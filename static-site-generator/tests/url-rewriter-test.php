@@ -1,0 +1,3854 @@
+<?php
+/**
+ * Tests for SSGWP_URL_Rewriter.
+ *
+ * @package PlaygroundStaticSiteGenerator
+ */
+
+define( 'ABSPATH', __DIR__ );
+
+$ssgwp_test_home_url     = 'https://example.test';
+$ssgwp_test_site_url     = 'https://example.test';
+$ssgwp_test_content_url  = 'https://example.test/wp-content';
+$ssgwp_test_includes_url = 'https://example.test/wp-includes';
+
+if ( ! function_exists( 'wp_normalize_path' ) ) {
+	/**
+	 * Normalize paths for tests.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	function wp_normalize_path( $path ) {
+		return str_replace( '\\', '/', (string) $path );
+	}
+}
+
+if ( ! function_exists( 'trailingslashit' ) ) {
+	/**
+	 * Add a trailing slash.
+	 *
+	 * @param string $value Value.
+	 * @return string
+	 */
+	function trailingslashit( $value ) {
+		return rtrim( (string) $value, "/\\" ) . '/';
+	}
+}
+
+if ( ! function_exists( 'untrailingslashit' ) ) {
+	/**
+	 * Remove trailing slashes.
+	 *
+	 * @param string $value Value.
+	 * @return string
+	 */
+	function untrailingslashit( $value ) {
+		return rtrim( (string) $value, "/\\" );
+	}
+}
+
+if ( ! function_exists( 'wp_parse_url' ) ) {
+	/**
+	 * Parse a URL for tests.
+	 *
+	 * @param string $url       URL.
+	 * @param int    $component URL component.
+	 * @return mixed
+	 */
+	function wp_parse_url( $url, $component = -1 ) {
+		return -1 === $component ? parse_url( $url ) : parse_url( $url, $component );
+	}
+}
+
+if ( ! function_exists( 'home_url' ) ) {
+	/**
+	 * Return the test home URL.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	function home_url( $path = '' ) {
+		global $ssgwp_test_home_url;
+
+		return ssgwp_test_url( $ssgwp_test_home_url, $path );
+	}
+}
+
+if ( ! function_exists( 'site_url' ) ) {
+	/**
+	 * Return the test site URL.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	function site_url( $path = '' ) {
+		global $ssgwp_test_site_url;
+
+		return ssgwp_test_url( $ssgwp_test_site_url, $path );
+	}
+}
+
+if ( ! function_exists( 'content_url' ) ) {
+	/**
+	 * Return a content URL for tests.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	function content_url( $path = '' ) {
+		global $ssgwp_test_content_url;
+
+		return ssgwp_test_url( $ssgwp_test_content_url, $path );
+	}
+}
+
+if ( ! function_exists( 'includes_url' ) ) {
+	/**
+	 * Return an includes URL for tests.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	function includes_url( $path = '' ) {
+		global $ssgwp_test_includes_url;
+
+		return ssgwp_test_url( $ssgwp_test_includes_url, $path );
+	}
+}
+
+if ( ! function_exists( 'esc_attr' ) ) {
+	/**
+	 * Escape an HTML attribute for tests.
+	 *
+	 * @param string $value Value.
+	 * @return string
+	 */
+	function esc_attr( $value ) {
+		return htmlspecialchars( (string) $value, ENT_QUOTES );
+	}
+}
+
+if ( ! class_exists( 'WP_HTML_Tag_Processor' ) ) {
+	/**
+	 * Minimal HTML tag processor for URL rewriter tests.
+	 */
+	class WP_HTML_Tag_Processor {
+		/**
+		 * HTML being processed.
+		 *
+		 * @var string
+		 */
+		private $html;
+
+		/**
+		 * Parsed tags.
+		 *
+		 * @var array<int,array<string,mixed>>
+		 */
+		private $tags = array();
+
+		/**
+		 * Current tag index.
+		 *
+		 * @var int
+		 */
+		private $index = -1;
+
+		/**
+		 * Constructor.
+		 *
+		 * @param string $html HTML.
+		 */
+		public function __construct( $html ) {
+			$this->html = (string) $html;
+			$this->parse_tags();
+		}
+
+		/**
+		 * Move to the next tag.
+		 *
+		 * @param string|null $tag_name Optional tag name.
+		 * @return bool
+		 */
+		public function next_tag( $tag_name = null ) {
+			$tag_name = null === $tag_name ? null : strtoupper( $tag_name );
+
+			while ( isset( $this->tags[ ++$this->index ] ) ) {
+				if ( null === $tag_name || $tag_name === $this->get_tag() ) {
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		/**
+		 * Get the current tag name.
+		 *
+		 * @return string|null
+		 */
+		public function get_tag() {
+			return isset( $this->tags[ $this->index ] )
+				? strtoupper( $this->tags[ $this->index ]['name'] )
+				: null;
+		}
+
+		/**
+		 * Get an attribute from the current tag.
+		 *
+		 * @param string $name Attribute name.
+		 * @return string|null
+		 */
+		public function get_attribute( $name ) {
+			if ( ! isset( $this->tags[ $this->index ] ) ) {
+				return null;
+			}
+
+			$attributes = $this->tags[ $this->index ]['attributes'];
+			$key        = strtolower( $name );
+
+			return isset( $attributes[ $key ] ) ? $attributes[ $key ]['value'] : null;
+		}
+
+		/**
+		 * Set an attribute on the current tag.
+		 *
+		 * @param string $name  Attribute name.
+		 * @param string $value Attribute value.
+		 */
+		public function set_attribute( $name, $value ) {
+			if ( ! isset( $this->tags[ $this->index ] ) ) {
+				return;
+			}
+
+			$tag        = $this->tags[ $this->index ];
+			$attributes = $tag['attributes'];
+			$key        = strtolower( $name );
+
+			if ( ! isset( $attributes[ $key ] ) ) {
+				return;
+			}
+
+			$attribute = $attributes[ $key ];
+			$tag_html  = substr_replace(
+				$tag['html'],
+				esc_attr( $value ),
+				$attribute['value_offset'],
+				$attribute['value_length']
+			);
+			$delta     = strlen( $tag_html ) - $tag['length'];
+
+			$this->html = substr_replace(
+				$this->html,
+				$tag_html,
+				$tag['offset'],
+				$tag['length']
+			);
+			$this->tags[ $this->index ]['html']       = $tag_html;
+			$this->tags[ $this->index ]['length']     = strlen( $tag_html );
+			$this->tags[ $this->index ]['attributes'] = $this->parse_attributes( $tag_html );
+
+			if ( 0 === $delta ) {
+				return;
+			}
+
+			for ( $index = $this->index + 1; $index < count( $this->tags ); $index++ ) {
+				$this->tags[ $index ]['offset'] += $delta;
+			}
+		}
+
+		/**
+		 * Get the updated HTML.
+		 *
+		 * @return string
+		 */
+		public function get_updated_html() {
+			return $this->html;
+		}
+
+		/**
+		 * Parse tags from HTML.
+		 */
+		private function parse_tags() {
+			preg_match_all(
+				'/<([a-zA-Z][a-zA-Z0-9:-]*)(\s[^>]*)?>/s',
+				$this->html,
+				$matches,
+				PREG_OFFSET_CAPTURE
+			);
+
+			foreach ( $matches[0] as $index => $tag_match ) {
+				$tag_html = $tag_match[0];
+				$this->tags[] = array(
+					'name'       => $matches[1][ $index ][0],
+					'html'       => $tag_html,
+					'offset'     => $tag_match[1],
+					'length'     => strlen( $tag_html ),
+					'attributes' => $this->parse_attributes( $tag_html ),
+				);
+			}
+		}
+
+		/**
+		 * Parse attributes from a tag.
+		 *
+		 * @param string $tag_html Tag HTML.
+		 * @return array<string,array<string,int|string>>
+		 */
+		private function parse_attributes( $tag_html ) {
+			$attributes = array();
+
+			preg_match_all(
+				'/([a-zA-Z_:][a-zA-Z0-9:._-]*)\s*=\s*(["\'])(.*?)\2/s',
+				$tag_html,
+				$matches,
+				PREG_OFFSET_CAPTURE
+			);
+
+			foreach ( $matches[1] as $index => $name_match ) {
+				$key                  = strtolower( $name_match[0] );
+				$attributes[ $key ] = array(
+					'value'        => $matches[3][ $index ][0],
+					'value_offset' => $matches[3][ $index ][1],
+					'value_length' => strlen( $matches[3][ $index ][0] ),
+				);
+			}
+
+			return $attributes;
+		}
+	}
+}
+
+/**
+ * Append a path to a test URL.
+ *
+ * @param string $base Base URL.
+ * @param string $path Path.
+ * @return string
+ */
+function ssgwp_test_url( $base, $path ) {
+	return rtrim( $base, '/' ) . '/' . ltrim( $path, '/' );
+}
+
+/**
+ * Minimal collector for URL rewriter tests.
+ */
+class SSGWP_URL_Collector {
+	/**
+	 * Resolve a URL against a base URL.
+	 *
+	 * @param string $url      URL.
+	 * @param string $base_url Base URL.
+	 * @return string
+	 */
+	public function resolve_relative_url( $url, $base_url ) {
+		if ( preg_match( '#^[a-z][a-z0-9+.-]*:#i', $url ) ) {
+			return $url;
+		}
+
+		if ( 0 === strpos( $url, '//' ) ) {
+			$scheme = wp_parse_url( $base_url, PHP_URL_SCHEME );
+			return $scheme . ':' . $url;
+		}
+
+		$base_parts = wp_parse_url( $base_url );
+		$scheme     = isset( $base_parts['scheme'] ) ? $base_parts['scheme'] : 'http';
+		$host       = isset( $base_parts['host'] ) ? $base_parts['host'] : '';
+		$port       = isset( $base_parts['port'] ) ? ':' . (int) $base_parts['port'] : '';
+		$url_parts  = wp_parse_url( $url );
+
+		if ( false === $url_parts ) {
+			return $url;
+		}
+
+		$relative_path = isset( $url_parts['path'] ) ? $url_parts['path'] : '';
+		$query         = isset( $url_parts['query'] ) ? '?' . $url_parts['query'] : '';
+		$fragment      = isset( $url_parts['fragment'] ) ? '#' . $url_parts['fragment'] : '';
+
+		if ( 0 === strpos( $relative_path, '/' ) ) {
+			return $scheme . '://' . $host . $port . $this->collapse_path( $relative_path ) . $query . $fragment;
+		}
+
+		$base_path = isset( $base_parts['path'] ) ? $base_parts['path'] : '/';
+		$base_dir  = '/' === substr( $base_path, -1 ) ? $base_path : trailingslashit( dirname( $base_path ) );
+
+		if ( '' === $relative_path ) {
+			return $scheme . '://' . $host . $port . $base_path . $query . $fragment;
+		}
+
+		return $scheme . '://' . $host . $port . $this->collapse_path( $base_dir . $relative_path ) . $query . $fragment;
+	}
+
+	/**
+	 * Normalize a URL.
+	 *
+	 * @param string $url URL.
+	 * @return string|null
+	 */
+	public function normalize_url( $url ) {
+		$url = strtok( (string) $url, '#' );
+
+		if ( false === $url || '' === $url ) {
+			return null;
+		}
+
+		$parts = wp_parse_url( $url );
+
+		if ( empty( $parts['host'] ) ) {
+			$url   = $this->resolve_relative_url( $url, home_url( '/' ) );
+			$parts = wp_parse_url( $url );
+		}
+
+		$home_parts = wp_parse_url( home_url( '/' ) );
+
+		if ( empty( $parts['host'] ) || empty( $home_parts['host'] ) || strtolower( $home_parts['host'] ) !== strtolower( $parts['host'] ) ) {
+			return null;
+		}
+
+		$path = isset( $parts['path'] ) ? $parts['path'] : '/';
+
+		if ( preg_match( '#/(wp-admin|wp-json|feed)(/|$)#', $path ) ) {
+			return null;
+		}
+
+		$query = '';
+
+		if ( isset( $parts['query'] ) ) {
+			parse_str( $parts['query'], $query_args );
+
+			foreach ( $query_args as $key => $value ) {
+				if ( is_array( $value ) ) {
+					return null;
+				}
+
+				if ( 'ssgwp_export' === $key ) {
+					unset( $query_args[ $key ] );
+				}
+			}
+
+			ksort( $query_args, SORT_STRING );
+			$query = http_build_query( $query_args, '', '&', PHP_QUERY_RFC3986 );
+		}
+
+		$scheme = isset( $home_parts['scheme'] ) ? $home_parts['scheme'] : 'https';
+
+		return $scheme . '://' . strtolower( $parts['host'] ) . $path . ( '' !== $query ? '?' . $query : '' );
+	}
+
+	/**
+	 * Collapse dot segments in a URL path.
+	 *
+	 * @param string $path URL path.
+	 * @return string
+	 */
+	private function collapse_path( $path ) {
+		$had_trailing_slash = '/' === substr( $path, -1 );
+		$segments           = explode( '/', $path );
+		$output             = array();
+
+		foreach ( $segments as $segment ) {
+			if ( '' === $segment || '.' === $segment ) {
+				continue;
+			}
+
+			if ( '..' === $segment ) {
+				array_pop( $output );
+				continue;
+			}
+
+			$output[] = $segment;
+		}
+
+		$collapsed = '/' . implode( '/', $output );
+
+		if ( $had_trailing_slash && '/' !== $collapsed ) {
+			$collapsed = trailingslashit( $collapsed );
+		}
+
+		return $collapsed;
+	}
+}
+
+require_once dirname( __DIR__ ) . '/includes/class-path-utils.php';
+require_once dirname( __DIR__ ) . '/includes/class-url-rewriter.php';
+
+$rewriter = new SSGWP_URL_Rewriter( new SSGWP_URL_Collector(), 'relative' );
+
+set_error_handler(
+	static function ( $severity, $message ) {
+		ssgwp_fail( 'rewrite_html emitted a warning: ' . $message );
+	}
+);
+
+$result = $rewriter->rewrite_html(
+	'<link rel="stylesheet" href="/wp-content/themes/example/style.css?ver=1"><h1>Test</h1>',
+	'https://example.test/',
+	'index.html'
+);
+
+restore_error_handler();
+
+ssgwp_assert_same(
+	'<link rel="stylesheet" href="wp-content/themes/example/style.css?ver=1"><h1>Test</h1>',
+	$result['content'],
+	'rewrite_html rewrites stylesheet links through the HTML API.'
+);
+
+ssgwp_assert_same(
+	array( 'https://example.test/wp-content/themes/example/style.css?ver=1' ),
+	$result['assets'],
+	'rewrite_html records stylesheet links as assets to copy.'
+);
+
+$method = new ReflectionMethod( $rewriter, 'prepare_html_attribute_value' );
+$method->setAccessible( true );
+
+$placeholders = array();
+
+set_error_handler(
+	static function ( $severity, $message ) {
+		ssgwp_fail( 'prepare_html_attribute_value emitted a warning: ' . $message );
+	}
+);
+
+$prepared = $method->invokeArgs( $rewriter, array( 'wp-content/themes/example/style.css?ver=1', &$placeholders ) );
+
+restore_error_handler();
+
+ssgwp_assert_same(
+	'/__ssgwp_relative_url_0__',
+	$prepared,
+	'prepare_html_attribute_value uses a placeholder for relative stylesheet URLs.'
+);
+
+ssgwp_assert_same(
+	array( '/__ssgwp_relative_url_0__' => 'wp-content/themes/example/style.css?ver=1' ),
+	$placeholders,
+	'prepare_html_attribute_value stores the original relative stylesheet URL.'
+);
+
+$pattern_method = new ReflectionMethod( $rewriter, 'rewrite_html_attributes_with_patterns' );
+$pattern_method->setAccessible( true );
+
+$pattern_rewritten = $pattern_method->invoke(
+	$rewriter,
+	'<link rel="preconnect" href="https://example.test">'
+		. '<link rel="dns-prefetch" href="//example.test">'
+		. '<base href="https://example.test/">'
+		. '<link rel="home" href="https://example.test/">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<link rel="preconnect" href="https://example.test">',
+	$pattern_rewritten,
+	'rewrite_html_attributes_with_patterns preserves same-origin preconnect resource hints.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="dns-prefetch" href="//example.test">',
+	$pattern_rewritten,
+	'rewrite_html_attributes_with_patterns preserves same-origin DNS prefetch resource hints.'
+);
+
+ssgwp_assert_contains(
+	'<base href="./">',
+	$pattern_rewritten,
+	'rewrite_html_attributes_with_patterns anchors same-site base hrefs to the static document.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="home" href="index.html">',
+	$pattern_rewritten,
+	'rewrite_html_attributes_with_patterns still rewrites semantic page link relations.'
+);
+
+$pattern_unquoted_rewritten = $pattern_method->invoke(
+	$rewriter,
+	'<link rel=preconnect href=https://example.test>'
+		. '<base href=https://example.test/>'
+		. '<a href=/static-page/>Static</a>'
+		. '<link rel=preload as=document href=/preloaded-page/>'
+		. '<blockquote cite=/citation-source>Citation</blockquote>'
+		. '<cite cite=/citation-source#inline>Inline citation</cite>'
+		. '<del cite=/citation-source#deleted>Deleted citation</del>'
+		. '<ins cite=/citation-source#inserted>Inserted citation</ins>'
+		. '<img src=/wp-content/uploads/photo.jpg?pattern=1 alt="">'
+		. '<img src=/wp-content/uploads/photo.jpg?longdesc=1 longdesc=/long-description/ alt="">'
+		. '<table background=/wp-content/uploads/table-bg.jpg?pattern=1><tr>'
+		. '<td background=/wp-content/uploads/cell-bg.jpg?pattern=1>Legacy</td>'
+		. '</tr></table>'
+		. '<frame src=/legacy-frame/ longdesc=/frame-description/>'
+		. '<object data=/object-page/></object>'
+		. '<object data=/wp-content/uploads/social-video.mp4?pattern=1></object>'
+		. '<param name=movie value=/wp-content/uploads/social-video.mp4?param=1>',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<link rel=preconnect href=https://example.test>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns preserves unquoted resource hints.'
+);
+
+ssgwp_assert_contains(
+	'<base href=./>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted same-site base hrefs.'
+);
+
+ssgwp_assert_contains(
+	'<a href=static-page/index.html>Static</a>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel=preload as=document href=preloaded-page/index.html>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted document preload links.'
+);
+
+ssgwp_assert_contains(
+	'<blockquote cite=citation-source/index.html>Citation</blockquote>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted citation links.'
+);
+
+ssgwp_assert_contains(
+	'<cite cite=citation-source/index.html#inline>Inline citation</cite>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted cite element citation links.'
+);
+
+ssgwp_assert_contains(
+	'<del cite=citation-source/index.html#deleted>Deleted citation</del>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted deleted-content citation links.'
+);
+
+ssgwp_assert_contains(
+	'<ins cite=citation-source/index.html#inserted>Inserted citation</ins>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted inserted-content citation links.'
+);
+
+ssgwp_assert_contains(
+	'<img src=wp-content/uploads/photo.jpg?pattern=1 alt="">',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted asset links.'
+);
+
+ssgwp_assert_contains(
+	'<img src=wp-content/uploads/photo.jpg?longdesc=1 longdesc=long-description/index.html alt="">',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted long description page links.'
+);
+
+ssgwp_assert_contains(
+	'<table background=wp-content/uploads/table-bg.jpg?pattern=1><tr>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted legacy table background assets.'
+);
+
+ssgwp_assert_contains(
+	'<td background=wp-content/uploads/cell-bg.jpg?pattern=1>Legacy</td>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted legacy table cell background assets.'
+);
+
+ssgwp_assert_contains(
+	'src=legacy-frame/index.html',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns treats unquoted frame sources as page links.'
+);
+
+ssgwp_assert_contains(
+	'longdesc=frame-description/index.html',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites unquoted frame long description links.'
+);
+
+ssgwp_assert_contains(
+	'<object data=object-page/index.html></object>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns treats unquoted object pages as page links.'
+);
+
+ssgwp_assert_contains(
+	'<object data=wp-content/uploads/social-video.mp4?pattern=1></object>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns treats unquoted object media as assets.'
+);
+
+ssgwp_assert_contains(
+	'<param name=movie value=wp-content/uploads/social-video.mp4?param=1>',
+	$pattern_unquoted_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites URL-bearing param values.'
+);
+
+$pattern_lazy_rewritten = $pattern_method->invoke(
+	$rewriter,
+	'<div data-bg="/wp-content/uploads/bg.jpg?lazy=1"'
+		. ' data-bgset="/wp-content/uploads/photo.jpg 1x, /wp-content/uploads/photo-2x.jpg 2x">'
+		. '<span data-src="/wp-content/uploads/photo.jpg?lazy=2"></span></div>'
+		. '<a data-href="/deferred-page/">Deferred</a>'
+		. '<button data-href="/wp-content/uploads/photo.jpg?deferred=1">Asset</button>'
+		. '<div data-url="/generic-page/" data-link="/wp-content/uploads/photo.jpg?data-link=1"></div>'
+		. '<img data-permalink="/attachment-page/"'
+		. ' data-orig-file="/wp-content/uploads/original.jpg?orig=1"'
+		. ' data-medium-file="/wp-content/uploads/medium.jpg?medium=1"'
+		. ' data-large-file="/wp-content/uploads/large.jpg?large=1" alt="">'
+		. '<iframe src="/framed-page/" data-src="/lazy-frame/" data-lazy-src="/wp-content/uploads/photo.jpg?frame=1"></iframe>'
+		. '<embed src="/embed-page/">'
+		. '<embed src="/wp-content/uploads/social-video.mp4?embed=1">'
+		. '<embed data-src="/embed-page/" data-lazy-src="/wp-content/uploads/social-video.mp4?lazy-embed=1">'
+		. '<svg><a xlink:href="/svg-linked-page/"><text>SVG page link</text></a></svg>'
+		. '<article itemscope itemid="/microdata-item/"'
+		. ' itemtype="/schema/local https://schema.org/Article https://example.test/schema/secondary/">Microdata item</article>'
+		. '<article about="/rdfa-about/" resource="https://example.test/rdfa-resource/">RDFa</article>'
+		. '<head profile="/metadata-profile/ https://example.test/metadata-secondary-profile/">'
+		. '</head>'
+		. '<span about="[schema:Thing]" resource="_:local">RDFa CURIE</span>',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'data-bg="wp-content/uploads/bg.jpg?lazy=1"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites lazy background asset attributes.'
+);
+
+ssgwp_assert_contains(
+	'data-bgset="wp-content/uploads/photo.jpg 1x, wp-content/uploads/photo-2x.jpg 2x"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites lazy background srcset attributes.'
+);
+
+ssgwp_assert_contains(
+	'data-src="wp-content/uploads/photo.jpg?lazy=2"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites lazy source attributes on any tag.'
+);
+
+ssgwp_assert_contains(
+	'data-href="deferred-page/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats data-href page URLs as links.'
+);
+
+ssgwp_assert_contains(
+	'data-href="wp-content/uploads/photo.jpg?deferred=1"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats data-href media URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-url="generic-page/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats data-url page URLs as links.'
+);
+
+ssgwp_assert_contains(
+	'data-link="wp-content/uploads/photo.jpg?data-link=1"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats data-link media URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-permalink="attachment-page/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats WordPress image data-permalink as a page link.'
+);
+
+ssgwp_assert_contains(
+	'data-orig-file="wp-content/uploads/original.jpg?orig=1"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites WordPress original image metadata URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-medium-file="wp-content/uploads/medium.jpg?medium=1"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites WordPress medium image metadata URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-large-file="wp-content/uploads/large.jpg?large=1"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites WordPress large image metadata URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-src="lazy-frame/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats lazy iframe page sources as page links.'
+);
+
+ssgwp_assert_contains(
+	'<iframe src="framed-page/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats iframe src page URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'data-lazy-src="wp-content/uploads/photo.jpg?frame=1"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns keeps lazy iframe media sources as assets.'
+);
+
+ssgwp_assert_contains(
+	'<embed src="embed-page/index.html">',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats embed src page URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<embed src="wp-content/uploads/social-video.mp4?embed=1">',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns keeps embed src media URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'<embed data-src="embed-page/index.html" data-lazy-src="wp-content/uploads/social-video.mp4?lazy-embed=1">',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats lazy embed sources as page-or-asset URLs.'
+);
+
+ssgwp_assert_contains(
+	'<svg><a xlink:href="svg-linked-page/index.html"><text>SVG page link</text></a></svg>',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns treats SVG anchor xlink hrefs as page links.'
+);
+
+ssgwp_assert_contains(
+	'itemid="microdata-item/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites microdata itemid page URLs.'
+);
+
+ssgwp_assert_contains(
+	'itemtype="schema/local/index.html https://schema.org/Article schema/secondary/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites same-site microdata itemtype URL tokens.'
+);
+
+ssgwp_assert_contains(
+	'about="rdfa-about/index.html" resource="rdfa-resource/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites RDFa page identifiers.'
+);
+
+ssgwp_assert_contains(
+	'profile="metadata-profile/index.html metadata-secondary-profile/index.html"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns rewrites metadata profile URLs.'
+);
+
+ssgwp_assert_contains(
+	'about="[schema:Thing]" resource="_:local"',
+	$pattern_lazy_rewritten,
+	'rewrite_html_attributes_with_patterns preserves RDFa CURIE values.'
+);
+
+$pattern_srcdoc_method = new ReflectionMethod( $rewriter, 'rewrite_srcdoc_attributes_with_patterns' );
+$pattern_srcdoc_method->setAccessible( true );
+
+$pattern_srcdoc_rewritten = $pattern_srcdoc_method->invoke(
+	$rewriter,
+	'<iframe srcdoc="'
+		. esc_attr( '<a href="/embedded-page/">Embedded</a><img src="/wp-content/uploads/photo.jpg?srcdoc=1">' )
+		. '"></iframe>',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'href=&quot;embedded-page/index.html&quot;',
+	$pattern_srcdoc_rewritten,
+	'rewrite_srcdoc_attributes_with_patterns rewrites page links inside srcdoc.'
+);
+
+ssgwp_assert_contains(
+	'src=&quot;wp-content/uploads/photo.jpg?srcdoc=1&quot;',
+	$pattern_srcdoc_rewritten,
+	'rewrite_srcdoc_attributes_with_patterns rewrites asset URLs inside srcdoc.'
+);
+
+$pattern_meta_refresh_method = new ReflectionMethod( $rewriter, 'rewrite_meta_refresh_with_patterns' );
+$pattern_meta_refresh_method->setAccessible( true );
+
+$pattern_meta_refresh_rewritten = $pattern_meta_refresh_method->invoke(
+	$rewriter,
+	'<meta http-equiv="refresh" content="0; url=/static-page/#section">'
+		. '<meta name="viewport" content="width=device-width">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta http-equiv="refresh" content="0; url=static-page/index.html#section">',
+	$pattern_meta_refresh_rewritten,
+	'rewrite_meta_refresh_with_patterns rewrites refresh URLs without the HTML API.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="viewport" content="width=device-width">',
+	$pattern_meta_refresh_rewritten,
+	'rewrite_meta_refresh_with_patterns leaves non-URL meta content unchanged.'
+);
+
+$pattern_meta_refresh_unquoted = $pattern_meta_refresh_method->invoke(
+	$rewriter,
+	'<meta http-equiv=refresh content=0;url=/static-page/>',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta http-equiv=refresh content=0;url=static-page/index.html>',
+	$pattern_meta_refresh_unquoted,
+	'rewrite_meta_refresh_with_patterns rewrites unquoted refresh URLs.'
+);
+
+$semicolon_query_hash = substr( md5( 'jump=one%3Btwo' ), 0, 8 );
+$meta_refresh_semicolon = $rewriter->rewrite_html(
+	'<meta http-equiv="refresh" content="0; url=/static-page/?jump=one;two#section">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta http-equiv="refresh" content="0; url=static-page-' . $semicolon_query_hash . '.html#section">',
+	$meta_refresh_semicolon['content'],
+	'rewrite_html keeps semicolons inside meta refresh URL query strings.'
+);
+
+$pattern_meta_refresh_semicolon = $pattern_meta_refresh_method->invoke(
+	$rewriter,
+	'<meta http-equiv="refresh" content="0; url=/static-page/?jump=one;two#section">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta http-equiv="refresh" content="0; url=static-page-' . $semicolon_query_hash . '.html#section">',
+	$pattern_meta_refresh_semicolon,
+	'rewrite_meta_refresh_with_patterns keeps semicolons inside URL query strings.'
+);
+
+$quoted_meta_refresh_suffix = $rewriter->rewrite_html(
+	'<meta http-equiv="refresh" content="0; url=\'/static-page/?jump=one;two#section\'; foo=bar">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta http-equiv="refresh" content="0; url=&#039;static-page-'
+		. $semicolon_query_hash . '.html#section&#039;; foo=bar">',
+	$quoted_meta_refresh_suffix['content'],
+	'rewrite_html keeps quoted meta refresh suffixes outside the rewritten URL.'
+);
+
+$pattern_meta_refresh_quoted_suffix = $pattern_meta_refresh_method->invoke(
+	$rewriter,
+	'<meta http-equiv="refresh" content="0; url=\'/static-page/?jump=one;two#section\'; foo=bar">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta http-equiv="refresh" content="0; url=&#039;static-page-'
+		. $semicolon_query_hash . '.html#section&#039;; foo=bar">',
+	$pattern_meta_refresh_quoted_suffix,
+	'rewrite_meta_refresh_with_patterns keeps quoted suffixes outside the URL.'
+);
+
+$pattern_meta_content_method = new ReflectionMethod( $rewriter, 'rewrite_meta_content_urls_with_patterns' );
+$pattern_meta_content_method->setAccessible( true );
+
+$pattern_meta_content_rewritten = $pattern_meta_content_method->invoke(
+	$rewriter,
+	'<meta property="og:url" content="/meta-page/#share">'
+		. '<meta name="twitter:image" content="/wp-content/uploads/social.jpg?ver=1">'
+		. '<meta itemprop="contentUrl" content="/wp-content/uploads/social-video.mp4?schema=1">'
+		. '<meta itemprop="embedUrl" content="/video-player/">'
+		. '<meta itemprop="citation" content="/citation-source/">'
+		. '<meta itemprop="sameAs" content="/schema-profile/">'
+		. '<meta itemprop="mentions" content="/schema-mentions/">'
+		. '<meta itemprop="mainEntityOfPage" content="/schema-main-entity-page/">'
+		. '<meta itemprop="discussionUrl" content="/schema-discussion/">'
+		. '<meta itemprop="item" content="/schema-breadcrumb/">'
+		. '<meta itemprop="hasPart" content="/schema-part/">'
+		. '<meta itemprop="isPartOf" content="/schema-collection/">'
+		. '<meta itemprop="isBasedOnUrl" content="/schema-source/">'
+		. '<meta itemprop="relatedLink" content="/schema-related/">'
+		. '<meta itemprop="significantLinks" content="/schema-significant/">'
+		. '<meta itemprop="reviewedBy" content="/schema-reviewer/">'
+		. '<meta itemprop="subjectOf" content="/schema-subject/">'
+		. '<meta itemprop="url sameAs" content="/schema-token-profile/">'
+		. '<meta itemprop="image thumbnailUrl" content="/wp-content/uploads/social.jpg?schema-token=1">'
+		. '<meta itemprop="publishingPrinciples" content="/publishing-principles/">'
+		. '<meta property="article:author" content="/author/admin/">'
+		. '<meta property="article:publisher" content="/publisher/">'
+		. '<meta property="og:see_also" content="/related/">'
+		. '<meta name="twitter:player" content="/video-player/">'
+		. '<meta name="msapplication-TileImage" content="/wp-content/uploads/tile.png">'
+		. '<meta name="msapplication-starturl" content="/start-page/">'
+		. '<meta name="msapplication-task" content="name=Docs;action-uri=/task-target/;icon-uri=/wp-content/uploads/tile.png?task=1">'
+		. '<meta name="description" content="Plain text">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta property="og:url" content="meta-page/index.html#share">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites page meta URLs without the HTML API.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="twitter:image" content="wp-content/uploads/social.jpg?ver=1">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites asset meta URLs without the HTML API.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="contentUrl" content="wp-content/uploads/social-video.mp4?schema=1">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org contentUrl media URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="embedUrl" content="video-player/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org embedUrl page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="citation" content="citation-source/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org citation page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="sameAs" content="schema-profile/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org sameAs page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="mentions" content="schema-mentions/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org mentions page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="mainEntityOfPage" content="schema-main-entity-page/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org mainEntityOfPage URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="discussionUrl" content="schema-discussion/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org discussionUrl page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="item" content="schema-breadcrumb/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org item page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="hasPart" content="schema-part/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org hasPart page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="isPartOf" content="schema-collection/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org isPartOf page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="isBasedOnUrl" content="schema-source/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org isBasedOnUrl page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="significantLinks" content="schema-significant/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org significantLinks page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="reviewedBy" content="schema-reviewer/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org reviewedBy page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="subjectOf" content="schema-subject/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org subjectOf page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="url sameAs" content="schema-token-profile/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org meta itemprop page URL tokens.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="image thumbnailUrl" content="wp-content/uploads/social.jpg?schema-token=1">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org meta itemprop asset URL tokens.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="publishingPrinciples" content="publishing-principles/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites schema.org publishingPrinciples page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="article:author" content="author/admin/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites article author page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="article:publisher" content="publisher/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites article publisher page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="og:see_also" content="related/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites Open Graph related page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="twitter:player" content="video-player/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites Twitter player page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-TileImage" content="wp-content/uploads/tile.png">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites tile image meta URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-starturl" content="start-page/index.html">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites Windows pinned-site start URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-task" content="name=Docs;action-uri=task-target/index.html;icon-uri=wp-content/uploads/tile.png?task=1">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns rewrites pinned-site task meta URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="description" content="Plain text">',
+	$pattern_meta_content_rewritten,
+	'rewrite_meta_content_urls_with_patterns leaves non-URL meta content unchanged.'
+);
+
+$pattern_meta_content_unquoted = $pattern_meta_content_method->invoke(
+	$rewriter,
+	'<meta property=og:url content=/meta-page/>'
+		. '<meta name=twitter:image content=/wp-content/uploads/social.jpg>',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta property=og:url content=meta-page/index.html>',
+	$pattern_meta_content_unquoted,
+	'rewrite_meta_content_urls_with_patterns rewrites unquoted page meta URLs.'
+);
+
+ssgwp_assert_contains(
+	'<meta name=twitter:image content=wp-content/uploads/social.jpg>',
+	$pattern_meta_content_unquoted,
+	'rewrite_meta_content_urls_with_patterns rewrites unquoted asset meta URLs.'
+);
+
+$export_root = ssgwp_make_fixture_dir();
+$query_hash  = substr( md5( 'p=42' ), 0, 8 );
+$view_hash   = substr( md5( 'view=grid' ), 0, 8 );
+$text_query_hash         = substr( md5( 'p=84' ), 0, 8 );
+$escaped_text_query_hash = substr( md5( 'p=85' ), 0, 8 );
+
+foreach (
+	array(
+		'index.html',
+		'index-' . $query_hash . '.html',
+		'index-' . $text_query_hash . '.html',
+		'index-' . $escaped_text_query_hash . '.html',
+		'static-page/index.html',
+		'static-page/relative-child/index.html',
+		'static-page-' . $view_hash . '.html',
+			'blog/page/2/index.html',
+			'comments/index.html',
+			'citation-source/index.html',
+			'embed-page/index.html',
+			'framed-page/index.html',
+			'form-button/index.html',
+			'form-input/index.html',
+			'form-target/index.html',
+			'generic-page/index.html',
+			'frame-description/index.html',
+			'legacy-frame/index.html',
+			'long-description/index.html',
+			'meta-page/index.html',
+			'microdata-breadcrumb/index.html',
+			'microdata-item/index.html',
+			'microdata-profile/index.html',
+			'microdata-related/index.html',
+			'microdata-significant/index.html',
+			'schema/local/index.html',
+			'schema/secondary/index.html',
+			'schema-about/index.html',
+			'schema-collection/index.html',
+			'schema-main-entity/index.html',
+			'schema-mentions/index.html',
+			'schema-part/index.html',
+			'schema-contributor/index.html',
+			'schema-reviewer/index.html',
+			'schema-subject/index.html',
+			'schema-token-profile/index.html',
+		'nested/page/index.html',
+		'protocol-escaped/index.html',
+		'protocol-page/index.html',
+		'protocol-text/index.html',
+		'prefetched-page/index.html',
+		'deferred-page/index.html',
+		'sample-page/index.html',
+		'lazy-frame/index.html',
+		'object-page/index.html',
+		'author/admin/index.html',
+		'publisher/index.html',
+		'related/index.html',
+		'schema-breadcrumb/index.html',
+		'schema-collection/index.html',
+		'schema-part/index.html',
+		'schema-contributor/index.html',
+		'schema-reviewer/index.html',
+		'schema-related/index.html',
+		'schema-author/index.html',
+		'schema-publisher/index.html',
+		'task-target/index.html',
+		'amp-page/index.html',
+		'embedded-page/index.html',
+		'video-player/index.html',
+		'encoded%20page/index.html',
+		'collision%20page/index.html',
+		'collision%2Bpage/index.html',
+		'nested%2Fsegment/index.html',
+		'%2E%2E/secret/index.html',
+		'wp-content/uploads/bg.jpg',
+		'wp-content/uploads/captions.vtt',
+		'wp-content/uploads/photo.jpg',
+		'wp-content/uploads/photo-2x.jpg',
+		'wp-content/uploads/image-set.jpg',
+		'wp-content/uploads/image-set-2x.jpg',
+		'wp-content/uploads/social.jpg',
+		'wp-content/uploads/social-audio.mp3',
+		'wp-content/uploads/social-video.mp4',
+		'wp-content/uploads/table-bg.jpg',
+		'wp-content/uploads/cell-bg.jpg',
+		'wp-content/uploads/tile.png',
+		'wp-includes/fonts/dashicons.eot',
+	)
+	as $fixture_file
+) {
+	ssgwp_touch_export_file( $export_root, $fixture_file );
+}
+
+$srcdoc = esc_attr(
+	'<a class="embedded" href="/embedded-page/">Embedded</a>'
+		. '<img src="/wp-content/uploads/photo.jpg?srcdoc=1" alt="">'
+		. '<style>.embed{background:url("/wp-content/uploads/bg.jpg?srcdoc=1")}</style>'
+);
+
+$html = implode(
+	'',
+	array(
+		'<a class="pretty" href="/static-page/">Pretty</a>',
+		'<a class="no-trailing" href="/static-page">No slash</a>',
+		'<a class="absolute" href="https://example.test/nested/page/#section">Absolute</a>',
+		'<a class="protocol" href="//example.test/protocol-page/">Protocol</a>',
+		'<a class="encoded" href="/encoded%20page/">Encoded</a>',
+		'<a class="encoded-space" href="/collision%20page/">Encoded space</a>',
+		'<a class="literal-plus" href="/collision+page/">Literal plus</a>',
+		'<a class="encoded-slash" href="/nested%2Fsegment/">Encoded slash</a>',
+		'<a class="encoded-parent" href="/%2e%2e/secret/">Encoded parent</a>',
+		'<a class="non-pretty" href="/?p=42#comments">Query</a>',
+		'<a class="query" href="/static-page/?view=grid#items">Query page</a>',
+		'<a class="archive" href="/blog/page/2/#posts">Archive</a>',
+		'<a class="comments-page" href="/comments/">Comments page</a>',
+		'<a class="templated" href="/static-page/{id}/">Templated</a>',
+		'<a class="ping-link" href="/static-page/" ping="/click-ping/ https://example.test/absolute-ping/">Ping</a>',
+		'<area href="/static-page/" ping="/map-ping/">',
+		'<blockquote cite="/citation-source/">Citation</blockquote>',
+		'<q cite="/citation-source/#quote">Quote</q>',
+		'<cite cite="/citation-source/#inline">Inline citation</cite>',
+		'<del cite="/citation-source/#deleted">Deleted citation</del>',
+		'<ins cite="/citation-source/#inserted">Inserted citation</ins>',
+		'<base href="https://example.test/">',
+		'<table background="/wp-content/uploads/table-bg.jpg?table=1"><tr>'
+			. '<td background="/wp-content/uploads/cell-bg.jpg?cell=1">Legacy</td>'
+			. '</tr></table>',
+		'<a class="admin" href="/wp-admin/admin.php">Admin</a>',
+		'<a class="api" href="/wp-json/wp/v2/posts">API</a>',
+		'<a class="rest-query" href="/?rest_route=/wp/v2/posts">REST query</a>',
+		'<a class="oembed-query" href="/?oembed=true&url=https%3A%2F%2Fexample.test%2Fstatic-page%2F">oEmbed query</a>',
+		'<a class="feed" href="/feed/">Feed</a>',
+		'<a class="feed-query" href="/?feed=rss2">Feed query</a>',
+		'<link rel="alternate" type="application/rss+xml" href="/feed/">',
+		'<link rel="alternate" type="application/rss+xml" href="/?feed=rss2">',
+		'<link rel="alternate" type="application/rss+xml" href="/comments/feed/">',
+		'<link rel="alternate" type="application/json+oembed" href="/?oembed=true&url=https%3A%2F%2Fexample.test%2Fstatic-page%2F">',
+		'<link rel="home" href="https://example.test/">',
+		'<link rel="about" href="/about-export/">',
+		'<link rel="copyright" href="/copyright-export/">',
+		'<link rel="glossary" href="/glossary-export/">',
+		'<link rel="payment" href="/payment-export/">',
+		'<link rel="preconnect" href="https://example.test">',
+		'<link rel="dns-prefetch" href="//example.test">',
+		'<link rel="prefetch" href="/prefetched-page/">',
+		'<link rel="prerender" href="/prefetched-page/#ready">',
+		'<link rel="preload" as="document" href="/preloaded-page/">',
+		'<link rel="preload" type="text/html" href="/typed-preload/">',
+		'<link rel="prefetch" as="image" href="/wp-content/uploads/photo.jpg?prefetch=1">',
+		'<link rel="author" href="/author/admin/">',
+		'<link rel="me" href="/identity/">',
+		'<link rel="profile" href="/profile-page/">',
+		'<link rel="amphtml" href="/amp-page/">',
+		'<link itemprop="url sameAs" href="/microdata-profile/">',
+		'<link itemprop="about" href="/schema-about/">',
+		'<link itemprop="relatedLink" href="/microdata-related/">',
+		'<link itemprop="item" href="/microdata-breadcrumb/">',
+		'<link itemprop="hasPart" href="/schema-part/">',
+		'<link itemprop="isPartOf" href="/schema-collection/">',
+		'<link itemprop="isBasedOnUrl" href="/schema-source/">',
+		'<link itemprop="mainEntity" href="/schema-main-entity/">',
+		'<link itemprop="mainEntityOfPage" href="/schema-main-entity-link-page/">',
+		'<link itemprop="significantLinks" href="/microdata-significant/">',
+		'<link itemprop="publishingPrinciples" href="/publishing-principles/">',
+		'<link itemprop="acquireLicensePage" href="/microdata-license/">',
+		'<link itemprop="author" href="/schema-author/">',
+		'<link itemprop="citation" href="/citation-source/">',
+		'<link itemprop="publisher" href="/schema-publisher/">',
+		'<link itemprop="contributor" href="/schema-contributor/">',
+		'<link itemprop="citation" href="/schema-citation/">',
+		'<link itemprop="contentUrl" href="/wp-content/uploads/social-video.mp4?link-schema=1">',
+		'<article itemscope itemid="/microdata-item/"'
+			. ' itemtype="/schema/local https://schema.org/Article https://example.test/schema/secondary/">Microdata item</article>',
+		'<article about="/rdfa-about/" resource="https://example.test/rdfa-resource/">RDFa</article>',
+		'<head profile="/metadata-profile/ https://example.test/metadata-secondary-profile/">'
+			. '</head>',
+		'<section vocab="/rdfa-vocab/" typeof="schema:Thing">RDFa vocab</section>',
+		'<span vocab="https://schema.org/">RDFa external vocab</span>',
+		'<span about="[schema:Thing]" resource="_:local">RDFa CURIE</span>',
+		'<svg><a xlink:href="/svg-linked-page/"><text>SVG page link</text></a></svg>',
+		'<a class="deferred" data-href="/deferred-page/">Deferred</a>',
+		'<button data-href="/wp-content/uploads/photo.jpg?deferred=1">Deferred asset</button>',
+		'<a class="generic-data-url" data-url="/generic-page/">Generic data URL</a>',
+		'<button data-link="/wp-content/uploads/photo.jpg?data-link=1">Generic data asset</button>',
+		'<img class="wp-image-metadata" data-permalink="/attachment-page/"'
+			. ' data-orig-file="/wp-content/uploads/original.jpg?orig=1"'
+			. ' data-medium-file="/wp-content/uploads/medium.jpg?medium=1"'
+			. ' data-large-file="/wp-content/uploads/large.jpg?large=1" alt="">',
+		'<form action="/form-target/"><button formaction="/form-button/">Submit</button>'
+			. '<input type="submit" formaction="/form-input/"></form>',
+		'<a class="external" href="https://external.test/static-page/">External</a>',
+		'<a class="external-port" href="https://example.test:8443/static-page/">External port</a>',
+		'<a class="external-scheme" href="http://example.test:443/static-page/">External scheme</a>',
+		'<a class="mail" href="mailto:test@example.test">Mail</a>',
+		'<a class="tel" href="tel:+15551234567">Tel</a>',
+		'<a class="js" href="javascript:void(0)">JS</a>',
+		'<a class="data" href="data:text/plain,hello">Data</a>',
+		'<a class="blob" href="blob:https://example.test/id">Blob</a>',
+		'<meta charset="UTF-8" />',
+		'<meta property="og:url" content="https://example.test/nested/page/#share">',
+		'<meta property="al:web:url" content="/app-link-web/">',
+		'<meta property="og:image" content="https://example.test/wp-content/uploads/social.jpg?ver=1">',
+		'<meta property="og:audio" content="https://example.test/wp-content/uploads/social-audio.mp3?ver=1">',
+		'<meta property="og:video" content="https://example.test/wp-content/uploads/social-video.mp4?ver=1">',
+		'<meta name="twitter:image" content="/wp-content/uploads/photo.jpg">',
+		'<meta name="msapplication-TileImage" content="/wp-content/uploads/tile.png">',
+		'<meta name="msapplication-square70x70logo" content="/wp-content/uploads/tile.png?small=1">',
+		'<meta name="msapplication-wide310x150logo" content="/wp-content/uploads/tile.png?wide=1">',
+		'<meta name="msapplication-config" content="/browserconfig.xml">',
+		'<meta name="msapplication-starturl" content="/start-page/">',
+		'<meta name="msapplication-task" content="name=Docs;action-uri=/task-target/;icon-uri=/wp-content/uploads/tile.png?task=1">',
+		'<meta itemprop="contentUrl" content="/wp-content/uploads/social-video.mp4?schema=1">',
+		'<meta itemprop="embedUrl" content="/video-player/">',
+		'<meta itemprop="citation" content="/citation-source/">',
+		'<meta itemprop="sameAs" content="/schema-profile/">',
+		'<meta itemprop="mentions" content="/schema-mentions/">',
+		'<meta itemprop="discussionUrl" content="/schema-discussion/">',
+		'<meta itemprop="item" content="/schema-breadcrumb/">',
+		'<meta itemprop="hasPart" content="/schema-part/">',
+		'<meta itemprop="isPartOf" content="/schema-collection/">',
+		'<meta itemprop="isBasedOnUrl" content="/schema-source/">',
+		'<meta itemprop="relatedLink" content="/schema-related/">',
+		'<meta itemprop="significantLinks" content="/schema-significant/">',
+		'<meta itemprop="license" content="/schema-license/">',
+		'<meta itemprop="publishingPrinciples" content="/publishing-principles/">',
+		'<meta itemprop="author" content="/schema-author/">',
+		'<meta itemprop="publisher" content="/schema-publisher/">',
+		'<meta itemprop="reviewedBy" content="/schema-reviewer/">',
+		'<meta itemprop="subjectOf" content="/schema-subject/">',
+		'<meta itemprop="mainEntityOfPage" content="/schema-main-entity-page/">',
+		'<meta itemprop="citation" content="/schema-citation/">',
+		'<meta itemprop="url sameAs" content="/schema-token-profile/">',
+		'<meta itemprop="image thumbnailUrl" content="/wp-content/uploads/social.jpg?schema-token=1">',
+		'<meta property="article:author" content="/author/admin/">',
+		'<meta property="article:publisher" content="/publisher/">',
+		'<meta property="og:see_also" content="/related/">',
+		'<meta name="twitter:player" content="/video-player/">',
+		'<meta name="twitter:player:stream" content="/wp-content/uploads/social-video.mp4?stream=1">',
+		'<link rel="preload" as="image" href="/wp-content/uploads/photo.jpg" imagesrcset="/wp-content/uploads/photo.jpg 1x, /wp-content/uploads/photo-2x.jpg 2x">',
+		'<img src="/wp-content/uploads/photo.jpg?size=large" alt="">',
+		'<img srcset="/wp-content/uploads/photo.jpg 1x, /wp-content/uploads/photo-2x.jpg 2x" alt="">',
+		'<img srcset="data:image/gif;base64,R0lGODlhAQABAAAAACw= 1x, /wp-content/uploads/photo-2x.jpg 2x" alt="">',
+		'<img class="longdesc" src="/wp-content/uploads/photo.jpg?longdesc=1" longdesc="/long-description/" alt="">',
+		'<div data-bg="/wp-content/uploads/bg.jpg?lazy=1"'
+			. ' data-background="/wp-content/uploads/bg.jpg?lazy=2"'
+			. ' data-bgset="/wp-content/uploads/photo.jpg 1x, /wp-content/uploads/photo-2x.jpg 2x"></div>',
+		'<span data-src="/wp-content/uploads/photo.jpg?lazy=3"'
+			. ' data-original="/wp-content/uploads/photo.jpg?lazy=4"'
+			. ' data-poster="/wp-content/uploads/bg.jpg?lazy=5"></span>',
+		'<iframe src="/framed-page/"></iframe>',
+		'<iframe src="/framed-page/" longdesc="/frame-description/"></iframe>',
+		'<frame src="/legacy-frame/" longdesc="/frame-description/">',
+		'<iframe data-src="/lazy-frame/" data-lazy-src="/wp-content/uploads/photo.jpg?frame=1"></iframe>',
+		'<embed src="/embed-page/">',
+		'<embed src="/wp-content/uploads/social-video.mp4?embed=1">',
+		'<embed data-src="/embed-page/" data-lazy-src="/wp-content/uploads/social-video.mp4?lazy-embed=1">',
+		'<object data="/object-page/"></object>',
+		'<object data="/wp-content/uploads/social-video.mp4?object=1"></object>',
+		'<object><param name="movie" value="/wp-content/uploads/social-video.mp4?param=1">'
+			. '<param name="url" value="/nested/page/">'
+			. '<param name="quality" value="/static-page/"></object>',
+		'<video><track kind="captions" src="/wp-content/uploads/captions.vtt?lang=en"></video>',
+		'<svg><filter><feImage href="/wp-content/uploads/filter.png?svg=1"'
+			. ' xlink:href="/wp-content/uploads/filter-2x.png?svg=2"></feImage></filter></svg>',
+		'<style>.hero{background:url("/wp-content/uploads/bg.jpg?ver=1")}</style>',
+		'<style>.responsive{background-image:image-set("/wp-content/uploads/image-set.jpg?density=1" 1x,'
+			. ' "/wp-content/uploads/image-set-2x.jpg?density=2" 2x, type("image/jpeg"))}</style>',
+		'<div style="background-image:url(/wp-content/uploads/bg.jpg?inline=1)"></div>',
+		'<div style=background:url(/wp-content/uploads/bg.jpg?unquoted=1)></div>',
+		'<iframe srcdoc="' . $srcdoc . '"></iframe>',
+		'<script type="application/json">{"url":"https:\/\/example.test\/nested\/page\/"}</script>',
+		'<script type="application/json">{"protocol":"//example.test/protocol-text/","protocolEscaped":"\/\/example.test\/protocol-escaped\/"}</script>',
+		'<script type="application/json">{"queryOnly":"https://example.test?p=84#text",'
+			. '"escapedQueryOnly":"https:\/\/example.test?p=85#text"}</script>',
+		'<script>const lookalike = "https://example.test.evil/static-page/";'
+			. ' const escapedLookalike = "https:\/\/example.test.evil\/static-page\/";'
+			. ' const protocolLookalike = "//example.test.evil/static-page/";</script>',
+		'<script type="application/json">{"root":"\/nested\/page\/","rootAsset":"\/wp-content\/uploads\/photo.jpg?json=1"}</script>',
+		'<script type="application/json">{"plainRoot":"/static-page/","plainAsset":"/wp-content/uploads/photo.jpg?plain=1"}</script>',
+		'<script type="application/json">{"rest":"https:\/\/example.test\/?rest_route=\/wp\/v2\/posts"}</script>',
+		'<script>const absoluteWildcard = "https://example.test/wp-content/uploads/*";'
+			. ' const escapedAbsoluteWildcard = "https:\/\/example.test\/wp-content\/uploads\/*";'
+			. ' const protocolWildcard = "//example.test/wp-content/uploads/*";'
+			. ' const absoluteTemplate = "https://example.test/static-page/{id}/";</script>',
+		'<script type="speculationrules">{"prefetch":[{"where":{"href_matches":"\/*","not":{"href_matches":["\/wp-admin\/*","\/wp-content\/uploads\/*","/wp-content/themes/*"]}}}]}</script>',
+		'<script>const next = "https://example.test/static-page/";</script>',
+	)
+);
+
+$result = $rewriter->rewrite_html( $html, 'https://example.test/', 'index.html' );
+
+ssgwp_assert_contains(
+	'href="static-page/index.html"',
+	$result['content'],
+	'rewrite_html points pretty page links at generated index files.'
+);
+
+ssgwp_assert_contains(
+	'href="nested/page/index.html#section"',
+	$result['content'],
+	'rewrite_html preserves fragments after normalizing page URLs.'
+);
+
+ssgwp_assert_contains(
+	'href="protocol-page/index.html"',
+	$result['content'],
+	'rewrite_html rewrites protocol-relative same-site page URLs.'
+);
+
+ssgwp_assert_contains(
+	'href="encoded%20page/index.html"',
+	$result['content'],
+	'rewrite_html preserves encoded paths in generated file URLs.'
+);
+
+ssgwp_assert_contains(
+	'href="collision%20page/index.html"',
+	$result['content'],
+	'rewrite_html maps encoded spaces to distinct generated files.'
+);
+
+ssgwp_assert_contains(
+	'href="collision%2Bpage/index.html"',
+	$result['content'],
+	'rewrite_html maps literal plus signs to distinct generated files.'
+);
+
+ssgwp_assert_contains(
+	'href="nested%2Fsegment/index.html"',
+	$result['content'],
+	'rewrite_html keeps encoded slashes inside one generated path segment.'
+);
+
+ssgwp_assert_contains(
+	'href="%2E%2E/secret/index.html"',
+	$result['content'],
+	'rewrite_html keeps encoded parent segments literal.'
+);
+
+ssgwp_assert_contains(
+	'href="index-' . $query_hash . '.html#comments"',
+	$result['content'],
+	'rewrite_html rewrites non-pretty query pages to their generated files.'
+);
+
+ssgwp_assert_contains(
+	'href="static-page-' . $view_hash . '.html#items"',
+	$result['content'],
+	'rewrite_html rewrites queried pretty URLs to their generated files.'
+);
+
+ssgwp_assert_contains(
+	'href="blog/page/2/index.html#posts"',
+	$result['content'],
+	'rewrite_html rewrites archive pagination URLs to generated files.'
+);
+
+ssgwp_assert_contains(
+	'href="comments/index.html"',
+	$result['content'],
+	'rewrite_html rewrites a public page whose slug is comments.'
+);
+
+ssgwp_assert_contains(
+	'href="/static-page/{id}/"',
+	$result['content'],
+	'rewrite_html leaves templated page attributes unchanged.'
+);
+
+ssgwp_assert_contains(
+	'ping="/click-ping/ https://example.test/absolute-ping/"',
+	$result['content'],
+	'rewrite_html leaves link ping URLs dynamic.'
+);
+
+ssgwp_assert_contains(
+	'ping="/map-ping/"',
+	$result['content'],
+	'rewrite_html leaves area ping URLs dynamic.'
+);
+
+ssgwp_assert_contains(
+	'<blockquote cite="citation-source/index.html">',
+	$result['content'],
+	'rewrite_html rewrites blockquote cite page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<q cite="citation-source/index.html#quote">',
+	$result['content'],
+	'rewrite_html rewrites quote cite page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<cite cite="citation-source/index.html#inline">',
+	$result['content'],
+	'rewrite_html rewrites cite element citation page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<del cite="citation-source/index.html#deleted">',
+	$result['content'],
+	'rewrite_html rewrites deleted-content citation page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<ins cite="citation-source/index.html#inserted">',
+	$result['content'],
+	'rewrite_html rewrites inserted-content citation page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<base href="./">',
+	$result['content'],
+	'rewrite_html anchors same-site base hrefs to the static document directory.'
+);
+
+ssgwp_assert_contains(
+	'<table background="wp-content/uploads/table-bg.jpg?table=1"><tr>',
+	$result['content'],
+	'rewrite_html rewrites legacy table background asset URLs.'
+);
+
+ssgwp_assert_contains(
+	'<td background="wp-content/uploads/cell-bg.jpg?cell=1">Legacy</td>',
+	$result['content'],
+	'rewrite_html rewrites legacy table cell background asset URLs.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="home" href="index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=home links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="about" href="about-export/index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=about links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="copyright" href="copyright-export/index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=copyright links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="glossary" href="glossary-export/index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=glossary links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="payment" href="payment-export/index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=payment links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="preconnect" href="https://example.test">',
+	$result['content'],
+	'rewrite_html leaves same-origin preconnect resource hints unchanged.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="dns-prefetch" href="//example.test">',
+	$result['content'],
+	'rewrite_html leaves same-origin DNS prefetch resource hints unchanged.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="prefetch" href="prefetched-page/index.html">',
+	$result['content'],
+	'rewrite_html rewrites page prefetch hints as crawlable pages.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="prerender" href="prefetched-page/index.html#ready">',
+	$result['content'],
+	'rewrite_html rewrites page prerender hints as crawlable pages.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="preload" as="document" href="preloaded-page/index.html">',
+	$result['content'],
+	'rewrite_html rewrites document preload hints as crawlable pages.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="preload" type="text/html" href="typed-preload/index.html">',
+	$result['content'],
+	'rewrite_html rewrites HTML preload hints as crawlable pages.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="prefetch" as="image" href="wp-content/uploads/photo.jpg?prefetch=1">',
+	$result['content'],
+	'rewrite_html keeps image prefetch hints as copied assets.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="author" href="author/admin/index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=author links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="me" href="identity/index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=me links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="profile" href="profile-page/index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=profile links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link rel="amphtml" href="amp-page/index.html">',
+	$result['content'],
+	'rewrite_html treats same-site rel=amphtml links as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="url sameAs" href="microdata-profile/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org link itemprop page URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="about" href="schema-about/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org about itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="relatedLink" href="microdata-related/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org relatedLink itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="item" href="microdata-breadcrumb/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org itemprop item link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="hasPart" href="schema-part/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org hasPart itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="isPartOf" href="schema-collection/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org isPartOf itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="isBasedOnUrl" href="schema-source/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org isBasedOnUrl itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="mainEntity" href="schema-main-entity/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org mainEntity itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="mainEntityOfPage" href="schema-main-entity-link-page/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org mainEntityOfPage itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="significantLinks" href="microdata-significant/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org significantLinks itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="publishingPrinciples" href="publishing-principles/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org publishingPrinciples itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="acquireLicensePage" href="microdata-license/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org acquireLicensePage itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="author" href="schema-author/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org author itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="citation" href="citation-source/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org citation itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="publisher" href="schema-publisher/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org publisher itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="contributor" href="schema-contributor/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org contributor itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="citation" href="schema-citation/index.html">',
+	$result['content'],
+	'rewrite_html treats schema.org citation itemprop link URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<link itemprop="contentUrl" href="wp-content/uploads/social-video.mp4?link-schema=1">',
+	$result['content'],
+	'rewrite_html treats schema.org link itemprop media URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'itemid="microdata-item/index.html"',
+	$result['content'],
+	'rewrite_html treats microdata itemid URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'itemtype="schema/local/index.html https://schema.org/Article schema/secondary/index.html"',
+	$result['content'],
+	'rewrite_html rewrites same-site microdata itemtype URL tokens.'
+);
+
+ssgwp_assert_contains(
+	'about="rdfa-about/index.html" resource="rdfa-resource/index.html"',
+	$result['content'],
+	'rewrite_html treats RDFa about/resource URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'profile="metadata-profile/index.html metadata-secondary-profile/index.html"',
+	$result['content'],
+	'rewrite_html treats metadata profile URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'vocab="rdfa-vocab/index.html"',
+	$result['content'],
+	'rewrite_html treats same-site RDFa vocab URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'vocab="https://schema.org/"',
+	$result['content'],
+	'rewrite_html leaves external RDFa vocab URLs unchanged.'
+);
+
+ssgwp_assert_contains(
+	'about="[schema:Thing]" resource="_:local"',
+	$result['content'],
+	'rewrite_html preserves RDFa CURIE and blank-node values.'
+);
+
+ssgwp_assert_contains(
+	'data-href="deferred-page/index.html"',
+	$result['content'],
+	'rewrite_html treats data-href page URLs as links.'
+);
+
+ssgwp_assert_contains(
+	'data-href="wp-content/uploads/photo.jpg?deferred=1"',
+	$result['content'],
+	'rewrite_html treats data-href media URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-url="generic-page/index.html"',
+	$result['content'],
+	'rewrite_html treats data-url page URLs as links.'
+);
+
+ssgwp_assert_contains(
+	'data-link="wp-content/uploads/photo.jpg?data-link=1"',
+	$result['content'],
+	'rewrite_html treats data-link media URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-permalink="attachment-page/index.html"',
+	$result['content'],
+	'rewrite_html treats WordPress image data-permalink values as page links.'
+);
+
+ssgwp_assert_contains(
+	'data-orig-file="wp-content/uploads/original.jpg?orig=1"',
+	$result['content'],
+	'rewrite_html rewrites WordPress original image metadata URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-medium-file="wp-content/uploads/medium.jpg?medium=1"',
+	$result['content'],
+	'rewrite_html rewrites WordPress medium image metadata URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'data-large-file="wp-content/uploads/large.jpg?large=1"',
+	$result['content'],
+	'rewrite_html rewrites WordPress large image metadata URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'<form action="form-target/index.html">',
+	$result['content'],
+	'rewrite_html rewrites form action page targets.'
+);
+
+ssgwp_assert_contains(
+	'<button formaction="form-button/index.html">',
+	$result['content'],
+	'rewrite_html rewrites button formaction page targets.'
+);
+
+ssgwp_assert_contains(
+	'<input type="submit" formaction="form-input/index.html">',
+	$result['content'],
+	'rewrite_html rewrites input formaction page targets.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/prefetched-page/', $result['links'], true ),
+	'rewrite_html records page prefetch hints as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/photo.jpg?prefetch=1', $result['assets'], true ),
+	'rewrite_html records image prefetch hints as assets to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/table-bg.jpg?table=1', $result['assets'], true ),
+	'rewrite_html records legacy table background assets to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/cell-bg.jpg?cell=1', $result['assets'], true ),
+	'rewrite_html records legacy table cell background assets to copy.'
+);
+
+foreach (
+	array(
+		'about'     => 'https://example.test/about-export/',
+		'copyright' => 'https://example.test/copyright-export/',
+		'glossary'  => 'https://example.test/glossary-export/',
+		'payment'   => 'https://example.test/payment-export/',
+	) as $rel => $link
+) {
+	ssgwp_assert_same(
+		true,
+		in_array( $link, $result['links'], true ),
+		'rewrite_html records rel=' . $rel . ' links as pages to crawl.'
+	);
+}
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/author/admin/', $result['links'], true ),
+	'rewrite_html records rel=author links as pages to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/identity/', $result['links'], true ),
+	'rewrite_html records rel=me links as pages to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/profile-page/', $result['links'], true ),
+	'rewrite_html records rel=profile links as pages to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/amp-page/', $result['links'], true ),
+	'rewrite_html records rel=amphtml links as pages to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/preloaded-page/', $result['links'], true ),
+	'rewrite_html records document preload hints as pages to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/typed-preload/', $result['links'], true ),
+	'rewrite_html records HTML preload hints as pages to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/microdata-profile/', $result['links'], true ),
+	'rewrite_html records schema.org link itemprop page URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-about/', $result['links'], true ),
+	'rewrite_html records schema.org about itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/microdata-related/', $result['links'], true ),
+	'rewrite_html records schema.org relatedLink itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/microdata-breadcrumb/', $result['links'], true ),
+	'rewrite_html records schema.org itemprop item links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-part/', $result['links'], true ),
+	'rewrite_html records schema.org hasPart itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-collection/', $result['links'], true ),
+	'rewrite_html records schema.org isPartOf itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-source/', $result['links'], true ),
+	'rewrite_html records schema.org isBasedOnUrl itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-main-entity/', $result['links'], true ),
+	'rewrite_html records schema.org mainEntity itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-main-entity-link-page/', $result['links'], true ),
+	'rewrite_html records schema.org mainEntityOfPage itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/microdata-significant/', $result['links'], true ),
+	'rewrite_html records schema.org significantLinks itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/publishing-principles/', $result['links'], true ),
+	'rewrite_html records schema.org publishingPrinciples itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/microdata-license/', $result['links'], true ),
+	'rewrite_html records schema.org acquireLicensePage itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-author/', $result['links'], true ),
+	'rewrite_html records schema.org author itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-publisher/', $result['links'], true ),
+	'rewrite_html records schema.org publisher itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-contributor/', $result['links'], true ),
+	'rewrite_html records schema.org contributor itemprop links as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema-token-profile/', $result['links'], true ),
+	'rewrite_html records schema.org meta itemprop token lists as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/social-video.mp4?link-schema=1', $result['assets'], true ),
+	'rewrite_html records schema.org link itemprop media URLs as assets to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/social.jpg?schema-token=1', $result['assets'], true ),
+	'rewrite_html records schema.org meta itemprop asset token lists as assets to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/microdata-item/', $result['links'], true ),
+	'rewrite_html records microdata itemid URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema/local', $result['links'], true ),
+	'rewrite_html records same-site microdata itemtype root-relative URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/schema/secondary/', $result['links'], true ),
+	'rewrite_html records same-site microdata itemtype absolute URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/rdfa-about/', $result['links'], true ),
+	'rewrite_html records RDFa about URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/rdfa-resource/', $result['links'], true ),
+	'rewrite_html records RDFa resource URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/metadata-profile/', $result['links'], true ),
+	'rewrite_html records metadata profile URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/metadata-secondary-profile/', $result['links'], true ),
+	'rewrite_html records metadata profile URL lists as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/rdfa-vocab/', $result['links'], true ),
+	'rewrite_html records RDFa vocab URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/svg-linked-page/', $result['links'], true ),
+	'rewrite_html records SVG anchor xlink hrefs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/deferred-page/', $result['links'], true ),
+	'rewrite_html records data-href page URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/generic-page/', $result['links'], true ),
+	'rewrite_html records data-url page URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/attachment-page/', $result['links'], true ),
+	'rewrite_html records WordPress image data-permalink values as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/citation-source/', $result['links'], true ),
+	'rewrite_html records citation URLs as links to crawl.'
+);
+
+foreach (
+	array(
+		'https://example.test/click-ping/',
+		'https://example.test/absolute-ping/',
+		'https://example.test/map-ping/',
+	)
+	as $ping_link
+) {
+	ssgwp_assert_same(
+		false,
+		in_array( $ping_link, $result['links'], true ),
+		'rewrite_html does not record ping URLs as links to crawl: ' . $ping_link
+	);
+}
+
+foreach (
+	array(
+		'https://example.test/form-target/',
+		'https://example.test/form-button/',
+		'https://example.test/form-input/',
+	)
+	as $form_link
+) {
+	ssgwp_assert_same(
+		true,
+		in_array( $form_link, $result['links'], true ),
+		'rewrite_html records form navigation URLs as links to crawl: ' . $form_link
+	);
+}
+
+ssgwp_assert_same(
+	false,
+	in_array( 'https://example.test/?rest_route=/wp/v2/posts', $result['links'], true ),
+	'rewrite_html does not record query-based REST API URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	false,
+	in_array( 'https://example.test/?feed=rss2', $result['links'], true ),
+	'rewrite_html does not record query-based feed URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	false,
+	in_array( 'https://example.test/?oembed=true&url=https%3A%2F%2Fexample.test%2Fstatic-page%2F', $result['links'], true ),
+	'rewrite_html does not record query-based oEmbed URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/photo.jpg?deferred=1', $result['assets'], true ),
+	'rewrite_html records data-href media URLs as assets to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/photo.jpg?data-link=1', $result['assets'], true ),
+	'rewrite_html records data-link media URLs as assets to copy.'
+);
+
+foreach (
+	array(
+		'https://example.test/wp-content/uploads/original.jpg?orig=1',
+		'https://example.test/wp-content/uploads/medium.jpg?medium=1',
+		'https://example.test/wp-content/uploads/large.jpg?large=1',
+	)
+	as $metadata_asset
+) {
+	ssgwp_assert_same(
+		true,
+		in_array( $metadata_asset, $result['assets'], true ),
+		'rewrite_html records WordPress image metadata URLs as assets to copy: ' . $metadata_asset
+	);
+}
+
+ssgwp_assert_contains(
+	'src="wp-content/uploads/photo.jpg?size=large"',
+	$result['content'],
+	'rewrite_html keeps asset URLs as asset file paths with query strings.'
+);
+
+ssgwp_assert_contains(
+	'srcset="wp-content/uploads/photo.jpg 1x, wp-content/uploads/photo-2x.jpg 2x"',
+	$result['content'],
+	'rewrite_html rewrites srcset candidates to copied asset files.'
+);
+
+ssgwp_assert_contains(
+	'srcset="data:image/gif;base64,R0lGODlhAQABAAAAACw= 1x, wp-content/uploads/photo-2x.jpg 2x"',
+	$result['content'],
+	'rewrite_html rewrites mixed data and same-site srcset candidates.'
+);
+
+ssgwp_assert_contains(
+	'imagesrcset="wp-content/uploads/photo.jpg 1x, wp-content/uploads/photo-2x.jpg 2x"',
+	$result['content'],
+	'rewrite_html rewrites responsive image preload srcset candidates.'
+);
+
+ssgwp_assert_contains(
+	'<img class="longdesc" src="wp-content/uploads/photo.jpg?longdesc=1" longdesc="long-description/index.html" alt="">',
+	$result['content'],
+	'rewrite_html rewrites image long description page URLs.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/long-description/', $result['links'], true ),
+	'rewrite_html records image long description page URLs as links to crawl.'
+);
+
+ssgwp_assert_contains(
+	'data-bg="wp-content/uploads/bg.jpg?lazy=1"',
+	$result['content'],
+	'rewrite_html rewrites lazy background asset attributes on non-image tags.'
+);
+
+ssgwp_assert_contains(
+	'data-background="wp-content/uploads/bg.jpg?lazy=2"',
+	$result['content'],
+	'rewrite_html rewrites lazy data-background asset attributes.'
+);
+
+ssgwp_assert_contains(
+	'data-bgset="wp-content/uploads/photo.jpg 1x, wp-content/uploads/photo-2x.jpg 2x"',
+	$result['content'],
+	'rewrite_html rewrites lazy background srcset attributes.'
+);
+
+ssgwp_assert_contains(
+	'data-src="wp-content/uploads/photo.jpg?lazy=3"',
+	$result['content'],
+	'rewrite_html rewrites lazy data-src attributes on non-image tags.'
+);
+
+ssgwp_assert_contains(
+	'data-original="wp-content/uploads/photo.jpg?lazy=4"',
+	$result['content'],
+	'rewrite_html rewrites lazy data-original attributes.'
+);
+
+ssgwp_assert_contains(
+	'data-poster="wp-content/uploads/bg.jpg?lazy=5"',
+	$result['content'],
+	'rewrite_html rewrites lazy data-poster attributes.'
+);
+
+ssgwp_assert_contains(
+	'data-src="lazy-frame/index.html"',
+	$result['content'],
+	'rewrite_html treats lazy iframe page sources as page links.'
+);
+
+ssgwp_assert_contains(
+	'<iframe src="framed-page/index.html"></iframe>',
+	$result['content'],
+	'rewrite_html treats iframe src page URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<iframe src="framed-page/index.html" longdesc="frame-description/index.html"></iframe>',
+	$result['content'],
+	'rewrite_html rewrites iframe long description page URLs.'
+);
+
+ssgwp_assert_contains(
+	'<frame src="legacy-frame/index.html" longdesc="frame-description/index.html">',
+	$result['content'],
+	'rewrite_html treats legacy frame src and longdesc URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'data-lazy-src="wp-content/uploads/photo.jpg?frame=1"',
+	$result['content'],
+	'rewrite_html keeps lazy iframe media sources as assets.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/lazy-frame/', $result['links'], true ),
+	'rewrite_html records lazy iframe page sources as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/photo.jpg?frame=1', $result['assets'], true ),
+	'rewrite_html records lazy iframe media sources as assets to copy.'
+);
+
+ssgwp_assert_contains(
+	'<embed src="embed-page/index.html">',
+	$result['content'],
+	'rewrite_html treats embed src page URLs as page links.'
+);
+
+ssgwp_assert_contains(
+	'<embed src="wp-content/uploads/social-video.mp4?embed=1">',
+	$result['content'],
+	'rewrite_html keeps embed src media URLs as assets.'
+);
+
+ssgwp_assert_contains(
+	'<embed data-src="embed-page/index.html" data-lazy-src="wp-content/uploads/social-video.mp4?lazy-embed=1">',
+	$result['content'],
+	'rewrite_html treats lazy embed sources as page-or-asset URLs.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/framed-page/', $result['links'], true ),
+	'rewrite_html records iframe src page URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/frame-description/', $result['links'], true ),
+	'rewrite_html records frame long description URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/legacy-frame/', $result['links'], true ),
+	'rewrite_html records legacy frame src URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/embed-page/', $result['links'], true ),
+	'rewrite_html records embed src page URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/social-video.mp4?embed=1', $result['assets'], true ),
+	'rewrite_html records embed src media URLs as assets to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/social-video.mp4?lazy-embed=1', $result['assets'], true ),
+	'rewrite_html records lazy embed media URLs as assets to copy.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="og:url" content="nested/page/index.html#share">',
+	$result['content'],
+	'rewrite_html rewrites Open Graph page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="al:web:url" content="app-link-web/index.html">',
+	$result['content'],
+	'rewrite_html rewrites App Links web fallback URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="og:image" content="wp-content/uploads/social.jpg?ver=1">',
+	$result['content'],
+	'rewrite_html rewrites Open Graph image URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="og:audio" content="wp-content/uploads/social-audio.mp3?ver=1">',
+	$result['content'],
+	'rewrite_html rewrites Open Graph audio URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="og:video" content="wp-content/uploads/social-video.mp4?ver=1">',
+	$result['content'],
+	'rewrite_html rewrites Open Graph video URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="twitter:image" content="wp-content/uploads/photo.jpg">',
+	$result['content'],
+	'rewrite_html rewrites Twitter image URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-TileImage" content="wp-content/uploads/tile.png">',
+	$result['content'],
+	'rewrite_html rewrites Windows tile image URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-square70x70logo" content="wp-content/uploads/tile.png?small=1">',
+	$result['content'],
+	'rewrite_html rewrites small Windows tile image URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-wide310x150logo" content="wp-content/uploads/tile.png?wide=1">',
+	$result['content'],
+	'rewrite_html rewrites wide Windows tile image URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-config" content="browserconfig.xml">',
+	$result['content'],
+	'rewrite_html rewrites Windows browser config URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-starturl" content="start-page/index.html">',
+	$result['content'],
+	'rewrite_html rewrites Windows pinned-site start URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-task" content="name=Docs;action-uri=task-target/index.html;icon-uri=wp-content/uploads/tile.png?task=1">',
+	$result['content'],
+	'rewrite_html rewrites Windows pinned-site task URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="contentUrl" content="wp-content/uploads/social-video.mp4?schema=1">',
+	$result['content'],
+	'rewrite_html rewrites schema.org contentUrl media URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="embedUrl" content="video-player/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org embedUrl page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="citation" content="citation-source/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org citation page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="sameAs" content="schema-profile/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org sameAs page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="mentions" content="schema-mentions/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org mentions page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="discussionUrl" content="schema-discussion/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org discussionUrl page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="item" content="schema-breadcrumb/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org item page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="hasPart" content="schema-part/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org hasPart page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="isPartOf" content="schema-collection/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org isPartOf page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="isBasedOnUrl" content="schema-source/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org isBasedOnUrl page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="relatedLink" content="schema-related/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org relatedLink page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="significantLinks" content="schema-significant/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org significantLinks page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="license" content="schema-license/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org license page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="publishingPrinciples" content="publishing-principles/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org publishingPrinciples page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="author" content="schema-author/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org author page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="publisher" content="schema-publisher/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org publisher page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="reviewedBy" content="schema-reviewer/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org reviewedBy page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="subjectOf" content="schema-subject/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org subjectOf page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="mainEntityOfPage" content="schema-main-entity-page/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org mainEntityOfPage URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="citation" content="schema-citation/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org citation page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="url sameAs" content="schema-token-profile/index.html">',
+	$result['content'],
+	'rewrite_html rewrites schema.org meta itemprop page URL tokens.'
+);
+
+ssgwp_assert_contains(
+	'<meta itemprop="image thumbnailUrl" content="wp-content/uploads/social.jpg?schema-token=1">',
+	$result['content'],
+	'rewrite_html rewrites schema.org meta itemprop asset URL tokens.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="article:author" content="author/admin/index.html">',
+	$result['content'],
+	'rewrite_html rewrites article author page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="article:publisher" content="publisher/index.html">',
+	$result['content'],
+	'rewrite_html rewrites article publisher page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta property="og:see_also" content="related/index.html">',
+	$result['content'],
+	'rewrite_html rewrites Open Graph related page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="twitter:player" content="video-player/index.html">',
+	$result['content'],
+	'rewrite_html rewrites Twitter player page URLs in meta content attributes.'
+);
+
+ssgwp_assert_contains(
+	'<meta name="twitter:player:stream" content="wp-content/uploads/social-video.mp4?stream=1">',
+	$result['content'],
+	'rewrite_html rewrites Twitter player stream URLs in meta content attributes.'
+);
+
+$meta_only_result = $rewriter->rewrite_html(
+	'<meta property="og:url" content="/meta-page/">'
+		. '<meta property="al:web:url" content="/app-link-web/">'
+		. '<meta property="og:image" content="/wp-content/uploads/social.jpg">'
+		. '<meta property="article:publisher" content="/publisher/">'
+		. '<meta property="og:see_also" content="/related/">'
+		. '<meta itemprop="embedUrl" content="/video-player/">'
+		. '<meta itemprop="sameAs" content="/schema-profile/">'
+		. '<meta itemprop="mentions" content="/schema-mentions/">'
+		. '<meta itemprop="discussionUrl" content="/schema-discussion/">'
+		. '<meta itemprop="item" content="/schema-breadcrumb/">'
+		. '<meta itemprop="hasPart" content="/schema-part/">'
+		. '<meta itemprop="isPartOf" content="/schema-collection/">'
+		. '<meta itemprop="isBasedOnUrl" content="/schema-source/">'
+		. '<meta itemprop="relatedLink" content="/schema-related/">'
+		. '<meta itemprop="significantLinks" content="/schema-significant/">'
+		. '<meta itemprop="license" content="/schema-license/">'
+		. '<meta itemprop="publishingPrinciples" content="/publishing-principles/">'
+		. '<meta itemprop="author" content="/schema-author/">'
+		. '<meta itemprop="publisher" content="/schema-publisher/">'
+		. '<meta itemprop="reviewedBy" content="/schema-reviewer/">'
+		. '<meta itemprop="subjectOf" content="/schema-subject/">'
+		. '<meta itemprop="mainEntityOfPage" content="/schema-main-entity-page/">'
+		. '<meta itemprop="citation" content="/schema-citation/">'
+		. '<meta itemprop="url sameAs" content="/schema-token-profile/">'
+		. '<meta itemprop="image thumbnailUrl" content="/wp-content/uploads/social.jpg?schema-token=1">'
+		. '<meta name="twitter:player" content="/video-player/">'
+		. '<meta name="msapplication-TileImage" content="/wp-content/uploads/tile.png">'
+		. '<meta name="msapplication-square310x310logo" content="/wp-content/uploads/tile.png?square=1">'
+		. '<meta name="msapplication-config" content="/browserconfig.xml">'
+		. '<meta name="msapplication-starturl" content="/start-page/">'
+		. '<meta name="msapplication-task" content="name=Docs;action-uri=/task-target/;icon-uri=/wp-content/uploads/tile.png?task=1">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_same(
+	array(
+		'https://example.test/meta-page/',
+		'https://example.test/app-link-web/',
+		'https://example.test/publisher/',
+		'https://example.test/related/',
+		'https://example.test/video-player/',
+		'https://example.test/schema-profile/',
+		'https://example.test/schema-mentions/',
+		'https://example.test/schema-discussion/',
+		'https://example.test/schema-breadcrumb/',
+		'https://example.test/schema-part/',
+		'https://example.test/schema-collection/',
+		'https://example.test/schema-source/',
+		'https://example.test/schema-related/',
+		'https://example.test/schema-significant/',
+		'https://example.test/schema-license/',
+		'https://example.test/publishing-principles/',
+		'https://example.test/schema-author/',
+		'https://example.test/schema-publisher/',
+		'https://example.test/schema-reviewer/',
+		'https://example.test/schema-subject/',
+		'https://example.test/schema-main-entity-page/',
+		'https://example.test/schema-citation/',
+		'https://example.test/schema-token-profile/',
+		'https://example.test/start-page/',
+		'https://example.test/task-target/',
+	),
+	$meta_only_result['links'],
+	'rewrite_html records meta page, social, and structured-data page URLs as links to crawl.'
+);
+
+ssgwp_assert_same(
+	array(
+		'https://example.test/wp-content/uploads/social.jpg',
+		'https://example.test/wp-content/uploads/social.jpg?schema-token=1',
+		'https://example.test/wp-content/uploads/tile.png',
+		'https://example.test/wp-content/uploads/tile.png?square=1',
+		'https://example.test/browserconfig.xml',
+		'https://example.test/wp-content/uploads/tile.png?task=1',
+	),
+	$meta_only_result['assets'],
+	'rewrite_html records meta image and tile URLs as assets to copy.'
+);
+
+$browser_config_none_result = $rewriter->rewrite_html(
+	'<meta name="msapplication-config" content="none">',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'<meta name="msapplication-config" content="none">',
+	$browser_config_none_result['content'],
+	'rewrite_html leaves disabled Windows browser config metadata unchanged.'
+);
+
+ssgwp_assert_same(
+	array(),
+	$browser_config_none_result['assets'],
+	'rewrite_html does not record disabled Windows browser config metadata as an asset.'
+);
+
+ssgwp_assert_contains(
+	'url("wp-content/uploads/bg.jpg?ver=1")',
+	$result['content'],
+	'rewrite_html rewrites inline CSS asset URLs.'
+);
+
+ssgwp_assert_contains(
+	'image-set("wp-content/uploads/image-set.jpg?density=1" 1x,'
+		. ' "wp-content/uploads/image-set-2x.jpg?density=2" 2x, type("image/jpeg"))',
+	$result['content'],
+	'rewrite_html rewrites quoted CSS image-set asset URLs.'
+);
+
+ssgwp_assert_contains(
+	'style="background-image:url(wp-content/uploads/bg.jpg?inline=1)"',
+	$result['content'],
+	'rewrite_html rewrites inline style attribute URLs.'
+);
+
+ssgwp_assert_contains(
+	'style=background:url(wp-content/uploads/bg.jpg?unquoted=1)',
+	$result['content'],
+	'rewrite_html rewrites unquoted inline style attribute URLs.'
+);
+
+ssgwp_assert_contains(
+	'href=&quot;embedded-page/index.html&quot;',
+	$result['content'],
+	'rewrite_html rewrites page links inside iframe srcdoc attributes.'
+);
+
+ssgwp_assert_contains(
+	'src=&quot;wp-content/uploads/photo.jpg?srcdoc=1&quot;',
+	$result['content'],
+	'rewrite_html rewrites asset URLs inside iframe srcdoc attributes.'
+);
+
+ssgwp_assert_contains(
+	'url(&quot;wp-content/uploads/bg.jpg?srcdoc=1&quot;)',
+	$result['content'],
+	'rewrite_html rewrites CSS URLs inside iframe srcdoc attributes.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/embedded-page/', $result['links'], true ),
+	'rewrite_html records iframe srcdoc page links as links to crawl.'
+);
+
+ssgwp_assert_contains(
+	'data="object-page/index.html"',
+	$result['content'],
+	'rewrite_html rewrites object data page URLs to generated files.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/object-page/', $result['links'], true ),
+	'rewrite_html records object data page URLs as links to crawl.'
+);
+
+ssgwp_assert_contains(
+	'data="wp-content/uploads/social-video.mp4?object=1"',
+	$result['content'],
+	'rewrite_html keeps object data media URLs as copied assets.'
+);
+
+ssgwp_assert_contains(
+	'<track kind="captions" src="wp-content/uploads/captions.vtt?lang=en">',
+	$result['content'],
+	'rewrite_html rewrites video track captions as copied assets.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/social-video.mp4?object=1', $result['assets'], true ),
+	'rewrite_html records object data media URLs as assets to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/captions.vtt?lang=en', $result['assets'], true ),
+	'rewrite_html records video track captions as assets to copy.'
+);
+
+ssgwp_assert_contains(
+	'<param name="movie" value="wp-content/uploads/social-video.mp4?param=1">',
+	$result['content'],
+	'rewrite_html rewrites known URL-bearing param asset values.'
+);
+
+ssgwp_assert_contains(
+	'<param name="url" value="nested/page/index.html">',
+	$result['content'],
+	'rewrite_html rewrites known URL-bearing param page values.'
+);
+
+ssgwp_assert_contains(
+	'<param name="quality" value="/static-page/">',
+	$result['content'],
+	'rewrite_html leaves non-URL param control values unchanged.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/nested/page/', $result['links'], true ),
+	'rewrite_html records URL-bearing param page values as links to crawl.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/social-video.mp4?param=1', $result['assets'], true ),
+	'rewrite_html records URL-bearing param asset values as assets to copy.'
+);
+
+ssgwp_assert_contains(
+	'href="wp-content/uploads/filter.png?svg=1"',
+	$result['content'],
+	'rewrite_html rewrites SVG filter image href attributes.'
+);
+
+ssgwp_assert_contains(
+	'xlink:href="wp-content/uploads/filter-2x.png?svg=2"',
+	$result['content'],
+	'rewrite_html rewrites SVG filter image xlink:href attributes.'
+);
+
+ssgwp_assert_contains(
+	'<svg><a xlink:href="svg-linked-page/index.html"><text>SVG page link</text></a></svg>',
+	$result['content'],
+	'rewrite_html treats SVG anchor xlink hrefs as crawlable page links.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/filter.png?svg=1', $result['assets'], true ),
+	'rewrite_html records SVG filter image href assets to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/filter-2x.png?svg=2', $result['assets'], true ),
+	'rewrite_html records SVG filter image xlink:href assets to copy.'
+);
+
+ssgwp_assert_contains(
+	'nested\/page\/index.html',
+	$result['content'],
+	'rewrite_html rewrites JSON-escaped same-site page URLs.'
+);
+
+ssgwp_assert_contains(
+	'"protocol":"protocol-text/index.html"',
+	$result['content'],
+	'rewrite_html rewrites protocol-relative same-site page URLs in JSON text.'
+);
+
+ssgwp_assert_contains(
+	'"protocolEscaped":"protocol-escaped\/index.html"',
+	$result['content'],
+	'rewrite_html rewrites JSON-escaped protocol-relative same-site page URLs.'
+);
+
+ssgwp_assert_contains(
+	'"queryOnly":"index-' . $text_query_hash . '.html#text"',
+	$result['content'],
+	'rewrite_html rewrites absolute same-site text URLs with query-only paths.'
+);
+
+ssgwp_assert_contains(
+	'"escapedQueryOnly":"index-' . $escaped_text_query_hash . '.html#text"',
+	$result['content'],
+	'rewrite_html rewrites JSON-escaped same-site text URLs with query-only paths.'
+);
+
+ssgwp_assert_contains(
+	'"https://example.test.evil/static-page/"',
+	$result['content'],
+	'rewrite_html leaves absolute lookalike host text URLs unchanged.'
+);
+
+ssgwp_assert_contains(
+	'"https:\/\/example.test.evil\/static-page\/"',
+	$result['content'],
+	'rewrite_html leaves JSON-escaped lookalike host text URLs unchanged.'
+);
+
+ssgwp_assert_contains(
+	'"//example.test.evil/static-page/"',
+	$result['content'],
+	'rewrite_html leaves protocol-relative lookalike host text URLs unchanged.'
+);
+
+ssgwp_assert_contains(
+	'"root":"nested\/page\/index.html"',
+	$result['content'],
+	'rewrite_html rewrites JSON-escaped root-relative page URLs.'
+);
+
+ssgwp_assert_contains(
+	'"rootAsset":"wp-content\/uploads\/photo.jpg?json=1"',
+	$result['content'],
+	'rewrite_html rewrites JSON-escaped root-relative asset URLs.'
+);
+
+ssgwp_assert_contains(
+	'"plainRoot":"static-page/index.html"',
+	$result['content'],
+	'rewrite_html rewrites plain root-relative page URLs in JSON text.'
+);
+
+ssgwp_assert_contains(
+	'"plainAsset":"wp-content/uploads/photo.jpg?plain=1"',
+	$result['content'],
+	'rewrite_html rewrites plain root-relative asset URLs in JSON text.'
+);
+
+ssgwp_assert_contains(
+	'<meta charset="UTF-8" />',
+	$result['content'],
+	'rewrite_html does not rewrite self-closing tag slashes as URLs.'
+);
+
+ssgwp_assert_contains(
+	'"href_matches":"\/*"',
+	$result['content'],
+	'rewrite_html does not rewrite wildcard speculation-rule URL patterns.'
+);
+
+ssgwp_assert_contains(
+	'"\/wp-admin\/*"',
+	$result['content'],
+	'rewrite_html does not rewrite escaped wildcard URL patterns.'
+);
+
+ssgwp_assert_contains(
+	'"\/wp-content\/uploads\/*"',
+	$result['content'],
+	'rewrite_html does not rewrite escaped wildcard WordPress asset patterns.'
+);
+
+ssgwp_assert_contains(
+	'"/wp-content/themes/*"',
+	$result['content'],
+	'rewrite_html does not rewrite plain wildcard WordPress asset patterns.'
+);
+
+ssgwp_assert_contains(
+	'"https://example.test/wp-content/uploads/*"',
+	$result['content'],
+	'rewrite_html does not rewrite absolute wildcard WordPress asset patterns.'
+);
+
+ssgwp_assert_contains(
+	'"https:\/\/example.test\/wp-content\/uploads\/*"',
+	$result['content'],
+	'rewrite_html does not rewrite escaped absolute wildcard asset patterns.'
+);
+
+ssgwp_assert_contains(
+	'"//example.test/wp-content/uploads/*"',
+	$result['content'],
+	'rewrite_html does not rewrite protocol-relative wildcard asset patterns.'
+);
+
+ssgwp_assert_contains(
+	'"https://example.test/static-page/{id}/"',
+	$result['content'],
+	'rewrite_html does not rewrite absolute templated page patterns.'
+);
+
+ssgwp_assert_contains(
+	'const next = "static-page/index.html";',
+	$result['content'],
+	'rewrite_html rewrites JavaScript same-site page strings.'
+);
+
+$rewritten_json = $rewriter->rewrite_text_asset(
+	'{"url":"https:\/\/example.test\/nested\/page\/",'
+		. '"asset":"https:\/\/example.test\/wp-content\/uploads\/photo.jpg?size=large",'
+		. '"protocol":"\/\/example.test\/protocol-escaped\/",'
+		. '"root":"\/static-page\/",'
+		. '"root_asset":"\/wp-content\/uploads\/photo.jpg?root=1"}',
+	'app/data.json'
+);
+
+ssgwp_assert_contains(
+	'..\/nested\/page\/index.html',
+	$rewritten_json,
+	'rewrite_text_asset rewrites JSON-escaped page URLs to generated files.'
+);
+
+ssgwp_assert_contains(
+	'..\/wp-content\/uploads\/photo.jpg?size=large',
+	$rewritten_json,
+	'rewrite_text_asset rewrites JSON-escaped asset URLs to copied files.'
+);
+
+ssgwp_assert_contains(
+	'..\/protocol-escaped\/index.html',
+	$rewritten_json,
+	'rewrite_text_asset rewrites JSON-escaped protocol-relative page URLs.'
+);
+
+ssgwp_assert_contains(
+	'..\/static-page\/index.html',
+	$rewritten_json,
+	'rewrite_text_asset rewrites JSON-escaped root-relative page URLs.'
+);
+
+ssgwp_assert_contains(
+	'..\/wp-content\/uploads\/photo.jpg?root=1',
+	$rewritten_json,
+	'rewrite_text_asset rewrites JSON-escaped root-relative asset URLs.'
+);
+
+$rewritten_manifest = $rewriter->rewrite_text_asset_with_assets(
+	'{"icons":[{"src":"icon-192.png"},{"src":".hidden.png"},{"src":"icons/icon.png"},{"src":".\/icons\/maskable.svg?purpose=any"},{"src":"..\/shared\/logo.webp"}]}',
+	'wp-content/plugins/app/manifest.json'
+);
+
+ssgwp_assert_contains(
+	'"src":"icon-192.png"',
+	$rewritten_manifest['content'],
+	'rewrite_text_asset_with_assets rewrites sibling manifest icon paths.'
+);
+
+ssgwp_assert_contains(
+	'"src":"icons/icon.png"',
+	$rewritten_manifest['content'],
+	'rewrite_text_asset_with_assets rewrites same-directory manifest icon paths.'
+);
+
+ssgwp_assert_contains(
+	'"src":".hidden.png"',
+	$rewritten_manifest['content'],
+	'rewrite_text_asset_with_assets leaves hidden sibling asset paths unchanged.'
+);
+
+ssgwp_assert_contains(
+	'"src":"icons\/maskable.svg?purpose=any"',
+	$rewritten_manifest['content'],
+	'rewrite_text_asset_with_assets normalizes escaped manifest icon paths.'
+);
+
+ssgwp_assert_same(
+	array(
+		'https://example.test/wp-content/plugins/app/icon-192.png',
+		'https://example.test/wp-content/plugins/app/icons/icon.png',
+		'https://example.test/wp-content/plugins/app/icons/maskable.svg?purpose=any',
+		'https://example.test/wp-content/plugins/shared/logo.webp',
+	),
+	$rewritten_manifest['assets'],
+	'rewrite_text_asset_with_assets records relative manifest icon assets to copy.'
+);
+
+$rewritten_copied_html = $rewriter->rewrite_text_asset_with_assets(
+	'<meta http-equiv="refresh" content="0; url=/static-page/">'
+		. '<meta property="og:image" content="/wp-content/uploads/social.jpg">',
+	'wp-content/plugins/app/landing.html'
+);
+
+ssgwp_assert_contains(
+	'content="0; url=../../../static-page/index.html"',
+	$rewritten_copied_html['content'],
+	'rewrite_text_asset_with_assets rewrites meta refresh URLs in copied HTML assets.'
+);
+
+ssgwp_assert_contains(
+	'content="../../uploads/social.jpg"',
+	$rewritten_copied_html['content'],
+	'rewrite_text_asset_with_assets rewrites social meta URLs in copied HTML assets.'
+);
+
+$rewritten_copied_svg = $rewriter->rewrite_text_asset_with_assets(
+	'<svg><filter><feImage href="icons/filter.png"></feImage></filter></svg>',
+	'wp-content/plugins/app/filter.svg'
+);
+
+ssgwp_assert_contains(
+	'href="icons/filter.png"',
+	$rewritten_copied_svg['content'],
+	'rewrite_text_asset_with_assets rewrites SVG filter image href attributes.'
+);
+
+ssgwp_assert_same(
+	array( 'https://example.test/wp-content/plugins/app/icons/filter.png' ),
+	$rewritten_copied_svg['assets'],
+	'rewrite_text_asset_with_assets records SVG filter image href assets to copy.'
+);
+
+$rewritten_copied_xml = $rewriter->rewrite_text_asset_with_assets(
+	'<browserconfig><msapplication><tile>'
+		. '<square70x70logo src="tile-small.png"/>'
+		. '<square150x150logo src="icons/tile-150.png"/>'
+		. '</tile></msapplication></browserconfig>',
+	'wp-content/plugins/app/browserconfig.xml'
+);
+
+ssgwp_assert_contains(
+	'src="tile-small.png"',
+	$rewritten_copied_xml['content'],
+	'rewrite_text_asset_with_assets rewrites XML sibling asset paths.'
+);
+
+ssgwp_assert_contains(
+	'src="icons/tile-150.png"',
+	$rewritten_copied_xml['content'],
+	'rewrite_text_asset_with_assets rewrites XML nested asset paths.'
+);
+
+ssgwp_assert_same(
+	array(
+		'https://example.test/wp-content/plugins/app/tile-small.png',
+		'https://example.test/wp-content/plugins/app/icons/tile-150.png',
+	),
+	$rewritten_copied_xml['assets'],
+	'rewrite_text_asset_with_assets records XML tile assets to copy.'
+);
+
+$rewritten_asset_text = $rewriter->rewrite_text_asset(
+	'asset=/wp-content/uploads/photo.jpg?text=1 escaped=\/wp-content\/uploads\/photo.jpg?text=2',
+	'app/app.js'
+);
+
+ssgwp_assert_contains(
+	'asset=../wp-content/uploads/photo.jpg?text=1',
+	$rewritten_asset_text,
+	'rewrite_text_asset rewrites unstructured root-relative WordPress asset paths.'
+);
+
+ssgwp_assert_contains(
+	'escaped=..\/wp-content\/uploads\/photo.jpg?text=2',
+	$rewritten_asset_text,
+	'rewrite_text_asset rewrites unstructured escaped root-relative WordPress asset paths.'
+);
+
+$rewritten_js = $rewriter->rewrite_text_asset(
+	'const next = "https://example.test/static-page/";'
+		. ' const protocol = "//example.test/protocol-text/";'
+		. ' const root = "/nested/page/";',
+	'app/app.js'
+);
+
+ssgwp_assert_contains(
+	'../static-page/index.html',
+	$rewritten_js,
+	'rewrite_text_asset rewrites JavaScript same-site page strings.'
+);
+
+ssgwp_assert_contains(
+	'../nested/page/index.html',
+	$rewritten_js,
+	'rewrite_text_asset rewrites JavaScript root-relative page strings.'
+);
+
+ssgwp_assert_contains(
+	'../protocol-text/index.html',
+	$rewritten_js,
+	'rewrite_text_asset rewrites JavaScript protocol-relative page strings.'
+);
+
+$rewritten_player_json = $rewriter->rewrite_text_asset_with_assets(
+	'{"captions":"captions.vtt","runtime":"runtime.wasm",'
+		. '"worker":"nested\/worker.wasm","thumbnail":"poster.webp"}',
+	'wp-content/plugins/player/config.json'
+);
+
+ssgwp_assert_contains(
+	'"captions":"captions.vtt"',
+	$rewritten_player_json['content'],
+	'rewrite_text_asset_with_assets rewrites relative WebVTT captions.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/plugins/player/captions.vtt', $rewritten_player_json['assets'], true ),
+	'rewrite_text_asset_with_assets records relative WebVTT captions to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/plugins/player/runtime.wasm', $rewritten_player_json['assets'], true ),
+	'rewrite_text_asset_with_assets records relative WebAssembly modules to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/plugins/player/nested/worker.wasm', $rewritten_player_json['assets'], true ),
+	'rewrite_text_asset_with_assets records escaped relative WebAssembly modules to copy.'
+);
+
+$rewritten_sourcemap_css = $rewriter->rewrite_text_asset_with_assets(
+	'.app{color:red}/*# sourceMappingURL=/wp-content/plugins/app/maps/app.css.map */',
+	'wp-content/plugins/app/styles/app.css'
+);
+
+ssgwp_assert_contains(
+	'sourceMappingURL=../maps/app.css.map',
+	$rewritten_sourcemap_css['content'],
+	'rewrite_text_asset_with_assets rewrites CSS source map references.'
+);
+
+ssgwp_assert_same(
+	array( 'https://example.test/wp-content/plugins/app/maps/app.css.map' ),
+	$rewritten_sourcemap_css['assets'],
+	'rewrite_text_asset_with_assets records CSS source maps to copy.'
+);
+
+$rewritten_sourcemap_js = $rewriter->rewrite_text_asset_with_assets(
+	'console.log("app");' . "\n" . '//# sourceMappingURL=app.js.map',
+	'wp-content/plugins/app/app.js'
+);
+
+ssgwp_assert_contains(
+	'sourceMappingURL=app.js.map',
+	$rewritten_sourcemap_js['content'],
+	'rewrite_text_asset_with_assets preserves sibling JavaScript source map paths.'
+);
+
+ssgwp_assert_same(
+	array( 'https://example.test/wp-content/plugins/app/app.js.map' ),
+	$rewritten_sourcemap_js['assets'],
+	'rewrite_text_asset_with_assets records JavaScript source maps to copy.'
+);
+
+$rewritten_css = $rewriter->rewrite_text_asset(
+	'.hero{background:url("https://example.test/wp-content/uploads/bg.jpg?ver=1")}',
+	'wp-content/themes/theme/app.css'
+);
+
+ssgwp_assert_contains(
+	'../../uploads/bg.jpg?ver=1',
+	$rewritten_css,
+	'rewrite_text_asset rewrites CSS same-site asset URLs.'
+);
+
+$rewritten_css = $rewriter->rewrite_text_asset(
+	'@font-face{src:url("../fonts/dashicons.eot?ver=1")}',
+	'wp-includes/css/dashicons.css'
+);
+
+ssgwp_assert_contains(
+	'../fonts/dashicons.eot?ver=1',
+	$rewritten_css,
+	'rewrite_text_asset resolves relative CSS URLs from the copied asset path.'
+);
+
+$rewritten_image_set_css = $rewriter->rewrite_text_asset_with_assets(
+	'.hero{background-image:image-set("images/hero.png" 1x, '
+		. '"/wp-content/uploads/photo-2x.jpg?image-set=2" 2x, type("image/png"))}'
+		. '.wide{background-image:-webkit-image-set("../shared/hero.webp" 1x)}',
+	'wp-content/plugins/app/styles/app.css'
+);
+
+ssgwp_assert_contains(
+	'image-set("images/hero.png" 1x, '
+		. '"../../../uploads/photo-2x.jpg?image-set=2" 2x, type("image/png"))',
+	$rewritten_image_set_css['content'],
+	'rewrite_text_asset_with_assets rewrites quoted CSS image-set URLs.'
+);
+
+ssgwp_assert_contains(
+	'-webkit-image-set("../shared/hero.webp" 1x)',
+	$rewritten_image_set_css['content'],
+	'rewrite_text_asset_with_assets rewrites prefixed image-set URLs.'
+);
+
+ssgwp_assert_same(
+	array(
+		'https://example.test/wp-content/plugins/app/styles/images/hero.png',
+		'https://example.test/wp-content/uploads/photo-2x.jpg?image-set=2',
+		'https://example.test/wp-content/plugins/app/shared/hero.webp',
+	),
+	$rewritten_image_set_css['assets'],
+	'rewrite_text_asset_with_assets records CSS image-set assets to copy.'
+);
+
+ssgwp_assert_static_target_exists(
+	$export_root,
+	'wp-includes/css/dashicons.css',
+	'../fonts/dashicons.eot?ver=1',
+	'rewritten relative CSS URL target exists.'
+);
+
+foreach (
+	array(
+		'static-page/index.html',
+		'static-page/relative-child/index.html',
+		'static-page-' . $view_hash . '.html#items',
+		'blog/page/2/index.html#posts',
+		'comments/index.html',
+		'citation-source/index.html',
+		'citation-source/index.html#quote',
+		'nested/page/index.html#section',
+		'nested/page/index.html#share',
+		'protocol-escaped/index.html',
+		'protocol-page/index.html',
+		'protocol-text/index.html',
+		'prefetched-page/index.html',
+		'deferred-page/index.html',
+		'framed-page/index.html',
+		'frame-description/index.html',
+		'legacy-frame/index.html',
+		'lazy-frame/index.html',
+		'long-description/index.html',
+		'embed-page/index.html',
+		'author/admin/index.html',
+		'amp-page/index.html',
+		'publisher/index.html',
+		'related/index.html',
+		'microdata-item/index.html',
+		'microdata-profile/index.html',
+		'microdata-breadcrumb/index.html',
+		'microdata-related/index.html',
+		'microdata-significant/index.html',
+		'schema/local/index.html',
+		'schema/secondary/index.html',
+		'schema-about/index.html',
+		'schema-breadcrumb/index.html',
+		'schema-collection/index.html',
+		'schema-main-entity/index.html',
+		'schema-mentions/index.html',
+		'schema-part/index.html',
+		'schema-related/index.html',
+		'schema-subject/index.html',
+		'embedded-page/index.html',
+		'video-player/index.html',
+		'encoded%20page/index.html',
+		'collision%20page/index.html',
+		'collision%2Bpage/index.html',
+		'nested%2Fsegment/index.html',
+		'%2E%2E/secret/index.html',
+		'index-' . $query_hash . '.html#comments',
+		'wp-content/uploads/social.jpg?ver=1',
+		'wp-content/uploads/social-audio.mp3?ver=1',
+		'wp-content/uploads/social-video.mp4?ver=1',
+		'wp-content/uploads/social-video.mp4?schema=1',
+		'wp-content/uploads/social-video.mp4?embed=1',
+		'wp-content/uploads/social-video.mp4?lazy-embed=1',
+		'wp-content/uploads/social-video.mp4?link-schema=1',
+		'wp-content/uploads/social-video.mp4?param=1',
+		'wp-content/uploads/social-video.mp4?stream=1',
+		'wp-content/uploads/captions.vtt?lang=en',
+			'wp-content/uploads/tile.png',
+			'wp-content/uploads/tile.png?small=1',
+			'wp-content/uploads/tile.png?wide=1',
+			'wp-content/uploads/photo.jpg?size=large',
+			'wp-content/uploads/photo.jpg?prefetch=1',
+			'wp-content/uploads/photo.jpg?longdesc=1',
+			'wp-content/uploads/photo.jpg?deferred=1',
+			'wp-content/uploads/photo.jpg?data-link=1',
+			'wp-content/uploads/photo.jpg?lazy=3',
+		'wp-content/uploads/photo.jpg?lazy=4',
+		'wp-content/uploads/photo.jpg?frame=1',
+		'wp-content/uploads/photo-2x.jpg',
+		'wp-content/uploads/image-set.jpg?density=1',
+		'wp-content/uploads/image-set-2x.jpg?density=2',
+		'wp-content/uploads/bg.jpg?lazy=1',
+		'wp-content/uploads/bg.jpg?lazy=2',
+		'wp-content/uploads/bg.jpg?lazy=5',
+		'wp-content/uploads/bg.jpg?unquoted=1',
+	)
+	as $static_url
+) {
+	ssgwp_assert_static_target_exists(
+		$export_root,
+		'index.html',
+		$static_url,
+		'rewritten URL target exists: ' . $static_url
+	);
+}
+
+$nested_result = $rewriter->rewrite_html(
+	'<base href="https://example.test/nested/page/"><a href="/static-page/">Nested</a>',
+	'https://example.test/nested/page/',
+	'nested/page/index.html'
+);
+
+ssgwp_assert_contains(
+	'<base href="./">',
+	$nested_result['content'],
+	'rewrite_html keeps nested page base hrefs relative to the generated document.'
+);
+
+ssgwp_assert_contains(
+	'href="../../static-page/index.html"',
+	$nested_result['content'],
+	'rewrite_html builds file-targeting relative URLs from nested pages.'
+);
+
+ssgwp_assert_static_target_exists(
+	$export_root,
+	'nested/page/index.html',
+	'../../static-page/index.html',
+	'nested page rewritten URL target exists.'
+);
+
+$relative_result = $rewriter->rewrite_html(
+	'<a href="relative-child/">Relative child</a>'
+		. '<img src="../wp-content/uploads/photo.jpg?relative=1" alt="">'
+		. '<script>const relativePage = "./relative-child/";'
+		. ' const relativeAsset = "../wp-content/uploads/photo.jpg?relative-script=1";'
+		. ' const escapedRelativePage = ".\/relative-child\/";</script>'
+		. '<iframe srcdoc="' . esc_attr(
+			'<script type="application/json">{"srcdocPage":"./relative-child/",'
+				. '"srcdocEscaped":".\/relative-child\/",'
+				. '"srcdocAsset":"../wp-content/uploads/photo.jpg?srcdoc-script=1"}</script>'
+		) . '"></iframe>',
+	'https://example.test/static-page/',
+	'static-page/index.html'
+);
+
+ssgwp_assert_contains(
+	'href="relative-child/index.html"',
+	$relative_result['content'],
+	'rewrite_html resolves page-relative links from pretty permalink directories.'
+);
+
+ssgwp_assert_contains(
+	'src="../wp-content/uploads/photo.jpg?relative=1"',
+	$relative_result['content'],
+	'rewrite_html resolves parent-relative asset links from pretty permalink directories.'
+);
+
+ssgwp_assert_contains(
+	'const relativePage = "relative-child/index.html";',
+	$relative_result['content'],
+	'rewrite_html rewrites document-relative page URLs in script text.'
+);
+
+ssgwp_assert_contains(
+	'const relativeAsset = "../wp-content/uploads/photo.jpg?relative-script=1";',
+	$relative_result['content'],
+	'rewrite_html rewrites parent-relative asset URLs in script text.'
+);
+
+ssgwp_assert_contains(
+	'const escapedRelativePage = "relative-child\/index.html";',
+	$relative_result['content'],
+	'rewrite_html rewrites JSON-escaped document-relative script URLs.'
+);
+
+ssgwp_assert_contains(
+	'&quot;srcdocPage&quot;:&quot;relative-child/index.html&quot;',
+	$relative_result['content'],
+	'rewrite_html rewrites document-relative script page URLs inside srcdoc.'
+);
+
+ssgwp_assert_contains(
+	'&quot;srcdocEscaped&quot;:&quot;relative-child\/index.html&quot;',
+	$relative_result['content'],
+	'rewrite_html rewrites escaped document-relative script URLs inside srcdoc.'
+);
+
+ssgwp_assert_contains(
+	'&quot;srcdocAsset&quot;:&quot;../wp-content/uploads/photo.jpg?srcdoc-script=1&quot;',
+	$relative_result['content'],
+	'rewrite_html rewrites parent-relative script asset URLs inside srcdoc.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/static-page/relative-child/', $relative_result['links'], true ),
+	'rewrite_html records page-relative links from pretty permalink directories.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/photo.jpg?relative=1', $relative_result['assets'], true ),
+	'rewrite_html records parent-relative asset links from pretty permalink directories.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/photo.jpg?relative-script=1', $relative_result['assets'], true ),
+	'rewrite_html records parent-relative script asset links to copy.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/wp-content/uploads/photo.jpg?srcdoc-script=1', $relative_result['assets'], true ),
+	'rewrite_html records parent-relative srcdoc script asset links to copy.'
+);
+
+ssgwp_assert_static_target_exists(
+	$export_root,
+	'static-page/index.html',
+	'relative-child/index.html',
+	'page-relative rewritten URL target exists.'
+);
+
+ssgwp_assert_static_target_exists(
+	$export_root,
+	'static-page/index.html',
+	'../wp-content/uploads/photo.jpg?relative=1',
+	'parent-relative asset URL target exists.'
+);
+
+$ssgwp_test_home_url     = 'https://playground.wordpress.net/scope:sad-quiet-school';
+$ssgwp_test_site_url     = 'https://playground.wordpress.net/scope:sad-quiet-school';
+$ssgwp_test_content_url  = 'https://playground.wordpress.net/scope:sad-quiet-school/wp-content';
+$ssgwp_test_includes_url = 'https://playground.wordpress.net/scope:sad-quiet-school/wp-includes';
+
+$scoped_result = $rewriter->rewrite_html(
+	'<a href="https://playground.wordpress.net/scope:sad-quiet-school/sample-page/">Sample</a>'
+		. '<a href="/scope:sad-quiet-school/sample-page/">Root</a>'
+		. '<base href="https://playground.wordpress.net/scope:sad-quiet-school/">'
+		. '<a href="https://playground.wordpress.net/scope:other-site/sample-page/">Other</a>'
+		. '<img src="https://playground.wordpress.net/scope:other-site/wp-content/uploads/photo.jpg" alt="">'
+		. '<img src="/scope:sad-quiet-school/wp-content/uploads/photo.jpg" alt="">'
+		. '<script type="application/json">{"plainRootAsset":"/wp-content/uploads/photo.jpg","plainRootAssetEscaped":"\/wp-content\/uploads\/photo.jpg"}</script>',
+	'https://playground.wordpress.net/scope:sad-quiet-school/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'href="sample-page/index.html"',
+	$scoped_result['content'],
+	'rewrite_html strips the Playground scope base from same-site page links.'
+);
+
+ssgwp_assert_contains(
+	'src="wp-content/uploads/photo.jpg"',
+	$scoped_result['content'],
+	'rewrite_html strips the Playground scope base from same-site asset links.'
+);
+
+ssgwp_assert_contains(
+	'<base href="./">',
+	$scoped_result['content'],
+	'rewrite_html anchors scoped same-site base hrefs to the static document directory.'
+);
+
+ssgwp_assert_contains(
+	'"plainRootAsset":"/wp-content/uploads/photo.jpg"',
+	$scoped_result['content'],
+	'rewrite_html leaves root-level WordPress asset paths outside the Playground scope unchanged.'
+);
+
+ssgwp_assert_contains(
+	'"plainRootAssetEscaped":"\/wp-content\/uploads\/photo.jpg"',
+	$scoped_result['content'],
+	'rewrite_html leaves escaped root-level WordPress asset paths outside the Playground scope unchanged.'
+);
+
+ssgwp_assert_contains(
+	'href="https://playground.wordpress.net/scope:other-site/sample-page/"',
+	$scoped_result['content'],
+	'rewrite_html leaves same-host page links from another Playground scope unchanged.'
+);
+
+ssgwp_assert_contains(
+	'src="https://playground.wordpress.net/scope:other-site/wp-content/uploads/photo.jpg"',
+	$scoped_result['content'],
+	'rewrite_html leaves same-host asset links from another Playground scope unchanged.'
+);
+
+ssgwp_assert_not_contains(
+	'scope%3Asad-quiet-school/scope%3Asad-quiet-school',
+	$scoped_result['content'],
+	'rewrite_html avoids duplicated encoded Playground scope paths.'
+);
+
+ssgwp_assert_static_target_exists(
+	$export_root,
+	'index.html',
+	'sample-page/index.html',
+	'scoped page rewritten URL target exists.'
+);
+
+$ssgwp_test_home_url     = 'https://example.test';
+$ssgwp_test_site_url     = 'https://example.test';
+$ssgwp_test_content_url  = 'https://example.test/wp-content';
+$ssgwp_test_includes_url = 'https://example.test/wp-includes';
+
+foreach (
+	array(
+		'href="/wp-admin/admin.php"',
+		'href="/wp-json/wp/v2/posts"',
+		'href="/?rest_route=/wp/v2/posts"',
+		'href="/?oembed=true',
+		'href="/feed/"',
+		'href="/?feed=rss2"',
+		'type="application/rss+xml" href="/feed/"',
+		'type="application/rss+xml" href="/?feed=rss2"',
+		'type="application/rss+xml" href="/comments/feed/"',
+		'type="application/json+oembed" href="/?oembed=true',
+		'href="https://external.test/static-page/"',
+		'href="https://example.test:8443/static-page/"',
+		'href="http://example.test:443/static-page/"',
+		'href="mailto:test@example.test"',
+		'href="tel:+15551234567"',
+		'href="javascript:void(0)"',
+		'href="data:text/plain,hello"',
+		'href="blob:https://example.test/id"',
+		'"rest":"https:\/\/example.test\/?rest_route=\/wp\/v2\/posts"',
+	)
+	as $unchanged
+) {
+	ssgwp_assert_contains(
+		$unchanged,
+		$result['content'],
+		'rewrite_html leaves unsupported or external URL unchanged: ' . $unchanged
+	);
+}
+
+ssgwp_assert_same(
+	true,
+	$rewriter->is_same_site_url( 'https://example.test:443/static-page/' ),
+	'is_same_site_url treats the explicit HTTPS default port as same-origin.'
+);
+
+ssgwp_assert_same(
+	false,
+	$rewriter->is_same_site_url( 'https://example.test:8443/static-page/' ),
+	'is_same_site_url rejects a different explicit port.'
+);
+
+ssgwp_assert_same(
+	false,
+	$rewriter->is_same_site_url( 'http://example.test:443/static-page/' ),
+	'is_same_site_url rejects a different scheme even when the port matches.'
+);
+
+ssgwp_delete_directory( $export_root );
+
+/**
+ * Assert two values are identical.
+ *
+ * @param mixed  $expected Expected value.
+ * @param mixed  $actual   Actual value.
+ * @param string $message  Failure message.
+ */
+function ssgwp_assert_same( $expected, $actual, $message ) {
+	if ( $expected === $actual ) {
+		return;
+	}
+
+	ssgwp_fail( $message . ' Expected ' . var_export( $expected, true ) . ', got ' . var_export( $actual, true ) . '.' );
+}
+
+/**
+ * Assert a string contains a substring.
+ *
+ * @param string $needle   Expected substring.
+ * @param string $haystack String to search.
+ * @param string $message  Failure message.
+ */
+function ssgwp_assert_contains( $needle, $haystack, $message ) {
+	if ( false !== strpos( $haystack, $needle ) ) {
+		return;
+	}
+
+	ssgwp_fail( $message . ' Missing ' . var_export( $needle, true ) . '.' );
+}
+
+/**
+ * Assert text does not contain a substring.
+ *
+ * @param string $needle  Expected absent substring.
+ * @param string $haystack Text to inspect.
+ * @param string $message Failure message.
+ */
+function ssgwp_assert_not_contains( $needle, $haystack, $message ) {
+	if ( false === strpos( $haystack, $needle ) ) {
+		return;
+	}
+
+	ssgwp_fail( $message . ' Unexpected ' . var_export( $needle, true ) . '.' );
+}
+
+/**
+ * Create a file in the export fixture.
+ *
+ * @param string $export_root Export fixture root.
+ * @param string $relative    Relative file path.
+ */
+function ssgwp_touch_export_file( $export_root, $relative ) {
+	$path = trailingslashit( $export_root ) . $relative;
+
+	if ( ! is_dir( dirname( $path ) ) && ! mkdir( dirname( $path ), 0777, true ) ) {
+		ssgwp_fail( 'Could not create fixture directory for ' . $relative . '.' );
+	}
+
+	file_put_contents( $path, '' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+}
+
+/**
+ * Assert a rewritten static URL points to an existing exported file.
+ *
+ * @param string $export_root Export fixture root.
+ * @param string $from_file   Referencing file.
+ * @param string $url         Rewritten URL.
+ * @param string $message     Failure message.
+ */
+function ssgwp_assert_static_target_exists( $export_root, $from_file, $url, $message ) {
+	$path = preg_replace( '/[?#].*$/', '', $url );
+
+	if ( preg_match( '#^[a-z][a-z0-9+.-]*:#i', $path ) || 0 === strpos( $path, '/' ) ) {
+		ssgwp_fail( $message . ' Expected a relative static URL, got ' . var_export( $url, true ) . '.' );
+	}
+
+	$target = ssgwp_normalize_fixture_path( dirname( $from_file ) . '/' . $path );
+	$target = trailingslashit( $export_root ) . $target;
+
+	if ( is_file( $target ) ) {
+		return;
+	}
+
+	ssgwp_fail( $message . ' Missing exported file ' . var_export( $target, true ) . '.' );
+}
+
+/**
+ * Normalize a relative fixture path.
+ *
+ * @param string $path Relative path.
+ * @return string
+ */
+function ssgwp_normalize_fixture_path( $path ) {
+	$segments = array();
+
+	foreach ( explode( '/', wp_normalize_path( $path ) ) as $segment ) {
+		if ( '' === $segment || '.' === $segment ) {
+			continue;
+		}
+
+		if ( '..' === $segment ) {
+			array_pop( $segments );
+			continue;
+		}
+
+		$segments[] = $segment;
+	}
+
+	return implode( '/', $segments );
+}
+
+/**
+ * Create a temporary fixture directory.
+ *
+ * @return string
+ */
+function ssgwp_make_fixture_dir() {
+	$directory = sys_get_temp_dir() . '/ssgwp-url-rewriter-' . getmypid() . '-' . mt_rand();
+
+	if ( ! mkdir( $directory ) ) {
+		ssgwp_fail( 'Could not create fixture directory.' );
+	}
+
+	return wp_normalize_path( $directory );
+}
+
+/**
+ * Delete a directory recursively.
+ *
+ * @param string $directory Directory.
+ */
+function ssgwp_delete_directory( $directory ) {
+	if ( ! is_dir( $directory ) ) {
+		return;
+	}
+
+	$iterator = new RecursiveIteratorIterator(
+		new RecursiveDirectoryIterator( $directory, FilesystemIterator::SKIP_DOTS ),
+		RecursiveIteratorIterator::CHILD_FIRST
+	);
+
+	foreach ( $iterator as $item ) {
+		if ( $item->isDir() ) {
+			rmdir( $item->getPathname() ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir
+		} else {
+			unlink( $item->getPathname() ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+		}
+	}
+
+	rmdir( $directory ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir
+}
+
+/**
+ * Exit with a test failure.
+ *
+ * @param string $message Failure message.
+ */
+function ssgwp_fail( $message ) {
+	fwrite( STDERR, $message . PHP_EOL ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+	exit( 1 );
+}

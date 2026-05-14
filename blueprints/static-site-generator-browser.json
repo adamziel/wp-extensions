@@ -1,0 +1,68 @@
+{
+	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
+	"meta": {
+		"title": "Static Site Generator",
+		"description": "Install the static site generator plugin and seed a richer demo site.",
+		"author": "Adam Zielinski",
+		"categories": ["static-sites", "publishing", "tools"]
+	},
+	"landingPage": "/wp-admin/tools.php?page=playground-static-site-generator",
+	"login": true,
+	"preferredVersions": {
+		"wp": "latest",
+		"php": "8.3"
+	},
+	"extraLibraries": ["wp-cli"],
+	"steps": [
+		{
+			"step": "installPlugin",
+			"pluginData": {
+				"resource": "git:directory",
+				"url": "https://github.com/adamziel/wp-extensions",
+				"ref": "main",
+				"refType": "branch",
+				"path": "static-site-generator"
+			},
+			"options": {
+				"activate": true,
+				"targetFolderName": "static-site-generator"
+			}
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp option update permalink_structure '/%year%/%monthnum%/%day%/%postname%/'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp rewrite flush --hard"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp term create category Travel --slug=travel"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp term create category Field-notes --slug=field-notes"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=page --post_status=publish --post_title='About the Static Demo' --post_name=about-static-demo --post_content='<!-- wp:heading --><h2>About the Static Demo</h2><!-- /wp:heading --><!-- wp:paragraph --><p>This page exists to verify that static exports render real page content, not the homepage.</p><!-- /wp:paragraph --><!-- wp:list --><ul><li>Pages</li><li>Dated posts</li><li>Linked archive content</li></ul><!-- /wp:list -->'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=page --post_status=publish --post_title='Projects' --post_name=projects --post_content='<!-- wp:heading --><h2>Projects</h2><!-- /wp:heading --><!-- wp:paragraph --><p>A second page with separate content for static export verification.</p><!-- /wp:paragraph -->'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=post --post_status=publish --post_title='Hello World Field Report' --post_name=hello-world --post_date='2026-03-11 10:00:00' --post_content='<!-- wp:paragraph --><p>Hello World Field Report has unique dated-post content for export verification.</p><!-- /wp:paragraph --><!-- wp:quote --><blockquote class=\"wp-block-quote\"><p>Dated permalinks should render this post, not the homepage.</p></blockquote><!-- /wp:quote -->'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=post --post_status=publish --post_title='Gallery Launch Notes' --post_name=gallery-launch-notes --post_date='2026-03-12 10:00:00' --post_content='<!-- wp:heading --><h2>Gallery Launch Notes</h2><!-- /wp:heading --><!-- wp:paragraph --><p>This second post confirms that multiple dated post pages export independently.</p><!-- /wp:paragraph -->'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=post --post_status=publish --post_title='Archive Deep Dive' --post_name=archive-deep-dive --post_date='2026-03-13 10:00:00' --post_content='<!-- wp:paragraph --><p>Archive Deep Dive gives the demo enough content for archives and same-site links.</p><!-- /wp:paragraph -->'"
+		}
+	]
+}
