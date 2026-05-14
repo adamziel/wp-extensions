@@ -259,7 +259,7 @@ final class ImportRunnerTest extends TestCase {
 			)->with_status( ImportSourceItem::STATUS_IMPORTED )
 		);
 
-		for ( $index = 1; $index <= 26; ++$index ) {
+		for ( $index = 1; $index <= 101; ++$index ) {
 			$key = 'local:nav:' . str_pad( (string) $index, 3, '0', STR_PAD_LEFT );
 			$this->store->save_source_item(
 				ImportSourceItem::queued(
@@ -297,8 +297,8 @@ final class ImportRunnerTest extends TestCase {
 
 		$this->assertSame( ImportSession::STATUS_RUNNING, $this->store->find( $session->get_id() )->get_status() );
 		$this->assertSame( array( $session->get_id()->to_string() ), $scheduled );
-		$this->assertNotNull( $this->store->find_idempotency_record( $session->get_id(), 'nav-menu-item:local:nav:025:25' ) );
-		$this->assertNull( $this->store->find_idempotency_record( $session->get_id(), 'nav-menu-item:local:nav:026:26' ) );
+		$this->assertNotNull( $this->store->find_idempotency_record( $session->get_id(), 'nav-menu-item:local:nav:100:100' ) );
+		$this->assertNull( $this->store->find_idempotency_record( $session->get_id(), 'nav-menu-item:local:nav:101:101' ) );
 	}
 
 	/**
@@ -741,8 +741,8 @@ final class ImportRunnerTest extends TestCase {
 			'GitHub tree ref was not found.'
 		);
 
-		for ( $index = 1; $index <= 26; ++$index ) {
-			$suffix         = str_pad( (string) $index, 2, '0', STR_PAD_LEFT );
+		for ( $index = 1; $index <= 101; ++$index ) {
+			$suffix         = str_pad( (string) $index, 3, '0', STR_PAD_LEFT );
 			$path           = 'docs/page-' . $suffix . '.md';
 			$url            = 'https://api.github.com/repos/example/repository/git/blobs/page-' . $suffix;
 			$tree_entries[] = array(
@@ -780,16 +780,16 @@ final class ImportRunnerTest extends TestCase {
 		$metadata             = $processing[0]->get_metadata();
 
 		$this->assertCount( 1, $processing );
-		$this->assertSame( 25, $this->store->count_prepared_documents( $session->get_id() ) );
-		$this->assertSame( 25, $posts->count_posts() );
+		$this->assertSame( 100, $this->store->count_prepared_documents( $session->get_id() ) );
+		$this->assertSame( 100, $posts->count_posts() );
 		$this->assertSame( 'partial', $metadata['github_tree_status'] );
-		$this->assertSame( 'docs/page-25.md', $metadata['github_tree_cursor'] );
-		$this->assertSame( 26, $metadata['github_tree_total_files'] );
-		$this->assertSame( 25, $metadata['github_tree_queued_files'] );
+		$this->assertSame( 'docs/page-100.md', $metadata['github_tree_cursor'] );
+		$this->assertSame( 101, $metadata['github_tree_total_files'] );
+		$this->assertSame( 100, $metadata['github_tree_queued_files'] );
 		$this->assertContains( 'github.tree_progress', $events_after_first );
 		$this->assertNotContains( 'github.tree_queued', $events_after_first );
-		$this->assertContains( 'https://api.github.com/repos/example/repository/git/blobs/page-25', $requests_after_first );
-		$this->assertNotContains( 'https://api.github.com/repos/example/repository/git/blobs/page-26', $requests_after_first );
+		$this->assertContains( 'https://api.github.com/repos/example/repository/git/blobs/page-100', $requests_after_first );
+		$this->assertNotContains( 'https://api.github.com/repos/example/repository/git/blobs/page-101', $requests_after_first );
 
 		$runner->run( $session->get_id() );
 
@@ -803,14 +803,14 @@ final class ImportRunnerTest extends TestCase {
 		$metadata        = $completed_state->get_metadata();
 
 		$this->assertSame( ImportSourceItem::STATUS_SKIPPED, $completed_state->get_status() );
-		$this->assertSame( 26, $this->store->count_prepared_documents( $session->get_id() ) );
-		$this->assertSame( 26, $posts->count_posts() );
+		$this->assertSame( 101, $this->store->count_prepared_documents( $session->get_id() ) );
+		$this->assertSame( 101, $posts->count_posts() );
 		$this->assertSame( 'complete', $metadata['github_tree_status'] );
-		$this->assertSame( 'docs/page-26.md', $metadata['github_tree_cursor'] );
-		$this->assertSame( 26, $metadata['github_tree_queued_files'] );
+		$this->assertSame( 'docs/page-101.md', $metadata['github_tree_cursor'] );
+		$this->assertSame( 101, $metadata['github_tree_queued_files'] );
 		$this->assertContains( 'github.tree_queued', $events );
 		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
-		$this->assertContains( 'https://api.github.com/repos/example/repository/git/blobs/page-26', $fetcher->get_requested_urls() );
+		$this->assertContains( 'https://api.github.com/repos/example/repository/git/blobs/page-101', $fetcher->get_requested_urls() );
 	}
 
 	/**
@@ -3145,7 +3145,7 @@ final class ImportRunnerTest extends TestCase {
 			)->with_status( ImportSourceItem::STATUS_SKIPPED )
 		);
 
-		for ( $index = 1; $index <= 26; ++$index ) {
+		for ( $index = 1; $index <= 101; ++$index ) {
 			$reference = $this->imported_wxr_attachment_reference(
 				$session,
 				'media:' . str_pad( (string) $index, 3, '0', STR_PAD_LEFT ),
@@ -3166,8 +3166,8 @@ final class ImportRunnerTest extends TestCase {
 
 		$this->assertSame( ImportSession::STATUS_RUNNING, $this->store->find( $session->get_id() )->get_status() );
 		$this->assertSame( array( $session->get_id()->to_string() ), $scheduled );
-		$this->assertNotNull( $this->store->find_idempotency_record( $session->get_id(), 'attachment-metadata:media:025' ) );
-		$this->assertNull( $this->store->find_idempotency_record( $session->get_id(), 'attachment-metadata:media:026' ) );
+		$this->assertNotNull( $this->store->find_idempotency_record( $session->get_id(), 'attachment-metadata:media:100' ) );
+		$this->assertNull( $this->store->find_idempotency_record( $session->get_id(), 'attachment-metadata:media:101' ) );
 	}
 
 	/**
@@ -3199,7 +3199,7 @@ final class ImportRunnerTest extends TestCase {
 			new ImportIdempotencyRecord( 'post:local:export:wxr-post:70', 'post', '1', 'parent-hash' )
 		);
 
-		for ( $index = 1; $index <= 26; ++$index ) {
+		for ( $index = 1; $index <= 101; ++$index ) {
 			$reference = $this->imported_wxr_attachment_reference(
 				$session,
 				'media:' . str_pad( (string) $index, 3, '0', STR_PAD_LEFT ),
@@ -3220,8 +3220,8 @@ final class ImportRunnerTest extends TestCase {
 
 		$this->assertSame( ImportSession::STATUS_RUNNING, $this->store->find( $session->get_id() )->get_status() );
 		$this->assertSame( array( $session->get_id()->to_string() ), $scheduled );
-		$this->assertNotNull( $this->store->find_idempotency_record( $session->get_id(), 'attachment-parent:media:025' ) );
-		$this->assertNull( $this->store->find_idempotency_record( $session->get_id(), 'attachment-parent:media:026' ) );
+		$this->assertNotNull( $this->store->find_idempotency_record( $session->get_id(), 'attachment-parent:media:100' ) );
+		$this->assertNull( $this->store->find_idempotency_record( $session->get_id(), 'attachment-parent:media:101' ) );
 	}
 
 	/**
@@ -4157,7 +4157,7 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertContains( 'object_streams_present', $text_scan_metadata['pdf_structure_reasons'] );
 		$this->assertSame( 1, $text_scan_metadata['pdf_object_stream_count'] );
 		$this->assertStringContainsString( 'Compressed object streams were detected', $text_scan_metadata['pdf_structure_warning'] );
-		$this->assertGreaterThan( 0, $this->store->count_prepared_documents( $session->get_id() ) );
+		$this->assertSame( 0, $this->store->count_prepared_documents( $session->get_id() ) );
 
 		$attempt = 0;
 		while ( $attempt < 10 && ImportSession::STATUS_DONE !== $this->store->find( $session->get_id() )->get_status() ) {
@@ -4176,7 +4176,7 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertSame( 'limited', $metadata['pdf_structure_status'] );
 		$this->assertSame( 1, $metadata['pdf_object_stream_count'] );
 		$this->assertSame( $prepared_count, $this->store->count_idempotency_records_by_resource_type( $session->get_id(), 'prepared_document' ) );
-		$this->assertGreaterThan( 1, $prepared_count );
+		$this->assertSame( 1, $prepared_count );
 		$this->assertSame( $metadata['pdf_structure_warning'], $documents[0]->get_metadata()['pdf_structure_warning'] );
 	}
 
@@ -4912,9 +4912,10 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT, $partial_metadata['pdf_text_chunk_index'] );
 		$this->assertGreaterThan( 0, $partial_metadata['pdf_text_next_offset'] );
 		$this->assertSame( 0, $partial_metadata['pdf_text_scan_read_offset'] );
-		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT, $this->store->count_prepared_documents( $session->get_id() ) );
-		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT, $this->store->count_idempotency_records_by_resource_type( $session->get_id(), 'prepared_document' ) );
-		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT, $posts->count_posts() );
+		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT, count( $partial_metadata['pdf_text_fragments'] ) );
+		$this->assertSame( 0, $this->store->count_prepared_documents( $session->get_id() ) );
+		$this->assertSame( 0, $this->store->count_idempotency_records_by_resource_type( $session->get_id(), 'prepared_document' ) );
+		$this->assertSame( 0, $posts->count_posts() );
 		$this->assertContains( 'document.pdf_text_progress', $events );
 
 		$runner->run( $session->get_id() );
@@ -4935,13 +4936,16 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertArrayNotHasKey( 'pdf_text_next_offset', $metadata );
 		$this->assertArrayNotHasKey( 'pdf_text_stream_index', $metadata );
 		$this->assertArrayNotHasKey( 'pdf_text_chunk_index', $metadata );
+		$this->assertArrayNotHasKey( 'pdf_text_fragments', $metadata );
 		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT + 1, $metadata['pdf_text_chunks_prepared'] );
-		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT + 1, $this->store->count_prepared_documents( $session->get_id() ) );
-		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT + 1, $this->store->count_idempotency_records_by_resource_type( $session->get_id(), 'prepared_document' ) );
-		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT + 1, $posts->count_posts() );
-		$last_document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() . ':pdf-text-chunk:0005' );
-		$this->assertNotNull( $last_document );
-		$this->assertGreaterThanOrEqual( $partial_metadata['pdf_text_next_offset'], $last_document->get_metadata()['pdf_text_chunk_start'] );
+		$this->assertSame( 1, $this->store->count_prepared_documents( $session->get_id() ) );
+		$this->assertSame( 1, $this->store->count_idempotency_records_by_resource_type( $session->get_id(), 'prepared_document' ) );
+		$this->assertSame( 1, $posts->count_posts() );
+		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
+		$this->assertNotNull( $document );
+		$this->assertStringNotContainsString( 'part 1', $document->get_title() );
+		$this->assertStringContainsString( 'Chunk body 1', $document->get_block_markup() );
+		$this->assertStringContainsString( 'Chunk body 6', $document->get_block_markup() );
 		$this->assertContains( 'document.pdf_text_complete', $events );
 	}
 
@@ -4996,17 +5000,20 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertArrayNotHasKey( 'pdf_text_next_offset', $metadata );
 		$this->assertArrayNotHasKey( 'pdf_text_stream_index', $metadata );
 		$this->assertArrayNotHasKey( 'pdf_text_chunk_index', $metadata );
+		$this->assertArrayNotHasKey( 'pdf_text_fragments', $metadata );
 		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT + 1, $metadata['pdf_text_chunks_prepared'] );
 		$this->assertSame( 'limited', $metadata['pdf_structure_status'] );
 		$this->assertSame( array( 'object_streams_present' ), $metadata['pdf_structure_reasons'] );
 		$this->assertSame( 1, $metadata['pdf_object_stream_count'] );
 		$this->assertStringContainsString( 'Compressed object streams were detected', $metadata['pdf_structure_warning'] );
-		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT + 1, $this->store->count_prepared_documents( $session->get_id() ) );
-		$this->assertSame( SourceItemDocumentProcessor::PDF_TEXT_SCAN_LIMIT + 1, $posts->count_posts() );
+		$this->assertSame( 1, $this->store->count_prepared_documents( $session->get_id() ) );
+		$this->assertSame( 1, $posts->count_posts() );
 
-		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() . ':pdf-text-chunk:0000' );
+		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
 		$this->assertNotNull( $document );
 		$this->assertSame( $metadata['pdf_structure_warning'], $document->get_metadata()['pdf_structure_warning'] );
+		$this->assertStringContainsString( 'Chunk body 1', $document->get_block_markup() );
+		$this->assertStringContainsString( 'Chunk body 6', $document->get_block_markup() );
 		$this->assertContains( 'document.pdf_structure_warning', $events );
 		$this->assertContains( 'document.pdf_text_complete', $events );
 	}
@@ -6206,7 +6213,13 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertNotNull( $decision );
 		$this->assertSame( ImportDecision::STATUS_PENDING, $decision->get_status() );
 		$this->assertSame(
-			array( 'domains' => array( 'cdn.source.example.test', 'source.example.test' ) ),
+			array(
+				'domains'  => array( 'cdn.source.example.test', 'source.example.test' ),
+				'examples' => array(
+					'cdn.source.example.test' => array( 'https://cdn.source.example.test/image.jpg' ),
+					'source.example.test'     => array( 'https://source.example.test/page' ),
+				),
+			),
 			$decision->get_options()
 		);
 		$this->assertContains( 'url.confirmation_required', $events );

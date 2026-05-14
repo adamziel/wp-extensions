@@ -13,7 +13,7 @@ use RuntimeException;
  * Imports queued local and confirmed first-party media references and rewrites prepared documents to attachment URLs.
  */
 final class ImportMediaImporter {
-	const DEFAULT_MEDIA_LIMIT = 25;
+	const DEFAULT_MEDIA_LIMIT = 100;
 
 	/**
 	 * Durable import store.

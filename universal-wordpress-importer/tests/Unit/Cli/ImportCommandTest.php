@@ -1123,10 +1123,10 @@ final class ImportCommandTest extends TestCase {
 		$this->assertCount( 1, $processing );
 		$metadata = $processing[0]->get_metadata();
 		$this->assertSame( 'partial', $metadata['github_tree_status'] );
-		$this->assertSame( 'docs/page-25.md', $metadata['github_tree_cursor'] );
-		$this->assertSame( 26, $metadata['github_tree_total_files'] );
-		$this->assertSame( 25, $metadata['github_tree_queued_files'] );
-		$this->assertSame( 25, $this->count_github_tree_children( $locked_store, $session ) );
+		$this->assertSame( 'docs/page-100.md', $metadata['github_tree_cursor'] );
+		$this->assertSame( 101, $metadata['github_tree_total_files'] );
+		$this->assertSame( 100, $metadata['github_tree_queued_files'] );
+		$this->assertSame( 100, $this->count_github_tree_children( $locked_store, $session ) );
 		$this->assertSame( 0, $locked_store->count_prepared_documents( $session->get_id() ) );
 		$this->assertContains( 'runner.simulated_fatal_after_github_tree_cursor', $events );
 
@@ -1157,13 +1157,13 @@ final class ImportCommandTest extends TestCase {
 		$completed_state = $recovery_store->find_source_item( $session->get_id(), $processing[0]->get_key() );
 
 		$this->assertSame( ImportSession::STATUS_DONE, $recovery_store->find( $session->get_id() )->get_status() );
-		$this->assertSame( 26, $recovery_store->count_prepared_documents( $session->get_id() ) );
-		$this->assertSame( 26, $recovery_store->count_idempotency_records_by_resource_type( $session->get_id(), 'prepared_document' ) );
-		$this->assertSame( 26, $this->count_github_tree_children( $recovery_store, $session ) );
+		$this->assertSame( 101, $recovery_store->count_prepared_documents( $session->get_id() ) );
+		$this->assertSame( 101, $recovery_store->count_idempotency_records_by_resource_type( $session->get_id(), 'prepared_document' ) );
+		$this->assertSame( 101, $this->count_github_tree_children( $recovery_store, $session ) );
 		$this->assertNotNull( $completed_state );
 		$this->assertSame( ImportSourceItem::STATUS_SKIPPED, $completed_state->get_status() );
 		$this->assertSame( 'complete', $completed_state->get_metadata()['github_tree_status'] );
-		$this->assertSame( 'docs/page-26.md', $completed_state->get_metadata()['github_tree_cursor'] );
+		$this->assertSame( 'docs/page-101.md', $completed_state->get_metadata()['github_tree_cursor'] );
 		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
 	}
 
@@ -1723,8 +1723,8 @@ final class ImportCommandTest extends TestCase {
 			'GitHub tree ref was not found.'
 		);
 
-		for ( $index = 1; $index <= 26; ++$index ) {
-			$suffix         = str_pad( (string) $index, 2, '0', STR_PAD_LEFT );
+		for ( $index = 1; $index <= 101; ++$index ) {
+			$suffix         = str_pad( (string) $index, 3, '0', STR_PAD_LEFT );
 			$path           = 'docs/page-' . $suffix . '.md';
 			$url            = 'https://api.github.com/repos/example/repository/git/blobs/page-' . $suffix;
 			$tree_entries[] = array(
@@ -1782,7 +1782,7 @@ final class ImportCommandTest extends TestCase {
 				ImportSourceItem::STATUS_SKIPPED,
 				ImportSourceItem::STATUS_FAILED,
 			),
-			100
+			200
 		);
 
 		foreach ( $items as $item ) {
@@ -2243,8 +2243,8 @@ $fetcher->add_json_error(
 	"GitHub tree ref was not found."
 );
 $tree_entries = array();
-for ( $index = 1; $index <= 26; ++$index ) {
-	$suffix = str_pad( (string) $index, 2, "0", STR_PAD_LEFT );
+for ( $index = 1; $index <= 101; ++$index ) {
+	$suffix = str_pad( (string) $index, 3, "0", STR_PAD_LEFT );
 	$path = "docs/page-" . $suffix . ".md";
 	$url = "https://api.github.com/repos/example/repository/git/blobs/page-" . $suffix;
 	$tree_entries[] = array(

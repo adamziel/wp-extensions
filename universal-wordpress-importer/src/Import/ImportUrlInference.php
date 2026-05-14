@@ -37,7 +37,9 @@ final class ImportUrlInference {
 	 * @return array{domains:array<int,string>,blocked:bool,message:string}
 	 */
 	public function advance( ImportSession $session, $limit = 250 ) {
-		$domains  = $this->collect_candidate_domains( $session, $limit );
+		$context  = $this->collect_candidate_domain_context( $session, $limit );
+		$domains  = $context['domains'];
+		$examples = $context['examples'];
 		$decision = $this->store->find_decision( $session->get_id(), self::DECISION_KEY );
 
 		if ( empty( $domains ) ) {
@@ -56,16 +58,21 @@ final class ImportUrlInference {
 			);
 		}
 
-		$existing_domains = null === $decision ? array() : $this->domains_from_decision_options( $decision );
-		$merged_domains   = $this->merge_domains( $existing_domains, $domains );
+		$existing_domains  = null === $decision ? array() : $this->domains_from_decision_options( $decision );
+		$existing_examples = null === $decision ? array() : $this->examples_from_decision_options( $decision );
+		$merged_domains    = $this->merge_domains( $existing_domains, $domains );
+		$merged_examples   = $this->merge_domain_examples( $existing_examples, $examples );
 
-		if ( null === $decision || $merged_domains !== $existing_domains ) {
+		if ( null === $decision || $merged_domains !== $existing_domains || $merged_examples !== $existing_examples ) {
 			$this->store->save_decision(
 				$session->get_id(),
 				ImportDecision::pending(
 					self::DECISION_KEY,
-					'Confirm which discovered URL domains are first-party before URL rewriting and post persistence continue.',
-					array( 'domains' => $merged_domains )
+					'Choose which discovered source URLs should be rewritten to this WordPress site.',
+					array(
+						'domains'  => $merged_domains,
+						'examples' => $merged_examples,
+					)
 				)
 			);
 			$this->store->record_event(
@@ -91,11 +98,12 @@ final class ImportUrlInference {
 	 *
 	 * @param ImportSession $session Session.
 	 * @param int           $limit   Maximum prepared documents to inspect.
-	 * @return array<int,string>
+	 * @return array{domains:array<int,string>,examples:array<string,array<int,string>>}
 	 */
-	private function collect_candidate_domains( ImportSession $session, $limit ) {
-		$domains = array();
-		$limit   = max( 1, min( 500, (int) $limit ) );
+	private function collect_candidate_domain_context( ImportSession $session, $limit ) {
+		$domains  = array();
+		$examples = array();
+		$limit    = max( 1, min( 500, (int) $limit ) );
 
 		$after_source_item_key = null;
 
@@ -116,6 +124,9 @@ final class ImportUrlInference {
 				}
 
 				$source_domains = $this->source_domains_for_metadata( $session, $metadata );
+				$url_examples   = isset( $metadata['absolute_url_examples'] ) && is_array( $metadata['absolute_url_examples'] )
+					? $metadata['absolute_url_examples']
+					: array();
 
 				foreach ( $metadata['absolute_url_domains'] as $domain ) {
 					$domain = $this->normalize_domain( $domain );
@@ -124,7 +135,12 @@ final class ImportUrlInference {
 						'' !== $domain
 						&& $this->is_suggested_first_party_domain( $domain, $source_domains )
 					) {
-						$domains[] = $domain;
+						$domains             = $this->merge_domains( $domains, array( $domain ) );
+						$matching_examples   = $this->examples_for_domain( $domain, $url_examples );
+						$examples[ $domain ] = $this->merge_example_list(
+							isset( $examples[ $domain ] ) ? $examples[ $domain ] : array(),
+							$matching_examples
+						);
 					}
 				}
 			}
@@ -159,7 +175,11 @@ final class ImportUrlInference {
 					'' !== $domain
 					&& $this->is_suggested_first_party_domain( $domain, $source_domains )
 				) {
-					$domains[] = $domain;
+					$domains             = $this->merge_domains( $domains, array( $domain ) );
+					$examples[ $domain ] = $this->merge_example_list(
+						isset( $examples[ $domain ] ) ? $examples[ $domain ] : array(),
+						array( $reference->get_resolved_source_uri() )
+					);
 				}
 			}
 		} while ( $reference_count === $limit );
@@ -172,6 +192,9 @@ final class ImportUrlInference {
 			}
 
 			$source_domains = $this->source_domains_for_metadata( $session, $metadata );
+			$url_examples   = isset( $metadata['absolute_url_examples'] ) && is_array( $metadata['absolute_url_examples'] )
+				? $metadata['absolute_url_examples']
+				: array();
 
 			foreach ( $metadata['wxr_nav_menu_absolute_url_domains'] as $domain ) {
 				$domain = $this->normalize_domain( $domain );
@@ -180,12 +203,23 @@ final class ImportUrlInference {
 					'' !== $domain
 					&& $this->is_suggested_first_party_domain( $domain, $source_domains )
 				) {
-					$domains[] = $domain;
+					$domains             = $this->merge_domains( $domains, array( $domain ) );
+					$matching_examples   = $this->examples_for_domain( $domain, $url_examples );
+					$examples[ $domain ] = $this->merge_example_list(
+						isset( $examples[ $domain ] ) ? $examples[ $domain ] : array(),
+						$matching_examples
+					);
 				}
 			}
 		}
 
-		return $this->merge_domains( array(), $domains );
+		$domains = $this->merge_domains( array(), $domains );
+		ksort( $examples );
+
+		return array(
+			'domains'  => $domains,
+			'examples' => array_intersect_key( $examples, array_flip( $domains ) ),
+		);
 	}
 
 	/**
@@ -294,6 +328,22 @@ final class ImportUrlInference {
 	}
 
 	/**
+	 * Reads URL examples from an existing decision.
+	 *
+	 * @param ImportDecision $decision Decision.
+	 * @return array<string,array<int,string>>
+	 */
+	private function examples_from_decision_options( ImportDecision $decision ) {
+		$options = $decision->get_options();
+
+		if ( ! isset( $options['examples'] ) || ! is_array( $options['examples'] ) ) {
+			return array();
+		}
+
+		return $this->merge_domain_examples( array(), $options['examples'] );
+	}
+
+	/**
 	 * Merges and sorts domain lists.
 	 *
 	 * @param array<int,string> $left  First domain list.
@@ -314,6 +364,82 @@ final class ImportUrlInference {
 		sort( $domains );
 
 		return $domains;
+	}
+
+	/**
+	 * Merges domain-keyed example URL lists.
+	 *
+	 * @param array<string,array<int,string>> $left  First example map.
+	 * @param array<string,array<int,string>> $right Second example map.
+	 * @return array<string,array<int,string>>
+	 */
+	private function merge_domain_examples( array $left, array $right ) {
+		$examples = array();
+
+		foreach ( array( $left, $right ) as $map ) {
+			foreach ( $map as $domain => $urls ) {
+				$domain = $this->normalize_domain( $domain );
+
+				if ( '' === $domain || ! is_array( $urls ) ) {
+					continue;
+				}
+
+				$examples[ $domain ] = $this->merge_example_list(
+					isset( $examples[ $domain ] ) ? $examples[ $domain ] : array(),
+					$urls
+				);
+			}
+		}
+
+		ksort( $examples );
+
+		return $examples;
+	}
+
+	/**
+	 * Returns example URLs for a normalized domain from a metadata examples map.
+	 *
+	 * @param string                     $domain   Normalized domain.
+	 * @param array<string,array<mixed>> $examples Domain-keyed examples.
+	 * @return array<int,string>
+	 */
+	private function examples_for_domain( $domain, array $examples ) {
+		$urls = array();
+
+		foreach ( $examples as $example_domain => $domain_examples ) {
+			if ( $this->normalize_domain( $example_domain ) !== $domain || ! is_array( $domain_examples ) ) {
+				continue;
+			}
+
+			$urls = $this->merge_example_list( $urls, $domain_examples );
+		}
+
+		return $urls;
+	}
+
+	/**
+	 * Merges a bounded URL example list.
+	 *
+	 * @param array<int,string> $left  First URL list.
+	 * @param array<int,mixed>  $right Second URL list.
+	 * @return array<int,string>
+	 */
+	private function merge_example_list( array $left, array $right ) {
+		$urls = array();
+
+		foreach ( array_merge( $left, $right ) as $url ) {
+			$url = trim( (string) $url );
+
+			if ( '' !== $url && ! in_array( $url, $urls, true ) ) {
+				$urls[] = $url;
+			}
+
+			if ( 3 <= count( $urls ) ) {
+				break;
+			}
+		}
+
+		return $urls;
 	}
 
 	/**

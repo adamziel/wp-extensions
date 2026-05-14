@@ -31,6 +31,7 @@ const html = `<!doctype html>
 	<form id="universal-importer-start-form">
 		<input type="text" id="universal-importer-source" name="source" required>
 		<input type="text" id="universal-importer-domains" name="confirmed_domains">
+		<input type="radio" name="url_rewrite_mode" value="ask" checked>
 		<input type="checkbox" name="dry_run" value="1" checked>
 		<div id="universal-importer-dropzone">
 			<input type="file" id="universal-importer-files" multiple webkitdirectory directory>
@@ -163,12 +164,16 @@ const html = `<!doctype html>
 
 			var paths = [];
 			var filenames = [];
+			var urlRewriteMode = '';
 			for (var pair of uploadCall.options.body.entries()) {
 				if (pair[0] === 'paths[]') {
 					paths.push(pair[1]);
 				}
 				if (pair[0] === 'files[]') {
 					filenames.push(pair[1].name);
+				}
+				if (pair[0] === 'url_rewrite_mode') {
+					urlRewriteMode = pair[1];
 				}
 			}
 			paths.sort();
@@ -181,6 +186,11 @@ const html = `<!doctype html>
 
 			if (JSON.stringify(filenames) !== JSON.stringify(['chapter.md', 'cover.jpg', 'loose.md'])) {
 				fail('Unexpected upload filenames: ' + JSON.stringify(filenames));
+				return;
+			}
+
+			if (urlRewriteMode !== 'ask') {
+				fail('Upload request did not include the URL rewrite mode.');
 				return;
 			}
 

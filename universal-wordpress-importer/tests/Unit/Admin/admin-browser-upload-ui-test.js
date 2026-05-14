@@ -126,6 +126,7 @@ const form = new Element('universal-importer-start-form');
 form.formValues = {
 	source: '',
 	confirmed_domains: '',
+	url_rewrite_mode: 'ask',
 	dry_run: '1'
 };
 const sourceInput = new Element('universal-importer-source');
@@ -249,6 +250,10 @@ dropzone.dispatch('drop', {
 
 	if (JSON.stringify(filenames) !== JSON.stringify(expectedFilenames)) {
 		throw new Error('Unexpected upload filenames: ' + JSON.stringify(filenames));
+	}
+
+	if (body.values.url_rewrite_mode !== 'ask') {
+		throw new Error('Upload request did not include the URL rewrite mode.');
 	}
 })().catch((error) => {
 	process.stderr.write(error.stack + '\n');

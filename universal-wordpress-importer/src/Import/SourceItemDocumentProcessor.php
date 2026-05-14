@@ -20,7 +20,7 @@ use ZipArchive;
  * Classifies discovered local files and prepares initial block markup.
  */
 final class SourceItemDocumentProcessor {
-	const DEFAULT_ITEM_LIMIT       = 25;
+	const DEFAULT_ITEM_LIMIT       = 100;
 	const READ_CHUNK_BYTES         = 65536;
 	const TEXT_CHUNK_BYTES         = 262144;
 	const SCRIPT_CARRY_BYTES       = 128;
@@ -522,12 +522,13 @@ final class SourceItemDocumentProcessor {
 		if ( empty( $structure_diagnostics ) && 0 === $next_offset ) {
 			$structure_diagnostics = $this->analyze_pdf_structure( $pdf );
 		}
-		$prepared    = 0;
-		$url_domains = array();
-		$last_end    = $next_offset;
-		$last_stream = $stream_index;
-		$diagnostics = isset( $metadata['pdf_text_scan_diagnostics'] ) && is_array( $metadata['pdf_text_scan_diagnostics'] ) ? $metadata['pdf_text_scan_diagnostics'] : array();
-		$diagnostics = $this->merge_pdf_text_scan_diagnostics( $diagnostics, $scan['diagnostics'] );
+		$fragments       = isset( $metadata['pdf_text_fragments'] ) && is_array( $metadata['pdf_text_fragments'] ) ? array_values( $metadata['pdf_text_fragments'] ) : array();
+		$fragments_added = 0;
+		$url_domains     = isset( $metadata['absolute_url_examples'] ) && is_array( $metadata['absolute_url_examples'] ) ? $metadata['absolute_url_examples'] : array();
+		$last_end        = $next_offset;
+		$last_stream     = $stream_index;
+		$diagnostics     = isset( $metadata['pdf_text_scan_diagnostics'] ) && is_array( $metadata['pdf_text_scan_diagnostics'] ) ? $metadata['pdf_text_scan_diagnostics'] : array();
+		$diagnostics     = $this->merge_pdf_text_scan_diagnostics( $diagnostics, $scan['diagnostics'] );
 
 		foreach ( $scan['streams'] as $stream ) {
 			$text = $this->normalize_extracted_pdf_text( $this->extract_pdf_text_operators( $stream['content'] ) );
@@ -539,69 +540,17 @@ final class SourceItemDocumentProcessor {
 				continue;
 			}
 
-			$document_key   = $item->get_key() . ':pdf-text-chunk:' . str_pad( (string) $chunk_index, 4, '0', STR_PAD_LEFT );
-			$table_summary  = array(
-				'tables'      => 0,
-				'rows'        => 0,
-				'max_columns' => 0,
-			);
-			$block_markup   = $this->pdf_text_to_blocks( $text, $table_summary );
-			$block_count    = $this->count_blocks( $block_markup );
-			$content_hash   = hash( 'sha256', "pdf-native-text-chunk\n" . $document_key . "\n" . $text );
 			$chunk_domains  = $this->extract_absolute_url_domains( $text );
 			$url_domains    = $this->merge_absolute_url_domain_examples( $url_domains, $chunk_domains );
-			$chunk_metadata = array(
-				'relative_path'               => $item->get_relative_path(),
-				'source_uri'                  => $item->get_source_uri(),
-				'pdf_source_item_key'         => $item->get_key(),
-				'pdf_text_engine'             => 'native',
-				'pdf_text_chunk_index'        => $chunk_index,
-				'pdf_text_chunk_start'        => (int) $stream['start_offset'],
-				'pdf_text_chunk_end'          => (int) $stream['next_offset'],
-				'pdf_text_stream_start_index' => (int) $stream['index'],
-				'pdf_text_stream_end_index'   => (int) $stream['index'],
-				'absolute_url_domains'        => array_keys( $chunk_domains ),
-				'absolute_url_examples'       => $chunk_domains,
-			);
-			$chunk_metadata = $this->merge_pdf_structure_metadata( $chunk_metadata, $structure_diagnostics );
-
-			if ( 0 < $table_summary['tables'] ) {
-				$chunk_metadata['pdf_table_block_count']      = $table_summary['tables'];
-				$chunk_metadata['pdf_table_row_count']        = $table_summary['rows'];
-				$chunk_metadata['pdf_table_max_column_count'] = $table_summary['max_columns'];
-				$chunk_metadata['pdf_layout_warning']         = 'PDF tabular text runs were converted to WordPress table blocks where detected. Complex columns, merged cells, or vector-only tables may still need operator review.';
-			}
-
-			$this->store->save_prepared_document(
-				new ImportPreparedDocument(
-					$session->get_id(),
-					$document_key,
-					'pdf',
-					$this->title_for_text_chunk( $item, $text, $chunk_index, false ),
-					$block_markup,
-					$block_count,
-					$content_hash,
-					$chunk_metadata
-				)
-			);
-			$this->store->remember_idempotency_record(
-				$session->get_id(),
-				new ImportIdempotencyRecord( 'document-blocks:' . $document_key, 'prepared_document', $document_key, $content_hash )
-			);
-
-			++$prepared;
-			++$chunk_index;
-		}
-
-		if ( ! empty( $pdf_asset_summary['assets'] ) && ! empty( $scan['complete'] ) ) {
-			$media_prepared = $this->save_pdf_embedded_media_prepared_document( $session, $item, $pdf_asset_summary['assets'], $chunk_index );
-			$prepared      += $media_prepared;
-			if ( 0 < $media_prepared ) {
+			$fragment_count = count( $fragments );
+			$fragments      = $this->append_pdf_text_fragment( $fragments, $text );
+			if ( count( $fragments ) > $fragment_count ) {
+				++$fragments_added;
 				++$chunk_index;
 			}
 		}
 
-		$chunks_total  = $chunks_so_far + $prepared;
+		$chunks_total  = $chunks_so_far + $fragments_added;
 		$streams_total = max( $streams_so_far + count( $scan['streams'] ), $last_stream );
 		$is_complete   = ! empty( $scan['complete'] );
 
@@ -624,6 +573,13 @@ final class SourceItemDocumentProcessor {
 			$next_offset
 		);
 
+		if ( $is_complete ) {
+			unset( $next_metadata['pdf_text_fragments'] );
+			$next_metadata = $this->save_pdf_text_scan_document( $session, $item, $fragments, $pdf_asset_summary, $next_metadata );
+		} else {
+			$next_metadata['pdf_text_fragments'] = $fragments;
+		}
+
 		$this->store->save_source_item(
 			$item->with_status( $is_complete ? ImportSourceItem::STATUS_IMPORTED : ImportSourceItem::STATUS_DISCOVERED )->with_replaced_metadata( $next_metadata )
 		);
@@ -640,7 +596,7 @@ final class SourceItemDocumentProcessor {
 				'offset'   => $last_end,
 				'stream'   => $last_stream,
 				'chunks'   => $chunks_total,
-				'prepared' => $prepared,
+				'prepared' => $is_complete ? 1 : 0,
 			)
 		);
 
@@ -4318,6 +4274,122 @@ final class SourceItemDocumentProcessor {
 			$metadata['pdf_text_stream_index'] = (int) $stream_index;
 			$metadata['pdf_text_chunk_index']  = (int) $chunk_index;
 		}
+
+		return $metadata;
+	}
+
+	/**
+	 * Appends a native PDF text fragment without exceeding the first-pass text limit.
+	 *
+	 * @param array<int,string> $fragments Existing fragments.
+	 * @param string            $text      New fragment text.
+	 * @return array<int,string>
+	 */
+	private function append_pdf_text_fragment( array $fragments, $text ) {
+		$text = trim( (string) $text );
+
+		if ( '' === $text ) {
+			return $fragments;
+		}
+
+		$current = strlen( implode( "\n\n", $fragments ) );
+		$space   = self::PDF_TEXT_LIMIT - $current - ( empty( $fragments ) ? 0 : 2 );
+
+		if ( 0 >= $space ) {
+			return $fragments;
+		}
+
+		if ( strlen( $text ) > $space ) {
+			$text = substr( $text, 0, $space );
+		}
+
+		if ( '' !== trim( $text ) ) {
+			$fragments[] = $text;
+		}
+
+		return $fragments;
+	}
+
+	/**
+	 * Saves one prepared document for an incrementally scanned PDF.
+	 *
+	 * @param ImportSession       $session           Session.
+	 * @param ImportSourceItem    $item              PDF source item.
+	 * @param array<int,string>   $fragments         Accumulated text fragments.
+	 * @param array<string,mixed> $pdf_asset_summary Embedded media summary.
+	 * @param array<string,mixed> $metadata          Source item metadata.
+	 * @return array<string,mixed> Updated source item metadata.
+	 */
+	private function save_pdf_text_scan_document( ImportSession $session, ImportSourceItem $item, array $fragments, array $pdf_asset_summary, array $metadata ) {
+		$content = $this->normalize_extracted_pdf_text( implode( "\n\n", $fragments ) );
+
+		if ( '' === $content && empty( $pdf_asset_summary['assets'] ) ) {
+			return $metadata;
+		}
+
+		$table_summary = array(
+			'tables'      => 0,
+			'rows'        => 0,
+			'max_columns' => 0,
+		);
+		$block_markup  = '' === $content ? '' : $this->pdf_text_to_blocks( $content, $table_summary );
+
+		if ( ! empty( $pdf_asset_summary['assets'] ) ) {
+			$block_markup = trim( $block_markup . "\n\n" . $this->pdf_embedded_media_blocks( $pdf_asset_summary['assets'] ) );
+		}
+
+		if ( '' === trim( $block_markup ) ) {
+			return $metadata;
+		}
+
+		if ( 0 < $table_summary['tables'] ) {
+			$metadata['pdf_table_block_count']      = $table_summary['tables'];
+			$metadata['pdf_table_row_count']        = $table_summary['rows'];
+			$metadata['pdf_table_max_column_count'] = $table_summary['max_columns'];
+			$metadata['pdf_layout_warning']         = 'PDF tabular text runs were converted to WordPress table blocks where detected. Complex columns, merged cells, or vector-only tables may still need operator review.';
+			$this->store->record_event(
+				$session->get_id(),
+				new ImportProgressEvent(
+					ImportProgressEvent::LEVEL_INFO,
+					'document.pdf_table_blocks',
+					'PDF tabular text was converted into WordPress table blocks.',
+					array(
+						'item_key'    => $item->get_key(),
+						'table_count' => $table_summary['tables'],
+						'row_count'   => $table_summary['rows'],
+					)
+				)
+			);
+		}
+
+		$content_hash = hash( 'sha256', "pdf-native-text\n" . $item->get_key() . "\n" . $content . "\n" . $block_markup );
+		$document     = new ImportPreparedDocument(
+			$session->get_id(),
+			$item->get_key(),
+			'pdf',
+			$this->title_for_text_chunk( $item, $content, 0, true ),
+			$block_markup,
+			$this->count_blocks( $block_markup ),
+			$content_hash,
+			array_merge(
+				array(
+					'relative_path'       => $item->get_relative_path(),
+					'source_uri'          => $item->get_source_uri(),
+					'pdf_source_item_key' => $item->get_key(),
+				),
+				$metadata
+			)
+		);
+
+		$this->store->save_prepared_document( $document );
+		$this->store->remember_idempotency_record(
+			$session->get_id(),
+			new ImportIdempotencyRecord( 'document-blocks:' . $item->get_key(), 'prepared_document', $document->get_source_item_key(), $content_hash )
+		);
+
+		$metadata['content_hash'] = $content_hash;
+		$metadata['title']        = $document->get_title();
+		$metadata['block_count']  = $document->get_block_count();
 
 		return $metadata;
 	}

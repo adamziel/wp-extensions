@@ -11,7 +11,7 @@ namespace UniversalImporter\Import;
  * Rewrites staged EPUB spine anchor placeholders to imported draft permalinks.
  */
 final class ImportEpubInternalLinkResolver {
-	const DEFAULT_DOCUMENT_LIMIT = 25;
+	const DEFAULT_DOCUMENT_LIMIT = 100;
 
 	/**
 	 * Durable import store.

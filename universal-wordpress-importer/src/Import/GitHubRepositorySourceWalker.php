@@ -16,7 +16,7 @@ use RuntimeException;
  */
 final class GitHubRepositorySourceWalker {
 	const MAX_ARCHIVE_BYTES = 268435456;
-	const TREE_BLOB_LIMIT   = 25;
+	const TREE_BLOB_LIMIT   = 100;
 
 	/**
 	 * Durable store.

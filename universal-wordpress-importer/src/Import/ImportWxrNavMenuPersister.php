@@ -13,7 +13,7 @@ use RuntimeException;
  * Persists staged WXR nav_menu_item posts as local WordPress navigation menus.
  */
 final class ImportWxrNavMenuPersister {
-	const DEFAULT_SOURCE_LIMIT = 25;
+	const DEFAULT_SOURCE_LIMIT = 100;
 
 	/**
 	 * Durable import store.

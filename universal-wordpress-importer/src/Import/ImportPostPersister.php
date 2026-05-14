@@ -13,7 +13,7 @@ use RuntimeException;
  * Persists staged block markup as idempotent WordPress pages.
  */
 final class ImportPostPersister {
-	const DEFAULT_DOCUMENT_LIMIT = 25;
+	const DEFAULT_DOCUMENT_LIMIT = 100;
 
 	/**
 	 * Durable import store.
