@@ -1227,10 +1227,13 @@ final class ImportCommandTest extends TestCase {
 			++$attempt;
 		}
 		$prepared_count = $recovery_store->count_prepared_documents( $session->get_id() );
+		$documents      = $recovery_store->list_prepared_documents( $session->get_id(), 10 );
 
 		$this->assertSame( ImportSession::STATUS_DONE, $recovery_store->find( $session->get_id() )->get_status() );
-		$this->assertGreaterThan( 1, $prepared_count );
+		$this->assertSame( 1, $prepared_count );
 		$this->assertSame( $prepared_count, $recovery_store->count_idempotency_records_by_resource_type( $session->get_id(), 'prepared_document' ) );
+		$this->assertStringContainsString( 'Chunk body 1', $documents[0]->get_block_markup() );
+		$this->assertStringContainsString( 'Chunk body 6', $documents[0]->get_block_markup() );
 		$this->assertCount( 1, $recovery_store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 ) );
 	}
 
