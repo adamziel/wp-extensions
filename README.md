@@ -2,6 +2,22 @@
 
 Small WordPress extensions and experiments.
 
+## Markdown Editor
+
+`markdown-editor/` opens a directory of Markdown files in the WordPress block
+editor when running in WordPress Playground.
+
+It includes:
+
+- a mu-plugin that maps `wp_posts` and `wp_postmeta` to Markdown-backed SQLite
+  virtual tables
+- the `sqlite_markdown` PHP.wasm extension source that registers those virtual
+  tables
+- `php-toolkit` as a submodule for Markdown <-> block markup conversion
+
+See [markdown-editor/README.md](markdown-editor/README.md) for setup and
+Playground CLI usage.
+
 ## Static Site Generator
 
 `static-site-generator/` is a WordPress plugin that exports a WordPress site to
