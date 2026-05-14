@@ -1,0 +1,26 @@
+.DS_Store
+Thumbs.db
+
+# Local dependency/build artifacts.
+vendor/
+node_modules/
+build/
+dist/
+coverage/
+.phpunit.result.cache
+
+# Loop runtime artifacts. Keep memory/status/task files tracked.
+.codex-loop/runs/
+.codex-loop/current.prompt.md
+.codex-loop/last-message.md
+.codex-loop/session-history.tsv
+.codex-loop/run-counter
+.codex-loop/last-exit
+.autonomous-loop/logs/
+.autonomous-loop/tmp/
+
+# Common local secrets.
+.env
+.env.*
+*.key
+*.pem

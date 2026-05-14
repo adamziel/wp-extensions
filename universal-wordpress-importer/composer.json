@@ -1,0 +1,37 @@
+{
+  "name": "wordpress/universal-importer",
+  "description": "A resumable universal WordPress importer for trees of documents, archives, sites, and repositories.",
+  "type": "wordpress-plugin",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=7.2.24",
+    "wp-php-toolkit/data-liberation": "^0.1.5"
+  },
+  "require-dev": {
+    "dealerdirect/phpcodesniffer-composer-installer": "^1.1",
+    "phpunit/phpunit": "^8.5 || ^9.6",
+    "wp-coding-standards/wpcs": "^3.2"
+  },
+  "autoload": {
+    "psr-4": {
+      "UniversalImporter\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "UniversalImporter\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "build:release": "php tools/build-release.php",
+    "lint": "phpcs",
+    "smoke:release": "php tools/smoke-release-activation.php --build",
+    "test": "phpunit"
+  },
+  "config": {
+    "allow-plugins": {
+      "dealerdirect/phpcodesniffer-composer-installer": true
+    },
+    "sort-packages": true
+  }
+}

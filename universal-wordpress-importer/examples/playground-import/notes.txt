@@ -1,0 +1,8 @@
+Plain text note
+===============
+
+This file gives the importer a simple text source to turn into paragraphs.
+
+Use it with the other sample files by importing:
+
+/wordpress/wp-content/plugins/universal-wordpress-importer/examples/playground-import

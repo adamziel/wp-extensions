@@ -1,0 +1,13 @@
+.git
+.gitignore
+.distignore
+.autonomous-loop
+.codex-loop
+dist
+tests
+tools
+vendor/bin
+phpunit.xml.dist
+phpcs.xml.dist
+run_autonomous_loop.sh
+scripts/codex-loop.sh
