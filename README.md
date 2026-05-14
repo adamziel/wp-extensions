@@ -49,6 +49,13 @@ The generated ZIP is written to:
 ./static-site-output/static-site.zip
 ```
 
+If the Playground CLI cannot write the ZIP to the mounted output directory,
+make sure the host directory is writable by the runtime:
+
+```bash
+chmod 777 ./static-site-output
+```
+
 ### Regular WordPress
 
 Copy `static-site-generator/` into `wp-content/plugins/`:
