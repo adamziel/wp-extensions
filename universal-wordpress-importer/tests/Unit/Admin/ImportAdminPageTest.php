@@ -212,12 +212,51 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( "dropzone.addEventListener('drop'", $source );
 		$this->assertStringContainsString( 'readDirectoryEntries', $source );
 		$this->assertStringContainsString( 'webkitGetAsEntry', $source );
-		$this->assertStringContainsString( 'Drop files or folders here', $source );
+		$this->assertStringContainsString( 'Or upload a folder from this computer', $source );
+		$this->assertStringContainsString( 'Import source', $source );
+		$this->assertStringContainsString( 'URL rewriting', $source );
+		$this->assertStringContainsString( 'Ask when URLs are found', $source );
+		$this->assertStringContainsString( 'Keep imported URLs unchanged', $source );
+		$this->assertStringContainsString( 'Rewrite known source domains', $source );
+		$this->assertStringContainsString( 'url_rewrite_mode', $source );
+		$this->assertStringContainsString( 'universal-importer-progressbar', $source );
+		$this->assertStringContainsString( 'universal-importer-current-action', $source );
+		$this->assertStringContainsString( 'data-url-choice="none"', $source );
 		$this->assertStringContainsString( "'sessions' => \$sessions", $source );
 		$this->assertStringContainsString( 'wp_json_encode( $config )', $source );
 		$this->assertStringContainsString( 'function sessionNeedsKeepalive(session)', $source );
 		$this->assertStringContainsString( 'function reattachActiveSession()', $source );
 		$this->assertStringContainsString( 'reattachActiveSession();', $source );
+	}
+
+	/**
+	 * Preserve mode stores an explicit "do not rewrite" URL decision.
+	 *
+	 * @return void
+	 */
+	public function test_create_import_session_can_preserve_imported_urls() {
+		$page     = $this->create_page();
+		$snapshot = $page->create_import_session( '/tmp/book.md', array(), false, 'preserve' );
+		$session  = $this->store->find( ImportSessionId::from_string( $snapshot['id'] ) );
+		$decision = $this->store->find_decision( $session->get_id(), 'confirm-first-party-domains' );
+
+		$this->assertNotNull( $decision );
+		$this->assertSame( ImportDecision::STATUS_RESOLVED, $decision->get_status() );
+		$this->assertSame( array( 'confirmed_domains' => array() ), $decision->get_answer() );
+	}
+
+	/**
+	 * Rewrite mode requires an explicit source domain list.
+	 *
+	 * @return void
+	 */
+	public function test_create_import_session_requires_domains_for_rewrite_mode() {
+		$page = $this->create_page();
+
+		$this->expectException( InvalidArgumentException::class );
+		$this->expectExceptionMessage( 'Enter at least one source domain to rewrite, or choose to be asked later.' );
+
+		$page->create_import_session( '/tmp/book.md', array(), false, 'rewrite' );
 	}
 
 	/**
@@ -674,6 +713,11 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( 'not_configured', $details['pdf_documents']['recent'][1]['ocr_status'] );
 		$this->assertStringContainsString( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND', $details['pdf_documents']['recent'][1]['hint'] );
 		$this->assertSame( 1, $details['posts']['persisted'] );
+		$this->assertArrayHasKey( 'dashboard', $details );
+		$this->assertArrayHasKey( 'current_action', $details['dashboard'] );
+		$this->assertArrayHasKey( 'checklist', $details['dashboard'] );
+		$this->assertNotEmpty( $details['dashboard']['checklist'] );
+		$this->assertSame( 6, $details['dashboard']['summary']['total'] );
 	}
 
 	/**

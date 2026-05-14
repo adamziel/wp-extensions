@@ -15,8 +15,8 @@ use RuntimeException;
  */
 final class ImportRunner {
 	const DEFAULT_LOCK_TTL_SECONDS  = 300;
-	const DEFAULT_BATCH_SIZE        = 10;
-	const DEFAULT_SOURCE_ITEM_LIMIT = 25;
+	const DEFAULT_BATCH_SIZE        = 20;
+	const DEFAULT_SOURCE_ITEM_LIMIT = 100;
 
 	/**
 	 * Store used for durable session state.

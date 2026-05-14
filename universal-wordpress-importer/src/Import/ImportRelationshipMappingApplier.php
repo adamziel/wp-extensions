@@ -13,7 +13,7 @@ use RuntimeException;
  * Applies operator-approved relationship mappings to already-imported drafts.
  */
 final class ImportRelationshipMappingApplier {
-	const DEFAULT_DECISION_LIMIT = 25;
+	const DEFAULT_DECISION_LIMIT = 100;
 
 	/**
 	 * Durable import store.

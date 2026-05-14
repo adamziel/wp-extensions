@@ -16,7 +16,7 @@ use ZipArchive;
  * Expands discovered zip files into durable source queue items.
  */
 final class ZipArchiveSourceWalker {
-	const DEFAULT_ITEM_LIMIT = 10;
+	const DEFAULT_ITEM_LIMIT = 100;
 	const MAX_ENTRY_BYTES    = 67108864;
 
 	/**

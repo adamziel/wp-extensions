@@ -13,7 +13,7 @@ use RuntimeException;
  * Persists WXR postmeta after the matching prepared document has a local draft.
  */
 final class ImportPostMetaPersister {
-	const DEFAULT_DOCUMENT_LIMIT = 25;
+	const DEFAULT_DOCUMENT_LIMIT = 100;
 
 	/**
 	 * Durable import store.

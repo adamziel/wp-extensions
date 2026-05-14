@@ -13,7 +13,7 @@ use RuntimeException;
  * Discovers local files and directories incrementally into the source queue.
  */
 final class LocalFilesystemSourceWalker {
-	const DEFAULT_ITEM_LIMIT = 25;
+	const DEFAULT_ITEM_LIMIT = 100;
 
 	/**
 	 * Durable store.

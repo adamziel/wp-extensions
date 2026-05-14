@@ -13,7 +13,7 @@ use RuntimeException;
  * Persists staged remote comments against already-imported draft posts.
  */
 final class ImportCommentPersister {
-	const DEFAULT_DOCUMENT_LIMIT = 25;
+	const DEFAULT_DOCUMENT_LIMIT = 100;
 
 	/**
 	 * Durable import store.
