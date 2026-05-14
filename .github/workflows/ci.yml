@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: zip
+          coverage: none
+
+      - name: Validate Blueprint JSON
+        run: |
+          php -r 'foreach (glob("blueprints/*.json") as $file) { json_decode(file_get_contents($file), true, 512, JSON_THROW_ON_ERROR); echo "Valid $file\n"; }'
+
+      - name: Check Static Site Generator
+        run: |
+          umask 0022
+          find static-site-generator -name '*.php' -print0 | xargs -0 -n1 php -l
+          php static-site-generator/tests/path-utils-test.php
+          php static-site-generator/tests/url-collector-test.php
+          php static-site-generator/tests/url-rewriter-test.php
+          php static-site-generator/tests/static-exporter-test.php
+          php static-site-generator/tests/plugin-test.php
+
+      - name: Install Universal Importer dependencies
+        working-directory: universal-wordpress-importer
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Test Universal Importer
+        working-directory: universal-wordpress-importer
+        env:
+          UNIVERSAL_IMPORTER_SKIP_CHROMIUM_TEST: '1'
+        run: |
+          umask 0022
+          composer validate --no-check-publish
+          composer test
+          composer lint
+          composer build:release

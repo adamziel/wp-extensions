@@ -2,6 +2,25 @@
 
 Small WordPress extensions and experiments.
 
+## Universal WordPress Importer
+
+`universal-wordpress-importer/` is a WordPress plugin for durable,
+resumable imports from content trees: local folders, browser-dropped folders,
+zip archives, Markdown, HTML, text, EPUB, WXR, PDFs, GitHub repositories, and
+WordPress REST sites.
+
+[![Try in Playground](https://img.shields.io/badge/Try%20in-WordPress%20Playground-3858e9?style=for-the-badge&logo=wordpress)](https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Funiversal-wordpress-importer-demo.json)
+
+The Playground Blueprint installs the packaged plugin and opens
+`Tools -> Universal Importer`. Use this bundled source path to try an import:
+
+```text
+/wordpress/wp-content/plugins/universal-wordpress-importer/examples/playground-import
+```
+
+See [universal-wordpress-importer/README.md](universal-wordpress-importer/README.md)
+for features, usage, examples, limitations, and development checks.
+
 ## Markdown Editor
 
 `markdown-editor/` opens a directory of Markdown files in the WordPress block
@@ -120,4 +139,11 @@ php static-site-generator/tests/url-collector-test.php
 php static-site-generator/tests/url-rewriter-test.php
 php static-site-generator/tests/static-exporter-test.php
 php static-site-generator/tests/plugin-test.php
+
+cd universal-wordpress-importer
+composer install
+composer validate --no-check-publish
+composer test
+composer lint
+composer build:release
 ```
