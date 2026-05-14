@@ -65,6 +65,33 @@ npm run recompile:php:node:jspi:8.4
 
 ## Run With Playground CLI
 
+The quickest path is the helper script:
+
+```bash
+markdown-editor/run-playground-cli.sh
+```
+
+It builds the `sqlite_markdown` side module, installs `php-toolkit`
+dependencies, prepares a Playground checkout at `../wordpress-playground`, and
+starts the Playground CLI with the required mounts.
+
+Use environment variables to point it at existing directories:
+
+```bash
+CONTENT_DIR=~/notes \
+PLAYGROUND_DIR=~/src/wordpress-playground \
+markdown-editor/run-playground-cli.sh
+```
+
+The first run recompiles the Playground Node JSPI PHP build for the selected
+PHP version. To skip that after you have a compatible PHP.wasm build:
+
+```bash
+RECOMPILE_PHP=0 markdown-editor/run-playground-cli.sh
+```
+
+### Manual Commands
+
 Set these paths:
 
 ```bash
