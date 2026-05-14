@@ -60,6 +60,20 @@ enum PostColumns {
     POST_COL_DATE_GMT,
     POST_COL_MODIFIED_GMT,
     POST_COL_CONTENT,
+    POST_COL_AUTHOR,
+    POST_COL_DATE,
+    POST_COL_EXCERPT,
+    POST_COL_COMMENT_STATUS,
+    POST_COL_PING_STATUS,
+    POST_COL_PASSWORD,
+    POST_COL_TO_PING,
+    POST_COL_PINGED,
+    POST_COL_MODIFIED,
+    POST_COL_CONTENT_FILTERED,
+    POST_COL_GUID,
+    POST_COL_MENU_ORDER,
+    POST_COL_MIME_TYPE,
+    POST_COL_COMMENT_COUNT,
     POST_COL_COUNT
 };
 
@@ -1761,7 +1775,21 @@ static int posts_vtab_connect(sqlite3 *db, void *aux, int argc, const char *cons
         "post_type TEXT,"
         "post_date_gmt TEXT,"
         "post_modified_gmt TEXT,"
-        "post_content TEXT"
+        "post_content TEXT,"
+        "post_author INTEGER,"
+        "post_date TEXT,"
+        "post_excerpt TEXT,"
+        "comment_status TEXT,"
+        "ping_status TEXT,"
+        "post_password TEXT,"
+        "to_ping TEXT,"
+        "pinged TEXT,"
+        "post_modified TEXT,"
+        "post_content_filtered TEXT,"
+        "guid TEXT,"
+        "menu_order INTEGER,"
+        "post_mime_type TEXT,"
+        "comment_count INTEGER"
         ")";
     int rc;
     int index;
@@ -1913,6 +1941,32 @@ static int posts_vtab_column(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int
             break;
         case POST_COL_CONTENT:
             sqlite3_result_text(ctx, post->post_content, -1, SQLITE_TRANSIENT);
+            break;
+        case POST_COL_AUTHOR:
+            sqlite3_result_int(ctx, 1);
+            break;
+        case POST_COL_DATE:
+            sqlite3_result_text(ctx, post->post_date_gmt, -1, SQLITE_TRANSIENT);
+            break;
+        case POST_COL_EXCERPT:
+        case POST_COL_PASSWORD:
+        case POST_COL_TO_PING:
+        case POST_COL_PINGED:
+        case POST_COL_CONTENT_FILTERED:
+        case POST_COL_GUID:
+        case POST_COL_MIME_TYPE:
+            sqlite3_result_text(ctx, "", -1, SQLITE_STATIC);
+            break;
+        case POST_COL_COMMENT_STATUS:
+        case POST_COL_PING_STATUS:
+            sqlite3_result_text(ctx, "closed", -1, SQLITE_STATIC);
+            break;
+        case POST_COL_MODIFIED:
+            sqlite3_result_text(ctx, post->post_modified_gmt, -1, SQLITE_TRANSIENT);
+            break;
+        case POST_COL_MENU_ORDER:
+        case POST_COL_COMMENT_COUNT:
+            sqlite3_result_int(ctx, 0);
             break;
         default:
             sqlite3_result_null(ctx);

@@ -37,6 +37,26 @@ It includes:
 See [markdown-editor/README.md](markdown-editor/README.md) for setup and
 Playground CLI usage.
 
+The repository includes a small Markdown page tree in `content/` so the editor
+has pages to load on the first run.
+
+### Sparse Checkout Demo
+
+To try only the Markdown editor and sample content:
+
+```bash
+git clone --filter=blob:none --sparse https://github.com/adamziel/wp-extensions.git wp-markdown-editor
+cd wp-markdown-editor
+git sparse-checkout set markdown-editor content
+markdown-editor/run-playground-cli.sh
+```
+
+Then open:
+
+```text
+http://127.0.0.1:9400/wp-admin/edit.php?post_type=page
+```
+
 ## Static Site Generator
 
 `static-site-generator/` is a WordPress plugin that exports a WordPress site to
