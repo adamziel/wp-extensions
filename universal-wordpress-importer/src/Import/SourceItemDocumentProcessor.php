@@ -531,7 +531,7 @@ final class SourceItemDocumentProcessor {
 		$diagnostics     = $this->merge_pdf_text_scan_diagnostics( $diagnostics, $scan['diagnostics'] );
 
 		foreach ( $scan['streams'] as $stream ) {
-			$text = $this->normalize_extracted_pdf_text( $this->extract_pdf_text_operators( $stream['content'] ) );
+			$text = $this->normalize_extracted_pdf_text( $this->extract_pdf_text_operators( $stream['content'] ), true );
 
 			$last_end    = (int) $stream['next_offset'];
 			$last_stream = (int) $stream['index'] + 1;
@@ -5665,7 +5665,7 @@ final class SourceItemDocumentProcessor {
 			}
 		}
 
-		$text = $this->normalize_extracted_pdf_text( implode( "\n\n", $parts ) );
+		$text = $this->normalize_extracted_pdf_text( implode( "\n\n", $parts ), true );
 
 		if ( self::PDF_TEXT_LIMIT < strlen( $text ) ) {
 			$text = substr( $text, 0, self::PDF_TEXT_LIMIT );
@@ -6049,8 +6049,8 @@ final class SourceItemDocumentProcessor {
 				if ( null !== $move && '' !== trim( $line ) ) {
 					if ( 0.01 < abs( $move[1] ) ) {
 						$this->finish_pdf_text_line( $lines, $line );
-					} elseif ( 24 < $move[0] && ! preg_match( '/\s$/', $line ) ) {
-						$line .= ' ';
+					} elseif ( 24 < $move[0] ) {
+						$line = rtrim( $line ) . $this->pdf_text_gap( $move[0] );
 					}
 				}
 			} elseif ( 'Tm' === $operator ) {
@@ -6061,8 +6061,8 @@ final class SourceItemDocumentProcessor {
 					if ( null !== $current_y && '' !== trim( $line ) ) {
 						if ( 2 < abs( $next_y - $current_y ) || ( null !== $current_x && $next_x < $current_x - 2 ) ) {
 							$this->finish_pdf_text_line( $lines, $line );
-						} elseif ( null !== $current_x && 24 < $next_x - $current_x && ! preg_match( '/\s$/', $line ) ) {
-							$line .= ' ';
+						} elseif ( null !== $current_x && 24 < $next_x - $current_x ) {
+							$line = rtrim( $line ) . $this->pdf_text_gap( $next_x - $current_x );
 						}
 					}
 					$current_x = $next_x;
@@ -6192,13 +6192,23 @@ final class SourceItemDocumentProcessor {
 	 * @return void
 	 */
 	private function finish_pdf_text_line( array &$lines, &$line ) {
-		$line = trim( (string) $line );
+		$line = rtrim( (string) $line );
 
-		if ( '' !== $line ) {
+		if ( '' !== trim( $line ) ) {
 			$lines[] = $line;
 		}
 
 		$line = '';
+	}
+
+	/**
+	 * Converts a PDF horizontal text movement into table-detectable spacing.
+	 *
+	 * @param float $gap Horizontal movement.
+	 * @return string
+	 */
+	private function pdf_text_gap( $gap ) {
+		return str_repeat( ' ', min( 12, max( 4, (int) floor( abs( (float) $gap ) / 24 ) ) ) );
 	}
 
 	/**
@@ -6422,7 +6432,7 @@ final class SourceItemDocumentProcessor {
 		$anchors = array();
 
 		foreach ( preg_split( '/\R{2,}/', trim( $content ) ) as $chunk ) {
-			$chunk = trim( (string) $chunk );
+			$chunk = $this->normalize_pdf_block_markers( trim( (string) $chunk ) );
 
 			if ( '' === $chunk ) {
 				continue;
@@ -6559,6 +6569,33 @@ final class SourceItemDocumentProcessor {
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Unit tests run without WordPress loaded.
 		return (string) json_encode( $attributes );
+	}
+
+	/**
+	 * Normalizes common PDF text-extractor list glyphs into Markdown-compatible markers.
+	 *
+	 * @param string $chunk PDF text chunk.
+	 * @return string
+	 */
+	private function normalize_pdf_block_markers( $chunk ) {
+		$lines = preg_split( '/\n/', (string) $chunk );
+
+		if ( ! is_array( $lines ) ) {
+			return (string) $chunk;
+		}
+
+		foreach ( $lines as $index => $line ) {
+			$line = (string) $line;
+			foreach ( array( "\xE2\x80\xA2", "\xE2\x97\x8F", "\xE2\x97\xA6", "\xE2\x81\x83" ) as $bullet ) {
+				if ( 0 === strpos( ltrim( $line ), $bullet ) ) {
+					$indent          = substr( $line, 0, strlen( $line ) - strlen( ltrim( $line ) ) );
+					$lines[ $index ] = $indent . '- ' . ltrim( substr( ltrim( $line ), strlen( $bullet ) ) );
+					break;
+				}
+			}
+		}
+
+		return implode( "\n", $lines );
 	}
 
 	/**
