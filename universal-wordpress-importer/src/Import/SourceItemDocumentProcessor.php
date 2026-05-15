@@ -5647,19 +5647,33 @@ final class SourceItemDocumentProcessor {
 	 * @return string
 	 */
 	private function extract_pdf_text( $pdf ) {
-		$segments = array( (string) $pdf );
+		$page_streams = $this->extract_pdf_page_content_streams( $pdf );
+		$segments     = array();
+		$font_maps    = $this->extract_pdf_to_unicode_font_maps( $pdf );
 
-		foreach ( $this->extract_pdf_stream_segments( $pdf ) as $segment ) {
-			$segments[] = $segment;
+		if ( ! empty( $page_streams ) ) {
+			foreach ( $page_streams as $stream ) {
+				$segments[] = $stream;
+			}
+		} else {
+			$segments[] = array(
+				'content'   => (string) $pdf,
+				'font_maps' => $font_maps,
+			);
+
+			foreach ( $this->extract_pdf_stream_segments( $pdf ) as $segment ) {
+				$segments[] = array(
+					'content'   => $segment,
+					'font_maps' => $font_maps,
+				);
+			}
 		}
 
 		$parts = array();
 		$bytes = 0;
 
-		$font_maps = $this->extract_pdf_to_unicode_font_maps( $pdf );
-
 		foreach ( $segments as $segment ) {
-			$text = $this->extract_pdf_text_operators( $segment, $font_maps );
+			$text = $this->extract_pdf_text_operators( $segment['content'], $segment['font_maps'] );
 
 			if ( '' === $text ) {
 				continue;
@@ -6022,6 +6036,50 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
+	 * Returns decoded page content streams with their page-local font maps.
+	 *
+	 * @param string $pdf Raw PDF bytes.
+	 * @return array<int,array{content:string,font_maps:array<string,array<string,string>>}>
+	 */
+	private function extract_pdf_page_content_streams( $pdf ) {
+		$objects          = $this->extract_pdf_indirect_objects( $pdf );
+		$font_object_maps = $this->extract_pdf_font_object_text_maps( $objects );
+		$streams          = array();
+
+		if ( empty( $objects ) ) {
+			return $streams;
+		}
+
+		foreach ( $objects as $object ) {
+			if ( ! preg_match( '#/Type\s*/Page\b#', $object ) ) {
+				continue;
+			}
+
+			$resources   = $this->pdf_page_resource_dictionary( $object, $objects );
+			$font_maps   = $this->pdf_font_maps_from_resource_dictionary( $resources, $font_object_maps, $objects );
+			$content_ids = $this->pdf_page_content_object_ids( $object );
+
+			foreach ( $content_ids as $content_id ) {
+				if ( ! isset( $objects[ $content_id ] ) ) {
+					continue;
+				}
+
+				$content = $this->pdf_object_stream_body( $objects[ $content_id ] );
+				if ( '' === $content ) {
+					continue;
+				}
+
+				$streams[] = array(
+					'content'   => $content,
+					'font_maps' => $font_maps,
+				);
+			}
+		}
+
+		return $streams;
+	}
+
+	/**
 	 * Extracts simple PDF font text maps keyed by page font resource name.
 	 *
 	 * @param string $pdf Raw PDF bytes.
@@ -6029,6 +6087,38 @@ final class SourceItemDocumentProcessor {
 	 */
 	private function extract_pdf_to_unicode_font_maps( $pdf ) {
 		$objects  = $this->extract_pdf_indirect_objects( $pdf );
+		$font_map = $this->extract_pdf_font_object_text_maps( $objects );
+
+		if ( empty( $font_map ) ) {
+			return array();
+		}
+
+		$maps = array();
+		foreach ( $font_map as $object_id => $map ) {
+			$pattern = '#/([A-Za-z0-9_.-]+)\s+' . preg_quote( (string) $object_id, '#' ) . '\s+\d+\s+R\b#';
+			if ( preg_match_all( $pattern, (string) $pdf, $matches ) ) {
+				foreach ( $matches[1] as $name ) {
+					if ( 'ToUnicode' !== $name ) {
+						$maps[ (string) $name ] = $map;
+					}
+				}
+			}
+		}
+
+		if ( 1 === count( $font_map ) ) {
+			$maps['__default'] = reset( $font_map );
+		}
+
+		return $maps;
+	}
+
+	/**
+	 * Extracts PDF text maps keyed by indirect font object ID.
+	 *
+	 * @param array<int,string> $objects Indirect PDF objects.
+	 * @return array<int,array<string,string>>
+	 */
+	private function extract_pdf_font_object_text_maps( array $objects ) {
 		$cmaps    = array();
 		$font_map = array();
 
@@ -6053,27 +6143,152 @@ final class SourceItemDocumentProcessor {
 			}
 		}
 
-		if ( empty( $font_map ) ) {
-			return array();
+		return $font_map;
+	}
+
+	/**
+	 * Resolves the resource dictionary for a page object.
+	 *
+	 * @param string            $page_object Page object body.
+	 * @param array<int,string> $objects     Indirect PDF objects.
+	 * @return string
+	 */
+	private function pdf_page_resource_dictionary( $page_object, array $objects ) {
+		if ( preg_match( '#/Resources\s+(\d+)\s+\d+\s+R\b#', (string) $page_object, $match ) ) {
+			$object_id = (int) $match[1];
+			return isset( $objects[ $object_id ] ) ? $objects[ $object_id ] : '';
 		}
 
-		$maps = array();
-		foreach ( $font_map as $object_id => $map ) {
-			$pattern = '#/([A-Za-z0-9_.-]+)\s+' . preg_quote( (string) $object_id, '#' ) . '\s+\d+\s+R\b#';
-			if ( preg_match_all( $pattern, (string) $pdf, $matches ) ) {
-				foreach ( $matches[1] as $name ) {
-					if ( 'ToUnicode' !== $name ) {
-						$maps[ (string) $name ] = $map;
-					}
+		$position = strpos( (string) $page_object, '/Resources' );
+		if ( false === $position ) {
+			return '';
+		}
+
+		$dictionary_start = strpos( (string) $page_object, '<<', $position );
+		if ( false === $dictionary_start ) {
+			return '';
+		}
+
+		return $this->extract_pdf_balanced_dictionary_at( $page_object, $dictionary_start );
+	}
+
+	/**
+	 * Returns font maps keyed by the names used in a page resource dictionary.
+	 *
+	 * @param string                          $resources        Page resources dictionary.
+	 * @param array<int,array<string,string>> $font_object_maps Text maps keyed by indirect font object ID.
+	 * @param array<int,string>               $objects          Indirect PDF objects.
+	 * @return array<string,array<string,string>>
+	 */
+	private function pdf_font_maps_from_resource_dictionary( $resources, array $font_object_maps, array $objects ) {
+		$font_dictionary = $this->pdf_font_resource_dictionary( $resources, $objects );
+		$maps            = array();
+
+		if ( '' === $font_dictionary || empty( $font_object_maps ) ) {
+			return $maps;
+		}
+
+		if ( preg_match_all( '#/([A-Za-z0-9_.-]+)\s+(\d+)\s+\d+\s+R\b#', $font_dictionary, $matches, PREG_SET_ORDER ) ) {
+			foreach ( $matches as $match ) {
+				$name      = (string) $match[1];
+				$object_id = (int) $match[2];
+				if ( 'ToUnicode' !== $name && isset( $font_object_maps[ $object_id ] ) ) {
+					$maps[ $name ] = $font_object_maps[ $object_id ];
 				}
 			}
 		}
 
-		if ( 1 === count( $font_map ) ) {
-			$maps['__default'] = reset( $font_map );
+		if ( 1 === count( $maps ) ) {
+			$maps['__default'] = reset( $maps );
 		}
 
 		return $maps;
+	}
+
+	/**
+	 * Returns the /Font resource dictionary body from a page resources dictionary.
+	 *
+	 * @param string            $resources Page resources dictionary.
+	 * @param array<int,string> $objects   Indirect PDF objects.
+	 * @return string
+	 */
+	private function pdf_font_resource_dictionary( $resources, array $objects ) {
+		if ( preg_match( '#/Font\s+(\d+)\s+\d+\s+R\b#', (string) $resources, $match ) ) {
+			$object_id = (int) $match[1];
+			return isset( $objects[ $object_id ] ) ? $objects[ $object_id ] : '';
+		}
+
+		$position = strpos( (string) $resources, '/Font' );
+		if ( false === $position ) {
+			return '';
+		}
+
+		$dictionary_start = strpos( (string) $resources, '<<', $position );
+		if ( false === $dictionary_start ) {
+			return '';
+		}
+
+		return $this->extract_pdf_balanced_dictionary_at( $resources, $dictionary_start );
+	}
+
+	/**
+	 * Returns content stream object IDs from a page object.
+	 *
+	 * @param string $page_object Page object body.
+	 * @return array<int,int>
+	 */
+	private function pdf_page_content_object_ids( $page_object ) {
+		$ids = array();
+
+		if ( preg_match( '#/Contents\s+\[(.*?)\]#s', (string) $page_object, $match ) ) {
+			if ( preg_match_all( '#(\d+)\s+\d+\s+R\b#', $match[1], $refs ) ) {
+				foreach ( $refs[1] as $object_id ) {
+					$ids[] = (int) $object_id;
+				}
+			}
+		} elseif ( preg_match( '#/Contents\s+(\d+)\s+\d+\s+R\b#', (string) $page_object, $match ) ) {
+			$ids[] = (int) $match[1];
+		}
+
+		return array_values( array_unique( $ids ) );
+	}
+
+	/**
+	 * Extracts a balanced PDF dictionary starting at an opening << pair.
+	 *
+	 * @param string $content PDF object content.
+	 * @param int    $offset  Byte offset of the opening dictionary marker.
+	 * @return string
+	 */
+	private function extract_pdf_balanced_dictionary_at( $content, $offset ) {
+		$content = (string) $content;
+		$offset  = max( 0, (int) $offset );
+		$length  = strlen( $content );
+		$depth   = 0;
+		$start   = null;
+
+		for ( $index = $offset; $index < $length - 1; ++$index ) {
+			$pair = substr( $content, $index, 2 );
+
+			if ( '<<' === $pair ) {
+				if ( 0 === $depth ) {
+					$start = $index;
+				}
+				++$depth;
+				++$index;
+				continue;
+			}
+
+			if ( '>>' === $pair ) {
+				--$depth;
+				++$index;
+				if ( 0 === $depth && null !== $start ) {
+					return substr( $content, $start, $index - $start + 1 );
+				}
+			}
+		}
+
+		return '';
 	}
 
 	/**
@@ -6312,12 +6527,30 @@ final class SourceItemDocumentProcessor {
 	 * @return string
 	 */
 	private function pdf_object_stream_body( $object_body ) {
-		if ( ! preg_match( '/<<(.*?)>>\s*stream(?:\r\n|\n|\r)?(.*?)(?:\r\n|\n|\r)?endstream/s', (string) $object_body, $match ) ) {
+		$object_body = (string) $object_body;
+
+		if ( ! preg_match( '/<<(.*?)>>\s*stream(?:\r\n|\n|\r)?/s', $object_body, $match, PREG_OFFSET_CAPTURE ) ) {
 			return '';
 		}
 
-		$dictionary = (string) $match[1];
-		$stream     = (string) $match[2];
+		$dictionary   = (string) $match[1][0];
+		$stream_start = $match[0][1] + strlen( $match[0][0] );
+		$stream_end   = $this->pdf_stream_end_from_declared_length( $object_body, $dictionary, $stream_start );
+		$uses_length  = null !== $stream_end;
+
+		if ( null === $stream_end ) {
+			$stream_end = strpos( $object_body, 'endstream', $stream_start );
+		}
+
+		if ( false === $stream_end ) {
+			return '';
+		}
+
+		$stream = substr( $object_body, $stream_start, $stream_end - $stream_start );
+
+		if ( ! $uses_length ) {
+			$stream = $this->trim_pdf_stream_delimiters( $stream );
+		}
 
 		if ( false !== stripos( $dictionary, '/FlateDecode' ) && function_exists( 'gzuncompress' ) ) {
 			$decoded = @gzuncompress( $stream ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Invalid PDF CMap streams are ignored.

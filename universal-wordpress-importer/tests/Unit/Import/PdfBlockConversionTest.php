@@ -199,6 +199,39 @@ final class PdfBlockConversionTest extends TestCase {
 	}
 
 	/**
+	 * Page-local PDF font resources may reuse the same name for different ToUnicode maps.
+	 *
+	 * @return void
+	 */
+	public function test_pdf_page_local_to_unicode_font_resources_do_not_bleed_between_pages() {
+		if ( ! function_exists( 'mb_convert_encoding' ) ) {
+			$this->markTestSkipped( 'mbstring is required to build UTF-16BE CMap fixtures.' );
+		}
+
+		$source_file = $this->temporary_pdf_with_page_local_to_unicode_resources( 'page-local-font-resources.pdf' );
+		$session     = ImportSession::start_for_source( $source_file );
+		$posts       = new FakePostGateway();
+		$runner      = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/' );
+		$this->store->save( $session );
+
+		$status = $this->store->find( $session->get_id() )->get_status();
+		for ( $tick = 0; $tick < 8 && ImportSession::STATUS_DONE !== $status; ++$tick ) {
+			$runner->run( $session->get_id() );
+			$status = $this->store->find( $session->get_id() )->get_status();
+		}
+
+		$post_content = $this->combined_post_content( $posts );
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertStringContainsString( 'PAGE ONE', $post_content );
+		$this->assertStringContainsString( 'PAGE TWO', $post_content );
+		$this->assertStringContainsString( 'MATKA', $post_content );
+		$this->assertStringContainsString( 'KUCHARKA', $post_content );
+		$this->assertLessThan( strpos( $post_content, 'PAGE TWO' ), strpos( $post_content, 'PAGE ONE' ) );
+	}
+
+	/**
 	 * Returns at least ten distinct tricky PDF conversion cases.
 	 *
 	 * @return array<string,array<int,array<string,mixed>>>
@@ -480,6 +513,70 @@ final class PdfBlockConversionTest extends TestCase {
 		);
 
 		return $this->temporary_file( $basename, "%PDF-1.4\n" . implode( '', $objects ) . "%%EOF\n" );
+	}
+
+	/**
+	 * Creates a two-page PDF whose pages reuse /F2 with different font objects.
+	 *
+	 * @param string $basename Fixture basename.
+	 * @return string
+	 */
+	private function temporary_pdf_with_page_local_to_unicode_resources( $basename ) {
+		$first_text     = 'PAGE ONE MATKA';
+		$second_text    = 'PAGE TWO KUCHARKA';
+		$first_encoded  = $this->encode_fixture_text_to_cmap_hex( $first_text, 1 );
+		$second_encoded = $this->encode_fixture_text_to_cmap_hex( $second_text, 30 );
+		$first_content  = "BT\n/F2 12 Tf\n72 720 Td\n<" . $first_encoded['hex'] . "> Tj\nET";
+		$second_content = "BT\n/F2 12 Tf\n72 720 Td\n<" . $second_encoded['hex'] . "> Tj\nET";
+		$objects        = array(
+			"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+			"2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >> endobj\n",
+			"3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F2 7 0 R >> >> /Contents 5 0 R >> endobj\n",
+			"4 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F2 9 0 R >> >> /Contents 6 0 R >> endobj\n",
+			'5 0 obj << /Length ' . strlen( $first_content ) . " >>\nstream\n" . $first_content . "\nendstream\nendobj\n",
+			'6 0 obj << /Length ' . strlen( $second_content ) . " >>\nstream\n" . $second_content . "\nendstream\nendobj\n",
+			"7 0 obj << /Type /Font /Subtype /Type0 /BaseFont /FirstPageFont /Encoding /Identity-H /DescendantFonts [11 0 R] /ToUnicode 8 0 R >> endobj\n",
+			'8 0 obj << /Length ' . strlen( $first_encoded['cmap'] ) . " >>\nstream\n" . $first_encoded['cmap'] . "\nendstream\nendobj\n",
+			"9 0 obj << /Type /Font /Subtype /Type0 /BaseFont /SecondPageFont /Encoding /Identity-H /DescendantFonts [12 0 R] /ToUnicode 10 0 R >> endobj\n",
+			'10 0 obj << /Length ' . strlen( $second_encoded['cmap'] ) . " >>\nstream\n" . $second_encoded['cmap'] . "\nendstream\nendobj\n",
+			"11 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /FirstPageFont /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >> endobj\n",
+			"12 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /SecondPageFont /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >> endobj\n",
+		);
+
+		return $this->temporary_file( $basename, "%PDF-1.4\n" . implode( '', $objects ) . "%%EOF\n" );
+	}
+
+	/**
+	 * Encodes fixture text as glyph IDs plus a matching ToUnicode CMap.
+	 *
+	 * @param string $text       Text to encode.
+	 * @param int    $first_code First glyph code.
+	 * @return array{hex:string,cmap:string}
+	 */
+	private function encode_fixture_text_to_cmap_hex( $text, $first_code ) {
+		$characters   = preg_split( '//u', (string) $text, -1, PREG_SPLIT_NO_EMPTY );
+		$encoded      = '';
+		$cmap_entries = array();
+		$code         = (int) $first_code;
+		$seen         = array();
+
+		$this->assertIsArray( $characters );
+
+		foreach ( $characters as $char ) {
+			if ( ! isset( $seen[ $char ] ) ) {
+				$seen[ $char ]  = strtoupper( str_pad( dechex( $code ), 4, '0', STR_PAD_LEFT ) );
+				$cmap_entries[] = '<' . $seen[ $char ] . '> <' . $this->utf16be_hex( $char ) . '>';
+				++$code;
+			}
+			$encoded .= $seen[ $char ];
+		}
+
+		$cmap = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def\n/CMapName /PageLocalUnitTest def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n" . count( $cmap_entries ) . " beginbfchar\n" . implode( "\n", $cmap_entries ) . "\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+
+		return array(
+			'hex'  => $encoded,
+			'cmap' => $cmap,
+		);
 	}
 
 	/**
