@@ -4231,14 +4231,14 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
-	 * Oversized PDFs fail before embedded media scanning reads and queues assets.
+	 * PDFs larger than one native scan window stream across runner ticks instead of failing immediately.
 	 *
 	 * @return void
 	 */
-	public function test_runner_rejects_oversized_pdf_before_embedded_media_scan() {
+	public function test_runner_streams_large_pdf_before_embedded_media_scan() {
 		$source_file = $this->temporary_pdf_with_jpeg_image(
-			'oversized-embedded-image.pdf',
-			"BT\n/F1 12 Tf\n72 720 Td\n(# Oversized PDF\\n\\nBody before image.) Tj\nET\nq 1 0 0 1 0 0 cm /Im1 Do Q"
+			'large-embedded-image.pdf',
+			"BT\n/F1 12 Tf\n72 720 Td\n(# Large PDF\\n\\nBody before image.) Tj\nET\nq 1 0 0 1 0 0 cm /Im1 Do Q"
 		);
 		file_put_contents( $source_file, str_repeat( '0', SourceItemDocumentProcessor::PDF_FILE_LIMIT ), FILE_APPEND );
 		$marker           = $this->temporary_directory() . '/external-helper-ran';
@@ -4249,6 +4249,7 @@ final class ImportRunnerTest extends TestCase {
 		$php_code         = 'file_put_contents(' . $marker_literal . ', "ran"); file_put_contents($argv[2], "helper text");';
 		$command          = escapeshellarg( PHP_BINARY ) . ' -r ' . escapeshellarg( $php_code ) . ' {input} {output}';
 		$session          = ImportSession::start_for_source( $source_file );
+		$posts            = new FakePostGateway();
 		$media            = new FakeMediaGateway();
 		$cache            = new ImportCacheDirectory( $this->temporary_directory(), 'unit-test' );
 		$this->store->save( $session );
@@ -4261,22 +4262,37 @@ final class ImportRunnerTest extends TestCase {
 		putenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND=' . $command );
 
 		try {
-			( new ImportRunner( $this->store, 'unit-test', 60, null, null, 'https://local.example.test/', $media, null, null, null, $cache ) )->run( $session->get_id() );
+			$runner  = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/', $media, null, null, null, $cache );
+			$attempt = 0;
+			while ( $attempt < 20 && ImportSession::STATUS_DONE !== $this->store->find( $session->get_id() )->get_status() ) {
+				$runner->run( $session->get_id() );
+				++$attempt;
+			}
 		} finally {
 			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND', $previous_text );
 			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_TEXT_TIMEOUT', $previous_timeout );
 			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND', $previous_ocr );
 		}
 
-		$items      = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_FAILED ), 1 );
+		$items = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$this->assertCount( 1, $items );
 		$metadata   = $items[0]->get_metadata();
-		$references = $this->store->list_media_references_by_statuses( $session->get_id(), array( ImportMediaReference::STATUS_QUEUED, ImportMediaReference::STATUS_IMPORTED, ImportMediaReference::STATUS_FAILED ), 5 );
+		$references = $this->store->list_media_references_by_statuses( $session->get_id(), array( ImportMediaReference::STATUS_IMPORTED ), 5 );
+		$document   = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
 
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
 		$this->assertSame( 'pdf', $metadata['document_format'] );
-		$this->assertSame( 'PDF file exceeds the first-pass extraction size limit.', $metadata['error'] );
-		$this->assertArrayNotHasKey( 'pdf_embedded_media_queued', $metadata );
-		$this->assertCount( 0, $references );
-		$this->assertSame( 0, $media->count_attachments() );
+		$this->assertSame( 'native', $metadata['pdf_text_engine'] );
+		$this->assertSame( 1, $metadata['pdf_embedded_media_queued'] );
+		$this->assertGreaterThanOrEqual( SourceItemDocumentProcessor::PDF_FILE_LIMIT, $metadata['pdf_structure_scan_read_offset'] );
+		$this->assertGreaterThanOrEqual( SourceItemDocumentProcessor::PDF_FILE_LIMIT, $metadata['pdf_media_scan_read_offset'] );
+		$this->assertGreaterThanOrEqual( SourceItemDocumentProcessor::PDF_FILE_LIMIT, $metadata['pdf_text_scan_read_offset'] );
+		$this->assertCount( 1, $references );
+		$this->assertSame( 1, $media->count_attachments() );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertNotNull( $document );
+		$this->assertStringContainsString( 'Large PDF', $document->get_block_markup() );
+		$this->assertStringContainsString( '<!-- wp:image -->', $document->get_block_markup() );
 		$this->assertFileDoesNotExist( $marker );
 	}
 
@@ -4488,6 +4504,53 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertSame( 1, $posts->count_posts() );
 		$this->assertStringContainsString( '<!-- wp:image -->', $posts->get_post( 1 )['post_content'] );
 		$this->assertStringContainsString( 'https://local.example.test/wp-content/uploads/embedded-image-1-', $posts->get_post( 1 )['post_content'] );
+	}
+
+	/**
+	 * PDFs without text can import simple FlateDecode bitmap images without an external PDF tool.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_image_only_pdf_when_embedded_flate_bitmap_can_be_converted() {
+		$raw_pixels = str_repeat( "\xff\xff\xff", 64 * 64 );
+		$compressed = gzcompress( $raw_pixels );
+		$this->assertIsString( $compressed );
+		$source_file  = $this->temporary_pdf_with_embedded_image(
+			'image-only-flate-bitmap.pdf',
+			'q 1 0 0 1 0 0 cm /Im1 Do Q',
+			'FlateDecode',
+			$compressed
+		);
+		$previous_ocr = getenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+		$session      = ImportSession::start_for_source( $source_file );
+		$posts        = new FakePostGateway();
+		$media        = new FakeMediaGateway();
+		$cache        = new ImportCacheDirectory( $this->temporary_directory(), 'unit-test' );
+		$this->store->save( $session );
+
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test ensures OCR is not required when PDF image assets can be extracted.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+
+		try {
+			( new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/', $media, null, null, null, $cache ) )->run( $session->get_id() );
+		} finally {
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND', $previous_ocr );
+		}
+
+		$items      = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$metadata   = $items[0]->get_metadata();
+		$references = $this->store->list_media_references_by_statuses( $session->get_id(), array( ImportMediaReference::STATUS_IMPORTED ), 5 );
+		$attachment = $media->get_attachment( 100 );
+
+		$this->assertCount( 1, $references );
+		$this->assertSame( 'FlateDecode', $references[0]->get_metadata()['pdf_image_filter'] );
+		$this->assertSame( 'png', $references[0]->get_metadata()['extension'] );
+		$this->assertStringEndsWith( '.png', $attachment['resolved_source_uri'] );
+		$this->assertStringStartsWith( "\x89PNG\r\n\x1a\n", file_get_contents( $attachment['resolved_source_uri'] ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Unit test verifies converted importer cache payload bytes.
+		$this->assertSame( 'no_text_assets_imported', $metadata['pdf_text_extraction_status'] );
+		$this->assertSame( 'queued', $metadata['pdf_embedded_media_extraction_status'] );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertStringContainsString( '.png', $posts->get_post( 1 )['post_content'] );
 	}
 
 	/**

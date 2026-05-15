@@ -265,7 +265,7 @@ final class SourceItemDocumentProcessor {
 	 */
 	private function process_pdf_item( ImportSession $session, ImportSourceItem $item ) {
 		try {
-			$this->assert_pdf_file_within_first_pass_limit( $item->get_source_uri() );
+			$this->assert_pdf_file_is_readable( $item->get_source_uri() );
 			$structure_summary = $this->process_pdf_structure_scan( $session, $item );
 
 			if ( empty( $structure_summary['complete'] ) ) {
@@ -421,6 +421,7 @@ final class SourceItemDocumentProcessor {
 		}
 
 		$scan          = $this->extract_pdf_structure_scan( $pdf, 0, self::PDF_STRUCTURE_SCAN_LIMIT, $stream_index, $next_offset );
+		$scan          = $this->continue_pdf_scan_when_window_ends_before_eof( $item->get_source_uri(), $next_offset, strlen( $pdf ), $scan );
 		$diagnostics   = $this->merge_pdf_structure_scan_diagnostics( $diagnostics, $scan['diagnostics'] );
 		$is_complete   = ! empty( $scan['complete'] );
 		$next_metadata = $this->pdf_structure_scan_metadata(
@@ -510,12 +511,13 @@ final class SourceItemDocumentProcessor {
 		}
 
 		$scan = $this->extract_pdf_text_stream_scan( $pdf, 0, self::PDF_TEXT_SCAN_LIMIT, $stream_index, $next_offset );
+		$scan = $this->continue_pdf_scan_when_window_ends_before_eof( $item->get_source_uri(), $next_offset, strlen( $pdf ), $scan );
 
 		if ( ! $is_resuming && ! empty( $scan['complete'] ) ) {
 			return null;
 		}
 
-		if ( ! $is_resuming && (int) $scan['diagnostics']['text_operators'] < self::PDF_TEXT_SCAN_LIMIT ) {
+		if ( ! $is_resuming && ! empty( $scan['complete'] ) && (int) $scan['diagnostics']['text_operators'] < self::PDF_TEXT_SCAN_LIMIT ) {
 			return null;
 		}
 
@@ -551,11 +553,16 @@ final class SourceItemDocumentProcessor {
 			}
 		}
 
+		if ( empty( $scan['complete'] ) && (int) $last_end < (int) $scan['next_offset'] ) {
+			$last_end    = (int) $scan['next_offset'];
+			$last_stream = max( $last_stream, (int) $scan['next_index'] );
+		}
+
 		$chunks_total  = $chunks_so_far + $fragments_added;
 		$streams_total = max( $streams_so_far + count( $scan['streams'] ), $last_stream );
 		$is_complete   = ! empty( $scan['complete'] );
 
-		if ( 0 === $chunks_total && $is_complete ) {
+		if ( 0 === $chunks_total && $is_complete && empty( $pdf_asset_summary['assets'] ) ) {
 			return null;
 		}
 
@@ -3529,7 +3536,7 @@ final class SourceItemDocumentProcessor {
 		}
 
 		if ( 'pdf' === $format && $should_scan_pdf_assets ) {
-			$this->assert_pdf_file_within_first_pass_limit( $item->get_source_uri() );
+			$this->assert_pdf_file_is_readable( $item->get_source_uri() );
 			$pdf_asset_summary = $this->queue_pdf_embedded_media_references( $session, $item );
 		}
 
@@ -3709,13 +3716,13 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
-	 * Verifies a PDF is safe for bounded first-pass parsing before media scans.
+	 * Verifies a PDF exists and can be opened before bounded streaming scans.
 	 *
 	 * @param string $path Source path.
 	 * @return void
-	 * @throws RuntimeException When the file cannot be read or exceeds the PDF limit.
+	 * @throws RuntimeException When the file cannot be read.
 	 */
-	private function assert_pdf_file_within_first_pass_limit( $path ) {
+	private function assert_pdf_file_is_readable( $path ) {
 		if ( ! is_file( $path ) ) {
 			throw new RuntimeException( 'Discovered PDF item is no longer a file.' );
 		}
@@ -3728,10 +3735,6 @@ final class SourceItemDocumentProcessor {
 
 		if ( false === $size ) {
 			throw new RuntimeException( 'Unable to determine discovered PDF file size.' );
-		}
-
-		if ( self::PDF_FILE_LIMIT < (int) $size ) {
-			throw new RuntimeException( 'PDF file exceeds the first-pass extraction size limit.' );
 		}
 	}
 
@@ -3750,13 +3753,40 @@ final class SourceItemDocumentProcessor {
 			return '';
 		}
 
-		$length = max( 0, min( self::PDF_FILE_LIMIT, (int) $size ) - $offset );
+		$length = max( 0, min( self::PDF_FILE_LIMIT, (int) $size - $offset ) );
 		if ( 0 >= $length ) {
 			return '';
 		}
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- PDF scan reads are bounded and can resume from a stored byte offset.
 		return file_get_contents( $path, false, null, $offset, $length );
+	}
+
+	/**
+	 * Marks a PDF scan incomplete when its bounded read window did not reach EOF.
+	 *
+	 * @param string              $path        Source path.
+	 * @param int                 $read_offset Absolute file offset of the read window.
+	 * @param int                 $read_bytes  Bytes read for this scan.
+	 * @param array<string,mixed> $scan        Scan result with complete and next_offset keys.
+	 * @return array<string,mixed>
+	 */
+	private function continue_pdf_scan_when_window_ends_before_eof( $path, $read_offset, $read_bytes, array $scan ) {
+		$size        = filesize( $path );
+		$read_offset = max( 0, (int) $read_offset );
+		$read_bytes  = max( 0, (int) $read_bytes );
+
+		if ( false === $size || 0 >= $read_bytes ) {
+			return $scan;
+		}
+
+		$window_end = $read_offset + $read_bytes;
+		if ( ! empty( $scan['complete'] ) && $window_end < (int) $size ) {
+			$scan['complete']    = false;
+			$scan['next_offset'] = max( isset( $scan['next_offset'] ) ? (int) $scan['next_offset'] : 0, $window_end );
+		}
+
+		return $scan;
 	}
 
 	/**
@@ -3787,7 +3817,7 @@ final class SourceItemDocumentProcessor {
 		}
 
 		if ( self::PDF_FILE_LIMIT < (int) $size ) {
-			throw new RuntimeException( 'PDF file exceeds the first-pass extraction size limit.' );
+			return $this->read_large_pdf_text_with_external_fallback( $path, $structure_metadata );
 		}
 
 		$stream       = $this->open_document_stream( $path );
@@ -3912,6 +3942,88 @@ final class SourceItemDocumentProcessor {
 			'metadata'     => array(
 				'pdf_text_engine' => 'native',
 			) + $diagnostics,
+		);
+	}
+
+	/**
+	 * Falls back to configured extractors for large PDFs after bounded native scans.
+	 *
+	 * @param string              $path               Source path.
+	 * @param array<string,mixed> $structure_metadata Existing durable structure diagnostics.
+	 * @return array{content:string,content_hash:string,metadata?:array<string,mixed>}
+	 * @throws ImportDocumentProcessingException When external text and OCR extraction fail.
+	 * @throws RuntimeException When the file cannot be hashed.
+	 */
+	private function read_large_pdf_text_with_external_fallback( $path, array $structure_metadata ) {
+		$source_hash = hash_file( 'sha256', $path );
+		if ( false === $source_hash ) {
+			throw new RuntimeException( 'Unable to hash discovered PDF file.' );
+		}
+
+		$diagnostics = array_merge(
+			$structure_metadata,
+			array(
+				'pdf_native_text_status' => 'streamed',
+				'pdf_scan_window_bytes'  => self::PDF_FILE_LIMIT,
+			)
+		);
+		$external    = $this->extract_pdf_text_with_external_command( $path );
+
+		if ( '' !== trim( $external['content'] ) ) {
+			return array(
+				'content'      => $external['content'],
+				'content_hash' => hash( 'sha256', "pdf-external\n" . $source_hash . "\n" . $external['content'] ),
+				'metadata'     => array_merge(
+					array(
+						'pdf_text_engine' => 'external',
+					),
+					$diagnostics,
+					$external['metadata']
+				),
+			);
+		}
+
+		$ocr = $this->extract_pdf_text_with_ocr( $path );
+
+		if ( '' !== trim( $ocr['content'] ) ) {
+			$external_metadata = $external['metadata'];
+			if ( isset( $external_metadata['pdf_external_text_status'] ) && 'not_configured' === $external_metadata['pdf_external_text_status'] ) {
+				$external_metadata = array();
+			}
+
+			return array(
+				'content'      => $ocr['content'],
+				'content_hash' => hash( 'sha256', "pdf-ocr\n" . $source_hash . "\n" . $ocr['content'] ),
+				'metadata'     => array_merge(
+					array(
+						'pdf_text_engine' => 'ocr',
+						'pdf_ocr_status'  => 'succeeded',
+					),
+					$diagnostics,
+					$external_metadata,
+					$ocr['metadata']
+				),
+			);
+		}
+
+		$external_status = isset( $external['metadata']['pdf_external_text_status'] ) ? (string) $external['metadata']['pdf_external_text_status'] : '';
+		$ocr_status      = isset( $ocr['metadata']['pdf_ocr_status'] ) ? (string) $ocr['metadata']['pdf_ocr_status'] : '';
+		$message         = $ocr['message'];
+
+		if ( 'not_configured' === $external_status && 'not_configured' === $ocr_status ) {
+			$message = 'PDF text extraction produced no importable text. Configure UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND for a text extractor such as pdftotext, or UNIVERSAL_IMPORTER_PDF_OCR_COMMAND for scanned PDFs.';
+		} elseif ( 'not_configured' !== $external_status && '' !== trim( $external['message'] ) ) {
+			$message = $external['message'];
+			if ( 'not_configured' === $ocr_status ) {
+				$message .= ' OCR is not configured; set UNIVERSAL_IMPORTER_PDF_OCR_COMMAND to try scanned-PDF fallback.';
+			}
+		}
+
+		throw new ImportDocumentProcessingException(
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Message is persisted as an operational diagnostic, not rendered here.
+			$message,
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Metadata is persisted as structured diagnostics, not rendered here.
+			array_merge( $diagnostics, $external['metadata'], $ocr['metadata'] )
 		);
 	}
 
@@ -4097,6 +4209,11 @@ final class SourceItemDocumentProcessor {
 		$base_metadata = $item->get_metadata();
 		$summary       = $this->pdf_media_scan_summary_from_metadata( $base_metadata );
 
+		if ( ! empty( $base_metadata['pdf_media_scan_complete'] ) ) {
+			$summary['complete'] = true;
+			return $summary;
+		}
+
 		if ( ! is_file( $item->get_source_uri() ) || ! is_readable( $item->get_source_uri() ) ) {
 			$summary['complete'] = true;
 			return $summary;
@@ -4110,6 +4227,7 @@ final class SourceItemDocumentProcessor {
 
 		$read_offset             = $summary['next_offset'];
 		$scan                    = $this->extract_pdf_image_streams( $pdf, 0, self::PDF_MEDIA_SCAN_LIMIT, $summary['next_index'], $read_offset );
+		$scan                    = $this->continue_pdf_scan_when_window_ends_before_eof( $item->get_source_uri(), $read_offset, strlen( $pdf ), $scan );
 		$summary['complete']     = $scan['complete'];
 		$summary['read_offset']  = $read_offset;
 		$summary['read_bytes']   = strlen( $pdf );
@@ -4120,7 +4238,7 @@ final class SourceItemDocumentProcessor {
 		foreach ( $scan['images'] as $image ) {
 			if ( self::PDF_MEDIA_LIMIT <= $summary['queued'] ) {
 				$this->count_unsupported_pdf_asset( $summary, 'extraction_limit', $image['filter'] );
-			} elseif ( 'DCTDecode' !== $image['filter'] ) {
+			} elseif ( ! in_array( $image['filter'], array( 'DCTDecode', 'FlateDecode' ), true ) ) {
 				$this->count_unsupported_pdf_asset( $summary, 'unsupported_filter', $image['filter'] );
 			} elseif ( ! empty( $image['malformed_stream'] ) ) {
 				$this->count_unsupported_pdf_asset( $summary, 'malformed_stream', $image['filter'] );
@@ -4132,13 +4250,15 @@ final class SourceItemDocumentProcessor {
 				$this->count_unsupported_pdf_asset( $summary, 'empty_stream', $image['filter'] );
 			} elseif ( self::PDF_MEDIA_FILE_LIMIT < strlen( $image['stream'] ) ) {
 				$this->count_unsupported_pdf_asset( $summary, 'file_size_limit', $image['filter'] );
-			} elseif ( ! $this->pdf_stream_has_jpeg_signature( $image['stream'] ) ) {
+			} elseif ( 'DCTDecode' === $image['filter'] && ! $this->pdf_stream_has_jpeg_signature( $image['stream'] ) ) {
 				$this->count_unsupported_pdf_asset( $summary, 'invalid_jpeg', $image['filter'] );
 			} else {
-				$asset = $this->queue_pdf_jpeg_media_reference( $session, $item, $image, $image['index'] );
+				$asset = $this->queue_pdf_image_media_reference( $session, $item, $image, $image['index'] );
 				if ( null !== $asset ) {
 					$summary['assets'][] = $asset;
 					++$summary['queued'];
+				} else {
+					$this->count_unsupported_pdf_asset( $summary, 'unsupported_image_encoding', $image['filter'] );
 				}
 			}
 
@@ -4150,6 +4270,10 @@ final class SourceItemDocumentProcessor {
 				)
 			);
 			$progress_metadata_saved = true;
+		}
+
+		if ( empty( $summary['complete'] ) && (int) $summary['next_offset'] < (int) $scan['next_offset'] ) {
+			$summary['next_offset'] = (int) $scan['next_offset'];
 		}
 
 		if ( ! $progress_metadata_saved && empty( $summary['complete'] ) ) {
@@ -4200,6 +4324,7 @@ final class SourceItemDocumentProcessor {
 		$metadata['pdf_embedded_media_assets']  = $summary['assets'];
 		$metadata['pdf_media_scan_read_offset'] = isset( $summary['read_offset'] ) ? (int) $summary['read_offset'] : 0;
 		$metadata['pdf_media_scan_read_bytes']  = isset( $summary['read_bytes'] ) ? (int) $summary['read_bytes'] : 0;
+		$metadata['pdf_media_scan_complete']    = (bool) $complete;
 
 		$metadata['pdf_unsupported_embedded_media_count']         = (int) $summary['unsupported'];
 		$metadata['pdf_unsupported_embedded_media_filter_counts'] = $summary['unsupported_filters'];
@@ -4689,6 +4814,10 @@ final class SourceItemDocumentProcessor {
 			$hint .= ' At least one DCTDecode image stream did not contain a recognizable JPEG payload.';
 		}
 
+		if ( in_array( 'unsupported_image_encoding', $reasons, true ) ) {
+			$hint .= ' At least one embedded image stream used bitmap settings the native importer could not convert.';
+		}
+
 		if ( in_array( 'unsupported_filter', $reasons, true ) ) {
 			$hint .= ' Use a richer PDF media extractor or review the source PDF manually for these assets.';
 		}
@@ -4810,6 +4939,7 @@ final class SourceItemDocumentProcessor {
 	private function pdf_image_stream_entry( $object_number, $dictionary, $stream, $malformed_stream, $index, $next_offset ) {
 		return array(
 			'object'           => (string) $object_number,
+			'dictionary'       => (string) $dictionary,
 			'filter'           => $this->pdf_image_filter( $dictionary ),
 			'stream'           => (string) $stream,
 			'width'            => $this->pdf_dictionary_int( $dictionary, 'Width' ),
@@ -4952,6 +5082,277 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
+	 * Builds an importable image payload from a PDF image stream.
+	 *
+	 * @param array<string,mixed> $image Extracted image data.
+	 * @return array{bytes:string,extension:string}|null
+	 */
+	private function pdf_image_media_payload( array $image ) {
+		$filter = isset( $image['filter'] ) ? (string) $image['filter'] : '';
+		$stream = isset( $image['stream'] ) ? (string) $image['stream'] : '';
+
+		if ( '' === $stream ) {
+			return null;
+		}
+
+		if ( 'DCTDecode' === $filter ) {
+			return $this->pdf_stream_has_jpeg_signature( $stream )
+				? array(
+					'bytes'     => $stream,
+					'extension' => 'jpg',
+				)
+				: null;
+		}
+
+		if ( 'FlateDecode' === $filter ) {
+			return $this->pdf_flate_image_media_payload( $image );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Converts a simple FlateDecode PDF bitmap image stream to PNG bytes.
+	 *
+	 * @param array<string,mixed> $image Extracted image data.
+	 * @return array{bytes:string,extension:string}|null
+	 */
+	private function pdf_flate_image_media_payload( array $image ) {
+		if ( ! function_exists( 'gzuncompress' ) ) {
+			return null;
+		}
+
+		$dictionary = isset( $image['dictionary'] ) ? (string) $image['dictionary'] : '';
+		$width      = isset( $image['width'] ) ? (int) $image['width'] : 0;
+		$height     = isset( $image['height'] ) ? (int) $image['height'] : 0;
+		$bits       = $this->pdf_dictionary_int( $dictionary, 'BitsPerComponent' );
+
+		if ( $width < self::PDF_MEDIA_MIN_DIMENSION || $height < self::PDF_MEDIA_MIN_DIMENSION || 8 !== $bits ) {
+			return null;
+		}
+
+		$decoded = @gzuncompress( (string) $image['stream'] ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Invalid PDF image streams are diagnosed as unsupported.
+		if ( false === $decoded ) {
+			$decoded = @gzdecode( (string) $image['stream'] ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Invalid PDF image streams are diagnosed as unsupported.
+		}
+		if ( false === $decoded || self::PDF_MEDIA_FILE_LIMIT < strlen( $decoded ) ) {
+			return null;
+		}
+
+		$components = $this->pdf_image_color_components( $dictionary );
+		if ( 0 === $components ) {
+			return null;
+		}
+
+		$raw = $this->decode_pdf_flate_image_predictor( $decoded, $dictionary, $width, $height, $components );
+		if ( null === $raw ) {
+			return null;
+		}
+
+		if ( 4 === $components ) {
+			$raw        = $this->convert_cmyk_bytes_to_rgb( $raw );
+			$components = 3;
+		}
+
+		$png = $this->png_bytes_from_raw_pixels( $raw, $width, $height, $components );
+		if ( null === $png || self::PDF_MEDIA_FILE_LIMIT < strlen( $png ) ) {
+			return null;
+		}
+
+		return array(
+			'bytes'     => $png,
+			'extension' => 'png',
+		);
+	}
+
+	/**
+	 * Determines supported component counts from a PDF image color space.
+	 *
+	 * @param string $dictionary PDF image dictionary.
+	 * @return int
+	 */
+	private function pdf_image_color_components( $dictionary ) {
+		if ( preg_match( '#/ColorSpace\s*/DeviceGray\b#i', (string) $dictionary ) ) {
+			return 1;
+		}
+
+		if ( preg_match( '#/ColorSpace\s*/DeviceRGB\b#i', (string) $dictionary ) ) {
+			return 3;
+		}
+
+		if ( preg_match( '#/ColorSpace\s*/DeviceCMYK\b#i', (string) $dictionary ) ) {
+			return 4;
+		}
+
+		return 0;
+	}
+
+	/**
+	 * Applies simple PDF/PNG predictors to FlateDecode image bytes.
+	 *
+	 * @param string $decoded    Decoded image bytes.
+	 * @param string $dictionary PDF image dictionary.
+	 * @param int    $width      Image width.
+	 * @param int    $height     Image height.
+	 * @param int    $components Color components per pixel.
+	 * @return string|null
+	 */
+	private function decode_pdf_flate_image_predictor( $decoded, $dictionary, $width, $height, $components ) {
+		$row_bytes = (int) $width * (int) $components;
+		if ( 0 >= $row_bytes || 0 >= (int) $height ) {
+			return null;
+		}
+
+		if ( strlen( $decoded ) === $row_bytes * (int) $height ) {
+			return $decoded;
+		}
+
+		$predictor = $this->pdf_dictionary_int( $dictionary, 'Predictor' );
+		if ( $predictor < 10 || strlen( $decoded ) < ( $row_bytes + 1 ) * (int) $height ) {
+			return null;
+		}
+
+		$output = '';
+		$prior  = str_repeat( "\0", $row_bytes );
+		for ( $row = 0; $row < (int) $height; ++$row ) {
+			$offset = $row * ( $row_bytes + 1 );
+			$filter = ord( $decoded[ $offset ] );
+			$line   = substr( $decoded, $offset + 1, $row_bytes );
+			$line   = $this->png_unfilter_scanline( $filter, $line, $prior, max( 1, (int) $components ) );
+			if ( null === $line ) {
+				return null;
+			}
+			$output .= $line;
+			$prior   = $line;
+		}
+
+		return $output;
+	}
+
+	/**
+	 * Reverses a PNG predictor scanline filter.
+	 *
+	 * @param int    $filter Filter byte.
+	 * @param string $line   Filtered row bytes.
+	 * @param string $prior  Previous unfiltered row bytes.
+	 * @param int    $bpp    Bytes per pixel.
+	 * @return string|null
+	 */
+	private function png_unfilter_scanline( $filter, $line, $prior, $bpp ) {
+		$bytes  = array_values( unpack( 'C*', (string) $line ) );
+		$up     = array_values( unpack( 'C*', (string) $prior ) );
+		$length = count( $bytes );
+
+		for ( $i = 0; $i < $length; ++$i ) {
+			$left    = $i >= $bpp ? $bytes[ $i - $bpp ] : 0;
+			$above   = isset( $up[ $i ] ) ? $up[ $i ] : 0;
+			$up_left = $i >= $bpp && isset( $up[ $i - $bpp ] ) ? $up[ $i - $bpp ] : 0;
+
+			if ( 1 === $filter ) {
+				$bytes[ $i ] = ( $bytes[ $i ] + $left ) & 0xff;
+			} elseif ( 2 === $filter ) {
+				$bytes[ $i ] = ( $bytes[ $i ] + $above ) & 0xff;
+			} elseif ( 3 === $filter ) {
+				$bytes[ $i ] = ( $bytes[ $i ] + (int) floor( ( $left + $above ) / 2 ) ) & 0xff;
+			} elseif ( 4 === $filter ) {
+				$bytes[ $i ] = ( $bytes[ $i ] + $this->png_paeth_predictor( $left, $above, $up_left ) ) & 0xff;
+			} elseif ( 0 !== $filter ) {
+				return null;
+			}
+		}
+
+		return pack( 'C*', ...$bytes );
+	}
+
+	/**
+	 * Computes the PNG Paeth predictor.
+	 *
+	 * @param int $left    Left byte.
+	 * @param int $above   Above byte.
+	 * @param int $up_left Upper-left byte.
+	 * @return int
+	 */
+	private function png_paeth_predictor( $left, $above, $up_left ) {
+		$p  = (int) $left + (int) $above - (int) $up_left;
+		$pa = abs( $p - (int) $left );
+		$pb = abs( $p - (int) $above );
+		$pc = abs( $p - (int) $up_left );
+
+		if ( $pa <= $pb && $pa <= $pc ) {
+			return (int) $left;
+		}
+
+		return $pb <= $pc ? (int) $above : (int) $up_left;
+	}
+
+	/**
+	 * Converts raw CMYK bytes into RGB bytes.
+	 *
+	 * @param string $cmyk CMYK bytes.
+	 * @return string
+	 */
+	private function convert_cmyk_bytes_to_rgb( $cmyk ) {
+		$rgb    = '';
+		$length = strlen( (string) $cmyk );
+
+		for ( $i = 0; $i + 3 < $length; $i += 4 ) {
+			$c    = ord( $cmyk[ $i ] ) / 255;
+			$m    = ord( $cmyk[ $i + 1 ] ) / 255;
+			$y    = ord( $cmyk[ $i + 2 ] ) / 255;
+			$k    = ord( $cmyk[ $i + 3 ] ) / 255;
+			$r    = (int) round( 255 * ( 1 - min( 1, $c + $k ) ) );
+			$g    = (int) round( 255 * ( 1 - min( 1, $m + $k ) ) );
+			$b    = (int) round( 255 * ( 1 - min( 1, $y + $k ) ) );
+			$rgb .= chr( $r ) . chr( $g ) . chr( $b );
+		}
+
+		return $rgb;
+	}
+
+	/**
+	 * Encodes raw grayscale/RGB pixels as a PNG image.
+	 *
+	 * @param string $pixels     Raw pixel bytes.
+	 * @param int    $width      Image width.
+	 * @param int    $height     Image height.
+	 * @param int    $components Component count, 1 for grayscale or 3 for RGB.
+	 * @return string|null
+	 */
+	private function png_bytes_from_raw_pixels( $pixels, $width, $height, $components ) {
+		$row_bytes = (int) $width * (int) $components;
+		if ( strlen( (string) $pixels ) !== $row_bytes * (int) $height ) {
+			return null;
+		}
+
+		$scanlines = '';
+		for ( $row = 0; $row < (int) $height; ++$row ) {
+			$scanlines .= "\0" . substr( $pixels, $row * $row_bytes, $row_bytes );
+		}
+
+		$color_type = 1 === (int) $components ? 0 : 2;
+		$ihdr       = pack( 'NNC5', (int) $width, (int) $height, 8, $color_type, 0, 0, 0 );
+
+		return "\x89PNG\r\n\x1a\n"
+			. $this->png_chunk( 'IHDR', $ihdr )
+			. $this->png_chunk( 'IDAT', gzcompress( $scanlines ) )
+			. $this->png_chunk( 'IEND', '' );
+	}
+
+	/**
+	 * Builds one PNG chunk.
+	 *
+	 * @param string $type PNG chunk type.
+	 * @param string $data PNG chunk data.
+	 * @return string
+	 */
+	private function png_chunk( $type, $data ) {
+		$type = (string) $type;
+		$data = (string) $data;
+
+		return pack( 'N', strlen( $data ) ) . $type . $data . pack( 'N', crc32( $type . $data ) );
+	}
+
+	/**
 	 * Removes stream delimiter line endings without touching the binary payload.
 	 *
 	 * @param string $stream Raw stream capture.
@@ -4976,7 +5377,7 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
-	 * Queues one extracted PDF JPEG image through the shared media pipeline.
+	 * Queues one extracted PDF image through the shared media pipeline.
 	 *
 	 * @param ImportSession       $session Session.
 	 * @param ImportSourceItem    $item    PDF source item.
@@ -4985,15 +5386,17 @@ final class SourceItemDocumentProcessor {
 	 * @return array<string,string>|null Queued asset summary.
 	 * @throws RuntimeException When cache extraction fails.
 	 */
-	private function queue_pdf_jpeg_media_reference( ImportSession $session, ImportSourceItem $item, array $image, $index ) {
-		$stream = isset( $image['stream'] ) ? (string) $image['stream'] : '';
+	private function queue_pdf_image_media_reference( ImportSession $session, ImportSourceItem $item, array $image, $index ) {
+		$payload = $this->pdf_image_media_payload( $image );
 
-		if ( '' === $stream ) {
+		if ( null === $payload || '' === $payload['bytes'] ) {
 			return null;
 		}
 
+		$stream    = $payload['bytes'];
+		$extension = $payload['extension'];
 		$hash      = hash( 'sha256', $stream );
-		$filename  = 'embedded-image-' . ( (int) $index + 1 ) . '-' . substr( $hash, 0, 12 ) . '.jpg';
+		$filename  = 'embedded-image-' . ( (int) $index + 1 ) . '-' . substr( $hash, 0, 12 ) . '.' . $extension;
 		$cache_key = substr( hash( 'sha256', $item->get_key() ), 0, 16 );
 		$path      = $this->cache_directory->path_for( $session->get_id(), 'pdf', array( $cache_key, $filename ) );
 
@@ -5018,7 +5421,7 @@ final class SourceItemDocumentProcessor {
 				array(
 					'reference_scope'       => 'pdf-embedded-asset',
 					'document_title'        => $item->get_relative_path(),
-					'extension'             => 'jpg',
+					'extension'             => $extension,
 					'pdf_source_item_key'   => $item->get_key(),
 					'pdf_image_object'      => (string) $image['object'],
 					'pdf_image_filter'      => (string) $image['filter'],
@@ -5042,7 +5445,7 @@ final class SourceItemDocumentProcessor {
 				new ImportProgressEvent(
 					ImportProgressEvent::LEVEL_INFO,
 					'media.pdf_asset_queued',
-					'Embedded PDF JPEG image was extracted and queued for attachment import.',
+					'Embedded PDF image was extracted and queued for attachment import.',
 					array(
 						'item_key'      => $item->get_key(),
 						'reference_key' => $reference->get_key(),
