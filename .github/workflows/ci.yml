@@ -60,6 +60,7 @@ jobs:
         run: |
           umask 0022
           composer validate --no-check-publish
+          php ../tests/markdown-docs-static-export-test.php
           composer test
           composer lint
           composer build:release
