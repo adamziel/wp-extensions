@@ -210,6 +210,17 @@ const context = {
 
 vm.runInNewContext(script, context, { filename: 'ImportAdminPage.inline.js' });
 
+filePicker.files = [{ name: 'Annual Report.pdf' }];
+filePicker.dispatch('change', {});
+
+if (!fileSummary.textContent.includes('1 file ready') || !fileSummary.textContent.includes('1 PDF')) {
+	throw new Error('PDF file picker selection was not summarized: ' + fileSummary.textContent);
+}
+
+if (sourceInput.required) {
+	throw new Error('Source input should not be required after a PDF is selected.');
+}
+
 const droppedTree = directoryEntry('Book', [
 	fileEntry('chapter.md'),
 	directoryEntry('assets', [
