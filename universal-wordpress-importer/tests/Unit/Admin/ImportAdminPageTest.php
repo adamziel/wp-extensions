@@ -23,6 +23,7 @@ use UniversalImporter\Import\ImportSession;
 use UniversalImporter\Import\ImportSessionId;
 use UniversalImporter\Import\ImportSourceItem;
 use UniversalImporter\Import\WordPressImportSessionStore;
+use UniversalImporter\Tests\Unit\Import\FakePostGateway;
 use UniversalImporter\Tests\Unit\Import\FakeWpdb;
 
 /**
@@ -195,6 +196,95 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( ImportSession::STATUS_DONE, $result['session']['status'] );
 		$this->assertTrue( $result['session']['dry_run'] );
 		$this->assertSame( 'session.done', $result['session']['recent_events'][0]['type'] );
+	}
+
+	/**
+	 * Browser-uploaded PDF files continue through draft creation without a stuck dashboard state.
+	 *
+	 * @return void
+	 */
+	public function test_keepalive_imports_browser_uploaded_pdf_file_session() {
+		$posts = new FakePostGateway();
+		$page  = $this->create_page(
+			function ( WordPressImportSessionStore $store ) use ( $posts ) {
+				return new ImportRunner( $store, 'admin-test', 60, null, $posts );
+			},
+			new ImportCacheDirectory( $this->temporary_directory(), 'unit-test' )
+		);
+
+		$snapshot = $page->create_import_session_from_uploaded_files(
+			array(
+				$this->uploaded_fixture(
+					'Annual Report.pdf',
+					$this->temporary_pdf_contents(
+						"BT\n/F1 12 Tf\n72 720 Td\n(A) Tj\n(n) Tj\n(n) Tj\n(u) Tj\n(a) Tj\n(l) Tj\n( ) Tj\n(R) Tj\n(e) Tj\n(p) Tj\n(o) Tj\n(r) Tj\n(t) Tj\n0 -14 Td\n(Body text from uploaded PDF.) Tj\nET"
+					)
+				),
+			),
+			array( 'Annual Report.pdf' ),
+			array(),
+			false,
+			'preserve'
+		);
+		$result   = null;
+
+		for ( $i = 0; $i < 8; $i++ ) {
+			$result = $page->run_keepalive( $snapshot['id'] );
+
+			if ( ImportSession::STATUS_DONE === $result['session']['status'] ) {
+				break;
+			}
+		}
+
+		$session  = $this->store->find( ImportSessionId::from_string( $snapshot['id'] ) );
+		$document = $this->store->list_recent_prepared_documents( $session->get_id(), 1 )[0];
+
+		$this->assertSame( ImportSession::STATUS_DONE, $result['session']['status'] );
+		$this->assertFalse( $result['session']['dry_run'] );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertSame( 'pdf', $document->get_format() );
+		$this->assertStringContainsString( 'Annual Report', $document->get_block_markup() );
+		$this->assertStringContainsString( 'Body text from uploaded PDF.', $document->get_block_markup() );
+		$this->assertSame( 'Import complete. Review the created drafts and any warnings.', $result['session']['dashboard']['current_action'] );
+		$this->assertFalse( $result['session']['dashboard']['needs_keepalive'] );
+		$this->assertStringNotContainsString( 'Checking remaining importer work', $result['session']['dashboard']['current_action'] );
+	}
+
+	/**
+	 * Failed source items render as attention states instead of vague background work.
+	 *
+	 * @return void
+	 */
+	public function test_status_snapshot_explains_failed_source_attention() {
+		$page     = $this->create_page();
+		$snapshot = $page->create_import_session( '/tmp/broken.pdf' );
+		$session  = $this->store->find( ImportSessionId::from_string( $snapshot['id'] ) );
+
+		$this->store->save( $session->mark_running() );
+		$this->store->save_source_item(
+			ImportSourceItem::queued(
+				$session->get_id(),
+				'local:broken.pdf',
+				null,
+				'/tmp/broken.pdf',
+				'broken.pdf',
+				ImportSourceItem::TYPE_FILE
+			)->with_status( ImportSourceItem::STATUS_FAILED )->with_metadata(
+				array(
+					'error' => 'PDF text extraction produced no importable text.',
+				)
+			)
+		);
+
+		$details = $page->get_status_snapshot( $session->get_id() );
+
+		$this->assertStringContainsString( 'Import needs attention', $details['dashboard']['current_action'] );
+		$this->assertStringContainsString( 'source item failed', $details['dashboard']['attention_message'] );
+		$this->assertFalse( $details['dashboard']['needs_keepalive'] );
+		$this->assertSame( 'blocked', $details['dashboard']['checklist'][0]['state'] );
+		$this->assertSame( 'blocked', $details['dashboard']['checklist'][5]['state'] );
+		$this->assertSame( 'PDF text extraction produced no importable text.', $details['source_items']['recent'][0]['metadata']['error'] );
+		$this->assertStringNotContainsString( 'Checking remaining importer work', $details['dashboard']['current_action'] );
 	}
 
 	/**
@@ -999,6 +1089,24 @@ final class ImportAdminPageTest extends TestCase {
 			'error'    => UPLOAD_ERR_OK,
 			'size'     => filesize( $path ),
 		);
+	}
+
+	/**
+	 * Creates a minimal single-stream PDF fixture body.
+	 *
+	 * @param string $content_stream PDF content stream.
+	 * @return string
+	 */
+	private function temporary_pdf_contents( $content_stream ) {
+		$stream = gzcompress( $content_stream );
+
+		return "%PDF-1.4\n"
+			. "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+			. "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+			. "3 0 obj << /Type /Page /Parent 2 0 R /Contents 4 0 R >> endobj\n"
+			. '4 0 obj << /Length ' . strlen( $stream ) . " /Filter /FlateDecode >>\nstream\n"
+			. $stream
+			. "\nendstream\nendobj\n%%EOF\n";
 	}
 
 	/**

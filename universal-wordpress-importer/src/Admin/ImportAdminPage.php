@@ -671,6 +671,10 @@ final class ImportAdminPage {
 				font-weight: 600;
 				margin: 0 0 14px;
 			}
+			.universal-importer-attention {
+				border-left-color: #dba617;
+				margin: 14px 0;
+			}
 			.universal-importer-checklist {
 				display: grid;
 				gap: 10px;
@@ -1025,11 +1029,12 @@ final class ImportAdminPage {
 				var summary = dashboard.summary || { total: 0, completed: 0, errors: 0 };
 				var percent = Math.max(0, Math.min(100, Number(dashboard.percentage || 0)));
 				var total = summary.total || '?';
+				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : session.status;
 				var html = '<section class="universal-importer-card" data-session-id="' + escapeHtml(session.id) + '">';
 				html += '<div class="universal-importer-card-header">';
 				html += '<div><h3 class="universal-importer-source-title">' + escapeHtml(session.source) + '</h3>';
 				html += '<p class="universal-importer-meta"><code>' + escapeHtml(session.id) + '</code> · ' + (session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Writes drafts', 'universal-wordpress-importer' ) ); ?>') + '</p></div>';
-				html += '<span class="universal-importer-status-pill">' + escapeHtml(session.status) + '</span>';
+				html += '<span class="universal-importer-status-pill">' + escapeHtml(displayStatus) + '</span>';
 				html += '</div><div class="universal-importer-card-body">';
 				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking importer state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
 				html += '<div class="universal-importer-progressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
@@ -1038,6 +1043,9 @@ final class ImportAdminPage {
 					html += ' · ' + summary.errors + ' <?php echo esc_js( __( 'errors', 'universal-wordpress-importer' ) ); ?>';
 				}
 				html += '</p>';
+				if (dashboard.attention_message) {
+					html += '<div class="notice notice-warning inline universal-importer-attention"><p><strong><?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?></strong><br>' + escapeHtml(dashboard.attention_message) + '</p></div>';
+				}
 				html += renderChecklist(dashboard.checklist || []);
 				html += renderPipeline(session);
 				if (session.relationship_warnings && session.relationship_warnings.length) {
@@ -1098,7 +1106,8 @@ final class ImportAdminPage {
 				var epubTocs = session.epub_tocs || { total: 0, recent: [] };
 				var statuses = sourceItems.statuses || {};
 				var mediaStatuses = media.statuses || {};
-				var html = '<details class="universal-importer-pipeline"><summary><?php echo esc_js( __( 'Details', 'universal-wordpress-importer' ) ); ?></summary>';
+				var open = session.dashboard && session.dashboard.attention_message ? ' open' : '';
+				var html = '<details class="universal-importer-pipeline"' + open + '><summary><?php echo esc_js( __( 'Details', 'universal-wordpress-importer' ) ); ?></summary>';
 				html += '<p><strong><?php echo esc_js( __( 'Source items:', 'universal-wordpress-importer' ) ); ?></strong> ' + sourceItems.total + ' total';
 				html += ' <span>(' + (statuses.queued || 0) + ' queued, ' + (statuses.processing || 0) + ' processing, ' + (statuses.imported || 0) + ' imported, ' + (statuses.skipped || 0) + ' skipped, ' + (statuses.failed || 0) + ' failed)</span></p>';
 				html += '<p><strong><?php echo esc_js( __( 'Prepared:', 'universal-wordpress-importer' ) ); ?></strong> ' + documents.total + ' <strong><?php echo esc_js( __( 'Drafts:', 'universal-wordpress-importer' ) ); ?></strong> ' + posts.persisted + ' <strong><?php echo esc_js( __( 'Comments:', 'universal-wordpress-importer' ) ); ?></strong> ' + comments.persisted + '</p>';
@@ -1115,7 +1124,11 @@ final class ImportAdminPage {
 				if (sourceItems.recent && sourceItems.recent.length) {
 					html += '<h4><?php echo esc_js( __( 'Recent source items', 'universal-wordpress-importer' ) ); ?></h4><ul>';
 					sourceItems.recent.forEach(function(item) {
-						html += '<li><code>' + escapeHtml(item.status) + '</code> ' + escapeHtml(item.relative_path || item.source_uri) + ' <span>(' + escapeHtml(item.type) + ')</span></li>';
+						html += '<li><code>' + escapeHtml(item.status) + '</code> ' + escapeHtml(item.relative_path || item.source_uri) + ' <span>(' + escapeHtml(item.type) + ')</span>';
+						if (item.metadata && item.metadata.error) {
+							html += '<br><span class="description">' + escapeHtml(item.metadata.error) + '</span>';
+						}
+						html += '</li>';
 					});
 					html += '</ul>';
 				}
@@ -1282,7 +1295,8 @@ final class ImportAdminPage {
 					&& session.status !== 'done'
 					&& session.status !== 'aborted'
 					&& session.status !== 'failed'
-					&& !(session.pending_decisions && session.pending_decisions.length);
+					&& !(session.pending_decisions && session.pending_decisions.length)
+					&& !(session.dashboard && session.dashboard.needs_keepalive === false);
 			}
 
 			function startKeepalive(sessionId) {
@@ -1310,7 +1324,7 @@ final class ImportAdminPage {
 				request('<?php echo esc_js( self::AJAX_KEEPALIVE ); ?>', { session_id: activeSessionId }).then(function(data) {
 					if (data.session) {
 						upsertSession(data.session);
-						if (data.session.status === 'done' || data.session.status === 'aborted' || data.session.status === 'failed' || data.session.pending_decisions.length) {
+						if (!sessionNeedsKeepalive(data.session)) {
 							window.clearInterval(timer);
 							timer = null;
 							activeSessionId = null;
@@ -1564,6 +1578,7 @@ final class ImportAdminPage {
 			$completed      = isset( $summary['completed'] ) ? (int) $summary['completed'] : 0;
 			$errors         = isset( $summary['errors'] ) ? (int) $summary['errors'] : 0;
 			$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking importer state.', 'universal-wordpress-importer' );
+			$display_status = empty( $dashboard['attention_message'] ) ? (string) $session['status'] : __( 'Needs attention', 'universal-wordpress-importer' );
 			?>
 			<section class="universal-importer-card" data-session-id="<?php echo esc_attr( $session['id'] ); ?>">
 				<div class="universal-importer-card-header">
@@ -1574,7 +1589,7 @@ final class ImportAdminPage {
 							<?php echo esc_html( $session['dry_run'] ? __( 'Dry run', 'universal-wordpress-importer' ) : __( 'Writes drafts', 'universal-wordpress-importer' ) ); ?>
 						</p>
 					</div>
-					<span class="universal-importer-status-pill"><?php echo esc_html( $session['status'] ); ?></span>
+					<span class="universal-importer-status-pill"><?php echo esc_html( $display_status ); ?></span>
 				</div>
 				<div class="universal-importer-card-body">
 					<p class="universal-importer-current-action"><?php echo esc_html( $current_action ); ?></p>
@@ -1597,6 +1612,11 @@ final class ImportAdminPage {
 						}
 						?>
 					</p>
+					<?php if ( ! empty( $dashboard['attention_message'] ) ) : ?>
+						<div class="notice notice-warning inline universal-importer-attention">
+							<p><strong><?php esc_html_e( 'Needs attention', 'universal-wordpress-importer' ); ?></strong><br><?php echo esc_html( (string) $dashboard['attention_message'] ); ?></p>
+						</div>
+					<?php endif; ?>
 					<?php $this->render_dashboard_checklist( isset( $dashboard['checklist'] ) && is_array( $dashboard['checklist'] ) ? $dashboard['checklist'] : array() ); ?>
 					<?php $this->render_pipeline_details( $session ); ?>
 					<?php $this->render_relationship_warnings( $session ); ?>
@@ -1678,7 +1698,8 @@ final class ImportAdminPage {
 		$epub_tocs    = $session['epub_tocs'];
 		$media_counts = $media['statuses'];
 		?>
-		<div class="universal-importer-pipeline">
+		<details class="universal-importer-pipeline" <?php echo ! empty( $session['dashboard']['attention_message'] ) ? 'open' : ''; ?>>
+			<summary><?php esc_html_e( 'Details', 'universal-wordpress-importer' ); ?></summary>
 			<p>
 				<strong><?php esc_html_e( 'Source items:', 'universal-wordpress-importer' ); ?></strong>
 				<?php echo esc_html( (string) $source_items['total'] ); ?>
@@ -1747,7 +1768,14 @@ final class ImportAdminPage {
 				<h4><?php esc_html_e( 'Recent source items', 'universal-wordpress-importer' ); ?></h4>
 				<ul>
 					<?php foreach ( $source_items['recent'] as $item ) : ?>
-						<li><code><?php echo esc_html( $item['status'] ); ?></code> <?php echo esc_html( '' === $item['relative_path'] ? $item['source_uri'] : $item['relative_path'] ); ?> <span>(<?php echo esc_html( $item['type'] ); ?>)</span></li>
+						<li>
+							<code><?php echo esc_html( $item['status'] ); ?></code>
+							<?php echo esc_html( '' === $item['relative_path'] ? $item['source_uri'] : $item['relative_path'] ); ?>
+							<span>(<?php echo esc_html( $item['type'] ); ?>)</span>
+							<?php if ( ! empty( $item['metadata']['error'] ) ) : ?>
+								<br><span class="description"><?php echo esc_html( (string) $item['metadata']['error'] ); ?></span>
+							<?php endif; ?>
+						</li>
 					<?php endforeach; ?>
 				</ul>
 			<?php endif; ?>
@@ -1846,7 +1874,7 @@ final class ImportAdminPage {
 					<?php endforeach; ?>
 				</ul>
 			<?php endif; ?>
-		</div>
+		</details>
 		<?php
 	}
 
@@ -2284,15 +2312,17 @@ final class ImportAdminPage {
 		}
 
 		return array(
-			'percentage'     => $percentage,
-			'current_action' => $this->dashboard_current_action( $session ),
-			'summary'        => array(
+			'percentage'        => $percentage,
+			'current_action'    => $this->dashboard_current_action( $session ),
+			'attention_message' => $this->dashboard_attention_message( $session ),
+			'needs_keepalive'   => $this->dashboard_needs_keepalive( $session ),
+			'summary'           => array(
 				'total'     => $total,
 				'completed' => $completed,
 				'errors'    => $errors,
 			),
-			'checklist'      => $this->dashboard_checklist( $session, $source_counts ),
-			'activity_log'   => $this->dashboard_activity_log( $session ),
+			'checklist'         => $this->dashboard_checklist( $session, $source_counts ),
+			'activity_log'      => $this->dashboard_activity_log( $session ),
 		);
 	}
 
@@ -2326,6 +2356,10 @@ final class ImportAdminPage {
 			return $this->admin_text( 'Import aborted. No further work will run for this session.' );
 		}
 
+		if ( ImportSession::STATUS_FAILED === $session['status'] ) {
+			return $this->admin_text( 'Import failed. Review the latest activity and start a new import after correcting the source.' );
+		}
+
 		if ( ! empty( $session['pending_decisions'] ) ) {
 			$first_decision = $session['pending_decisions'][0];
 
@@ -2342,16 +2376,47 @@ final class ImportAdminPage {
 
 		$source_statuses = isset( $session['source_items']['statuses'] ) && is_array( $session['source_items']['statuses'] ) ? $session['source_items']['statuses'] : array();
 		$media_statuses  = isset( $session['media']['statuses'] ) && is_array( $session['media']['statuses'] ) ? $session['media']['statuses'] : array();
+		$source_total    = isset( $session['source_items']['total'] ) ? (int) $session['source_items']['total'] : 0;
+		$document_total  = isset( $session['prepared_documents']['total'] ) ? (int) $session['prepared_documents']['total'] : 0;
+		$post_total      = isset( $session['posts']['persisted'] ) ? (int) $session['posts']['persisted'] : 0;
+
+		if ( ! empty( $source_statuses['failed'] ) ) {
+			return sprintf(
+				/* translators: %d: failed source item count. */
+				$this->admin_text( 'Import needs attention: %d source item failed. Open Details to inspect the failing file.' ),
+				(int) $source_statuses['failed']
+			);
+		}
+
+		if ( ! empty( $media_statuses['failed'] ) ) {
+			return sprintf(
+				/* translators: %d: failed media reference count. */
+				$this->admin_text( 'Import needs attention: %d media item failed. Open Details to inspect the failing reference.' ),
+				(int) $media_statuses['failed']
+			);
+		}
+
+		if ( ImportSession::STATUS_PENDING === $session['status'] && 0 === $source_total ) {
+			return $this->admin_text( 'Queued. The next importer tick will read the source and build the work list.' );
+		}
+
+		if ( ImportSession::STATUS_RUNNING === $session['status'] && 0 === $source_total ) {
+			return $this->admin_text( 'Starting import: reading the source and creating the work list.' );
+		}
 
 		if ( ! empty( $source_statuses['queued'] ) || ! empty( $source_statuses['processing'] ) ) {
 			return $this->admin_text( 'Scanning the source tree and preparing importable documents.' );
+		}
+
+		if ( ! empty( $source_statuses['discovered'] ) ) {
+			return $this->admin_text( 'Preparing discovered files for WordPress.' );
 		}
 
 		if ( ! empty( $media_statuses['queued'] ) ) {
 			return $this->admin_text( 'Importing media and rewriting document references.' );
 		}
 
-		if ( ! empty( $session['prepared_documents']['total'] ) && (int) $session['posts']['persisted'] < (int) $session['prepared_documents']['total'] ) {
+		if ( 0 < $document_total && $post_total < $document_total ) {
 			return $this->admin_text( 'Creating WordPress draft pages from prepared documents.' );
 		}
 
@@ -2359,7 +2424,84 @@ final class ImportAdminPage {
 			return $this->admin_text( 'Checking imported relationship metadata and warnings.' );
 		}
 
-		return $this->admin_text( 'Checking remaining importer work.' );
+		return $this->admin_text( 'No active work is queued. Review Details and the Activity log before starting a new import or aborting this session.' );
+	}
+
+	/**
+	 * Builds the current operator attention message.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return string
+	 */
+	private function dashboard_attention_message( array $session ) {
+		$source_statuses = isset( $session['source_items']['statuses'] ) && is_array( $session['source_items']['statuses'] ) ? $session['source_items']['statuses'] : array();
+		$media_statuses  = isset( $session['media']['statuses'] ) && is_array( $session['media']['statuses'] ) ? $session['media']['statuses'] : array();
+
+		if ( ! empty( $session['pending_decisions'] ) ) {
+			return $this->admin_text( 'Answer the prompt below to continue the import.' );
+		}
+
+		if ( ! empty( $source_statuses['failed'] ) ) {
+			return sprintf(
+				/* translators: %d: failed source item count. */
+				$this->admin_text( '%d source item failed. The importer will not continue until the source problem is corrected and a new import is started.' ),
+				(int) $source_statuses['failed']
+			);
+		}
+
+		if ( ! empty( $media_statuses['failed'] ) ) {
+			return sprintf(
+				/* translators: %d: failed media item count. */
+				$this->admin_text( '%d media item failed. Drafts may still exist, but media references need review.' ),
+				(int) $media_statuses['failed']
+			);
+		}
+
+		return '';
+	}
+
+	/**
+	 * Returns whether browser keepalive polling should continue.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return bool
+	 */
+	private function dashboard_needs_keepalive( array $session ) {
+		if ( ImportSession::STATUS_PENDING === $session['status'] ) {
+			return true;
+		}
+
+		if ( ImportSession::STATUS_RUNNING !== $session['status'] ) {
+			return false;
+		}
+
+		if ( '' !== $this->dashboard_attention_message( $session ) ) {
+			return false;
+		}
+
+		if ( ! empty( $session['pending_decisions'] ) ) {
+			return false;
+		}
+
+		$source_statuses = isset( $session['source_items']['statuses'] ) && is_array( $session['source_items']['statuses'] ) ? $session['source_items']['statuses'] : array();
+		$media_statuses  = isset( $session['media']['statuses'] ) && is_array( $session['media']['statuses'] ) ? $session['media']['statuses'] : array();
+		$source_total    = isset( $session['source_items']['total'] ) ? (int) $session['source_items']['total'] : 0;
+		$document_total  = isset( $session['prepared_documents']['total'] ) ? (int) $session['prepared_documents']['total'] : 0;
+		$post_total      = isset( $session['posts']['persisted'] ) ? (int) $session['posts']['persisted'] : 0;
+
+		if ( 0 === $source_total ) {
+			return true;
+		}
+
+		if ( ! empty( $source_statuses['queued'] ) || ! empty( $source_statuses['processing'] ) || ! empty( $source_statuses['discovered'] ) ) {
+			return true;
+		}
+
+		if ( ! empty( $media_statuses['queued'] ) ) {
+			return true;
+		}
+
+		return 0 < $document_total && $post_total < $document_total;
 	}
 
 	/**
@@ -2372,11 +2514,13 @@ final class ImportAdminPage {
 	private function dashboard_checklist( array $session, array $source_counts ) {
 		$queued_or_processing = (int) ( isset( $source_counts['queued'] ) ? $source_counts['queued'] : 0 ) + (int) ( isset( $source_counts['processing'] ) ? $source_counts['processing'] : 0 );
 		$source_total         = (int) ( isset( $session['source_items']['total'] ) ? $session['source_items']['total'] : 0 );
+		$source_failed        = (int) ( isset( $source_counts['failed'] ) ? $source_counts['failed'] : 0 );
 		$document_total       = (int) ( isset( $session['prepared_documents']['total'] ) ? $session['prepared_documents']['total'] : 0 );
 		$post_total           = (int) ( isset( $session['posts']['persisted'] ) ? $session['posts']['persisted'] : 0 );
 		$media_statuses       = isset( $session['media']['statuses'] ) && is_array( $session['media']['statuses'] ) ? $session['media']['statuses'] : array();
 		$media_total          = (int) ( isset( $session['media']['total'] ) ? $session['media']['total'] : 0 );
 		$media_open           = (int) ( isset( $media_statuses['queued'] ) ? $media_statuses['queued'] : 0 );
+		$media_failed         = (int) ( isset( $media_statuses['failed'] ) ? $media_statuses['failed'] : 0 );
 		$has_decision         = ! empty( $session['pending_decisions'] );
 		$is_done              = ImportSession::STATUS_DONE === $session['status'];
 
@@ -2384,8 +2528,8 @@ final class ImportAdminPage {
 			array(
 				'index'  => '1',
 				'label'  => $this->admin_text( 'Read the source tree' ),
-				'detail' => 0 === $source_total ? $this->admin_text( 'Waiting to discover files.' ) : sprintf( $this->admin_text( '%d source items tracked.' ), $source_total ),
-				'state'  => $this->stage_state( 0 < $source_total && 0 === $queued_or_processing, 0 < $queued_or_processing, false ),
+				'detail' => 0 < $source_failed ? sprintf( $this->admin_text( '%d source item failed.' ), $source_failed ) : ( 0 === $source_total ? $this->admin_text( 'Waiting to discover files.' ) : sprintf( $this->admin_text( '%d source items tracked.' ), $source_total ) ),
+				'state'  => $this->stage_state( 0 < $source_total && 0 === $queued_or_processing && 0 === $source_failed, 0 < $queued_or_processing, 0 < $source_failed ),
 			),
 			array(
 				'index'  => '2',
@@ -2402,8 +2546,8 @@ final class ImportAdminPage {
 			array(
 				'index'  => '4',
 				'label'  => $this->admin_text( 'Import media' ),
-				'detail' => 0 === $media_total ? $this->admin_text( 'No media queued yet.' ) : sprintf( $this->admin_text( '%1$d media references, %2$d still queued.' ), $media_total, $media_open ),
-				'state'  => $this->stage_state( 0 < $media_total && 0 === $media_open, 0 < $media_open, false ),
+				'detail' => 0 < $media_failed ? sprintf( $this->admin_text( '%d media item failed.' ), $media_failed ) : ( 0 === $media_total ? $this->admin_text( 'No media queued yet.' ) : sprintf( $this->admin_text( '%1$d media references, %2$d still queued.' ), $media_total, $media_open ) ),
+				'state'  => $this->stage_state( 0 < $media_total && 0 === $media_open && 0 === $media_failed, 0 < $media_open, 0 < $media_failed ),
 			),
 			array(
 				'index'  => '5',
@@ -2414,8 +2558,8 @@ final class ImportAdminPage {
 			array(
 				'index'  => '6',
 				'label'  => $this->admin_text( 'Finish and verify' ),
-				'detail' => $is_done ? $this->admin_text( 'Session is complete.' ) : $this->admin_text( 'Waiting for the remaining stages.' ),
-				'state'  => $this->stage_state( $is_done, ! $is_done, false ),
+				'detail' => ( 0 < $source_failed || 0 < $media_failed ) ? $this->admin_text( 'Needs review before this import can finish.' ) : ( $is_done ? $this->admin_text( 'Session is complete.' ) : $this->admin_text( 'Waiting for the remaining stages.' ) ),
+				'state'  => $this->stage_state( $is_done, ! $is_done && 0 === $source_failed && 0 === $media_failed, 0 < $source_failed || 0 < $media_failed ),
 			),
 		);
 	}
