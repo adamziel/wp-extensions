@@ -94,6 +94,14 @@ ssgwp_blueprint_assert(
 );
 
 ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_contains( $brew_blueprint, '&#65533;' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'punctuation_replacements' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'interested in&hellip;' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'can&rsquo;t' ),
+	'BrewCommerce blueprint repairs replacement characters from the upstream WXR demo data after import.'
+);
+
+ssgwp_blueprint_assert(
 	ssgwp_blueprint_step_contains( $brew_blueprint, 'brewcommerce-static-export-fallbacks' )
 		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'wc-block-product-template' )
 		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'grid-template-columns' )
