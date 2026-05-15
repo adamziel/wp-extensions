@@ -479,6 +479,10 @@ final class ImportAdminPage {
 				--ui-surface: #fff;
 				max-width: 1280px;
 			}
+			.universal-importer-admin,
+			.universal-importer-admin * {
+				box-sizing: border-box;
+			}
 			.universal-importer-admin h1 {
 				font-size: 28px;
 				line-height: 1.2;
@@ -523,6 +527,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-hint {
 				color: var(--ui-muted);
+				display: block;
 				font-size: 12px;
 				margin: 6px 0 0;
 			}
@@ -584,6 +589,9 @@ final class ImportAdminPage {
 				border-radius: 8px;
 				padding: 12px;
 			}
+			.universal-importer-url-intro {
+				margin: 0 0 12px;
+			}
 			.universal-importer-option {
 				align-items: start;
 				display: grid;
@@ -603,6 +611,22 @@ final class ImportAdminPage {
 			.universal-importer-option .universal-importer-hint,
 			.universal-importer-domain-list .universal-importer-hint {
 				display: block;
+			}
+			.universal-importer-domain-entry {
+				display: block;
+				margin-top: 12px;
+			}
+			.universal-importer-domain-entry span:first-child {
+				color: #1d2327;
+				display: block;
+				font-size: 13px;
+				font-weight: 600;
+				margin-bottom: 6px;
+			}
+			.universal-importer-domain-entry input[type="text"] {
+				border-radius: 6px;
+				min-height: 36px;
+				width: 100%;
 			}
 			.universal-importer-actions {
 				align-items: center;
@@ -675,12 +699,17 @@ final class ImportAdminPage {
 				border-left-color: #dba617;
 				margin: 14px 0;
 			}
+			.universal-importer-stage-title {
+				font-size: 13px;
+				font-weight: 700;
+				margin: 18px 0 8px;
+			}
 			.universal-importer-checklist {
 				display: grid;
 				gap: 10px;
 				grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 				list-style: none;
-				margin: 14px 0;
+				margin: 0 0 14px;
 				padding: 0;
 			}
 			.universal-importer-step {
@@ -717,6 +746,30 @@ final class ImportAdminPage {
 				font-size: 12px;
 				margin-top: 3px;
 			}
+			.universal-importer-step-heading {
+				align-items: baseline;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				justify-content: space-between;
+				margin-bottom: 2px;
+			}
+			.universal-importer-step-heading strong {
+				margin-right: auto;
+			}
+			.universal-importer-step-heading .universal-importer-step-state {
+				background: #f6f7f7;
+				border: 1px solid var(--ui-border);
+				border-radius: 999px;
+				color: var(--ui-muted);
+				display: inline-flex;
+				font-size: 11px;
+				font-weight: 700;
+				line-height: 1.3;
+				margin-top: 0;
+				padding: 2px 7px;
+				text-transform: uppercase;
+			}
 			.universal-importer-step[data-state="done"] {
 				background: #f0f6e8;
 				border-color: #b8d6a1;
@@ -740,6 +793,21 @@ final class ImportAdminPage {
 				border-color: #dba617;
 			}
 			.universal-importer-step[data-state="blocked"] .universal-importer-stage-index {
+				background: #dba617;
+				border-color: #dba617;
+				color: #1d2327;
+			}
+			.universal-importer-step[data-state="active"] .universal-importer-step-state {
+				background: #3858e9;
+				border-color: #3858e9;
+				color: #fff;
+			}
+			.universal-importer-step[data-state="done"] .universal-importer-step-state {
+				background: #008a20;
+				border-color: #008a20;
+				color: #fff;
+			}
+			.universal-importer-step[data-state="blocked"] .universal-importer-step-state {
 				background: #dba617;
 				border-color: #dba617;
 				color: #1d2327;
@@ -817,13 +885,13 @@ final class ImportAdminPage {
 				<div class="universal-importer-start-grid">
 					<div>
 						<p class="universal-importer-field">
-							<label for="universal-importer-source"><?php esc_html_e( 'Import source', 'universal-wordpress-importer' ); ?></label>
+							<label for="universal-importer-source"><?php esc_html_e( 'Paste a server path, URL, or GitHub repo', 'universal-wordpress-importer' ); ?></label>
 							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/wp-json/, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
-							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, zip file, WXR file, WordPress REST URL, GitHub repository URL, or leave this blank when uploading files from this browser.', 'universal-wordpress-importer' ); ?></span>
+							<span class="universal-importer-hint"><?php esc_html_e( 'Use this for sources the WordPress server can reach. For files on your computer, leave it blank and use the upload box below.', 'universal-wordpress-importer' ); ?></span>
 						</p>
 						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
 							<div class="universal-importer-upload-copy">
-								<strong><?php esc_html_e( 'Or upload files from this computer', 'universal-wordpress-importer' ); ?></strong>
+								<strong><?php esc_html_e( 'Upload from this computer', 'universal-wordpress-importer' ); ?></strong>
 								<p class="universal-importer-hint"><?php esc_html_e( 'Choose PDFs, EPUBs, HTML, Markdown, text, WXR/XML, ZIP archives, or a whole folder. Dropped files use the same resumable importer.', 'universal-wordpress-importer' ); ?></p>
 								<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
 								<ul id="universal-importer-file-preview" class="universal-importer-file-preview" aria-live="polite"></ul>
@@ -831,6 +899,7 @@ final class ImportAdminPage {
 							<div class="universal-importer-upload-actions">
 								<label class="button" for="universal-importer-file-picker"><?php esc_html_e( 'Choose files', 'universal-wordpress-importer' ); ?></label>
 								<label class="button" for="universal-importer-folder-picker"><?php esc_html_e( 'Choose folder', 'universal-wordpress-importer' ); ?></label>
+								<button type="button" class="button" id="universal-importer-clear-files" disabled><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button>
 							</div>
 							<input type="file" id="universal-importer-file-picker" class="universal-importer-file-input" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
 							<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
@@ -838,7 +907,8 @@ final class ImportAdminPage {
 					</div>
 					<div>
 						<fieldset class="universal-importer-field universal-importer-url-options">
-							<legend><?php esc_html_e( 'URL rewriting', 'universal-wordpress-importer' ); ?></legend>
+							<legend><?php esc_html_e( 'Rewrite source URLs?', 'universal-wordpress-importer' ); ?></legend>
+							<p class="universal-importer-hint universal-importer-url-intro"><?php esc_html_e( 'When imported content contains absolute URLs, choose whether links from the old site should point at this WordPress site.', 'universal-wordpress-importer' ); ?></p>
 							<label class="universal-importer-option">
 								<input type="radio" name="url_rewrite_mode" value="ask" checked>
 								<span><strong><?php esc_html_e( 'Ask when URLs are found', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Recommended. The import pauses only if absolute source URLs need a decision.', 'universal-wordpress-importer' ); ?></span></span>
@@ -851,7 +921,11 @@ final class ImportAdminPage {
 								<input type="radio" name="url_rewrite_mode" value="rewrite">
 								<span><strong><?php esc_html_e( 'Rewrite known source domains', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Every URL on these hosts is rewritten to this site, preserving the path.', 'universal-wordpress-importer' ); ?></span></span>
 							</label>
-							<input type="text" id="universal-importer-domains" name="confirmed_domains" placeholder="<?php echo esc_attr__( 'example.com, www.example.com', 'universal-wordpress-importer' ); ?>">
+							<label class="universal-importer-domain-entry" for="universal-importer-domains">
+								<span><?php esc_html_e( 'Domains to rewrite now', 'universal-wordpress-importer' ); ?></span>
+								<input type="text" id="universal-importer-domains" name="confirmed_domains" placeholder="<?php echo esc_attr__( 'example.com, www.example.com', 'universal-wordpress-importer' ); ?>">
+								<span class="universal-importer-hint"><?php esc_html_e( 'Optional for Ask. Use this when you already know the old site domains that should become this site.', 'universal-wordpress-importer' ); ?></span>
+							</label>
 						</fieldset>
 						<label class="universal-importer-option">
 							<input type="checkbox" name="dry_run" value="1">
@@ -875,6 +949,7 @@ final class ImportAdminPage {
 			var sourceInput = document.getElementById('universal-importer-source');
 			var filePicker = document.getElementById('universal-importer-file-picker');
 			var folderPicker = document.getElementById('universal-importer-folder-picker');
+			var clearFilesButton = document.getElementById('universal-importer-clear-files');
 			var dropzone = document.getElementById('universal-importer-dropzone');
 			var fileSummary = document.getElementById('universal-importer-file-summary');
 			var filePreview = document.getElementById('universal-importer-file-preview');
@@ -949,6 +1024,7 @@ final class ImportAdminPage {
 			function setBrowserFiles(files, sourceLabel) {
 				browserFiles = files || [];
 				sourceInput.required = browserFiles.length < 1;
+				clearFilesButton.disabled = browserFiles.length < 1;
 				if (!browserFiles.length) {
 					fileSummary.textContent = '';
 					filePreview.innerHTML = '';
@@ -962,7 +1038,7 @@ final class ImportAdminPage {
 				if (pdfCount) {
 					summary += ' · ' + pdfCount + ' PDF' + (pdfCount === 1 ? '' : 's');
 				}
-				fileSummary.textContent = summary + '.';
+				fileSummary.textContent = summary + '. Start import will upload this selection.';
 				renderFilePreview(browserFiles);
 			}
 
@@ -1066,12 +1142,26 @@ final class ImportAdminPage {
 				if (!items.length) {
 					return '';
 				}
-				var html = '<ol class="universal-importer-checklist" aria-label="<?php echo esc_js( __( 'Import stages', 'universal-wordpress-importer' ) ); ?>">';
+				var html = '<div class="universal-importer-stage-title"><?php echo esc_js( __( 'Import stages', 'universal-wordpress-importer' ) ); ?></div><ol class="universal-importer-checklist" aria-label="<?php echo esc_js( __( 'Import stages', 'universal-wordpress-importer' ) ); ?>">';
 				items.forEach(function(item) {
-					html += '<li class="universal-importer-step" data-state="' + escapeHtml(item.state || 'pending') + '"><span class="universal-importer-stage-index">' + escapeHtml(item.index || '') + '</span><span><strong>' + escapeHtml(item.label || '') + '</strong><span>' + escapeHtml(item.detail || '') + '</span></span></li>';
+					var state = item.state || 'pending';
+					html += '<li class="universal-importer-step" data-state="' + escapeHtml(state) + '"><span class="universal-importer-stage-index">' + escapeHtml(item.index || '') + '</span><span><span class="universal-importer-step-heading"><strong>' + escapeHtml(item.label || '') + '</strong><span class="universal-importer-step-state">' + escapeHtml(checklistStateLabel(state)) + '</span></span><span>' + escapeHtml(item.detail || '') + '</span></span></li>';
 				});
 				html += '</ol>';
 				return html;
+			}
+
+			function checklistStateLabel(state) {
+				if (state === 'done') {
+					return '<?php echo esc_js( __( 'Done', 'universal-wordpress-importer' ) ); ?>';
+				}
+				if (state === 'active') {
+					return '<?php echo esc_js( __( 'Now', 'universal-wordpress-importer' ) ); ?>';
+				}
+				if (state === 'blocked') {
+					return '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>';
+				}
+				return '<?php echo esc_js( __( 'Waiting', 'universal-wordpress-importer' ) ); ?>';
 			}
 
 			function renderActivityLog(events) {
@@ -1377,6 +1467,12 @@ final class ImportAdminPage {
 				setBrowserFiles(Array.prototype.slice.call(folderPicker.files || []), '<?php echo esc_js( __( 'folder selection', 'universal-wordpress-importer' ) ); ?>');
 			});
 
+			clearFilesButton.addEventListener('click', function() {
+				filePicker.value = '';
+				folderPicker.value = '';
+				setBrowserFiles([], '');
+			});
+
 			['dragenter', 'dragover'].forEach(function(type) {
 				dropzone.addEventListener(type, function(event) {
 					event.preventDefault();
@@ -1643,18 +1739,45 @@ final class ImportAdminPage {
 		}
 
 		?>
+		<div class="universal-importer-stage-title"><?php esc_html_e( 'Import stages', 'universal-wordpress-importer' ); ?></div>
 		<ol class="universal-importer-checklist" aria-label="<?php echo esc_attr__( 'Import stages', 'universal-wordpress-importer' ); ?>">
 			<?php foreach ( $items as $item ) : ?>
+				<?php $state = isset( $item['state'] ) ? (string) $item['state'] : 'pending'; ?>
 				<li class="universal-importer-step" data-state="<?php echo esc_attr( isset( $item['state'] ) ? $item['state'] : 'pending' ); ?>">
 					<span class="universal-importer-stage-index"><?php echo esc_html( isset( $item['index'] ) ? $item['index'] : '' ); ?></span>
 					<span>
-						<strong><?php echo esc_html( isset( $item['label'] ) ? $item['label'] : '' ); ?></strong>
+						<span class="universal-importer-step-heading">
+							<strong><?php echo esc_html( isset( $item['label'] ) ? $item['label'] : '' ); ?></strong>
+							<span class="universal-importer-step-state"><?php echo esc_html( $this->dashboard_stage_status_label( $state ) ); ?></span>
+						</span>
 						<span><?php echo esc_html( isset( $item['detail'] ) ? $item['detail'] : '' ); ?></span>
 					</span>
 				</li>
 			<?php endforeach; ?>
 		</ol>
 		<?php
+	}
+
+	/**
+	 * Returns the short visible label for a dashboard stage state.
+	 *
+	 * @param string $state Stage state.
+	 * @return string
+	 */
+	private function dashboard_stage_status_label( $state ) {
+		if ( 'done' === $state ) {
+			return __( 'Done', 'universal-wordpress-importer' );
+		}
+
+		if ( 'active' === $state ) {
+			return __( 'Now', 'universal-wordpress-importer' );
+		}
+
+		if ( 'blocked' === $state ) {
+			return __( 'Needs attention', 'universal-wordpress-importer' );
+		}
+
+		return __( 'Waiting', 'universal-wordpress-importer' );
 	}
 
 	/**

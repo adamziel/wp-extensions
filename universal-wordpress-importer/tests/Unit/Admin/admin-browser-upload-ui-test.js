@@ -142,6 +142,7 @@ const filePicker = new Element('universal-importer-file-picker');
 filePicker.files = [];
 const folderPicker = new Element('universal-importer-folder-picker');
 folderPicker.files = [];
+const clearFilesButton = new Element('universal-importer-clear-files');
 const dropzone = new Element('universal-importer-dropzone');
 const fileSummary = new Element('universal-importer-file-summary');
 const filePreview = new Element('universal-importer-file-preview');
@@ -155,6 +156,7 @@ const elements = {
 	'universal-importer-source': sourceInput,
 	'universal-importer-file-picker': filePicker,
 	'universal-importer-folder-picker': folderPicker,
+	'universal-importer-clear-files': clearFilesButton,
 	'universal-importer-dropzone': dropzone,
 	'universal-importer-file-summary': fileSummary,
 	'universal-importer-file-preview': filePreview,
@@ -221,6 +223,10 @@ if (sourceInput.required) {
 	throw new Error('Source input should not be required after a PDF is selected.');
 }
 
+if (clearFilesButton.disabled) {
+	throw new Error('Clear selection button should be enabled after a PDF is selected.');
+}
+
 const droppedTree = directoryEntry('Book', [
 	fileEntry('chapter.md'),
 	directoryEntry('assets', [
@@ -250,6 +256,29 @@ dropzone.dispatch('drop', {
 	if (sourceInput.required) {
 		throw new Error('Source input should not be required after browser files are selected.');
 	}
+
+	clearFilesButton.dispatch('click', {});
+
+	if (!sourceInput.required) {
+		throw new Error('Source input should become required after browser files are cleared.');
+	}
+
+	if (fileSummary.textContent !== '') {
+		throw new Error('File summary should be cleared after clearing browser files.');
+	}
+
+	dropzone.dispatch('drop', {
+		preventDefault() {},
+		dataTransfer: {
+			items: [
+				{ webkitGetAsEntry: () => droppedTree },
+				{ webkitGetAsEntry: () => fileEntry('loose.md') }
+			],
+			files: []
+		}
+	});
+	await flushPromises();
+	await flushPromises();
 
 	form.dispatch('submit', { preventDefault() {} });
 	await flushPromises();

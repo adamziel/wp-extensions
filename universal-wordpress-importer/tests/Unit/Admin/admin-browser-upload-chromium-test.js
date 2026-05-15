@@ -36,6 +36,7 @@ const html = `<!doctype html>
 		<div id="universal-importer-dropzone">
 			<input type="file" id="universal-importer-file-picker" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
 			<input type="file" id="universal-importer-folder-picker" multiple webkitdirectory directory>
+			<button type="button" id="universal-importer-clear-files" disabled>Clear selection</button>
 			<p id="universal-importer-file-summary"></p>
 			<ul id="universal-importer-file-preview"></ul>
 		</div>
@@ -121,6 +122,7 @@ const html = `<!doctype html>
 			var dropzone = document.getElementById('universal-importer-dropzone');
 			var sourceInput = document.getElementById('universal-importer-source');
 			var fileSummary = document.getElementById('universal-importer-file-summary');
+			var clearFilesButton = document.getElementById('universal-importer-clear-files');
 			var form = document.getElementById('universal-importer-start-form');
 			var droppedTree = directoryEntry('Book', [
 				fileEntry('chapter.md'),
@@ -151,6 +153,27 @@ const html = `<!doctype html>
 				fail('Source input should not be required after browser files are selected.');
 				return;
 			}
+
+			if (clearFilesButton.disabled) {
+				fail('Clear selection button should be enabled after browser files are selected.');
+				return;
+			}
+
+			clearFilesButton.click();
+
+			if (!sourceInput.required) {
+				fail('Source input should become required after clearing browser files.');
+				return;
+			}
+
+			if (fileSummary.textContent !== '') {
+				fail('File summary should be cleared after clearing browser files.');
+				return;
+			}
+
+			dispatchDragEvent(dropzone, 'drop', dataTransfer);
+
+			await new Promise(function(resolve) { setTimeout(resolve, 50); });
 
 			form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 			await new Promise(function(resolve) { setTimeout(resolve, 50); });
