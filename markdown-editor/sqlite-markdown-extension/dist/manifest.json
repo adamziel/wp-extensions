@@ -1,0 +1,10 @@
+{
+  "name": "sqlite_markdown",
+  "version": "0.0.0",
+  "artifacts": [
+    {
+      "phpVersion": "8.4",
+      "sourcePath": "sqlite_markdown-php8.4-jspi.so"
+    }
+  ]
+}
