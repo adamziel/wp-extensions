@@ -6022,7 +6022,7 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
-	 * Extracts simple PDF ToUnicode CMaps keyed by page font resource name.
+	 * Extracts simple PDF font text maps keyed by page font resource name.
 	 *
 	 * @param string $pdf Raw PDF bytes.
 	 * @return array<string,array<string,string>>
@@ -6033,21 +6033,23 @@ final class SourceItemDocumentProcessor {
 		$font_map = array();
 
 		foreach ( $objects as $object_id => $object ) {
-			if ( ! preg_match( '#/ToUnicode\s+(\d+)\s+\d+\s+R\b#', $object, $match ) ) {
-				continue;
+			if ( preg_match( '#/ToUnicode\s+(\d+)\s+\d+\s+R\b#', $object, $match ) ) {
+				$cmap_object_id = (int) $match[1];
+				if ( isset( $objects[ $cmap_object_id ] ) ) {
+					if ( ! isset( $cmaps[ $cmap_object_id ] ) ) {
+						$cmaps[ $cmap_object_id ] = $this->parse_pdf_to_unicode_cmap( $this->pdf_object_stream_body( $objects[ $cmap_object_id ] ) );
+					}
+
+					if ( ! empty( $cmaps[ $cmap_object_id ] ) ) {
+						$font_map[ $object_id ] = $cmaps[ $cmap_object_id ];
+						continue;
+					}
+				}
 			}
 
-			$cmap_object_id = (int) $match[1];
-			if ( ! isset( $objects[ $cmap_object_id ] ) ) {
-				continue;
-			}
-
-			if ( ! isset( $cmaps[ $cmap_object_id ] ) ) {
-				$cmaps[ $cmap_object_id ] = $this->parse_pdf_to_unicode_cmap( $this->pdf_object_stream_body( $objects[ $cmap_object_id ] ) );
-			}
-
-			if ( ! empty( $cmaps[ $cmap_object_id ] ) ) {
-				$font_map[ $object_id ] = $cmaps[ $cmap_object_id ];
+			$encoding_map = $this->extract_pdf_font_encoding_map( $object, $objects );
+			if ( ! empty( $encoding_map ) ) {
+				$font_map[ $object_id ] = $encoding_map;
 			}
 		}
 
@@ -6072,6 +6074,215 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return $maps;
+	}
+
+	/**
+	 * Extracts a simple one-byte font encoding map from a PDF font object.
+	 *
+	 * @param string            $font_object Font object body.
+	 * @param array<int,string> $objects     Indirect objects.
+	 * @return array<string,string>
+	 */
+	private function extract_pdf_font_encoding_map( $font_object, array $objects ) {
+		$encoding = '';
+
+		if ( preg_match( '#/Encoding\s+(\d+)\s+\d+\s+R\b#', (string) $font_object, $match ) ) {
+			$object_id = (int) $match[1];
+			$encoding  = isset( $objects[ $object_id ] ) ? $objects[ $object_id ] : '';
+		} elseif ( preg_match( '#/Encoding\s*<<(.*?)>>#s', (string) $font_object, $match ) ) {
+			$encoding = '<<' . $match[1] . '>>';
+		}
+
+		if ( '' === trim( $encoding ) ) {
+			return array();
+		}
+
+		return $this->parse_pdf_encoding_differences( $encoding );
+	}
+
+	/**
+	 * Parses a PDF Encoding Differences array into a one-byte character map.
+	 *
+	 * @param string $encoding Encoding dictionary/object body.
+	 * @return array<string,string>
+	 */
+	private function parse_pdf_encoding_differences( $encoding ) {
+		if ( ! preg_match( '#/Differences\s*\[(.*?)\]#s', (string) $encoding, $match ) ) {
+			return array();
+		}
+
+		if ( ! preg_match_all( '/\/[A-Za-z0-9_.]+|\d+/', $match[1], $tokens ) ) {
+			return array();
+		}
+
+		$map  = array();
+		$code = null;
+
+		foreach ( $tokens[0] as $token ) {
+			if ( is_numeric( $token ) ) {
+				$code = (int) $token;
+				continue;
+			}
+
+			if ( null === $code || 0 > $code || 255 < $code ) {
+				continue;
+			}
+
+			$unicode = $this->pdf_glyph_name_to_unicode( substr( $token, 1 ) );
+			if ( '' !== $unicode ) {
+				$map[ strtoupper( str_pad( dechex( $code ), 2, '0', STR_PAD_LEFT ) ) ] = $unicode;
+			}
+			++$code;
+		}
+
+		return $map;
+	}
+
+	/**
+	 * Converts common Adobe glyph names to Unicode.
+	 *
+	 * @param string $name Glyph name.
+	 * @return string
+	 */
+	private function pdf_glyph_name_to_unicode( $name ) {
+		$name = (string) $name;
+
+		if ( preg_match( '/^uni([0-9A-Fa-f]{4})(?:[0-9A-Fa-f]{4})*$/', $name, $match ) ) {
+			return $this->decode_pdf_cmap_unicode_hex( $match[1] );
+		}
+
+		if ( preg_match( '/^u([0-9A-Fa-f]{4,6})$/', $name, $match ) ) {
+			return $this->decode_pdf_cmap_unicode_hex( str_pad( $match[1], 4, '0', STR_PAD_LEFT ) );
+		}
+
+		$base = preg_replace( '/[._].*$/', '', $name );
+		if ( is_string( $base ) && '' !== $base && $base !== $name ) {
+			$name = $base;
+		}
+
+		$glyphs = array(
+			'A'            => 'A',
+			'B'            => 'B',
+			'C'            => 'C',
+			'D'            => 'D',
+			'E'            => 'E',
+			'F'            => 'F',
+			'G'            => 'G',
+			'H'            => 'H',
+			'I'            => 'I',
+			'J'            => 'J',
+			'K'            => 'K',
+			'L'            => 'L',
+			'M'            => 'M',
+			'N'            => 'N',
+			'O'            => 'O',
+			'P'            => 'P',
+			'Q'            => 'Q',
+			'R'            => 'R',
+			'S'            => 'S',
+			'T'            => 'T',
+			'U'            => 'U',
+			'V'            => 'V',
+			'W'            => 'W',
+			'X'            => 'X',
+			'Y'            => 'Y',
+			'Z'            => 'Z',
+			'a'            => 'a',
+			'b'            => 'b',
+			'c'            => 'c',
+			'd'            => 'd',
+			'e'            => 'e',
+			'f'            => 'f',
+			'g'            => 'g',
+			'h'            => 'h',
+			'i'            => 'i',
+			'j'            => 'j',
+			'k'            => 'k',
+			'l'            => 'l',
+			'm'            => 'm',
+			'n'            => 'n',
+			'o'            => 'o',
+			'p'            => 'p',
+			'q'            => 'q',
+			'r'            => 'r',
+			's'            => 's',
+			't'            => 't',
+			'u'            => 'u',
+			'v'            => 'v',
+			'w'            => 'w',
+			'x'            => 'x',
+			'y'            => 'y',
+			'z'            => 'z',
+			'Aogonek'      => 'Ą',
+			'Cacute'       => 'Ć',
+			'Eogonek'      => 'Ę',
+			'Lslash'       => 'Ł',
+			'Nacute'       => 'Ń',
+			'Oacute'       => 'Ó',
+			'Sacute'       => 'Ś',
+			'Zacute'       => 'Ź',
+			'Zdotaccent'   => 'Ż',
+			'aogonek'      => 'ą',
+			'cacute'       => 'ć',
+			'eogonek'      => 'ę',
+			'lslash'       => 'ł',
+			'nacute'       => 'ń',
+			'oacute'       => 'ó',
+			'sacute'       => 'ś',
+			'zacute'       => 'ź',
+			'zdotaccent'   => 'ż',
+			'space'        => ' ',
+			'exclam'       => '!',
+			'quotedbl'     => '"',
+			'numbersign'   => '#',
+			'dollar'       => '$',
+			'percent'      => '%',
+			'ampersand'    => '&',
+			'quotesingle'  => "'",
+			'quoteright'   => "'",
+			'parenleft'    => '(',
+			'parenright'   => ')',
+			'asterisk'     => '*',
+			'plus'         => '+',
+			'comma'        => ',',
+			'hyphen'       => '-',
+			'minus'        => '-',
+			'period'       => '.',
+			'slash'        => '/',
+			'zero'         => '0',
+			'one'          => '1',
+			'two'          => '2',
+			'three'        => '3',
+			'four'         => '4',
+			'five'         => '5',
+			'six'          => '6',
+			'seven'        => '7',
+			'eight'        => '8',
+			'nine'         => '9',
+			'colon'        => ':',
+			'semicolon'    => ';',
+			'less'         => '<',
+			'equal'        => '=',
+			'greater'      => '>',
+			'question'     => '?',
+			'at'           => '@',
+			'bracketleft'  => '[',
+			'backslash'    => '\\',
+			'bracketright' => ']',
+			'asciicircum'  => '^',
+			'underscore'   => '_',
+			'quoteleft'    => '`',
+			'braceleft'    => '{',
+			'bar'          => '|',
+			'braceright'   => '}',
+			'asciitilde'   => '~',
+			'endash'       => '–',
+			'emdash'       => '—',
+			'ellipsis'     => '…',
+			'bullet'       => '•',
+		);
+
+		return isset( $glyphs[ $name ] ) ? $glyphs[ $name ] : '';
 	}
 
 	/**

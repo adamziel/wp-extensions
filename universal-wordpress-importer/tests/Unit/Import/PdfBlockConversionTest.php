@@ -164,6 +164,41 @@ final class PdfBlockConversionTest extends TestCase {
 	}
 
 	/**
+	 * PDFs with custom Encoding Differences decode speaker labels from glyph names.
+	 *
+	 * @return void
+	 */
+	public function test_pdf_encoding_differences_decode_custom_font_bytes() {
+		$source_file = $this->temporary_pdf_with_encoding_differences(
+			'encoding-differences-screenplay.pdf',
+			array(
+				'MATKA',
+				'PANI GENOWEFA',
+				'Zażółć gęślą jaźń.',
+			)
+		);
+		$session     = ImportSession::start_for_source( $source_file );
+		$posts       = new FakePostGateway();
+		$runner      = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/' );
+		$this->store->save( $session );
+
+		$status = $this->store->find( $session->get_id() )->get_status();
+		for ( $tick = 0; $tick < 8 && ImportSession::STATUS_DONE !== $status; ++$tick ) {
+			$runner->run( $session->get_id() );
+			$status = $this->store->find( $session->get_id() )->get_status();
+		}
+
+		$post_content = $this->combined_post_content( $posts );
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertStringContainsString( 'MATKA', $post_content );
+		$this->assertStringContainsString( 'PANI GENOWEFA', $post_content );
+		$this->assertStringContainsString( 'Zażółć gęślą jaźń.', $post_content );
+		$this->assertStringNotContainsString( 'DdK', $post_content );
+	}
+
+	/**
 	 * Returns at least ten distinct tricky PDF conversion cases.
 	 *
 	 * @return array<string,array<int,array<string,mixed>>>
@@ -393,6 +428,82 @@ final class PdfBlockConversionTest extends TestCase {
 		$this->assertNotFalse( $converted );
 
 		return strtoupper( bin2hex( $converted ) );
+	}
+
+	/**
+	 * Creates a PDF fixture with a custom one-byte font Encoding Differences map.
+	 *
+	 * @param string            $basename Fixture basename.
+	 * @param array<int,string> $lines    Text lines.
+	 * @return string
+	 */
+	private function temporary_pdf_with_encoding_differences( $basename, array $lines ) {
+		$character_map = array();
+		$glyph_names   = array();
+		$next_code     = 65;
+		$content_lines = array( 'BT', '/F1 12 Tf', '72 720 Td' );
+
+		foreach ( $lines as $line_index => $line ) {
+			$encoded = '';
+			$chars   = preg_split( '//u', (string) $line, -1, PREG_SPLIT_NO_EMPTY );
+			$this->assertIsArray( $chars );
+
+			foreach ( $chars as $char ) {
+				if ( ! isset( $character_map[ $char ] ) ) {
+					$this->assertLessThanOrEqual( 255, $next_code );
+					$character_map[ $char ]    = $next_code;
+					$glyph_names[ $next_code ] = $this->fixture_pdf_glyph_name( $char );
+					++$next_code;
+				}
+				$encoded .= str_pad( dechex( $character_map[ $char ] ), 2, '0', STR_PAD_LEFT );
+			}
+
+			if ( 0 < $line_index ) {
+				$content_lines[] = '0 -18 Td';
+			}
+			$content_lines[] = '<' . strtoupper( $encoded ) . '> Tj';
+		}
+
+		$content_lines[] = 'ET';
+		$content         = implode( "\n", $content_lines );
+		$differences     = array( '65' );
+		for ( $code = 65; $code < $next_code; ++$code ) {
+			$differences[] = '/' . $glyph_names[ $code ];
+		}
+		$encoding = '<< /Type /Encoding /Differences [' . implode( ' ', $differences ) . '] >>';
+		$objects  = array(
+			"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+			"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+			"3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n",
+			'4 0 obj << /Length ' . strlen( $content ) . " >>\nstream\n" . $content . "\nendstream\nendobj\n",
+			'5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /UnitTest /Encoding ' . $encoding . " >> endobj\n",
+		);
+
+		return $this->temporary_file( $basename, "%PDF-1.4\n" . implode( '', $objects ) . "%%EOF\n" );
+	}
+
+	/**
+	 * Returns a PDF glyph name for a fixture character.
+	 *
+	 * @param string $char Character.
+	 * @return string
+	 */
+	private function fixture_pdf_glyph_name( $char ) {
+		$glyphs = array(
+			' ' => 'space',
+			'.' => 'period',
+			'ą' => 'aogonek',
+			'ć' => 'cacute',
+			'ę' => 'eogonek',
+			'ł' => 'lslash',
+			'ń' => 'nacute',
+			'ó' => 'oacute',
+			'ś' => 'sacute',
+			'ź' => 'zacute',
+			'ż' => 'zdotaccent',
+		);
+
+		return isset( $glyphs[ $char ] ) ? $glyphs[ $char ] : $char;
 	}
 
 	/**
