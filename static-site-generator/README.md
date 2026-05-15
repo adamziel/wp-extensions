@@ -31,6 +31,16 @@ Use the admin screen to download the static ZIP. The ZIP is the published
 static site; save the full Playground site separately if you want to keep an
 editable WordPress source site.
 
+After extracting the ZIP, open `index.html` for a quick check. For the closest
+preview, serve the extracted folder over HTTP so browser module scripts can
+run:
+
+```bash
+python3 -m http.server 8080
+```
+
+Then open `http://localhost:8080/`.
+
 ## CLI Playground
 
 From a checkout of this repository:
@@ -47,6 +57,13 @@ The generated ZIP is written to:
 
 ```text
 ./static-site-output/static-site.zip
+```
+
+Extract it and use the same local HTTP preview command from the extracted
+folder:
+
+```bash
+python3 -m http.server 8080
 ```
 
 If the Playground CLI cannot write the ZIP to the mounted output directory,
@@ -98,6 +115,18 @@ wp static-site export --output=./static-site.zip --report
 
 Use `--fetch-mode=internal` when loopback HTTP requests are blocked or
 unreliable, including many Playground environments.
+
+To test the exported site locally, extract the ZIP and run this command from
+the extracted folder:
+
+```bash
+python3 -m http.server 8080
+```
+
+Then open `http://localhost:8080/`. Opening files directly with `file://` is
+useful for basic HTML and CSS checks, but browsers block JavaScript ES modules
+from `file://` origins. That affects interactive frontend code such as the
+WordPress Interactivity API.
 
 ## Development Checks
 

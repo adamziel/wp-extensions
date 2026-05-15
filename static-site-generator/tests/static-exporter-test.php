@@ -859,6 +859,26 @@ ssgwp_assert_same(
 );
 
 ssgwp_assert_same(
+	true,
+	file_exists( $bounded_output_dir . '/_static-export-preview.txt' ),
+	'export_to_directory writes local preview guidance even when the technical manifest is disabled.'
+);
+
+$preview_note = file_get_contents( $bounded_output_dir . '/_static-export-preview.txt' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+
+ssgwp_assert_contains(
+	'file://',
+	$preview_note,
+	'Static preview guidance explains file protocol limits.'
+);
+
+ssgwp_assert_contains(
+	'python3 -m http.server 8080',
+	$preview_note,
+	'Static preview guidance gives a local HTTP server command.'
+);
+
+ssgwp_assert_same(
 	'discovered',
 	$bounded_events[0]['stage'],
 	'export_to_directory reports initial URL discovery before rendering.'
