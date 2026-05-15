@@ -8,9 +8,11 @@
 $repo_root = dirname( __DIR__ );
 
 $browser_blueprint = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-browser.json' );
+$brew_blueprint    = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-brewcommerce.json' );
 $cli_blueprint     = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-cli-export.json' );
 
 $browser_commands = ssgwp_blueprint_wp_cli_commands( $browser_blueprint );
+$brew_commands    = ssgwp_blueprint_wp_cli_commands( $brew_blueprint );
 $cli_commands     = ssgwp_blueprint_wp_cli_commands( $cli_blueprint );
 
 $delete_default_post_index = ssgwp_find_command_index( $browser_commands, 'wp post delete 1 --force' );
@@ -39,6 +41,41 @@ ssgwp_blueprint_assert(
 ssgwp_blueprint_assert(
 	ssgwp_command_contains( $browser_commands, 'wp static-site export' ) === false,
 	'Browser demo blueprint opens the admin exporter instead of auto-downloading a ZIP.'
+);
+
+ssgwp_blueprint_assert(
+	'/wp-admin/tools.php?page=playground-static-site-generator' === $brew_blueprint['landingPage'],
+	'BrewCommerce blueprint lands on the static exporter admin page.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_blueprint_has_wordpress_org_plugin( $brew_blueprint, 'woocommerce' ),
+	'BrewCommerce blueprint installs WooCommerce.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_blueprint_has_static_generator_install( $brew_blueprint ),
+	'BrewCommerce blueprint installs the static site generator from wp-extensions.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_uses_url( $brew_blueprint, 'theme.zip' ),
+	'BrewCommerce blueprint installs the coffee shop theme from the upstream asset URL.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_uses_url( $brew_blueprint, 'uploads.zip' ),
+	'BrewCommerce blueprint imports the coffee shop uploads from the upstream asset URL.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_uses_url( $brew_blueprint, 'content.xml' ),
+	'BrewCommerce blueprint imports the coffee shop WXR from the upstream asset URL.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_command_contains( $brew_commands, 'wp static-site export' ) === false,
+	'BrewCommerce browser blueprint opens the admin exporter instead of auto-downloading a ZIP.'
 );
 
 ssgwp_blueprint_assert(
@@ -122,6 +159,90 @@ function ssgwp_find_command_index( array $commands, $needle ) {
  */
 function ssgwp_command_contains( array $commands, $needle ) {
 	return false !== ssgwp_find_command_index( $commands, $needle );
+}
+
+/**
+ * Check whether a blueprint installs a wordpress.org plugin slug.
+ *
+ * @param array<string,mixed> $blueprint Blueprint data.
+ * @param string              $slug      Plugin slug.
+ * @return bool
+ */
+function ssgwp_blueprint_has_wordpress_org_plugin( array $blueprint, $slug ) {
+	foreach ( ssgwp_blueprint_steps( $blueprint ) as $step ) {
+		if (
+			'installPlugin' === $step['step']
+			&& isset( $step['pluginData']['resource'], $step['pluginData']['slug'] )
+			&& 'wordpress.org/plugins' === $step['pluginData']['resource']
+			&& $slug === $step['pluginData']['slug']
+		) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Check whether a blueprint installs this repo's static generator plugin.
+ *
+ * @param array<string,mixed> $blueprint Blueprint data.
+ * @return bool
+ */
+function ssgwp_blueprint_has_static_generator_install( array $blueprint ) {
+	foreach ( ssgwp_blueprint_steps( $blueprint ) as $step ) {
+		if (
+			'installPlugin' === $step['step']
+			&& isset( $step['pluginData']['resource'], $step['pluginData']['path'] )
+			&& 'git:directory' === $step['pluginData']['resource']
+			&& 'static-site-generator' === $step['pluginData']['path']
+		) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Check whether a blueprint references an upstream URL ending in a filename.
+ *
+ * @param array<string,mixed> $blueprint Blueprint data.
+ * @param string              $filename  Filename.
+ * @return bool
+ */
+function ssgwp_blueprint_step_uses_url( array $blueprint, $filename ) {
+	foreach ( ssgwp_blueprint_steps( $blueprint ) as $step ) {
+		if ( false !== strpos( wp_json_encode_fallback( $step ), '/brewcommerce/' . $filename ) ) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Return normalized blueprint step arrays.
+ *
+ * @param array<string,mixed> $blueprint Blueprint data.
+ * @return array<int,array<string,mixed>>
+ */
+function ssgwp_blueprint_steps( array $blueprint ) {
+	return isset( $blueprint['steps'] ) && is_array( $blueprint['steps'] )
+		? array_filter( $blueprint['steps'], 'is_array' )
+		: array();
+}
+
+/**
+ * Encode data for simple fixture inspection.
+ *
+ * @param mixed $data Data.
+ * @return string
+ */
+function wp_json_encode_fallback( $data ) {
+	$json = json_encode( $data, JSON_UNESCAPED_SLASHES ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode
+
+	return is_string( $json ) ? $json : '';
 }
 
 /**

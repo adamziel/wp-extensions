@@ -1,0 +1,101 @@
+{
+	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
+	"meta": {
+		"title": "Static Site Generator: Coffee Shop",
+		"description": "Load the BrewCommerce coffee shop demo and install the static site generator.",
+		"author": "Adam Zielinski",
+		"categories": ["static-sites", "WooCommerce", "Store"]
+	},
+	"landingPage": "/wp-admin/tools.php?page=playground-static-site-generator",
+	"login": true,
+	"preferredVersions": {
+		"wp": "latest",
+		"php": "8.3"
+	},
+	"features": {
+		"networking": true,
+		"intl": true
+	},
+	"extraLibraries": ["wp-cli"],
+	"steps": [
+		{
+			"step": "installTheme",
+			"themeData": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/WordPress/blueprints/trunk/blueprints/brewcommerce/theme.zip"
+			},
+			"options": {
+				"activate": true
+			}
+		},
+		{
+			"step": "installPlugin",
+			"pluginData": {
+				"resource": "wordpress.org/plugins",
+				"slug": "woocommerce"
+			},
+			"options": {
+				"activate": true
+			}
+		},
+		{
+			"step": "unzip",
+			"zipFile": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/WordPress/blueprints/trunk/blueprints/brewcommerce/uploads.zip"
+			},
+			"extractToPath": "/wordpress/wp-content"
+		},
+		{
+			"step": "resetData"
+		},
+		{
+			"step": "runSql",
+			"sql": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/WordPress/blueprints/trunk/blueprints/brewcommerce/database.sql"
+			}
+		},
+		{
+			"step": "importWxr",
+			"file": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/WordPress/blueprints/trunk/blueprints/brewcommerce/content.xml"
+			}
+		},
+		{
+			"step": "setSiteOptions",
+			"options": {
+				"blog_public": "1",
+				"woocommerce_coming_soon": "no",
+				"woocommerce_coming_soon_enabled": "no"
+			}
+		},
+		{
+			"step": "writeFile",
+			"data": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/WordPress/blueprints/trunk/blueprints/brewcommerce/ensure-media.php"
+			},
+			"path": "/wordpress/ensure-media.php"
+		},
+		{
+			"step": "runPHP",
+			"code": "<?php require '/wordpress/ensure-media.php';"
+		},
+		{
+			"step": "installPlugin",
+			"pluginData": {
+				"resource": "git:directory",
+				"url": "https://github.com/adamziel/wp-extensions",
+				"ref": "main",
+				"refType": "branch",
+				"path": "static-site-generator"
+			},
+			"options": {
+				"activate": true,
+				"targetFolderName": "static-site-generator"
+			}
+		}
+	]
+}
