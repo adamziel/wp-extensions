@@ -161,6 +161,24 @@ ssgwp_assert_same(
 );
 
 ssgwp_assert_same(
+	true,
+	SSGWP_Path_Utils::is_absolute_path( '/exports/static-site.zip' ),
+	'is_absolute_path recognizes POSIX absolute paths without wp-admin helpers.'
+);
+
+ssgwp_assert_same(
+	true,
+	SSGWP_Path_Utils::is_absolute_path( 'C:/exports/static-site.zip' ),
+	'is_absolute_path recognizes Windows drive absolute paths.'
+);
+
+ssgwp_assert_same(
+	false,
+	SSGWP_Path_Utils::is_absolute_path( 'exports/static-site.zip' ),
+	'is_absolute_path rejects relative paths.'
+);
+
+ssgwp_assert_same(
 	'collision%2Bpage/index.html',
 	SSGWP_Path_Utils::url_to_export_file_path( '/collision+page/' ),
 	'url_to_export_file_path keeps literal plus signs distinct.'

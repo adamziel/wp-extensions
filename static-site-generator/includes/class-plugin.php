@@ -1187,7 +1187,7 @@ final class SSGWP_Plugin {
 		$output = isset( $assoc_args['output'] ) ? $assoc_args['output'] : 'static-site.zip';
 		$output = wp_normalize_path( $output );
 
-		if ( ! path_is_absolute( $output ) ) {
+		if ( ! SSGWP_Path_Utils::is_absolute_path( $output ) ) {
 			$output = trailingslashit( getcwd() ) . $output;
 		}
 

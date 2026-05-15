@@ -178,6 +178,22 @@ final class SSGWP_Path_Utils {
 	}
 
 	/**
+	 * Determine whether a filesystem path is absolute.
+	 *
+	 * @param string $path Filesystem path.
+	 * @return bool Whether the path is absolute.
+	 */
+	public static function is_absolute_path( $path ) {
+		$path = wp_normalize_path( (string) $path );
+
+		return '' !== $path && (
+			'/' === $path[0]
+			|| (bool) preg_match( '#^[A-Za-z]:/#', $path )
+			|| 0 === strpos( $path, '//' )
+		);
+	}
+
+	/**
 	 * Resolve a child path and ensure it stays within the provided directory.
 	 *
 	 * @param string $directory Directory path.
