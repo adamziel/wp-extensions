@@ -246,7 +246,7 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( 'pdf', $document->get_format() );
 		$this->assertStringContainsString( 'Annual Report', $document->get_block_markup() );
 		$this->assertStringContainsString( 'Body text from uploaded PDF.', $document->get_block_markup() );
-		$this->assertSame( 'Import complete. Review the created drafts and any warnings.', $result['session']['dashboard']['current_action'] );
+		$this->assertSame( 'Import complete.', $result['session']['dashboard']['current_action'] );
 		$this->assertFalse( $result['session']['dashboard']['needs_keepalive'] );
 		$this->assertStringNotContainsString( 'Checking remaining importer work', $result['session']['dashboard']['current_action'] );
 	}
@@ -318,13 +318,61 @@ final class ImportAdminPageTest extends TestCase {
 
 		$details = $page->get_status_snapshot( $session->get_id() );
 
-		$this->assertStringContainsString( 'Import needs attention', $details['dashboard']['current_action'] );
+		$this->assertStringContainsString( 'source item needs attention', $details['dashboard']['current_action'] );
 		$this->assertStringContainsString( 'source item failed', $details['dashboard']['attention_message'] );
 		$this->assertFalse( $details['dashboard']['needs_keepalive'] );
 		$this->assertSame( 'blocked', $details['dashboard']['checklist'][0]['state'] );
-		$this->assertSame( 'blocked', $details['dashboard']['checklist'][5]['state'] );
+		$this->assertSame( array( 'blocked', 'pending', 'pending', 'pending', 'pending', 'pending' ), array_column( $details['dashboard']['checklist'], 'state' ) );
 		$this->assertSame( 'PDF text extraction produced no importable text.', $details['source_items']['recent'][0]['metadata']['error'] );
 		$this->assertStringNotContainsString( 'Checking remaining importer work', $details['dashboard']['current_action'] );
+	}
+
+	/**
+	 * Pending URL choices block the next stage without marking later stages.
+	 *
+	 * @return void
+	 */
+	public function test_status_snapshot_keeps_checklist_sequential_for_url_choices() {
+		$page     = $this->create_page();
+		$snapshot = $page->create_import_session( '/tmp/book.md' );
+		$session  = $this->store->find( ImportSessionId::from_string( $snapshot['id'] ) );
+
+		$this->store->save( $session->mark_running() );
+		$this->store->save_source_item(
+			ImportSourceItem::queued(
+				$session->get_id(),
+				'local:book.md',
+				null,
+				'/tmp/book.md',
+				'book.md',
+				ImportSourceItem::TYPE_FILE
+			)->with_status( ImportSourceItem::STATUS_IMPORTED )
+		);
+		$this->store->save_prepared_document(
+			new ImportPreparedDocument(
+				$session->get_id(),
+				'local:book.md',
+				'markdown',
+				'Book',
+				'<!-- wp:paragraph --><p>Body</p><!-- /wp:paragraph -->',
+				1,
+				'hash-book'
+			)
+		);
+		$this->store->save_decision(
+			$session->get_id(),
+			ImportDecision::pending(
+				'confirm-first-party-domains',
+				'Confirm first-party domains before URL rewriting.',
+				array( 'domains' => array( 'example.com' ) )
+			)
+		);
+
+		$details = $page->get_status_snapshot( $session->get_id() );
+
+		$this->assertSame( 'Choose URL treatment to continue.', $details['dashboard']['current_action'] );
+		$this->assertSame( array( 'done', 'done', 'blocked', 'pending', 'pending', 'pending' ), array_column( $details['dashboard']['checklist'], 'state' ) );
+		$this->assertSame( 'URL treatment', $details['dashboard']['checklist'][2]['label'] );
 	}
 
 	/**
@@ -348,24 +396,27 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( "dropzone.addEventListener('drop'", $source );
 		$this->assertStringContainsString( 'readDirectoryEntries', $source );
 		$this->assertStringContainsString( 'webkitGetAsEntry', $source );
-		$this->assertStringContainsString( 'Upload from this computer', $source );
+		$this->assertStringContainsString( 'Upload files or a folder', $source );
 		$this->assertStringContainsString( 'id="universal-importer-clear-files"', $source );
 		$this->assertStringContainsString( 'Clear selection', $source );
 		$this->assertStringContainsString( 'countFilesByExtension(browserFiles, \'.pdf\')', $source );
-		$this->assertStringContainsString( 'Paste a server path, URL, or GitHub repo', $source );
-		$this->assertStringContainsString( 'Rewrite source URLs?', $source );
-		$this->assertStringContainsString( 'Ask when URLs are found', $source );
-		$this->assertStringContainsString( 'Keep imported URLs unchanged', $source );
-		$this->assertStringContainsString( 'Rewrite known source domains', $source );
-		$this->assertStringContainsString( 'Domains to rewrite now', $source );
+		$this->assertStringContainsString( 'URL or server path', $source );
+		$this->assertStringContainsString( 'URL treatment', $source );
+		$this->assertStringContainsString( 'Ask when old URLs are found', $source );
+		$this->assertStringContainsString( 'Keep URLs unchanged', $source );
+		$this->assertStringContainsString( 'Rewrite listed domains', $source );
+		$this->assertStringContainsString( 'Old site domains', $source );
 		$this->assertStringContainsString( 'url_rewrite_mode', $source );
 		$this->assertStringContainsString( 'universal-importer-progressbar', $source );
 		$this->assertStringContainsString( 'universal-importer-current-action', $source );
 		$this->assertStringContainsString( 'universal-importer-stage-title', $source );
 		$this->assertStringContainsString( 'universal-importer-step-state', $source );
 		$this->assertStringContainsString( 'function checklistStateLabel(state)', $source );
+		$this->assertStringContainsString( 'function syncPrimaryView(session)', $source );
+		$this->assertStringContainsString( 'function isImportLocked(session)', $source );
+		$this->assertStringContainsString( 'universal-importer-start-form" class="universal-importer-start', $source );
 		$this->assertStringContainsString( 'data-url-choice="none"', $source );
-		$this->assertStringContainsString( "'sessions' => \$sessions", $source );
+		$this->assertStringContainsString( "'primary_session_id' =>", $source );
 		$this->assertStringContainsString( 'wp_json_encode( $config )', $source );
 		$this->assertStringContainsString( 'function sessionNeedsKeepalive(session)', $source );
 		$this->assertStringContainsString( 'function reattachActiveSession()', $source );

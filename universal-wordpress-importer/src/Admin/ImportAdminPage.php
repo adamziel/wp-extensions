@@ -516,9 +516,12 @@ final class ImportAdminPage {
 			$error = $exception->getMessage();
 		}
 
-		$config = array(
-			'nonce'    => $nonce,
-			'sessions' => $sessions,
+		$primary_session   = $this->primary_admin_session( $sessions );
+		$has_active_import = null !== $primary_session && $this->is_active_admin_session( $primary_session );
+		$config            = array(
+			'nonce'              => $nonce,
+			'sessions'           => null === $primary_session ? array() : array( $primary_session ),
+			'primary_session_id' => null === $primary_session ? '' : (string) $primary_session['id'],
 		);
 
 		?>
@@ -552,6 +555,14 @@ final class ImportAdminPage {
 				box-shadow: 0 1px 2px rgba(0,0,0,.04);
 				margin: 18px 0 28px;
 				padding: 24px;
+			}
+			.universal-importer-start.is-hidden {
+				display: none;
+			}
+			.universal-importer-section-heading {
+				font-size: 18px;
+				line-height: 1.3;
+				margin: 0 0 12px;
 			}
 			.universal-importer-start-grid {
 				display: grid;
@@ -638,6 +649,7 @@ final class ImportAdminPage {
 			.universal-importer-url-options {
 				border: 1px solid var(--ui-border);
 				border-radius: 8px;
+				background: #fbfbfc;
 				padding: 12px;
 			}
 			.universal-importer-url-intro {
@@ -688,6 +700,13 @@ final class ImportAdminPage {
 			.universal-importer-sessions {
 				display: grid;
 				gap: 16px;
+			}
+			.universal-importer-sessions.is-empty {
+				display: none;
+			}
+			.universal-importer-empty-progress {
+				color: var(--ui-muted);
+				margin: 0 0 18px;
 			}
 			.universal-importer-card {
 				background: var(--ui-surface);
@@ -758,9 +777,10 @@ final class ImportAdminPage {
 			.universal-importer-checklist {
 				display: grid;
 				gap: 10px;
-				grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+				grid-template-columns: minmax(0, 1fr);
 				list-style: none;
 				margin: 0 0 14px;
+				max-width: 760px;
 				padding: 0;
 			}
 			.universal-importer-step {
@@ -843,6 +863,9 @@ final class ImportAdminPage {
 				background: #fcf9e8;
 				border-color: #dba617;
 			}
+			.universal-importer-step[data-state="pending"] {
+				background: #fbfbfc;
+			}
 			.universal-importer-step[data-state="blocked"] .universal-importer-stage-index {
 				background: #dba617;
 				border-color: #dba617;
@@ -893,6 +916,7 @@ final class ImportAdminPage {
 				display: grid;
 				gap: 9px;
 				grid-template-columns: 20px minmax(0, 1fr);
+				margin: 0;
 			}
 			.universal-importer-domain-list input {
 				margin-top: 2px;
@@ -927,23 +951,24 @@ final class ImportAdminPage {
 		</style>
 		<div class="wrap universal-importer-admin">
 			<h1><?php esc_html_e( 'Universal Importer', 'universal-wordpress-importer' ); ?></h1>
-			<p class="universal-importer-lede"><?php esc_html_e( 'Bring a folder, archive, site export, REST URL, or GitHub repository into WordPress as resumable draft-page imports.', 'universal-wordpress-importer' ); ?></p>
+			<p class="universal-importer-lede"><?php esc_html_e( 'Import files, folders, archives, or reachable URLs into WordPress drafts.', 'universal-wordpress-importer' ); ?></p>
 			<?php if ( '' !== $error ) : ?>
 				<div class="notice notice-error"><p><?php echo esc_html( $error ); ?></p></div>
 			<?php endif; ?>
 			<div id="universal-importer-notice" class="notice" style="display:none"><p></p></div>
-			<form id="universal-importer-start-form" class="universal-importer-start">
+			<form id="universal-importer-start-form" class="universal-importer-start<?php echo $has_active_import ? ' is-hidden' : ''; ?>">
+				<h2 class="universal-importer-section-heading"><?php esc_html_e( 'Select content', 'universal-wordpress-importer' ); ?></h2>
 				<div class="universal-importer-start-grid">
 					<div>
 						<p class="universal-importer-field">
-							<label for="universal-importer-source"><?php esc_html_e( 'Paste a server path, URL, or GitHub repo', 'universal-wordpress-importer' ); ?></label>
+							<label for="universal-importer-source"><?php esc_html_e( 'URL or server path', 'universal-wordpress-importer' ); ?></label>
 							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/wp-json/, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
-							<span class="universal-importer-hint"><?php esc_html_e( 'Use this for sources the WordPress server can reach. For files on your computer, leave it blank and use the upload box below.', 'universal-wordpress-importer' ); ?></span>
+							<span class="universal-importer-hint"><?php esc_html_e( 'Use this when WordPress can reach the source directly.', 'universal-wordpress-importer' ); ?></span>
 						</p>
 						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
 							<div class="universal-importer-upload-copy">
-								<strong><?php esc_html_e( 'Upload from this computer', 'universal-wordpress-importer' ); ?></strong>
-								<p class="universal-importer-hint"><?php esc_html_e( 'Choose PDFs, EPUBs, HTML, Markdown, text, WXR/XML, ZIP archives, or a whole folder. Dropped files use the same resumable importer.', 'universal-wordpress-importer' ); ?></p>
+								<strong><?php esc_html_e( 'Upload files or a folder', 'universal-wordpress-importer' ); ?></strong>
+								<p class="universal-importer-hint"><?php esc_html_e( 'PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP, or a folder.', 'universal-wordpress-importer' ); ?></p>
 								<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
 								<ul id="universal-importer-file-preview" class="universal-importer-file-preview" aria-live="polite"></ul>
 							</div>
@@ -958,24 +983,24 @@ final class ImportAdminPage {
 					</div>
 					<div>
 						<fieldset class="universal-importer-field universal-importer-url-options">
-							<legend><?php esc_html_e( 'Rewrite source URLs?', 'universal-wordpress-importer' ); ?></legend>
-							<p class="universal-importer-hint universal-importer-url-intro"><?php esc_html_e( 'When imported content contains absolute URLs, choose whether links from the old site should point at this WordPress site.', 'universal-wordpress-importer' ); ?></p>
+							<legend><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></legend>
+							<p class="universal-importer-hint universal-importer-url-intro"><?php esc_html_e( 'Choose what happens to old-site links inside imported content.', 'universal-wordpress-importer' ); ?></p>
 							<label class="universal-importer-option">
 								<input type="radio" name="url_rewrite_mode" value="ask" checked>
-								<span><strong><?php esc_html_e( 'Ask when URLs are found', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Recommended. The import pauses only if absolute source URLs need a decision.', 'universal-wordpress-importer' ); ?></span></span>
+								<span><strong><?php esc_html_e( 'Ask when old URLs are found', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Recommended for most imports.', 'universal-wordpress-importer' ); ?></span></span>
 							</label>
 							<label class="universal-importer-option">
 								<input type="radio" name="url_rewrite_mode" value="preserve">
-								<span><strong><?php esc_html_e( 'Keep imported URLs unchanged', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Use this for reference archives or when links should keep pointing to the original site.', 'universal-wordpress-importer' ); ?></span></span>
+								<span><strong><?php esc_html_e( 'Keep URLs unchanged', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Links keep pointing to their original site.', 'universal-wordpress-importer' ); ?></span></span>
 							</label>
 							<label class="universal-importer-option">
 								<input type="radio" name="url_rewrite_mode" value="rewrite">
-								<span><strong><?php esc_html_e( 'Rewrite known source domains', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Every URL on these hosts is rewritten to this site, preserving the path.', 'universal-wordpress-importer' ); ?></span></span>
+								<span><strong><?php esc_html_e( 'Rewrite listed domains', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Paths are preserved on this site.', 'universal-wordpress-importer' ); ?></span></span>
 							</label>
 							<label class="universal-importer-domain-entry" for="universal-importer-domains">
-								<span><?php esc_html_e( 'Domains to rewrite now', 'universal-wordpress-importer' ); ?></span>
+								<span><?php esc_html_e( 'Old site domains', 'universal-wordpress-importer' ); ?></span>
 								<input type="text" id="universal-importer-domains" name="confirmed_domains" placeholder="<?php echo esc_attr__( 'example.com, www.example.com', 'universal-wordpress-importer' ); ?>">
-								<span class="universal-importer-hint"><?php esc_html_e( 'Optional for Ask. Use this when you already know the old site domains that should become this site.', 'universal-wordpress-importer' ); ?></span>
+								<span class="universal-importer-hint"><?php esc_html_e( 'Optional unless you choose Rewrite listed domains.', 'universal-wordpress-importer' ); ?></span>
 							</label>
 						</fieldset>
 						<label class="universal-importer-option">
@@ -985,12 +1010,13 @@ final class ImportAdminPage {
 					</div>
 				</div>
 				<p class="universal-importer-actions">
-					<?php submit_button( __( 'Start import', 'universal-wordpress-importer' ), 'primary', 'submit', false ); ?>
+					<?php submit_button( __( 'Import this content', 'universal-wordpress-importer' ), 'primary', 'submit', false ); ?>
 				</p>
 			</form>
-			<h2><?php esc_html_e( 'Recent sessions', 'universal-wordpress-importer' ); ?></h2>
-			<div id="universal-importer-sessions" class="universal-importer-sessions">
-				<?php $this->render_session_list( $sessions ); ?>
+			<h2><?php esc_html_e( 'Current import', 'universal-wordpress-importer' ); ?></h2>
+			<p id="universal-importer-empty-progress" class="universal-importer-empty-progress"<?php echo null === $primary_session ? '' : ' style="display:none"'; ?>><?php esc_html_e( 'Choose content above to start an import.', 'universal-wordpress-importer' ); ?></p>
+			<div id="universal-importer-sessions" class="universal-importer-sessions<?php echo null === $primary_session ? ' is-empty' : ''; ?>">
+				<?php $this->render_session_list( null === $primary_session ? array() : array( $primary_session ) ); ?>
 			</div>
 		</div>
 		<script>
@@ -1005,8 +1031,9 @@ final class ImportAdminPage {
 			var fileSummary = document.getElementById('universal-importer-file-summary');
 			var filePreview = document.getElementById('universal-importer-file-preview');
 			var sessions = document.getElementById('universal-importer-sessions');
+			var emptyProgress = document.getElementById('universal-importer-empty-progress');
 			var notice = document.getElementById('universal-importer-notice');
-			var activeSessionId = null;
+			var activeSessionId = config.primary_session_id || null;
 			var timer = null;
 			var browserFiles = [];
 
@@ -1089,7 +1116,7 @@ final class ImportAdminPage {
 				if (pdfCount) {
 					summary += ' · ' + pdfCount + ' PDF' + (pdfCount === 1 ? '' : 's');
 				}
-				fileSummary.textContent = summary + '. Start import will upload this selection.';
+				fileSummary.textContent = summary + '.';
 				renderFilePreview(browserFiles);
 			}
 
@@ -1157,13 +1184,14 @@ final class ImportAdminPage {
 				var percent = Math.max(0, Math.min(100, Number(dashboard.percentage || 0)));
 				var total = summary.total || '?';
 				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : session.status;
+				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>';
 				var html = '<section class="universal-importer-card" data-session-id="' + escapeHtml(session.id) + '">';
 				html += '<div class="universal-importer-card-header">';
 				html += '<div><h3 class="universal-importer-source-title">' + escapeHtml(session.source) + '</h3>';
-				html += '<p class="universal-importer-meta"><code>' + escapeHtml(session.id) + '</code> · ' + (session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Writes drafts', 'universal-wordpress-importer' ) ); ?>') + '</p></div>';
+				html += '<p class="universal-importer-meta">' + mode + '</p></div>';
 				html += '<span class="universal-importer-status-pill">' + escapeHtml(displayStatus) + '</span>';
 				html += '</div><div class="universal-importer-card-body">';
-				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking importer state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
+				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
 				html += '<div class="universal-importer-progressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
 				html += '<p class="universal-importer-meta">' + percent + '% · ' + summary.completed + ' / ' + total + ' <?php echo esc_js( __( 'items complete', 'universal-wordpress-importer' ) ); ?>';
 				if (summary.errors) {
@@ -1174,7 +1202,6 @@ final class ImportAdminPage {
 					html += '<div class="notice notice-warning inline universal-importer-attention"><p><strong><?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?></strong><br>' + escapeHtml(dashboard.attention_message) + '</p></div>';
 				}
 				html += renderChecklist(dashboard.checklist || []);
-				html += renderPipeline(session);
 				if (session.relationship_warnings && session.relationship_warnings.length) {
 					html += renderRelationshipWarnings(session.relationship_warnings);
 				}
@@ -1182,6 +1209,7 @@ final class ImportAdminPage {
 					html += renderDecisions(session);
 				}
 				html += renderActivityLog(dashboard.activity_log || session.recent_events || []);
+				html += renderPipeline(session);
 				if (session.status !== 'done' && session.status !== 'aborted') {
 					html += '<p><button type="button" class="button universal-importer-abort" data-session-id="' + escapeHtml(session.id) + '"><?php echo esc_js( __( 'Abort', 'universal-wordpress-importer' ) ); ?></button></p>';
 				}
@@ -1207,21 +1235,21 @@ final class ImportAdminPage {
 					return '<?php echo esc_js( __( 'Done', 'universal-wordpress-importer' ) ); ?>';
 				}
 				if (state === 'active') {
-					return '<?php echo esc_js( __( 'Now', 'universal-wordpress-importer' ) ); ?>';
+					return '<?php echo esc_js( __( 'In progress', 'universal-wordpress-importer' ) ); ?>';
 				}
 				if (state === 'blocked') {
 					return '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>';
 				}
-				return '<?php echo esc_js( __( 'Waiting', 'universal-wordpress-importer' ) ); ?>';
+				return '<?php echo esc_js( __( 'Not started', 'universal-wordpress-importer' ) ); ?>';
 			}
 
 			function renderActivityLog(events) {
 				if (!events.length) {
 					return '';
 				}
-				var html = '<div class="universal-importer-log"><strong><?php echo esc_js( __( 'Activity log', 'universal-wordpress-importer' ) ); ?></strong><ol>';
+				var html = '<div class="universal-importer-log"><strong><?php echo esc_js( __( 'Done so far', 'universal-wordpress-importer' ) ); ?></strong><ol>';
 				events.forEach(function(event) {
-					html += '<li><span class="universal-importer-meta">' + escapeHtml(event.type || '') + '</span><br>' + escapeHtml(event.message || '') + '</li>';
+					html += '<li>' + escapeHtml(event.message || '') + '</li>';
 				});
 				html += '</ol></div>';
 				return html;
@@ -1247,8 +1275,7 @@ final class ImportAdminPage {
 				var epubTocs = session.epub_tocs || { total: 0, recent: [] };
 				var statuses = sourceItems.statuses || {};
 				var mediaStatuses = media.statuses || {};
-				var open = session.dashboard && session.dashboard.attention_message ? ' open' : '';
-				var html = '<details class="universal-importer-pipeline"' + open + '><summary><?php echo esc_js( __( 'Details', 'universal-wordpress-importer' ) ); ?></summary>';
+				var html = '<details class="universal-importer-pipeline"><summary><?php echo esc_js( __( 'Technical details', 'universal-wordpress-importer' ) ); ?></summary>';
 				html += '<p><strong><?php echo esc_js( __( 'Source items:', 'universal-wordpress-importer' ) ); ?></strong> ' + sourceItems.total + ' total';
 				html += ' <span>(' + (statuses.queued || 0) + ' queued, ' + (statuses.processing || 0) + ' processing, ' + (statuses.imported || 0) + ' imported, ' + (statuses.skipped || 0) + ' skipped, ' + (statuses.failed || 0) + ' failed)</span></p>';
 				html += '<p><strong><?php echo esc_js( __( 'Prepared:', 'universal-wordpress-importer' ) ); ?></strong> ' + documents.total + ' <strong><?php echo esc_js( __( 'Drafts:', 'universal-wordpress-importer' ) ); ?></strong> ' + posts.persisted + ' <strong><?php echo esc_js( __( 'Comments:', 'universal-wordpress-importer' ) ); ?></strong> ' + comments.persisted + '</p>';
@@ -1338,7 +1365,7 @@ final class ImportAdminPage {
 			}
 
 			function renderDecisions(session) {
-				var html = '<div class="universal-importer-decisions"><h4><?php echo esc_js( __( 'URL rewrite choice', 'universal-wordpress-importer' ) ); ?></h4>';
+				var html = '<div class="universal-importer-decisions"><h4><?php echo esc_js( __( 'URL treatment', 'universal-wordpress-importer' ) ); ?></h4>';
 				session.pending_decisions.forEach(function(decision) {
 					html += '<div class="universal-importer-decision" data-decision-key="' + escapeHtml(decision.key) + '">';
 					if (decision.key === 'confirm-first-party-domains') {
@@ -1357,8 +1384,8 @@ final class ImportAdminPage {
 			function renderUrlDecision(session, decision) {
 				var domains = decision.options && decision.options.domains ? decision.options.domains : [];
 				var examples = decision.options && decision.options.examples ? decision.options.examples : {};
-				var html = '<p><strong><?php echo esc_js( __( 'Do you want to rewrite absolute URLs from the imported content to this site?', 'universal-wordpress-importer' ) ); ?></strong></p>';
-				html += '<p class="description"><?php echo esc_js( __( 'Selected hosts will be rewritten to the current WordPress site while preserving each URL path. Unselected hosts stay exactly as imported.', 'universal-wordpress-importer' ) ); ?></p>';
+				var html = '<p><strong><?php echo esc_js( __( 'Rewrite old-site URLs to this site?', 'universal-wordpress-importer' ) ); ?></strong></p>';
+				html += '<p class="description"><?php echo esc_js( __( 'Selected hosts move to this site and keep the same paths. Unselected hosts stay unchanged.', 'universal-wordpress-importer' ) ); ?></p>';
 				html += '<div class="universal-importer-domain-list">';
 				domains.forEach(function(domain) {
 					var domainExamples = examples[domain] || [];
@@ -1395,39 +1422,57 @@ final class ImportAdminPage {
 				});
 			}
 
-			function findSessionElement(sessionId) {
-				var nodes = sessions.querySelectorAll('[data-session-id]');
-				for (var index = 0; index < nodes.length; index++) {
-					if (nodes[index].getAttribute('data-session-id') === sessionId) {
-						return nodes[index];
+			function isImportLocked(session) {
+				return session
+					&& session.id
+					&& session.status !== 'done'
+					&& session.status !== 'aborted'
+					&& session.status !== 'failed';
+			}
+
+			function primarySession() {
+				var recentSessions = config.sessions || [];
+				return recentSessions.length ? recentSessions[0] : null;
+			}
+
+			function syncPrimaryView(session) {
+				var primary = session || primarySession();
+				if (primary) {
+					var wrapper = document.createElement('div');
+					wrapper.innerHTML = renderSession(primary);
+					sessions.innerHTML = '';
+					sessions.appendChild(wrapper.firstElementChild);
+					sessions.classList.remove('is-empty');
+					if (emptyProgress) {
+						emptyProgress.style.display = 'none';
+					}
+				} else {
+					sessions.innerHTML = '';
+					sessions.classList.add('is-empty');
+					if (emptyProgress) {
+						emptyProgress.style.display = '';
 					}
 				}
-				return null;
+
+				if (form && form.classList) {
+					if (form.classList.toggle) {
+						form.classList.toggle('is-hidden', isImportLocked(primary));
+					} else if (isImportLocked(primary)) {
+						form.classList.add('is-hidden');
+					} else {
+						form.classList.remove('is-hidden');
+					}
+				}
 			}
 
 			function rememberSession(session) {
-				var recentSessions = config.sessions || [];
-				for (var index = 0; index < recentSessions.length; index++) {
-					if (recentSessions[index].id === session.id) {
-						recentSessions[index] = session;
-						config.sessions = recentSessions;
-						return;
-					}
-				}
-				recentSessions.unshift(session);
-				config.sessions = recentSessions;
+				config.sessions = [session];
+				config.primary_session_id = session.id;
 			}
 
 			function upsertSession(session) {
 				rememberSession(session);
-				var existing = findSessionElement(session.id);
-				var wrapper = document.createElement('div');
-				wrapper.innerHTML = renderSession(session);
-				if (existing) {
-					existing.replaceWith(wrapper.firstElementChild);
-				} else {
-					sessions.insertBefore(wrapper.firstElementChild, sessions.firstChild);
-				}
+				syncPrimaryView(session);
 			}
 
 			function sessionNeedsKeepalive(session) {
@@ -1448,13 +1493,11 @@ final class ImportAdminPage {
 			}
 
 			function reattachActiveSession() {
-				var recentSessions = config.sessions || [];
-				for (var index = 0; index < recentSessions.length; index++) {
-					if (sessionNeedsKeepalive(recentSessions[index])) {
-						startKeepalive(recentSessions[index].id);
-						tick();
-						return;
-					}
+				var session = primarySession();
+				syncPrimaryView(session);
+				if (sessionNeedsKeepalive(session)) {
+					startKeepalive(session.id);
+					tick();
 				}
 			}
 
@@ -1502,7 +1545,7 @@ final class ImportAdminPage {
 
 				request(action, payload).then(function(session) {
 					upsertSession(session);
-					showNotice('Import session created and queued.', 'success');
+					showNotice('<?php echo esc_js( __( 'Import started.', 'universal-wordpress-importer' ) ); ?>', 'success');
 					startKeepalive(session.id);
 					tick();
 				}).catch(function(error) {
@@ -1574,7 +1617,7 @@ final class ImportAdminPage {
 					}
 					request('<?php echo esc_js( self::AJAX_DECIDE ); ?>', data).then(function(session) {
 						upsertSession(session);
-						showNotice('Import decision resolved.', 'success');
+						showNotice('<?php echo esc_js( __( 'URL choice saved.', 'universal-wordpress-importer' ) ); ?>', 'success');
 						startKeepalive(session.id);
 						tick();
 					}).catch(function(error) {
@@ -1584,7 +1627,7 @@ final class ImportAdminPage {
 				}
 				request('<?php echo esc_js( self::AJAX_ABORT ); ?>', { session_id: event.target.getAttribute('data-session-id') }).then(function(session) {
 					upsertSession(session);
-					showNotice('Import session aborted.', 'warning');
+					showNotice('<?php echo esc_js( __( 'Import aborted.', 'universal-wordpress-importer' ) ); ?>', 'warning');
 				}).catch(function(error) {
 					showNotice(error.message, 'error');
 				});
@@ -1706,6 +1749,36 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Returns the one session the admin page should focus on.
+	 *
+	 * @param array<int,array<string,mixed>> $sessions Recent session snapshots.
+	 * @return array<string,mixed>|null
+	 */
+	private function primary_admin_session( array $sessions ) {
+		foreach ( $sessions as $session ) {
+			if ( is_array( $session ) ) {
+				return $session;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Returns whether a session should keep the start form out of view.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return bool
+	 */
+	private function is_active_admin_session( array $session ) {
+		$status = isset( $session['status'] ) ? (string) $session['status'] : '';
+
+		return ImportSession::STATUS_DONE !== $status
+			&& ImportSession::STATUS_ABORTED !== $status
+			&& ImportSession::STATUS_FAILED !== $status;
+	}
+
+	/**
 	 * Renders a list of session snapshots.
 	 *
 	 * @param array<int,array<string,mixed>> $sessions Session snapshots.
@@ -1713,7 +1786,6 @@ final class ImportAdminPage {
 	 */
 	private function render_session_list( array $sessions ) {
 		if ( empty( $sessions ) ) {
-			echo '<p>' . esc_html__( 'No import sessions yet.', 'universal-wordpress-importer' ) . '</p>';
 			return;
 		}
 
@@ -1724,7 +1796,7 @@ final class ImportAdminPage {
 			$total          = empty( $summary['total'] ) ? '?' : (string) $summary['total'];
 			$completed      = isset( $summary['completed'] ) ? (int) $summary['completed'] : 0;
 			$errors         = isset( $summary['errors'] ) ? (int) $summary['errors'] : 0;
-			$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking importer state.', 'universal-wordpress-importer' );
+			$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking import state.', 'universal-wordpress-importer' );
 			$display_status = empty( $dashboard['attention_message'] ) ? (string) $session['status'] : __( 'Needs attention', 'universal-wordpress-importer' );
 			?>
 			<section class="universal-importer-card" data-session-id="<?php echo esc_attr( $session['id'] ); ?>">
@@ -1732,8 +1804,7 @@ final class ImportAdminPage {
 					<div>
 						<h3 class="universal-importer-source-title"><?php echo esc_html( $session['source'] ); ?></h3>
 						<p class="universal-importer-meta">
-							<code><?php echo esc_html( $session['id'] ); ?></code>
-							<?php echo esc_html( $session['dry_run'] ? __( 'Dry run', 'universal-wordpress-importer' ) : __( 'Writes drafts', 'universal-wordpress-importer' ) ); ?>
+							<?php echo esc_html( $session['dry_run'] ? __( 'Dry run', 'universal-wordpress-importer' ) : __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>
 						</p>
 					</div>
 					<span class="universal-importer-status-pill"><?php echo esc_html( $display_status ); ?></span>
@@ -1821,14 +1892,14 @@ final class ImportAdminPage {
 		}
 
 		if ( 'active' === $state ) {
-			return __( 'Now', 'universal-wordpress-importer' );
+			return __( 'In progress', 'universal-wordpress-importer' );
 		}
 
 		if ( 'blocked' === $state ) {
 			return __( 'Needs attention', 'universal-wordpress-importer' );
 		}
 
-		return __( 'Waiting', 'universal-wordpress-importer' );
+		return __( 'Not started', 'universal-wordpress-importer' );
 	}
 
 	/**
@@ -1844,10 +1915,10 @@ final class ImportAdminPage {
 
 		?>
 		<div class="universal-importer-log">
-			<strong><?php esc_html_e( 'Activity log', 'universal-wordpress-importer' ); ?></strong>
+			<strong><?php esc_html_e( 'Done so far', 'universal-wordpress-importer' ); ?></strong>
 			<ol>
 				<?php foreach ( $events as $event ) : ?>
-					<li><span class="universal-importer-meta"><?php echo esc_html( isset( $event['type'] ) ? $event['type'] : '' ); ?></span><br><?php echo esc_html( isset( $event['message'] ) ? $event['message'] : '' ); ?></li>
+					<li><?php echo esc_html( isset( $event['message'] ) ? $event['message'] : '' ); ?></li>
 				<?php endforeach; ?>
 			</ol>
 		</div>
@@ -1872,8 +1943,8 @@ final class ImportAdminPage {
 		$epub_tocs    = $session['epub_tocs'];
 		$media_counts = $media['statuses'];
 		?>
-		<details class="universal-importer-pipeline" <?php echo ! empty( $session['dashboard']['attention_message'] ) ? 'open' : ''; ?>>
-			<summary><?php esc_html_e( 'Details', 'universal-wordpress-importer' ); ?></summary>
+		<details class="universal-importer-pipeline">
+			<summary><?php esc_html_e( 'Technical details', 'universal-wordpress-importer' ); ?></summary>
 			<p>
 				<strong><?php esc_html_e( 'Source items:', 'universal-wordpress-importer' ); ?></strong>
 				<?php echo esc_html( (string) $source_items['total'] ); ?>
@@ -2088,7 +2159,7 @@ final class ImportAdminPage {
 
 		?>
 		<div class="universal-importer-decisions">
-			<h4><?php esc_html_e( 'URL rewrite choice', 'universal-wordpress-importer' ); ?></h4>
+			<h4><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></h4>
 			<?php foreach ( $session['pending_decisions'] as $decision ) : ?>
 				<div class="universal-importer-decision" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>">
 					<?php if ( 'confirm-first-party-domains' === $decision['key'] ) : ?>
@@ -2096,8 +2167,8 @@ final class ImportAdminPage {
 						$domains  = isset( $decision['options']['domains'] ) && is_array( $decision['options']['domains'] ) ? $decision['options']['domains'] : array();
 						$examples = isset( $decision['options']['examples'] ) && is_array( $decision['options']['examples'] ) ? $decision['options']['examples'] : array();
 						?>
-						<p><strong><?php esc_html_e( 'Do you want to rewrite absolute URLs from the imported content to this site?', 'universal-wordpress-importer' ); ?></strong></p>
-						<p class="description"><?php esc_html_e( 'Selected hosts will be rewritten to the current WordPress site while preserving each URL path. Unselected hosts stay exactly as imported.', 'universal-wordpress-importer' ); ?></p>
+						<p><strong><?php esc_html_e( 'Rewrite old-site URLs to this site?', 'universal-wordpress-importer' ); ?></strong></p>
+						<p class="description"><?php esc_html_e( 'Selected hosts move to this site and keep the same paths. Unselected hosts stay unchanged.', 'universal-wordpress-importer' ); ?></p>
 						<div class="universal-importer-domain-list">
 							<?php foreach ( $domains as $domain ) : ?>
 								<?php
@@ -2523,29 +2594,29 @@ final class ImportAdminPage {
 	 */
 	private function dashboard_current_action( array $session ) {
 		if ( ImportSession::STATUS_DONE === $session['status'] ) {
-			return $this->admin_text( 'Import complete. Review the created drafts and any warnings.' );
+			return $this->admin_text( 'Import complete.' );
 		}
 
 		if ( ImportSession::STATUS_ABORTED === $session['status'] ) {
-			return $this->admin_text( 'Import aborted. No further work will run for this session.' );
+			return $this->admin_text( 'Import aborted.' );
 		}
 
 		if ( ImportSession::STATUS_FAILED === $session['status'] ) {
-			return $this->admin_text( 'Import failed. Review the latest activity and start a new import after correcting the source.' );
+			return $this->admin_text( 'Import failed.' );
 		}
 
 		if ( ! empty( $session['pending_decisions'] ) ) {
 			$first_decision = $session['pending_decisions'][0];
 
 			if ( isset( $first_decision['key'] ) && 'confirm-first-party-domains' === $first_decision['key'] ) {
-				return $this->admin_text( 'Waiting for URL rewrite preference before writing pages.' );
+				return $this->admin_text( 'Choose URL treatment to continue.' );
 			}
 
-			return $this->admin_text( 'Waiting for an import decision before continuing.' );
+			return $this->admin_text( 'Choose how to continue.' );
 		}
 
 		if ( ! empty( $session['remote_backoff']['total'] ) ) {
-			return $this->admin_text( 'Waiting for a remote site or API rate limit to clear.' );
+			return $this->admin_text( 'Waiting for the remote source.' );
 		}
 
 		$source_statuses = isset( $session['source_items']['statuses'] ) && is_array( $session['source_items']['statuses'] ) ? $session['source_items']['statuses'] : array();
@@ -2557,7 +2628,7 @@ final class ImportAdminPage {
 		if ( ! empty( $source_statuses['failed'] ) ) {
 			return sprintf(
 				/* translators: %d: failed source item count. */
-				$this->admin_text( 'Import needs attention: %d source item failed. Open Details to inspect the failing file.' ),
+				$this->admin_text( '%d source item needs attention.' ),
 				(int) $source_statuses['failed']
 			);
 		}
@@ -2565,40 +2636,40 @@ final class ImportAdminPage {
 		if ( ! empty( $media_statuses['failed'] ) ) {
 			return sprintf(
 				/* translators: %d: failed media reference count. */
-				$this->admin_text( 'Import needs attention: %d media item failed. Open Details to inspect the failing reference.' ),
+				$this->admin_text( '%d media item needs attention.' ),
 				(int) $media_statuses['failed']
 			);
 		}
 
 		if ( ImportSession::STATUS_PENDING === $session['status'] && 0 === $source_total ) {
-			return $this->admin_text( 'Queued. The next importer tick will read the source and build the work list.' );
+			return $this->admin_text( 'Queued.' );
 		}
 
 		if ( ImportSession::STATUS_RUNNING === $session['status'] && 0 === $source_total ) {
-			return $this->admin_text( 'Starting import: reading the source and creating the work list.' );
+			return $this->admin_text( 'Reading the source.' );
 		}
 
 		if ( ! empty( $source_statuses['queued'] ) || ! empty( $source_statuses['processing'] ) ) {
-			return $this->admin_text( 'Scanning the source tree and preparing importable documents.' );
+			return $this->admin_text( 'Reading the source.' );
 		}
 
 		if ( ! empty( $source_statuses['discovered'] ) ) {
-			return $this->admin_text( 'Preparing discovered files for WordPress.' );
+			return $this->admin_text( 'Preparing content.' );
 		}
 
 		if ( ! empty( $media_statuses['queued'] ) ) {
-			return $this->admin_text( 'Importing media and rewriting document references.' );
+			return $this->admin_text( 'Importing media.' );
 		}
 
 		if ( 0 < $document_total && $post_total < $document_total ) {
-			return $this->admin_text( 'Creating WordPress draft pages from prepared documents.' );
+			return $this->admin_text( 'Writing drafts.' );
 		}
 
 		if ( ! empty( $session['relationship_warnings'] ) ) {
-			return $this->admin_text( 'Checking imported relationship metadata and warnings.' );
+			return $this->admin_text( 'Reviewing relationships.' );
 		}
 
-		return $this->admin_text( 'No active work is queued. Review Details and the Activity log before starting a new import or aborting this session.' );
+		return $this->admin_text( 'Checking import state.' );
 	}
 
 	/**
@@ -2687,10 +2758,12 @@ final class ImportAdminPage {
 	 */
 	private function dashboard_checklist( array $session, array $source_counts ) {
 		$queued_or_processing = (int) ( isset( $source_counts['queued'] ) ? $source_counts['queued'] : 0 ) + (int) ( isset( $source_counts['processing'] ) ? $source_counts['processing'] : 0 );
+		$source_discovered    = (int) ( isset( $source_counts['discovered'] ) ? $source_counts['discovered'] : 0 );
 		$source_total         = (int) ( isset( $session['source_items']['total'] ) ? $session['source_items']['total'] : 0 );
 		$source_failed        = (int) ( isset( $source_counts['failed'] ) ? $source_counts['failed'] : 0 );
 		$document_total       = (int) ( isset( $session['prepared_documents']['total'] ) ? $session['prepared_documents']['total'] : 0 );
 		$post_total           = (int) ( isset( $session['posts']['persisted'] ) ? $session['posts']['persisted'] : 0 );
+		$is_dry_run           = ! empty( $session['dry_run'] );
 		$media_statuses       = isset( $session['media']['statuses'] ) && is_array( $session['media']['statuses'] ) ? $session['media']['statuses'] : array();
 		$media_total          = (int) ( isset( $session['media']['total'] ) ? $session['media']['total'] : 0 );
 		$media_open           = (int) ( isset( $media_statuses['queued'] ) ? $media_statuses['queued'] : 0 );
@@ -2698,68 +2771,126 @@ final class ImportAdminPage {
 		$has_decision         = ! empty( $session['pending_decisions'] );
 		$is_done              = ImportSession::STATUS_DONE === $session['status'];
 
-		return array(
+		$stages = array(
 			array(
 				'index'  => '1',
-				'label'  => $this->admin_text( 'Read the source tree' ),
-				'detail' => 0 < $source_failed ? sprintf( $this->admin_text( '%d source item failed.' ), $source_failed ) : ( 0 === $source_total ? $this->admin_text( 'Waiting to discover files.' ) : sprintf( $this->admin_text( '%d source items tracked.' ), $source_total ) ),
-				'state'  => $this->stage_state( 0 < $source_total && 0 === $queued_or_processing && 0 === $source_failed, 0 < $queued_or_processing, 0 < $source_failed ),
+				'label'  => $this->admin_text( 'Read source' ),
+				'detail' => $this->admin_text( 'Not started.' ),
+				'state'  => 'pending',
 			),
 			array(
 				'index'  => '2',
-				'label'  => $this->admin_text( 'Prepare documents' ),
-				'detail' => sprintf( $this->admin_text( '%d documents ready.' ), $document_total ),
-				'state'  => $this->stage_state( 0 < $document_total && 0 === $queued_or_processing, 0 < $queued_or_processing, false ),
+				'label'  => $this->admin_text( 'Prepare content' ),
+				'detail' => $this->admin_text( 'Not started.' ),
+				'state'  => 'pending',
 			),
 			array(
 				'index'  => '3',
-				'label'  => $this->admin_text( 'Choose URL rewrite behavior' ),
-				'detail' => $has_decision ? $this->admin_text( 'Needs your choice.' ) : $this->admin_text( 'No URL decision is waiting.' ),
-				'state'  => $this->stage_state( ! $has_decision, $has_decision, $has_decision ),
+				'label'  => $this->admin_text( 'URL treatment' ),
+				'detail' => $this->admin_text( 'Not started.' ),
+				'state'  => 'pending',
 			),
 			array(
 				'index'  => '4',
 				'label'  => $this->admin_text( 'Import media' ),
-				'detail' => 0 < $media_failed ? sprintf( $this->admin_text( '%d media item failed.' ), $media_failed ) : ( 0 === $media_total ? $this->admin_text( 'No media queued yet.' ) : sprintf( $this->admin_text( '%1$d media references, %2$d still queued.' ), $media_total, $media_open ) ),
-				'state'  => $this->stage_state( 0 < $media_total && 0 === $media_open && 0 === $media_failed, 0 < $media_open, 0 < $media_failed ),
+				'detail' => $this->admin_text( 'Not started.' ),
+				'state'  => 'pending',
 			),
 			array(
 				'index'  => '5',
-				'label'  => $this->admin_text( 'Write WordPress drafts' ),
-				'detail' => sprintf( $this->admin_text( '%1$d of %2$d drafts written.' ), $post_total, $document_total ),
-				'state'  => $this->stage_state( 0 < $document_total && $post_total >= $document_total, 0 < $document_total && $post_total < $document_total, false ),
+				'label'  => $this->admin_text( 'Write drafts' ),
+				'detail' => $this->admin_text( 'Not started.' ),
+				'state'  => 'pending',
 			),
 			array(
 				'index'  => '6',
-				'label'  => $this->admin_text( 'Finish and verify' ),
-				'detail' => ( 0 < $source_failed || 0 < $media_failed ) ? $this->admin_text( 'Needs review before this import can finish.' ) : ( $is_done ? $this->admin_text( 'Session is complete.' ) : $this->admin_text( 'Waiting for the remaining stages.' ) ),
-				'state'  => $this->stage_state( $is_done, ! $is_done && 0 === $source_failed && 0 === $media_failed, 0 < $source_failed || 0 < $media_failed ),
+				'label'  => $this->admin_text( 'Finish' ),
+				'detail' => $this->admin_text( 'Not started.' ),
+				'state'  => 'pending',
 			),
 		);
-	}
 
-	/**
-	 * Returns a stage state.
-	 *
-	 * @param bool $done    Whether stage is done.
-	 * @param bool $active  Whether stage is active.
-	 * @param bool $blocked Whether stage is blocked.
-	 * @return string
-	 */
-	private function stage_state( $done, $active, $blocked ) {
-		if ( $blocked ) {
-			return 'blocked';
+		if ( 0 < $source_failed ) {
+			$stages[0]['detail'] = sprintf( $this->admin_text( '%d source item failed.' ), $source_failed );
+			$stages[0]['state']  = 'blocked';
+			return $stages;
 		}
 
-		if ( $done ) {
-			return 'done';
+		if ( 0 === $source_total ) {
+			if ( ! $is_done ) {
+				$stages[0]['detail'] = $this->admin_text( 'Queued.' );
+				$stages[0]['state']  = 'active';
+				return $stages;
+			}
+
+			$stages[0]['detail'] = $this->admin_text( 'No source items found.' );
+			$stages[0]['state']  = 'done';
+		} else {
+			if ( 0 < $queued_or_processing ) {
+				$stages[0]['detail'] = sprintf( $this->admin_text( '%d source items found.' ), $source_total );
+				$stages[0]['state']  = 'active';
+				return $stages;
+			}
+
+			$stages[0]['detail'] = sprintf( $this->admin_text( '%d source items found.' ), $source_total );
+			$stages[0]['state']  = 'done';
 		}
 
-		if ( $active ) {
-			return 'active';
+		if ( 0 < $source_discovered ) {
+			$stages[1]['detail'] = sprintf( $this->admin_text( 'Preparing %d item.' ), $source_discovered );
+			$stages[1]['state']  = 'active';
+			return $stages;
 		}
 
-		return 'pending';
+		if ( 0 === $document_total && ! $is_done ) {
+			$stages[1]['detail'] = $this->admin_text( 'Looking for importable content.' );
+			$stages[1]['state']  = 'active';
+			return $stages;
+		}
+
+		$stages[1]['detail'] = 0 < $document_total ? sprintf( $this->admin_text( '%d documents ready.' ), $document_total ) : $this->admin_text( 'No importable documents found.' );
+		$stages[1]['state']  = 'done';
+
+		if ( $has_decision ) {
+			$stages[2]['detail'] = $this->admin_text( 'Choose how old URLs should be handled.' );
+			$stages[2]['state']  = 'blocked';
+			return $stages;
+		}
+
+		$stages[2]['detail'] = $this->admin_text( 'URL choice is set.' );
+		$stages[2]['state']  = 'done';
+
+		if ( 0 < $media_failed ) {
+			$stages[3]['detail'] = sprintf( $this->admin_text( '%d media item failed.' ), $media_failed );
+			$stages[3]['state']  = 'blocked';
+			return $stages;
+		}
+
+		if ( 0 < $media_open ) {
+			$stages[3]['detail'] = sprintf( $this->admin_text( '%d media items queued.' ), $media_open );
+			$stages[3]['state']  = 'active';
+			return $stages;
+		}
+
+		$stages[3]['detail'] = 0 < $media_total ? sprintf( $this->admin_text( '%d media items imported.' ), $media_total ) : $this->admin_text( 'No media found.' );
+		$stages[3]['state']  = 'done';
+
+		if ( $is_dry_run ) {
+			$stages[4]['detail'] = $this->admin_text( 'Dry run: no drafts written.' );
+			$stages[4]['state']  = 'done';
+		} elseif ( 0 < $document_total && $post_total < $document_total ) {
+			$stages[4]['detail'] = sprintf( $this->admin_text( '%1$d of %2$d drafts written.' ), $post_total, $document_total );
+			$stages[4]['state']  = 'active';
+			return $stages;
+		} else {
+			$stages[4]['detail'] = 0 < $document_total ? sprintf( $this->admin_text( '%1$d of %2$d drafts written.' ), $post_total, $document_total ) : $this->admin_text( 'No drafts to write.' );
+			$stages[4]['state']  = 'done';
+		}
+
+		$stages[5]['detail'] = $is_done ? $this->admin_text( 'Complete.' ) : $this->admin_text( 'Final checks.' );
+		$stages[5]['state']  = $is_done ? 'done' : 'active';
+
+		return $stages;
 	}
 
 	/**
