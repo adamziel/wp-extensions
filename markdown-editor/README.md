@@ -16,9 +16,9 @@ unzip -q wp-markdown-editor.zip
 npx --yes @wp-playground/cli@latest server \
 	--php=8.4 \
 	--login \
-	--php-extension="$PWD/wp-markdown-editor/markdown-editor/sqlite-markdown-extension/dist/manifest.json" \
-	--mount-dir "$PWD/wp-markdown-editor/content" /markdown-root \
-	--mount-dir "$PWD/wp-markdown-editor/markdown-editor" /wordpress/wp-content/mu-plugins
+	--php-extension=wp-markdown-editor/markdown-editor/sqlite-markdown-extension/dist/manifest.json \
+	--mount=wp-markdown-editor/content:/markdown-root \
+	--mount=wp-markdown-editor/markdown-editor:/wordpress/wp-content/mu-plugins
 ```
 
 Then open:
@@ -176,8 +176,8 @@ npx --yes @wp-playground/cli@latest server \
 	--php=8.4 \
 	--login \
 	--php-extension="$WP_EXTENSIONS/markdown-editor/sqlite-markdown-extension/dist/manifest.json" \
-	--mount-dir "$WP_EXTENSIONS/content" /markdown-root \
-	--mount-dir "$WP_EXTENSIONS/markdown-editor" /wordpress/wp-content/mu-plugins
+	--mount="$WP_EXTENSIONS/content:/markdown-root" \
+	--mount="$WP_EXTENSIONS/markdown-editor:/wordpress/wp-content/mu-plugins"
 ```
 
 Then open:
