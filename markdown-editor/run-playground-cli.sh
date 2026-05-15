@@ -127,5 +127,5 @@ npx --yes "$PLAYGROUND_CLI_PACKAGE" server \
 	--port="$PORT" \
 	--login \
 	--php-extension="$EXTENSION_MANIFEST" \
-	--mount-dir "$CONTENT_DIR" /markdown-root \
-	--mount-dir "$SCRIPT_DIR" /wordpress/wp-content/mu-plugins
+	--mount="$CONTENT_DIR:/markdown-root" \
+	--mount="$SCRIPT_DIR:/wordpress/wp-content/mu-plugins"
