@@ -88,6 +88,19 @@ ssgwp_blueprint_assert(
 );
 
 ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_contains( $brew_blueprint, 'communication-preferences' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'unresolved shortcode placeholder' ),
+	'BrewCommerce blueprint replaces the imported AutomateWoo shortcode page with rendered content.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_contains( $brew_blueprint, 'brewcommerce-static-export-fallbacks' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'wc-block-product-template' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'grid-template-columns' ),
+	'BrewCommerce blueprint includes a static product grid fallback style.'
+);
+
+ssgwp_blueprint_assert(
 	ssgwp_command_contains( $brew_commands, 'wp static-site export' ) === false,
 	'BrewCommerce browser blueprint opens the admin exporter instead of auto-downloading a ZIP.'
 );

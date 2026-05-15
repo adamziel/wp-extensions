@@ -501,6 +501,39 @@ ssgwp_assert_same(
 	'rewrite_html records stylesheet links as assets to copy.'
 );
 
+$unicode_json_result = $rewriter->rewrite_html(
+	'<script type="application/json">{"cartUrl":"\u002Fcart\u002F","shopUrl":"\u002Fshop\u002F","assetUrl":"\u002Fwp-content\u002Fuploads\u002Fcoffee.jpg"}</script>',
+	'https://example.test/shop/',
+	'shop/index.html'
+);
+
+ssgwp_assert_contains(
+	'"cartUrl":"..\u002Fcart\u002Findex.html"',
+	$unicode_json_result['content'],
+	'rewrite_html rewrites JSON unicode-escaped root-relative cart URLs for file previews.'
+);
+
+ssgwp_assert_contains(
+	'"assetUrl":"..\u002Fwp-content\u002Fuploads\u002Fcoffee.jpg"',
+	$unicode_json_result['content'],
+	'rewrite_html rewrites JSON unicode-escaped root-relative asset URLs for file previews.'
+);
+
+ssgwp_assert_same(
+	array(
+		'https://example.test/cart/',
+		'https://example.test/shop/',
+	),
+	$unicode_json_result['links'],
+	'rewrite_html records JSON unicode-escaped page URLs for crawling.'
+);
+
+ssgwp_assert_same(
+	array( 'https://example.test/wp-content/uploads/coffee.jpg' ),
+	$unicode_json_result['assets'],
+	'rewrite_html records JSON unicode-escaped asset URLs for copying.'
+);
+
 $method = new ReflectionMethod( $rewriter, 'prepare_html_attribute_value' );
 $method->setAccessible( true );
 

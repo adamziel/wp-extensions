@@ -2399,6 +2399,7 @@ final class SSGWP_URL_Rewriter {
 		$content = $this->rewrite_absolute_text_urls( $content, $target_path, true );
 		$content = $this->rewrite_protocol_relative_text_urls( $content, $target_path, false );
 		$content = $this->rewrite_protocol_relative_text_urls( $content, $target_path, true );
+		$content = $this->rewrite_json_unicode_root_relative_text_urls( $content, $target_path );
 		$content = $this->rewrite_root_relative_text_urls( $content, $target_path, false );
 		$content = $this->rewrite_root_relative_text_urls( $content, $target_path, true );
 		$content = $this->rewrite_root_asset_text_urls( $content, $target_path, false );
@@ -2595,6 +2596,35 @@ final class SSGWP_URL_Rewriter {
 				$rewritten = $this->rewrite_url_value( $url, home_url( '/' ), $target_path, 'maybe' );
 
 				return $escaped ? str_replace( '/', '\\/', $rewritten ) : $rewritten;
+			},
+			$content
+		);
+	}
+
+	/**
+	 * Rewrite JSON strings that encode root-relative URLs as \u002F paths.
+	 *
+	 * WooCommerce and block interactivity state can store URLs such as
+	 * "\u002Fcart\u002F". If those survive into a file:// preview, JavaScript
+	 * reconstructs root-relative links that point outside the extracted ZIP.
+	 *
+	 * @param string $content     Text content.
+	 * @param string $target_path Relative static file path.
+	 * @return string
+	 */
+	private function rewrite_json_unicode_root_relative_text_urls( $content, $target_path ) {
+		return preg_replace_callback(
+			'#(?<=["\'])(?:\\\\u002[fF])(?!\\\\u002[fF])(?=[A-Za-z0-9._~%:@-])(?:(?:\\\\u002[fF])|[^\\\\\s\'"<>)])*#',
+			function ( $matches ) use ( $target_path ) {
+				$url = preg_replace( '#\\\\u002[fF]#', '/', $matches[0] );
+
+				if ( preg_match( '/[*{}]/', $url ) ) {
+					return $matches[0];
+				}
+
+				$rewritten = $this->rewrite_url_value( $url, home_url( '/' ), $target_path, 'maybe' );
+
+				return str_replace( '/', '\\u002F', $rewritten );
 			},
 			$content
 		);
