@@ -15,11 +15,7 @@ The exporter includes:
 
 ## Browser Playground
 
-Open the demo Blueprint in the Playground webapp:
-
-```text
-https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json
-```
+[![Try it in WordPress Playground](https://raw.githubusercontent.com/WordPress/wordpress-playground/refs/heads/trunk/packages/docs/site/static/img/try-it-in-playground.webp)](https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json)
 
 The Blueprint installs this plugin, seeds a richer demo site with pages,
 categories, dated posts, and block content, then opens
