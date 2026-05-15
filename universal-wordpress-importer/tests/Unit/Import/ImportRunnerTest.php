@@ -5517,6 +5517,31 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Duplicate and punctuation-only Markdown headings receive stable unique anchors.
+	 *
+	 * @return void
+	 */
+	public function test_runner_assigns_unique_markdown_heading_anchors() {
+		$source_file = $this->temporary_file(
+			'anchors.md',
+			"# API\n\n## Attributes\n\n## Attributes\n\n### !!!"
+		);
+		$session     = ImportSession::start_for_source( $source_file );
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60 ) )->run( $session->get_id() );
+
+		$items    = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
+		$markup   = $document->get_block_markup();
+
+		$this->assertStringContainsString( '<h1 id="api">API</h1>', $markup );
+		$this->assertStringContainsString( '<h2 id="attributes">Attributes</h2>', $markup );
+		$this->assertStringContainsString( '<h2 id="attributes-2">Attributes</h2>', $markup );
+		$this->assertStringContainsString( '<h3 id="section">!!!</h3>', $markup );
+	}
+
+	/**
 	 * Ambiguous setext-looking chunks do not over-promote other Markdown shapes.
 	 *
 	 * @return void
