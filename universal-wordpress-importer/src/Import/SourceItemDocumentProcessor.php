@@ -6020,30 +6020,185 @@ final class SourceItemDocumentProcessor {
 	 * @return string
 	 */
 	private function extract_pdf_text_operators( $content ) {
+		$tokens    = $this->tokenize_pdf_content_stream( $content );
+		$operands  = array();
+		$lines     = array();
+		$line      = '';
+		$current_x = null;
+		$current_y = null;
+
+		foreach ( $tokens as $token ) {
+			if ( 'operator' !== $token['type'] ) {
+				$operands[] = $token['value'];
+				continue;
+			}
+
+			$operator = $token['value'];
+
+			if ( 'Tj' === $operator ) {
+				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ) ) );
+			} elseif ( 'TJ' === $operator ) {
+				$this->append_pdf_text_to_line( $line, $this->extract_pdf_strings_from_operands( $this->pdf_array_operand_body( $this->last_pdf_operand( $operands ) ) ) );
+			} elseif ( "'" === $operator || '"' === $operator ) {
+				$this->finish_pdf_text_line( $lines, $line );
+				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ) ) );
+			} elseif ( 'T*' === $operator ) {
+				$this->finish_pdf_text_line( $lines, $line );
+			} elseif ( 'Td' === $operator || 'TD' === $operator ) {
+				$move = $this->last_pdf_numeric_operands( $operands, 2 );
+				if ( null !== $move && '' !== trim( $line ) ) {
+					if ( 0.01 < abs( $move[1] ) ) {
+						$this->finish_pdf_text_line( $lines, $line );
+					} elseif ( 24 < $move[0] && ! preg_match( '/\s$/', $line ) ) {
+						$line .= ' ';
+					}
+				}
+			} elseif ( 'Tm' === $operator ) {
+				$matrix = $this->last_pdf_numeric_operands( $operands, 6 );
+				if ( null !== $matrix ) {
+					$next_x = $matrix[4];
+					$next_y = $matrix[5];
+					if ( null !== $current_y && '' !== trim( $line ) ) {
+						if ( 2 < abs( $next_y - $current_y ) || ( null !== $current_x && $next_x < $current_x - 2 ) ) {
+							$this->finish_pdf_text_line( $lines, $line );
+						} elseif ( null !== $current_x && 24 < $next_x - $current_x && ! preg_match( '/\s$/', $line ) ) {
+							$line .= ' ';
+						}
+					}
+					$current_x = $next_x;
+					$current_y = $next_y;
+				}
+			} elseif ( 'BT' === $operator || 'ET' === $operator ) {
+				$this->finish_pdf_text_line( $lines, $line );
+				$current_x = null;
+				$current_y = null;
+			}
+
+			$operands = array();
+		}
+
+		$this->finish_pdf_text_line( $lines, $line );
+
+		return implode( "\n", $lines );
+	}
+
+	/**
+	 * Tokenizes the subset of PDF content stream syntax needed for text extraction.
+	 *
+	 * @param string $content Candidate PDF content stream.
+	 * @return array<int,array{type:string,value:string}>
+	 */
+	private function tokenize_pdf_content_stream( $content ) {
+		$tokens  = array();
 		$content = (string) $content;
-		$parts   = array();
+		$pattern = '/\((?:\\\\.|[^\\\\\)])*\)|\[(?:\\\\.|[^\]])*\]|<[\da-fA-F\s]+>|<<|>>|\/[^\s<>\[\]\(\)]+|[+-]?(?:\d+\.\d+|\d+|\.\d+)|T\*|Tj|TJ|Td|TD|Tm|BT|ET|\'|"|[A-Za-z][A-Za-z0-9\*]*/s';
 
-		if ( preg_match_all( '/\[(.*?)\]\s*TJ/s', $content, $arrays ) ) {
-			foreach ( $arrays[1] as $array_content ) {
-				$text = $this->extract_pdf_strings_from_operands( $array_content );
-
-				if ( '' !== $text ) {
-					$parts[] = $text;
-				}
-			}
+		if ( ! preg_match_all( $pattern, $content, $matches ) ) {
+			return $tokens;
 		}
 
-		if ( preg_match_all( '/((?:\((?:\\\\.|[^\\\\\)])*\)|<[\da-fA-F\s]+>))\s*(?:Tj|\'|")/s', $content, $strings ) ) {
-			foreach ( $strings[1] as $operand ) {
-				$text = $this->decode_pdf_text_operand( $operand );
+		$text_operators = array( 'Tj', 'TJ', "'", '"', 'T*', 'Td', 'TD', 'Tm', 'BT', 'ET' );
 
-				if ( '' !== $text ) {
-					$parts[] = $text;
-				}
-			}
+		foreach ( $matches[0] as $match ) {
+			$value    = (string) $match;
+			$tokens[] = array(
+				'type'  => in_array( $value, $text_operators, true ) ? 'operator' : 'operand',
+				'value' => $value,
+			);
 		}
 
-		return implode( "\n", $parts );
+		return $tokens;
+	}
+
+	/**
+	 * Returns the last PDF operand from a stack.
+	 *
+	 * @param array<int,string> $operands Operand stack.
+	 * @return string
+	 */
+	private function last_pdf_operand( array $operands ) {
+		if ( empty( $operands ) ) {
+			return '';
+		}
+
+		return (string) $operands[ count( $operands ) - 1 ];
+	}
+
+	/**
+	 * Returns an array operand body without brackets.
+	 *
+	 * @param string $operand Array operand.
+	 * @return string
+	 */
+	private function pdf_array_operand_body( $operand ) {
+		$operand = trim( (string) $operand );
+
+		if ( '[' === substr( $operand, 0, 1 ) && ']' === substr( $operand, -1 ) ) {
+			return substr( $operand, 1, -1 );
+		}
+
+		return '';
+	}
+
+	/**
+	 * Returns the last numeric operands from a stack.
+	 *
+	 * @param array<int,string> $operands Operand stack.
+	 * @param int               $count    Number of operands.
+	 * @return array<int,float>|null
+	 */
+	private function last_pdf_numeric_operands( array $operands, $count ) {
+		$count = max( 1, (int) $count );
+
+		if ( count( $operands ) < $count ) {
+			return null;
+		}
+
+		$values = array_slice( $operands, -$count );
+		$nums   = array();
+
+		foreach ( $values as $value ) {
+			if ( ! is_numeric( $value ) ) {
+				return null;
+			}
+			$nums[] = (float) $value;
+		}
+
+		return $nums;
+	}
+
+	/**
+	 * Appends decoded PDF text without treating every text-showing operator as a line break.
+	 *
+	 * @param string $line Current line, by reference.
+	 * @param string $text Decoded text.
+	 * @return void
+	 */
+	private function append_pdf_text_to_line( &$line, $text ) {
+		$text = (string) $text;
+
+		if ( '' === $text ) {
+			return;
+		}
+
+		$line .= $text;
+	}
+
+	/**
+	 * Completes the current PDF text line.
+	 *
+	 * @param array<int,string> $lines Completed lines, by reference.
+	 * @param string            $line  Current line, by reference.
+	 * @return void
+	 */
+	private function finish_pdf_text_line( array &$lines, &$line ) {
+		$line = trim( (string) $line );
+
+		if ( '' !== $line ) {
+			$lines[] = $line;
+		}
+
+		$line = '';
 	}
 
 	/**

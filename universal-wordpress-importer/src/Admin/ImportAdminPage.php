@@ -548,12 +548,23 @@ final class ImportAdminPage {
 				padding: 12px;
 			}
 			.universal-importer-option {
-				align-items: flex-start;
-				display: flex;
+				align-items: start;
+				display: grid;
 				gap: 9px;
+				grid-template-columns: 20px minmax(0, 1fr);
 				margin: 0 0 12px;
 			}
+			.universal-importer-option input {
+				margin-top: 2px;
+			}
+			.universal-importer-option > span {
+				min-width: 0;
+			}
 			.universal-importer-option strong {
+				display: block;
+			}
+			.universal-importer-option .universal-importer-hint,
+			.universal-importer-domain-list .universal-importer-hint {
 				display: block;
 			}
 			.universal-importer-actions {
@@ -625,14 +636,35 @@ final class ImportAdminPage {
 			}
 			.universal-importer-checklist {
 				display: grid;
-				gap: 8px;
-				grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+				gap: 10px;
+				grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+				list-style: none;
 				margin: 14px 0;
+				padding: 0;
 			}
 			.universal-importer-step {
+				align-items: start;
 				border: 1px solid var(--ui-border);
 				border-radius: 8px;
+				display: grid;
+				gap: 10px;
+				grid-template-columns: 30px minmax(0, 1fr);
 				padding: 10px 12px;
+				position: relative;
+			}
+			.universal-importer-stage-index {
+				align-items: center;
+				background: #f6f7f7;
+				border: 1px solid var(--ui-border);
+				border-radius: 999px;
+				color: var(--ui-muted);
+				display: inline-flex;
+				font-size: 12px;
+				font-weight: 700;
+				height: 26px;
+				justify-content: center;
+				line-height: 1;
+				width: 26px;
 			}
 			.universal-importer-step strong {
 				display: block;
@@ -648,13 +680,28 @@ final class ImportAdminPage {
 				background: #f0f6e8;
 				border-color: #b8d6a1;
 			}
+			.universal-importer-step[data-state="done"] .universal-importer-stage-index {
+				background: #008a20;
+				border-color: #008a20;
+				color: #fff;
+			}
 			.universal-importer-step[data-state="active"] {
 				background: #f0f6fc;
 				border-color: #72aee6;
 			}
+			.universal-importer-step[data-state="active"] .universal-importer-stage-index {
+				background: #3858e9;
+				border-color: #3858e9;
+				color: #fff;
+			}
 			.universal-importer-step[data-state="blocked"] {
 				background: #fcf9e8;
 				border-color: #dba617;
+			}
+			.universal-importer-step[data-state="blocked"] .universal-importer-stage-index {
+				background: #dba617;
+				border-color: #dba617;
+				color: #1d2327;
 			}
 			.universal-importer-log {
 				border-top: 1px solid #f0f0f1;
@@ -680,6 +727,15 @@ final class ImportAdminPage {
 				display: grid;
 				gap: 8px;
 				margin: 12px 0;
+			}
+			.universal-importer-domain-list label {
+				align-items: start;
+				display: grid;
+				gap: 9px;
+				grid-template-columns: 20px minmax(0, 1fr);
+			}
+			.universal-importer-domain-list input {
+				margin-top: 2px;
 			}
 			@media (max-width: 960px) {
 				.universal-importer-start-grid,
@@ -909,11 +965,11 @@ final class ImportAdminPage {
 				if (!items.length) {
 					return '';
 				}
-				var html = '<div class="universal-importer-checklist">';
+				var html = '<ol class="universal-importer-checklist" aria-label="<?php echo esc_js( __( 'Import stages', 'universal-wordpress-importer' ) ); ?>">';
 				items.forEach(function(item) {
-					html += '<div class="universal-importer-step" data-state="' + escapeHtml(item.state || 'pending') + '"><strong>' + escapeHtml(item.label || '') + '</strong><span>' + escapeHtml(item.detail || '') + '</span></div>';
+					html += '<li class="universal-importer-step" data-state="' + escapeHtml(item.state || 'pending') + '"><span class="universal-importer-stage-index">' + escapeHtml(item.index || '') + '</span><span><strong>' + escapeHtml(item.label || '') + '</strong><span>' + escapeHtml(item.detail || '') + '</span></span></li>';
 				});
-				html += '</div>';
+				html += '</ol>';
 				return html;
 			}
 
@@ -1059,11 +1115,11 @@ final class ImportAdminPage {
 				html += '<div class="universal-importer-domain-list">';
 				domains.forEach(function(domain) {
 					var domainExamples = examples[domain] || [];
-					html += '<label><input type="checkbox" class="universal-importer-decision-domain" value="' + escapeHtml(domain) + '" checked> <strong>' + escapeHtml(domain) + '</strong>';
+					html += '<label><input type="checkbox" class="universal-importer-decision-domain" value="' + escapeHtml(domain) + '" checked><span><strong>' + escapeHtml(domain) + '</strong>';
 					if (domainExamples.length) {
 						html += '<span class="universal-importer-hint">' + escapeHtml(domainExamples[0]) + '</span>';
 					}
-					html += '</label>';
+					html += '</span></label>';
 				});
 				html += '</div>';
 				html += '<p><button type="button" class="button button-primary universal-importer-resolve-decision" data-url-choice="selected" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '"><?php echo esc_js( __( 'Rewrite selected domains', 'universal-wordpress-importer' ) ); ?></button> ';
@@ -1468,14 +1524,17 @@ final class ImportAdminPage {
 		}
 
 		?>
-		<div class="universal-importer-checklist">
+		<ol class="universal-importer-checklist" aria-label="<?php echo esc_attr__( 'Import stages', 'universal-wordpress-importer' ); ?>">
 			<?php foreach ( $items as $item ) : ?>
-				<div class="universal-importer-step" data-state="<?php echo esc_attr( isset( $item['state'] ) ? $item['state'] : 'pending' ); ?>">
-					<strong><?php echo esc_html( isset( $item['label'] ) ? $item['label'] : '' ); ?></strong>
-					<span><?php echo esc_html( isset( $item['detail'] ) ? $item['detail'] : '' ); ?></span>
-				</div>
+				<li class="universal-importer-step" data-state="<?php echo esc_attr( isset( $item['state'] ) ? $item['state'] : 'pending' ); ?>">
+					<span class="universal-importer-stage-index"><?php echo esc_html( isset( $item['index'] ) ? $item['index'] : '' ); ?></span>
+					<span>
+						<strong><?php echo esc_html( isset( $item['label'] ) ? $item['label'] : '' ); ?></strong>
+						<span><?php echo esc_html( isset( $item['detail'] ) ? $item['detail'] : '' ); ?></span>
+					</span>
+				</li>
 			<?php endforeach; ?>
-		</div>
+		</ol>
 		<?php
 	}
 
@@ -1746,10 +1805,12 @@ final class ImportAdminPage {
 								?>
 								<label>
 									<input type="checkbox" class="universal-importer-decision-domain" value="<?php echo esc_attr( $domain ); ?>" checked>
-									<strong><?php echo esc_html( $domain ); ?></strong>
-									<?php if ( ! empty( $domain_examples ) ) : ?>
-										<span class="universal-importer-hint"><?php echo esc_html( (string) $domain_examples[0] ); ?></span>
-									<?php endif; ?>
+									<span>
+										<strong><?php echo esc_html( $domain ); ?></strong>
+										<?php if ( ! empty( $domain_examples ) ) : ?>
+											<span class="universal-importer-hint"><?php echo esc_html( (string) $domain_examples[0] ); ?></span>
+										<?php endif; ?>
+									</span>
 								</label>
 							<?php endforeach; ?>
 						</div>
@@ -2222,31 +2283,37 @@ final class ImportAdminPage {
 
 		return array(
 			array(
+				'index'  => '1',
 				'label'  => $this->admin_text( 'Read the source tree' ),
 				'detail' => 0 === $source_total ? $this->admin_text( 'Waiting to discover files.' ) : sprintf( $this->admin_text( '%d source items tracked.' ), $source_total ),
 				'state'  => $this->stage_state( 0 < $source_total && 0 === $queued_or_processing, 0 < $queued_or_processing, false ),
 			),
 			array(
+				'index'  => '2',
 				'label'  => $this->admin_text( 'Prepare documents' ),
 				'detail' => sprintf( $this->admin_text( '%d documents ready.' ), $document_total ),
 				'state'  => $this->stage_state( 0 < $document_total && 0 === $queued_or_processing, 0 < $queued_or_processing, false ),
 			),
 			array(
+				'index'  => '3',
 				'label'  => $this->admin_text( 'Choose URL rewrite behavior' ),
 				'detail' => $has_decision ? $this->admin_text( 'Needs your choice.' ) : $this->admin_text( 'No URL decision is waiting.' ),
 				'state'  => $this->stage_state( ! $has_decision, $has_decision, $has_decision ),
 			),
 			array(
+				'index'  => '4',
 				'label'  => $this->admin_text( 'Import media' ),
 				'detail' => 0 === $media_total ? $this->admin_text( 'No media queued yet.' ) : sprintf( $this->admin_text( '%1$d media references, %2$d still queued.' ), $media_total, $media_open ),
 				'state'  => $this->stage_state( 0 < $media_total && 0 === $media_open, 0 < $media_open, false ),
 			),
 			array(
+				'index'  => '5',
 				'label'  => $this->admin_text( 'Write WordPress drafts' ),
 				'detail' => sprintf( $this->admin_text( '%1$d of %2$d drafts written.' ), $post_total, $document_total ),
 				'state'  => $this->stage_state( 0 < $document_total && $post_total >= $document_total, 0 < $document_total && $post_total < $document_total, false ),
 			),
 			array(
+				'index'  => '6',
 				'label'  => $this->admin_text( 'Finish and verify' ),
 				'detail' => $is_done ? $this->admin_text( 'Session is complete.' ) : $this->admin_text( 'Waiting for the remaining stages.' ),
 				'state'  => $this->stage_state( $is_done, ! $is_done, false ),

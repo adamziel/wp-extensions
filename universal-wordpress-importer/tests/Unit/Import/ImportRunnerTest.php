@@ -3694,6 +3694,56 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * PDF glyph-by-glyph text operators are joined into readable lines.
+	 *
+	 * @return void
+	 */
+	public function test_runner_joins_pdf_glyph_level_text_operators() {
+		$source_file = $this->temporary_pdf(
+			'glyphs.pdf',
+			"BT\n/F1 12 Tf\n72 720 Td\n(G) Tj\n(l) Tj\n(y) Tj\n(p) Tj\n(h) Tj\n( ) Tj\n(P) Tj\n(D) Tj\n(F) Tj\n0 -14 Td\n(Body) Tj\n( ) Tj\n(text) Tj\nET",
+			true
+		);
+		$session     = ImportSession::start_for_source( $source_file );
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60 ) )->run( $session->get_id() );
+
+		$items    = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
+
+		$this->assertNotNull( $document );
+		$this->assertStringContainsString( 'Glyph PDF', $document->get_block_markup() );
+		$this->assertStringContainsString( 'Body text', $document->get_block_markup() );
+		$this->assertStringNotContainsString( "G\nl\ny\np\nh", $document->get_block_markup() );
+	}
+
+	/**
+	 * PDF glyphs positioned with text matrices on one baseline stay on one line.
+	 *
+	 * @return void
+	 */
+	public function test_runner_joins_pdf_glyphs_positioned_with_text_matrices() {
+		$source_file = $this->temporary_pdf(
+			'matrix-glyphs.pdf',
+			"BT\n/F1 12 Tf\n1 0 0 1 72 720 Tm\n(M) Tj\n1 0 0 1 80 720 Tm\n(a) Tj\n1 0 0 1 88 720 Tm\n(t) Tj\n1 0 0 1 96 720 Tm\n(r) Tj\n1 0 0 1 104 720 Tm\n(i) Tj\n1 0 0 1 112 720 Tm\n(x) Tj\n1 0 0 1 72 700 Tm\n(Second line) Tj\nET",
+			true
+		);
+		$session     = ImportSession::start_for_source( $source_file );
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60 ) )->run( $session->get_id() );
+
+		$items    = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
+
+		$this->assertNotNull( $document );
+		$this->assertStringContainsString( 'Matrix', $document->get_block_markup() );
+		$this->assertStringContainsString( 'Second line', $document->get_block_markup() );
+		$this->assertStringNotContainsString( "M\na\nt\nr\ni\nx", $document->get_block_markup() );
+	}
+
+	/**
 	 * PDF text stream extraction honors direct /Length values when stream bytes contain sentinel text.
 	 *
 	 * @return void
