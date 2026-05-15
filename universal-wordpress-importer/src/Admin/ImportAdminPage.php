@@ -26,17 +26,18 @@ use UniversalImporter\Plugin;
  * Registers and serves the importer admin page and keepalive endpoints.
  */
 final class ImportAdminPage {
-	const PAGE_SLUG        = 'universal-wordpress-importer';
-	const NONCE_ACTION     = 'universal_importer_admin';
-	const AJAX_CREATE      = 'universal_importer_create_session';
-	const AJAX_UPLOAD      = 'universal_importer_upload_session';
-	const AJAX_KEEPALIVE   = 'universal_importer_keepalive';
-	const AJAX_ABORT       = 'universal_importer_abort_session';
-	const AJAX_DECIDE      = 'universal_importer_resolve_decision';
-	const CAPABILITY       = 'manage_options';
-	const RECENT_SESSIONS  = 10;
-	const MAX_UPLOAD_FILES = 500;
-	const MAX_UPLOAD_BYTES = 134217728;
+	const PAGE_SLUG             = 'universal-wordpress-importer';
+	const NONCE_ACTION          = 'universal_importer_admin';
+	const AJAX_CREATE           = 'universal_importer_create_session';
+	const AJAX_UPLOAD           = 'universal_importer_upload_session';
+	const AJAX_KEEPALIVE        = 'universal_importer_keepalive';
+	const AJAX_ABORT            = 'universal_importer_abort_session';
+	const AJAX_DECIDE           = 'universal_importer_resolve_decision';
+	const CAPABILITY            = 'manage_options';
+	const RECENT_SESSIONS       = 10;
+	const MAX_UPLOAD_FILES      = 500;
+	const MAX_UPLOAD_BYTES      = 134217728;
+	const KEEPALIVE_BURST_TICKS = 4;
 
 	/**
 	 * Persistent import session store.
@@ -260,13 +261,63 @@ final class ImportAdminPage {
 			$id = ImportSessionId::from_string( (string) $session_id );
 		}
 
-		$runner  = $this->create_runner();
-		$summary = $runner->run( $id );
+		$runner   = $this->create_runner();
+		$summary  = $runner->run( $id );
+		$snapshot = null === $id ? null : $this->get_status_snapshot( $id );
+
+		$should_burst = null !== $id && $this->should_burst_keepalive( $snapshot, $summary );
+		for ( $tick = 1; $tick < self::KEEPALIVE_BURST_TICKS && $should_burst; ++$tick ) {
+			$next_summary = $runner->run( $id );
+			$summary      = $this->combine_keepalive_summaries( $summary, $next_summary );
+			$snapshot     = $this->get_status_snapshot( $id );
+			$should_burst = $this->should_burst_keepalive( $snapshot, $summary );
+		}
 
 		return array(
 			'summary' => $summary,
-			'session' => null === $id ? null : $this->get_status_snapshot( $id ),
+			'session' => $snapshot,
 		);
+	}
+
+	/**
+	 * Returns whether one AJAX keepalive may safely run another bounded tick.
+	 *
+	 * @param array<string,mixed>|null $snapshot Current session snapshot.
+	 * @param array<string,int>        $summary  Previous runner summary.
+	 * @return bool
+	 */
+	private function should_burst_keepalive( $snapshot, array $summary ) {
+		if ( null === $snapshot || ! empty( $summary['locked'] ) || ! empty( $summary['errors'] ) ) {
+			return false;
+		}
+
+		if ( empty( $snapshot['dashboard'] ) || empty( $snapshot['dashboard']['needs_keepalive'] ) ) {
+			return false;
+		}
+
+		$source_items = isset( $snapshot['source_items'] ) && is_array( $snapshot['source_items'] ) ? $snapshot['source_items'] : array();
+		$media        = isset( $snapshot['media'] ) && is_array( $snapshot['media'] ) ? $snapshot['media'] : array();
+		$source_total = isset( $source_items['total'] ) ? (int) $source_items['total'] : 0;
+		$media_total  = isset( $media['total'] ) ? (int) $media['total'] : 0;
+		$documents    = isset( $snapshot['prepared_documents']['total'] ) ? (int) $snapshot['prepared_documents']['total'] : 0;
+		$posts        = isset( $snapshot['posts']['persisted'] ) ? (int) $snapshot['posts']['persisted'] : 0;
+
+		return 0 < $source_total || 0 < $media_total || $posts < $documents;
+	}
+
+	/**
+	 * Adds runner summary counters.
+	 *
+	 * @param array<string,int> $summary Existing summary.
+	 * @param array<string,int> $next    Next summary.
+	 * @return array<string,int>
+	 */
+	private function combine_keepalive_summaries( array $summary, array $next ) {
+		foreach ( array( 'processed', 'locked', 'skipped', 'errors' ) as $key ) {
+			$summary[ $key ] = ( isset( $summary[ $key ] ) ? (int) $summary[ $key ] : 0 ) + ( isset( $next[ $key ] ) ? (int) $next[ $key ] : 0 );
+		}
+
+		return $summary;
 	}
 
 	/**

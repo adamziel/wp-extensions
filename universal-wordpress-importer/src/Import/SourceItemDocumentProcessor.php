@@ -35,8 +35,8 @@ final class SourceItemDocumentProcessor {
 	const PDF_OCR_ERROR_LIMIT      = 2048;
 	const PDF_MEDIA_LIMIT          = 10;
 	const PDF_MEDIA_SCAN_LIMIT     = 5;
-	const PDF_STRUCTURE_SCAN_LIMIT = 5;
-	const PDF_TEXT_SCAN_LIMIT      = 5;
+	const PDF_STRUCTURE_SCAN_LIMIT = 100;
+	const PDF_TEXT_SCAN_LIMIT      = 100;
 	const PDF_MEDIA_FILE_LIMIT     = 8388608;
 	const PDF_TABLE_MIN_ROWS       = 2;
 

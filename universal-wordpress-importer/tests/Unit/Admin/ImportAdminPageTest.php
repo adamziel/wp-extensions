@@ -22,6 +22,7 @@ use UniversalImporter\Import\ImportRunner;
 use UniversalImporter\Import\ImportSession;
 use UniversalImporter\Import\ImportSessionId;
 use UniversalImporter\Import\ImportSourceItem;
+use UniversalImporter\Import\SourceItemDocumentProcessor;
 use UniversalImporter\Import\WordPressImportSessionStore;
 use UniversalImporter\Tests\Unit\Import\FakePostGateway;
 use UniversalImporter\Tests\Unit\Import\FakeWpdb;
@@ -248,6 +249,45 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( 'Import complete. Review the created drafts and any warnings.', $result['session']['dashboard']['current_action'] );
 		$this->assertFalse( $result['session']['dashboard']['needs_keepalive'] );
 		$this->assertStringNotContainsString( 'Checking remaining importer work', $result['session']['dashboard']['current_action'] );
+	}
+
+	/**
+	 * Browser keepalive runs enough bounded PDF ticks to avoid leaving large uploads at discovered/unknown.
+	 *
+	 * @return void
+	 */
+	public function test_keepalive_bursts_large_browser_uploaded_pdf_to_draft() {
+		$posts = new FakePostGateway();
+		$page  = $this->create_page(
+			function ( WordPressImportSessionStore $store ) use ( $posts ) {
+				return new ImportRunner( $store, 'admin-test', 60, null, $posts );
+			},
+			new ImportCacheDirectory( $this->temporary_directory(), 'unit-test' )
+		);
+		$count = SourceItemDocumentProcessor::PDF_STRUCTURE_SCAN_LIMIT + 10;
+
+		$snapshot = $page->create_import_session_from_uploaded_files(
+			array(
+				$this->uploaded_fixture(
+					'Screenplay.pdf',
+					$this->temporary_multi_stream_pdf_contents( $count )
+				),
+			),
+			array( 'Screenplay.pdf' ),
+			array(),
+			false,
+			'preserve'
+		);
+		$result   = $page->run_keepalive( $snapshot['id'] );
+		$session  = $this->store->find( ImportSessionId::from_string( $snapshot['id'] ) );
+		$document = $this->store->list_recent_prepared_documents( $session->get_id(), 1 )[0];
+
+		$this->assertSame( ImportSession::STATUS_DONE, $result['session']['status'] );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertSame( 'pdf', $document->get_format() );
+		$this->assertStringContainsString( 'Scene 1', $document->get_block_markup() );
+		$this->assertStringContainsString( 'Scene ' . $count, $document->get_block_markup() );
+		$this->assertFalse( $result['session']['dashboard']['needs_keepalive'] );
 	}
 
 	/**
@@ -1113,6 +1153,42 @@ final class ImportAdminPageTest extends TestCase {
 			. '4 0 obj << /Length ' . strlen( $stream ) . " /Filter /FlateDecode >>\nstream\n"
 			. $stream
 			. "\nendstream\nendobj\n%%EOF\n";
+	}
+
+	/**
+	 * Creates a minimal PDF fixture body with many text streams.
+	 *
+	 * @param int $count Number of content streams.
+	 * @return string
+	 */
+	private function temporary_multi_stream_pdf_contents( $count ) {
+		$count        = max( 1, (int) $count );
+		$objects      = array(
+			"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+			"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+		);
+		$content_refs = array();
+
+		for ( $index = 0; $index < $count; ++$index ) {
+			$object_id      = 4 + $index;
+			$content_refs[] = $object_id . ' 0 R';
+			$scene          = $index + 1;
+			$stream         = "BT\n/F1 12 Tf\n72 720 Td\n(Scene " . $scene . ") Tj\n0 -14 Td\n(Action line " . $scene . ".) Tj\nET\n";
+			$objects[]      = $object_id . ' 0 obj << /Length ' . strlen( $stream ) . " >>\nstream\n"
+				. $stream
+				. "\nendstream\nendobj\n";
+		}
+
+		array_splice(
+			$objects,
+			2,
+			0,
+			array(
+				'3 0 obj << /Type /Page /Parent 2 0 R /Contents [' . implode( ' ', $content_refs ) . "] >> endobj\n",
+			)
+		);
+
+		return "%PDF-1.4\n" . implode( '', $objects ) . "%%EOF\n";
 	}
 
 	/**
