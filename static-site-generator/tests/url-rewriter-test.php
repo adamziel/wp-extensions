@@ -3673,10 +3673,13 @@ $ssgwp_test_includes_url = 'https://playground.wordpress.net/scope:sad-quiet-sch
 $scoped_result = $rewriter->rewrite_html(
 	'<a href="https://playground.wordpress.net/scope:sad-quiet-school/sample-page/">Sample</a>'
 		. '<a href="/scope:sad-quiet-school/sample-page/">Root</a>'
+		. '<a href="/shop/">Shop now</a>'
+		. '<a href="/product-category/beans/" data-type="product_cat">All the beans</a>'
 		. '<base href="https://playground.wordpress.net/scope:sad-quiet-school/">'
 		. '<a href="https://playground.wordpress.net/scope:other-site/sample-page/">Other</a>'
 		. '<img src="https://playground.wordpress.net/scope:other-site/wp-content/uploads/photo.jpg" alt="">'
 		. '<img src="/scope:sad-quiet-school/wp-content/uploads/photo.jpg" alt="">'
+		. '<main data-wp-context=\'{"shopUrl":"/shop/"}\'></main>'
 		. '<script type="application/json">{"plainRootAsset":"/wp-content/uploads/photo.jpg","plainRootAssetEscaped":"\/wp-content\/uploads\/photo.jpg"}</script>',
 	'https://playground.wordpress.net/scope:sad-quiet-school/',
 	'index.html'
@@ -3692,6 +3695,24 @@ ssgwp_assert_contains(
 	'src="wp-content/uploads/photo.jpg"',
 	$scoped_result['content'],
 	'rewrite_html strips the Playground scope base from same-site asset links.'
+);
+
+ssgwp_assert_contains(
+	'href="shop/index.html"',
+	$scoped_result['content'],
+	'rewrite_html treats root-relative page hrefs as scoped Playground site links.'
+);
+
+ssgwp_assert_contains(
+	'href="product-category/beans/index.html"',
+	$scoped_result['content'],
+	'rewrite_html treats root-relative taxonomy hrefs as scoped Playground site links.'
+);
+
+ssgwp_assert_contains(
+	'data-wp-context=\'{&quot;shopUrl&quot;:&quot;shop/index.html&quot;}\'',
+	$scoped_result['content'],
+	'rewrite_html treats root-relative Interactivity API page URLs as scoped Playground site links.'
 );
 
 ssgwp_assert_contains(

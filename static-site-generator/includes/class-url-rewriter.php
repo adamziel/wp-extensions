@@ -2114,6 +2114,7 @@ final class SSGWP_URL_Rewriter {
 		}
 
 		$absolute = $this->collector->resolve_relative_url( $value, $base_url );
+		$absolute = $this->resolve_scoped_root_relative_page_url( $value, $absolute, $kind );
 		$absolute = $this->normalize_absolute_url_path( $absolute );
 
 		if ( ! $this->is_same_site_url( $absolute ) ) {
@@ -2178,6 +2179,56 @@ final class SSGWP_URL_Rewriter {
 		}
 
 		return './';
+	}
+
+	/**
+	 * Resolve root-relative page links against scoped Playground deployments.
+	 *
+	 * Imported content can contain links such as /shop/ even when WordPress is
+	 * actually deployed under /scope:example/. Treat page-like root paths as site
+	 * links, but keep root-level wp-content/wp-includes assets protected.
+	 *
+	 * @param string $value    Original URL value.
+	 * @param string $absolute Absolute URL resolved by the collector.
+	 * @param string $kind     URL kind.
+	 * @return string Absolute URL.
+	 */
+	private function resolve_scoped_root_relative_page_url( $value, $absolute, $kind ) {
+		if ( ! SSGWP_Path_Utils::has_deployment_base_path() ) {
+			return $absolute;
+		}
+
+		$value = trim( (string) $value );
+
+		if ( '' === $value || '/' !== $value[0] || 0 === strpos( $value, '//' ) ) {
+			return $absolute;
+		}
+
+		$value_path = (string) wp_parse_url( $value, PHP_URL_PATH );
+
+		if ( '' === $value_path || SSGWP_Path_Utils::is_url_path_under_deployment_base( $value_path ) ) {
+			return $absolute;
+		}
+
+		if ( preg_match( '#^/(?:wp-content|wp-includes)(?:/|$)#i', $value_path ) ) {
+			return $absolute;
+		}
+
+		if ( preg_match( '#^/scope:[^/]+(?:/|$)#i', rawurldecode( $value_path ) ) ) {
+			return $absolute;
+		}
+
+		$query     = wp_parse_url( $value, PHP_URL_QUERY );
+		$fragment  = wp_parse_url( $value, PHP_URL_FRAGMENT );
+		$candidate = trailingslashit( home_url( '/' ) ) . ltrim( $value_path, '/' );
+		$candidate .= is_string( $query ) && '' !== $query ? '?' . $query : '';
+		$candidate .= is_string( $fragment ) && '' !== $fragment ? '#' . $fragment : '';
+
+		if ( 'page' !== $kind && ! ( 'maybe' === $kind && $this->is_page_like_url( $candidate ) ) ) {
+			return $absolute;
+		}
+
+		return $candidate;
 	}
 
 	/**

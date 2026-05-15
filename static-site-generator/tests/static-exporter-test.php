@@ -1288,8 +1288,87 @@ ssgwp_assert_not_contains(
 	'export_to_directory does not emit raw AutomateWoo shortcode placeholders in the commerce fixture.'
 );
 
+$ssgwp_test_home_url = 'https://playground.wordpress.net/scope:coffee-shop/';
+$ssgwp_test_site_url = 'https://playground.wordpress.net/scope:coffee-shop/';
+
+$scoped_commerce_output_dir = $fixture_root . '/scoped-commerce-export';
+$ssgwp_test_posts           = array(
+	1 => (object) array(
+		'ID'             => 1,
+		'post_type'      => 'page',
+		'post_status'    => 'publish',
+		'post_content'   => '',
+		'permalink_path' => 'shop/',
+	),
+	2 => (object) array(
+		'ID'             => 2,
+		'post_type'      => 'page',
+		'post_status'    => 'publish',
+		'post_content'   => '',
+		'permalink_path' => 'cart/',
+	),
+);
+$ssgwp_test_http_responses  = array(
+	'https://playground.wordpress.net/scope:coffee-shop/' => '<html><body><main data-wp-context=\'{"shopUrl":"/shop/"}\'><a class="wp-block-button__link" href="/shop/">Shop now</a><a href="/product-category/beans/" data-type="product_cat" data-id="21">All the beans</a></main></body></html>',
+	'https://playground.wordpress.net/scope:coffee-shop/shop/' => '<html><body><main><h1>Shop</h1><p>Scoped shop page rendered.</p></main></body></html>',
+	'https://playground.wordpress.net/scope:coffee-shop/cart/' => '<html><body><main><h1>Cart</h1></main></body></html>',
+	'https://playground.wordpress.net/scope:coffee-shop/product-category/beans/' => '<html><body><main><h1>All the beans</h1></main></body></html>',
+);
+
+$exporter->export_to_directory(
+	$scoped_commerce_output_dir,
+	array(
+		'copy_core_assets' => false,
+		'copy_plugins'     => false,
+		'copy_theme'       => false,
+		'copy_uploads'     => false,
+		'fetch_mode'       => 'remote',
+		'url_mode'         => 'relative',
+	)
+);
+
+$scoped_commerce_home = file_get_contents( $scoped_commerce_output_dir . '/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+
+ssgwp_assert_contains(
+	'href="shop/index.html"',
+	$scoped_commerce_home,
+	'export_to_directory rewrites scoped Playground root-relative shop hrefs for file previews.'
+);
+
+ssgwp_assert_not_contains(
+	'href="/shop/"',
+	$scoped_commerce_home,
+	'export_to_directory removes scoped Playground root-relative shop hrefs from exported HTML.'
+);
+
+ssgwp_assert_contains(
+	'href="product-category/beans/index.html"',
+	$scoped_commerce_home,
+	'export_to_directory rewrites scoped Playground root-relative product category hrefs.'
+);
+
+ssgwp_assert_contains(
+	'&quot;shopUrl&quot;:&quot;shop/index.html&quot;',
+	$scoped_commerce_home,
+	'export_to_directory rewrites scoped Playground root-relative JSON shop URLs.'
+);
+
+ssgwp_assert_same(
+	true,
+	file_exists( $scoped_commerce_output_dir . '/shop/index.html' ),
+	'export_to_directory writes the scoped Playground shop target.'
+);
+
+ssgwp_assert_same(
+	true,
+	file_exists( $scoped_commerce_output_dir . '/product-category/beans/index.html' ),
+	'export_to_directory writes the scoped Playground product category target.'
+);
+
 $ssgwp_test_posts          = array();
 $ssgwp_test_http_responses = array();
+$ssgwp_test_home_url       = 'https://example.test/';
+$ssgwp_test_site_url       = 'https://example.test/';
 
 wp_mkdir_p( $fixture_root . '/theme/static-site-generator' );
 file_put_contents( $fixture_root . '/theme/archive.phar', 'phar' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
