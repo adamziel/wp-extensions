@@ -5733,6 +5733,62 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Local Markdown document links are rewritten to imported draft permalinks.
+	 *
+	 * @return void
+	 */
+	public function test_runner_resolves_markdown_document_links_to_imported_pages() {
+		$root = $this->temporary_directory();
+		mkdir( $root . '/reference' );
+		file_put_contents(
+			$root . '/index.md',
+			"# Handbook\n\nContinue to [Block API](reference/block-api.md#attributes), [Guide](guide.markdown), and [Missing](missing.md)."
+		);
+		file_put_contents( $root . '/guide.markdown', "# Guide\n\nBack to [Home](./index.md) or jump to [Root API](/reference/block-api.md)." );
+		file_put_contents( $root . '/reference/block-api.md', "# Block API\n\nReturn to [Handbook](../index.md#overview)." );
+
+		$session = ImportSession::start_for_source( $root );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		for ( $tick = 0; $tick < 8; ++$tick ) {
+			( new ImportRunner( $this->store, 'unit-test', 60, null, $posts ) )->run( $session->get_id() );
+
+			if ( ImportSession::STATUS_DONE === $this->store->find( $session->get_id() )->get_status() ) {
+				break;
+			}
+		}
+
+		$posts_by_title = $this->posts_by_title( $posts );
+		$events         = array_map(
+			function ( ImportProgressEvent $event ) {
+				return $event->get_type();
+			},
+			$this->store->list_events( $session->get_id(), 30 )
+		);
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertArrayHasKey( 'Handbook', $posts_by_title );
+		$this->assertArrayHasKey( 'Block API', $posts_by_title );
+		$this->assertArrayHasKey( 'Guide', $posts_by_title );
+
+		$handbook = $posts_by_title['Handbook'];
+		$api      = $posts_by_title['Block API'];
+		$guide    = $posts_by_title['Guide'];
+
+		$this->assertStringContainsString( $posts->get_permalink( $api['ID'] ) . '#attributes', $handbook['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $guide['ID'] ), $handbook['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $handbook['ID'] ), $guide['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $api['ID'] ), $guide['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $handbook['ID'] ) . '#overview', $api['post_content'] );
+		$this->assertStringContainsString( 'missing.md', $handbook['post_content'] );
+		$this->assertStringNotContainsString( 'reference/block-api.md', $handbook['post_content'] );
+		$this->assertStringNotContainsString( 'guide.markdown', $handbook['post_content'] );
+		$this->assertStringNotContainsString( '../index.md', $api['post_content'] );
+		$this->assertContains( 'markdown.internal_links_resolved', $events );
+	}
+
+	/**
 	 * Unsafe direct Markdown image URLs are not emitted as Image blocks.
 	 *
 	 * @return void
@@ -7557,6 +7613,27 @@ exit( 99 );
 			'stdout'    => false === $stdout ? '' : $stdout,
 			'stderr'    => false === $stderr ? '' : $stderr,
 		);
+	}
+
+	/**
+	 * Indexes fake posts by title.
+	 *
+	 * @param FakePostGateway $posts Fake post gateway.
+	 * @return array<string,array<string,mixed>>
+	 */
+	private function posts_by_title( FakePostGateway $posts ) {
+		$posts_by_title = array();
+		$post_count     = $posts->count_posts();
+
+		for ( $post_id = 1; $post_id <= $post_count; ++$post_id ) {
+			$post = $posts->get_post( $post_id );
+
+			if ( null !== $post ) {
+				$posts_by_title[ $post['post_title'] ] = $post;
+			}
+		}
+
+		return $posts_by_title;
 	}
 
 	/**

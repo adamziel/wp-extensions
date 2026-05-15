@@ -25,6 +25,8 @@ define( 'MB_IN_BYTES', 1024 * 1024 );
 
 $ssgwp_test_home_url = 'https://example.test/';
 $ssgwp_test_site_url = 'https://example.test/';
+$ssgwp_test_posts = array();
+$ssgwp_test_http_responses = array();
 
 if ( ! function_exists( 'wp_normalize_path' ) ) {
 	/**
@@ -257,13 +259,198 @@ if ( ! function_exists( 'get_option' ) ) {
 
 if ( ! function_exists( 'get_post' ) ) {
 	/**
-	 * Return no post in static exporter tests.
+	 * Return a test post.
 	 *
 	 * @param int $post_id Post ID.
-	 * @return null No post.
+	 * @return object|null Test post, or null.
 	 */
 	function get_post( $post_id ) {
-		return null;
+		global $ssgwp_test_posts;
+
+		$post_id = is_object( $post_id ) ? $post_id->ID : (int) $post_id;
+
+		return isset( $ssgwp_test_posts[ $post_id ] ) ? $ssgwp_test_posts[ $post_id ] : null;
+	}
+}
+
+if ( ! function_exists( 'get_post_types' ) ) {
+	/**
+	 * Return public post types for export tests.
+	 *
+	 * @return array
+	 */
+	function get_post_types() {
+		return array(
+			'post'       => (object) array(
+				'exclude_from_search' => false,
+				'has_archive'         => false,
+			),
+			'page'       => (object) array(
+				'exclude_from_search' => false,
+				'has_archive'         => false,
+			),
+			'attachment' => (object) array(
+				'exclude_from_search' => false,
+				'has_archive'         => false,
+			),
+		);
+	}
+}
+
+if ( ! function_exists( 'get_post_type_archive_link' ) ) {
+	/**
+	 * Return a post type archive URL.
+	 *
+	 * @param string $post_type Post type.
+	 * @return string
+	 */
+	function get_post_type_archive_link( $post_type ) {
+		return home_url( $post_type . '/' );
+	}
+}
+
+if ( ! function_exists( 'wp_count_posts' ) ) {
+	/**
+	 * Count test posts.
+	 *
+	 * @param string $post_type Post type.
+	 * @return object
+	 */
+	function wp_count_posts( $post_type ) {
+		global $ssgwp_test_posts;
+
+		$count = 0;
+
+		foreach ( $ssgwp_test_posts as $post ) {
+			if ( $post_type === $post->post_type && 'publish' === $post->post_status ) {
+				++$count;
+			}
+		}
+
+		return (object) array( 'publish' => $count );
+	}
+}
+
+if ( ! function_exists( 'get_permalink' ) ) {
+	/**
+	 * Return a test permalink.
+	 *
+	 * @param int|object $post Post ID or object.
+	 * @return string
+	 */
+	function get_permalink( $post ) {
+		$post_id = is_object( $post ) ? $post->ID : (int) $post;
+		$post    = get_post( $post_id );
+
+		if ( null !== $post && ! empty( $post->permalink_path ) ) {
+			return home_url( $post->permalink_path );
+		}
+
+		return home_url( 'post-' . $post_id . '/' );
+	}
+}
+
+if ( ! function_exists( 'get_taxonomies' ) ) {
+	/**
+	 * Return no taxonomies by default.
+	 *
+	 * @return array
+	 */
+	function get_taxonomies() {
+		return array();
+	}
+}
+
+if ( ! function_exists( 'get_terms' ) ) {
+	/**
+	 * Return no terms by default.
+	 *
+	 * @return array
+	 */
+	function get_terms() {
+		return array();
+	}
+}
+
+if ( ! function_exists( 'get_term_link' ) ) {
+	/**
+	 * Return a test term link.
+	 *
+	 * @param object $term Term object.
+	 * @return string
+	 */
+	function get_term_link( $term ) {
+		return home_url( 'term-' . $term->term_id . '/' );
+	}
+}
+
+if ( ! function_exists( 'get_users' ) ) {
+	/**
+	 * Return no users by default.
+	 *
+	 * @return array
+	 */
+	function get_users() {
+		return array();
+	}
+}
+
+if ( ! function_exists( 'get_author_posts_url' ) ) {
+	/**
+	 * Return a test author URL.
+	 *
+	 * @param int $user_id User ID.
+	 * @return string
+	 */
+	function get_author_posts_url( $user_id ) {
+		return home_url( 'author/user-' . (int) $user_id . '/' );
+	}
+}
+
+if ( ! function_exists( 'count_user_posts' ) ) {
+	/**
+	 * Return no author posts by default.
+	 *
+	 * @return int
+	 */
+	function count_user_posts() {
+		return 0;
+	}
+}
+
+if ( ! class_exists( 'WP_Query' ) ) {
+	/**
+	 * Minimal WP_Query test double.
+	 */
+	class WP_Query {
+		/**
+		 * Queried post IDs.
+		 *
+		 * @var int[]
+		 */
+		public $posts = array();
+
+		/**
+		 * Constructor.
+		 *
+		 * @param array $args Query arguments.
+		 */
+		public function __construct( array $args ) {
+			global $ssgwp_test_posts;
+
+			$post_type = isset( $args['post_type'] ) ? $args['post_type'] : 'post';
+			$per_page  = isset( $args['posts_per_page'] ) ? (int) $args['posts_per_page'] : 10;
+			$page      = isset( $args['paged'] ) ? max( 1, (int) $args['paged'] ) : 1;
+			$ids       = array();
+
+			foreach ( $ssgwp_test_posts as $post ) {
+				if ( $post_type === $post->post_type && 'publish' === $post->post_status ) {
+					$ids[] = $post->ID;
+				}
+			}
+
+			$this->posts = array_slice( $ids, ( $page - 1 ) * $per_page, $per_page );
+		}
 	}
 }
 
@@ -276,6 +463,26 @@ if ( ! function_exists( 'wp_remote_get' ) ) {
 	 * @return array Response.
 	 */
 	function wp_remote_get( $url, $args = array() ) {
+		global $ssgwp_test_http_responses;
+
+		if ( isset( $ssgwp_test_http_responses[ $url ] ) ) {
+			return array(
+				'response' => array( 'code' => 200 ),
+				'headers'  => array( 'content-type' => 'text/html; charset=UTF-8' ),
+				'body'     => $ssgwp_test_http_responses[ $url ],
+			);
+		}
+
+		$canonical_url = remove_query_arg( 'ssgwp_export', $url );
+
+		if ( isset( $ssgwp_test_http_responses[ $canonical_url ] ) ) {
+			return array(
+				'response' => array( 'code' => 200 ),
+				'headers'  => array( 'content-type' => 'text/html; charset=UTF-8' ),
+				'body'     => $ssgwp_test_http_responses[ $canonical_url ],
+			);
+		}
+
 		return array(
 			'response' => array( 'code' => 200 ),
 			'headers'  => array( 'content-type' => 'text/html; charset=UTF-8' ),
@@ -843,6 +1050,94 @@ ssgwp_assert_same(
 	$seo_result['generated_robots'],
 	'export_to_directory reports generated robots.txt.'
 );
+
+$markdown_docs_output_dir  = $fixture_root . '/markdown-docs-export';
+$ssgwp_test_posts          = array(
+	1 => (object) array(
+		'ID'             => 1,
+		'post_type'      => 'page',
+		'post_status'    => 'publish',
+		'post_content'   => '<!-- wp:paragraph --><p>Markdown docs intro.</p><!-- /wp:paragraph -->',
+		'permalink_path' => 'docs/intro/',
+	),
+	2 => (object) array(
+		'ID'             => 2,
+		'post_type'      => 'page',
+		'post_status'    => 'publish',
+		'post_content'   => '<!-- wp:paragraph --><p>Block API attributes.</p><!-- /wp:paragraph -->',
+		'permalink_path' => 'docs/reference/block-api/',
+	),
+);
+$ssgwp_test_http_responses = array(
+	'https://example.test/'                         => '<html><head><title>Docs Home</title></head><body><main><h1>Markdown Docs Home</h1><a href="https://example.test/docs/intro/">Read the docs</a></main></body></html>',
+	'https://example.test/docs/intro/'              => '<html><head><title>Intro</title></head><body><main><h1>Imported Markdown Intro</h1><p>Intro page content, not the homepage.</p><a href="https://example.test/docs/reference/block-api/#attributes">Block API</a></main></body></html>',
+	'https://example.test/docs/reference/block-api/' => '<html><head><title>Block API</title></head><body><main><h1>Block API Reference</h1><p>Reference page content, not the homepage.</p><a href="https://example.test/docs/intro/">Back to intro</a></main></body></html>',
+);
+
+$markdown_docs_result = $exporter->export_to_directory(
+	$markdown_docs_output_dir,
+	array(
+		'max_pages'         => 5,
+		'copy_uploads'      => false,
+		'copy_theme'        => false,
+		'copy_plugins'      => false,
+		'copy_core_assets'  => false,
+		'include_manifest'  => false,
+	)
+);
+
+$markdown_docs_home      = file_get_contents( $markdown_docs_output_dir . '/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+$markdown_docs_intro     = file_get_contents( $markdown_docs_output_dir . '/docs/intro/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+$markdown_docs_reference = file_get_contents( $markdown_docs_output_dir . '/docs/reference/block-api/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+
+ssgwp_assert_same(
+	array(
+		'https://example.test/',
+		'https://example.test/docs/intro/',
+		'https://example.test/docs/reference/block-api/',
+	),
+	$markdown_docs_result['exported_urls'],
+	'export_to_directory exports linked imported Markdown docs as distinct pages.'
+);
+
+ssgwp_assert_contains(
+	'Markdown Docs Home',
+	$markdown_docs_home,
+	'export_to_directory writes the Markdown docs home page.'
+);
+
+ssgwp_assert_contains(
+	'Imported Markdown Intro',
+	$markdown_docs_intro,
+	'export_to_directory writes the imported Markdown intro page content.'
+);
+
+ssgwp_assert_not_contains(
+	'Markdown Docs Home',
+	$markdown_docs_intro,
+	'export_to_directory does not write homepage HTML into the imported Markdown intro page.'
+);
+
+ssgwp_assert_contains(
+	'Block API Reference',
+	$markdown_docs_reference,
+	'export_to_directory writes the imported Markdown reference page content.'
+);
+
+ssgwp_assert_not_contains(
+	'Markdown Docs Home',
+	$markdown_docs_reference,
+	'export_to_directory does not write homepage HTML into the imported Markdown reference page.'
+);
+
+ssgwp_assert_not_contains(
+	'.md',
+	$markdown_docs_intro,
+	'export_to_directory receives imported docs with permalink links, not Markdown source paths.'
+);
+
+$ssgwp_test_posts          = array();
+$ssgwp_test_http_responses = array();
 
 wp_mkdir_p( $fixture_root . '/theme/static-site-generator' );
 file_put_contents( $fixture_root . '/theme/archive.phar', 'phar' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents

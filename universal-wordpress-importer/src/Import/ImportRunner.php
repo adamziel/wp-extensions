@@ -258,27 +258,30 @@ final class ImportRunner {
 			$media                  = $urls['blocked'] ? $this->blocked_media_summary() : ( new ImportMediaReferenceDetector( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
 			$lock                   = $this->refresh_lock( $lock );
 			if ( $current->is_dry_run() ) {
-				$rewrites      = $urls['blocked'] ? $this->blocked_rewrite_summary() : ( new ImportUrlRewriter( $this->store, $this->local_site_url, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-				$lock          = $this->refresh_lock( $lock );
-				$media_imports = $this->dry_run_media_import_summary();
-				$posts         = $this->dry_run_post_summary();
-				$epub_links    = $this->dry_run_epub_link_summary();
-				$postmeta      = $this->dry_run_postmeta_summary();
-				$att_meta      = $this->dry_run_attachment_metadata_summary();
-				$parents       = $this->dry_run_attachment_parent_summary();
-				$comments      = $this->dry_run_comment_summary();
-				$mappings      = $this->dry_run_mapping_summary();
-				$menus         = $this->dry_run_nav_menu_summary();
+				$rewrites       = $urls['blocked'] ? $this->blocked_rewrite_summary() : ( new ImportUrlRewriter( $this->store, $this->local_site_url, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+				$lock           = $this->refresh_lock( $lock );
+				$media_imports  = $this->dry_run_media_import_summary();
+				$posts          = $this->dry_run_post_summary();
+				$epub_links     = $this->dry_run_epub_link_summary();
+				$markdown_links = $this->dry_run_markdown_link_summary();
+				$postmeta       = $this->dry_run_postmeta_summary();
+				$att_meta       = $this->dry_run_attachment_metadata_summary();
+				$parents        = $this->dry_run_attachment_parent_summary();
+				$comments       = $this->dry_run_comment_summary();
+				$mappings       = $this->dry_run_mapping_summary();
+				$menus          = $this->dry_run_nav_menu_summary();
 				$this->record_dry_run_write_skip_event( $current, $documents, $media );
 			} else {
-				$media_imports = $urls['blocked'] ? $this->blocked_media_import_summary() : ( new ImportMediaImporter( $this->store, $this->media_gateway, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-				$lock          = $this->refresh_lock( $lock );
-				$rewrites      = $urls['blocked'] ? $this->blocked_rewrite_summary() : ( new ImportUrlRewriter( $this->store, $this->local_site_url, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-				$lock          = $this->refresh_lock( $lock );
-				$posts         = $urls['blocked'] || $media_imports['blocked'] ? $this->blocked_post_summary( $urls['blocked'] ? $urls : $media_imports ) : ( new ImportPostPersister( $this->store, $this->post_gateway, $this->controls, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-				$lock          = $this->refresh_lock( $lock );
-				$epub_links    = $urls['blocked'] || $media_imports['blocked'] ? $this->blocked_epub_link_summary( $urls['blocked'] ? $urls : $media_imports ) : ( new ImportEpubInternalLinkResolver( $this->store, $this->post_gateway ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-				if ( 0 < $epub_links['resolved'] && ! $urls['blocked'] && ! $media_imports['blocked'] ) {
+				$media_imports  = $urls['blocked'] ? $this->blocked_media_import_summary() : ( new ImportMediaImporter( $this->store, $this->media_gateway, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+				$lock           = $this->refresh_lock( $lock );
+				$rewrites       = $urls['blocked'] ? $this->blocked_rewrite_summary() : ( new ImportUrlRewriter( $this->store, $this->local_site_url, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+				$lock           = $this->refresh_lock( $lock );
+				$posts          = $urls['blocked'] || $media_imports['blocked'] ? $this->blocked_post_summary( $urls['blocked'] ? $urls : $media_imports ) : ( new ImportPostPersister( $this->store, $this->post_gateway, $this->controls, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+				$lock           = $this->refresh_lock( $lock );
+				$epub_links     = $urls['blocked'] || $media_imports['blocked'] ? $this->blocked_epub_link_summary( $urls['blocked'] ? $urls : $media_imports ) : ( new ImportEpubInternalLinkResolver( $this->store, $this->post_gateway ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+				$lock           = $this->refresh_lock( $lock );
+				$markdown_links = $urls['blocked'] || $media_imports['blocked'] ? $this->blocked_markdown_link_summary( $urls['blocked'] ? $urls : $media_imports ) : ( new ImportMarkdownInternalLinkResolver( $this->store, $this->post_gateway ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+				if ( ( 0 < $epub_links['resolved'] || 0 < $markdown_links['resolved'] ) && ! $urls['blocked'] && ! $media_imports['blocked'] ) {
 					$posts = $this->combine_post_summaries(
 						$posts,
 						( new ImportPostPersister( $this->store, $this->post_gateway, $this->controls, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT )
@@ -306,6 +309,7 @@ final class ImportRunner {
 				$media_imports,
 				$posts,
 				$epub_links,
+				$markdown_links,
 				$postmeta,
 				$att_meta,
 				$parents,
@@ -322,57 +326,63 @@ final class ImportRunner {
 					$traversal['complete'] ? 'source.discovery_complete' : 'source.discovery_progress',
 					$traversal['message'],
 					array(
-						'owner'        => $this->owner,
-						'dry_run'      => $current->is_dry_run(),
-						'discovered'   => $traversal['discovered'],
-						'queued'       => $traversal['queued'],
-						'failed'       => $traversal['failed'],
-						'imported'     => $documents['imported'],
-						'skipped'      => $documents['skipped'],
-						'url_domains'  => $urls['domains'],
-						'archives'     => array(
+						'owner'          => $this->owner,
+						'dry_run'        => $current->is_dry_run(),
+						'discovered'     => $traversal['discovered'],
+						'queued'         => $traversal['queued'],
+						'failed'         => $traversal['failed'],
+						'imported'       => $documents['imported'],
+						'skipped'        => $documents['skipped'],
+						'url_domains'    => $urls['domains'],
+						'archives'       => array(
 							'expanded' => $archives['expanded'],
 							'queued'   => $archives['queued'],
 							'failed'   => $archives['failed'],
 						),
-						'github'       => array(
+						'github'         => array(
 							'queued' => $github['queued'],
 							'failed' => $github['failed'],
 						),
-						'remote'       => array(
+						'remote'         => array(
 							'queued' => $remote['queued'],
 							'failed' => $remote['failed'],
 						),
-						'url_rewrites' => array(
+						'url_rewrites'   => array(
 							'rewritten' => $rewrites['rewritten'],
 							'skipped'   => $rewrites['skipped'],
 						),
-						'media'        => array(
+						'media'          => array(
 							'queued'    => $media['queued'],
 							'imported'  => $media_imports['imported'],
 							'rewritten' => $media_imports['rewritten'],
 							'skipped'   => $media['skipped'] + $media_imports['skipped'],
 							'failed'    => $media_imports['failed'],
 						),
-						'posts'        => array(
+						'posts'          => array(
 							'created' => $posts['created'],
 							'updated' => $posts['updated'],
 							'skipped' => $posts['skipped'],
 							'failed'  => $posts['failed'],
 						),
-						'epub_links'   => array(
+						'epub_links'     => array(
 							'resolved' => $epub_links['resolved'],
 							'deferred' => $epub_links['deferred'],
 							'skipped'  => $epub_links['skipped'],
 							'failed'   => $epub_links['failed'],
 						),
-						'postmeta'     => array(
+						'markdown_links' => array(
+							'resolved' => $markdown_links['resolved'],
+							'deferred' => $markdown_links['deferred'],
+							'skipped'  => $markdown_links['skipped'],
+							'failed'   => $markdown_links['failed'],
+						),
+						'postmeta'       => array(
 							'applied'  => $postmeta['applied'],
 							'skipped'  => $postmeta['skipped'],
 							'deferred' => $postmeta['deferred'],
 							'failed'   => $postmeta['failed'],
 						),
-						'attachments'  => array(
+						'attachments'    => array(
 							'metadata_applied'  => $att_meta['applied'],
 							'metadata_skipped'  => $att_meta['skipped'],
 							'metadata_deferred' => $att_meta['deferred'],
@@ -382,19 +392,19 @@ final class ImportRunner {
 							'parents_deferred'  => $parents['deferred'],
 							'parents_failed'    => $parents['failed'],
 						),
-						'comments'     => array(
+						'comments'       => array(
 							'created'  => $comments['created'],
 							'updated'  => $comments['updated'],
 							'skipped'  => $comments['skipped'],
 							'deferred' => $comments['deferred'],
 							'failed'   => $comments['failed'],
 						),
-						'mappings'     => array(
+						'mappings'       => array(
 							'applied' => $mappings['applied'],
 							'skipped' => $mappings['skipped'],
 							'failed'  => $mappings['failed'],
 						),
-						'nav_menus'    => array(
+						'nav_menus'      => array(
 							'applied'  => $menus['applied'],
 							'skipped'  => $menus['skipped'],
 							'deferred' => $menus['deferred'],
@@ -635,6 +645,7 @@ final class ImportRunner {
 	 * @param array<string,mixed> $media_imports Media import summary.
 	 * @param array<string,mixed> $posts         Post persistence summary.
 	 * @param array<string,mixed> $epub_links    EPUB internal link summary.
+	 * @param array<string,mixed> $markdown_links Markdown internal link summary.
 	 * @param array<string,mixed> $postmeta      Postmeta persistence summary.
 	 * @param array<string,mixed> $att_meta      Attachment metadata summary.
 	 * @param array<string,mixed> $parents       Attachment parent summary.
@@ -643,7 +654,7 @@ final class ImportRunner {
 	 * @param array<string,mixed> $menus         Navigation menu summary.
 	 * @return ImportSession
 	 */
-	private function with_completion_status( ImportSession $session, array $traversal, array $media_imports, array $posts, array $epub_links, array $postmeta, array $att_meta, array $parents, array $comments, array $mappings, array $menus ) {
+	private function with_completion_status( ImportSession $session, array $traversal, array $media_imports, array $posts, array $epub_links, array $markdown_links, array $postmeta, array $att_meta, array $parents, array $comments, array $mappings, array $menus ) {
 		if ( empty( $traversal['complete'] ) ) {
 			return $session;
 		}
@@ -656,7 +667,7 @@ final class ImportRunner {
 			return $session->mark_done();
 		}
 
-		if ( $this->has_failed_or_blocked_content_work( $media_imports, $posts, $epub_links, $postmeta, $att_meta, $parents, $comments, $mappings, $menus ) ) {
+		if ( $this->has_failed_or_blocked_content_work( $media_imports, $posts, $epub_links, $markdown_links, $postmeta, $att_meta, $parents, $comments, $mappings, $menus ) ) {
 			return $session;
 		}
 
@@ -669,6 +680,10 @@ final class ImportRunner {
 		}
 
 		if ( $this->has_unresolved_epub_internal_links( $session ) ) {
+			return $session;
+		}
+
+		if ( $this->has_unresolved_markdown_internal_links( $session ) ) {
 			return $session;
 		}
 
@@ -718,6 +733,7 @@ final class ImportRunner {
 	 * @param array<string,mixed> $media_imports Media import summary.
 	 * @param array<string,mixed> $posts         Post persistence summary.
 	 * @param array<string,mixed> $epub_links    EPUB internal link summary.
+	 * @param array<string,mixed> $markdown_links Markdown internal link summary.
 	 * @param array<string,mixed> $postmeta      Postmeta persistence summary.
 	 * @param array<string,mixed> $att_meta      Attachment metadata summary.
 	 * @param array<string,mixed> $parents       Attachment parent summary.
@@ -726,12 +742,12 @@ final class ImportRunner {
 	 * @param array<string,mixed> $menus         Navigation menu summary.
 	 * @return bool
 	 */
-	private function has_failed_or_blocked_content_work( array $media_imports, array $posts, array $epub_links, array $postmeta, array $att_meta, array $parents, array $comments, array $mappings, array $menus ) {
+	private function has_failed_or_blocked_content_work( array $media_imports, array $posts, array $epub_links, array $markdown_links, array $postmeta, array $att_meta, array $parents, array $comments, array $mappings, array $menus ) {
 		if ( ! empty( $media_imports['blocked'] ) ) {
 			return true;
 		}
 
-		foreach ( array( $media_imports, $posts, $epub_links, $postmeta, $att_meta, $parents, $comments, $mappings, $menus ) as $summary ) {
+		foreach ( array( $media_imports, $posts, $epub_links, $markdown_links, $postmeta, $att_meta, $parents, $comments, $mappings, $menus ) as $summary ) {
 			foreach ( array( 'failed', 'deferred' ) as $key ) {
 				if ( ! empty( $summary[ $key ] ) ) {
 					return true;
@@ -781,6 +797,16 @@ final class ImportRunner {
 		} while ( $document_count === $limit );
 
 		return false;
+	}
+
+	/**
+	 * Returns whether prepared Markdown documents still contain local document links.
+	 *
+	 * @param ImportSession $session Session.
+	 * @return bool
+	 */
+	private function has_unresolved_markdown_internal_links( ImportSession $session ) {
+		return ( new ImportMarkdownInternalLinkResolver( $this->store, $this->post_gateway ) )->has_unresolved_links( $session );
 	}
 
 	/**
@@ -1149,6 +1175,21 @@ final class ImportRunner {
 	}
 
 	/**
+	 * Builds a no-op Markdown link summary for dry-run sessions.
+	 *
+	 * @return array{resolved:int,deferred:int,skipped:int,failed:int,message:string}
+	 */
+	private function dry_run_markdown_link_summary() {
+		return array(
+			'resolved' => 0,
+			'deferred' => 0,
+			'skipped'  => 0,
+			'failed'   => 0,
+			'message'  => 'Dry-run session skipped Markdown document link rewrites.',
+		);
+	}
+
+	/**
 	 * Builds a no-op postmeta summary for dry-run sessions.
 	 *
 	 * @return array{applied:int,skipped:int,deferred:int,failed:int,message:string}
@@ -1245,6 +1286,22 @@ final class ImportRunner {
 	 * @return array{resolved:int,deferred:int,skipped:int,failed:int,message:string}
 	 */
 	private function blocked_epub_link_summary( array $blocked ) {
+		return array(
+			'resolved' => 0,
+			'deferred' => 0,
+			'skipped'  => 0,
+			'failed'   => 0,
+			'message'  => $blocked['message'],
+		);
+	}
+
+	/**
+	 * Builds a no-op Markdown link summary while URL/media work is blocked.
+	 *
+	 * @param array<string,mixed> $blocked Blocking summary.
+	 * @return array{resolved:int,deferred:int,skipped:int,failed:int,message:string}
+	 */
+	private function blocked_markdown_link_summary( array $blocked ) {
 		return array(
 			'resolved' => 0,
 			'deferred' => 0,
