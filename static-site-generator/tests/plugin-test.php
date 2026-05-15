@@ -121,7 +121,6 @@ $admin_args = $request_args_method->invoke(
 		'max_pages'        => 1,
 		'include_media'    => '1',
 		'generate_sitemap' => '1',
-		'include_report'   => '1',
 	)
 );
 
@@ -145,14 +144,28 @@ ssgwp_assert_same(
 
 ssgwp_assert_same(
 	true,
-	$admin_args['copy_uploads'] && $admin_args['generate_sitemap'] && $admin_args['include_manifest'],
+	$admin_args['copy_uploads'] && $admin_args['generate_sitemap'],
 	'request_to_export_args maps user-facing include options to exporter settings.'
+);
+
+ssgwp_assert_same(
+	false,
+	$admin_args['include_manifest'],
+	'request_to_export_args leaves the technical export report disabled unless selected.'
 );
 
 ssgwp_assert_same(
 	false,
 	$admin_args['generate_robots'],
 	'request_to_export_args leaves optional SEO files disabled when not selected.'
+);
+
+$report_args = $request_args_method->invoke( null, array( 'include_report' => '1' ) );
+
+ssgwp_assert_same(
+	true,
+	$report_args['include_manifest'],
+	'request_to_export_args enables the technical export report when selected.'
 );
 
 $store_method->invoke(

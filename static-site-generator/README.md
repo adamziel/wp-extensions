@@ -65,9 +65,10 @@ cp -R static-site-generator /path/to/wordpress/wp-content/plugins/
 ```
 
 Then activate **Playground Static Site Generator** in `wp-admin -> Plugins`.
-Open `Tools -> Static Site Generator`, choose the link format and artifact
-extras, and download the static ZIP. The exporter includes required frontend
-assets and linked site pages automatically.
+Open `Tools -> Static Site Generator`, choose any extra files you want, and
+download the static ZIP. The exporter includes required frontend assets and
+linked site pages automatically. Advanced link settings can stay on the
+default unless you already know the final hosting location.
 
 Requirements:
 

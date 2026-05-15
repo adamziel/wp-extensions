@@ -87,19 +87,6 @@ final class SSGWP_Plugin {
 
 				<table class="form-table" role="presentation">
 					<tr>
-						<th scope="row"><label for="ssgwp_url_mode"><?php esc_html_e( 'Link format', 'playground-static-site-generator' ); ?></label></th>
-						<td>
-							<select name="url_mode" id="ssgwp_url_mode">
-								<option value="relative" selected><?php esc_html_e( 'Portable ZIP', 'playground-static-site-generator' ); ?></option>
-								<option value="root"><?php esc_html_e( 'Site root', 'playground-static-site-generator' ); ?></option>
-								<option value="absolute"><?php esc_html_e( 'Current WordPress URL', 'playground-static-site-generator' ); ?></option>
-							</select>
-							<p class="description">
-								<?php esc_html_e( 'Portable ZIP uses relative links and is best for downloading, previewing, or moving the export between hosts.', 'playground-static-site-generator' ); ?>
-							</p>
-						</td>
-					</tr>
-					<tr>
 						<th scope="row"><?php esc_html_e( 'Include', 'playground-static-site-generator' ); ?></th>
 						<td>
 							<label>
@@ -115,8 +102,8 @@ final class SSGWP_Plugin {
 								<?php esc_html_e( 'robots.txt with a sitemap reference', 'playground-static-site-generator' ); ?>
 							</label><br />
 							<label>
-								<input type="checkbox" name="include_report" value="1" checked />
-								<?php esc_html_e( 'Export report for debugging', 'playground-static-site-generator' ); ?>
+								<input type="checkbox" name="include_report" value="1" />
+								<?php esc_html_e( 'Technical export report', 'playground-static-site-generator' ); ?>
 							</label>
 							<p class="description">
 								<?php esc_html_e( 'Theme, plugin, WordPress CSS/JS, and linked site pages are included automatically so the static site works.', 'playground-static-site-generator' ); ?>
@@ -124,6 +111,31 @@ final class SSGWP_Plugin {
 						</td>
 					</tr>
 				</table>
+				<details>
+					<summary><?php esc_html_e( 'Advanced link settings', 'playground-static-site-generator' ); ?></summary>
+					<table class="form-table" role="presentation">
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Make links work when hosted', 'playground-static-site-generator' ); ?></th>
+							<td>
+								<label>
+									<input type="radio" name="url_mode" value="relative" checked />
+									<?php esc_html_e( 'Anywhere, including a ZIP preview or subfolder', 'playground-static-site-generator' ); ?>
+								</label><br />
+								<label>
+									<input type="radio" name="url_mode" value="root" />
+									<?php esc_html_e( 'At the root of a domain', 'playground-static-site-generator' ); ?>
+								</label><br />
+								<label>
+									<input type="radio" name="url_mode" value="absolute" />
+									<?php esc_html_e( 'At the same public URL as this WordPress site', 'playground-static-site-generator' ); ?>
+								</label>
+								<p class="description">
+									<?php esc_html_e( 'Leave this on the first option unless you already know the final hosting location.', 'playground-static-site-generator' ); ?>
+								</p>
+							</td>
+						</tr>
+					</table>
+				</details>
 
 				<?php
 				submit_button(
