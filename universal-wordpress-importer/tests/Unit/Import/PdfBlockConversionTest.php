@@ -232,6 +232,38 @@ final class PdfBlockConversionTest extends TestCase {
 	}
 
 	/**
+	 * Screenplay-style PDFs preserve speaker spacing and emphasis.
+	 *
+	 * @return void
+	 */
+	public function test_pdf_screenplay_speaker_lines_become_spaced_bold_paragraphs() {
+		$source_file = $this->temporary_pdf_with_streams(
+			'screenplay-speaker-spacing.pdf',
+			array(
+				"BT\n/F1 12 Tf\n72 720 Td\n(DZIEWCZYNA) Tj\n0 -18 Td\n(No bo ja właśnie... chciałam, żeby ksiądz się pomodlił - w intencji.) Tj\n0 -18 Td\n(KSIĄDZ) Tj\n0 -18 Td\n(W jakiej intencji?) Tj\n0 -18 Td\n(DZIEWCZYNA) Tj\n0 -18 Td\n(Nie mogę powiedzieć.) Tj\n0 -18 Td\n(KSIĄDZ) Tj\n0 -18 Td\n(Mnie możesz wszystko powiedzieć.) Tj\nET",
+			)
+		);
+		$session     = ImportSession::start_for_source( $source_file );
+		$posts       = new FakePostGateway();
+		$runner      = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/' );
+		$this->store->save( $session );
+
+		$status = $this->store->find( $session->get_id() )->get_status();
+		for ( $tick = 0; $tick < 8 && ImportSession::STATUS_DONE !== $status; ++$tick ) {
+			$runner->run( $session->get_id() );
+			$status = $this->store->find( $session->get_id() )->get_status();
+		}
+
+		$post_content = $this->combined_post_content( $posts );
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertStringContainsString( '<p><strong>DZIEWCZYNA</strong><br>No bo ja właśnie... chciałam, żeby ksiądz się pomodlił - w intencji.</p>', $post_content );
+		$this->assertStringContainsString( '<p><strong>KSIĄDZ</strong><br>W jakiej intencji?</p>', $post_content );
+		$this->assertStringContainsString( "</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:paragraph -->\n<p><strong>KSIĄDZ</strong>", $post_content );
+	}
+
+	/**
 	 * Returns at least ten distinct tricky PDF conversion cases.
 	 *
 	 * @return array<string,array<int,array<string,mixed>>>

@@ -8015,6 +8015,12 @@ final class SourceItemDocumentProcessor {
 				continue;
 			}
 
+			$screenplay = $this->pdf_screenplay_text_to_blocks( $chunk );
+			if ( null !== $screenplay ) {
+				$blocks[] = $screenplay;
+				continue;
+			}
+
 			$block = $this->markdown_to_blocks( $chunk );
 			if ( '' !== trim( $block ) ) {
 				$blocks[] = $block;
@@ -8022,6 +8028,125 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return implode( "\n\n", $blocks );
+	}
+
+	/**
+	 * Converts screenplay-like PDF text into paragraphs with bold speaker names.
+	 *
+	 * @param string $chunk Candidate PDF text chunk.
+	 * @return string|null Block markup, or null when the text is not screenplay-like.
+	 */
+	private function pdf_screenplay_text_to_blocks( $chunk ) {
+		$lines = preg_split( '/\n/', trim( (string) $chunk ) );
+
+		if ( ! is_array( $lines ) || 4 > count( $lines ) ) {
+			return null;
+		}
+
+		$speaker_count = 0;
+		foreach ( $lines as $line ) {
+			if ( $this->is_pdf_screenplay_speaker_line( $line ) ) {
+				++$speaker_count;
+			}
+		}
+
+		if ( 2 > $speaker_count ) {
+			return null;
+		}
+
+		$blocks        = array();
+		$pending_lines = array();
+		$speaker       = null;
+		$dialogue      = array();
+
+		foreach ( $lines as $line ) {
+			$line = trim( (string) $line );
+
+			if ( '' === $line ) {
+				continue;
+			}
+
+			if ( $this->is_pdf_screenplay_speaker_line( $line ) ) {
+				$this->append_pdf_screenplay_pending_blocks( $blocks, $pending_lines, $speaker, $dialogue );
+				$speaker  = $line;
+				$dialogue = array();
+				continue;
+			}
+
+			if ( null === $speaker ) {
+				$pending_lines[] = $line;
+			} else {
+				$dialogue[] = $line;
+			}
+		}
+
+		$this->append_pdf_screenplay_pending_blocks( $blocks, $pending_lines, $speaker, $dialogue );
+
+		return empty( $blocks ) ? null : implode( "\n\n", $blocks );
+	}
+
+	/**
+	 * Appends pending screenplay text as WordPress paragraph blocks.
+	 *
+	 * @param array<int,string> $blocks        Existing blocks.
+	 * @param array<int,string> $pending_lines Non-speaker lines before a cue.
+	 * @param string|null       $speaker       Current speaker cue.
+	 * @param array<int,string> $dialogue      Dialogue lines for the speaker.
+	 * @return void
+	 */
+	private function append_pdf_screenplay_pending_blocks( array &$blocks, array &$pending_lines, &$speaker, array &$dialogue ) {
+		if ( null === $speaker && ! empty( $pending_lines ) ) {
+			$block = $this->markdown_to_blocks( implode( "\n", $pending_lines ) );
+			if ( '' !== trim( $block ) ) {
+				$blocks[] = $block;
+			}
+			$pending_lines = array();
+			return;
+		}
+
+		if ( null === $speaker ) {
+			return;
+		}
+
+		$html = '<strong>' . $this->escape_html( $speaker ) . '</strong>';
+		if ( ! empty( $dialogue ) ) {
+			$html .= '<br>' . nl2br( $this->escape_html( implode( "\n", $dialogue ) ), false );
+		}
+
+		$blocks[] = '<!-- wp:paragraph -->' . "\n" . '<p>' . $html . '</p>' . "\n" . '<!-- /wp:paragraph -->';
+
+		$speaker       = null;
+		$dialogue      = array();
+		$pending_lines = array();
+	}
+
+	/**
+	 * Returns whether a PDF line looks like a screenplay speaker cue.
+	 *
+	 * @param string $line Candidate line.
+	 * @return bool
+	 */
+	private function is_pdf_screenplay_speaker_line( $line ) {
+		$line = trim( (string) $line );
+
+		$length = function_exists( 'mb_strlen' ) ? mb_strlen( $line, 'UTF-8' ) : strlen( $line );
+		if ( '' === $line || 40 < $length ) {
+			return false;
+		}
+
+		if ( preg_match( '/[a-ząćęłńóśźż]/u', $line ) ) {
+			return false;
+		}
+
+		if ( ! preg_match( '/\p{L}{2}/u', $line ) ) {
+			return false;
+		}
+
+		if ( preg_match( '/[.!?;:]$/u', $line ) ) {
+			return false;
+		}
+
+		return (bool) preg_match( '/^[\p{Lu}\p{N}\s\'’().-]+$/u', $line );
 	}
 
 	/**
