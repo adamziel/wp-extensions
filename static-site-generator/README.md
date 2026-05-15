@@ -11,6 +11,8 @@ admin UI or from WP-CLI.
 The exporter includes:
 
 - an admin screen at `Tools -> Static Site Generator`
+- a reload-safe admin progress bar with current action, percent complete, and
+  an export log
 - a programmatic `ssgwp_export_static_site()` API
 - a WP-CLI command: `wp static-site export`
 - Playground Blueprint examples for browser and CLI workflows
