@@ -1392,11 +1392,13 @@ final class WordPressImportSessionStore implements ImportSessionStoreInterface {
 	 * @throws RuntimeException When JSON encoding fails.
 	 */
 	private function encode_json( array $data ) {
+		$options = defined( 'JSON_INVALID_UTF8_SUBSTITUTE' ) ? JSON_INVALID_UTF8_SUBSTITUTE : 0;
+
 		if ( function_exists( 'wp_json_encode' ) ) {
-			$json = wp_json_encode( $data );
+			$json = wp_json_encode( $data, $options );
 		} else {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Used in unit tests without WordPress loaded.
-			$json = json_encode( $data );
+			$json = json_encode( $data, $options );
 		}
 
 		if ( ! is_string( $json ) ) {

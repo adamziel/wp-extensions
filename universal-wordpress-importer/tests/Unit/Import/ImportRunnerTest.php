@@ -4554,6 +4554,148 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Large PDF image streams are not tokenized as native text content.
+	 *
+	 * @return void
+	 */
+	public function test_runner_does_not_import_large_pdf_image_bytes_as_text() {
+		$image       = "\xff\xd8BT\n/F1 12 Tf\n72 720 Td\n(THIS SHOULD NOT BECOME TEXT) Tj\nET\xff\xd9";
+		$source_file = $this->temporary_pdf_with_embedded_image(
+			'large-image-bytes-as-text.pdf',
+			'q 1 0 0 1 0 0 cm /Im1 Do Q',
+			'DCTDecode',
+			$image
+		);
+		file_put_contents( $source_file, str_repeat( '0', SourceItemDocumentProcessor::PDF_FILE_LIMIT ), FILE_APPEND );
+		$previous_text = getenv( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND' );
+		$previous_ocr  = getenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+		$session       = ImportSession::start_for_source( $source_file );
+		$posts         = new FakePostGateway();
+		$media         = new FakeMediaGateway();
+		$cache         = new ImportCacheDirectory( $this->temporary_directory(), 'unit-test' );
+		$this->store->save( $session );
+
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test isolates PDF fallback command configuration.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND' );
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test isolates OCR command configuration.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+
+		try {
+			$runner  = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/', $media, null, null, null, $cache );
+			$attempt = 0;
+			while ( $attempt < 20 && ImportSession::STATUS_DONE !== $this->store->find( $session->get_id() )->get_status() ) {
+				$runner->run( $session->get_id() );
+				++$attempt;
+			}
+		} finally {
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND', $previous_text );
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND', $previous_ocr );
+		}
+
+		$items      = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$metadata   = $items[0]->get_metadata();
+		$document   = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
+		$post       = $posts->get_post( 1 );
+		$references = $this->store->list_media_references_by_statuses( $session->get_id(), array( ImportMediaReference::STATUS_IMPORTED ), 5 );
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 'native', $metadata['pdf_text_engine'] );
+		$this->assertSame( 'no_text_assets_imported', $metadata['pdf_text_extraction_status'] );
+		$this->assertCount( 1, $references );
+		$this->assertSame( 1, $media->count_attachments() );
+		$this->assertNotNull( $document );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertStringContainsString( '<!-- wp:image -->', $post['post_content'] );
+		$this->assertStringNotContainsString( 'THIS SHOULD NOT BECOME TEXT', $post['post_content'] );
+		$this->assertStringNotContainsString( 'THIS SHOULD NOT BECOME TEXT', $document->get_block_markup() );
+	}
+
+	/**
+	 * Large PDF font program streams are not tokenized as page text content.
+	 *
+	 * @return void
+	 */
+	public function test_runner_does_not_import_large_pdf_font_program_bytes_as_text() {
+		$source_file   = $this->temporary_pdf_with_font_program_stream( 'large-font-program-bytes-as-text.pdf' );
+		$previous_text = getenv( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND' );
+		$previous_ocr  = getenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+		$session       = ImportSession::start_for_source( $source_file );
+		$posts         = new FakePostGateway();
+		$cache         = new ImportCacheDirectory( $this->temporary_directory(), 'unit-test' );
+		$this->store->save( $session );
+
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test isolates PDF fallback command configuration.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND' );
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test isolates OCR command configuration.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+
+		try {
+			$runner  = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/', null, null, null, null, $cache );
+			$attempt = 0;
+			while ( $attempt < 20 && ImportSession::STATUS_DONE !== $this->store->find( $session->get_id() )->get_status() ) {
+				$runner->run( $session->get_id() );
+				++$attempt;
+			}
+		} finally {
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND', $previous_text );
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND', $previous_ocr );
+		}
+
+		$items    = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertNotNull( $document );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertStringContainsString( 'Readable PDF', $document->get_block_markup() );
+		$this->assertStringContainsString( 'Actual page body', $document->get_block_markup() );
+		$this->assertStringNotContainsString( 'THIS SHOULD NOT BECOME TEXT', $document->get_block_markup() );
+		$this->assertStringNotContainsString( 'THIS SHOULD NOT BECOME TEXT', $posts->get_post( 1 )['post_content'] );
+	}
+
+	/**
+	 * Streamed native PDF text uses early font resources to decode one-byte glyph strings.
+	 *
+	 * @return void
+	 */
+	public function test_runner_decodes_large_pdf_one_byte_text_with_to_unicode_map() {
+		$source_file   = $this->temporary_large_pdf_with_to_unicode_text( 'large-to-unicode-one-byte-text.pdf' );
+		$previous_text = getenv( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND' );
+		$previous_ocr  = getenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+		$session       = ImportSession::start_for_source( $source_file );
+		$posts         = new FakePostGateway();
+		$cache         = new ImportCacheDirectory( $this->temporary_directory(), 'unit-test' );
+		$this->store->save( $session );
+
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test isolates PDF fallback command configuration.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND' );
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test isolates OCR command configuration.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+
+		try {
+			$runner  = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/', null, null, null, null, $cache );
+			$attempt = 0;
+			while ( $attempt < 30 && ImportSession::STATUS_DONE !== $this->store->find( $session->get_id() )->get_status() ) {
+				$runner->run( $session->get_id() );
+				++$attempt;
+			}
+		} finally {
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND', $previous_text );
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND', $previous_ocr );
+		}
+
+		$items    = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertNotNull( $document );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertStringContainsString( 'You build', $document->get_block_markup() );
+		$this->assertStringNotContainsString( '&lt;RX', $document->get_block_markup() );
+		$this->assertStringNotContainsString( 'EXLOG', $document->get_block_markup() );
+	}
+
+	/**
 	 * Non-JPEG embedded PDF image streams remain observable instead of disappearing silently.
 	 *
 	 * @return void
@@ -8340,6 +8482,101 @@ exit( 99 );
 			. $image
 			. "\nendstream\nendobj\n"
 			. $extra_objects
+			. "%%EOF\n";
+
+		return $this->temporary_file( $basename, $pdf );
+	}
+
+	/**
+	 * Creates a large PDF fixture with a compressed font program that looks like page text.
+	 *
+	 * @param string $basename Fixture basename.
+	 * @return string
+	 */
+	private function temporary_pdf_with_font_program_stream( $basename ) {
+		$content      = "BT\n/F1 12 Tf\n72 720 Td\n(# Readable PDF\\n\\nActual page body.) Tj\nET\n";
+		$font_program = gzcompress( "BT\n/F1 12 Tf\n72 720 Td\n(THIS SHOULD NOT BECOME TEXT) Tj\nET\n" );
+		$pdf          = "%PDF-1.4\n"
+			. "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+			. "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+			. "3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n"
+			. '4 0 obj << /Length ' . strlen( $content ) . " >>\nstream\n"
+			. $content
+			. "\nendstream\nendobj\n"
+			. "5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FontDescriptor 6 0 R >> endobj\n"
+			. "6 0 obj << /Type /FontDescriptor /FontName /Helvetica /FontFile 7 0 R >> endobj\n"
+			. '7 0 obj << /Length ' . strlen( $font_program ) . ' /Length1 1024 /Filter /FlateDecode' . " >>\nstream\n"
+			. $font_program
+			. "\nendstream\nendobj\n"
+			. str_repeat( '0', SourceItemDocumentProcessor::PDF_FILE_LIMIT )
+			. "\n%%EOF\n";
+
+		return $this->temporary_file( $basename, $pdf );
+	}
+
+	/**
+	 * Creates a large PDF fixture whose early content needs a late ToUnicode map.
+	 *
+	 * @param string $basename Fixture basename.
+	 * @return string
+	 */
+	private function temporary_large_pdf_with_to_unicode_text( $basename ) {
+		$cmap           = "/CIDInit /ProcSet findresource begin\n"
+			. "12 dict begin\n"
+			. "begincmap\n"
+			. "1 beginbfchar\n"
+			. "<0003> <0020>\n"
+			. "endbfchar\n"
+			. "8 beginbfchar\n"
+			. "<003C> <0059>\n"
+			. "<0052> <006F>\n"
+			. "<0058> <0075>\n"
+			. "<0045> <0062>\n"
+			. "<004C> <0069>\n"
+			. "<004F> <006C>\n"
+			. "<0047> <0064>\n"
+			. "<0020> <0020>\n"
+			. "endbfchar\n"
+			. "endcmap\n"
+			. "CMapName currentdict /CMap defineresource pop\n"
+			. "end end\n";
+		$content        = "BT\n/F6 12 Tf\n72 720 Td\n(<RX\\003EXLOG) Tj\nET\n";
+		$alternate_cmap = "/CIDInit /ProcSet findresource begin\n"
+			. "12 dict begin\n"
+			. "begincmap\n"
+			. "1 begincodespacerange\n"
+			. "<0000> <FFFF>\n"
+			. "endcodespacerange\n"
+			. "4 beginbfchar\n"
+			. "<0003> <0020>\n"
+			. "<003C> <0059>\n"
+			. "<0052> <006F>\n"
+			. "<0058> <0075>\n"
+			. "endbfchar\n"
+			. "endcmap\n"
+			. "CMapName currentdict /CMap defineresource pop\n"
+			. "end end\n";
+		$prefix         = "%PDF-1.4\n"
+			. "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+			. "2 0 obj << /Type /Pages /Kids [3 0 R 9 0 R] /Count 2 >> endobj\n"
+			. "3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F6 6 0 R >> >> /Contents 8 0 R >> endobj\n"
+			. '8 0 obj << /Length ' . strlen( $content ) . " >>\nstream\n"
+			. $content
+			. "\nendstream\nendobj\n";
+		$suffix         = "6 0 obj << /Type /Font /Subtype /Type0 /BaseFont /Subset /Encoding /Identity-H /ToUnicode 7 0 R >> endobj\n"
+			. '7 0 obj << /Length ' . strlen( $cmap ) . " >>\nstream\n"
+			. $cmap
+			. "\nendstream\nendobj\n"
+			. "9 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F6 10 0 R >> >> /Contents 11 0 R >> endobj\n"
+			. "10 0 obj << /Type /Font /Subtype /Type0 /BaseFont /OtherSubset /Encoding /Identity-H /ToUnicode 12 0 R >> endobj\n"
+			. "11 0 obj << /Length 0 >>\nstream\n\nendstream\nendobj\n"
+			. '12 0 obj << /Length ' . strlen( $alternate_cmap ) . " >>\nstream\n"
+			. $alternate_cmap
+			. "\nendstream\nendobj\n";
+		$pdf            = $prefix
+			. str_repeat( '0', SourceItemDocumentProcessor::PDF_FILE_LIMIT )
+			. "\n"
+			. $suffix
 			. "%%EOF\n";
 
 		return $this->temporary_file( $basename, $pdf );

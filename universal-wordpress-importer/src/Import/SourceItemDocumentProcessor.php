@@ -20,26 +20,27 @@ use ZipArchive;
  * Classifies discovered local files and prepares initial block markup.
  */
 final class SourceItemDocumentProcessor {
-	const DEFAULT_ITEM_LIMIT       = 100;
-	const READ_CHUNK_BYTES         = 65536;
-	const TEXT_CHUNK_BYTES         = 262144;
-	const SCRIPT_CARRY_BYTES       = 128;
-	const WXR_POST_LIMIT           = 25;
-	const EPUB_SPINE_LIMIT         = 25;
-	const EPUB_ENTRY_LIMIT         = 8388608;
-	const EPUB_TOC_LIMIT           = 500;
-	const PDF_FILE_LIMIT           = 16777216;
-	const PDF_TEXT_LIMIT           = 1048576;
-	const PDF_TEXT_TIMEOUT         = 60;
-	const PDF_OCR_TIMEOUT          = 60;
-	const PDF_OCR_ERROR_LIMIT      = 2048;
-	const PDF_MEDIA_LIMIT          = 10;
-	const PDF_MEDIA_SCAN_LIMIT     = 5;
-	const PDF_MEDIA_MIN_DIMENSION  = 50;
-	const PDF_STRUCTURE_SCAN_LIMIT = 100;
-	const PDF_TEXT_SCAN_LIMIT      = 100;
-	const PDF_MEDIA_FILE_LIMIT     = 8388608;
-	const PDF_TABLE_MIN_ROWS       = 2;
+	const DEFAULT_ITEM_LIMIT           = 100;
+	const READ_CHUNK_BYTES             = 65536;
+	const TEXT_CHUNK_BYTES             = 262144;
+	const SCRIPT_CARRY_BYTES           = 128;
+	const WXR_POST_LIMIT               = 25;
+	const EPUB_SPINE_LIMIT             = 25;
+	const EPUB_ENTRY_LIMIT             = 8388608;
+	const EPUB_TOC_LIMIT               = 500;
+	const PDF_FILE_LIMIT               = 16777216;
+	const PDF_TEXT_LIMIT               = 1048576;
+	const PDF_TEXT_TIMEOUT             = 60;
+	const PDF_OCR_TIMEOUT              = 60;
+	const PDF_OCR_ERROR_LIMIT          = 2048;
+	const PDF_MEDIA_LIMIT              = 10;
+	const PDF_MEDIA_SCAN_LIMIT         = 5;
+	const PDF_MEDIA_MIN_DIMENSION      = 50;
+	const PDF_STRUCTURE_SCAN_LIMIT     = 100;
+	const PDF_TEXT_SCAN_LIMIT          = 100;
+	const PDF_MEDIA_FILE_LIMIT         = 8388608;
+	const PDF_FONT_RESOURCE_SCAN_BYTES = 4194304;
+	const PDF_TABLE_MIN_ROWS           = 2;
 
 	/**
 	 * EPUB manifest media types handled by the attachment pipeline.
@@ -532,9 +533,12 @@ final class SourceItemDocumentProcessor {
 		$last_stream     = $stream_index;
 		$diagnostics     = isset( $metadata['pdf_text_scan_diagnostics'] ) && is_array( $metadata['pdf_text_scan_diagnostics'] ) ? $metadata['pdf_text_scan_diagnostics'] : array();
 		$diagnostics     = $this->merge_pdf_text_scan_diagnostics( $diagnostics, $scan['diagnostics'] );
+		$font_maps       = $this->extract_pdf_to_unicode_font_maps_for_scan( $item->get_source_uri(), $pdf );
+		$content_maps    = $this->extract_pdf_content_font_maps_for_scan( $item->get_source_uri(), $pdf );
 
 		foreach ( $scan['streams'] as $stream ) {
-			$text = $this->normalize_extracted_pdf_text( $this->extract_pdf_text_operators( $stream['content'], $this->extract_pdf_to_unicode_font_maps( $pdf ) ), true );
+			$stream_font_maps = isset( $stream['object'] ) && isset( $content_maps[ (int) $stream['object'] ] ) ? $content_maps[ (int) $stream['object'] ] : $font_maps;
+			$text             = $this->normalize_extracted_pdf_text( $this->extract_pdf_text_operators( $stream['content'], $stream_font_maps ), true );
 
 			$last_end    = (int) $stream['next_offset'];
 			$last_stream = (int) $stream['index'] + 1;
@@ -4468,6 +4472,10 @@ final class SourceItemDocumentProcessor {
 		);
 		$block_markup  = '' === $content ? '' : $this->pdf_text_to_blocks( $content, $table_summary );
 
+		if ( '' === $content && ! empty( $pdf_asset_summary['assets'] ) ) {
+			$metadata['pdf_text_extraction_status'] = 'no_text_assets_imported';
+		}
+
 		if ( ! empty( $pdf_asset_summary['assets'] ) ) {
 			$block_markup = trim( $block_markup . "\n\n" . $this->pdf_embedded_media_blocks( $pdf_asset_summary['assets'] ) );
 		}
@@ -6133,11 +6141,15 @@ final class SourceItemDocumentProcessor {
 
 		$text_operator_pattern = '/(?:\[[^\]]*\]\s*TJ|(?:\((?:\\\\.|[^\\\\\)])*\)|<[\da-fA-F\s]+>)\s*(?:Tj|\'|"))/s';
 		$stream_count          = count( $streams );
-		while ( $stream_count < $limit && preg_match( '/<<(.*?)>>\s*stream(?:\r\n|\n|\r)?/s', $pdf, $match, PREG_OFFSET_CAPTURE, $offset ) ) {
-			$dictionary   = (string) $match[1][0];
+		$stream_pattern        = '/(\d+)\s+\d+\s+obj\s*<<((?:(?!\bendobj\b).)*?)>>\s*stream(?:\r\n|\n|\r)?/s';
+		while ( $stream_count < $limit && preg_match( $stream_pattern, $pdf, $match, PREG_OFFSET_CAPTURE, $offset ) ) {
+			$object_id    = (int) $match[1][0];
+			$dictionary   = (string) $match[2][0];
 			$stream_start = $match[0][1] + strlen( $match[0][0] );
 			$stream_end   = $this->pdf_stream_end_from_declared_length( $pdf, $dictionary, $stream_start );
 			$uses_length  = null !== $stream_end;
+			$is_image     = false !== stripos( $dictionary, '/Subtype' ) && preg_match( '#/Subtype\s*/Image\b#i', $dictionary );
+			$is_font_file = preg_match( '#/Length1\b#i', $dictionary ) || preg_match( '#/Subtype\s*/(?:Type1C|CIDFontType0C|OpenType)\b#i', $dictionary );
 
 			if ( null === $stream_end ) {
 				$stream_end = strpos( $pdf, 'endstream', $stream_start );
@@ -6164,6 +6176,12 @@ final class SourceItemDocumentProcessor {
 			}
 
 			++$matched_streams;
+
+			if ( $is_image || $is_font_file ) {
+				$offset = $next_offset;
+				++$stream_index;
+				continue;
+			}
 
 			if ( false !== stripos( $dictionary, '/FlateDecode' ) ) {
 				if ( ! function_exists( 'gzuncompress' ) ) {
@@ -6194,13 +6212,14 @@ final class SourceItemDocumentProcessor {
 				'start_offset' => $base_offset + $stream_start,
 				'next_offset'  => $base_offset + $next_offset,
 				'index'        => $stream_index,
+				'object'       => $object_id,
 			);
 			$stream_count    = count( $streams );
 			$offset          = $next_offset;
 			++$stream_index;
 		}
 
-		if ( count( $streams ) >= $limit && preg_match( '/<<(.*?)>>\s*stream(?:\r\n|\n|\r)?/s', $pdf, $next_match, PREG_OFFSET_CAPTURE, $offset ) ) {
+		if ( count( $streams ) >= $limit && preg_match( $stream_pattern, $pdf, $next_match, PREG_OFFSET_CAPTURE, $offset ) ) {
 			unset( $next_match );
 			$complete = false;
 		}
@@ -6391,6 +6410,8 @@ final class SourceItemDocumentProcessor {
 			$stream_start = $match[0][1] + strlen( $match[0][0] );
 			$stream_end   = $this->pdf_stream_end_from_declared_length( $pdf, $dictionary, $stream_start );
 			$uses_length  = null !== $stream_end;
+			$is_image     = false !== stripos( $dictionary, '/Subtype' ) && preg_match( '#/Subtype\s*/Image\b#i', $dictionary );
+			$is_font_file = preg_match( '#/Length1\b#i', $dictionary ) || preg_match( '#/Subtype\s*/(?:Type1C|CIDFontType0C|OpenType)\b#i', $dictionary );
 
 			if ( null === $stream_end ) {
 				$stream_end = strpos( $pdf, 'endstream', $stream_start );
@@ -6415,6 +6436,10 @@ final class SourceItemDocumentProcessor {
 			}
 
 			++$matched_streams;
+
+			if ( $is_image || $is_font_file ) {
+				continue;
+			}
 
 			if ( false !== stripos( $dictionary, '/FlateDecode' ) ) {
 				if ( ! function_exists( 'gzuncompress' ) ) {
@@ -6501,7 +6526,105 @@ final class SourceItemDocumentProcessor {
 	 * @return array<string,array<string,string>>
 	 */
 	private function extract_pdf_to_unicode_font_maps( $pdf ) {
-		$objects  = $this->extract_pdf_indirect_objects( $pdf );
+		$objects = $this->extract_pdf_indirect_objects( $pdf );
+		return $this->pdf_to_unicode_font_maps_from_objects( $objects, (string) $pdf );
+	}
+
+	/**
+	 * Extracts PDF text maps for a streamed scan window plus early page resources.
+	 *
+	 * @param string $path Source PDF path.
+	 * @param string $pdf  Current PDF scan window.
+	 * @return array<string,array<string,string>>
+	 */
+	private function extract_pdf_to_unicode_font_maps_for_scan( $path, $pdf ) {
+		$context = $this->pdf_font_scan_context( $path, $pdf );
+
+		return $this->pdf_to_unicode_font_maps_from_objects( $context['objects'], $context['pdf'] );
+	}
+
+	/**
+	 * Extracts page-local PDF text maps keyed by content stream object ID.
+	 *
+	 * @param string $path Source PDF path.
+	 * @param string $pdf  Current PDF scan window.
+	 * @return array<int,array<string,array<string,string>>>
+	 */
+	private function extract_pdf_content_font_maps_for_scan( $path, $pdf ) {
+		$context          = $this->pdf_font_scan_context( $path, $pdf );
+		$objects          = $context['objects'];
+		$font_object_maps = $this->extract_pdf_font_object_text_maps( $objects );
+		$content_maps     = array();
+
+		if ( empty( $objects ) || empty( $font_object_maps ) ) {
+			return $content_maps;
+		}
+
+		foreach ( $objects as $object ) {
+			if ( ! preg_match( '#/Type\s*/Page\b#', $object ) ) {
+				continue;
+			}
+
+			$resources   = $this->pdf_page_resource_dictionary( $object, $objects );
+			$font_maps   = $this->pdf_font_maps_from_resource_dictionary( $resources, $font_object_maps, $objects );
+			$content_ids = $this->pdf_page_content_object_ids( $object );
+
+			if ( empty( $font_maps ) || empty( $content_ids ) ) {
+				continue;
+			}
+
+			foreach ( $content_ids as $content_id ) {
+				$content_maps[ (int) $content_id ] = $font_maps;
+			}
+		}
+
+		return $content_maps;
+	}
+
+	/**
+	 * Builds the bounded object context used for streamed PDF font decoding.
+	 *
+	 * @param string $path Source PDF path.
+	 * @param string $pdf  Current PDF scan window.
+	 * @return array{objects:array<int,string>,pdf:string}
+	 */
+	private function pdf_font_scan_context( $path, $pdf ) {
+		$pdf     = (string) $pdf;
+		$prefix  = '';
+		$suffix  = '';
+		$size    = is_file( $path ) ? filesize( $path ) : false;
+		$objects = $this->extract_pdf_indirect_objects( $pdf );
+
+		if ( false !== $size && self::PDF_FILE_LIMIT < (int) $size ) {
+			$prefix_length = min( self::PDF_FONT_RESOURCE_SCAN_BYTES, (int) $size );
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Reads a bounded prefix containing page resource dictionaries for streamed PDF font decoding.
+			$prefix = (string) file_get_contents( $path, false, null, 0, $prefix_length );
+			if ( '' !== $prefix ) {
+				$objects = $this->extract_pdf_indirect_objects( $prefix ) + $objects;
+			}
+
+			$suffix_offset = max( 0, (int) $size - self::PDF_FONT_RESOURCE_SCAN_BYTES );
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- Reads a bounded suffix containing late PDF font maps for streamed PDF font decoding.
+			$suffix = (string) file_get_contents( $path, false, null, $suffix_offset, min( self::PDF_FONT_RESOURCE_SCAN_BYTES, (int) $size - $suffix_offset ) );
+			if ( '' !== $suffix ) {
+				$objects = $objects + $this->extract_pdf_indirect_objects( $suffix );
+			}
+		}
+
+		return array(
+			'objects' => $objects,
+			'pdf'     => $prefix . "\n" . $suffix . "\n" . $pdf,
+		);
+	}
+
+	/**
+	 * Builds PDF text maps from extracted objects and resource references.
+	 *
+	 * @param array<int,string> $objects PDF indirect objects.
+	 * @param string            $pdf     PDF bytes containing font resource references.
+	 * @return array<string,array<string,string>>
+	 */
+	private function pdf_to_unicode_font_maps_from_objects( array $objects, $pdf ) {
 		$font_map = $this->extract_pdf_font_object_text_maps( $objects );
 
 		if ( empty( $font_map ) ) {
@@ -6514,7 +6637,17 @@ final class SourceItemDocumentProcessor {
 			if ( preg_match_all( $pattern, (string) $pdf, $matches ) ) {
 				foreach ( $matches[1] as $name ) {
 					if ( 'ToUnicode' !== $name ) {
-						$maps[ (string) $name ] = $map;
+						$name = (string) $name;
+						if ( isset( $maps[ $name ] ) ) {
+							$maps[ $name ] = $this->merge_non_conflicting_pdf_font_maps(
+								array(
+									$maps[ $name ],
+									$map,
+								)
+							);
+						} else {
+							$maps[ $name ] = $map;
+						}
 					}
 				}
 			}
@@ -6522,9 +6655,44 @@ final class SourceItemDocumentProcessor {
 
 		if ( 1 === count( $font_map ) ) {
 			$maps['__default'] = reset( $font_map );
+		} else {
+			$default_map = $this->merge_non_conflicting_pdf_font_maps( $font_map );
+			if ( ! empty( $default_map ) ) {
+				$maps['__default'] = $default_map;
+			}
 		}
 
 		return $maps;
+	}
+
+	/**
+	 * Builds a conservative fallback map from font maps that agree on glyph codes.
+	 *
+	 * @param array<int,array<string,string>> $font_maps Font maps keyed by object id.
+	 * @return array<string,string>
+	 */
+	private function merge_non_conflicting_pdf_font_maps( array $font_maps ) {
+		$merged    = array();
+		$conflicts = array();
+
+		foreach ( $font_maps as $font_map ) {
+			foreach ( $font_map as $code => $text ) {
+				$code = (string) $code;
+				if ( isset( $conflicts[ $code ] ) ) {
+					continue;
+				}
+
+				if ( isset( $merged[ $code ] ) && $merged[ $code ] !== $text ) {
+					unset( $merged[ $code ] );
+					$conflicts[ $code ] = true;
+					continue;
+				}
+
+				$merged[ $code ] = $text;
+			}
+		}
+
+		return $merged;
 	}
 
 	/**
@@ -7842,6 +8010,13 @@ final class SourceItemDocumentProcessor {
 			}
 
 			if ( $matched ) {
+				continue;
+			}
+
+			$one_byte_code = strtoupper( '00' . bin2hex( $bytes[ $index ] ) );
+			if ( isset( $font_map[ $one_byte_code ] ) ) {
+				$output .= $font_map[ $one_byte_code ];
+				++$index;
 				continue;
 			}
 

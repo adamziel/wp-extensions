@@ -402,6 +402,37 @@ final class WordPressImportSessionStoreTest extends TestCase {
 	}
 
 	/**
+	 * Invalid UTF-8 bytes in operational metadata are substituted instead of breaking persistence.
+	 *
+	 * @return void
+	 */
+	public function test_source_item_metadata_substitutes_invalid_utf8() {
+		$session = ImportSession::start_for_source( '/tmp/import-root/binary.pdf' );
+		$this->store->save( $session );
+
+		$item = ImportSourceItem::queued(
+			$session->get_id(),
+			'local:binary',
+			null,
+			'/tmp/import-root/binary.pdf',
+			'binary.pdf',
+			ImportSourceItem::TYPE_FILE,
+			array(
+				'extension'  => 'pdf',
+				'diagnostic' => "valid\xffbytes",
+			)
+		);
+
+		$this->store->save_source_item( $item );
+
+		$restored = $this->store->find_source_item( $session->get_id(), 'local:binary' );
+
+		$this->assertNotNull( $restored );
+		$this->assertSame( 'pdf', $restored->get_metadata()['extension'] );
+		$this->assertStringContainsString( "\xef\xbf\xbd", $restored->get_metadata()['diagnostic'] );
+	}
+
+	/**
 	 * Prepared documents are stored separately from source item metadata and upsert by source item.
 	 *
 	 * @return void
