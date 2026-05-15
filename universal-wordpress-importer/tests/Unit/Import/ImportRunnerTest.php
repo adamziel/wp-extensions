@@ -5450,7 +5450,7 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertSame( 'Chapter', $meta['title'] );
 		$this->assertArrayNotHasKey( 'block_markup', $meta );
 		$this->assertNotNull( $document );
-		$this->assertStringContainsString( '<!-- wp:heading {"level":1} -->', $document->get_block_markup() );
+		$this->assertStringContainsString( '<!-- wp:heading {"level":1,"anchor":"chapter"} -->', $document->get_block_markup() );
 		$this->assertStringContainsString( '<!-- wp:paragraph -->', $document->get_block_markup() );
 		$this->assertNotNull( $this->store->find_idempotency_record( $session->get_id(), 'document-blocks:' . $item->get_key() ) );
 	}
@@ -5480,7 +5480,7 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertSame( 'Front Matter Title', $meta['title'] );
 		$this->assertTrue( $meta['markdown_front_matter'] );
 		$this->assertSame( 'Front Matter Title', $meta['markdown_front_matter_title'] );
-		$this->assertStringContainsString( '<h1>Visible Heading</h1>', $markup );
+		$this->assertStringContainsString( '<h1 id="visible-heading">Visible Heading</h1>', $markup );
 		$this->assertStringContainsString( '<p>Body text.</p>', $markup );
 		$this->assertStringNotContainsString( 'source.example.test/private', $markup );
 		$this->assertStringNotContainsString( '<p>title:', $markup );
@@ -5509,8 +5509,8 @@ final class ImportRunnerTest extends TestCase {
 
 		$this->assertSame( 'Setext Title', $document->get_title() );
 		$this->assertSame( 'Setext Title', $item->get_metadata()['title'] );
-		$this->assertStringContainsString( '<h1>Setext Title</h1>', $markup );
-		$this->assertStringContainsString( '<h2>Setext Subtitle with <strong>strong</strong></h2>', $markup );
+		$this->assertStringContainsString( '<h1 id="setext-title">Setext Title</h1>', $markup );
+		$this->assertStringContainsString( '<h2 id="setext-subtitle-with-strong">Setext Subtitle with <strong>strong</strong></h2>', $markup );
 		$this->assertStringContainsString( '<!-- wp:separator -->', $markup );
 		$this->assertStringContainsString( '<p>Body text.</p>', $markup );
 		$this->assertSame( $document->get_block_count(), $item->get_metadata()['block_count'] );
@@ -5623,7 +5623,7 @@ final class ImportRunnerTest extends TestCase {
 		$document = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
 		$markup   = $document->get_block_markup();
 
-		$this->assertStringContainsString( '<h1><strong>Linked</strong> <a href="https://source.example.test/heading">Heading</a></h1>', $markup );
+		$this->assertStringContainsString( '<h1 id="linked-heading"><strong>Linked</strong> <a href="https://source.example.test/heading">Heading</a></h1>', $markup );
 		$this->assertStringContainsString( '<p>Paragraph with <strong>strong</strong> and <em>emphasis</em> plus <code>literal **not strong** &lt;tag&gt;</code> and <a href="files/report.pdf" title="Annual report">Report</a>.</p>', $markup );
 		$this->assertStringContainsString( '<li><a href="/local/path">List link</a></li>', $markup );
 		$this->assertStringContainsString( '<li><strong>Strong item</strong></li>', $markup );
@@ -5742,10 +5742,20 @@ final class ImportRunnerTest extends TestCase {
 		mkdir( $root . '/reference' );
 		file_put_contents(
 			$root . '/index.md',
-			"# Handbook\n\nContinue to [Block API](reference/block-api.md#attributes), [Guide](guide.markdown), and [Missing](missing.md)."
+			"# Handbook\n\n## Overview\n\nContinue to "
+				. '[Block API](reference/block-api.md#attributes), '
+				. '[Guide](guide.markdown), and [Missing](missing.md).'
 		);
-		file_put_contents( $root . '/guide.markdown', "# Guide\n\nBack to [Home](./index.md) or jump to [Root API](/reference/block-api.md)." );
-		file_put_contents( $root . '/reference/block-api.md', "# Block API\n\nReturn to [Handbook](../index.md#overview)." );
+		file_put_contents(
+			$root . '/guide.markdown',
+			"# Guide\n\nBack to [Home](./index.md) or jump to "
+				. '[Root API](/reference/block-api.md).'
+		);
+		file_put_contents(
+			$root . '/reference/block-api.md',
+			"# Block API\n\n## Attributes\n\n## Supports\n\nReturn to "
+				. '[Handbook](../index.md#overview).'
+		);
 
 		$session = ImportSession::start_for_source( $root );
 		$posts   = new FakePostGateway();
@@ -5781,6 +5791,9 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertStringContainsString( $posts->get_permalink( $handbook['ID'] ), $guide['post_content'] );
 		$this->assertStringContainsString( $posts->get_permalink( $api['ID'] ), $guide['post_content'] );
 		$this->assertStringContainsString( $posts->get_permalink( $handbook['ID'] ) . '#overview', $api['post_content'] );
+		$this->assertStringContainsString( 'id="overview"', $handbook['post_content'] );
+		$this->assertStringContainsString( 'id="attributes"', $api['post_content'] );
+		$this->assertStringContainsString( 'id="supports"', $api['post_content'] );
 		$this->assertStringContainsString( 'missing.md', $handbook['post_content'] );
 		$this->assertStringNotContainsString( 'reference/block-api.md', $handbook['post_content'] );
 		$this->assertStringNotContainsString( 'guide.markdown', $handbook['post_content'] );
@@ -5866,7 +5879,7 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertArrayNotHasKey( 'markdown_next_offset', $final_meta );
 		$this->assertStringContainsString( ':markdown-chunk:0', $documents[0]->get_source_item_key() );
 		$this->assertStringContainsString( ':markdown-chunk:1', $documents[1]->get_source_item_key() );
-		$this->assertStringContainsString( '<!-- wp:heading {"level":1} -->', $documents[0]->get_block_markup() );
+		$this->assertStringContainsString( '<!-- wp:heading {"level":1,"anchor":"large"} -->', $documents[0]->get_block_markup() );
 		$this->assertStringContainsString( '<a href="files/report.pdf">download</a>', $documents[0]->get_block_markup() );
 		$this->assertStringContainsString( 'Final resumed Markdown paragraph.', $last_document->get_block_markup() );
 		$this->assertContains( 'document.markdown_progress', $events );

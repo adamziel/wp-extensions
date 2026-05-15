@@ -6418,7 +6418,8 @@ final class SourceItemDocumentProcessor {
 	 * @return string
 	 */
 	private function markdown_to_blocks( $content, array $references = array() ) {
-		$blocks = array();
+		$blocks  = array();
+		$anchors = array();
 
 		foreach ( preg_split( '/\R{2,}/', trim( $content ) ) as $chunk ) {
 			$chunk = trim( (string) $chunk );
@@ -6429,14 +6430,19 @@ final class SourceItemDocumentProcessor {
 
 			if ( preg_match( '/^(#{1,6})\s+(.+)$/', $chunk, $matches ) ) {
 				$level    = strlen( $matches[1] );
-				$blocks[] = '<!-- wp:heading {"level":' . $level . '} -->' . "\n" . '<h' . $level . '>' . $this->markdown_inline_to_html( $matches[2], $references ) . '</h' . $level . '>' . "\n" . '<!-- /wp:heading -->';
+				$blocks[] = $this->markdown_heading_block( $level, $matches[2], $references, $anchors );
 				continue;
 			}
 
 			$setext_heading = $this->markdown_setext_heading( $chunk );
 			if ( null !== $setext_heading ) {
 				$level    = $setext_heading['level'];
-				$blocks[] = '<!-- wp:heading {"level":' . $level . '} -->' . "\n" . '<h' . $level . '>' . $this->markdown_inline_to_html( $setext_heading['text'], $references ) . '</h' . $level . '>' . "\n" . '<!-- /wp:heading -->';
+				$blocks[] = $this->markdown_heading_block(
+					$level,
+					$setext_heading['text'],
+					$references,
+					$anchors
+				);
 				continue;
 			}
 
@@ -6481,6 +6487,78 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return implode( "\n\n", $blocks );
+	}
+
+	/**
+	 * Converts one Markdown heading into a Heading block with a stable anchor.
+	 *
+	 * @param int                                          $level      Heading level.
+	 * @param string                                       $text       Markdown heading text.
+	 * @param array<string,array{url:string,title:string}> $references Reference definitions.
+	 * @param array<string,bool>                           $anchors    Anchors already used.
+	 * @return string
+	 */
+	private function markdown_heading_block( $level, $text, array $references, array &$anchors ) {
+		$level        = max( 1, min( 6, (int) $level ) );
+		$heading_html = $this->markdown_inline_to_html( $text, $references );
+		$anchor       = $this->unique_markdown_heading_anchor(
+			$this->html_text( $heading_html ),
+			$anchors
+		);
+		$attrs        = $this->encode_block_attributes(
+			array(
+				'level'  => $level,
+				'anchor' => $anchor,
+			)
+		);
+
+		return '<!-- wp:heading ' . $attrs . ' -->' . "\n"
+			. '<h' . $level . ' id="' . $this->escape_html( $anchor ) . '">'
+			. $heading_html
+			. '</h' . $level . '>' . "\n"
+			. '<!-- /wp:heading -->';
+	}
+
+	/**
+	 * Returns a unique fragment anchor for Markdown heading text.
+	 *
+	 * @param string             $text    Heading text.
+	 * @param array<string,bool> $anchors Anchors already used.
+	 * @return string
+	 */
+	private function unique_markdown_heading_anchor( $text, array &$anchors ) {
+		$base = strtolower( trim( (string) $text ) );
+		$base = preg_replace( '/[^a-z0-9]+/', '-', $base );
+		$base = trim( is_string( $base ) ? $base : '', '-' );
+
+		if ( '' === $base ) {
+			$base = 'section';
+		}
+
+		$anchor = $base;
+		$suffix = 2;
+		while ( isset( $anchors[ $anchor ] ) ) {
+			$anchor = $base . '-' . $suffix;
+			++$suffix;
+		}
+
+		$anchors[ $anchor ] = true;
+		return $anchor;
+	}
+
+	/**
+	 * Encodes Gutenberg block attributes for generated block comments.
+	 *
+	 * @param array<string,mixed> $attributes Block attributes.
+	 * @return string
+	 */
+	private function encode_block_attributes( array $attributes ) {
+		if ( function_exists( 'wp_json_encode' ) ) {
+			return (string) wp_json_encode( $attributes );
+		}
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- Unit tests run without WordPress loaded.
+		return (string) json_encode( $attributes );
 	}
 
 	/**

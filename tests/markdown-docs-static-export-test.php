@@ -35,7 +35,7 @@ if ( ! mkdir( $docs_root . '/reference', 0777, true ) || ! mkdir( $docs_root . '
 file_put_contents( $wp_root . '/wp-includes/blocks/navigation/style.min.css', '.wp-block-navigation{display:flex}' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 file_put_contents( $docs_root . '/assets/block-flow.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="#3858e9"/></svg>' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 file_put_contents( $docs_root . '/index.md', "---\ntitle: Gutenberg Handbook\n---\n\n# Gutenberg Handbook\n\n![Block flow](assets/block-flow.svg \"Block flow\")\n\nUse [Block API](reference/block-api.md#attributes), [Root API](/reference/block-api.md#supports), and [Nested Guide](guides/nested.mdown).\n\n| Scenario | Expected |\n| --- | --- |\n| Relative Markdown links | Imported page permalinks |\n| Static export | Separate HTML files |\n\n```js\nregisterBlockType('demo/example', {});\n```" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-file_put_contents( $docs_root . '/reference/block-api.md', "# Block API\n\nThe attributes section should survive export.\n\nReturn to [Handbook](../index.md#overview)." ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+file_put_contents( $docs_root . '/reference/block-api.md', "# Block API\n\n## Attributes\n\nThe attributes section should survive export.\n\n## Supports\n\nThe supports section should keep its fragment target.\n\nReturn to [Handbook](../index.md#overview)." ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 file_put_contents( $docs_root . '/guides/nested.mdown', "# Nested Guide\n\nBack to [Handbook](../index.md) and [Block API](../reference/block-api.md)." ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 
 define( 'ABSPATH', $wp_root . '/' );
@@ -124,6 +124,8 @@ md_static_assert_same( 4, count( $result['exported_urls'] ), 'Static exporter sh
 md_static_assert_file_contains( $export_dir . '/index.html', 'Imported Docs Home', 'Static export should include the docs home.' );
 md_static_assert_file_contains( $export_dir . '/imported/1/index.html', 'Gutenberg Handbook', 'Static export should include the imported Handbook page.' );
 md_static_assert_file_contains( $export_dir . '/imported/2/index.html', 'Block API', 'Static export should include the imported Block API page.' );
+md_static_assert_file_contains( $export_dir . '/imported/2/index.html', 'id="attributes"', 'Static export should include the Attributes fragment target.' );
+md_static_assert_file_contains( $export_dir . '/imported/2/index.html', 'id="supports"', 'Static export should include the Supports fragment target.' );
 md_static_assert_file_contains( $export_dir . '/imported/3/index.html', 'Nested Guide', 'Static export should include the imported nested guide page.' );
 md_static_assert_file_not_contains( $export_dir . '/imported/1/index.html', 'Imported Docs Home', 'Imported docs pages should not contain homepage HTML.' );
 md_static_assert_file_not_contains( $export_dir . '/imported/1/index.html', '.md', 'Imported docs page should not link to Markdown source paths.' );
