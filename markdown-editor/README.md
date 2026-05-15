@@ -6,13 +6,13 @@ Edit a directory of Markdown files in the WordPress block editor.
 
 ### Try The Demo
 
-Fetch only the Markdown editor and sample content:
+Download the GitHub Release package and start Playground:
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/adamziel/wp-extensions.git wp-markdown-editor
-cd wp-markdown-editor
-git sparse-checkout set markdown-editor content
-markdown-editor/run-playground-cli.sh
+curl -fsSL https://github.com/adamziel/wp-extensions/releases/download/markdown-editor-latest/wp-markdown-editor.zip -o wp-markdown-editor.zip
+rm -rf wp-markdown-editor
+unzip -q wp-markdown-editor.zip
+wp-markdown-editor/run-playground-cli.sh
 ```
 
 Then open:
@@ -37,10 +37,10 @@ corresponding Markdown file on disk.
 
 ### Use Your Own Markdown Directory
 
-Point the runner at any directory of Markdown files:
+Point the release runner at any directory of Markdown files:
 
 ```bash
-CONTENT_DIR=~/notes markdown-editor/run-playground-cli.sh
+CONTENT_DIR=~/notes wp-markdown-editor/run-playground-cli.sh
 ```
 
 The editor expects each page file to have front matter and a numeric storage ID
@@ -71,8 +71,8 @@ Hello from Markdown.
 ### Useful Options
 
 ```bash
-PORT=9410 markdown-editor/run-playground-cli.sh
-PLAYGROUND_CLI_PACKAGE=@wp-playground/cli@3.1.33 markdown-editor/run-playground-cli.sh
+PORT=9410 wp-markdown-editor/run-playground-cli.sh
+PLAYGROUND_CLI_PACKAGE=@wp-playground/cli@3.1.33 wp-markdown-editor/run-playground-cli.sh
 ```
 
 Use `@wp-playground/cli@3.1.33` or newer. Older Playground packages do not
@@ -92,10 +92,11 @@ This extension is made of three parts that should move together:
 - `vendor/php-toolkit` converts between Markdown and WordPress block markup.
 
 The runner uses published npm packages only. It does not clone WordPress
-Playground. On first run, it prepares the local toolkit checkout, uses the
-prebuilt `sqlite_markdown` PHP.wasm side module when present, and starts the
-published Playground CLI with the required mounts. If the side-module artifact
-is missing, the runner builds it with `@php-wasm/compile-extension`.
+Playground. The GitHub Release zip includes the local toolkit runtime
+dependencies and prebuilt `sqlite_markdown` PHP.wasm side module, so the usage
+flow does not need Composer, Docker, or a repository checkout. In a development
+checkout, the runner can still prepare the toolkit checkout and build the side
+module when those release artifacts are missing.
 
 ### Requirements
 
@@ -104,6 +105,24 @@ is missing, the runner builds it with `@php-wasm/compile-extension`.
 - Composer, for `vendor/php-toolkit`.
 - Docker, for `@php-wasm/compile-extension` builds.
 - `@wp-playground/cli@3.1.33` or newer.
+
+### Build The Release Zip
+
+The release package includes the runtime files users need without a Git
+checkout:
+
+```bash
+git submodule update --init --recursive markdown-editor/vendor/php-toolkit
+composer install --no-dev --prefer-dist --no-interaction \
+	-d markdown-editor/vendor/php-toolkit
+markdown-editor/tools/build-release-zip.sh
+```
+
+The output is:
+
+```text
+dist/wp-markdown-editor.zip
+```
 
 ### Build The Side Module
 

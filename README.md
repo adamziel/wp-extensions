@@ -34,21 +34,22 @@ It includes:
   tables
 - `php-toolkit` as a submodule for Markdown <-> block markup conversion
 
-See [markdown-editor/README.md](markdown-editor/README.md) for setup and
-Playground CLI usage.
+See [markdown-editor/README.md](markdown-editor/README.md) for usage and
+development notes.
 
-The repository includes a small Markdown page tree in `content/` so the editor
-has pages to load on the first run.
+GitHub Releases publish a ready-to-run `wp-markdown-editor.zip` package with
+the mu-plugin, the PHP toolkit runtime dependencies, the prebuilt PHP.wasm side
+module, and a small Markdown page tree in `content/`.
 
-### Sparse Checkout Demo
+### Release Zip Demo
 
-To try only the Markdown editor and sample content:
+Download the Markdown Editor release package and start Playground:
 
 ```bash
-git clone --filter=blob:none --sparse https://github.com/adamziel/wp-extensions.git wp-markdown-editor
-cd wp-markdown-editor
-git sparse-checkout set markdown-editor content
-markdown-editor/run-playground-cli.sh
+curl -fsSL https://github.com/adamziel/wp-extensions/releases/download/markdown-editor-latest/wp-markdown-editor.zip -o wp-markdown-editor.zip
+rm -rf wp-markdown-editor
+unzip -q wp-markdown-editor.zip
+wp-markdown-editor/run-playground-cli.sh
 ```
 
 Then open:
