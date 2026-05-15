@@ -32,7 +32,7 @@ if ( ! defined( 'EDIT_MD_ROOT' ) ) {
 if ( ! defined( 'EDIT_MD_TOOLKIT_AUTOLOAD' ) ) {
 	define(
 		'EDIT_MD_TOOLKIT_AUTOLOAD',
-		'/internal/shared/markdown-editor/vendor/php-toolkit/vendor/autoload.php'
+		'/wordpress/wp-content/mu-plugins/vendor/php-toolkit/vendor/autoload.php'
 	);
 }
 

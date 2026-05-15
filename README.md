@@ -49,7 +49,13 @@ Download the Markdown Editor release package and start Playground:
 curl -fsSL https://github.com/adamziel/wp-extensions/releases/download/markdown-editor-latest/wp-markdown-editor.zip -o wp-markdown-editor.zip
 rm -rf wp-markdown-editor
 unzip -q wp-markdown-editor.zip
-wp-markdown-editor/run-playground-cli.sh
+
+npx --yes @wp-playground/cli@latest server \
+	--php=8.4 \
+	--login \
+	--php-extension="$PWD/wp-markdown-editor/markdown-editor/sqlite-markdown-extension/dist/manifest.json" \
+	--mount-dir "$PWD/wp-markdown-editor/content" /markdown-root \
+	--mount-dir "$PWD/wp-markdown-editor/markdown-editor" /wordpress/wp-content/mu-plugins
 ```
 
 Then open:

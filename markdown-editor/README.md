@@ -12,7 +12,13 @@ Download the GitHub Release package and start Playground:
 curl -fsSL https://github.com/adamziel/wp-extensions/releases/download/markdown-editor-latest/wp-markdown-editor.zip -o wp-markdown-editor.zip
 rm -rf wp-markdown-editor
 unzip -q wp-markdown-editor.zip
-wp-markdown-editor/run-playground-cli.sh
+
+npx --yes @wp-playground/cli@latest server \
+	--php=8.4 \
+	--login \
+	--php-extension="$PWD/wp-markdown-editor/markdown-editor/sqlite-markdown-extension/dist/manifest.json" \
+	--mount-dir "$PWD/wp-markdown-editor/content" /markdown-root \
+	--mount-dir "$PWD/wp-markdown-editor/markdown-editor" /wordpress/wp-content/mu-plugins
 ```
 
 Then open:
@@ -77,6 +83,10 @@ PLAYGROUND_CLI_PACKAGE=@wp-playground/cli@3.1.33 wp-markdown-editor/run-playgrou
 
 Use `@wp-playground/cli@3.1.33` or newer. Older Playground packages do not
 export all PHP.wasm symbols needed by this editor.
+
+The bundled `wp-markdown-editor/run-playground-cli.sh` wrapper runs the same
+Playground CLI command and adds validation for Node.js, the Playground CLI
+`--php-extension` option, and missing release artifacts.
 
 ## Development
 
@@ -167,8 +177,7 @@ npx --yes @wp-playground/cli@latest server \
 	--login \
 	--php-extension="$WP_EXTENSIONS/markdown-editor/sqlite-markdown-extension/dist/manifest.json" \
 	--mount-dir "$WP_EXTENSIONS/content" /markdown-root \
-	--mount-dir "$WP_EXTENSIONS/markdown-editor" /wordpress/wp-content/mu-plugins \
-	--mount-dir "$WP_EXTENSIONS/markdown-editor" /internal/shared/markdown-editor
+	--mount-dir "$WP_EXTENSIONS/markdown-editor" /wordpress/wp-content/mu-plugins
 ```
 
 Then open:
