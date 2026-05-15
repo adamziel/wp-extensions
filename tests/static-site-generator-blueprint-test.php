@@ -1,0 +1,149 @@
+<?php
+/**
+ * Regression checks for static site generator Playground blueprints.
+ *
+ * @package WPExtensions
+ */
+
+$repo_root = dirname( __DIR__ );
+
+$browser_blueprint = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-browser.json' );
+$cli_blueprint     = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-cli-export.json' );
+
+$browser_commands = ssgwp_blueprint_wp_cli_commands( $browser_blueprint );
+$cli_commands     = ssgwp_blueprint_wp_cli_commands( $cli_blueprint );
+
+$delete_default_post_index = ssgwp_find_command_index( $browser_commands, 'wp post delete 1 --force' );
+$hello_world_index         = ssgwp_find_command_index( $browser_commands, '--post_name=hello-world' );
+
+ssgwp_blueprint_assert(
+	false !== $delete_default_post_index,
+	'Browser demo blueprint deletes the default WordPress post.'
+);
+
+ssgwp_blueprint_assert(
+	false !== $hello_world_index,
+	'Browser demo blueprint creates the hello-world demo post.'
+);
+
+ssgwp_blueprint_assert(
+	$delete_default_post_index < $hello_world_index,
+	'Browser demo blueprint frees the hello-world slug before seeding that post.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_command_contains( $browser_commands, 'Hello World Field Report' ),
+	'Browser demo blueprint includes the dated hello-world verification content.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_command_contains( $browser_commands, 'wp static-site export' ) === false,
+	'Browser demo blueprint opens the admin exporter instead of auto-downloading a ZIP.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_command_contains( $cli_commands, 'wp static-site export --output=/exports/static-site.zip --fetch-mode=internal' ),
+	'CLI export blueprint runs the static export command with the Playground-safe fetch mode.'
+);
+
+/**
+ * Decode a blueprint JSON file.
+ *
+ * @param string $path Blueprint path.
+ * @return array<string,mixed>
+ */
+function ssgwp_blueprint_decode( $path ) {
+	$contents = file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+	if ( false === $contents ) {
+		ssgwp_blueprint_fail( 'Could not read ' . $path );
+	}
+
+	try {
+		$blueprint = json_decode( $contents, true, 512, JSON_THROW_ON_ERROR );
+	} catch ( Exception $exception ) {
+		ssgwp_blueprint_fail( $path . ' is not valid JSON: ' . $exception->getMessage() );
+	}
+
+	if ( ! is_array( $blueprint ) ) {
+		ssgwp_blueprint_fail( $path . ' did not decode to an object.' );
+	}
+
+	return $blueprint;
+}
+
+/**
+ * Return WP-CLI commands from a blueprint.
+ *
+ * @param array<string,mixed> $blueprint Blueprint data.
+ * @return array<int,string>
+ */
+function ssgwp_blueprint_wp_cli_commands( array $blueprint ) {
+	$commands = array();
+	$steps    = isset( $blueprint['steps'] ) && is_array( $blueprint['steps'] )
+		? $blueprint['steps']
+		: array();
+
+	foreach ( $steps as $step ) {
+		if (
+			is_array( $step )
+			&& isset( $step['step'], $step['command'] )
+			&& 'wp-cli' === $step['step']
+		) {
+			$commands[] = (string) $step['command'];
+		}
+	}
+
+	return $commands;
+}
+
+/**
+ * Find the first command containing a substring.
+ *
+ * @param array<int,string> $commands Commands.
+ * @param string            $needle   Substring.
+ * @return int|false
+ */
+function ssgwp_find_command_index( array $commands, $needle ) {
+	foreach ( $commands as $index => $command ) {
+		if ( false !== strpos( $command, $needle ) ) {
+			return $index;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Check whether any command contains a substring.
+ *
+ * @param array<int,string> $commands Commands.
+ * @param string            $needle   Substring.
+ * @return bool
+ */
+function ssgwp_command_contains( array $commands, $needle ) {
+	return false !== ssgwp_find_command_index( $commands, $needle );
+}
+
+/**
+ * Assert a blueprint condition.
+ *
+ * @param bool   $condition Condition.
+ * @param string $message   Failure message.
+ * @return void
+ */
+function ssgwp_blueprint_assert( $condition, $message ) {
+	if ( ! $condition ) {
+		ssgwp_blueprint_fail( $message );
+	}
+}
+
+/**
+ * Fail the blueprint test.
+ *
+ * @param string $message Failure message.
+ * @return void
+ */
+function ssgwp_blueprint_fail( $message ) {
+	fwrite( STDERR, $message . "\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite
+	exit( 1 );
+}
