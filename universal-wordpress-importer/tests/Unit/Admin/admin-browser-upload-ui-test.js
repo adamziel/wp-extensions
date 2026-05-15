@@ -25,6 +25,8 @@ class Element {
 		this.listeners = {};
 		this.required = true;
 		this.textContent = '';
+		this.innerHTML = '';
+		this.children = [];
 		this.style = {};
 		this.firstChild = null;
 		this.firstElementChild = {};
@@ -51,6 +53,12 @@ class Element {
 
 	querySelectorAll() {
 		return [];
+	}
+
+	appendChild(child) {
+		this.children.push(child);
+		this.textContent += child.textContent || '';
+		return child;
 	}
 
 	insertBefore() {}
@@ -130,10 +138,13 @@ form.formValues = {
 	dry_run: '1'
 };
 const sourceInput = new Element('universal-importer-source');
-const fileInput = new Element('universal-importer-files');
-fileInput.files = [];
+const filePicker = new Element('universal-importer-file-picker');
+filePicker.files = [];
+const folderPicker = new Element('universal-importer-folder-picker');
+folderPicker.files = [];
 const dropzone = new Element('universal-importer-dropzone');
 const fileSummary = new Element('universal-importer-file-summary');
+const filePreview = new Element('universal-importer-file-preview');
 const sessions = new Element('universal-importer-sessions');
 const notice = new Element('universal-importer-notice');
 const noticeParagraph = { textContent: '' };
@@ -142,9 +153,11 @@ const fetchCalls = [];
 const elements = {
 	'universal-importer-start-form': form,
 	'universal-importer-source': sourceInput,
-	'universal-importer-files': fileInput,
+	'universal-importer-file-picker': filePicker,
+	'universal-importer-folder-picker': folderPicker,
 	'universal-importer-dropzone': dropzone,
 	'universal-importer-file-summary': fileSummary,
+	'universal-importer-file-preview': filePreview,
 	'universal-importer-sessions': sessions,
 	'universal-importer-notice': notice
 };

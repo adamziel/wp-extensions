@@ -34,8 +34,10 @@ const html = `<!doctype html>
 		<input type="radio" name="url_rewrite_mode" value="ask" checked>
 		<input type="checkbox" name="dry_run" value="1" checked>
 		<div id="universal-importer-dropzone">
-			<input type="file" id="universal-importer-files" multiple webkitdirectory directory>
+			<input type="file" id="universal-importer-file-picker" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
+			<input type="file" id="universal-importer-folder-picker" multiple webkitdirectory directory>
 			<p id="universal-importer-file-summary"></p>
+			<ul id="universal-importer-file-preview"></ul>
 		</div>
 	</form>
 	<div id="universal-importer-sessions"></div>

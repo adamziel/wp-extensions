@@ -532,6 +532,7 @@ final class ImportAdminPage {
 				border: 1px dashed #8c8f94;
 				border-radius: 8px;
 				display: flex;
+				flex-wrap: wrap;
 				gap: 14px;
 				justify-content: space-between;
 				margin-top: 10px;
@@ -541,6 +542,42 @@ final class ImportAdminPage {
 				background: #f0f6fc;
 				border-color: var(--ui-accent);
 				box-shadow: 0 0 0 1px var(--ui-accent);
+			}
+			.universal-importer-upload-copy {
+				flex: 1 1 340px;
+				min-width: 0;
+			}
+			.universal-importer-upload-actions {
+				align-items: center;
+				display: flex;
+				flex: 0 0 auto;
+				flex-wrap: wrap;
+				gap: 8px;
+				justify-content: flex-end;
+			}
+			.universal-importer-file-input {
+				clip: rect(1px, 1px, 1px, 1px);
+				clip-path: inset(50%);
+				height: 1px;
+				overflow: hidden;
+				position: absolute;
+				white-space: nowrap;
+				width: 1px;
+			}
+			.universal-importer-file-summary {
+				font-weight: 600;
+				margin-top: 10px;
+			}
+			.universal-importer-file-preview {
+				color: var(--ui-muted);
+				font-size: 12px;
+				margin: 6px 0 0 18px;
+				max-height: 88px;
+				overflow: auto;
+			}
+			.universal-importer-file-preview li {
+				margin: 0 0 3px;
+				overflow-wrap: anywhere;
 			}
 			.universal-importer-url-options {
 				border: 1px solid var(--ui-border);
@@ -747,6 +784,23 @@ final class ImportAdminPage {
 					margin-top: 10px;
 				}
 			}
+			@media (max-width: 600px) {
+				.universal-importer-start {
+					padding: 16px;
+				}
+				.universal-importer-dropzone {
+					display: block;
+				}
+				.universal-importer-upload-actions {
+					display: grid;
+					grid-template-columns: 1fr;
+					justify-content: stretch;
+					margin-top: 12px;
+				}
+				.universal-importer-upload-actions .button {
+					text-align: center;
+				}
+			}
 		</style>
 		<div class="wrap universal-importer-admin">
 			<h1><?php esc_html_e( 'Universal Importer', 'universal-wordpress-importer' ); ?></h1>
@@ -764,12 +818,18 @@ final class ImportAdminPage {
 							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, zip file, WXR file, WordPress REST URL, GitHub repository URL, or leave this blank when uploading files from this browser.', 'universal-wordpress-importer' ); ?></span>
 						</p>
 						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
-							<div>
-								<strong><?php esc_html_e( 'Or upload a folder from this computer', 'universal-wordpress-importer' ); ?></strong>
-								<p class="universal-importer-hint"><?php esc_html_e( 'Dropped browser files are staged into importer-managed storage and continue through the same resumable runner.', 'universal-wordpress-importer' ); ?></p>
-								<p id="universal-importer-file-summary" class="universal-importer-hint" aria-live="polite"></p>
+							<div class="universal-importer-upload-copy">
+								<strong><?php esc_html_e( 'Or upload files from this computer', 'universal-wordpress-importer' ); ?></strong>
+								<p class="universal-importer-hint"><?php esc_html_e( 'Choose PDFs, EPUBs, HTML, Markdown, text, WXR/XML, ZIP archives, or a whole folder. Dropped files use the same resumable importer.', 'universal-wordpress-importer' ); ?></p>
+								<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
+								<ul id="universal-importer-file-preview" class="universal-importer-file-preview" aria-live="polite"></ul>
 							</div>
-							<input type="file" id="universal-importer-files" multiple webkitdirectory directory>
+							<div class="universal-importer-upload-actions">
+								<label class="button" for="universal-importer-file-picker"><?php esc_html_e( 'Choose files', 'universal-wordpress-importer' ); ?></label>
+								<label class="button" for="universal-importer-folder-picker"><?php esc_html_e( 'Choose folder', 'universal-wordpress-importer' ); ?></label>
+							</div>
+							<input type="file" id="universal-importer-file-picker" class="universal-importer-file-input" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
+							<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
 						</div>
 					</div>
 					<div>
@@ -809,9 +869,11 @@ final class ImportAdminPage {
 			var config = <?php echo wp_json_encode( $config ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- wp_json_encode returns JavaScript-safe JSON. ?>;
 			var form = document.getElementById('universal-importer-start-form');
 			var sourceInput = document.getElementById('universal-importer-source');
-			var fileInput = document.getElementById('universal-importer-files');
+			var filePicker = document.getElementById('universal-importer-file-picker');
+			var folderPicker = document.getElementById('universal-importer-folder-picker');
 			var dropzone = document.getElementById('universal-importer-dropzone');
 			var fileSummary = document.getElementById('universal-importer-file-summary');
+			var filePreview = document.getElementById('universal-importer-file-preview');
 			var sessions = document.getElementById('universal-importer-sessions');
 			var notice = document.getElementById('universal-importer-notice');
 			var activeSessionId = null;
@@ -859,14 +921,45 @@ final class ImportAdminPage {
 				return file.universalImporterRelativePath || file.webkitRelativePath || file.name;
 			}
 
-			function setBrowserFiles(files) {
+			function countFilesByExtension(files, extension) {
+				return files.filter(function(file) {
+					return filePath(file).toLowerCase().slice(-extension.length) === extension;
+				}).length;
+			}
+
+			function renderFilePreview(files) {
+				var previewFiles = files.slice(0, 5);
+				filePreview.innerHTML = '';
+				previewFiles.forEach(function(file) {
+					var item = document.createElement('li');
+					item.textContent = filePath(file);
+					filePreview.appendChild(item);
+				});
+				if (files.length > previewFiles.length) {
+					var remaining = document.createElement('li');
+					remaining.textContent = '+' + (files.length - previewFiles.length) + ' more';
+					filePreview.appendChild(remaining);
+				}
+			}
+
+			function setBrowserFiles(files, sourceLabel) {
 				browserFiles = files || [];
 				sourceInput.required = browserFiles.length < 1;
 				if (!browserFiles.length) {
 					fileSummary.textContent = '';
+					filePreview.innerHTML = '';
 					return;
 				}
-				fileSummary.textContent = browserFiles.length + ' file' + (browserFiles.length === 1 ? '' : 's') + ' ready from browser selection.';
+				var pdfCount = countFilesByExtension(browserFiles, '.pdf');
+				var summary = browserFiles.length + ' file' + (browserFiles.length === 1 ? '' : 's') + ' ready';
+				if (sourceLabel) {
+					summary += ' from ' + sourceLabel;
+				}
+				if (pdfCount) {
+					summary += ' · ' + pdfCount + ' PDF' + (pdfCount === 1 ? '' : 's');
+				}
+				fileSummary.textContent = summary + '.';
+				renderFilePreview(browserFiles);
 			}
 
 			function readDirectoryEntries(reader) {
@@ -1262,8 +1355,12 @@ final class ImportAdminPage {
 				});
 			});
 
-			fileInput.addEventListener('change', function() {
-				setBrowserFiles(Array.prototype.slice.call(fileInput.files || []));
+			filePicker.addEventListener('change', function() {
+				setBrowserFiles(Array.prototype.slice.call(filePicker.files || []), '<?php echo esc_js( __( 'file selection', 'universal-wordpress-importer' ) ); ?>');
+			});
+
+			folderPicker.addEventListener('change', function() {
+				setBrowserFiles(Array.prototype.slice.call(folderPicker.files || []), '<?php echo esc_js( __( 'folder selection', 'universal-wordpress-importer' ) ); ?>');
 			});
 
 			['dragenter', 'dragover'].forEach(function(type) {
@@ -1281,7 +1378,9 @@ final class ImportAdminPage {
 			});
 
 			dropzone.addEventListener('drop', function(event) {
-				filesFromDrop(event.dataTransfer).then(setBrowserFiles).catch(function(error) {
+				filesFromDrop(event.dataTransfer).then(function(files) {
+					setBrowserFiles(files, '<?php echo esc_js( __( 'drop', 'universal-wordpress-importer' ) ); ?>');
+				}).catch(function(error) {
 					showNotice(error.message, 'error');
 				});
 			});

@@ -208,11 +208,18 @@ final class ImportAdminPageTest extends TestCase {
 
 		$this->assertIsString( $source );
 		$this->assertStringContainsString( 'id="universal-importer-dropzone"', $source );
-		$this->assertStringContainsString( 'id="universal-importer-files" multiple webkitdirectory directory', $source );
+		$this->assertStringContainsString( 'id="universal-importer-file-picker"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-folder-picker"', $source );
+		$this->assertStringContainsString( 'accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip', $source );
+		$this->assertStringContainsString( 'id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory', $source );
+		$this->assertStringContainsString( 'Choose files', $source );
+		$this->assertStringContainsString( 'Choose folder', $source );
+		$this->assertStringContainsString( 'universal-importer-file-preview', $source );
 		$this->assertStringContainsString( "dropzone.addEventListener('drop'", $source );
 		$this->assertStringContainsString( 'readDirectoryEntries', $source );
 		$this->assertStringContainsString( 'webkitGetAsEntry', $source );
-		$this->assertStringContainsString( 'Or upload a folder from this computer', $source );
+		$this->assertStringContainsString( 'Or upload files from this computer', $source );
+		$this->assertStringContainsString( 'countFilesByExtension(browserFiles, \'.pdf\')', $source );
 		$this->assertStringContainsString( 'Import source', $source );
 		$this->assertStringContainsString( 'URL rewriting', $source );
 		$this->assertStringContainsString( 'Ask when URLs are found', $source );
