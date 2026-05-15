@@ -158,6 +158,19 @@ function edit_md_decode_post_content_for_render( $post ) {
 }
 
 /**
+ * Convert raw Markdown loaded from the virtual table before front-end content
+ * filters render it. Some template paths do not observe the mutated WP_Post
+ * object from `the_post`, so keep the conversion at the content boundary too.
+ */
+add_filter( 'the_content', 'edit_md_decode_the_content_for_render', 0 );
+function edit_md_decode_the_content_for_render( $content ) {
+	if ( edit_md_looks_like_blocks( $content ) ) {
+		return $content;
+	}
+	return edit_md_markdown_to_blocks( $content );
+}
+
+/**
  * Convert block markup back to Markdown right before WordPress writes the
  * row. The virtual table stores whatever string we hand it, so the disk
  * file ends up containing the Markdown the user expects to see.
