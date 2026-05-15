@@ -251,6 +251,8 @@ final class SSGWP_Static_Exporter {
 			$this->write_robots_txt( $output_dir );
 		}
 
+		$this->write_preview_instructions( $output_dir );
+
 		$this->report_progress(
 			'complete',
 			sprintf( 'Exported %1$d pages and %2$d files.', count( $exported ), $this->files_exported ),
@@ -344,6 +346,36 @@ final class SSGWP_Static_Exporter {
 		$contents = "User-agent: *\nAllow: /\nSitemap: " . home_url( '/sitemap.xml' ) . "\n";
 
 		$this->write_file( trailingslashit( $output_dir ) . 'robots.txt', $contents );
+	}
+
+	/**
+	 * Write local preview instructions into the static export.
+	 *
+	 * Browser file previews are useful for simple pages, but module scripts are
+	 * blocked on file:// origins. A local HTTP server gives the static export the
+	 * same protocol shape it will have on real hosting.
+	 *
+	 * @param string $output_dir Static export directory.
+	 * @throws Exception When the file cannot be written.
+	 */
+	private function write_preview_instructions( $output_dir ) {
+		$contents = implode(
+			"\n",
+			array(
+				'Static export preview',
+				'',
+				'Open index.html directly for a quick file:// preview of basic HTML and CSS.',
+				'Some browser features, including JavaScript ES modules used by the WordPress Interactivity API, cannot run from file:// origins.',
+				'For the closest local preview, serve the extracted folder over HTTP:',
+				'',
+				'python3 -m http.server 8080',
+				'',
+				'Then open http://localhost:8080/ in your browser.',
+				''
+			)
+		);
+
+		$this->write_file( trailingslashit( $output_dir ) . '_static-export-preview.txt', $contents );
 	}
 
 	/**
