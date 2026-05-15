@@ -19,6 +19,10 @@ function sanitize_text_field( $value ) {
 	return trim( strip_tags( (string) $value ) );
 }
 
+function absint( $value ) {
+	return abs( (int) $value );
+}
+
 function trailingslashit( $value ) {
 	return rtrim( (string) $value, "/\\" ) . '/';
 }
@@ -114,6 +118,10 @@ $latest_progress_method->setAccessible( true );
 
 $request_args_method = new ReflectionMethod( 'SSGWP_Plugin', 'request_to_export_args' );
 $request_args_method->setAccessible( true );
+
+$cli_args_method = new ReflectionMethod( 'SSGWP_Plugin', 'wp_cli_assoc_args_to_export_args' );
+$cli_args_method->setAccessible( true );
+
 $admin_args = $request_args_method->invoke(
 	null,
 	array(
@@ -166,6 +174,39 @@ ssgwp_assert_same(
 	true,
 	$report_args['include_manifest'],
 	'request_to_export_args enables the technical export report when selected.'
+);
+
+$cli_args = $cli_args_method->invoke(
+	null,
+	array(
+		'url-mode' => 'bad-value',
+	)
+);
+
+ssgwp_assert_same(
+	'relative',
+	$cli_args['url_mode'],
+	'wp_cli_assoc_args_to_export_args falls back to portable relative links for invalid URL modes.'
+);
+
+ssgwp_assert_same(
+	10000,
+	$cli_args['max_pages'],
+	'wp_cli_assoc_args_to_export_args uses a high page limit as an internal runaway guard.'
+);
+
+ssgwp_assert_same(
+	false,
+	$cli_args['include_manifest'],
+	'wp_cli_assoc_args_to_export_args leaves the technical export report disabled by default.'
+);
+
+$cli_report_args = $cli_args_method->invoke( null, array( 'report' => true ) );
+
+ssgwp_assert_same(
+	true,
+	$cli_report_args['include_manifest'],
+	'wp_cli_assoc_args_to_export_args enables the technical export report when selected.'
 );
 
 $store_method->invoke(

@@ -100,10 +100,6 @@ final class SSGWP_Plugin {
 							<label>
 								<input type="checkbox" name="generate_robots" value="1" />
 								<?php esc_html_e( 'robots.txt with a sitemap reference', 'playground-static-site-generator' ); ?>
-							</label><br />
-							<label>
-								<input type="checkbox" name="include_report" value="1" />
-								<?php esc_html_e( 'Technical export report', 'playground-static-site-generator' ); ?>
 							</label>
 							<p class="description">
 								<?php esc_html_e( 'Theme, plugin, WordPress CSS/JS, and linked site pages are included automatically so the static site works.', 'playground-static-site-generator' ); ?>
@@ -112,25 +108,37 @@ final class SSGWP_Plugin {
 					</tr>
 				</table>
 				<details>
-					<summary><?php esc_html_e( 'Advanced link settings', 'playground-static-site-generator' ); ?></summary>
+					<summary><?php esc_html_e( 'Hosting settings', 'playground-static-site-generator' ); ?></summary>
 					<table class="form-table" role="presentation">
 						<tr>
-							<th scope="row"><?php esc_html_e( 'Make links work when hosted', 'playground-static-site-generator' ); ?></th>
+							<th scope="row"><?php esc_html_e( 'Where will the ZIP be used?', 'playground-static-site-generator' ); ?></th>
 							<td>
 								<label>
 									<input type="radio" name="url_mode" value="relative" checked />
-									<?php esc_html_e( 'Anywhere, including a ZIP preview or subfolder', 'playground-static-site-generator' ); ?>
+									<?php esc_html_e( 'Anywhere: local preview, ZIP preview, or a subfolder', 'playground-static-site-generator' ); ?>
 								</label><br />
 								<label>
 									<input type="radio" name="url_mode" value="root" />
-									<?php esc_html_e( 'At the root of a domain', 'playground-static-site-generator' ); ?>
+									<?php esc_html_e( 'The root of a domain, such as example.com', 'playground-static-site-generator' ); ?>
 								</label><br />
 								<label>
 									<input type="radio" name="url_mode" value="absolute" />
-									<?php esc_html_e( 'At the same public URL as this WordPress site', 'playground-static-site-generator' ); ?>
+									<?php esc_html_e( 'The exact same public URL as this WordPress site', 'playground-static-site-generator' ); ?>
 								</label>
 								<p class="description">
-									<?php esc_html_e( 'Leave this on the first option unless you already know the final hosting location.', 'playground-static-site-generator' ); ?>
+									<?php esc_html_e( 'Leave this on the first option unless your hosting provider specifically needs root-relative or full URLs.', 'playground-static-site-generator' ); ?>
+								</p>
+							</td>
+						</tr>
+						<tr>
+							<th scope="row"><?php esc_html_e( 'Troubleshooting', 'playground-static-site-generator' ); ?></th>
+							<td>
+								<label>
+									<input type="checkbox" name="include_report" value="1" />
+									<?php esc_html_e( 'Include export report JSON', 'playground-static-site-generator' ); ?>
+								</label>
+								<p class="description">
+									<?php esc_html_e( 'Only enable this when you need to inspect what was exported.', 'playground-static-site-generator' ); ?>
 								</p>
 							</td>
 						</tr>
@@ -1183,20 +1191,8 @@ final class SSGWP_Plugin {
 			$output = trailingslashit( getcwd() ) . $output;
 		}
 
-		$export_args = array(
-			'url_mode'         => isset( $assoc_args['url-mode'] ) ? sanitize_key( $assoc_args['url-mode'] ) : 'relative',
-			'max_pages'        => isset( $assoc_args['max-pages'] ) ? max( 1, absint( $assoc_args['max-pages'] ) ) : 500,
-			'copy_uploads'     => ! isset( $assoc_args['skip-uploads'] ),
-			'copy_theme'       => ! isset( $assoc_args['skip-theme'] ),
-			'copy_plugins'     => ! isset( $assoc_args['skip-plugins'] ),
-			'copy_core_assets' => ! isset( $assoc_args['skip-core-assets'] ),
-			'crawl_links'      => ! isset( $assoc_args['no-crawl'] ),
-			'include_manifest' => ! isset( $assoc_args['no-report'] ),
-			'generate_sitemap' => isset( $assoc_args['generate-sitemap'] ),
-			'generate_robots'  => isset( $assoc_args['generate-robots'] ),
-			'fetch_mode'       => isset( $assoc_args['fetch-mode'] ) ? sanitize_key( $assoc_args['fetch-mode'] ) : 'auto',
-			'progress_callback' => array( __CLASS__, 'wp_cli_report_progress' ),
-		);
+		$export_args                       = self::wp_cli_assoc_args_to_export_args( $assoc_args );
+		$export_args['progress_callback'] = array( __CLASS__, 'wp_cli_report_progress' );
 
 		$exporter = new SSGWP_Static_Exporter();
 		$result   = $exporter->export_to_zip( $output, $export_args );
@@ -1215,6 +1211,34 @@ final class SSGWP_Plugin {
 				WP_CLI::warning( $warning );
 			}
 		}
+	}
+
+	/**
+	 * Convert WP-CLI associative args to exporter args.
+	 *
+	 * @param array $assoc_args WP-CLI associative args.
+	 * @return array
+	 */
+	private static function wp_cli_assoc_args_to_export_args( array $assoc_args ) {
+		$url_mode = isset( $assoc_args['url-mode'] ) ? sanitize_key( $assoc_args['url-mode'] ) : 'relative';
+
+		if ( ! in_array( $url_mode, array( 'relative', 'root', 'absolute' ), true ) ) {
+			$url_mode = 'relative';
+		}
+
+		return array(
+			'url_mode'         => $url_mode,
+			'max_pages'        => isset( $assoc_args['max-pages'] ) ? max( 1, absint( $assoc_args['max-pages'] ) ) : 10000,
+			'copy_uploads'     => ! isset( $assoc_args['skip-uploads'] ),
+			'copy_theme'       => ! isset( $assoc_args['skip-theme'] ),
+			'copy_plugins'     => ! isset( $assoc_args['skip-plugins'] ),
+			'copy_core_assets' => ! isset( $assoc_args['skip-core-assets'] ),
+			'crawl_links'      => ! isset( $assoc_args['no-crawl'] ),
+			'include_manifest' => isset( $assoc_args['report'] ) || isset( $assoc_args['include-report'] ),
+			'generate_sitemap' => isset( $assoc_args['generate-sitemap'] ),
+			'generate_robots'  => isset( $assoc_args['generate-robots'] ),
+			'fetch_mode'       => isset( $assoc_args['fetch-mode'] ) ? sanitize_key( $assoc_args['fetch-mode'] ) : 'auto',
+		);
 	}
 
 	/**

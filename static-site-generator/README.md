@@ -67,8 +67,8 @@ cp -R static-site-generator /path/to/wordpress/wp-content/plugins/
 Then activate **Playground Static Site Generator** in `wp-admin -> Plugins`.
 Open `Tools -> Static Site Generator`, choose any extra files you want, and
 download the static ZIP. The exporter includes required frontend assets and
-linked site pages automatically. Advanced link settings can stay on the
-default unless you already know the final hosting location.
+linked site pages automatically. Hosting settings can stay on the default
+unless your hosting provider specifically needs root-relative or full URLs.
 
 Requirements:
 
@@ -88,10 +88,12 @@ wp static-site export --output=./static-site.zip --fetch-mode=auto
 Useful options:
 
 ```bash
-wp static-site export --output=./static-site.zip --url-mode=relative
+wp static-site export --output=./static-site.zip --url-mode=relative # portable ZIP/subfolder links
+wp static-site export --output=./static-site.zip --url-mode=root     # links start at /
+wp static-site export --output=./static-site.zip --url-mode=absolute # links use the current site URL
 wp static-site export --output=./static-site.zip --fetch-mode=internal
 wp static-site export --output=./static-site.zip --generate-sitemap --generate-robots
-wp static-site export --output=./static-site.zip --no-report
+wp static-site export --output=./static-site.zip --report
 ```
 
 Use `--fetch-mode=internal` when loopback HTTP requests are blocked or
