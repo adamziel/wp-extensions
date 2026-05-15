@@ -96,7 +96,9 @@ ssgwp_blueprint_assert(
 ssgwp_blueprint_assert(
 	ssgwp_blueprint_step_contains( $brew_blueprint, 'brewcommerce-static-export-fallbacks' )
 		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'wc-block-product-template' )
-		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'grid-template-columns' ),
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'grid-template-columns' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'aspect-ratio:1/1' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'object-fit:cover' ),
 	'BrewCommerce blueprint includes a static product grid fallback style.'
 );
 

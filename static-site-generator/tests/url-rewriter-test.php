@@ -534,6 +534,75 @@ ssgwp_assert_same(
 	'rewrite_html records JSON unicode-escaped asset URLs for copying.'
 );
 
+$interactivity_json_result = $rewriter->rewrite_html(
+	'<div data-wp-context=\'{"shopUrl":"/shop/","cartUrl":"/cart/","product":{"image":"/wp-content/uploads/coffee.jpg"},"label":"Shop"}\'></div>',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'data-wp-context=\'{&quot;shopUrl&quot;:&quot;shop/index.html&quot;,&quot;cartUrl&quot;:&quot;cart/index.html&quot;',
+	$interactivity_json_result['content'],
+	'rewrite_html rewrites Interactivity API JSON page URLs with the HTML parser.'
+);
+
+ssgwp_assert_contains(
+	'&quot;image&quot;:&quot;wp-content/uploads/coffee.jpg&quot;',
+	$interactivity_json_result['content'],
+	'rewrite_html rewrites Interactivity API JSON asset URLs with the HTML parser.'
+);
+
+ssgwp_assert_contains(
+	'&quot;label&quot;:&quot;Shop&quot;',
+	$interactivity_json_result['content'],
+	'rewrite_html preserves non-URL JSON strings in Interactivity API context.'
+);
+
+ssgwp_assert_same(
+	array(
+		'https://example.test/shop/',
+		'https://example.test/cart/',
+	),
+	$interactivity_json_result['links'],
+	'rewrite_html records Interactivity API JSON page URLs for crawling.'
+);
+
+ssgwp_assert_same(
+	array( 'https://example.test/wp-content/uploads/coffee.jpg' ),
+	$interactivity_json_result['assets'],
+	'rewrite_html records Interactivity API JSON asset URLs for copying.'
+);
+
+$encoded_interactivity_json_result = $rewriter->rewrite_html(
+	'<div data-wp-context="{&quot;shopUrl&quot;:&quot;/shop/&quot;}"></div>',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'data-wp-context="{&quot;shopUrl&quot;:&quot;shop/index.html&quot;}"',
+	$encoded_interactivity_json_result['content'],
+	'rewrite_html rewrites HTML-encoded Interactivity API JSON attributes.'
+);
+
+$stable_interactivity_json_result = $rewriter->rewrite_html(
+	'<div data-wp-context="{&quot;shopUrl&quot;:&quot;shop/index.html&quot;}"></div>',
+	'https://example.test/',
+	'index.html'
+);
+
+ssgwp_assert_contains(
+	'data-wp-context="{&quot;shopUrl&quot;:&quot;shop/index.html&quot;}"',
+	$stable_interactivity_json_result['content'],
+	'rewrite_html preserves already rewritten Interactivity API JSON attributes.'
+);
+
+ssgwp_assert_not_contains(
+	'&amp;quot;',
+	$stable_interactivity_json_result['content'],
+	'rewrite_html does not double-escape already rewritten Interactivity API JSON attributes.'
+);
+
 $method = new ReflectionMethod( $rewriter, 'prepare_html_attribute_value' );
 $method->setAccessible( true );
 

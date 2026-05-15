@@ -356,6 +356,7 @@ final class SSGWP_URL_Rewriter {
 			'data-thumb'       => 'asset',
 			'data-thumbnail'   => 'asset',
 			'data-url'         => 'maybe',
+			'data-wp-context'  => 'json',
 			'about'            => 'semantic-page',
 			'itemid'           => 'page',
 			'itemtype'         => 'semantic-page-list',
@@ -483,6 +484,8 @@ final class SSGWP_URL_Rewriter {
 
 				if ( 'srcset' === $kind ) {
 					$rewritten = $this->rewrite_srcset( $value, $base_url, $target_path );
+				} elseif ( 'json' === $kind ) {
+					$rewritten = $this->rewrite_json_url_values( $value, $base_url, $target_path );
 				} elseif ( 'semantic-page-list' === $kind ) {
 					$rewritten = $this->rewrite_url_list_value(
 						$value,
@@ -571,6 +574,7 @@ final class SSGWP_URL_Rewriter {
 			'data-thumb'       => 'asset',
 			'data-thumbnail'   => 'asset',
 			'data-url'         => 'maybe',
+			'data-wp-context'  => 'json',
 			'imagesrcset'      => 'srcset',
 			'about'            => 'semantic-page',
 			'itemid'           => 'page',
@@ -591,6 +595,8 @@ final class SSGWP_URL_Rewriter {
 
 					if ( 'srcset' === $kind ) {
 						$rewritten = $this->rewrite_srcset( $value, $base_url, $target_path );
+					} elseif ( 'json' === $kind ) {
+						$rewritten = $this->rewrite_json_url_values( $value, $base_url, $target_path );
 					} elseif ( 'semantic-page-list' === $kind ) {
 						$rewritten = $this->rewrite_url_list_value(
 							$value,
@@ -600,6 +606,10 @@ final class SSGWP_URL_Rewriter {
 						);
 					} else {
 						$rewritten = $this->rewrite_url_value( $value, $base_url, $target_path, $kind );
+					}
+
+					if ( $rewritten === $value ) {
+						return $matches[0];
 					}
 
 					if ( '' !== $matches[2] ) {
@@ -1100,6 +1110,118 @@ final class SSGWP_URL_Rewriter {
 			},
 			(string) $value
 		);
+	}
+
+	/**
+	 * Rewrite URL-looking strings inside a JSON attribute value.
+	 *
+	 * WordPress Interactivity API directives, including data-wp-context, often
+	 * carry navigation URLs in JSON. Decode the JSON and rewrite only string
+	 * values that parse as same-site page or asset URLs.
+	 *
+	 * @param string $value       JSON attribute value.
+	 * @param string $base_url    Base URL.
+	 * @param string $target_path Relative static file path.
+	 * @return string Original or rewritten JSON.
+	 */
+	private function rewrite_json_url_values( $value, $base_url, $target_path ) {
+		$json    = (string) $value;
+		$decoded = json_decode( $json, true );
+
+		if ( JSON_ERROR_NONE !== json_last_error() ) {
+			$decoded_json = html_entity_decode( $json, ENT_QUOTES, 'UTF-8' );
+
+			if ( $decoded_json === $json ) {
+				return $value;
+			}
+
+			$decoded = json_decode( $decoded_json, true );
+
+			if ( JSON_ERROR_NONE !== json_last_error() ) {
+				return $value;
+			}
+		}
+
+		$changed = false;
+		$decoded = $this->rewrite_json_value_url_strings(
+			$decoded,
+			$base_url,
+			$target_path,
+			$changed
+		);
+
+		if ( ! $changed ) {
+			return $value;
+		}
+
+		$encoded = json_encode( $decoded, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+
+		return is_string( $encoded ) ? $encoded : $value;
+	}
+
+	/**
+	 * Rewrite URL-looking strings in decoded JSON data.
+	 *
+	 * @param mixed  $value       Decoded JSON value.
+	 * @param string $base_url    Base URL.
+	 * @param string $target_path Relative static file path.
+	 * @param bool   $changed     Whether any value changed.
+	 * @return mixed Rewritten value.
+	 */
+	private function rewrite_json_value_url_strings( $value, $base_url, $target_path, &$changed ) {
+		if ( is_string( $value ) ) {
+			if ( ! $this->is_url_like_json_string( $value ) ) {
+				return $value;
+			}
+
+			$rewritten = $this->rewrite_url_value( $value, $base_url, $target_path, 'maybe' );
+
+			if ( $rewritten !== $value ) {
+				$changed = true;
+			}
+
+			return $rewritten;
+		}
+
+		if ( ! is_array( $value ) ) {
+			return $value;
+		}
+
+		foreach ( $value as $key => $child ) {
+			$value[ $key ] = $this->rewrite_json_value_url_strings(
+				$child,
+				$base_url,
+				$target_path,
+				$changed
+			);
+		}
+
+		return $value;
+	}
+
+	/**
+	 * Check whether a JSON string is shaped like a URL reference.
+	 *
+	 * @param string $value String value.
+	 * @return bool Whether the value should go through URL normalization.
+	 */
+	private function is_url_like_json_string( $value ) {
+		if ( '' === $value || trim( $value ) !== $value ) {
+			return false;
+		}
+
+		if (
+			'/' === $value[0]
+			|| '?' === $value[0]
+			|| 0 === strpos( $value, './' )
+			|| 0 === strpos( $value, '../' )
+		) {
+			return true;
+		}
+
+		$scheme = wp_parse_url( $value, PHP_URL_SCHEME );
+
+		return is_string( $scheme ) && '' !== $scheme;
 	}
 
 	/**

@@ -1168,7 +1168,7 @@ $ssgwp_test_posts          = array(
 	),
 );
 $ssgwp_test_http_responses = array(
-	'https://example.test/' => '<html><head><title>Coffee Home</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main><h1>Coffee Home</h1><a href="/shop/">Shop</a><a href="/cart/">Cart</a><a href="/communication-preferences/">Communication preferences</a></main></body></html>',
+	'https://example.test/' => '<html><head><title>Coffee Home</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main data-wp-context=\'{"shopUrl":"/shop/","cartUrl":"/cart/"}\'><h1>Coffee Home</h1><a href="/shop/">Shop</a><a href="/cart/">Cart</a><a href="/communication-preferences/">Communication preferences</a></main></body></html>',
 	'https://example.test/shop/' => '<html><head><title>Shop</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main><h1>Shop</h1><ul class="products columns-3"><li class="product">Espresso Roast</li><li class="product">Pour Over Kit</li><li class="product">Travel Tumbler</li></ul><a href="/cart/">View cart</a><script type="application/json">{"cartUrl":"\u002Fcart\u002F","checkoutUrl":"\u002Fcheckout\u002F","styleUrl":"\u002Fwp-content\u002Fplugins\u002Fwoocommerce\u002Fassets\u002Fcss\u002Fwoocommerce.css"}</script></main></body></html>',
 	'https://example.test/cart/' => '<html><head><title>Cart</title></head><body><main><h1>Cart</h1><p>Cart page rendered.</p><a href="/shop/">Keep shopping</a></main></body></html>',
 	'https://example.test/communication-preferences/' => '<html><head><title>Communication preferences</title></head><body><main><h1>Communication preferences</h1><p>Rendered communication preferences content.</p></main></body></html>',
@@ -1188,6 +1188,7 @@ $commerce_result = $exporter->export_to_directory(
 );
 
 $commerce_shop          = file_get_contents( $commerce_output_dir . '/shop/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+$commerce_home          = file_get_contents( $commerce_output_dir . '/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
 $commerce_cart          = file_get_contents( $commerce_output_dir . '/cart/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
 $commerce_communication = file_get_contents( $commerce_output_dir . '/communication-preferences/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
 
@@ -1197,10 +1198,40 @@ ssgwp_assert_same(
 	'export_to_directory includes the commerce shop page in the export.'
 );
 
+ssgwp_assert_same(
+	true,
+	file_exists( $commerce_output_dir . '/shop/index.html' ),
+	'export_to_directory writes the static shop page targeted by homepage links.'
+);
+
+ssgwp_assert_contains(
+	'href="shop/index.html"',
+	$commerce_home,
+	'export_to_directory rewrites homepage shop links for file previews.'
+);
+
+ssgwp_assert_not_contains(
+	'href="/shop/"',
+	$commerce_home,
+	'export_to_directory removes root-relative shop hrefs from the homepage.'
+);
+
 ssgwp_assert_contains(
 	'Espresso Roast',
 	$commerce_shop,
 	'export_to_directory writes product content on the shop page.'
+);
+
+ssgwp_assert_contains(
+	'&quot;shopUrl&quot;:&quot;shop/index.html&quot;',
+	$commerce_home,
+	'export_to_directory rewrites Interactivity API shop URLs in homepage JSON context.'
+);
+
+ssgwp_assert_not_contains(
+	'&quot;shopUrl&quot;:&quot;/shop/&quot;',
+	$commerce_home,
+	'export_to_directory removes root-relative shop URLs from homepage JSON context.'
 );
 
 ssgwp_assert_contains(
