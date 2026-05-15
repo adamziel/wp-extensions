@@ -128,6 +128,42 @@ final class PdfBlockConversionTest extends TestCase {
 	}
 
 	/**
+	 * PDFs with embedded ToUnicode font maps decode glyph IDs into readable text.
+	 *
+	 * @return void
+	 */
+	public function test_pdf_to_unicode_cmap_decodes_glyph_codes_to_text() {
+		if ( ! function_exists( 'mb_convert_encoding' ) ) {
+			$this->markTestSkipped( 'mbstring is required to build UTF-16BE CMap fixtures.' );
+		}
+
+		$source_file = $this->temporary_pdf_with_to_unicode_cmap(
+			'to-unicode-screenplay.pdf',
+			'KRAN ZAWSZE KAPIE',
+			"INT. KUCHNIA - NOC\nZażółć gęślą jaźń."
+		);
+		$session     = ImportSession::start_for_source( $source_file );
+		$posts       = new FakePostGateway();
+		$runner      = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/' );
+		$this->store->save( $session );
+
+		$status = $this->store->find( $session->get_id() )->get_status();
+		for ( $tick = 0; $tick < 8 && ImportSession::STATUS_DONE !== $status; ++$tick ) {
+			$runner->run( $session->get_id() );
+			$status = $this->store->find( $session->get_id() )->get_status();
+		}
+
+		$post_content = $this->combined_post_content( $posts );
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertStringContainsString( 'KRAN ZAWSZE KAPIE', $post_content );
+		$this->assertStringContainsString( 'INT. KUCHNIA - NOC', $post_content );
+		$this->assertStringContainsString( 'Zażółć gęślą jaźń.', $post_content );
+		$this->assertStringNotContainsString( '$<br>', $post_content );
+	}
+
+	/**
 	 * Returns at least ten distinct tricky PDF conversion cases.
 	 *
 	 * @return array<string,array<int,array<string,mixed>>>
@@ -289,6 +325,74 @@ final class PdfBlockConversionTest extends TestCase {
 	 */
 	private function temporary_pdf_with_jpeg_image( $basename, array $streams ) {
 		return $this->temporary_pdf_document( $basename, $streams, true );
+	}
+
+	/**
+	 * Creates a PDF fixture whose visible text is encoded as font glyph IDs plus ToUnicode.
+	 *
+	 * @param string $basename Fixture basename.
+	 * @param string $title    Title text.
+	 * @param string $body     Body text.
+	 * @return string
+	 */
+	private function temporary_pdf_with_to_unicode_cmap( $basename, $title, $body ) {
+		$all_text   = (string) $title . "\n" . (string) $body;
+		$characters = preg_split( '//u', $all_text, -1, PREG_SPLIT_NO_EMPTY );
+		$this->assertIsArray( $characters );
+		$character_map = array();
+		$next_code     = 1;
+		$cmap_entries  = array();
+		$encoded_title = '';
+		$encoded_body  = '';
+		$encode_text   = function ( $text ) use ( &$character_map, &$next_code, &$cmap_entries ) {
+			$encoded = '';
+			$chars   = preg_split( '//u', (string) $text, -1, PREG_SPLIT_NO_EMPTY );
+			$this->assertIsArray( $chars );
+
+			foreach ( $chars as $char ) {
+				if ( ! isset( $character_map[ $char ] ) ) {
+					$code                   = strtoupper( str_pad( dechex( $next_code ), 4, '0', STR_PAD_LEFT ) );
+					$character_map[ $char ] = $code;
+					$cmap_entries[]         = '<' . $code . '> <' . $this->utf16be_hex( $char ) . '>';
+					++$next_code;
+				}
+				$encoded .= $character_map[ $char ];
+			}
+
+			return $encoded;
+		};
+
+		unset( $characters );
+
+		$encoded_title = $encode_text( $title );
+		$encoded_body  = $encode_text( $body );
+		$content       = "BT\n/F1 12 Tf\n72 720 Td\n<" . $encoded_title . "> Tj\n0 -18 Td\n<" . $encoded_body . "> Tj\nET";
+		$cmap          = "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def\n/CMapName /UnitTest def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n" . count( $cmap_entries ) . " beginbfchar\n" . implode( "\n", $cmap_entries ) . "\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+
+		$objects = array(
+			"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+			"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+			"3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >> endobj\n",
+			'4 0 obj << /Length ' . strlen( $content ) . " >>\nstream\n" . $content . "\nendstream\nendobj\n",
+			"5 0 obj << /Type /Font /Subtype /Type0 /BaseFont /UnitTest /Encoding /Identity-H /DescendantFonts [7 0 R] /ToUnicode 6 0 R >> endobj\n",
+			'6 0 obj << /Length ' . strlen( $cmap ) . " >>\nstream\n" . $cmap . "\nendstream\nendobj\n",
+			"7 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /UnitTest /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >> endobj\n",
+		);
+
+		return $this->temporary_file( $basename, "%PDF-1.4\n" . implode( '', $objects ) . "%%EOF\n" );
+	}
+
+	/**
+	 * Encodes text as UTF-16BE hex for ToUnicode fixtures.
+	 *
+	 * @param string $text UTF-8 text.
+	 * @return string
+	 */
+	private function utf16be_hex( $text ) {
+		$converted = mb_convert_encoding( (string) $text, 'UTF-16BE', 'UTF-8' );
+		$this->assertNotFalse( $converted );
+
+		return strtoupper( bin2hex( $converted ) );
 	}
 
 	/**

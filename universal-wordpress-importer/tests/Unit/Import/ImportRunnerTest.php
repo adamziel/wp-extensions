@@ -5398,6 +5398,44 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Obvious glyph-code garbage is rejected instead of being written as page content.
+	 *
+	 * @return void
+	 */
+	public function test_runner_rejects_low_quality_pdf_glyph_garbage() {
+		$source_file   = $this->temporary_pdf(
+			'glyph-garbage.pdf',
+			"BT\n/F1 12 Tf\n72 720 Td\n($) Tj\nT*\n(L%%\") Tj\nT*\n(L) Tj\nT*\n(.VnN,) Tj\nT*\n('23J/a^$4&) Tj\nT*\n($) Tj\nT*\n(.) Tj\nT*\n(.) Tj\nT*\n(.) Tj\nT*\n(.) Tj\nT*\n(4) Tj\nT*\n(4) Tj\nT*\n(4) Tj\nT*\n(4) Tj\nET",
+			false
+		);
+		$previous_text = getenv( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND' );
+		$previous_ocr  = getenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+		$session       = ImportSession::start_for_source( $source_file );
+		$this->store->save( $session );
+
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test isolates PDF fallback command configuration.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND' );
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv -- Unit test isolates OCR command configuration.
+		putenv( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND' );
+
+		try {
+			( new ImportRunner( $this->store, 'unit-test', 60 ) )->run( $session->get_id() );
+		} finally {
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND', $previous_text );
+			$this->restore_environment_variable( 'UNIVERSAL_IMPORTER_PDF_OCR_COMMAND', $previous_ocr );
+		}
+
+		$items    = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_FAILED ), 1 );
+		$metadata = $items[0]->get_metadata();
+
+		$this->assertCount( 1, $items );
+		$this->assertSame( 0, $this->store->count_prepared_documents( $session->get_id() ) );
+		$this->assertSame( 'rejected', $metadata['pdf_native_text_quality'] );
+		$this->assertStringContainsString( 'rejected that output', $metadata['pdf_native_text_warning'] );
+		$this->assertStringContainsString( 'PDF text extraction produced no importable text', $metadata['error'] );
+	}
+
+	/**
 	 * Unsafe zip entry paths are skipped with diagnostics instead of being extracted.
 	 *
 	 * @return void

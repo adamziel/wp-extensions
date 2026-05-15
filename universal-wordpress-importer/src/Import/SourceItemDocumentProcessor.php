@@ -531,7 +531,7 @@ final class SourceItemDocumentProcessor {
 		$diagnostics     = $this->merge_pdf_text_scan_diagnostics( $diagnostics, $scan['diagnostics'] );
 
 		foreach ( $scan['streams'] as $stream ) {
-			$text = $this->normalize_extracted_pdf_text( $this->extract_pdf_text_operators( $stream['content'] ), true );
+			$text = $this->normalize_extracted_pdf_text( $this->extract_pdf_text_operators( $stream['content'], $this->extract_pdf_to_unicode_font_maps( $pdf ) ), true );
 
 			$last_end    = (int) $stream['next_offset'];
 			$last_stream = (int) $stream['index'] + 1;
@@ -3818,6 +3818,12 @@ final class SourceItemDocumentProcessor {
 		$diagnostics = empty( $structure_metadata ) ? $this->analyze_pdf_structure( $pdf ) : $structure_metadata;
 		$external    = null;
 
+		if ( $this->is_low_quality_pdf_text( $text ) ) {
+			$diagnostics['pdf_native_text_quality'] = 'rejected';
+			$diagnostics['pdf_native_text_warning'] = 'Native PDF text extraction produced mostly glyph codes or symbols. The importer rejected that output instead of creating unreadable draft content.';
+			$text                                   = '';
+		}
+
 		if ( ! empty( $diagnostics['pdf_object_stream_count'] ) ) {
 			$external = $this->extract_pdf_text_with_external_command( $path );
 
@@ -5650,8 +5656,10 @@ final class SourceItemDocumentProcessor {
 		$parts = array();
 		$bytes = 0;
 
+		$font_maps = $this->extract_pdf_to_unicode_font_maps( $pdf );
+
 		foreach ( $segments as $segment ) {
-			$text = $this->extract_pdf_text_operators( $segment );
+			$text = $this->extract_pdf_text_operators( $segment, $font_maps );
 
 			if ( '' === $text ) {
 				continue;
@@ -6014,18 +6022,221 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
-	 * Extracts text operands from common PDF text-showing operators.
+	 * Extracts simple PDF ToUnicode CMaps keyed by page font resource name.
 	 *
-	 * @param string $content Candidate PDF content stream.
+	 * @param string $pdf Raw PDF bytes.
+	 * @return array<string,array<string,string>>
+	 */
+	private function extract_pdf_to_unicode_font_maps( $pdf ) {
+		$objects  = $this->extract_pdf_indirect_objects( $pdf );
+		$cmaps    = array();
+		$font_map = array();
+
+		foreach ( $objects as $object_id => $object ) {
+			if ( ! preg_match( '#/ToUnicode\s+(\d+)\s+\d+\s+R\b#', $object, $match ) ) {
+				continue;
+			}
+
+			$cmap_object_id = (int) $match[1];
+			if ( ! isset( $objects[ $cmap_object_id ] ) ) {
+				continue;
+			}
+
+			if ( ! isset( $cmaps[ $cmap_object_id ] ) ) {
+				$cmaps[ $cmap_object_id ] = $this->parse_pdf_to_unicode_cmap( $this->pdf_object_stream_body( $objects[ $cmap_object_id ] ) );
+			}
+
+			if ( ! empty( $cmaps[ $cmap_object_id ] ) ) {
+				$font_map[ $object_id ] = $cmaps[ $cmap_object_id ];
+			}
+		}
+
+		if ( empty( $font_map ) ) {
+			return array();
+		}
+
+		$maps = array();
+		foreach ( $font_map as $object_id => $map ) {
+			$pattern = '#/([A-Za-z0-9_.-]+)\s+' . preg_quote( (string) $object_id, '#' ) . '\s+\d+\s+R\b#';
+			if ( preg_match_all( $pattern, (string) $pdf, $matches ) ) {
+				foreach ( $matches[1] as $name ) {
+					if ( 'ToUnicode' !== $name ) {
+						$maps[ (string) $name ] = $map;
+					}
+				}
+			}
+		}
+
+		if ( 1 === count( $font_map ) ) {
+			$maps['__default'] = reset( $font_map );
+		}
+
+		return $maps;
+	}
+
+	/**
+	 * Extracts indirect object bodies by object number.
+	 *
+	 * @param string $pdf Raw PDF bytes.
+	 * @return array<int,string>
+	 */
+	private function extract_pdf_indirect_objects( $pdf ) {
+		$objects = array();
+
+		if ( ! preg_match_all( '/(\d+)\s+\d+\s+obj\b(.*?)endobj/s', (string) $pdf, $matches, PREG_SET_ORDER ) ) {
+			return $objects;
+		}
+
+		foreach ( $matches as $match ) {
+			$objects[ (int) $match[1] ] = (string) $match[2];
+		}
+
+		return $objects;
+	}
+
+	/**
+	 * Returns a decoded stream body from an indirect object.
+	 *
+	 * @param string $object_body Object body.
 	 * @return string
 	 */
-	private function extract_pdf_text_operators( $content ) {
+	private function pdf_object_stream_body( $object_body ) {
+		if ( ! preg_match( '/<<(.*?)>>\s*stream(?:\r\n|\n|\r)?(.*?)(?:\r\n|\n|\r)?endstream/s', (string) $object_body, $match ) ) {
+			return '';
+		}
+
+		$dictionary = (string) $match[1];
+		$stream     = (string) $match[2];
+
+		if ( false !== stripos( $dictionary, '/FlateDecode' ) && function_exists( 'gzuncompress' ) ) {
+			$decoded = @gzuncompress( $stream ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Invalid PDF CMap streams are ignored.
+			if ( false === $decoded ) {
+				$decoded = @gzdecode( $stream ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- Invalid PDF CMap streams are ignored.
+			}
+			if ( false !== $decoded ) {
+				$stream = $decoded;
+			}
+		}
+
+		return $stream;
+	}
+
+	/**
+	 * Parses the bfchar/bfrange subset of a ToUnicode CMap.
+	 *
+	 * @param string $cmap CMap content.
+	 * @return array<string,string>
+	 */
+	private function parse_pdf_to_unicode_cmap( $cmap ) {
+		$map = array();
+
+		if ( preg_match_all( '/beginbfchar(.*?)endbfchar/s', (string) $cmap, $sections ) ) {
+			foreach ( $sections[1] as $section ) {
+				if ( preg_match_all( '/<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>/', (string) $section, $pairs, PREG_SET_ORDER ) ) {
+					foreach ( $pairs as $pair ) {
+						$map[ strtoupper( $pair[1] ) ] = $this->decode_pdf_cmap_unicode_hex( $pair[2] );
+					}
+				}
+			}
+		}
+
+		if ( preg_match_all( '/beginbfrange(.*?)endbfrange/s', (string) $cmap, $sections ) ) {
+			foreach ( $sections[1] as $section ) {
+				if ( preg_match_all( '/<([0-9A-Fa-f]+)>\s+<([0-9A-Fa-f]+)>\s+(?:<([0-9A-Fa-f]+)>|\[(.*?)\])/', (string) $section, $ranges, PREG_SET_ORDER ) ) {
+					foreach ( $ranges as $range ) {
+						$map = $this->merge_pdf_cmap_range( $map, $range );
+					}
+				}
+			}
+		}
+
+		return array_filter(
+			$map,
+			static function ( $value ) {
+				return '' !== $value;
+			}
+		);
+	}
+
+	/**
+	 * Adds one ToUnicode bfrange row to a CMap.
+	 *
+	 * @param array<string,string> $map Existing map.
+	 * @param array<int,string>    $range Regex match.
+	 * @return array<string,string>
+	 */
+	private function merge_pdf_cmap_range( array $map, array $range ) {
+		$start      = hexdec( $range[1] );
+		$end        = hexdec( $range[2] );
+		$code_width = strlen( $range[1] );
+
+		if ( $end < $start || 512 < $end - $start ) {
+			return $map;
+		}
+
+		if ( isset( $range[4] ) && '' !== trim( (string) $range[4] ) ) {
+			if ( ! preg_match_all( '/<([0-9A-Fa-f]+)>/', (string) $range[4], $values ) ) {
+				return $map;
+			}
+
+			foreach ( $values[1] as $index => $value ) {
+				$code         = strtoupper( str_pad( dechex( $start + $index ), $code_width, '0', STR_PAD_LEFT ) );
+				$map[ $code ] = $this->decode_pdf_cmap_unicode_hex( $value );
+			}
+
+			return $map;
+		}
+
+		$unicode_start = hexdec( $range[3] );
+		$unicode_width = strlen( $range[3] );
+
+		for ( $code_point = $start; $code_point <= $end; ++$code_point ) {
+			$code         = strtoupper( str_pad( dechex( $code_point ), $code_width, '0', STR_PAD_LEFT ) );
+			$unicode_hex  = strtoupper( str_pad( dechex( $unicode_start + ( $code_point - $start ) ), $unicode_width, '0', STR_PAD_LEFT ) );
+			$map[ $code ] = $this->decode_pdf_cmap_unicode_hex( $unicode_hex );
+		}
+
+		return $map;
+	}
+
+	/**
+	 * Decodes a ToUnicode destination hex string.
+	 *
+	 * @param string $hex UTF-16BE or byte-oriented hex string.
+	 * @return string
+	 */
+	private function decode_pdf_cmap_unicode_hex( $hex ) {
+		$binary = $this->decode_pdf_hex_bytes( $hex );
+
+		if ( '' === $binary ) {
+			return '';
+		}
+
+		if ( function_exists( 'mb_convert_encoding' ) ) {
+			$converted = mb_convert_encoding( $binary, 'UTF-8', 'UTF-16BE' );
+			if ( false !== $converted && '' !== $converted ) {
+				return $converted;
+			}
+		}
+
+		return $binary;
+	}
+
+	/**
+	 * Extracts text operands from common PDF text-showing operators.
+	 *
+	 * @param string                             $content   Candidate PDF content stream.
+	 * @param array<string,array<string,string>> $font_maps Optional ToUnicode maps keyed by font resource name.
+	 * @return string
+	 */
+	private function extract_pdf_text_operators( $content, array $font_maps = array() ) {
 		$tokens    = $this->tokenize_pdf_content_stream( $content );
 		$operands  = array();
 		$lines     = array();
 		$line      = '';
 		$current_x = null;
 		$current_y = null;
+		$font_map  = empty( $font_maps['__default'] ) ? array() : $font_maps['__default'];
 
 		foreach ( $tokens as $token ) {
 			if ( 'operator' !== $token['type'] ) {
@@ -6036,14 +6247,23 @@ final class SourceItemDocumentProcessor {
 			$operator = $token['value'];
 
 			if ( 'Tj' === $operator ) {
-				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ) ) );
+				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ), $font_map ) );
 			} elseif ( 'TJ' === $operator ) {
-				$this->append_pdf_text_to_line( $line, $this->extract_pdf_strings_from_operands( $this->pdf_array_operand_body( $this->last_pdf_operand( $operands ) ) ) );
+				$this->append_pdf_text_to_line( $line, $this->extract_pdf_strings_from_operands( $this->pdf_array_operand_body( $this->last_pdf_operand( $operands ) ), $font_map ) );
 			} elseif ( "'" === $operator || '"' === $operator ) {
 				$this->finish_pdf_text_line( $lines, $line );
-				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ) ) );
+				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ), $font_map ) );
 			} elseif ( 'T*' === $operator ) {
 				$this->finish_pdf_text_line( $lines, $line );
+			} elseif ( 'Tf' === $operator ) {
+				$font_name = $this->pdf_font_name_from_operands( $operands );
+				if ( null !== $font_name && isset( $font_maps[ $font_name ] ) ) {
+					$font_map = $font_maps[ $font_name ];
+				} elseif ( isset( $font_maps['__default'] ) ) {
+					$font_map = $font_maps['__default'];
+				} else {
+					$font_map = array();
+				}
 			} elseif ( 'Td' === $operator || 'TD' === $operator ) {
 				$move = $this->last_pdf_numeric_operands( $operands, 2 );
 				if ( null !== $move && '' !== trim( $line ) ) {
@@ -6097,7 +6317,7 @@ final class SourceItemDocumentProcessor {
 			return $tokens;
 		}
 
-		$text_operators = array( 'Tj', 'TJ', "'", '"', 'T*', 'Td', 'TD', 'Tm', 'BT', 'ET' );
+		$text_operators = array( 'Tj', 'TJ', "'", '"', 'T*', 'Tf', 'Td', 'TD', 'Tm', 'BT', 'ET' );
 
 		foreach ( $matches[0] as $match ) {
 			$value    = (string) $match;
@@ -6212,12 +6432,35 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
+	 * Returns the active font resource name from Tf operands.
+	 *
+	 * @param array<int,string> $operands Operand stack.
+	 * @return string|null Font resource name without leading slash.
+	 */
+	private function pdf_font_name_from_operands( array $operands ) {
+		if ( count( $operands ) < 2 ) {
+			return null;
+		}
+
+		$name = (string) $operands[ count( $operands ) - 2 ];
+
+		if ( 0 !== strpos( $name, '/' ) ) {
+			return null;
+		}
+
+		$name = substr( $name, 1 );
+
+		return '' === $name ? null : $name;
+	}
+
+	/**
 	 * Extracts text strings from a PDF array operand.
 	 *
-	 * @param string $operands Raw array operand body.
+	 * @param string               $operands Raw array operand body.
+	 * @param array<string,string> $font_map Optional ToUnicode character map.
 	 * @return string
 	 */
-	private function extract_pdf_strings_from_operands( $operands ) {
+	private function extract_pdf_strings_from_operands( $operands, array $font_map = array() ) {
 		if ( ! preg_match_all( '/\((?:\\\\.|[^\\\\\)])*\)|<[\da-fA-F\s]+>/s', (string) $operands, $matches ) ) {
 			return '';
 		}
@@ -6225,7 +6468,7 @@ final class SourceItemDocumentProcessor {
 		$parts = array();
 
 		foreach ( $matches[0] as $operand ) {
-			$text = $this->decode_pdf_text_operand( $operand );
+			$text = $this->decode_pdf_text_operand( $operand, $font_map );
 
 			if ( '' !== $text ) {
 				$parts[] = $text;
@@ -6238,10 +6481,11 @@ final class SourceItemDocumentProcessor {
 	/**
 	 * Decodes a PDF literal or hex string operand.
 	 *
-	 * @param string $operand Operand token.
+	 * @param string               $operand Operand token.
+	 * @param array<string,string> $font_map Optional ToUnicode character map.
 	 * @return string
 	 */
-	private function decode_pdf_text_operand( $operand ) {
+	private function decode_pdf_text_operand( $operand, array $font_map = array() ) {
 		$operand = trim( (string) $operand );
 
 		if ( '' === $operand ) {
@@ -6249,11 +6493,12 @@ final class SourceItemDocumentProcessor {
 		}
 
 		if ( '(' === $operand[0] && ')' === substr( $operand, -1 ) ) {
-			return $this->decode_pdf_literal_string( substr( $operand, 1, -1 ) );
+			$literal = $this->decode_pdf_literal_string( substr( $operand, 1, -1 ) );
+			return empty( $font_map ) ? $literal : $this->decode_pdf_text_with_font_map( $literal, $font_map );
 		}
 
 		if ( '<' === $operand[0] && '>' === substr( $operand, -1 ) ) {
-			return $this->decode_pdf_hex_string( substr( $operand, 1, -1 ) );
+			return empty( $font_map ) ? $this->decode_pdf_hex_string( substr( $operand, 1, -1 ) ) : $this->decode_pdf_text_with_font_map( $this->decode_pdf_hex_bytes( substr( $operand, 1, -1 ) ), $font_map );
 		}
 
 		return '';
@@ -6324,6 +6569,27 @@ final class SourceItemDocumentProcessor {
 	 * @return string
 	 */
 	private function decode_pdf_hex_string( $value ) {
+		$binary = $this->decode_pdf_hex_bytes( $value );
+
+		if ( '' === $binary ) {
+			return '';
+		}
+
+		if ( 0 === strpos( $binary, "\xfe\xff" ) && function_exists( 'mb_convert_encoding' ) ) {
+			$converted = mb_convert_encoding( substr( $binary, 2 ), 'UTF-8', 'UTF-16BE' );
+			return false === $converted ? '' : $converted;
+		}
+
+		return $binary;
+	}
+
+	/**
+	 * Decodes PDF hexadecimal string bytes without interpreting character encoding.
+	 *
+	 * @param string $value Hex string body.
+	 * @return string
+	 */
+	private function decode_pdf_hex_bytes( $value ) {
 		$hex = preg_replace( '/\s+/', '', (string) $value );
 
 		if ( ! is_string( $hex ) || '' === $hex ) {
@@ -6340,12 +6606,56 @@ final class SourceItemDocumentProcessor {
 			return '';
 		}
 
-		if ( 0 === strpos( $binary, "\xfe\xff" ) && function_exists( 'mb_convert_encoding' ) ) {
-			$converted = mb_convert_encoding( substr( $binary, 2 ), 'UTF-8', 'UTF-16BE' );
-			return false === $converted ? '' : $converted;
+		return $binary;
+	}
+
+	/**
+	 * Decodes font-specific glyph bytes through a PDF ToUnicode character map.
+	 *
+	 * @param string               $bytes    Raw glyph bytes.
+	 * @param array<string,string> $font_map ToUnicode map keyed by uppercase hex codes.
+	 * @return string
+	 */
+	private function decode_pdf_text_with_font_map( $bytes, array $font_map ) {
+		$output     = '';
+		$bytes      = (string) $bytes;
+		$length     = strlen( $bytes );
+		$code_sizes = array();
+
+		foreach ( array_keys( $font_map ) as $code ) {
+			$code_sizes[ strlen( (string) $code ) / 2 ] = true;
 		}
 
-		return $binary;
+		$code_sizes = array_keys( $code_sizes );
+		rsort( $code_sizes, SORT_NUMERIC );
+
+		for ( $index = 0; $index < $length; ) {
+			$matched = false;
+
+			foreach ( $code_sizes as $size ) {
+				$size = (int) $size;
+				if ( $size < 1 || $index + $size > $length ) {
+					continue;
+				}
+
+				$code = strtoupper( bin2hex( substr( $bytes, $index, $size ) ) );
+				if ( isset( $font_map[ $code ] ) ) {
+					$output .= $font_map[ $code ];
+					$index  += $size;
+					$matched = true;
+					break;
+				}
+			}
+
+			if ( $matched ) {
+				continue;
+			}
+
+			$output .= $bytes[ $index ];
+			++$index;
+		}
+
+		return $output;
 	}
 
 	/**
@@ -6367,6 +6677,55 @@ final class SourceItemDocumentProcessor {
 		$text = preg_replace( "/\n{3,}/", "\n\n", is_string( $text ) ? $text : '' );
 
 		return trim( is_string( $text ) ? $text : '' );
+	}
+
+	/**
+	 * Detects obvious glyph-code garbage before it becomes WordPress content.
+	 *
+	 * @param string $text Extracted PDF text.
+	 * @return bool
+	 */
+	private function is_low_quality_pdf_text( $text ) {
+		$text = trim( (string) $text );
+
+		if ( strlen( $text ) < 24 ) {
+			return false;
+		}
+
+		$visible = preg_match_all( '/[^\s]/u', $text );
+		if ( false === $visible || 0 === $visible ) {
+			return false;
+		}
+
+		$letters = preg_match_all( '/\p{L}/u', $text );
+		$digits  = preg_match_all( '/\p{N}/u', $text );
+		if ( false === $letters || false === $digits ) {
+			return false;
+		}
+
+		$punctuation = max( 0, (int) $visible - (int) $letters - (int) $digits );
+		$text_ratio  = ( (int) $letters + (int) $digits ) / (int) $visible;
+
+		if ( $text_ratio < 0.25 && 10 < $punctuation ) {
+			return true;
+		}
+
+		$lines             = preg_split( '/\n+/', $text );
+		$short_symbol_rows = 0;
+		$row_count         = is_array( $lines ) ? count( $lines ) : 0;
+
+		if ( ! is_array( $lines ) || $row_count < 10 ) {
+			return false;
+		}
+
+		foreach ( $lines as $line ) {
+			$line = trim( (string) $line );
+			if ( '' !== $line && strlen( $line ) <= 2 && ! preg_match( '/\p{L}{2}/u', $line ) ) {
+				++$short_symbol_rows;
+			}
+		}
+
+		return $short_symbol_rows / $row_count > 0.6;
 	}
 
 	/**
