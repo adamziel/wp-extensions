@@ -5659,12 +5659,14 @@ final class SourceItemDocumentProcessor {
 			$segments[] = array(
 				'content'   => (string) $pdf,
 				'font_maps' => $font_maps,
+				'font_info' => array(),
 			);
 
 			foreach ( $this->extract_pdf_stream_segments( $pdf ) as $segment ) {
 				$segments[] = array(
 					'content'   => $segment,
 					'font_maps' => $font_maps,
+					'font_info' => array(),
 				);
 			}
 		}
@@ -5673,7 +5675,7 @@ final class SourceItemDocumentProcessor {
 		$bytes = 0;
 
 		foreach ( $segments as $segment ) {
-			$text = $this->extract_pdf_text_operators( $segment['content'], $segment['font_maps'] );
+			$text = $this->extract_pdf_text_operators( $segment['content'], $segment['font_maps'], $segment['font_info'] );
 
 			if ( '' === $text ) {
 				continue;
@@ -6039,11 +6041,12 @@ final class SourceItemDocumentProcessor {
 	 * Returns decoded page content streams with their page-local font maps.
 	 *
 	 * @param string $pdf Raw PDF bytes.
-	 * @return array<int,array{content:string,font_maps:array<string,array<string,string>>}>
+	 * @return array<int,array{content:string,font_maps:array<string,array<string,string>>,font_info:array<string,array{bold:bool,italic:bool}>}>
 	 */
 	private function extract_pdf_page_content_streams( $pdf ) {
 		$objects          = $this->extract_pdf_indirect_objects( $pdf );
 		$font_object_maps = $this->extract_pdf_font_object_text_maps( $objects );
+		$font_object_info = $this->extract_pdf_font_object_text_styles( $objects );
 		$streams          = array();
 
 		if ( empty( $objects ) ) {
@@ -6057,6 +6060,7 @@ final class SourceItemDocumentProcessor {
 
 			$resources   = $this->pdf_page_resource_dictionary( $object, $objects );
 			$font_maps   = $this->pdf_font_maps_from_resource_dictionary( $resources, $font_object_maps, $objects );
+			$font_info   = $this->pdf_font_styles_from_resource_dictionary( $resources, $font_object_info, $objects );
 			$content_ids = $this->pdf_page_content_object_ids( $object );
 
 			foreach ( $content_ids as $content_id ) {
@@ -6072,6 +6076,7 @@ final class SourceItemDocumentProcessor {
 				$streams[] = array(
 					'content'   => $content,
 					'font_maps' => $font_maps,
+					'font_info' => $font_info,
 				);
 			}
 		}
@@ -6147,6 +6152,58 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
+	 * Extracts PDF text styles keyed by indirect font object ID.
+	 *
+	 * @param array<int,string> $objects Indirect PDF objects.
+	 * @return array<int,array{bold:bool,italic:bool}>
+	 */
+	private function extract_pdf_font_object_text_styles( array $objects ) {
+		$stems  = array();
+		$styles = array();
+
+		foreach ( $objects as $object_id => $object ) {
+			if ( ! preg_match( '#/Type\s*/Font\b#', $object ) ) {
+				continue;
+			}
+
+			$stem = $this->pdf_numeric_dictionary_value( $object, 'StemV', $objects );
+			if ( null !== $stem ) {
+				$stems[ $object_id ] = $stem;
+			}
+		}
+
+		$stem_baseline = null;
+		if ( ! empty( $stems ) ) {
+			$stem_values = array_values( $stems );
+			sort( $stem_values, SORT_NUMERIC );
+			$stem_baseline = $stem_values[ (int) floor( count( $stem_values ) / 2 ) ];
+		}
+
+		foreach ( $objects as $object_id => $object ) {
+			if ( ! preg_match( '#/Type\s*/Font\b#', $object ) ) {
+				continue;
+			}
+
+			$name         = $this->pdf_font_object_name( $object );
+			$flags        = $this->pdf_numeric_dictionary_value( $object, 'Flags', $objects );
+			$weight       = $this->pdf_numeric_dictionary_value( $object, 'FontWeight', $objects );
+			$italic_angle = $this->pdf_numeric_dictionary_value( $object, 'ItalicAngle', $objects );
+			$stem         = isset( $stems[ $object_id ] ) ? $stems[ $object_id ] : null;
+
+			$styles[ $object_id ] = array(
+				'bold'   => (bool) preg_match( '/(?:bold|black|heavy|semibold|demi)/i', $name )
+					|| ( null !== $weight && 600 <= $weight )
+					|| ( null !== $flags && 0 !== ( (int) $flags & 262144 ) )
+					|| ( null !== $stem && null !== $stem_baseline && $stem > $stem_baseline + 8 ),
+				'italic' => (bool) preg_match( '/(?:italic|oblique)/i', $name )
+					|| ( null !== $italic_angle && 0.0 !== (float) $italic_angle ),
+			);
+		}
+
+		return $styles;
+	}
+
+	/**
 	 * Resolves the resource dictionary for a page object.
 	 *
 	 * @param string            $page_object Page object body.
@@ -6203,6 +6260,39 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return $maps;
+	}
+
+	/**
+	 * Returns font styles keyed by the names used in a page resource dictionary.
+	 *
+	 * @param string                                  $resources        Page resources dictionary.
+	 * @param array<int,array{bold:bool,italic:bool}> $font_object_info Text styles keyed by indirect font object ID.
+	 * @param array<int,string>                       $objects          Indirect PDF objects.
+	 * @return array<string,array{bold:bool,italic:bool}>
+	 */
+	private function pdf_font_styles_from_resource_dictionary( $resources, array $font_object_info, array $objects ) {
+		$font_dictionary = $this->pdf_font_resource_dictionary( $resources, $objects );
+		$styles          = array();
+
+		if ( '' === $font_dictionary || empty( $font_object_info ) ) {
+			return $styles;
+		}
+
+		if ( preg_match_all( '#/([A-Za-z0-9_.-]+)\s+(\d+)\s+\d+\s+R\b#', $font_dictionary, $matches, PREG_SET_ORDER ) ) {
+			foreach ( $matches as $match ) {
+				$name      = (string) $match[1];
+				$object_id = (int) $match[2];
+				if ( 'ToUnicode' !== $name && isset( $font_object_info[ $object_id ] ) ) {
+					$styles[ $name ] = $font_object_info[ $object_id ];
+				}
+			}
+		}
+
+		if ( 1 === count( $styles ) ) {
+			$styles['__default'] = reset( $styles );
+		}
+
+		return $styles;
 	}
 
 	/**
@@ -6289,6 +6379,45 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return '';
+	}
+
+	/**
+	 * Returns a simple font object name for style detection.
+	 *
+	 * @param string $font_object Font object body.
+	 * @return string
+	 */
+	private function pdf_font_object_name( $font_object ) {
+		if ( preg_match( '#/(?:BaseFont|FontName)\s*/([A-Za-z0-9+_.-]+)#', (string) $font_object, $match ) ) {
+			return (string) $match[1];
+		}
+
+		return '';
+	}
+
+	/**
+	 * Returns a numeric PDF dictionary value, resolving simple numeric objects.
+	 *
+	 * @param string            $object_body PDF object body.
+	 * @param string            $key    Dictionary key without slash.
+	 * @param array<int,string> $objects Indirect PDF objects.
+	 * @return float|null
+	 */
+	private function pdf_numeric_dictionary_value( $object_body, $key, array $objects ) {
+		$key = preg_quote( (string) $key, '#' );
+
+		if ( preg_match( '#/' . $key . '\s+([+-]?(?:\d+(?:\.\d+)?|\.\d+))\b#', (string) $object_body, $match ) ) {
+			return (float) $match[1];
+		}
+
+		if ( preg_match( '#/' . $key . '\s+(\d+)\s+\d+\s+R\b#', (string) $object_body, $match ) ) {
+			$object_id = (int) $match[1];
+			if ( isset( $objects[ $object_id ] ) && preg_match( '/^\s*([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*$/', $objects[ $object_id ], $value ) ) {
+				return (float) $value[1];
+			}
+		}
+
+		return null;
 	}
 
 	/**
@@ -6669,18 +6798,30 @@ final class SourceItemDocumentProcessor {
 	/**
 	 * Extracts text operands from common PDF text-showing operators.
 	 *
-	 * @param string                             $content   Candidate PDF content stream.
-	 * @param array<string,array<string,string>> $font_maps Optional ToUnicode maps keyed by font resource name.
+	 * @param string                                     $content   Candidate PDF content stream.
+	 * @param array<string,array<string,string>>         $font_maps Optional ToUnicode maps keyed by font resource name.
+	 * @param array<string,array{bold:bool,italic:bool}> $font_info Optional text styles keyed by font resource name.
 	 * @return string
 	 */
-	private function extract_pdf_text_operators( $content, array $font_maps = array() ) {
-		$tokens    = $this->tokenize_pdf_content_stream( $content );
-		$operands  = array();
-		$lines     = array();
-		$line      = '';
-		$current_x = null;
-		$current_y = null;
-		$font_map  = empty( $font_maps['__default'] ) ? array() : $font_maps['__default'];
+	private function extract_pdf_text_operators( $content, array $font_maps = array(), array $font_info = array() ) {
+		$tokens          = $this->tokenize_pdf_content_stream( $content );
+		$operands        = array();
+		$lines           = array();
+		$line            = '';
+		$line_is_bold    = false;
+		$line_is_italic  = false;
+		$line_font_names = array();
+		$font_usage      = array();
+		$current_font    = null;
+		$current_x       = null;
+		$current_y       = null;
+		$current_size    = 12.0;
+		$last_text_y     = null;
+		$font_map        = empty( $font_maps['__default'] ) ? array() : $font_maps['__default'];
+		$font_style      = empty( $font_info['__default'] ) ? array(
+			'bold'   => false,
+			'italic' => false,
+		) : $font_info['__default'];
 
 		foreach ( $tokens as $token ) {
 			if ( 'operator' !== $token['type'] ) {
@@ -6691,16 +6832,21 @@ final class SourceItemDocumentProcessor {
 			$operator = $token['value'];
 
 			if ( 'Tj' === $operator ) {
-				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ), $font_map ) );
+				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ), $font_map ), $font_style, $current_font, $lines, $line_is_bold, $line_is_italic, $line_font_names, $font_usage, $current_y, $last_text_y, $current_size );
 			} elseif ( 'TJ' === $operator ) {
-				$this->append_pdf_text_to_line( $line, $this->extract_pdf_strings_from_operands( $this->pdf_array_operand_body( $this->last_pdf_operand( $operands ) ), $font_map ) );
+				$this->append_pdf_text_to_line( $line, $this->extract_pdf_strings_from_operands( $this->pdf_array_operand_body( $this->last_pdf_operand( $operands ) ), $font_map ), $font_style, $current_font, $lines, $line_is_bold, $line_is_italic, $line_font_names, $font_usage, $current_y, $last_text_y, $current_size );
 			} elseif ( "'" === $operator || '"' === $operator ) {
-				$this->finish_pdf_text_line( $lines, $line );
-				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ), $font_map ) );
+				$this->finish_pdf_text_line( $lines, $line, $line_is_bold, $line_is_italic, $line_font_names, $current_y );
+				$this->append_pdf_text_to_line( $line, $this->decode_pdf_text_operand( $this->last_pdf_operand( $operands ), $font_map ), $font_style, $current_font, $lines, $line_is_bold, $line_is_italic, $line_font_names, $font_usage, $current_y, $last_text_y, $current_size );
 			} elseif ( 'T*' === $operator ) {
-				$this->finish_pdf_text_line( $lines, $line );
+				$this->finish_pdf_text_line( $lines, $line, $line_is_bold, $line_is_italic, $line_font_names, $current_y );
 			} elseif ( 'Tf' === $operator ) {
-				$font_name = $this->pdf_font_name_from_operands( $operands );
+				$font_name    = $this->pdf_font_name_from_operands( $operands );
+				$current_font = $font_name;
+				$font_size    = $this->last_pdf_numeric_operands( $operands, 1 );
+				if ( null !== $font_size ) {
+					$current_size = max( 1.0, (float) $font_size[0] );
+				}
 				if ( null !== $font_name && isset( $font_maps[ $font_name ] ) ) {
 					$font_map = $font_maps[ $font_name ];
 				} elseif ( isset( $font_maps['__default'] ) ) {
@@ -6708,11 +6854,22 @@ final class SourceItemDocumentProcessor {
 				} else {
 					$font_map = array();
 				}
+
+				if ( null !== $font_name && isset( $font_info[ $font_name ] ) ) {
+					$font_style = $font_info[ $font_name ];
+				} elseif ( isset( $font_info['__default'] ) ) {
+					$font_style = $font_info['__default'];
+				} else {
+					$font_style = array(
+						'bold'   => false,
+						'italic' => false,
+					);
+				}
 			} elseif ( 'Td' === $operator || 'TD' === $operator ) {
 				$move = $this->last_pdf_numeric_operands( $operands, 2 );
 				if ( null !== $move && '' !== trim( $line ) ) {
 					if ( 0.01 < abs( $move[1] ) ) {
-						$this->finish_pdf_text_line( $lines, $line );
+						$this->finish_pdf_text_line( $lines, $line, $line_is_bold, $line_is_italic, $line_font_names, $current_y );
 					} elseif ( 24 < $move[0] ) {
 						$line = rtrim( $line ) . $this->pdf_text_gap( $move[0] );
 					}
@@ -6722,9 +6879,9 @@ final class SourceItemDocumentProcessor {
 				if ( null !== $matrix ) {
 					$next_x = $matrix[4];
 					$next_y = $matrix[5];
-					if ( null !== $current_y && '' !== trim( $line ) ) {
-						if ( 2 < abs( $next_y - $current_y ) || ( null !== $current_x && $next_x < $current_x - 2 ) ) {
-							$this->finish_pdf_text_line( $lines, $line );
+					if ( '' !== trim( $line ) ) {
+						if ( null === $current_y || 2 < abs( $next_y - $current_y ) || ( null !== $current_x && $next_x < $current_x - 2 ) ) {
+							$this->finish_pdf_text_line( $lines, $line, $line_is_bold, $line_is_italic, $line_font_names, $current_y );
 						} elseif ( null !== $current_x && 24 < $next_x - $current_x ) {
 							$line = rtrim( $line ) . $this->pdf_text_gap( $next_x - $current_x );
 						}
@@ -6733,7 +6890,7 @@ final class SourceItemDocumentProcessor {
 					$current_y = $next_y;
 				}
 			} elseif ( 'BT' === $operator || 'ET' === $operator ) {
-				$this->finish_pdf_text_line( $lines, $line );
+				$this->finish_pdf_text_line( $lines, $line, $line_is_bold, $line_is_italic, $line_font_names, $current_y );
 				$current_x = null;
 				$current_y = null;
 			}
@@ -6741,9 +6898,9 @@ final class SourceItemDocumentProcessor {
 			$operands = array();
 		}
 
-		$this->finish_pdf_text_line( $lines, $line );
+		$this->finish_pdf_text_line( $lines, $line, $line_is_bold, $line_is_italic, $line_font_names, $current_y );
 
-		return implode( "\n", $lines );
+		return $this->format_pdf_text_line_records( $lines, $font_usage );
 	}
 
 	/**
@@ -6834,35 +6991,218 @@ final class SourceItemDocumentProcessor {
 	/**
 	 * Appends decoded PDF text without treating every text-showing operator as a line break.
 	 *
-	 * @param string $line Current line, by reference.
-	 * @param string $text Decoded text.
+	 * @param string                       $line           Current line, by reference.
+	 * @param string                       $text           Decoded text.
+	 * @param array{bold:bool,italic:bool} $font_style     Active font style.
+	 * @param string|null                  $font_name      Active font resource name.
+	 * @param array<int,string>            $lines          Completed lines, by reference.
+	 * @param bool                         $line_is_bold   Whether the current line includes bold text.
+	 * @param bool                         $line_is_italic Whether the current line includes italic text.
+	 * @param array<string,bool>           $line_font_names Font names used in the current line.
+	 * @param array<string,int>            $font_usage     Approximate decoded text bytes by font.
+	 * @param float|null                   $current_y      Current text y position.
+	 * @param float|null                   $last_text_y    Last non-empty text y position.
+	 * @param float                        $font_size      Active font size.
 	 * @return void
 	 */
-	private function append_pdf_text_to_line( &$line, $text ) {
+	private function append_pdf_text_to_line( &$line, $text, array $font_style, $font_name, array &$lines, &$line_is_bold, &$line_is_italic, array &$line_font_names, array &$font_usage, $current_y, &$last_text_y, $font_size ) {
 		$text = (string) $text;
 
-		if ( '' === $text ) {
+		if ( '' === $text || ( '' === trim( $text ) && '' === trim( (string) $line ) ) ) {
 			return;
 		}
 
+		$has_visible_text = '' !== trim( $text );
+
+		if ( $has_visible_text && '' === trim( (string) $line ) ) {
+			$this->append_pdf_text_layout_gap( $lines, $current_y, $last_text_y, $font_size );
+		}
+
 		$line .= $text;
+		if ( ! $has_visible_text ) {
+			return;
+		}
+
+		if ( ! empty( $font_style['bold'] ) ) {
+			$line_is_bold = true;
+		}
+		if ( ! empty( $font_style['italic'] ) ) {
+			$line_is_italic = true;
+		}
+		if ( null !== $font_name && '' !== $font_name ) {
+			$line_font_names[ $font_name ] = true;
+			$font_usage[ $font_name ]      = ( isset( $font_usage[ $font_name ] ) ? (int) $font_usage[ $font_name ] : 0 ) + strlen( trim( $text ) );
+		}
+		if ( null !== $current_y ) {
+			$last_text_y = (float) $current_y;
+		}
+	}
+
+	/**
+	 * Adds a paragraph gap when PDF vertical spacing indicates one.
+	 *
+	 * @param array<int,array<string,mixed>> $lines       Completed line records, by reference.
+	 * @param float|null                     $current_y   Current text y position.
+	 * @param float|null                     $last_text_y Last non-empty text y position.
+	 * @param float                          $font_size   Active font size.
+	 * @return void
+	 */
+	private function append_pdf_text_layout_gap( array &$lines, $current_y, $last_text_y, $font_size ) {
+		if ( null === $current_y || null === $last_text_y ) {
+			return;
+		}
+
+		$gap       = abs( $current_y - $last_text_y );
+		$threshold = max( 18.0, (float) $font_size * 1.8 );
+		if ( $gap <= $threshold || $gap > (float) $font_size * 10.0 ) {
+			return;
+		}
+
+		$last_record = empty( $lines ) ? null : end( $lines );
+		if ( null === $last_record || ( is_array( $last_record ) && '' === (string) $last_record['text'] ) ) {
+			return;
+		}
+
+		$lines[] = array(
+			'text'   => '',
+			'bold'   => false,
+			'italic' => false,
+			'fonts'  => array(),
+			'y'      => null,
+		);
 	}
 
 	/**
 	 * Completes the current PDF text line.
 	 *
-	 * @param array<int,string> $lines Completed lines, by reference.
-	 * @param string            $line  Current line, by reference.
+	 * @param array<int,array<string,mixed>> $lines           Completed line records, by reference.
+	 * @param string                         $line            Current line, by reference.
+	 * @param bool                           $line_is_bold    Whether the line includes bold text.
+	 * @param bool                           $line_is_italic  Whether the line includes italic text.
+	 * @param array<string,bool>             $line_font_names Font names used in the current line.
+	 * @param float|null                     $current_y       Current text y position.
 	 * @return void
 	 */
-	private function finish_pdf_text_line( array &$lines, &$line ) {
+	private function finish_pdf_text_line( array &$lines, &$line, &$line_is_bold, &$line_is_italic, array &$line_font_names, $current_y ) {
 		$line = rtrim( (string) $line );
 
 		if ( '' !== trim( $line ) ) {
-			$lines[] = $line;
+			$lines[] = array(
+				'text'   => $line,
+				'bold'   => (bool) $line_is_bold,
+				'italic' => (bool) $line_is_italic,
+				'fonts'  => array_keys( $line_font_names ),
+				'y'      => $current_y,
+			);
 		}
 
-		$line = '';
+		$line            = '';
+		$line_is_bold    = false;
+		$line_is_italic  = false;
+		$line_font_names = array();
+	}
+
+	/**
+	 * Formats extracted PDF line records as Markdown text.
+	 *
+	 * @param array<int,array<string,mixed>> $records    Extracted line records.
+	 * @param array<string,int>              $font_usage Approximate decoded text bytes by font.
+	 * @return string
+	 */
+	private function format_pdf_text_line_records( array $records, array $font_usage ) {
+		$body_font = $this->dominant_pdf_text_font( $font_usage );
+		$lines     = array();
+
+		foreach ( $records as $record ) {
+			$text = isset( $record['text'] ) ? (string) $record['text'] : '';
+			if ( '' === $text ) {
+				$lines[] = '';
+				continue;
+			}
+
+			$bold    = ! empty( $record['bold'] ) || $this->is_pdf_emphasized_font_line( $record, $body_font );
+			$lines[] = $this->format_pdf_text_line( $text, $bold, ! empty( $record['italic'] ) );
+		}
+
+		return implode( "\n", $lines );
+	}
+
+	/**
+	 * Returns the dominant font resource used for decoded PDF text.
+	 *
+	 * @param array<string,int> $font_usage Approximate decoded text bytes by font.
+	 * @return string|null
+	 */
+	private function dominant_pdf_text_font( array $font_usage ) {
+		$body_font = null;
+		$body_size = 0;
+
+		foreach ( $font_usage as $font => $size ) {
+			if ( (int) $size > $body_size ) {
+				$body_font = (string) $font;
+				$body_size = (int) $size;
+			}
+		}
+
+		return $body_font;
+	}
+
+	/**
+	 * Infers emphasized PDF label lines when explicit font metadata was stripped.
+	 *
+	 * @param array<string,mixed> $record    Extracted line record.
+	 * @param string|null         $body_font Dominant body font resource.
+	 * @return bool
+	 */
+	private function is_pdf_emphasized_font_line( array $record, $body_font ) {
+		if ( null === $body_font || empty( $record['fonts'] ) || ! is_array( $record['fonts'] ) || 1 !== count( $record['fonts'] ) ) {
+			return false;
+		}
+
+		$font = (string) reset( $record['fonts'] );
+		if ( $font === $body_font ) {
+			return false;
+		}
+
+		$text = trim( isset( $record['text'] ) ? (string) $record['text'] : '' );
+		if ( '' === $text || strlen( $text ) > 96 ) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Formats one extracted PDF line as Markdown for block conversion.
+	 *
+	 * @param string $line   Extracted line.
+	 * @param bool   $bold   Whether the line should be bold.
+	 * @param bool   $italic Whether the line should be italic.
+	 * @return string
+	 */
+	private function format_pdf_text_line( $line, $bold, $italic ) {
+		$line = rtrim( (string) $line );
+
+		if ( $bold ) {
+			$line = '**' . $this->escape_pdf_markdown_delimiters( $line, '**' ) . '**';
+		}
+
+		if ( $italic ) {
+			$line = '*' . $this->escape_pdf_markdown_delimiters( $line, '*' ) . '*';
+		}
+
+		return $line;
+	}
+
+	/**
+	 * Avoids prematurely closing generated PDF Markdown emphasis.
+	 *
+	 * @param string $text      Extracted text.
+	 * @param string $delimiter Markdown delimiter.
+	 * @return string
+	 */
+	private function escape_pdf_markdown_delimiters( $text, $delimiter ) {
+		return str_replace( (string) $delimiter, '\\' . (string) $delimiter, (string) $text );
 	}
 
 	/**
@@ -8015,12 +8355,6 @@ final class SourceItemDocumentProcessor {
 				continue;
 			}
 
-			$screenplay = $this->pdf_screenplay_text_to_blocks( $chunk );
-			if ( null !== $screenplay ) {
-				$blocks[] = $screenplay;
-				continue;
-			}
-
 			$block = $this->markdown_to_blocks( $chunk );
 			if ( '' !== trim( $block ) ) {
 				$blocks[] = $block;
@@ -8028,125 +8362,6 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return implode( "\n\n", $blocks );
-	}
-
-	/**
-	 * Converts screenplay-like PDF text into paragraphs with bold speaker names.
-	 *
-	 * @param string $chunk Candidate PDF text chunk.
-	 * @return string|null Block markup, or null when the text is not screenplay-like.
-	 */
-	private function pdf_screenplay_text_to_blocks( $chunk ) {
-		$lines = preg_split( '/\n/', trim( (string) $chunk ) );
-
-		if ( ! is_array( $lines ) || 4 > count( $lines ) ) {
-			return null;
-		}
-
-		$speaker_count = 0;
-		foreach ( $lines as $line ) {
-			if ( $this->is_pdf_screenplay_speaker_line( $line ) ) {
-				++$speaker_count;
-			}
-		}
-
-		if ( 2 > $speaker_count ) {
-			return null;
-		}
-
-		$blocks        = array();
-		$pending_lines = array();
-		$speaker       = null;
-		$dialogue      = array();
-
-		foreach ( $lines as $line ) {
-			$line = trim( (string) $line );
-
-			if ( '' === $line ) {
-				continue;
-			}
-
-			if ( $this->is_pdf_screenplay_speaker_line( $line ) ) {
-				$this->append_pdf_screenplay_pending_blocks( $blocks, $pending_lines, $speaker, $dialogue );
-				$speaker  = $line;
-				$dialogue = array();
-				continue;
-			}
-
-			if ( null === $speaker ) {
-				$pending_lines[] = $line;
-			} else {
-				$dialogue[] = $line;
-			}
-		}
-
-		$this->append_pdf_screenplay_pending_blocks( $blocks, $pending_lines, $speaker, $dialogue );
-
-		return empty( $blocks ) ? null : implode( "\n\n", $blocks );
-	}
-
-	/**
-	 * Appends pending screenplay text as WordPress paragraph blocks.
-	 *
-	 * @param array<int,string> $blocks        Existing blocks.
-	 * @param array<int,string> $pending_lines Non-speaker lines before a cue.
-	 * @param string|null       $speaker       Current speaker cue.
-	 * @param array<int,string> $dialogue      Dialogue lines for the speaker.
-	 * @return void
-	 */
-	private function append_pdf_screenplay_pending_blocks( array &$blocks, array &$pending_lines, &$speaker, array &$dialogue ) {
-		if ( null === $speaker && ! empty( $pending_lines ) ) {
-			$block = $this->markdown_to_blocks( implode( "\n", $pending_lines ) );
-			if ( '' !== trim( $block ) ) {
-				$blocks[] = $block;
-			}
-			$pending_lines = array();
-			return;
-		}
-
-		if ( null === $speaker ) {
-			return;
-		}
-
-		$html = '<strong>' . $this->escape_html( $speaker ) . '</strong>';
-		if ( ! empty( $dialogue ) ) {
-			$html .= '<br>' . nl2br( $this->escape_html( implode( "\n", $dialogue ) ), false );
-		}
-
-		$blocks[] = '<!-- wp:paragraph -->' . "\n" . '<p>' . $html . '</p>' . "\n" . '<!-- /wp:paragraph -->';
-
-		$speaker       = null;
-		$dialogue      = array();
-		$pending_lines = array();
-	}
-
-	/**
-	 * Returns whether a PDF line looks like a screenplay speaker cue.
-	 *
-	 * @param string $line Candidate line.
-	 * @return bool
-	 */
-	private function is_pdf_screenplay_speaker_line( $line ) {
-		$line = trim( (string) $line );
-
-		$length = function_exists( 'mb_strlen' ) ? mb_strlen( $line, 'UTF-8' ) : strlen( $line );
-		if ( '' === $line || 40 < $length ) {
-			return false;
-		}
-
-		if ( preg_match( '/[a-ząćęłńóśźż]/u', $line ) ) {
-			return false;
-		}
-
-		if ( ! preg_match( '/\p{L}{2}/u', $line ) ) {
-			return false;
-		}
-
-		if ( preg_match( '/[.!?;:]$/u', $line ) ) {
-			return false;
-		}
-
-		return (bool) preg_match( '/^[\p{Lu}\p{N}\s\'’().-]+$/u', $line );
 	}
 
 	/**

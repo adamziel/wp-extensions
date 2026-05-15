@@ -232,17 +232,12 @@ final class PdfBlockConversionTest extends TestCase {
 	}
 
 	/**
-	 * Screenplay-style PDFs preserve speaker spacing and emphasis.
+	 * PDF font weight and vertical spacing become block emphasis and paragraph gaps.
 	 *
 	 * @return void
 	 */
-	public function test_pdf_screenplay_speaker_lines_become_spaced_bold_paragraphs() {
-		$source_file = $this->temporary_pdf_with_streams(
-			'screenplay-speaker-spacing.pdf',
-			array(
-				"BT\n/F1 12 Tf\n72 720 Td\n(DZIEWCZYNA) Tj\n0 -18 Td\n(No bo ja właśnie... chciałam, żeby ksiądz się pomodlił - w intencji.) Tj\n0 -18 Td\n(KSIĄDZ) Tj\n0 -18 Td\n(W jakiej intencji?) Tj\n0 -18 Td\n(DZIEWCZYNA) Tj\n0 -18 Td\n(Nie mogę powiedzieć.) Tj\n0 -18 Td\n(KSIĄDZ) Tj\n0 -18 Td\n(Mnie możesz wszystko powiedzieć.) Tj\nET",
-			)
-		);
+	public function test_pdf_font_weight_and_vertical_spacing_become_block_markup() {
+		$source_file = $this->temporary_pdf_with_font_weight_and_vertical_gap( 'font-weight-layout-gap.pdf' );
 		$session     = ImportSession::start_for_source( $source_file );
 		$posts       = new FakePostGateway();
 		$runner      = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/' );
@@ -258,9 +253,9 @@ final class PdfBlockConversionTest extends TestCase {
 
 		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
 		$this->assertSame( 1, $posts->count_posts() );
-		$this->assertStringContainsString( '<p><strong>DZIEWCZYNA</strong><br>No bo ja właśnie... chciałam, żeby ksiądz się pomodlił - w intencji.</p>', $post_content );
-		$this->assertStringContainsString( '<p><strong>KSIĄDZ</strong><br>W jakiej intencji?</p>', $post_content );
-		$this->assertStringContainsString( "</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:paragraph -->\n<p><strong>KSIĄDZ</strong>", $post_content );
+		$this->assertStringContainsString( '<p>Introductory paragraph.</p>', $post_content );
+		$this->assertStringContainsString( "<p><strong>Important Label</strong><br>\nBody after label.</p>", $post_content );
+		$this->assertStringContainsString( "</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:paragraph -->\n<p><strong>Important Label</strong>", $post_content );
 	}
 
 	/**
@@ -573,6 +568,26 @@ final class PdfBlockConversionTest extends TestCase {
 			'10 0 obj << /Length ' . strlen( $second_encoded['cmap'] ) . " >>\nstream\n" . $second_encoded['cmap'] . "\nendstream\nendobj\n",
 			"11 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /FirstPageFont /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >> endobj\n",
 			"12 0 obj << /Type /Font /Subtype /CIDFontType2 /BaseFont /SecondPageFont /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >> endobj\n",
+		);
+
+		return $this->temporary_file( $basename, "%PDF-1.4\n" . implode( '', $objects ) . "%%EOF\n" );
+	}
+
+	/**
+	 * Creates a PDF fixture with a bold font run separated by a vertical gap.
+	 *
+	 * @param string $basename Fixture basename.
+	 * @return string
+	 */
+	private function temporary_pdf_with_font_weight_and_vertical_gap( $basename ) {
+		$content = "BT\n/F1 12 Tf\n1 0 0 1 72 720 Tm\n(Introductory paragraph.) Tj\n/F2 12 Tf\n1 0 0 1 72 680 Tm\n(Important Label) Tj\n/F1 12 Tf\n1 0 0 1 72 664 Tm\n(Body after label.) Tj\nET";
+		$objects = array(
+			"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n",
+			"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n",
+			"3 0 obj << /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >> endobj\n",
+			'4 0 obj << /Length ' . strlen( $content ) . " >>\nstream\n" . $content . "\nendstream\nendobj\n",
+			"5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n",
+			"6 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >> endobj\n",
 		);
 
 		return $this->temporary_file( $basename, "%PDF-1.4\n" . implode( '', $objects ) . "%%EOF\n" );
