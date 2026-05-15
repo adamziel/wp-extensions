@@ -689,6 +689,12 @@ ssgwp_assert_contains(
 	'ensure_html_charset adds UTF-8 metadata for file previews with non-ASCII text.'
 );
 
+ssgwp_assert_contains(
+	'You may be interested in…',
+	$charset_method->invoke( $exporter, '<html><head><title>Cart</title></head><body>You may be interested in�</body></html>' ),
+	'ensure_html_charset repairs known WooCommerce replacement-character headings.'
+);
+
 ssgwp_assert_same(
 	'<html><head><meta charset="UTF-8"><title>Cart</title></head><body>Cart</body></html>',
 	$charset_method->invoke( $exporter, '<html><head><meta charset="UTF-8"><title>Cart</title></head><body>Cart</body></html>' ),

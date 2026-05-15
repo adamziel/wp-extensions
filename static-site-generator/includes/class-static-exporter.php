@@ -411,7 +411,7 @@ final class SSGWP_Static_Exporter {
 	 * @return string HTML with a charset declaration.
 	 */
 	private function ensure_html_charset( $html ) {
-		$html = (string) $html;
+		$html = $this->repair_known_replacement_characters( (string) $html );
 
 		if (
 			preg_match( '#<meta\s+[^>]*charset\s*=#i', $html )
@@ -431,6 +431,24 @@ final class SSGWP_Static_Exporter {
 		}
 
 		return $meta . $html;
+	}
+
+	/**
+	 * Repair replacement characters from known WooCommerce rendered strings.
+	 *
+	 * @param string $html Rendered HTML.
+	 * @return string HTML with known replacement characters repaired.
+	 */
+	private function repair_known_replacement_characters( $html ) {
+		return str_replace(
+			array(
+				'You may be interested in�',
+				'You may be interested in&#65533;',
+				'You may be interested in&#xFFFD;',
+			),
+			'You may be interested in…',
+			(string) $html
+		);
 	}
 
 	/**
