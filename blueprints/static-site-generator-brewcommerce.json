@@ -68,8 +68,13 @@
 			"options": {
 				"blog_public": "1",
 				"woocommerce_coming_soon": "no",
-				"woocommerce_coming_soon_enabled": "no"
+				"woocommerce_coming_soon_enabled": "no",
+				"woocommerce_store_pages_only": "no"
 			}
+		},
+		{
+			"step": "runPHP",
+			"code": "<?php\nif ( ! defined( 'ABSPATH' ) ) {\n\trequire '/wordpress/wp-load.php';\n}\n\nupdate_option( 'blog_public', '1' );\nupdate_option( 'woocommerce_coming_soon', 'no' );\nupdate_option( 'woocommerce_coming_soon_enabled', 'no' );\nupdate_option( 'woocommerce_store_pages_only', 'no' );\nupdate_option( 'woocommerce_task_list_hidden', 'yes' );\nupdate_option( 'woocommerce_task_list_complete', 'yes' );\nupdate_option( 'woocommerce_onboarding_opt_in', 'no' );\nupdate_option( 'woocommerce_show_marketplace_suggestions', 'no' );\nupdate_option( 'woocommerce_allow_tracking', 'no' );\nupdate_option(\n\t'woocommerce_onboarding_profile',\n\tarray(\n\t\t'completed' => true,\n\t\t'skipped'   => true,\n\t)\n);\ndelete_transient( '_wc_activation_redirect' );\ndelete_option( '_wc_activation_redirect' );\n\nif ( defined( 'WPMU_PLUGIN_DIR' ) && wp_mkdir_p( WPMU_PLUGIN_DIR ) ) {\n\tfile_put_contents(\n\t\tWPMU_PLUGIN_DIR . '/brewcommerce-public-store.php',\n\t\t\"<?php\\nadd_filter( 'woocommerce_coming_soon_exclude', '__return_true', PHP_INT_MAX );\\n\"\n\t);\n}"
 		},
 		{
 			"step": "writeFile",

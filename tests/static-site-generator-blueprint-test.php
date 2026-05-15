@@ -74,6 +74,20 @@ ssgwp_blueprint_assert(
 );
 
 ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_contains( $brew_blueprint, 'woocommerce_coming_soon' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'woocommerce_store_pages_only' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, '_wc_activation_redirect' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'woocommerce_coming_soon_exclude' ),
+	'BrewCommerce blueprint launches the store before static export.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_contains( $brew_blueprint, 'woocommerce_onboarding_profile' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'woocommerce_task_list_hidden' ),
+	'BrewCommerce blueprint skips the WooCommerce guided setup.'
+);
+
+ssgwp_blueprint_assert(
 	ssgwp_command_contains( $brew_commands, 'wp static-site export' ) === false,
 	'BrewCommerce browser blueprint opens the admin exporter instead of auto-downloading a ZIP.'
 );
@@ -214,6 +228,23 @@ function ssgwp_blueprint_has_static_generator_install( array $blueprint ) {
 function ssgwp_blueprint_step_uses_url( array $blueprint, $filename ) {
 	foreach ( ssgwp_blueprint_steps( $blueprint ) as $step ) {
 		if ( false !== strpos( wp_json_encode_fallback( $step ), '/brewcommerce/' . $filename ) ) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Check whether a blueprint step contains a substring.
+ *
+ * @param array<string,mixed> $blueprint Blueprint data.
+ * @param string              $needle    Substring.
+ * @return bool
+ */
+function ssgwp_blueprint_step_contains( array $blueprint, $needle ) {
+	foreach ( ssgwp_blueprint_steps( $blueprint ) as $step ) {
+		if ( false !== strpos( wp_json_encode_fallback( $step ), $needle ) ) {
 			return true;
 		}
 	}
