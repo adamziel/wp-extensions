@@ -38,6 +38,10 @@
 		},
 		{
 			"step": "wp-cli",
+			"command": "wp post delete 1 --force"
+		},
+		{
+			"step": "wp-cli",
 			"command": "wp term create category Travel --slug=travel"
 		},
 		{
