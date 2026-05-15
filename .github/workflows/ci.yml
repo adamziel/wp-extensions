@@ -37,6 +37,18 @@ jobs:
           php static-site-generator/tests/static-exporter-test.php
           php static-site-generator/tests/plugin-test.php
 
+      - name: Check Markdown Editor release package
+        run: |
+          umask 0022
+          bash -n markdown-editor/run-playground-cli.sh
+          bash -n markdown-editor/tools/build-release-zip.sh
+          git submodule update --init --recursive markdown-editor/vendor/php-toolkit
+          composer install --no-dev --prefer-dist --no-interaction -d markdown-editor/vendor/php-toolkit
+          markdown-editor/tools/build-release-zip.sh
+          unzip -l dist/wp-markdown-editor.zip | grep 'wp-markdown-editor/run-playground-cli.sh'
+          unzip -l dist/wp-markdown-editor.zip | grep 'wp-markdown-editor/markdown-editor/vendor/php-toolkit/vendor/autoload.php'
+          unzip -l dist/wp-markdown-editor.zip | grep 'wp-markdown-editor/markdown-editor/sqlite-markdown-extension/dist/manifest.json'
+
       - name: Install Universal Importer dependencies
         working-directory: universal-wordpress-importer
         run: composer install --no-interaction --prefer-dist
