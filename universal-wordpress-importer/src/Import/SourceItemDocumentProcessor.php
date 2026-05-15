@@ -3701,8 +3701,9 @@ final class SourceItemDocumentProcessor {
 			}
 			if ( ! empty( $pdf_assets ) ) {
 				$block_markup = trim( $block_markup . "\n\n" . $this->pdf_embedded_media_blocks( $pdf_assets ) );
+				$block_markup = $this->rewrite_imported_media_references_in_markup( $session, $item, $block_markup );
 			}
-			$block_count = $this->count_blocks( $block_markup );
+				$block_count = $this->count_blocks( $block_markup );
 		} else {
 			$block_markup = $this->text_to_blocks( $content );
 			$block_count  = $this->count_blocks( $block_markup );
@@ -4478,6 +4479,7 @@ final class SourceItemDocumentProcessor {
 
 		if ( ! empty( $pdf_asset_summary['assets'] ) ) {
 			$block_markup = trim( $block_markup . "\n\n" . $this->pdf_embedded_media_blocks( $pdf_asset_summary['assets'] ) );
+			$block_markup = $this->rewrite_imported_media_references_in_markup( $session, $item, $block_markup );
 		}
 
 		if ( '' === trim( $block_markup ) ) {
@@ -5493,6 +5495,50 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return implode( "\n\n", $blocks );
+	}
+
+	/**
+	 * Rewrites PDF media placeholders when attachments were imported before document preparation finished.
+	 *
+	 * @param ImportSession    $session Session.
+	 * @param ImportSourceItem $item    Source item.
+	 * @param string           $markup  Block markup.
+	 * @return string
+	 */
+	private function rewrite_imported_media_references_in_markup( ImportSession $session, ImportSourceItem $item, $markup ) {
+		$markup              = (string) $markup;
+		$after_reference_key = null;
+		$limit               = 500;
+		$reference_count     = 0;
+
+		do {
+			$references      = $this->store->list_media_references_by_statuses_after_reference_key(
+				$session->get_id(),
+				array( ImportMediaReference::STATUS_IMPORTED ),
+				$after_reference_key,
+				$limit
+			);
+			$reference_count = count( $references );
+
+			foreach ( $references as $reference ) {
+				$after_reference_key = $reference->get_key();
+
+				if ( $reference->get_source_item_key() !== $item->get_key() ) {
+					continue;
+				}
+
+				$metadata       = $reference->get_metadata();
+				$attachment_url = isset( $metadata['attachment_url'] ) ? (string) $metadata['attachment_url'] : '';
+
+				if ( '' === $attachment_url ) {
+					continue;
+				}
+
+				$markup = str_replace( $reference->get_original_url(), $attachment_url, $markup );
+			}
+		} while ( $reference_count === $limit );
+
+		return $markup;
 	}
 
 	/**

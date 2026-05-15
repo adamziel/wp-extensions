@@ -4606,6 +4606,8 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertNotNull( $document );
 		$this->assertSame( 1, $posts->count_posts() );
 		$this->assertStringContainsString( '<!-- wp:image -->', $post['post_content'] );
+		$this->assertStringContainsString( 'https://local.example.test/wp-content/uploads/embedded-image-1-', $post['post_content'] );
+		$this->assertStringNotContainsString( 'uwi-pdf-asset://', $post['post_content'] );
 		$this->assertStringNotContainsString( 'THIS SHOULD NOT BECOME TEXT', $post['post_content'] );
 		$this->assertStringNotContainsString( 'THIS SHOULD NOT BECOME TEXT', $document->get_block_markup() );
 	}
