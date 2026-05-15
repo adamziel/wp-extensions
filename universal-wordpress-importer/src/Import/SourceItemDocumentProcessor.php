@@ -35,6 +35,7 @@ final class SourceItemDocumentProcessor {
 	const PDF_OCR_ERROR_LIMIT      = 2048;
 	const PDF_MEDIA_LIMIT          = 10;
 	const PDF_MEDIA_SCAN_LIMIT     = 5;
+	const PDF_MEDIA_MIN_DIMENSION  = 50;
 	const PDF_STRUCTURE_SCAN_LIMIT = 100;
 	const PDF_TEXT_SCAN_LIMIT      = 100;
 	const PDF_MEDIA_FILE_LIMIT     = 8388608;
@@ -3590,7 +3591,7 @@ final class SourceItemDocumentProcessor {
 				$metadata['pdf_embedded_media_extraction_status'] = 0 < $pdf_asset_summary['unsupported'] ? 'partial' : 'queued';
 				$metadata['pdf_embedded_media_queued']            = $pdf_asset_summary['queued'];
 				$metadata['pdf_embedded_media_assets']            = $pdf_asset_summary['assets'];
-				$metadata['pdf_embedded_media_hint']              = 'PDF contains embedded JPEG image streams; extracted images were queued for media attachment import. Other embedded PDF media or vector content may still need operator review.';
+				$metadata['pdf_embedded_media_hint']              = 'PDF contains embedded JPEG image streams; extracted images at least ' . self::PDF_MEDIA_MIN_DIMENSION . 'x' . self::PDF_MEDIA_MIN_DIMENSION . 'px were queued for media attachment import. Other embedded PDF media or vector content may still need operator review.';
 			}
 
 			if ( isset( $pdf_asset_summary['read_offset'] ) ) {
@@ -4125,6 +4126,8 @@ final class SourceItemDocumentProcessor {
 				$this->count_unsupported_pdf_asset( $summary, 'malformed_stream', $image['filter'] );
 			} elseif ( 0 >= (int) $image['width'] || 0 >= (int) $image['height'] ) {
 				$this->count_unsupported_pdf_asset( $summary, 'missing_dimensions', $image['filter'] );
+			} elseif ( (int) $image['width'] < self::PDF_MEDIA_MIN_DIMENSION || (int) $image['height'] < self::PDF_MEDIA_MIN_DIMENSION ) {
+				$this->count_unsupported_pdf_asset( $summary, 'small_dimensions', $image['filter'] );
 			} elseif ( '' === (string) $image['stream'] ) {
 				$this->count_unsupported_pdf_asset( $summary, 'empty_stream', $image['filter'] );
 			} elseif ( self::PDF_MEDIA_FILE_LIMIT < strlen( $image['stream'] ) ) {
@@ -4668,6 +4671,10 @@ final class SourceItemDocumentProcessor {
 
 		if ( in_array( 'missing_dimensions', $reasons, true ) ) {
 			$hint .= ' At least one embedded JPEG image stream used missing or indirect dimensions that the bounded parser could not resolve.';
+		}
+
+		if ( in_array( 'small_dimensions', $reasons, true ) ) {
+			$hint .= ' Embedded JPEG image streams smaller than ' . self::PDF_MEDIA_MIN_DIMENSION . 'x' . self::PDF_MEDIA_MIN_DIMENSION . 'px were skipped as likely masks, icons, or layout artifacts.';
 		}
 
 		if ( in_array( 'empty_stream', $reasons, true ) ) {

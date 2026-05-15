@@ -694,7 +694,7 @@ final class PdfBlockConversionTest extends TestCase {
 		if ( $include_image ) {
 			$image = base64_decode( $this->tiny_jpeg_base64(), true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- Unit test embeds a tiny binary JPEG fixture in a generated PDF.
 			$this->assertIsString( $image );
-			$objects[] = $image_id . ' 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
+			$objects[] = $image_id . ' 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
 				. $image
 				. "\nendstream\nendobj\n";
 		}

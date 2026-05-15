@@ -4422,7 +4422,7 @@ final class ImportRunnerTest extends TestCase {
 			. '4 0 obj << /Length ' . strlen( $content_stream ) . " >>\nstream\n"
 			. $content_stream
 			. "\nendstream\nendobj\n"
-			. '5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\rstream\r"
+			. '5 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\rstream\r"
 			. $image
 			. "\rendstream\rendobj\r%%EOF\r";
 		$source_file    = $this->temporary_file( 'embedded-image-cr-delimiter.pdf', $pdf );
@@ -4646,6 +4646,54 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertSame( array( 'DCTDecode' ), $metadata['pdf_unsupported_embedded_media_filters'] );
 		$this->assertSame( array( 'missing_dimensions' ), $metadata['pdf_unsupported_embedded_media_reasons'] );
 		$this->assertStringContainsString( 'missing or indirect dimensions', $metadata['pdf_embedded_media_hint'] );
+		$this->assertCount( 0, $references );
+		$this->assertSame( 0, $media->count_attachments() );
+		$this->assertSame( 1, $posts->count_posts() );
+		$this->assertNotNull( $document );
+		$this->assertSame( $metadata['pdf_unsupported_embedded_media_reasons'], $document->get_metadata()['pdf_unsupported_embedded_media_reasons'] );
+		$this->assertContains( 'media.pdf_asset_unsupported', $events );
+	}
+
+	/**
+	 * Small embedded JPEG streams are treated as likely layout artifacts instead of imported media.
+	 *
+	 * @return void
+	 */
+	public function test_runner_skips_small_pdf_embedded_image_streams() {
+		$image = base64_decode( $this->tiny_jpeg_base64(), true ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- Unit test embeds a tiny binary JPEG fixture in a generated PDF.
+		$this->assertIsString( $image );
+
+		$source_file = $this->temporary_pdf_with_embedded_image_dictionary(
+			'small-embedded-image.pdf',
+			"BT\n/F1 12 Tf\n72 720 Td\n(# PDF With Small Image\\n\\nBody before image.) Tj\nET\nq 1 0 0 1 0 0 cm /Im1 Do Q",
+			'/Width 49 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode',
+			$image,
+			''
+		);
+		$session     = ImportSession::start_for_source( $source_file );
+		$posts       = new FakePostGateway();
+		$media       = new FakeMediaGateway();
+		$cache       = new ImportCacheDirectory( $this->temporary_directory(), 'unit-test' );
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/', $media, null, null, null, $cache ) )->run( $session->get_id() );
+
+		$items      = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 1 );
+		$metadata   = $items[0]->get_metadata();
+		$references = $this->store->list_media_references_by_statuses( $session->get_id(), array( ImportMediaReference::STATUS_QUEUED, ImportMediaReference::STATUS_IMPORTED, ImportMediaReference::STATUS_FAILED ), 5 );
+		$document   = $this->store->find_prepared_document( $session->get_id(), $items[0]->get_key() );
+		$events     = array_map(
+			function ( $event ) {
+				return $event->get_type();
+			},
+			$this->store->list_events( $session->get_id(), 20 )
+		);
+
+		$this->assertSame( 'unsupported', $metadata['pdf_embedded_media_extraction_status'] );
+		$this->assertSame( 1, $metadata['pdf_unsupported_embedded_media_count'] );
+		$this->assertSame( array( 'DCTDecode' ), $metadata['pdf_unsupported_embedded_media_filters'] );
+		$this->assertSame( array( 'small_dimensions' ), $metadata['pdf_unsupported_embedded_media_reasons'] );
+		$this->assertStringContainsString( 'smaller than 50x50px', $metadata['pdf_embedded_media_hint'] );
 		$this->assertCount( 0, $references );
 		$this->assertSame( 0, $media->count_attachments() );
 		$this->assertSame( 1, $posts->count_posts() );
@@ -8151,7 +8199,7 @@ exit( 99 );
 			$object      = $next_object++;
 			$xobjects[]  = '/' . $name . ' ' . $object . ' 0 R';
 			$draws[]     = 'q 1 0 0 1 0 0 cm /' . $name . ' Do Q';
-			$image_objs .= $object . ' 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
+			$image_objs .= $object . ' 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
 				. $image
 				. "\nendstream\nendobj\n";
 		}
@@ -8201,7 +8249,7 @@ exit( 99 );
 		return $this->temporary_pdf_with_embedded_image_dictionary(
 			$basename,
 			$content_stream,
-			'/Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter ' . $filter_expression,
+			'/Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter ' . $filter_expression,
 			$image,
 			''
 		);
@@ -8250,7 +8298,7 @@ exit( 99 );
 			. '4 0 obj << /Length ' . strlen( $content_stream ) . " >>\nstream\n"
 			. $content_stream
 			. "\nendstream\nendobj\n"
-			. '5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
+			. '5 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
 			. $image
 			. "\n%%EOF\n";
 
@@ -8273,10 +8321,10 @@ exit( 99 );
 			. '4 0 obj << /Length ' . strlen( $content_stream ) . " >>\nstream\n"
 			. $content_stream
 			. "\nendstream\nendobj\n"
-			. '5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
+			. '5 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
 			. $image
 			. "\nendobj\n"
-			. '6 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
+			. '6 0 obj << /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' . strlen( $image ) . " >>\nstream\n"
 			. $image
 			. "\nendstream\nendobj\n%%EOF\n";
 
