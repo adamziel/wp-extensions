@@ -197,6 +197,7 @@ final class SSGWP_Static_Exporter {
 
 			$target_path = $this->url_to_file_path( $url );
 			$response    = $this->inject_missing_core_block_styles( $response );
+			$response    = $this->ensure_html_charset( $response );
 			$rewritten   = $rewriter->rewrite_html( $response, $url, $target_path );
 
 			$this->write_file( trailingslashit( $output_dir ) . $target_path, $rewritten['content'] );
@@ -401,6 +402,35 @@ final class SSGWP_Static_Exporter {
 		}
 
 		return $injected . $html;
+	}
+
+	/**
+	 * Ensure exported HTML declares UTF-8 for file:// previews.
+	 *
+	 * @param string $html Rendered HTML.
+	 * @return string HTML with a charset declaration.
+	 */
+	private function ensure_html_charset( $html ) {
+		$html = (string) $html;
+
+		if (
+			preg_match( '#<meta\s+[^>]*charset\s*=#i', $html )
+			|| preg_match( '#<meta\s+[^>]*http-equiv=["\']?content-type["\']?[^>]*>#i', $html )
+		) {
+			return $html;
+		}
+
+		$meta = '<meta charset="UTF-8" />' . "\n";
+
+		if ( false !== stripos( $html, '<head' ) ) {
+			return preg_replace( '#(<head\b[^>]*>)#i', '$1' . "\n" . $meta, $html, 1 );
+		}
+
+		if ( false !== stripos( $html, '<html' ) ) {
+			return preg_replace( '#(<html\b[^>]*>)#i', '$1' . "\n<head>\n" . $meta . "</head>\n", $html, 1 );
+		}
+
+		return $meta . $html;
 	}
 
 	/**

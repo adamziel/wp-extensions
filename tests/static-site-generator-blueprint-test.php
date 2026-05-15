@@ -98,8 +98,10 @@ ssgwp_blueprint_assert(
 		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'wc-block-product-template' )
 		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'grid-template-columns' )
 		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'aspect-ratio:1/1' )
-		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'object-fit:cover' ),
-	'BrewCommerce blueprint includes a static product grid fallback style.'
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'object-fit:cover' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'wc-block-cart' )
+		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'wc-block-components-sidebar-layout' ),
+	'BrewCommerce blueprint includes static product grid and cart fallback styles.'
 );
 
 ssgwp_blueprint_assert(

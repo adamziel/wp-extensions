@@ -680,6 +680,21 @@ ssgwp_assert_not_contains(
 	'inject_missing_core_block_styles ignores block classes inside style tags.'
 );
 
+$charset_method = new ReflectionMethod( $exporter, 'ensure_html_charset' );
+$charset_method->setAccessible( true );
+
+ssgwp_assert_contains(
+	'<meta charset="UTF-8" />',
+	$charset_method->invoke( $exporter, '<html><head><title>Cart</title></head><body>You may be interested in…</body></html>' ),
+	'ensure_html_charset adds UTF-8 metadata for file previews with non-ASCII text.'
+);
+
+ssgwp_assert_same(
+	'<html><head><meta charset="UTF-8"><title>Cart</title></head><body>Cart</body></html>',
+	$charset_method->invoke( $exporter, '<html><head><meta charset="UTF-8"><title>Cart</title></head><body>Cart</body></html>' ),
+	'ensure_html_charset preserves existing charset metadata.'
+);
+
 $url_to_file_path_method = new ReflectionMethod( $exporter, 'url_to_file_path' );
 $url_to_file_path_method->setAccessible( true );
 
@@ -1170,7 +1185,7 @@ $ssgwp_test_posts          = array(
 $ssgwp_test_http_responses = array(
 	'https://example.test/' => '<html><head><title>Coffee Home</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main data-wp-context=\'{"shopUrl":"/shop/","cartUrl":"/cart/"}\'><h1>Coffee Home</h1><a href="/shop/">Shop</a><a href="/cart/">Cart</a><a href="/communication-preferences/">Communication preferences</a></main></body></html>',
 	'https://example.test/shop/' => '<html><head><title>Shop</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main><h1>Shop</h1><ul class="products columns-3"><li class="product">Espresso Roast</li><li class="product">Pour Over Kit</li><li class="product">Travel Tumbler</li></ul><a href="/cart/">View cart</a><script type="application/json">{"cartUrl":"\u002Fcart\u002F","checkoutUrl":"\u002Fcheckout\u002F","styleUrl":"\u002Fwp-content\u002Fplugins\u002Fwoocommerce\u002Fassets\u002Fcss\u002Fwoocommerce.css"}</script></main></body></html>',
-	'https://example.test/cart/' => '<html><head><title>Cart</title></head><body><main><h1>Cart</h1><p>Cart page rendered.</p><a href="/shop/">Keep shopping</a></main></body></html>',
+	'https://example.test/cart/' => '<html><head><title>Cart</title></head><body><main class="wc-block-cart"><h1>Cart</h1><p>Cart page rendered.</p><h2>You may be interested in…</h2><a href="/shop/">Keep shopping</a></main></body></html>',
 	'https://example.test/communication-preferences/' => '<html><head><title>Communication preferences</title></head><body><main><h1>Communication preferences</h1><p>Rendered communication preferences content.</p></main></body></html>',
 	'https://example.test/checkout/' => '<html><head><title>Checkout</title></head><body><main><h1>Checkout</h1><p>Checkout page rendered.</p></main></body></html>',
 );
@@ -1274,6 +1289,18 @@ ssgwp_assert_contains(
 	'Cart page rendered',
 	$commerce_cart,
 	'export_to_directory exports linked cart pages used by shop links.'
+);
+
+ssgwp_assert_contains(
+	'<meta charset="UTF-8" />',
+	$commerce_cart,
+	'export_to_directory writes charset metadata for cart pages with non-ASCII copy.'
+);
+
+ssgwp_assert_contains(
+	'You may be interested in…',
+	$commerce_cart,
+	'export_to_directory preserves UTF-8 cart cross-sell headings.'
 );
 
 ssgwp_assert_contains(
