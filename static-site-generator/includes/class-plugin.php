@@ -87,32 +87,40 @@ final class SSGWP_Plugin {
 
 				<table class="form-table" role="presentation">
 					<tr>
-						<th scope="row"><label for="ssgwp_url_mode"><?php esc_html_e( 'URL mode', 'playground-static-site-generator' ); ?></label></th>
+						<th scope="row"><label for="ssgwp_url_mode"><?php esc_html_e( 'Link format', 'playground-static-site-generator' ); ?></label></th>
 						<td>
 							<select name="url_mode" id="ssgwp_url_mode">
-								<option value="relative" selected><?php esc_html_e( 'Relative URLs', 'playground-static-site-generator' ); ?></option>
-								<option value="root"><?php esc_html_e( 'Root-relative URLs', 'playground-static-site-generator' ); ?></option>
-								<option value="absolute"><?php esc_html_e( 'Absolute URLs', 'playground-static-site-generator' ); ?></option>
+								<option value="relative" selected><?php esc_html_e( 'Portable ZIP', 'playground-static-site-generator' ); ?></option>
+								<option value="root"><?php esc_html_e( 'Site root', 'playground-static-site-generator' ); ?></option>
+								<option value="absolute"><?php esc_html_e( 'Current WordPress URL', 'playground-static-site-generator' ); ?></option>
 							</select>
+							<p class="description">
+								<?php esc_html_e( 'Portable ZIP uses relative links and is best for downloading, previewing, or moving the export between hosts.', 'playground-static-site-generator' ); ?>
+							</p>
 						</td>
 					</tr>
 					<tr>
-						<th scope="row"><label for="ssgwp_max_pages"><?php esc_html_e( 'Maximum pages', 'playground-static-site-generator' ); ?></label></th>
-						<td><input type="number" min="1" max="5000" step="1" name="max_pages" id="ssgwp_max_pages" value="500" /></td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Assets', 'playground-static-site-generator' ); ?></th>
+						<th scope="row"><?php esc_html_e( 'Include', 'playground-static-site-generator' ); ?></th>
 						<td>
-							<label><input type="checkbox" name="copy_uploads" value="1" checked /> <?php esc_html_e( 'Uploads', 'playground-static-site-generator' ); ?></label><br />
-							<label><input type="checkbox" name="copy_theme" value="1" checked /> <?php esc_html_e( 'Active theme', 'playground-static-site-generator' ); ?></label><br />
-							<label><input type="checkbox" name="copy_plugins" value="1" checked /> <?php esc_html_e( 'Active plugin assets', 'playground-static-site-generator' ); ?></label><br />
-							<label><input type="checkbox" name="copy_core_assets" value="1" checked /> <?php esc_html_e( 'WordPress frontend assets', 'playground-static-site-generator' ); ?></label>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Discovery', 'playground-static-site-generator' ); ?></th>
-						<td>
-							<label><input type="checkbox" name="crawl_links" value="1" checked /> <?php esc_html_e( 'Follow same-site links found in exported pages', 'playground-static-site-generator' ); ?></label>
+							<label>
+								<input type="checkbox" name="include_media" value="1" checked />
+								<?php esc_html_e( 'Media library files', 'playground-static-site-generator' ); ?>
+							</label><br />
+							<label>
+								<input type="checkbox" name="generate_sitemap" value="1" />
+								<?php esc_html_e( 'sitemap.xml using the current WordPress URL', 'playground-static-site-generator' ); ?>
+							</label><br />
+							<label>
+								<input type="checkbox" name="generate_robots" value="1" />
+								<?php esc_html_e( 'robots.txt with a sitemap reference', 'playground-static-site-generator' ); ?>
+							</label><br />
+							<label>
+								<input type="checkbox" name="include_report" value="1" checked />
+								<?php esc_html_e( 'Export report for debugging', 'playground-static-site-generator' ); ?>
+							</label>
+							<p class="description">
+								<?php esc_html_e( 'Theme, plugin, WordPress CSS/JS, and linked site pages are included automatically so the static site works.', 'playground-static-site-generator' ); ?>
+							</p>
 						</td>
 					</tr>
 				</table>
@@ -732,14 +740,23 @@ final class SSGWP_Plugin {
 	 * @return array
 	 */
 	private static function request_to_export_args( array $request ) {
+		$url_mode = isset( $request['url_mode'] ) ? sanitize_key( $request['url_mode'] ) : 'relative';
+
+		if ( ! in_array( $url_mode, array( 'relative', 'root', 'absolute' ), true ) ) {
+			$url_mode = 'relative';
+		}
+
 		return array(
-			'url_mode'         => isset( $request['url_mode'] ) ? sanitize_key( $request['url_mode'] ) : 'relative',
-			'max_pages'        => isset( $request['max_pages'] ) ? max( 1, min( 5000, absint( $request['max_pages'] ) ) ) : 500,
-			'copy_uploads'     => ! empty( $request['copy_uploads'] ),
-			'copy_theme'       => ! empty( $request['copy_theme'] ),
-			'copy_plugins'     => ! empty( $request['copy_plugins'] ),
-			'copy_core_assets' => ! empty( $request['copy_core_assets'] ),
-			'crawl_links'      => ! empty( $request['crawl_links'] ),
+			'url_mode'         => $url_mode,
+			'max_pages'        => 10000,
+			'copy_uploads'     => ! empty( $request['include_media'] ),
+			'copy_theme'       => true,
+			'copy_plugins'     => true,
+			'copy_core_assets' => true,
+			'crawl_links'      => true,
+			'include_manifest' => ! empty( $request['include_report'] ),
+			'generate_sitemap' => ! empty( $request['generate_sitemap'] ),
+			'generate_robots'  => ! empty( $request['generate_robots'] ),
 			'fetch_mode'       => 'internal',
 		);
 	}
@@ -973,6 +990,12 @@ final class SSGWP_Plugin {
 					$pass    = isset( $context['pass'] ) ? max( 1, (int) $context['pass'] ) : 1;
 					$percent = min( 95, 89 + $pass );
 					break;
+				case 'generate_sitemap':
+					$percent = 94;
+					break;
+				case 'generate_robots':
+					$percent = 95;
+					break;
 				case 'complete':
 					$percent = 96;
 					break;
@@ -1010,6 +1033,8 @@ final class SSGWP_Plugin {
 				'copy_linked_assets',
 				'rewrite_assets',
 				'copy_text_asset_dependencies',
+				'generate_sitemap',
+				'generate_robots',
 				'complete',
 				'zip',
 				'zip_complete',
@@ -1154,6 +1179,9 @@ final class SSGWP_Plugin {
 			'copy_plugins'     => ! isset( $assoc_args['skip-plugins'] ),
 			'copy_core_assets' => ! isset( $assoc_args['skip-core-assets'] ),
 			'crawl_links'      => ! isset( $assoc_args['no-crawl'] ),
+			'include_manifest' => ! isset( $assoc_args['no-report'] ),
+			'generate_sitemap' => isset( $assoc_args['generate-sitemap'] ),
+			'generate_robots'  => isset( $assoc_args['generate-robots'] ),
 			'fetch_mode'       => isset( $assoc_args['fetch-mode'] ) ? sanitize_key( $assoc_args['fetch-mode'] ) : 'auto',
 			'progress_callback' => array( __CLASS__, 'wp_cli_report_progress' ),
 		);

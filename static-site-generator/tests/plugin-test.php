@@ -111,6 +111,50 @@ $store_method->setAccessible( true );
 
 $latest_progress_method = new ReflectionMethod( 'SSGWP_Plugin', 'get_latest_export_progress' );
 $latest_progress_method->setAccessible( true );
+
+$request_args_method = new ReflectionMethod( 'SSGWP_Plugin', 'request_to_export_args' );
+$request_args_method->setAccessible( true );
+$admin_args = $request_args_method->invoke(
+	null,
+	array(
+		'url_mode'         => 'bad-value',
+		'max_pages'        => 1,
+		'include_media'    => '1',
+		'generate_sitemap' => '1',
+		'include_report'   => '1',
+	)
+);
+
+ssgwp_assert_same(
+	'relative',
+	$admin_args['url_mode'],
+	'request_to_export_args falls back to portable relative links for invalid URL modes.'
+);
+
+ssgwp_assert_same(
+	10000,
+	$admin_args['max_pages'],
+	'request_to_export_args keeps the page limit as an internal runaway guard instead of a UI setting.'
+);
+
+ssgwp_assert_same(
+	true,
+	$admin_args['copy_theme'] && $admin_args['copy_plugins'] && $admin_args['copy_core_assets'] && $admin_args['crawl_links'],
+	'request_to_export_args always includes required frontend assets and linked site pages.'
+);
+
+ssgwp_assert_same(
+	true,
+	$admin_args['copy_uploads'] && $admin_args['generate_sitemap'] && $admin_args['include_manifest'],
+	'request_to_export_args maps user-facing include options to exporter settings.'
+);
+
+ssgwp_assert_same(
+	false,
+	$admin_args['generate_robots'],
+	'request_to_export_args leaves optional SEO files disabled when not selected.'
+);
+
 $store_method->invoke(
 	null,
 	'job-1',

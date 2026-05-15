@@ -693,6 +693,8 @@ ssgwp_assert_same(
 		'wordpress',
 		'plugin_version',
 		'url_mode',
+		'generated_sitemap',
+		'generated_robots',
 		'progress',
 		'playground_note',
 	),
@@ -755,6 +757,18 @@ ssgwp_assert_same(
 );
 
 ssgwp_assert_same(
+	false,
+	$manifest_data['generated_sitemap'],
+	'static-export.json records when sitemap.xml was not generated.'
+);
+
+ssgwp_assert_same(
+	false,
+	$manifest_data['generated_robots'],
+	'static-export.json records when robots.txt was not generated.'
+);
+
+ssgwp_assert_same(
 	true,
 	! empty( $manifest_data['progress'] ),
 	'static-export.json records progress events.'
@@ -776,6 +790,58 @@ ssgwp_assert_contains(
 	'WordPress Playground',
 	$manifest_data['playground_note'],
 	'static-export.json explains that the editable Playground site should be kept separately.'
+);
+
+$seo_output_dir = $fixture_root . '/seo-export';
+$seo_result     = $exporter->export_to_directory(
+	$seo_output_dir,
+	array(
+		'max_pages'         => 1,
+		'copy_uploads'      => false,
+		'copy_theme'        => false,
+		'copy_plugins'      => false,
+		'copy_core_assets'  => false,
+		'include_manifest'  => false,
+		'generate_sitemap'  => true,
+		'generate_robots'   => true,
+		'progress_callback' => null,
+	)
+);
+
+ssgwp_assert_same(
+	true,
+	file_exists( $seo_output_dir . '/sitemap.xml' ),
+	'export_to_directory writes sitemap.xml when requested.'
+);
+
+ssgwp_assert_contains(
+	'<loc>https://example.test/</loc>',
+	file_get_contents( $seo_output_dir . '/sitemap.xml' ), // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+	'sitemap.xml lists exported page URLs.'
+);
+
+ssgwp_assert_same(
+	true,
+	file_exists( $seo_output_dir . '/robots.txt' ),
+	'export_to_directory writes robots.txt when requested.'
+);
+
+ssgwp_assert_contains(
+	'Sitemap: https://example.test/sitemap.xml',
+	file_get_contents( $seo_output_dir . '/robots.txt' ), // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+	'robots.txt references sitemap.xml.'
+);
+
+ssgwp_assert_same(
+	true,
+	$seo_result['generated_sitemap'],
+	'export_to_directory reports generated sitemap.xml.'
+);
+
+ssgwp_assert_same(
+	true,
+	$seo_result['generated_robots'],
+	'export_to_directory reports generated robots.txt.'
 );
 
 wp_mkdir_p( $fixture_root . '/theme/static-site-generator' );

@@ -115,6 +115,8 @@ final class SSGWP_Static_Exporter {
 				'copy_core_assets' => true,
 				'crawl_links'      => true,
 				'include_manifest' => true,
+				'generate_sitemap' => false,
+				'generate_robots'  => false,
 				'fetch_mode'       => 'auto',
 				'progress_callback' => null,
 			)
@@ -237,6 +239,17 @@ final class SSGWP_Static_Exporter {
 		$this->report_progress( 'copy_linked_assets', 'Copying linked same-site assets.', array( 'asset_count' => count( $linked_asset_urls ) ) );
 		$this->copy_linked_assets( array_values( $linked_asset_urls ), $output_dir );
 		$this->rewrite_copied_text_assets_and_copy_dependencies( $output_dir, $rewriter );
+
+		if ( ! empty( $args['generate_sitemap'] ) ) {
+			$this->report_progress( 'generate_sitemap', 'Generating sitemap.xml.', array( 'url_count' => count( $exported ) ) );
+			$this->write_sitemap( $output_dir, $exported );
+		}
+
+		if ( ! empty( $args['generate_robots'] ) ) {
+			$this->report_progress( 'generate_robots', 'Generating robots.txt.', array( 'sitemap' => 'sitemap.xml' ) );
+			$this->write_robots_txt( $output_dir );
+		}
+
 		$this->report_progress(
 			'complete',
 			sprintf( 'Exported %1$d pages and %2$d files.', count( $exported ), $this->files_exported ),
@@ -256,6 +269,8 @@ final class SSGWP_Static_Exporter {
 			'wordpress'       => get_bloginfo( 'version' ),
 			'plugin_version'  => SSGWP_VERSION,
 			'url_mode'        => $args['url_mode'],
+			'generated_sitemap' => ! empty( $args['generate_sitemap'] ),
+			'generated_robots' => ! empty( $args['generate_robots'] ),
 			'progress'        => $this->progress,
 			'playground_note' => 'This static export can be hosted anywhere. Keep a WordPress Playground site export separately if you want to restore the editable source site later.',
 		);
@@ -292,6 +307,42 @@ final class SSGWP_Static_Exporter {
 		if ( null !== $this->progress_callback ) {
 			call_user_func( $this->progress_callback, $event );
 		}
+	}
+
+	/**
+	 * Write a sitemap for the exported public pages.
+	 *
+	 * @param string   $output_dir    Static export directory.
+	 * @param string[] $exported_urls Exported page URLs.
+	 * @throws Exception When the file cannot be written.
+	 */
+	private function write_sitemap( $output_dir, array $exported_urls ) {
+		$lines = array(
+			'<?xml version="1.0" encoding="UTF-8"?>',
+			'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+		);
+
+		foreach ( $exported_urls as $url ) {
+			$lines[] = "\t<url>";
+			$lines[] = "\t\t<loc>" . htmlspecialchars( $url, ENT_XML1 | ENT_COMPAT, 'UTF-8' ) . '</loc>';
+			$lines[] = "\t</url>";
+		}
+
+		$lines[] = '</urlset>';
+
+		$this->write_file( trailingslashit( $output_dir ) . 'sitemap.xml', implode( "\n", $lines ) . "\n" );
+	}
+
+	/**
+	 * Write a robots.txt that points crawlers to the generated sitemap.
+	 *
+	 * @param string $output_dir Static export directory.
+	 * @throws Exception When the file cannot be written.
+	 */
+	private function write_robots_txt( $output_dir ) {
+		$contents = "User-agent: *\nAllow: /\nSitemap: " . home_url( '/sitemap.xml' ) . "\n";
+
+		$this->write_file( trailingslashit( $output_dir ) . 'robots.txt', $contents );
 	}
 
 	/**
