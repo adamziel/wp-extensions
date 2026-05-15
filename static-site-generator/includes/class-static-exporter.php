@@ -184,8 +184,10 @@ final class SSGWP_Static_Exporter {
 					'page_failed',
 					sprintf( 'Could not export %s.', $url ),
 					array(
-						'url'   => $url,
-						'error' => $response->get_error_message(),
+						'url'            => $url,
+						'error'          => $response->get_error_message(),
+						'queue_position' => $queue_index,
+						'queue_total'    => count( $queue ),
 					)
 				);
 				continue;
@@ -204,6 +206,7 @@ final class SSGWP_Static_Exporter {
 					'url'            => $url,
 					'target_path'    => $target_path,
 					'pages_exported' => count( $exported ),
+					'queue_position' => $queue_index,
 					'queue_total'    => count( $queue ),
 				)
 			);

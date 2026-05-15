@@ -220,10 +220,22 @@ $store_method->invoke(
 		'stage'          => 'page_exported',
 		'message'        => 'Exported a page.',
 		'pages_exported' => 1,
-		'context'        => array( 'queue_total' => 2 ),
+		'context'        => array(
+			'queue_position' => 11,
+			'queue_total'    => 11,
+		),
 	),
 	'run-3'
 );
+
+$log_key = $progress_key_method->invoke( null, 'job-3', 'run-3' );
+
+ssgwp_assert_same(
+	75,
+	$ssgwp_transients[ $log_key ]['value']['percent'],
+	'store_progress_event uses queue position so completed page discovery reaches the asset phase.'
+);
+
 $store_method->invoke(
 	null,
 	'job-3',
@@ -233,8 +245,6 @@ $store_method->invoke(
 	),
 	'run-3'
 );
-
-$log_key = $progress_key_method->invoke( null, 'job-3', 'run-3' );
 
 ssgwp_assert_same(
 	100,

@@ -207,6 +207,8 @@ final class SSGWP_Plugin {
 						$initial_progress,
 						JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
 					); ?>;
+					var renderedLogLength = 0;
+					var replayTimer = null;
 
 					if (
 						! form ||
@@ -236,6 +238,10 @@ final class SSGWP_Plugin {
 						bar.style.width = next + '%';
 					}
 
+					function getPercent() {
+						return Math.max( 0, Math.min( 100, parseInt( percent.textContent, 10 ) || 0 ) );
+					}
+
 					function setRunning( running ) {
 						if ( submitButton ) {
 							submitButton.disabled = !! running;
@@ -246,6 +252,13 @@ final class SSGWP_Plugin {
 						if ( timer ) {
 							window.clearInterval( timer );
 							timer = null;
+						}
+					}
+
+					function stopReplay() {
+						if ( replayTimer ) {
+							window.clearTimeout( replayTimer );
+							replayTimer = null;
 						}
 					}
 
@@ -265,6 +278,7 @@ final class SSGWP_Plugin {
 						log.textContent = '';
 
 						if ( ! entries || ! entries.length ) {
+							renderedLogLength = 0;
 							return;
 						}
 
@@ -280,6 +294,11 @@ final class SSGWP_Plugin {
 							item.textContent = text;
 							log.appendChild( item );
 						} );
+						renderedLogLength = entries.length;
+					}
+
+					function renderLogPrefix( entries, length ) {
+						renderLog( entries ? entries.slice( 0, length ) : [] );
 					}
 
 					function renderProgress( data ) {
@@ -287,6 +306,7 @@ final class SSGWP_Plugin {
 							return;
 						}
 
+						stopReplay();
 						panel.hidden = false;
 						panel.classList.toggle( 'notice-error', 'failed' === data.stage );
 						panel.classList.toggle(
@@ -316,6 +336,41 @@ final class SSGWP_Plugin {
 						} else {
 							setRunning( true );
 						}
+					}
+
+					function renderProgressWithReplay( data ) {
+						var entries = data && data.log ? data.log : [];
+						var unseen = entries.slice( renderedLogLength );
+						var shouldReplay = unseen.length > 1 && data.percent > getPercent();
+						var baseLogLength = renderedLogLength;
+						var index = 0;
+
+						if ( ! shouldReplay ) {
+							renderProgress( data );
+							return;
+						}
+
+						stopReplay();
+						panel.hidden = false;
+						setRunning( true );
+
+						function replayNext() {
+							var entry = unseen[index];
+							var visibleLength = baseLogLength + index + 1;
+
+							if ( ! entry ) {
+								renderProgress( data );
+								return;
+							}
+
+							setMessage( entry.message );
+							setPercent( entry.percent );
+							renderLogPrefix( entries, visibleLength );
+							index++;
+							replayTimer = window.setTimeout( replayNext, 120 );
+						}
+
+						replayNext();
 					}
 
 					function createRunId() {
@@ -355,7 +410,7 @@ final class SSGWP_Plugin {
 									return;
 								}
 
-								renderProgress( data );
+								renderProgressWithReplay( data );
 							} )
 							.catch( function() {
 								setMessage( panel.getAttribute( 'data-failed' ) );
@@ -377,6 +432,7 @@ final class SSGWP_Plugin {
 							is_terminal: false
 						} );
 						stopPolling();
+						stopReplay();
 						pollProgress();
 						timer = window.setInterval( pollProgress, 1000 );
 					} );
@@ -886,7 +942,9 @@ final class SSGWP_Plugin {
 					? max( 0, (int) $context['queue_position'] - 1 )
 					: (int) $event['pages_exported'];
 			} else {
-				$done = (int) $event['pages_exported'];
+				$done = isset( $context['queue_position'] )
+					? max( 0, (int) $context['queue_position'] )
+					: (int) $event['pages_exported'];
 			}
 
 			$percent = 5 + (int) floor( min( 1, $done / $total ) * 70 );
