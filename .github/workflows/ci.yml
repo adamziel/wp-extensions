@@ -27,6 +27,7 @@ jobs:
         run: |
           php -r 'foreach (glob("blueprints/*.json") as $file) { json_decode(file_get_contents($file), true, 512, JSON_THROW_ON_ERROR); echo "Valid $file\n"; }'
           php tests/static-site-generator-blueprint-test.php
+          php tests/docs-site-test.php
 
       - name: Check Static Site Generator
         run: |
