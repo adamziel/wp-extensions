@@ -283,13 +283,7 @@ unset( $record );
 
 $permalinks = array();
 foreach ( $records as $source => $record ) {
-	$segments = array( $record['slug'] );
-	$parent_dir = $record['is_readme'] ? $record['parent_dir'] : $record['parent_dir'];
-	while ( $parent_dir !== '' && isset( $dir_records[ $parent_dir ] ) ) {
-		array_unshift( $segments, $records[ $dir_records[ $parent_dir ] ]['slug'] );
-		$parent_dir = $records[ $dir_records[ $parent_dir ] ]['parent_dir'];
-	}
-	$permalinks[ $source ] = '/' . implode( '/', $segments ) . '/';
+	$permalinks[ $source ] = '?page_id=' . $record['id'];
 }
 
 foreach ( $records as $source => $record ) {
