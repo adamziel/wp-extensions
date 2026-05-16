@@ -46,6 +46,7 @@ jobs:
           bash -n markdown-editor/tools/build-release-zip.sh
           git submodule update --init --recursive markdown-editor/vendor/php-toolkit
           composer install --no-dev --prefer-dist --no-interaction -d markdown-editor/vendor/php-toolkit
+          php tests/markdown-editor-conversion-test.php
           markdown-editor/tools/build-release-zip.sh
           unzip -l dist/wp-markdown-editor.zip | grep 'wp-markdown-editor/run-playground-cli.sh'
           unzip -l dist/wp-markdown-editor.zip | grep 'wp-markdown-editor/markdown-editor/vendor/php-toolkit/vendor/autoload.php'

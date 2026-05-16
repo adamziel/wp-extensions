@@ -59,9 +59,192 @@ function edit_md_looks_like_blocks( $content ) {
 }
 
 /**
+ * Collapse whitespace for comparing plain text values. Markdown has already
+ * been parsed by CommonMark before heading text reaches this function.
+ */
+function edit_md_collapse_text_whitespace( $text ) {
+	$text = html_entity_decode( (string) $text, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+	$output = '';
+	$in_whitespace = false;
+	$length = strlen( $text );
+
+	for ( $i = 0; $i < $length; $i++ ) {
+		$char = $text[ $i ];
+		if ( ctype_space( $char ) ) {
+			if ( $output !== '' ) {
+				$in_whitespace = true;
+			}
+			continue;
+		}
+		if ( $in_whitespace ) {
+			$output .= ' ';
+			$in_whitespace = false;
+		}
+		$output .= $char;
+	}
+
+	return $output;
+}
+
+/**
+ * Parse Markdown into a CommonMark document when the toolkit is available.
+ */
+function edit_md_parse_markdown_document( $markdown ) {
+	if ( ! edit_md_load_toolkit() ) {
+		return null;
+	}
+
+	$environment = new \League\CommonMark\Environment\Environment( array() );
+	$environment->addExtension( new \League\CommonMark\Extension\CommonMark\CommonMarkCoreExtension() );
+	$environment->addExtension( new \League\CommonMark\Extension\GithubFlavoredMarkdownExtension() );
+
+	$parser = new \League\CommonMark\Parser\MarkdownParser( $environment );
+	return $parser->parse( (string) $markdown );
+}
+
+function edit_md_collect_node_text( $node ) {
+	if ( $node instanceof \League\CommonMark\Node\Inline\Text ) {
+		return $node->getLiteral();
+	}
+	if ( $node instanceof \League\CommonMark\Extension\CommonMark\Node\Inline\Code ) {
+		return $node->getLiteral();
+	}
+	if ( $node instanceof \League\CommonMark\Node\Inline\Newline ) {
+		return ' ';
+	}
+
+	$text = '';
+	foreach ( $node->children() as $child ) {
+		$text .= edit_md_collect_node_text( $child );
+	}
+	return $text;
+}
+
+function edit_md_get_leading_h1( $markdown ) {
+	$document = edit_md_parse_markdown_document( $markdown );
+	if ( ! $document ) {
+		return null;
+	}
+
+	foreach ( $document->children() as $child ) {
+		if ( $child instanceof \League\CommonMark\Extension\CommonMark\Node\Block\Heading ) {
+			if ( $child->getLevel() !== 1 ) {
+				return null;
+			}
+			return array(
+				'text' => edit_md_collect_node_text( $child ),
+				'start_line' => $child->getStartLine(),
+				'end_line' => $child->getEndLine(),
+			);
+		}
+		return null;
+	}
+
+	return null;
+}
+
+function edit_md_has_redundant_leading_h1( $markdown, $post_title ) {
+	if ( edit_md_collapse_text_whitespace( $post_title ) === '' ) {
+		return false;
+	}
+	$heading = edit_md_get_leading_h1( $markdown );
+	if ( $heading === null || ! isset( $heading['text'] ) ) {
+		return false;
+	}
+	return edit_md_collapse_text_whitespace( $heading['text'] ) === edit_md_collapse_text_whitespace( $post_title );
+}
+
+function edit_md_split_lines_preserve_endings( $text ) {
+	$text = (string) $text;
+	$lines = array();
+	$line_start = 0;
+	$length = strlen( $text );
+
+	for ( $i = 0; $i < $length; $i++ ) {
+		if ( $text[ $i ] !== "\n" && $text[ $i ] !== "\r" ) {
+			continue;
+		}
+		if ( $text[ $i ] === "\r" && $i + 1 < $length && $text[ $i + 1 ] === "\n" ) {
+			$i++;
+		}
+		$lines[] = substr( $text, $line_start, $i - $line_start + 1 );
+		$line_start = $i + 1;
+	}
+
+	if ( $line_start < $length ) {
+		$lines[] = substr( $text, $line_start );
+	}
+
+	return $lines;
+}
+
+function edit_md_strip_redundant_leading_h1( $markdown, $post_title ) {
+	$markdown = (string) $markdown;
+	$heading = edit_md_get_leading_h1( $markdown );
+	if (
+		! $heading ||
+		edit_md_collapse_text_whitespace( $heading['text'] ) !== edit_md_collapse_text_whitespace( $post_title )
+	) {
+		return $markdown;
+	}
+
+	$lines = edit_md_split_lines_preserve_endings( $markdown );
+	$start = max( 0, (int) $heading['start_line'] - 1 );
+	$end = max( $start, (int) $heading['end_line'] - 1 );
+
+	while ( $start > 0 && trim( $lines[ $start - 1 ] ) === '' ) {
+		$start--;
+	}
+	while ( isset( $lines[ $end + 1 ] ) && trim( $lines[ $end + 1 ] ) === '' ) {
+		$end++;
+	}
+
+	array_splice( $lines, $start, $end - $start + 1 );
+	return implode( '', $lines );
+}
+
+function edit_md_ensure_leading_h1( $markdown, $post_title ) {
+	$markdown = (string) $markdown;
+	$post_title = edit_md_collapse_text_whitespace( $post_title );
+	if ( $post_title === '' || edit_md_has_redundant_leading_h1( $markdown, $post_title ) ) {
+		return $markdown;
+	}
+	return '# ' . $post_title . "\n\n" . ltrim( $markdown );
+}
+
+function edit_md_strip_block_delimiters( $blocks ) {
+	$blocks = (string) $blocks;
+	$output = '';
+	$offset = 0;
+
+	while ( true ) {
+		$start = strpos( $blocks, '<!-- wp:', $offset );
+		$closing_start = strpos( $blocks, '<!-- /wp:', $offset );
+		if ( $start === false || ( $closing_start !== false && $closing_start < $start ) ) {
+			$start = $closing_start;
+		}
+		if ( $start === false ) {
+			$output .= substr( $blocks, $offset );
+			break;
+		}
+		$end = strpos( $blocks, '-->', $start );
+		if ( $end === false ) {
+			$output .= substr( $blocks, $offset );
+			break;
+		}
+
+		$output .= substr( $blocks, $offset, $start - $offset );
+		$offset = $end + 3;
+	}
+
+	return $output;
+}
+
+/**
  * Convert a Markdown string to block markup via php-toolkit's MarkdownConsumer.
  */
-function edit_md_markdown_to_blocks( $markdown ) {
+function edit_md_markdown_to_blocks( $markdown, $post_title = '' ) {
+	$markdown = edit_md_strip_redundant_leading_h1( $markdown, $post_title );
 	if ( ! edit_md_load_toolkit() ) {
 		return '<!-- wp:html -->' . $markdown . '<!-- /wp:html -->';
 	}
@@ -73,16 +256,38 @@ function edit_md_markdown_to_blocks( $markdown ) {
 /**
  * Convert block markup back to Markdown via php-toolkit's MarkdownProducer.
  */
-function edit_md_blocks_to_markdown( $blocks ) {
+function edit_md_blocks_to_markdown( $blocks, $post_title = '', $restore_leading_h1 = false ) {
 	if ( ! edit_md_load_toolkit() ) {
-		return preg_replace( '/<!--\s*\/?wp:[^>]*-->/', '', (string) $blocks );
+		$markdown = edit_md_strip_block_delimiters( $blocks );
+		return $restore_leading_h1 ? edit_md_ensure_leading_h1( $markdown, $post_title ) : $markdown;
 	}
 	$bwm = new \WordPress\DataLiberation\DataFormatConsumer\BlocksWithMetadata(
 		(string) $blocks,
 		array()
 	);
 	$producer = new \WordPress\Markdown\MarkdownProducer( $bwm );
-	return $producer->produce();
+	$markdown = $producer->produce();
+	return $restore_leading_h1 ? edit_md_ensure_leading_h1( $markdown, $post_title ) : $markdown;
+}
+
+function edit_md_stored_post_had_redundant_leading_h1( $post_id, $next_title ) {
+	$post_id = (int) $post_id;
+	if ( $post_id <= 0 ) {
+		return false;
+	}
+
+	global $wpdb;
+	$row = $wpdb->get_row(
+		$wpdb->prepare(
+			"SELECT post_title, post_content FROM {$wpdb->posts} WHERE ID = %d",
+			$post_id
+		)
+	);
+	if ( ! $row ) {
+		return false;
+	}
+	return edit_md_has_redundant_leading_h1( $row->post_content, $row->post_title )
+		|| edit_md_has_redundant_leading_h1( $row->post_content, $next_title );
 }
 
 /**
@@ -152,7 +357,7 @@ function edit_md_decode_post_content_for_render( $post ) {
 		return;
 	}
 	if ( ! edit_md_looks_like_blocks( $post->post_content ) ) {
-		$post->post_content = edit_md_markdown_to_blocks( $post->post_content );
+		$post->post_content = edit_md_markdown_to_blocks( $post->post_content, $post->post_title );
 	}
 	$post->_edit_md_decoded = 1;
 }
@@ -167,7 +372,10 @@ function edit_md_decode_the_content_for_render( $content ) {
 	if ( edit_md_looks_like_blocks( $content ) ) {
 		return $content;
 	}
-	return edit_md_markdown_to_blocks( $content );
+	$post_title = isset( $GLOBALS['post'] ) && $GLOBALS['post'] instanceof WP_Post
+		? $GLOBALS['post']->post_title
+		: '';
+	return edit_md_markdown_to_blocks( $content, $post_title );
 }
 
 /**
@@ -175,8 +383,8 @@ function edit_md_decode_the_content_for_render( $content ) {
  * row. The virtual table stores whatever string we hand it, so the disk
  * file ends up containing the Markdown the user expects to see.
  */
-add_filter( 'wp_insert_post_data', 'edit_md_encode_post_content_for_storage', 0 );
-function edit_md_encode_post_content_for_storage( $data ) {
+add_filter( 'wp_insert_post_data', 'edit_md_encode_post_content_for_storage', 0, 4 );
+function edit_md_encode_post_content_for_storage( $data, $postarr = array(), $unsanitized_postarr = array(), $update = false ) {
 	if ( empty( $data['post_content'] ) ) {
 		return $data;
 	}
@@ -184,7 +392,10 @@ function edit_md_encode_post_content_for_storage( $data ) {
 	 * is already plain Markdown (e.g. a programmatic insert with no block
 	 * delimiters), leave it as-is so we don't double-encode. */
 	if ( edit_md_looks_like_blocks( $data['post_content'] ) ) {
-		$data['post_content'] = edit_md_blocks_to_markdown( $data['post_content'] );
+		$post_title = isset( $data['post_title'] ) ? $data['post_title'] : '';
+		$post_id = isset( $postarr['ID'] ) ? (int) $postarr['ID'] : 0;
+		$restore_leading_h1 = $update && edit_md_stored_post_had_redundant_leading_h1( $post_id, $post_title );
+		$data['post_content'] = edit_md_blocks_to_markdown( $data['post_content'], $post_title, $restore_leading_h1 );
 	}
 	return $data;
 }
@@ -205,7 +416,7 @@ function edit_md_rest_prepare_response( $response, $post, $request ) {
 	}
 	$data = $response->get_data();
 	if ( isset( $data['content']['raw'] ) && ! edit_md_looks_like_blocks( $data['content']['raw'] ) ) {
-		$data['content']['raw'] = edit_md_markdown_to_blocks( $data['content']['raw'] );
+		$data['content']['raw'] = edit_md_markdown_to_blocks( $data['content']['raw'], $post->post_title );
 		$response->set_data( $data );
 	}
 	return $response;
