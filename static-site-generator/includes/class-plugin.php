@@ -1179,23 +1179,27 @@ final class SSGWP_Plugin {
 
 	/**
 	 * WP-CLI command: wp static-site export --output=dist/site.zip.
+	 * Directory export: wp static-site export --output-dir=dist/site.
 	 *
 	 * @param array $args Positional args.
 	 * @param array $assoc_args Associative args.
 	 */
 	public static function wp_cli_export( $args, $assoc_args ) {
-		$output = isset( $assoc_args['output'] ) ? $assoc_args['output'] : 'static-site.zip';
-		$output = wp_normalize_path( $output );
-
-		if ( ! SSGWP_Path_Utils::is_absolute_path( $output ) ) {
-			$output = trailingslashit( getcwd() ) . $output;
-		}
-
 		$export_args                       = self::wp_cli_assoc_args_to_export_args( $assoc_args );
 		$export_args['progress_callback'] = array( __CLASS__, 'wp_cli_report_progress' );
+		$output_dir                        = isset( $export_args['output_dir'] ) ? $export_args['output_dir'] : '';
+		unset( $export_args['output_dir'] );
 
 		$exporter = new SSGWP_Static_Exporter();
-		$result   = $exporter->export_to_zip( $output, $export_args );
+
+		if ( '' !== $output_dir ) {
+			$output = self::wp_cli_absolute_path( $output_dir );
+			$result = $exporter->export_to_directory( $output, $export_args );
+		} else {
+			$output = isset( $assoc_args['output'] ) ? $assoc_args['output'] : 'static-site.zip';
+			$output = self::wp_cli_absolute_path( $output );
+			$result = $exporter->export_to_zip( $output, $export_args );
+		}
 
 		WP_CLI::success(
 			sprintf(
@@ -1214,6 +1218,22 @@ final class SSGWP_Plugin {
 	}
 
 	/**
+	 * Resolve a WP-CLI output path against the current working directory.
+	 *
+	 * @param string $path Output path.
+	 * @return string Absolute normalized path.
+	 */
+	private static function wp_cli_absolute_path( $path ) {
+		$path = wp_normalize_path( $path );
+
+		if ( ! SSGWP_Path_Utils::is_absolute_path( $path ) ) {
+			$path = trailingslashit( getcwd() ) . $path;
+		}
+
+		return wp_normalize_path( $path );
+	}
+
+	/**
 	 * Convert WP-CLI associative args to exporter args.
 	 *
 	 * @param array $assoc_args WP-CLI associative args.
@@ -1226,7 +1246,7 @@ final class SSGWP_Plugin {
 			$url_mode = 'relative';
 		}
 
-		return array(
+		$args = array(
 			'url_mode'         => $url_mode,
 			'max_pages'        => isset( $assoc_args['max-pages'] ) ? max( 1, absint( $assoc_args['max-pages'] ) ) : 10000,
 			'copy_uploads'     => ! isset( $assoc_args['skip-uploads'] ),
@@ -1239,6 +1259,12 @@ final class SSGWP_Plugin {
 			'generate_robots'  => isset( $assoc_args['generate-robots'] ),
 			'fetch_mode'       => isset( $assoc_args['fetch-mode'] ) ? sanitize_key( $assoc_args['fetch-mode'] ) : 'auto',
 		);
+
+		if ( isset( $assoc_args['output-dir'] ) ) {
+			$args['output_dir'] = sanitize_text_field( (string) $assoc_args['output-dir'] );
+		}
+
+		return $args;
 	}
 
 	/**

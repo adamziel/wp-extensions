@@ -46,7 +46,8 @@ npx @wp-playground/cli@latest run-blueprint \
 		<section>
 			<h2>Regular WordPress WP-CLI</h2>
 			<pre><code>wp plugin activate static-site-generator
-wp static-site export --output=./static-site.zip --fetch-mode=auto</code></pre>
+wp static-site export --output=./static-site.zip --fetch-mode=auto
+wp static-site export --output-dir=./static-site --fetch-mode=auto</code></pre>
 			<p>Useful flags include <code>--url-mode=relative</code>, <code>--url-mode=root</code>, <code>--url-mode=absolute</code>, <code>--fetch-mode=internal</code>, <code>--generate-sitemap</code>, <code>--generate-robots</code>, and <code>--report</code>.</p>
 		</section>
 
