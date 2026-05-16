@@ -9,8 +9,8 @@ especially Playground-scoped sites and WooCommerce demos.
   `You may be interested in...`.
 - Confirmed the root cause was corrupted upstream BrewCommerce WXR content that
   already contained U+FFFD replacement characters before static export.
-- Moved the BrewCommerce punctuation cleanup into the demo Blueprint import
-  preparation step.
+- Replaced the BrewCommerce demo's corrupted upstream WXR import with a cleaned
+  WXR asset in this repository so the source content is valid before import.
 - Added `_static-export-preview.txt` to exports so users understand when to
   use a local HTTP preview instead of `file://`.
 - Moved the static generator Playground button into this repository.
@@ -20,6 +20,8 @@ especially Playground-scoped sites and WooCommerce demos.
   directory and ZIP files, including shop, cart, product detail, product
   category, copied CSS, copied product image, distinct page content, shortcode
   absence, replacement-character absence, and file-preview-safe URLs.
+- Added a WP-CLI `--output-dir` mode for direct directory exports that can be
+  served over local HTTP without manually unzipping.
 
 ## Export correctness
 
@@ -55,8 +57,6 @@ Planned improvements:
 `file://` previews are useful for basic HTML and CSS, but browser module
 scripts cannot run there. Keep improving the supported preview path:
 
-- Add an optional WP-CLI directory export mode for easier `python3 -m
-  http.server 8080` previews without manually unzipping.
 - Add testing instructions that exercise both direct file inspection and local
   HTTP previews.
 - Consider a generated `serve-static-site.sh` helper only if it stays portable

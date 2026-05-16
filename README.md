@@ -171,12 +171,14 @@ From the WordPress root, activate the plugin and run:
 ```bash
 wp plugin activate static-site-generator
 wp static-site export --output=./static-site.zip --fetch-mode=auto
+wp static-site export --output-dir=./static-site --fetch-mode=auto
 ```
 
 Useful options:
 
 ```bash
 wp static-site export --output=./static-site.zip --url-mode=relative
+wp static-site export --output-dir=./static-site --url-mode=relative
 wp static-site export --output=./static-site.zip --fetch-mode=internal
 wp static-site export --output=./static-site.zip --generate-sitemap --generate-robots
 wp static-site export --output=./static-site.zip --report

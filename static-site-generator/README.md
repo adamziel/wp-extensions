@@ -100,6 +100,7 @@ From the WordPress root, activate the plugin and run:
 ```bash
 wp plugin activate static-site-generator
 wp static-site export --output=./static-site.zip --fetch-mode=auto
+wp static-site export --output-dir=./static-site --fetch-mode=auto
 ```
 
 Useful options:
@@ -108,6 +109,7 @@ Useful options:
 wp static-site export --output=./static-site.zip --url-mode=relative # portable ZIP/subfolder links
 wp static-site export --output=./static-site.zip --url-mode=root     # links start at /
 wp static-site export --output=./static-site.zip --url-mode=absolute # links use the current site URL
+wp static-site export --output-dir=./static-site --url-mode=relative # write files directly
 wp static-site export --output=./static-site.zip --fetch-mode=internal
 wp static-site export --output=./static-site.zip --generate-sitemap --generate-robots
 wp static-site export --output=./static-site.zip --report
@@ -116,8 +118,8 @@ wp static-site export --output=./static-site.zip --report
 Use `--fetch-mode=internal` when loopback HTTP requests are blocked or
 unreliable, including many Playground environments.
 
-To test the exported site locally, extract the ZIP and run this command from
-the extracted folder:
+To test a ZIP export locally, extract the ZIP and run this command from the
+extracted folder. With `--output-dir`, run it from the directory you exported:
 
 ```bash
 python3 -m http.server 8080

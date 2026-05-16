@@ -209,6 +209,19 @@ ssgwp_assert_same(
 	'wp_cli_assoc_args_to_export_args enables the technical export report when selected.'
 );
 
+$cli_directory_args = $cli_args_method->invoke(
+	null,
+	array(
+		'output-dir' => 'static-site',
+	)
+);
+
+ssgwp_assert_same(
+	'static-site',
+	isset( $cli_directory_args['output_dir'] ) ? $cli_directory_args['output_dir'] : null,
+	'wp_cli_assoc_args_to_export_args accepts a directory export target for local HTTP previews.'
+);
+
 $store_method->invoke(
 	null,
 	'job-1',

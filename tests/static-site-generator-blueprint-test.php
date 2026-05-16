@@ -18,6 +18,7 @@ $root_readme      = ssgwp_read_file( $repo_root . '/README.md' );
 $plugin_readme    = ssgwp_read_file( $repo_root . '/static-site-generator/README.md' );
 $audit_plan       = ssgwp_read_file( $repo_root . '/static-site-generator/docs/audit-plan.md' );
 $branding_research = ssgwp_read_file( $repo_root . '/static-site-generator/docs/branding-research.md' );
+$brew_wxr         = ssgwp_read_file( $repo_root . '/blueprints/static-site-generator-brewcommerce-content.xml' );
 
 $delete_default_post_index = ssgwp_find_command_index( $browser_commands, 'wp post delete 1 --force' );
 $hello_world_index         = ssgwp_find_command_index( $browser_commands, '--post_name=hello-world' );
@@ -73,8 +74,8 @@ ssgwp_blueprint_assert(
 );
 
 ssgwp_blueprint_assert(
-	ssgwp_blueprint_step_uses_url( $brew_blueprint, 'content.xml' ),
-	'BrewCommerce blueprint imports the coffee shop WXR from the upstream asset URL.'
+	ssgwp_blueprint_step_contains( $brew_blueprint, 'adamziel/wp-extensions/main/blueprints/static-site-generator-brewcommerce-content.xml' ),
+	'BrewCommerce blueprint imports the cleaned coffee shop WXR from this repository.'
 );
 
 ssgwp_blueprint_assert(
@@ -98,11 +99,18 @@ ssgwp_blueprint_assert(
 );
 
 ssgwp_blueprint_assert(
-	ssgwp_blueprint_step_contains( $brew_blueprint, '&#65533;' )
-		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'punctuation_replacements' )
-		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'interested in&hellip;' )
-		&& ssgwp_blueprint_step_contains( $brew_blueprint, 'can&rsquo;t' ),
-	'BrewCommerce blueprint repairs replacement characters from the upstream WXR demo data after import.'
+	false === ssgwp_blueprint_step_contains( $brew_blueprint, '&#65533;' )
+		&& false === ssgwp_blueprint_step_contains( $brew_blueprint, 'punctuation_replacements' )
+		&& false === ssgwp_blueprint_step_contains( $brew_blueprint, 'replacement_character' )
+		&& false === ssgwp_blueprint_step_contains( $brew_blueprint, html_entity_decode( '&#65533;', ENT_QUOTES, 'UTF-8' ) ),
+	'BrewCommerce blueprint does not repair corrupted punctuation after import.'
+);
+
+ssgwp_blueprint_assert(
+	false === strpos( $brew_wxr, html_entity_decode( '&#65533;', ENT_QUOTES, 'UTF-8' ) )
+		&& false !== strpos( $brew_wxr, 'You may be interested in&hellip;' )
+		&& false !== strpos( $brew_wxr, 'can&rsquo;t' ),
+	'BrewCommerce cleaned WXR contains valid source content without replacement characters.'
 );
 
 ssgwp_blueprint_assert(

@@ -52,6 +52,7 @@ docs_assert(
 
 docs_assert(
 	false !== strpos( $pages['get-started.html'], 'wp static-site export --output=./static-site.zip --fetch-mode=auto' )
+		&& false !== strpos( $pages['get-started.html'], 'wp static-site export --output-dir=./static-site --fetch-mode=auto' )
 		&& false !== strpos( $pages['get-started.html'], 'python3 -m http.server 8080' ),
 	'Get started page documents regular WP-CLI export and local HTTP preview.'
 );
