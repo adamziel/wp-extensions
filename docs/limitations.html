@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Limitations - StillPress</title>
+	<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<a class="brand" href="index.html"><img src="assets/stillpress-logo.svg" alt="StillPress" width="200" height="60"></a>
+		<nav aria-label="Main navigation">
+			<a href="get-started.html">Get Started</a>
+			<a href="examples.html">Examples</a>
+			<a href="limitations.html" aria-current="page">Limitations</a>
+			<a href="https://github.com/adamziel/wp-extensions/tree/main/static-site-generator">GitHub</a>
+		</nav>
+	</header>
+
+	<main class="content">
+		<h1>Limitations</h1>
+		<p>StillPress exports the rendered public site. It does not turn dynamic WordPress features into static services.</p>
+
+		<section>
+			<h2>file:// Preview Limits</h2>
+			<p>Direct file previews are convenient, but browsers block JavaScript ES modules from <code>file://</code> origins. WordPress Interactivity API modules and similar frontend modules need at least a local HTTP server.</p>
+			<pre><code>python3 -m http.server 8080</code></pre>
+		</section>
+
+		<section>
+			<h2>WooCommerce Snapshots</h2>
+			<p>WooCommerce pages export as rendered HTML snapshots. Product listings, product pages, images, and static cart page markup can work well. Live cart mutations, checkout processing, account pages, order actions, and payment flows still need a WordPress backend or a dedicated static-compatible service.</p>
+		</section>
+
+		<section>
+			<h2>Forms, Search, Comments, and REST</h2>
+			<p>Contact forms, search requests, comment submission, admin actions, nonce-protected endpoints, and REST API writes are dynamic. Keep them out of a purely static build or replace them with services designed for static hosting.</p>
+		</section>
+
+		<section>
+			<h2>Best Fit</h2>
+			<p>StillPress is best for content sites, docs, portfolios, brochure sites, static product catalogs, and exports you want to inspect or host on simple static infrastructure.</p>
+		</section>
+	</main>
+</body>
+</html>

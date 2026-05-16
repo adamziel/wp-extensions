@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Examples - StillPress</title>
+	<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<a class="brand" href="index.html"><img src="assets/stillpress-logo.svg" alt="StillPress" width="200" height="60"></a>
+		<nav aria-label="Main navigation">
+			<a href="get-started.html">Get Started</a>
+			<a href="examples.html" aria-current="page">Examples</a>
+			<a href="limitations.html">Limitations</a>
+			<a href="https://github.com/adamziel/wp-extensions/tree/main/static-site-generator">GitHub</a>
+		</nav>
+	</header>
+
+	<main class="content">
+		<h1>Examples</h1>
+		<p>Use these examples to verify that exported pages are distinct, links are rewritten, and assets are copied.</p>
+
+		<section>
+			<h2>Content Site Demo</h2>
+			<p>The browser demo seeds pages, categories, dated posts, and block content. It opens directly to the StillPress admin screen.</p>
+			<p><a class="text-link" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json">Open static-site-generator-browser.json in Playground</a></p>
+		</section>
+
+		<section>
+			<h2>BrewCommerce Demo</h2>
+			<p>The BrewCommerce Blueprint imports a richer coffee shop site with WooCommerce, product images, product pages, a shop page, cart snapshot, and theme/plugin CSS.</p>
+			<p><a class="text-link" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-brewcommerce.json">Open static-site-generator-brewcommerce.json in Playground</a></p>
+			<ul>
+				<li>Export the ZIP from <strong>Tools -> Static Site Generator</strong>.</li>
+				<li>Extract it and run <code>python3 -m http.server 8080</code>.</li>
+				<li>Check <code>/</code>, <code>/shop/</code>, <code>/cart/</code>, and at least one <code>/product/...</code> page.</li>
+				<li>Confirm product images render, product grids stay tiled, and links point to exported files.</li>
+			</ul>
+		</section>
+
+		<section>
+			<h2>CLI Export Blueprint</h2>
+			<p>The CLI Blueprint runs the export command in Playground and writes the ZIP to a mounted output folder.</p>
+			<p><a class="text-link" href="https://raw.githubusercontent.com/adamziel/wp-extensions/main/blueprints/static-site-generator-cli-export.json">View static-site-generator-cli-export.json</a></p>
+		</section>
+	</main>
+</body>
+</html>

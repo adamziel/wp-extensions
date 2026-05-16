@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Get Started - StillPress</title>
+	<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<a class="brand" href="index.html"><img src="assets/stillpress-logo.svg" alt="StillPress" width="200" height="60"></a>
+		<nav aria-label="Main navigation">
+			<a href="get-started.html" aria-current="page">Get Started</a>
+			<a href="examples.html">Examples</a>
+			<a href="limitations.html">Limitations</a>
+			<a href="https://github.com/adamziel/wp-extensions/tree/main/static-site-generator">GitHub</a>
+		</nav>
+	</header>
+
+	<main class="content">
+		<h1>Get Started</h1>
+		<p>StillPress works in four environments: browser Playground, Playground CLI, regular WordPress admin, and regular WordPress WP-CLI.</p>
+
+		<section>
+			<h2>Browser Playground</h2>
+			<p>Open the demo Blueprint, then use <strong>Tools -> Static Site Generator</strong> to download the ZIP.</p>
+			<p><a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json"><img src="assets/try-it-in-playground.svg" alt="Try it in WordPress Playground" width="260" height="64"></a></p>
+		</section>
+
+		<section>
+			<h2>Playground CLI</h2>
+			<pre><code>mkdir -p ./static-site-output
+npx @wp-playground/cli@latest run-blueprint \
+	--mount=./static-site-generator:/wordpress/wp-content/plugins/static-site-generator \
+	--mount=./static-site-output:/exports \
+	--blueprint=./blueprints/static-site-generator-cli-export.json</code></pre>
+			<p>The generated ZIP is written to <code>./static-site-output/static-site.zip</code>.</p>
+		</section>
+
+		<section>
+			<h2>Regular WordPress Admin</h2>
+			<pre><code>cp -R static-site-generator /path/to/wordpress/wp-content/plugins/</code></pre>
+			<p>Activate <strong>Playground Static Site Generator</strong>, then open <strong>Tools -> Static Site Generator</strong>. The default portable link mode is the right choice for ZIP previews, subfolders, and GitHub Pages.</p>
+		</section>
+
+		<section>
+			<h2>Regular WordPress WP-CLI</h2>
+			<pre><code>wp plugin activate static-site-generator
+wp static-site export --output=./static-site.zip --fetch-mode=auto</code></pre>
+			<p>Useful flags include <code>--url-mode=relative</code>, <code>--url-mode=root</code>, <code>--url-mode=absolute</code>, <code>--fetch-mode=internal</code>, <code>--generate-sitemap</code>, <code>--generate-robots</code>, and <code>--report</code>.</p>
+		</section>
+
+		<section>
+			<h2>Preview The Export</h2>
+			<p>After extracting the ZIP, run a local HTTP server from the extracted folder:</p>
+			<pre><code>python3 -m http.server 8080</code></pre>
+			<p>Then open <code>http://localhost:8080/</code>. Direct <code>file://</code> previews are useful for quick HTML and CSS checks, but local HTTP is the closer match for production hosting.</p>
+		</section>
+	</main>
+</body>
+</html>
