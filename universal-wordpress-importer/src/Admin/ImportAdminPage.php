@@ -773,6 +773,9 @@ final class ImportAdminPage {
 				border-left-color: #dba617;
 				margin: 14px 0;
 			}
+			.universal-importer-attention-actions {
+				margin: 10px 0 0;
+			}
 			.universal-importer-stage-title {
 				font-size: 15px;
 				font-weight: 700;
@@ -825,6 +828,11 @@ final class ImportAdminPage {
 				display: block;
 				font-size: 12px;
 				margin-top: 3px;
+			}
+			.universal-importer-stage-note {
+				color: #3c434a;
+				margin-top: 8px;
+				overflow-wrap: anywhere;
 			}
 			.universal-importer-step .universal-importer-stage-index {
 				align-self: start;
@@ -1233,7 +1241,11 @@ final class ImportAdminPage {
 				}
 				html += '</p>';
 				if (dashboard.attention_message) {
-					html += '<div class="notice notice-warning inline universal-importer-attention"><p><strong><?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?></strong><br>' + escapeHtml(dashboard.attention_message) + '</p></div>';
+					html += '<div class="notice notice-warning inline universal-importer-attention"><p><strong><?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?></strong><br>' + escapeHtml(dashboard.attention_message) + '</p>';
+					if (canStartAnotherImport(session)) {
+						html += '<p class="universal-importer-attention-actions"><button type="button" class="button button-primary universal-importer-start-over"><?php echo esc_js( __( 'Start another import', 'universal-wordpress-importer' ) ); ?></button></p>';
+					}
+					html += '</div>';
 				}
 				html += renderChecklist(dashboard.checklist || [], session);
 				if (session.relationship_warnings && session.relationship_warnings.length) {
@@ -1259,6 +1271,9 @@ final class ImportAdminPage {
 				items.forEach(function(item) {
 					var state = item.state || 'pending';
 					var itemHtml = '<li class="universal-importer-step" data-state="' + escapeHtml(state) + '"><span class="universal-importer-stage-index">' + escapeHtml(item.index || '') + '</span><span><span class="universal-importer-step-heading"><strong>' + escapeHtml(item.label || '') + '</strong><span class="universal-importer-step-state">' + escapeHtml(checklistStateLabel(state)) + '</span></span><span>' + escapeHtml(item.detail || '') + '</span>';
+					if (item.note) {
+						itemHtml += '<span class="universal-importer-stage-note">' + escapeHtml(item.note) + '</span>';
+					}
 					if (item.key === 'url_treatment') {
 						itemHtml += renderStageDecision(session, 'url_treatment');
 					}
@@ -1492,7 +1507,16 @@ final class ImportAdminPage {
 					&& session.id
 					&& session.status !== 'done'
 					&& session.status !== 'aborted'
-					&& session.status !== 'failed';
+					&& session.status !== 'failed'
+					&& !canStartAnotherImport(session);
+			}
+
+			function canStartAnotherImport(session) {
+				return session
+					&& session.dashboard
+					&& session.dashboard.needs_keepalive === false
+					&& !!session.dashboard.attention_message
+					&& !(session.pending_decisions && session.pending_decisions.length);
 			}
 
 			function primarySession() {
@@ -1655,6 +1679,18 @@ final class ImportAdminPage {
 			});
 
 			sessions.addEventListener('click', function(event) {
+				if (event.target.classList.contains('universal-importer-start-over')) {
+					if (form && form.classList) {
+						form.classList.remove('is-hidden');
+					}
+					if (form && form.scrollIntoView) {
+						form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+					}
+					if (sourceInput && sourceInput.focus) {
+						sourceInput.focus({ preventScroll: true });
+					}
+					return;
+				}
 				if (!event.target.classList.contains('universal-importer-abort')) {
 					if (!event.target.classList.contains('universal-importer-resolve-decision')) {
 						return;
@@ -1840,7 +1876,23 @@ final class ImportAdminPage {
 
 		return ImportSession::STATUS_DONE !== $status
 			&& ImportSession::STATUS_ABORTED !== $status
-			&& ImportSession::STATUS_FAILED !== $status;
+			&& ImportSession::STATUS_FAILED !== $status
+			&& ! $this->can_start_another_import( $session );
+	}
+
+	/**
+	 * Returns whether the current import is stopped and the user should be able to start another one.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return bool
+	 */
+	private function can_start_another_import( array $session ) {
+		$dashboard = isset( $session['dashboard'] ) && is_array( $session['dashboard'] ) ? $session['dashboard'] : array();
+
+		return isset( $dashboard['needs_keepalive'] )
+			&& false === $dashboard['needs_keepalive']
+			&& ! empty( $dashboard['attention_message'] )
+			&& empty( $session['pending_decisions'] );
 	}
 
 	/**
@@ -1899,6 +1951,9 @@ final class ImportAdminPage {
 					<?php if ( ! empty( $dashboard['attention_message'] ) ) : ?>
 						<div class="notice notice-warning inline universal-importer-attention">
 							<p><strong><?php esc_html_e( 'Needs attention', 'universal-wordpress-importer' ); ?></strong><br><?php echo esc_html( (string) $dashboard['attention_message'] ); ?></p>
+							<?php if ( $this->can_start_another_import( $session ) ) : ?>
+								<p class="universal-importer-attention-actions"><button type="button" class="button button-primary universal-importer-start-over"><?php esc_html_e( 'Start another import', 'universal-wordpress-importer' ); ?></button></p>
+							<?php endif; ?>
 						</div>
 					<?php endif; ?>
 					<?php $this->render_dashboard_checklist( isset( $dashboard['checklist'] ) && is_array( $dashboard['checklist'] ) ? $dashboard['checklist'] : array(), $session ); ?>
@@ -1940,6 +1995,9 @@ final class ImportAdminPage {
 							<span class="universal-importer-step-state"><?php echo esc_html( $this->dashboard_stage_status_label( $state ) ); ?></span>
 						</span>
 						<span><?php echo esc_html( isset( $item['detail'] ) ? $item['detail'] : '' ); ?></span>
+						<?php if ( ! empty( $item['note'] ) ) : ?>
+							<span class="universal-importer-stage-note"><?php echo esc_html( (string) $item['note'] ); ?></span>
+						<?php endif; ?>
 						<?php if ( isset( $item['key'] ) && 'url_treatment' === $item['key'] ) : ?>
 							<?php $this->render_stage_decision( $session, 'url_treatment' ); ?>
 						<?php endif; ?>
@@ -2873,6 +2931,39 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Builds a short visible note for the first failed source item.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return string
+	 */
+	private function dashboard_source_failure_note( array $session ) {
+		if ( empty( $session['source_items']['recent'] ) || ! is_array( $session['source_items']['recent'] ) ) {
+			return '';
+		}
+
+		foreach ( $session['source_items']['recent'] as $item ) {
+			if ( ! is_array( $item ) || ImportSourceItem::STATUS_FAILED !== ( isset( $item['status'] ) ? (string) $item['status'] : '' ) ) {
+				continue;
+			}
+
+			$label = isset( $item['relative_path'] ) && '' !== (string) $item['relative_path'] ? (string) $item['relative_path'] : ( isset( $item['source_uri'] ) ? (string) $item['source_uri'] : '' );
+			$error = isset( $item['metadata']['error'] ) ? trim( (string) $item['metadata']['error'] ) : '';
+
+			if ( '' === $label ) {
+				return $error;
+			}
+
+			if ( '' === $error ) {
+				return $label;
+			}
+
+			return $label . ': ' . $error;
+		}
+
+		return '';
+	}
+
+	/**
 	 * Builds high-level progress stages.
 	 *
 	 * @param array<string,mixed> $session       Session snapshot.
@@ -2941,6 +3032,7 @@ final class ImportAdminPage {
 
 		if ( 0 < $source_failed ) {
 			$stages[0]['detail'] = sprintf( $this->admin_text( '%d source item failed.' ), $source_failed );
+			$stages[0]['note']   = $this->dashboard_source_failure_note( $session );
 			$stages[0]['state']  = 'blocked';
 			return $stages;
 		}

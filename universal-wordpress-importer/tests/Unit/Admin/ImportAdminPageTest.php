@@ -323,6 +323,8 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertFalse( $details['dashboard']['needs_keepalive'] );
 		$this->assertSame( 'blocked', $details['dashboard']['checklist'][0]['state'] );
 		$this->assertSame( array( 'blocked', 'pending', 'pending', 'pending', 'pending', 'pending' ), array_column( $details['dashboard']['checklist'], 'state' ) );
+		$this->assertSame( 'broken.pdf: PDF text extraction produced no importable text.', $details['dashboard']['checklist'][0]['note'] );
+		$this->assertFalse( $this->invoke_private_admin_method( $page, 'is_active_admin_session', array( $details ) ) );
 		$this->assertSame( 'PDF text extraction produced no importable text.', $details['source_items']['recent'][0]['metadata']['error'] );
 		$this->assertStringNotContainsString( 'Checking remaining importer work', $details['dashboard']['current_action'] );
 	}
@@ -374,6 +376,7 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( array( 'done', 'done', 'blocked', 'pending', 'pending', 'pending' ), array_column( $details['dashboard']['checklist'], 'state' ) );
 		$this->assertSame( 'URL treatment', $details['dashboard']['checklist'][2]['label'] );
 		$this->assertSame( 'url_treatment', $details['dashboard']['checklist'][2]['key'] );
+		$this->assertTrue( $this->invoke_private_admin_method( $page, 'is_active_admin_session', array( $details ) ) );
 	}
 
 	/**
@@ -415,8 +418,10 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'function checklistStateLabel(state)', $source );
 		$this->assertStringContainsString( 'function syncPrimaryView(session)', $source );
 		$this->assertStringContainsString( 'function isImportLocked(session)', $source );
+		$this->assertStringContainsString( 'function canStartAnotherImport(session)', $source );
 		$this->assertStringContainsString( 'function renderStageDecision(session, stageKey)', $source );
 		$this->assertStringContainsString( 'universal-importer-stage-decision', $source );
+		$this->assertStringContainsString( 'universal-importer-start-over', $source );
 		$this->assertStringContainsString( 'universal-importer-card is-importing', $source );
 		$this->assertStringContainsString( 'universal-importer-start-form" class="universal-importer-start', $source );
 		$this->assertStringContainsString( 'data-url-choice="none"', $source );
@@ -1172,6 +1177,21 @@ final class ImportAdminPageTest extends TestCase {
 		$this->temporary_paths[] = $path;
 
 		return $path;
+	}
+
+	/**
+	 * Invokes a private ImportAdminPage method for focused dashboard state assertions.
+	 *
+	 * @param ImportAdminPage  $page      Admin page under test.
+	 * @param string           $method    Method name.
+	 * @param array<int,mixed> $arguments Method arguments.
+	 * @return mixed
+	 */
+	private function invoke_private_admin_method( ImportAdminPage $page, $method, array $arguments = array() ) {
+		$reflection = new \ReflectionMethod( $page, $method );
+		$reflection->setAccessible( true );
+
+		return $reflection->invokeArgs( $page, $arguments );
 	}
 
 	/**
