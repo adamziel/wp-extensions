@@ -878,6 +878,12 @@ ssgwp_assert_contains(
 	'Static preview guidance gives a local HTTP server command.'
 );
 
+ssgwp_assert_contains(
+	'Forms, search, comments, carts, checkout, account pages, and REST API writes need a live backend',
+	$preview_note,
+	'Static preview guidance explains dynamic WordPress limitations.'
+);
+
 ssgwp_assert_same(
 	'discovered',
 	$bounded_events[0]['stage'],
@@ -1203,9 +1209,9 @@ $ssgwp_test_posts          = array(
 	),
 );
 $ssgwp_test_http_responses = array(
-	'https://example.test/' => '<html><head><title>Coffee Home</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main data-wp-context=\'{"shopUrl":"/shop/","cartUrl":"/cart/"}\'><h1>Coffee Home</h1><a href="/shop/">Shop</a><a href="/cart/">Cart</a><a href="/communication-preferences/">Communication preferences</a></main></body></html>',
+	'https://example.test/' => '<html><head><title>Coffee Home</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main data-wp-context=\'{"shopUrl":"/shop/","cartUrl":"/cart/"}\'><h1>Coffee Home</h1><form role="search" action="/"><input name="s" value=""></form><a href="/shop/">Shop</a><a href="/cart/">Cart</a><a href="/communication-preferences/">Communication preferences</a></main></body></html>',
 	'https://example.test/shop/' => '<html><head><title>Shop</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main><h1>Shop</h1><ul class="products columns-3"><li class="product">Espresso Roast</li><li class="product">Pour Over Kit</li><li class="product">Travel Tumbler</li></ul><a href="/cart/">View cart</a><script type="application/json">{"cartUrl":"\u002Fcart\u002F","checkoutUrl":"\u002Fcheckout\u002F","styleUrl":"\u002Fwp-content\u002Fplugins\u002Fwoocommerce\u002Fassets\u002Fcss\u002Fwoocommerce.css"}</script></main></body></html>',
-	'https://example.test/cart/' => '<html><head><title>Cart</title></head><body><main class="wc-block-cart"><h1>Cart</h1><p>Cart page rendered.</p><h2>You may be interested in…</h2><a href="/shop/">Keep shopping</a></main></body></html>',
+	'https://example.test/cart/' => '<html><head><title>Cart</title></head><body><main class="wc-block-cart"><h1>Cart</h1><p>Cart page rendered.</p><form class="woocommerce-cart-form" method="post" action="/cart/"><button name="update_cart">Update cart</button></form><h2>You may be interested in…</h2><a href="/shop/">Keep shopping</a></main></body></html>',
 	'https://example.test/communication-preferences/' => '<html><head><title>Communication preferences</title></head><body><main><h1>Communication preferences</h1><p>Rendered communication preferences content.</p></main></body></html>',
 	'https://example.test/checkout/' => '<html><head><title>Checkout</title></head><body><main><h1>Checkout</h1><p>Checkout page rendered.</p></main></body></html>',
 );
@@ -1327,6 +1333,26 @@ ssgwp_assert_contains(
 	'Rendered communication preferences content',
 	$commerce_communication,
 	'export_to_directory exports rendered communication preference pages.'
+);
+
+$commerce_warnings = implode( "\n", $commerce_result['warnings'] );
+
+ssgwp_assert_contains(
+	'Search forms are exported as static markup',
+	$commerce_warnings,
+	'export_to_directory warns that search forms need a dynamic backend.'
+);
+
+ssgwp_assert_contains(
+	'WooCommerce cart, checkout, and account pages are exported as static snapshots',
+	$commerce_warnings,
+	'export_to_directory warns that WooCommerce cart-like pages need a dynamic backend.'
+);
+
+ssgwp_assert_contains(
+	'POST forms are exported as static markup',
+	$commerce_warnings,
+	'export_to_directory warns that POST forms need a dynamic backend.'
 );
 
 ssgwp_assert_not_contains(
