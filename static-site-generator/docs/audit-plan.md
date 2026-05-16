@@ -16,13 +16,17 @@ especially Playground-scoped sites and WooCommerce demos.
 - Moved the static generator Playground button into this repository.
 - Added export warnings for static snapshots of dynamic behavior such as POST
   forms, search forms, WooCommerce cart-like pages, and REST API references.
+- Added deterministic commerce artifact validation for representative exported
+  directory and ZIP files, including shop, cart, product detail, product
+  category, copied CSS, copied product image, distinct page content, shortcode
+  absence, replacement-character absence, and file-preview-safe URLs.
 
 ## Export correctness
 
 The exporter should keep proving that every discovered page receives its own
-rendered HTML rather than a reused homepage response. Keep the current Markdown
-docs and commerce fixtures, then add a real BrewCommerce export validation that
-opens the generated ZIP and checks representative files:
+rendered HTML rather than a reused homepage response. The current deterministic
+commerce fixture mirrors the BrewCommerce page shapes and checks representative
+directory and ZIP files:
 
 - `index.html`
 - `shop/index.html`
@@ -30,7 +34,7 @@ opens the generated ZIP and checks representative files:
 - at least one `product/.../index.html`
 - at least one `product-category/.../index.html`
 
-The validation should assert distinct headings, product content, copied product
+The validation asserts distinct headings, product content, copied product
 images, copied WooCommerce CSS, no unresolved shortcodes, no U+FFFD characters,
 and no root-relative links that break after extraction.
 
@@ -68,8 +72,8 @@ Planned checks:
 
 - Build a Playground-driven BrewCommerce export in CI if runtime cost is
   acceptable.
-- Otherwise, keep a deterministic PHP fixture that mirrors BrewCommerce page
-  shapes and verifies ZIP contents.
+- Keep the deterministic PHP fixture that mirrors BrewCommerce page shapes and
+  verifies ZIP contents.
 - Validate the local Playground button SVG and README links.
 - Add a docs/pages build check once GitHub Pages content lands.
 
