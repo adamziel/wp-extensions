@@ -2562,6 +2562,86 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Direct RSS feed URLs are imported as one prepared document per item.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_direct_remote_rss_feed_items() {
+		$fetcher = new FakeRemoteContentFetcher();
+		$fetcher->add_text(
+			'https://feed.example.test/rss.xml',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">'
+			. '<channel><title>Example Feed</title>'
+			. '<item><guid>item-1</guid><title>First Story</title><link>https://feed.example.test/first/</link><pubDate>Sat, 16 May 2026 00:00:00 +0000</pubDate><content:encoded><![CDATA[<h2>First Story</h2><p>Feed body with <a href="/about/">link</a>.</p>]]></content:encoded></item>'
+			. '<item><guid>item-2</guid><title>Second Story</title><link>https://feed.example.test/second/</link><description><![CDATA[Plain second body.]]></description></item>'
+			. '</channel></rss>'
+		);
+		$session = ImportSession::start_for_source( 'https://feed.example.test/rss.xml' );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, null, $fetcher ) )->run( $session->get_id() );
+
+		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
+		$root      = $this->store->find_source_item( $session->get_id(), 'remote:' . hash( 'sha256', 'https://feed.example.test/rss.xml' ) );
+		$events    = array_map(
+			function ( $event ) {
+				return $event->get_type();
+			},
+			$this->store->list_events( $session->get_id(), 20 )
+		);
+
+		$this->assertCount( 2, $documents );
+		$this->assertSame( 'rss', $documents[0]->get_format() );
+		$this->assertSame( 'First Story', $documents[0]->get_title() );
+		$this->assertStringContainsString( '<!-- wp:heading {"level":2} -->', $documents[0]->get_block_markup() );
+		$this->assertStringContainsString( '<!-- wp:paragraph -->', $documents[1]->get_block_markup() );
+		$this->assertSame( 'https://feed.example.test/rss.xml', $documents[0]->get_metadata()['remote_feed_url'] );
+		$this->assertSame( 'direct-feed', $root->get_metadata()['remote_feed_discovered_by'] );
+		$this->assertSame( 'rss', $root->get_metadata()['remote_mode'] );
+		$this->assertSame( 2, $posts->count_posts() );
+		$this->assertContains( 'remote.feed_prepared', $events );
+	}
+
+	/**
+	 * Ordinary site URLs advertising RSS are imported through the linked feed.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_rss_feed_advertised_by_remote_site_url() {
+		$fetcher = new FakeRemoteContentFetcher();
+		$fetcher->add_text(
+			'https://site.example.test/',
+			'<html><head><title>Feed Landing</title><link rel="alternate" type="application/rss+xml" href="/feed/"></head><body><p>Landing page.</p></body></html>'
+		);
+		$fetcher->add_text(
+			'https://site.example.test/feed/',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom Feed</title>'
+			. '<entry><id>tag:site.example.test,2026:1</id><title>Atom Entry</title><link href="https://site.example.test/atom-entry/"/><updated>2026-05-16T00:00:00Z</updated><content type="html">&lt;p&gt;Atom body.&lt;/p&gt;</content></entry>'
+			. '</feed>'
+		);
+		$session = ImportSession::start_for_source( 'https://site.example.test/' );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, null, $fetcher ) )->run( $session->get_id() );
+
+		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
+		$root      = $this->store->find_source_item( $session->get_id(), 'remote:' . hash( 'sha256', 'https://site.example.test/' ) );
+
+		$this->assertCount( 1, $documents );
+		$this->assertSame( 'rss', $documents[0]->get_format() );
+		$this->assertSame( 'Atom Entry', $documents[0]->get_title() );
+		$this->assertStringContainsString( '<p>Atom body.</p>', $documents[0]->get_block_markup() );
+		$this->assertSame( 'https://site.example.test/feed/', $root->get_metadata()['remote_feed_url'] );
+		$this->assertSame( 'html-feed-link', $root->get_metadata()['remote_feed_discovered_by'] );
+		$this->assertContains( 'https://site.example.test/feed/', $fetcher->get_requested_urls() );
+		$this->assertSame( 1, $posts->count_posts() );
+	}
+
+	/**
 	 * WXR exports are parsed into one prepared document per importable post entity.
 	 *
 	 * @return void

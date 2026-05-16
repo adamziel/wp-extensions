@@ -33,8 +33,9 @@ The sample data lives in
 ## Features
 
 - Imports local paths, browser-dropped folders/files, zip archives, nested
-  archives, Markdown, HTML, text, EPUB, WXR, WordPress REST URLs, GitHub
-  repositories, remote HTML pages, PDFs, and media references.
+  archives, Markdown, HTML, text, EPUB, WXR, WordPress REST/site URLs,
+  RSS/Atom feeds, GitHub repositories, remote HTML pages, PDFs, and media
+  references.
 - Treats inputs as trees and stores source-item cursors so long traversals can
   resume after bounded ticks.
 - Creates WordPress draft pages and infers native blocks when the source
@@ -68,8 +69,9 @@ Activate the plugin, then open:
 Tools -> Universal Importer
 ```
 
-You can enter a server path, URL, GitHub repository URL, or REST root, choose
-browser files/folders, or drop a folder onto the upload area.
+You can enter a server path, WordPress site URL, REST root, RSS/Atom feed URL,
+remote page URL, or GitHub repository URL. You can also choose browser
+files/folders or drop a folder onto the upload area.
 
 WP-CLI usage:
 
@@ -118,6 +120,19 @@ Import a public WordPress REST site:
 wp universal-importer import https://example.com/wp-json/
 ```
 
+Import a public WordPress site by its homepage. The importer tries REST first
+and can fall back to an advertised feed or the page itself:
+
+```bash
+wp universal-importer import https://example.com/
+```
+
+Import any RSS or Atom feed:
+
+```bash
+wp universal-importer import https://example.com/feed/
+```
+
 Import a zip archive:
 
 ```bash
@@ -149,6 +164,8 @@ export UNIVERSAL_IMPORTER_PDF_OCR_TIMEOUT=60
   produce diagnostics or can use configured external extraction/OCR helpers.
 - Remote authenticated imports require host-scoped environment variables;
   secrets are never stored in importer session tables.
+- RSS/Atom imports consume the currently advertised feed items; they do not
+  crawl historical feed archives or arbitrary site navigation.
 - Relationship mapping can require operator decisions when source users,
   terms, or first-party domains cannot be resolved automatically.
 - WP-Cron continuation depends on the site cron runner. Use `wp

@@ -6,8 +6,8 @@ Small WordPress extensions and experiments.
 
 `universal-wordpress-importer/` is a WordPress plugin for durable,
 resumable imports from content trees: local folders, browser-dropped folders,
-zip archives, Markdown, HTML, text, EPUB, WXR, PDFs, GitHub repositories, and
-WordPress REST sites.
+zip archives, Markdown, HTML, text, EPUB, WXR, PDFs, GitHub repositories,
+WordPress REST/site URLs, and RSS/Atom feeds.
 
 [![Try in Playground](https://img.shields.io/badge/Try%20in-WordPress%20Playground-3858e9?style=for-the-badge&logo=wordpress)](https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Funiversal-wordpress-importer-demo.json)
 

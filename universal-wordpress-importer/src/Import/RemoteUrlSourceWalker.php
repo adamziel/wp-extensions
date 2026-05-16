@@ -16,6 +16,7 @@ final class RemoteUrlSourceWalker {
 	const REST_PAGE_LIMIT      = 25;
 	const REST_COMMENT_LIMIT   = 25;
 	const REST_EMBED_RELATIONS = 'author,wp:term,wp:featuredmedia';
+	const RSS_ITEM_LIMIT       = 50;
 
 	/**
 	 * Built-in REST collection bases used when post type discovery is unavailable.
@@ -699,11 +700,44 @@ final class RemoteUrlSourceWalker {
 	 * @param ImportSourceItem $root             Root remote item.
 	 * @param string           $rest_failure_msg REST detection failure.
 	 * @return array{discovered:int,queued:int,failed:int,complete:bool,message:string}
+	 * @throws ImportRemoteRateLimitException When a discovered feed asks the importer to retry later.
 	 * @throws RuntimeException When the remote URL is not importable.
 	 */
 	private function prepare_single_remote_url( ImportSession $session, ImportSourceItem $root, $rest_failure_msg ) {
 		$response = $this->fetcher->fetch_text( $root->get_source_uri() );
-		$content  = ( new ImportHtmlBlockConverter() )->extract_body( $response['body'] );
+		$feed     = $this->parse_feed_response( $response['body'], $root->get_source_uri() );
+
+		if ( null !== $feed ) {
+			return $this->prepare_feed_documents( $session, $root, $root->get_source_uri(), $feed, 'direct-feed', $rest_failure_msg );
+		}
+
+		$feed_url = $this->discover_feed_url_from_html_response( $root->get_source_uri(), $response );
+
+		if ( '' !== $feed_url ) {
+			try {
+				$feed_response = $this->fetcher->fetch_text( $feed_url );
+				$feed          = $this->parse_feed_response( $feed_response['body'], $feed_url );
+
+				if ( null !== $feed ) {
+					return $this->prepare_feed_documents( $session, $root, $feed_url, $feed, 'html-feed-link', $rest_failure_msg );
+				}
+			} catch ( ImportRemoteRateLimitException $exception ) {
+				throw $exception;
+			} catch ( RuntimeException $exception ) {
+				$this->record_event(
+					$session,
+					'remote.feed_unavailable',
+					'Remote RSS/Atom feed link could not be fetched; falling back to the source page.',
+					$root,
+					array(
+						'feed_url' => $feed_url,
+						'error'    => $exception->getMessage(),
+					)
+				);
+			}
+		}
+
+		$content = ( new ImportHtmlBlockConverter() )->extract_body( $response['body'] );
 
 		if ( '' === $content ) {
 			throw new RuntimeException( 'Remote URL did not contain importable HTML or text content.' );
@@ -782,6 +816,166 @@ final class RemoteUrlSourceWalker {
 			'complete'   => true,
 			'message'    => 'Remote URL was staged as a prepared HTML document.',
 		);
+	}
+
+	/**
+	 * Prepares RSS or Atom items as remote documents.
+	 *
+	 * @param ImportSession       $session          Session.
+	 * @param ImportSourceItem    $root             Root remote item.
+	 * @param string              $feed_url         Feed URL.
+	 * @param array<string,mixed> $feed             Parsed feed payload.
+	 * @param string              $discovered_by    Feed discovery method.
+	 * @param string              $rest_failure_msg REST detection failure.
+	 * @return array{discovered:int,queued:int,failed:int,complete:bool,message:string}
+	 * @throws RuntimeException When the feed has no importable content.
+	 */
+	private function prepare_feed_documents( ImportSession $session, ImportSourceItem $root, $feed_url, array $feed, $discovered_by, $rest_failure_msg ) {
+		$prepared = 0;
+		$items    = isset( $feed['items'] ) && is_array( $feed['items'] ) ? array_slice( $feed['items'], 0, self::RSS_ITEM_LIMIT ) : array();
+
+		foreach ( $items as $index => $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+
+			if ( $this->prepare_feed_item_document( $session, $root, $feed_url, $feed, $item, (int) $index ) ) {
+				++$prepared;
+			}
+		}
+
+		if ( 0 === $prepared ) {
+			throw new RuntimeException( 'Remote RSS/Atom feed did not contain importable items.' );
+		}
+
+		$metadata = array_merge(
+			$root->get_metadata(),
+			array(
+				'remote_mode'               => 'rss',
+				'remote_complete'           => true,
+				'remote_status'             => 'complete',
+				'remote_documents_prepared' => $prepared,
+				'remote_feed_url'           => $feed_url,
+				'remote_feed_title'         => isset( $feed['title'] ) ? (string) $feed['title'] : '',
+				'remote_feed_discovered_by' => (string) $discovered_by,
+				'remote_rest_fallback'      => $rest_failure_msg,
+			)
+		);
+
+		$this->store->save_source_item( $root->with_status( ImportSourceItem::STATUS_SKIPPED )->with_metadata( $metadata ) );
+		$this->record_event(
+			$session,
+			'remote.feed_prepared',
+			'Remote RSS/Atom feed items were staged as prepared documents.',
+			$root,
+			array(
+				'feed_url'      => $feed_url,
+				'discovered_by' => (string) $discovered_by,
+				'prepared'      => $prepared,
+			)
+		);
+
+		return array(
+			'discovered' => $prepared,
+			'queued'     => $prepared,
+			'failed'     => 0,
+			'complete'   => true,
+			'message'    => 'Remote RSS/Atom feed items were staged as prepared documents.',
+		);
+	}
+
+	/**
+	 * Prepares one RSS or Atom item as a document.
+	 *
+	 * @param ImportSession       $session  Session.
+	 * @param ImportSourceItem    $root     Root remote item.
+	 * @param string              $feed_url Feed URL.
+	 * @param array<string,mixed> $feed     Parsed feed payload.
+	 * @param array<string,mixed> $item     Parsed feed item.
+	 * @param int                 $index    Feed item index.
+	 * @return bool Whether a document was prepared.
+	 */
+	private function prepare_feed_item_document( ImportSession $session, ImportSourceItem $root, $feed_url, array $feed, array $item, $index ) {
+		$source = isset( $item['link'] ) && '' !== trim( (string) $item['link'] ) ? trim( (string) $item['link'] ) : $feed_url . '#item-' . ( $index + 1 );
+		$id     = isset( $item['id'] ) && '' !== trim( (string) $item['id'] ) ? trim( (string) $item['id'] ) : $source;
+		$key    = 'remote-feed:' . hash( 'sha256', $root->get_source_uri() . "\n" . $feed_url . "\n" . $id . "\n" . (int) $index );
+
+		if ( null !== $this->store->find_prepared_document( $session->get_id(), $key ) ) {
+			return false;
+		}
+
+		$content = isset( $item['content'] ) ? trim( (string) $item['content'] ) : '';
+		if ( '' === $content ) {
+			$content = isset( $item['summary'] ) ? trim( (string) $item['summary'] ) : '';
+		}
+
+		if ( '' === $content ) {
+			return false;
+		}
+
+		$html_summary = array();
+		$content      = $this->feed_content_html_fragment( $content );
+		$markup       = ( new ImportHtmlBlockConverter() )->convert( $content, $html_summary );
+		$block_count  = $this->count_blocks( $markup );
+
+		if ( '' === $markup || 0 === $block_count ) {
+			return false;
+		}
+
+		$title    = isset( $item['title'] ) && '' !== trim( (string) $item['title'] ) ? trim( (string) $item['title'] ) : 'Feed item ' . ( $index + 1 );
+		$domains  = $this->extract_absolute_url_domains( $markup );
+		$meta     = array_merge(
+			array(
+				'remote_source_url'     => $source,
+				'remote_feed_url'       => $feed_url,
+				'remote_feed_title'     => isset( $feed['title'] ) ? (string) $feed['title'] : '',
+				'remote_feed_item_id'   => $id,
+				'remote_feed_item_date' => isset( $item['date'] ) ? (string) $item['date'] : '',
+				'absolute_url_domains'  => array_keys( $domains ),
+				'absolute_url_examples' => $domains,
+			),
+			$html_summary
+		);
+		$document = new ImportPreparedDocument(
+			$session->get_id(),
+			$key,
+			'rss',
+			$this->strip_all_tags( html_entity_decode( $title, ENT_QUOTES, 'UTF-8' ) ),
+			$markup,
+			$block_count,
+			hash( 'sha256', 'rss' . "\n" . $source . "\n" . $markup ),
+			$meta
+		);
+
+		$this->store->save_source_item(
+			ImportSourceItem::queued(
+				$session->get_id(),
+				$key,
+				$root->get_key(),
+				$source,
+				$this->feed_item_relative_path( $source, $index ),
+				ImportSourceItem::TYPE_FILE,
+				array(
+					'document_format'           => 'rss',
+					'processor_status'          => 'imported',
+					'title'                     => $document->get_title(),
+					'block_count'               => $block_count,
+					'content_hash'              => $document->get_content_hash(),
+					'remote_feed_url'           => $feed_url,
+					'remote_feed_item_id'       => $id,
+					'html_block_conversion'     => $html_summary['html_block_conversion'],
+					'html_inferred_block_count' => $html_summary['html_inferred_block_count'],
+					'html_classic_block_count'  => $html_summary['html_classic_block_count'],
+				)
+			)->with_status( ImportSourceItem::STATUS_IMPORTED )
+		);
+		$this->store->save_prepared_document( $document );
+		$this->store->remember_idempotency_record(
+			$session->get_id(),
+			new ImportIdempotencyRecord( 'document-blocks:' . $key, 'prepared_document', $key, $document->get_content_hash() )
+		);
+
+		return true;
 	}
 
 	/**
@@ -1096,6 +1290,199 @@ final class RemoteUrlSourceWalker {
 		}
 
 		return $links;
+	}
+
+	/**
+	 * Finds an RSS or Atom feed URL advertised by an HTML page.
+	 *
+	 * @param string                                                          $source   Source URL.
+	 * @param array{body:string,headers:array<string,string>,status_code:int} $response Remote response.
+	 * @return string
+	 */
+	private function discover_feed_url_from_html_response( $source, array $response ) {
+		$html = isset( $response['body'] ) ? (string) $response['body'] : '';
+
+		if ( ! preg_match_all( '#<link\b[^>]*>#i', $html, $matches ) ) {
+			return '';
+		}
+
+		foreach ( $matches[0] as $tag ) {
+			$rel  = strtolower( (string) $this->attribute_from_tag( $tag, 'rel' ) );
+			$type = strtolower( (string) $this->attribute_from_tag( $tag, 'type' ) );
+			$href = $this->attribute_from_tag( $tag, 'href' );
+
+			if ( null === $href || false === strpos( $rel, 'alternate' ) ) {
+				continue;
+			}
+
+			if ( false === strpos( $type, 'rss+xml' ) && false === strpos( $type, 'atom+xml' ) && false === strpos( $type, 'rdf+xml' ) ) {
+				continue;
+			}
+
+			$url = $this->absolute_url( html_entity_decode( trim( $href ), ENT_QUOTES, 'UTF-8' ), $source );
+
+			if ( '' !== $url && $this->is_remote_http_source( $url ) && $this->same_url_host( $url, $source ) ) {
+				return $url;
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Parses RSS, RDF, or Atom feed XML.
+	 *
+	 * @param string $body Feed response body.
+	 * @param string $url  Feed URL for diagnostics.
+	 * @return array{title:string,items:array<int,array<string,string>>}|null
+	 */
+	private function parse_feed_response( $body, $url ) {
+		$body = trim( (string) $body );
+
+		if ( '' === $body || '<' !== substr( $body, 0, 1 ) ) {
+			return null;
+		}
+
+		$previous = libxml_use_internal_errors( true );
+		$xml      = simplexml_load_string( $body, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA );
+		libxml_clear_errors();
+		libxml_use_internal_errors( $previous );
+
+		if ( false === $xml ) {
+			return null;
+		}
+
+		$name = strtolower( $xml->getName() );
+
+		if ( 'rss' === $name ) {
+			return $this->parse_rss_feed( $xml );
+		}
+
+		if ( 'feed' === $name ) {
+			return $this->parse_atom_feed( $xml );
+		}
+
+		if ( 'rdf' === $name || false !== stripos( $body, '<rdf:RDF' ) ) {
+			return $this->parse_rdf_feed( $xml, $url );
+		}
+
+		return null;
+	}
+
+	/**
+	 * Parses an RSS 2.0 feed.
+	 *
+	 * @param \SimpleXMLElement $xml Feed XML.
+	 * @return array{title:string,items:array<int,array<string,string>>}
+	 */
+	private function parse_rss_feed( \SimpleXMLElement $xml ) {
+		$channel = isset( $xml->channel ) ? $xml->channel : $xml;
+		$items   = array();
+
+		foreach ( $channel->item as $item ) {
+			$content_children = $item->children( 'http://purl.org/rss/1.0/modules/content/' );
+			$encoded          = isset( $content_children->encoded ) ? $this->xml_node_text( $content_children->encoded ) : '';
+			$items[]          = array(
+				'id'      => $this->xml_node_text( isset( $item->guid ) ? $item->guid : $item->link ),
+				'title'   => $this->xml_node_text( $item->title ),
+				'link'    => $this->xml_node_text( $item->link ),
+				'content' => '' === $encoded ? $this->xml_node_text( $item->description ) : $encoded,
+				'summary' => $this->xml_node_text( $item->description ),
+				'date'    => $this->xml_node_text( $item->pubDate ),
+			);
+		}
+
+		return array(
+			'title' => $this->xml_node_text( $channel->title ),
+			'items' => $items,
+		);
+	}
+
+	/**
+	 * Parses an Atom feed.
+	 *
+	 * @param \SimpleXMLElement $xml Feed XML.
+	 * @return array{title:string,items:array<int,array<string,string>>}
+	 */
+	private function parse_atom_feed( \SimpleXMLElement $xml ) {
+		$items = array();
+
+		foreach ( $xml->entry as $entry ) {
+			$content = $this->xml_node_text( isset( $entry->content ) ? $entry->content : '' );
+			$items[] = array(
+				'id'      => $this->xml_node_text( isset( $entry->id ) ? $entry->id : $entry->link ),
+				'title'   => $this->xml_node_text( $entry->title ),
+				'link'    => $this->atom_entry_link( $entry ),
+				'content' => '' === $content ? $this->xml_node_text( $entry->summary ) : $content,
+				'summary' => $this->xml_node_text( $entry->summary ),
+				'date'    => $this->xml_node_text( isset( $entry->updated ) ? $entry->updated : $entry->published ),
+			);
+		}
+
+		return array(
+			'title' => $this->xml_node_text( $xml->title ),
+			'items' => $items,
+		);
+	}
+
+	/**
+	 * Parses an RDF/RSS 1.0 feed.
+	 *
+	 * @param \SimpleXMLElement $xml Feed XML.
+	 * @param string            $url Feed URL.
+	 * @return array{title:string,items:array<int,array<string,string>>}
+	 */
+	private function parse_rdf_feed( \SimpleXMLElement $xml, $url ) {
+		$items = array();
+		$nodes = $xml->xpath( '//*[local-name()="item"]' );
+
+		foreach ( false === $nodes ? array() : $nodes as $item ) {
+			$items[] = array(
+				'id'      => $this->xml_node_text( isset( $item->link ) ? $item->link : $item->title ),
+				'title'   => $this->xml_node_text( $item->title ),
+				'link'    => $this->xml_node_text( $item->link ),
+				'content' => $this->xml_node_text( isset( $item->description ) ? $item->description : '' ),
+				'summary' => $this->xml_node_text( isset( $item->description ) ? $item->description : '' ),
+				'date'    => '',
+			);
+		}
+
+		$title_nodes = $xml->xpath( '/*/*[local-name()="channel"]/*[local-name()="title"]' );
+		$title       = ! empty( $title_nodes ) ? $this->xml_node_text( $title_nodes[0] ) : $url;
+
+		return array(
+			'title' => $title,
+			'items' => $items,
+		);
+	}
+
+	/**
+	 * Extracts an Atom entry link.
+	 *
+	 * @param \SimpleXMLElement $entry Atom entry.
+	 * @return string
+	 */
+	private function atom_entry_link( \SimpleXMLElement $entry ) {
+		foreach ( $entry->link as $link ) {
+			$attributes = $link->attributes();
+			$rel        = isset( $attributes['rel'] ) ? (string) $attributes['rel'] : 'alternate';
+
+			if ( 'alternate' === $rel && isset( $attributes['href'] ) ) {
+				return trim( (string) $attributes['href'] );
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Returns text content from an XML node.
+	 *
+	 * @param mixed $node XML node or scalar.
+	 * @return string
+	 */
+	private function xml_node_text( $node ) {
+		return trim( html_entity_decode( (string) $node, ENT_QUOTES, 'UTF-8' ) );
 	}
 
 	/**
@@ -1941,6 +2328,47 @@ final class RemoteUrlSourceWalker {
 		$name  = is_string( $path ) && '' !== trim( $path, '/' ) ? basename( trim( $path, '/' ) ) : ( isset( $parts['host'] ) ? $parts['host'] : '' );
 
 		return '' === trim( (string) $name ) ? 'Remote URL' : trim( (string) $name );
+	}
+
+	/**
+	 * Normalizes feed item content to an HTML fragment.
+	 *
+	 * @param string $content Feed item content.
+	 * @return string
+	 */
+	private function feed_content_html_fragment( $content ) {
+		$content = trim( (string) $content );
+
+		if ( '' === $content ) {
+			return '';
+		}
+
+		if ( false !== strpos( $content, '<' ) && false !== strpos( $content, '>' ) ) {
+			return $content;
+		}
+
+		return '<p>' . htmlspecialchars( $content, ENT_QUOTES, 'UTF-8' ) . '</p>';
+	}
+
+	/**
+	 * Builds a compact visible path for a feed item source.
+	 *
+	 * @param string $source Source URL.
+	 * @param int    $index  Feed item index.
+	 * @return string
+	 */
+	private function feed_item_relative_path( $source, $index ) {
+		$parts = $this->parse_url_compat( $source );
+
+		if ( is_array( $parts ) && ! empty( $parts['path'] ) ) {
+			$path = trim( (string) $parts['path'], '/' );
+
+			if ( '' !== $path ) {
+				return $path;
+			}
+		}
+
+		return 'feed-item-' . ( (int) $index + 1 );
 	}
 
 	/**

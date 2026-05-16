@@ -405,6 +405,7 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'Clear selection', $source );
 		$this->assertStringContainsString( 'countFilesByExtension(browserFiles, \'.pdf\')', $source );
 		$this->assertStringContainsString( 'URL or server path', $source );
+		$this->assertStringContainsString( 'RSS/Atom feed', $source );
 		$this->assertStringContainsString( 'URL treatment', $source );
 		$this->assertStringContainsString( 'Ask when old URLs are found', $source );
 		$this->assertStringContainsString( 'Keep URLs unchanged', $source );

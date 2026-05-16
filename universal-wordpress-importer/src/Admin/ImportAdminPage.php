@@ -1003,8 +1003,8 @@ final class ImportAdminPage {
 					<div>
 						<p class="universal-importer-field">
 							<label for="universal-importer-source"><?php esc_html_e( 'URL or server path', 'universal-wordpress-importer' ); ?></label>
-							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/wp-json/, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
-							<span class="universal-importer-hint"><?php esc_html_e( 'Use this when WordPress can reach the source directly.', 'universal-wordpress-importer' ); ?></span>
+							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/, https://example.com/feed/, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
+							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, WordPress site URL, REST root, RSS/Atom feed, remote page, or GitHub repo.', 'universal-wordpress-importer' ); ?></span>
 						</p>
 						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
 							<div class="universal-importer-upload-copy">
