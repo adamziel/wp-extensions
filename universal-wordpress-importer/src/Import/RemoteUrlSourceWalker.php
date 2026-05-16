@@ -896,7 +896,8 @@ final class RemoteUrlSourceWalker {
 	 * @return bool Whether a document was prepared.
 	 */
 	private function prepare_feed_item_document( ImportSession $session, ImportSourceItem $root, $feed_url, array $feed, array $item, $index ) {
-		$source = isset( $item['link'] ) && '' !== trim( (string) $item['link'] ) ? trim( (string) $item['link'] ) : $feed_url . '#item-' . ( $index + 1 );
+		$source = isset( $item['link'] ) && '' !== trim( (string) $item['link'] ) ? $this->absolute_url( trim( (string) $item['link'] ), $feed_url ) : '';
+		$source = '' === $source ? $feed_url . '#item-' . ( $index + 1 ) : $source;
 		$id     = isset( $item['id'] ) && '' !== trim( (string) $item['id'] ) ? trim( (string) $item['id'] ) : $source;
 		$key    = 'remote-feed:' . hash( 'sha256', $root->get_source_uri() . "\n" . $feed_url . "\n" . $id . "\n" . (int) $index );
 
@@ -915,6 +916,7 @@ final class RemoteUrlSourceWalker {
 
 		$html_summary = array();
 		$content      = $this->feed_content_html_fragment( $content );
+		$content      = $this->absolutize_feed_media_references( $content, $source );
 		$markup       = ( new ImportHtmlBlockConverter() )->convert( $content, $html_summary );
 		$block_count  = $this->count_blocks( $markup );
 
@@ -1585,7 +1587,124 @@ final class RemoteUrlSourceWalker {
 		$path = isset( $base['path'] ) ? (string) $base['path'] : '/';
 		$dir  = '/' . trim( dirname( $path ), '/\\' );
 
-		return $scheme . '://' . $host . $port . rtrim( $dir, '/' ) . '/' . $url;
+		return $scheme . '://' . $host . $port . $this->normalize_url_path( rtrim( $dir, '/' ) . '/' . $url );
+	}
+
+	/**
+	 * Resolves feed media references against the feed item URL before block conversion.
+	 *
+	 * @param string $content Feed item HTML fragment.
+	 * @param string $base_url Feed item URL.
+	 * @return string
+	 */
+	private function absolutize_feed_media_references( $content, $base_url ) {
+		if ( '' === trim( (string) $content ) || ! $this->is_remote_http_source( $base_url ) ) {
+			return (string) $content;
+		}
+
+		$content = preg_replace_callback(
+			'#\b(src|poster)\s*=\s*(["\'])(.*?)\2#is',
+			function ( $matches ) use ( $base_url ) {
+				$url = html_entity_decode( (string) $matches[3], ENT_QUOTES, 'UTF-8' );
+
+				if ( ! $this->should_absolutize_feed_reference( $url ) ) {
+					return $matches[0];
+				}
+
+				$absolute = $this->absolute_url( trim( $url ), $base_url );
+
+				if ( '' === $absolute ) {
+					return $matches[0];
+				}
+
+				return $matches[1] . '=' . $matches[2] . $this->esc_attr_compat( $absolute ) . $matches[2];
+			},
+			(string) $content
+		);
+
+		$content = preg_replace_callback(
+			'#\bsrcset\s*=\s*(["\'])(.*?)\1#is',
+			function ( $matches ) use ( $base_url ) {
+				$srcset = html_entity_decode( (string) $matches[2], ENT_QUOTES, 'UTF-8' );
+				$parts  = array();
+
+				foreach ( explode( ',', $srcset ) as $candidate ) {
+					$candidate = trim( $candidate );
+
+					if ( '' === $candidate ) {
+						continue;
+					}
+
+					$tokens = preg_split( '/\s+/', $candidate );
+					$url    = isset( $tokens[0] ) ? $tokens[0] : '';
+
+					if ( $this->should_absolutize_feed_reference( $url ) ) {
+						$absolute = $this->absolute_url( $url, $base_url );
+
+						if ( '' !== $absolute ) {
+							$tokens[0] = $absolute;
+						}
+					}
+
+					$parts[] = implode( ' ', $tokens );
+				}
+
+				return 'srcset=' . $matches[1] . $this->esc_attr_compat( implode( ', ', $parts ) ) . $matches[1];
+			},
+			(string) $content
+		);
+
+		return $content;
+	}
+
+	/**
+	 * Checks whether a feed media URL should be resolved against the item URL.
+	 *
+	 * @param string $url Candidate URL.
+	 * @return bool
+	 */
+	private function should_absolutize_feed_reference( $url ) {
+		$url = trim( (string) $url );
+
+		if ( '' === $url || 0 === strpos( $url, '#' ) ) {
+			return false;
+		}
+
+		return ! preg_match( '#^(?:https?:|data:|javascript:|mailto:|tel:)#i', $url );
+	}
+
+	/**
+	 * Normalizes dot segments in an absolute URL path while preserving query and fragment suffixes.
+	 *
+	 * @param string $path Path, optionally with query or fragment.
+	 * @return string
+	 */
+	private function normalize_url_path( $path ) {
+		$path      = (string) $path;
+		$suffix    = '';
+		$suffix_at = strcspn( $path, '?#' );
+
+		if ( $suffix_at < strlen( $path ) ) {
+			$suffix = substr( $path, $suffix_at );
+			$path   = substr( $path, 0, $suffix_at );
+		}
+
+		$segments = array();
+
+		foreach ( explode( '/', $path ) as $segment ) {
+			if ( '' === $segment || '.' === $segment ) {
+				continue;
+			}
+
+			if ( '..' === $segment ) {
+				array_pop( $segments );
+				continue;
+			}
+
+			$segments[] = $segment;
+		}
+
+		return '/' . implode( '/', $segments ) . $suffix;
 	}
 
 	/**

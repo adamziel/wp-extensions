@@ -2574,7 +2574,7 @@ final class ImportRunnerTest extends TestCase {
 			. '<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">'
 			. '<channel><title>Example Feed</title>'
 			. '<item><guid>item-1</guid><title>First Story</title><link>https://feed.example.test/first/</link><pubDate>Sat, 16 May 2026 00:00:00 +0000</pubDate><content:encoded><![CDATA[<h2>First Story</h2><p>Feed body with <a href="/about/">link</a>.</p>]]></content:encoded></item>'
-			. '<item><guid>item-2</guid><title>Second Story</title><link>https://feed.example.test/second/</link><description><![CDATA[Plain second body.]]></description></item>'
+			. '<item><guid>item-2</guid><title>Second Story</title><link>/second/</link><description><![CDATA[Plain second body.]]></description></item>'
 			. '</channel></rss>'
 		);
 		$session = ImportSession::start_for_source( 'https://feed.example.test/rss.xml' );
@@ -2598,10 +2598,72 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertStringContainsString( '<!-- wp:heading {"level":2} -->', $documents[0]->get_block_markup() );
 		$this->assertStringContainsString( '<!-- wp:paragraph -->', $documents[1]->get_block_markup() );
 		$this->assertSame( 'https://feed.example.test/rss.xml', $documents[0]->get_metadata()['remote_feed_url'] );
+		$this->assertSame( 'https://feed.example.test/second/', $documents[1]->get_metadata()['remote_source_url'] );
 		$this->assertSame( 'direct-feed', $root->get_metadata()['remote_feed_discovered_by'] );
 		$this->assertSame( 'rss', $root->get_metadata()['remote_mode'] );
 		$this->assertSame( 2, $posts->count_posts() );
 		$this->assertContains( 'remote.feed_prepared', $events );
+	}
+
+	/**
+	 * Relative media references inside feed item content are resolved against the item URL.
+	 *
+	 * @return void
+	 */
+	public function test_runner_absolutizes_relative_rss_media_urls() {
+		$fetcher = new FakeRemoteContentFetcher();
+		$fetcher->add_text(
+			'https://feed.example.test/rss.xml',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">'
+			. '<channel><title>Example Feed</title>'
+			. '<item><guid>item-1</guid><title>First Story</title><link>https://feed.example.test/posts/first/</link><content:encoded><![CDATA[<p><img src="../uploads/feed.jpg" srcset="../uploads/feed-small.jpg 400w, /uploads/feed-large.jpg 800w" alt="Feed image"></p>]]></content:encoded></item>'
+			. '</channel></rss>'
+		);
+		$session = ImportSession::start_for_source( 'https://feed.example.test/rss.xml' );
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60, null, new FakePostGateway(), null, null, null, $fetcher ) )->run( $session->get_id() );
+
+		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
+
+		$this->assertCount( 1, $documents );
+		$this->assertStringContainsString( 'src="https://feed.example.test/uploads/feed.jpg"', $documents[0]->get_block_markup() );
+		$this->assertStringContainsString( 'https://feed.example.test/uploads/feed-small.jpg 400w', $documents[0]->get_block_markup() );
+		$this->assertStringContainsString( 'https://feed.example.test/uploads/feed-large.jpg 800w', $documents[0]->get_block_markup() );
+		$this->assertSame( array( 'feed.example.test' ), $documents[0]->get_metadata()['absolute_url_domains'] );
+	}
+
+	/**
+	 * RDF/RSS 1.0 feeds are accepted as generic feed sources.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_remote_rdf_feed_items() {
+		$fetcher = new FakeRemoteContentFetcher();
+		$fetcher->add_text(
+			'https://rdf.example.test/feed.rdf',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/">'
+			. '<channel rdf:about="https://rdf.example.test/"><title>RDF Feed</title></channel>'
+			. '<item rdf:about="https://rdf.example.test/rdf-entry/"><title>RDF Entry</title><link>https://rdf.example.test/rdf-entry/</link><description><![CDATA[<p>RDF body.</p>]]></description></item>'
+			. '</rdf:RDF>'
+		);
+		$session = ImportSession::start_for_source( 'https://rdf.example.test/feed.rdf' );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, null, $fetcher ) )->run( $session->get_id() );
+
+		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
+		$root      = $this->store->find_source_item( $session->get_id(), 'remote:' . hash( 'sha256', 'https://rdf.example.test/feed.rdf' ) );
+
+		$this->assertCount( 1, $documents );
+		$this->assertSame( 'rss', $documents[0]->get_format() );
+		$this->assertSame( 'RDF Entry', $documents[0]->get_title() );
+		$this->assertStringContainsString( '<p>RDF body.</p>', $documents[0]->get_block_markup() );
+		$this->assertSame( 'RDF Feed', $root->get_metadata()['remote_feed_title'] );
+		$this->assertSame( 1, $posts->count_posts() );
 	}
 
 	/**

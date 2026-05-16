@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Formats - Universal Importer</title>
+	<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<a class="product-wordmark" href="./"><span>Universal</span><strong>Importer</strong></a>
+		<nav aria-label="Main navigation">
+			<a href="./">Overview</a>
+			<a href="get-started.html">Get Started</a>
+			<a href="formats.html" aria-current="page">Formats</a>
+			<a href="examples.html">Examples</a>
+			<a href="../index.html">StillPress</a>
+			<a href="https://github.com/adamziel/wp-extensions/tree/main/universal-wordpress-importer">GitHub</a>
+		</nav>
+	</header>
+
+	<main class="content">
+		<h1>Formats</h1>
+		<p>The importer favors predictable drafts over false fidelity. When a format cannot be mapped cleanly to native blocks, it preserves safe HTML in Classic or Custom HTML blocks rather than inventing structure.</p>
+
+		<section>
+			<h2>Documents</h2>
+			<table class="format-table">
+				<thead><tr><th>Source</th><th>Result</th><th>Notes</th></tr></thead>
+				<tbody>
+					<tr><td>Markdown</td><td>Headings, paragraphs, lists, quotes, tables, and links</td><td>Nested trees become separate draft pages.</td></tr>
+					<tr><td>HTML</td><td>Native blocks where safe, Classic or Custom HTML otherwise</td><td>Scripts and unsafe attributes are stripped.</td></tr>
+					<tr><td>Text</td><td>Paragraph blocks</td><td>Useful for notes and plain exports.</td></tr>
+					<tr><td>EPUB</td><td>One prepared document per spine item</td><td>Cross-document link checks run across the full prepared set.</td></tr>
+					<tr><td>PDF</td><td>Text blocks and embedded images where recoverable</td><td>Optional helpers improve text order and OCR for hard PDFs.</td></tr>
+				</tbody>
+			</table>
+		</section>
+
+		<section>
+			<h2>Sites and Feeds</h2>
+			<table class="format-table">
+				<thead><tr><th>Source</th><th>Result</th><th>Notes</th></tr></thead>
+				<tbody>
+					<tr><td>WordPress REST URL</td><td>Posts, pages, featured media, comments, and terms when exposed</td><td>Uses paged REST cursors for resumable imports.</td></tr>
+					<tr><td>WordPress homepage</td><td>REST import when discoverable</td><td>Falls back to an advertised feed or the single page.</td></tr>
+					<tr><td>RSS, Atom, RDF</td><td>One draft per feed item</td><td>Imports current feed items, not historical feed archives.</td></tr>
+					<tr><td>GitHub repository URL</td><td>Repository tree content</td><td>Good for docs, Markdown sites, and public content repositories.</td></tr>
+					<tr><td>WXR</td><td>WordPress export entities</td><td>May pause for author, term, relationship, or URL decisions.</td></tr>
+				</tbody>
+			</table>
+		</section>
+
+		<section>
+			<h2>PDF Helpers</h2>
+			<p>Native PDF extraction is bounded and works best on straightforward text PDFs. For layout-heavy or scanned documents, configure command templates on the host:</p>
+			<pre><code>export UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND='pdftotext -layout {input} {output}'
+export UNIVERSAL_IMPORTER_PDF_OCR_COMMAND='ocrmypdf --skip-text --sidecar {output} {input} {scratch}'</code></pre>
+		</section>
+	</main>
+</body>
+</html>

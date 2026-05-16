@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Examples - Universal Importer</title>
+	<link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+	<header class="site-header">
+		<a class="product-wordmark" href="./"><span>Universal</span><strong>Importer</strong></a>
+		<nav aria-label="Main navigation">
+			<a href="./">Overview</a>
+			<a href="get-started.html">Get Started</a>
+			<a href="formats.html">Formats</a>
+			<a href="examples.html" aria-current="page">Examples</a>
+			<a href="../index.html">StillPress</a>
+			<a href="https://github.com/adamziel/wp-extensions/tree/main/universal-wordpress-importer">GitHub</a>
+		</nav>
+	</header>
+
+	<main class="content">
+		<h1>Examples</h1>
+		<p>These examples are deliberately small enough to verify quickly and realistic enough to exercise the importer pipeline.</p>
+
+		<section>
+			<h2>Bundled Playground Source</h2>
+			<p>Open the demo, paste this path, and run a dry run before creating drafts:</p>
+			<pre><code>/wordpress/wp-content/plugins/universal-wordpress-importer/examples/playground-import</code></pre>
+			<p>The sample includes Markdown, HTML with a stripped script, plain text, and a nested appendix.</p>
+		</section>
+
+		<section>
+			<h2>RSS or Atom Feed</h2>
+			<p>Paste a public feed URL into the source field. The importer creates one draft per current feed item and resolves relative feed media against the item URL.</p>
+			<pre><code>https://wordpress.org/news/feed/</code></pre>
+		</section>
+
+		<section>
+			<h2>WordPress Site URL</h2>
+			<p>Paste a homepage or REST root. The importer tries the WordPress REST API first, then an advertised RSS or Atom feed, then the single page.</p>
+			<pre><code>https://example.com/
+https://example.com/wp-json/</code></pre>
+		</section>
+
+		<section>
+			<h2>GitHub Repository</h2>
+			<p>Use a public repository URL when the content already lives in GitHub.</p>
+			<pre><code>https://github.com/example/docs/tree/main/content</code></pre>
+		</section>
+
+		<section>
+			<h2>Host CLI Smoke Test</h2>
+			<p>Run a focused import from the repository checkout:</p>
+			<pre><code>wp universal-importer import ./universal-wordpress-importer/examples/playground-import
+wp universal-importer status import_...</code></pre>
+		</section>
+	</main>
+</body>
+</html>
