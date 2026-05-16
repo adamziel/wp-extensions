@@ -14,6 +14,8 @@ $cli_blueprint     = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-si
 $browser_commands = ssgwp_blueprint_wp_cli_commands( $browser_blueprint );
 $brew_commands    = ssgwp_blueprint_wp_cli_commands( $brew_blueprint );
 $cli_commands     = ssgwp_blueprint_wp_cli_commands( $cli_blueprint );
+$root_readme      = ssgwp_read_file( $repo_root . '/README.md' );
+$plugin_readme    = ssgwp_read_file( $repo_root . '/static-site-generator/README.md' );
 
 $delete_default_post_index = ssgwp_find_command_index( $browser_commands, 'wp post delete 1 --force' );
 $hello_world_index         = ssgwp_find_command_index( $browser_commands, '--post_name=hello-world' );
@@ -124,6 +126,25 @@ ssgwp_blueprint_assert(
 	'CLI export blueprint runs the static export command with the Playground-safe fetch mode.'
 );
 
+ssgwp_blueprint_assert(
+	false === strpos( $root_readme, 'try-it-in-playground.webp' )
+		&& false === strpos( $plugin_readme, 'try-it-in-playground.webp' ),
+	'Static generator README buttons do not use the WordPress Playground screenshot asset.'
+);
+
+ssgwp_blueprint_assert(
+	false === strpos( $root_readme, 'adamziel/playground-preview' )
+		&& false === strpos( $plugin_readme, 'adamziel/playground-preview' ),
+	'Static generator README buttons use an asset from this repository.'
+);
+
+ssgwp_blueprint_assert(
+	false !== strpos( $root_readme, 'static-site-generator/assets/try-it-in-playground.svg' )
+		&& false !== strpos( $plugin_readme, 'assets/try-it-in-playground.svg' )
+		&& file_exists( $repo_root . '/static-site-generator/assets/try-it-in-playground.svg' ),
+	'Static generator README buttons point to the local branded Playground button asset.'
+);
+
 /**
  * Decode a blueprint JSON file.
  *
@@ -147,6 +168,22 @@ function ssgwp_blueprint_decode( $path ) {
 	}
 
 	return $blueprint;
+}
+
+/**
+ * Read a required text file.
+ *
+ * @param string $path File path.
+ * @return string File contents.
+ */
+function ssgwp_read_file( $path ) {
+	$contents = file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+
+	if ( ! is_string( $contents ) ) {
+		ssgwp_blueprint_fail( 'Could not read ' . $path );
+	}
+
+	return $contents;
 }
 
 /**

@@ -1,7 +1,7 @@
 # Playground Static Site Generator
 
 <a href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json" target="_blank" rel="noopener noreferrer">
-  <img src="https://raw.githubusercontent.com/adamziel/playground-preview/refs/heads/trunk/assets/playground-preview-button.svg" alt="Open WordPress Playground Preview" width="220" height="57" />
+  <img src="assets/try-it-in-playground.svg" alt="Try it in WordPress Playground" width="260" height="64" />
 </a>
 
 Export a WordPress site to static HTML and frontend assets. The plugin works
@@ -20,7 +20,7 @@ The exporter includes:
 ## Browser Playground
 
 <a href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json" target="_blank" rel="noopener noreferrer">
-  <img src="https://raw.githubusercontent.com/adamziel/playground-preview/refs/heads/trunk/assets/playground-preview-button.svg" alt="Open WordPress Playground Preview" width="220" height="57" />
+  <img src="assets/try-it-in-playground.svg" alt="Try it in WordPress Playground" width="260" height="64" />
 </a>
 
 The Blueprint installs this plugin, seeds a richer demo site with pages,
