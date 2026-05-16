@@ -14,6 +14,8 @@ especially Playground-scoped sites and WooCommerce demos.
 - Added `_static-export-preview.txt` to exports so users understand when to
   use a local HTTP preview instead of `file://`.
 - Moved the static generator Playground button into this repository.
+- Added export warnings for static snapshots of dynamic behavior such as POST
+  forms, search forms, WooCommerce cart-like pages, and REST API references.
 
 ## Export correctness
 
@@ -40,9 +42,7 @@ plugin should make that explicit.
 
 Planned improvements:
 
-- Detect dynamic form targets and REST/admin endpoints during export.
-- Record warnings in `static-export.json` when enabled.
-- Add a human-readable limitations section to `_static-export-preview.txt`.
+- Expand dynamic warnings as more real-world frontend patterns appear.
 - Document which WooCommerce pages are exported as rendered snapshots and which
   interactions still need a live WordPress backend.
 

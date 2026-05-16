@@ -35,6 +35,13 @@ final class SSGWP_Static_Exporter {
 	private $linked_assets_copied = array();
 
 	/**
+	 * Dynamic behavior warning categories reported during this export.
+	 *
+	 * @var array<string,bool>
+	 */
+	private $dynamic_warnings = array();
+
+	/**
 	 * Current export root directory.
 	 *
 	 * @var string
@@ -102,6 +109,7 @@ final class SSGWP_Static_Exporter {
 		$this->warnings             = array();
 		$this->files_exported       = 0;
 		$this->linked_assets_copied = array();
+		$this->dynamic_warnings     = array();
 		$this->progress             = array();
 
 		$args = wp_parse_args(
@@ -198,6 +206,7 @@ final class SSGWP_Static_Exporter {
 			$target_path = $this->url_to_file_path( $url );
 			$response    = $this->inject_missing_core_block_styles( $response );
 			$response    = $this->ensure_html_charset( $response );
+			$this->collect_dynamic_behavior_warnings( $response, $url );
 			$rewritten   = $rewriter->rewrite_html( $response, $url, $target_path );
 
 			$this->write_file( trailingslashit( $output_dir ) . $target_path, $rewritten['content'] );
@@ -371,11 +380,76 @@ final class SSGWP_Static_Exporter {
 				'python3 -m http.server 8080',
 				'',
 				'Then open http://localhost:8080/ in your browser.',
+				'',
+				'Forms, search, comments, carts, checkout, account pages, and REST API writes need a live backend or a static-compatible service.',
 				''
 			)
 		);
 
 		$this->write_file( trailingslashit( $output_dir ) . '_static-export-preview.txt', $contents );
+	}
+
+	/**
+	 * Warn when rendered HTML contains behavior that cannot remain dynamic.
+	 *
+	 * These checks do not rewrite HTML. They give users explicit export guidance
+	 * for common WordPress features that need a backend after publication.
+	 *
+	 * @param string $html Rendered HTML.
+	 * @param string $url  Exported page URL.
+	 */
+	private function collect_dynamic_behavior_warnings( $html, $url ) {
+		$html = (string) $html;
+		$url  = (string) $url;
+
+		if ( preg_match( '#<form\b[^>]*\bmethod\s*=\s*["\']?post["\']?#i', $html ) ) {
+			$this->add_dynamic_warning_once(
+				'post_form',
+				'POST forms are exported as static markup and need a live backend or a static-compatible form service. Detected while exporting ' . $url . '.'
+			);
+		}
+
+		if (
+			preg_match( '#<form\b[^>]*\brole\s*=\s*["\']?search["\']?#i', $html )
+			|| preg_match( '#<input\b[^>]*\bname\s*=\s*["\']?s["\']?#i', $html )
+		) {
+			$this->add_dynamic_warning_once(
+				'search_form',
+				'Search forms are exported as static markup and need a live backend or a static-compatible search index. Detected while exporting ' . $url . '.'
+			);
+		}
+
+		if (
+			preg_match( '#\b(wc-block-cart|woocommerce-cart|woocommerce-checkout|woocommerce-account|woocommerce-cart-form)\b#i', $html )
+			|| preg_match( '#/(cart|checkout|my-account)(?:/|$)#i', (string) wp_parse_url( $url, PHP_URL_PATH ) )
+		) {
+			$this->add_dynamic_warning_once(
+				'woocommerce_action_page',
+				'WooCommerce cart, checkout, and account pages are exported as static snapshots and need a live backend for customer actions. Detected while exporting ' . $url . '.'
+			);
+		}
+
+		if ( false !== stripos( $html, '/wp-json/' ) || false !== stripos( $html, 'rest_route=' ) ) {
+			$this->add_dynamic_warning_once(
+				'rest_api',
+				'REST API links are exported as static references; REST API writes need a live backend. Detected while exporting ' . $url . '.'
+			);
+		}
+	}
+
+	/**
+	 * Record one warning per dynamic behavior category.
+	 *
+	 * @param string $key     Warning category key.
+	 * @param string $warning Warning message.
+	 */
+	private function add_dynamic_warning_once( $key, $warning ) {
+		if ( isset( $this->dynamic_warnings[ $key ] ) ) {
+			return;
+		}
+
+		$this->dynamic_warnings[ $key ] = true;
+		$this->warnings[]               = $warning;
 	}
 
 	/**
