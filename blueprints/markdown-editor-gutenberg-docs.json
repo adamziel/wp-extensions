@@ -2,7 +2,7 @@
 	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
 	"meta": {
 		"title": "Markdown Editor: Gutenberg Docs",
-		"description": "Load selected Gutenberg documentation pages into the Markdown-backed WordPress editor.",
+		"description": "Load the Gutenberg documentation tree into the Markdown-backed WordPress editor.",
 		"author": "Adam Zielinski",
 		"categories": ["markdown", "editor", "documentation", "gutenberg"]
 	},
@@ -25,87 +25,21 @@
 			"extractToPath": "/wordpress"
 		},
 		{
-			"step": "mkdir",
-			"path": "/tmp/gutenberg-docs"
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/block-editor-handbook.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/README.md"
+			"step": "writeFiles",
+			"writeToPath": "/tmp/gutenberg-docs",
+			"filesTree": {
+				"resource": "git:directory",
+				"url": "https://github.com/WordPress/gutenberg",
+				"ref": "trunk",
+				"path": "docs"
 			}
 		},
 		{
 			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/quick-start-guide.md",
+			"path": "/tmp/import-gutenberg-docs.php",
 			"data": {
 				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/getting-started/quick-start-guide.md"
-			}
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/tutorial.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/getting-started/tutorial.md"
-			}
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/fundamentals.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/getting-started/fundamentals/README.md"
-			}
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/block-api.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/reference-guides/block-api/README.md"
-			}
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/block-registration.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/reference-guides/block-api/block-registration.md"
-			}
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/block-metadata.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/reference-guides/block-api/block-metadata.md"
-			}
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/block-attributes.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/reference-guides/block-api/block-attributes.md"
-			}
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/packages.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/reference-guides/packages.md"
-			}
-		},
-		{
-			"step": "writeFile",
-			"path": "/tmp/gutenberg-docs/interactivity-api.md",
-			"data": {
-				"resource": "url",
-				"url": "https://raw.githubusercontent.com/WordPress/gutenberg/trunk/docs/reference-guides/interactivity-api/README.md"
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/main/blueprints/import-gutenberg-docs.php"
 			}
 		},
 		{
@@ -114,7 +48,7 @@
 		},
 		{
 			"step": "runPHP",
-			"code": "<?php\n$docs = array(\n\tarray( 101, 'block-editor-handbook', 'Block Editor Handbook', 'block-editor-handbook.md' ),\n\tarray( 102, 'quick-start-guide', 'Quick Start Guide', 'quick-start-guide.md' ),\n\tarray( 103, 'tutorial-build-your-first-block', 'Tutorial: Build Your First Block', 'tutorial.md' ),\n\tarray( 104, 'fundamentals-of-block-development', 'Fundamentals of Block Development', 'fundamentals.md' ),\n\tarray( 201, 'block-api-reference', 'Block API Reference', 'block-api.md' ),\n\tarray( 202, 'block-registration', 'Block Registration', 'block-registration.md' ),\n\tarray( 203, 'block-metadata', 'Block Metadata', 'block-metadata.md' ),\n\tarray( 204, 'block-attributes', 'Block Attributes', 'block-attributes.md' ),\n\tarray( 301, 'package-reference', 'Package Reference', 'packages.md' ),\n\tarray( 401, 'interactivity-api-reference', 'Interactivity API Reference', 'interactivity-api.md' ),\n);\n\nforeach ( $docs as $doc ) {\n\tlist( $id, $slug, $title, $source ) = $doc;\n\t$markdown = file_get_contents( '/tmp/gutenberg-docs/' . $source );\n\tif ( false === $markdown ) {\n\t\tthrow new RuntimeException( 'Could not read Gutenberg doc ' . $source );\n\t}\n\n\t$front_matter = sprintf(\n\t\t\"---\\npost_title = \\\"%s\\\"\\npost_name = \\\"%s\\\"\\npost_status = \\\"publish\\\"\\npost_type = \\\"page\\\"\\npost_date_gmt = \\\"2026-05-16 00:00:00\\\"\\npost_modified_gmt = \\\"2026-05-16 00:00:00\\\"\\n---\\n\",\n\t\taddcslashes( $title, \"\\\\\\\"\" ),\n\t\t$slug\n\t);\n\n\tfile_put_contents( '/markdown-root/' . $id . '-' . $slug . '.md', $front_matter . ltrim( $markdown ) );\n}\n"
+			"code": "<?php require '/tmp/import-gutenberg-docs.php';"
 		},
 		{
 			"step": "setSiteOptions",
