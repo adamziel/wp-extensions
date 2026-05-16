@@ -76,6 +76,28 @@ if ( ! function_exists( 'wp_mkdir_p' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_temp_dir' ) ) {
+	/**
+	 * Return a temporary directory path for tests.
+	 *
+	 * @return string Temp directory.
+	 */
+	function get_temp_dir() {
+		return sys_get_temp_dir() . '/';
+	}
+}
+
+if ( ! function_exists( 'wp_generate_uuid4' ) ) {
+	/**
+	 * Return a unique test identifier.
+	 *
+	 * @return string UUID-like value.
+	 */
+	function wp_generate_uuid4() {
+		return uniqid( 'ssgwp-test-', true );
+	}
+}
+
 if ( ! function_exists( 'wp_parse_url' ) ) {
 	/**
 	 * Parse a URL for tests.
@@ -1183,6 +1205,11 @@ file_put_contents(
 	$commerce_assets_dir . '/woocommerce.css',
 	'.woocommerce ul.products{display:grid}.woocommerce ul.products li.product{width:auto}'
 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+wp_mkdir_p( $fixture_root . '/wp-content/uploads/2024/11' );
+file_put_contents(
+	$fixture_root . '/wp-content/uploads/2024/11/triple-pack.jpeg',
+	'jpeg'
+); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 
 $commerce_output_dir       = $fixture_root . '/commerce-export';
 $ssgwp_test_posts          = array(
@@ -1210,10 +1237,12 @@ $ssgwp_test_posts          = array(
 );
 $ssgwp_test_http_responses = array(
 	'https://example.test/' => '<html><head><title>Coffee Home</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main data-wp-context=\'{"shopUrl":"/shop/","cartUrl":"/cart/"}\'><h1>Coffee Home</h1><form role="search" action="/"><input name="s" value=""></form><a href="/shop/">Shop</a><a href="/cart/">Cart</a><a href="/communication-preferences/">Communication preferences</a></main></body></html>',
-	'https://example.test/shop/' => '<html><head><title>Shop</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main><h1>Shop</h1><ul class="products columns-3"><li class="product">Espresso Roast</li><li class="product">Pour Over Kit</li><li class="product">Travel Tumbler</li></ul><a href="/cart/">View cart</a><script type="application/json">{"cartUrl":"\u002Fcart\u002F","checkoutUrl":"\u002Fcheckout\u002F","styleUrl":"\u002Fwp-content\u002Fplugins\u002Fwoocommerce\u002Fassets\u002Fcss\u002Fwoocommerce.css"}</script></main></body></html>',
+	'https://example.test/shop/' => '<html><head><title>Shop</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main><h1>Shop</h1><ul class="products columns-3"><li class="product"><a href="/product/triple-pack/">Triple Pack</a></li><li class="product">Espresso Roast</li><li class="product">Pour Over Kit</li><li class="product">Travel Tumbler</li></ul><a href="/product-category/beans/">Bean subscriptions</a><a href="/cart/">View cart</a><script type="application/json">{"cartUrl":"\u002Fcart\u002F","checkoutUrl":"\u002Fcheckout\u002F","styleUrl":"\u002Fwp-content\u002Fplugins\u002Fwoocommerce\u002Fassets\u002Fcss\u002Fwoocommerce.css"}</script></main></body></html>',
 	'https://example.test/cart/' => '<html><head><title>Cart</title></head><body><main class="wc-block-cart"><h1>Cart</h1><p>Cart page rendered.</p><form class="woocommerce-cart-form" method="post" action="/cart/"><button name="update_cart">Update cart</button></form><h2>You may be interested in…</h2><a href="/shop/">Keep shopping</a></main></body></html>',
 	'https://example.test/communication-preferences/' => '<html><head><title>Communication preferences</title></head><body><main><h1>Communication preferences</h1><p>Rendered communication preferences content.</p></main></body></html>',
 	'https://example.test/checkout/' => '<html><head><title>Checkout</title></head><body><main><h1>Checkout</h1><p>Checkout page rendered.</p></main></body></html>',
+	'https://example.test/product/triple-pack/' => '<html><head><title>Triple Pack</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main><h1>Triple Pack</h1><div class="woocommerce-product-gallery" style="opacity:1"><a href="/wp-content/uploads/2024/11/triple-pack.jpeg"><img width="600" height="600" src="/wp-content/uploads/2024/11/triple-pack.jpeg" class="wp-post-image" alt="Triple Pack" data-large_image="/wp-content/uploads/2024/11/triple-pack.jpeg"></a></div><p>Three bags of rotating house beans.</p><a href="/shop/">Back to shop</a></main></body></html>',
+	'https://example.test/product-category/beans/' => '<html><head><title>Bean subscriptions</title><link rel="stylesheet" href="/wp-content/plugins/woocommerce/assets/css/woocommerce.css?ver=10.7.0"></head><body><main><h1>Bean subscriptions</h1><p>Fresh roasted coffee bundles.</p><a href="/product/triple-pack/">Triple Pack</a></main></body></html>',
 );
 
 $commerce_result = $exporter->export_to_directory(
@@ -1232,6 +1261,8 @@ $commerce_shop          = file_get_contents( $commerce_output_dir . '/shop/index
 $commerce_home          = file_get_contents( $commerce_output_dir . '/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
 $commerce_cart          = file_get_contents( $commerce_output_dir . '/cart/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
 $commerce_communication = file_get_contents( $commerce_output_dir . '/communication-preferences/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+$commerce_product       = file_get_contents( $commerce_output_dir . '/product/triple-pack/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+$commerce_category      = file_get_contents( $commerce_output_dir . '/product-category/beans/index.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
 
 ssgwp_assert_same(
 	true,
@@ -1261,6 +1292,42 @@ ssgwp_assert_contains(
 	'Espresso Roast',
 	$commerce_shop,
 	'export_to_directory writes product content on the shop page.'
+);
+
+ssgwp_assert_contains(
+	'Triple Pack',
+	$commerce_product,
+	'export_to_directory writes product detail page content.'
+);
+
+ssgwp_assert_contains(
+	'Bean subscriptions',
+	$commerce_category,
+	'export_to_directory writes product category archive content.'
+);
+
+ssgwp_assert_same(
+	true,
+	file_exists( $commerce_output_dir . '/wp-content/uploads/2024/11/triple-pack.jpeg' ),
+	'export_to_directory copies product images referenced by product detail pages.'
+);
+
+ssgwp_assert_contains(
+	'src="../../wp-content/uploads/2024/11/triple-pack.jpeg"',
+	$commerce_product,
+	'export_to_directory rewrites product image URLs relative to the product page.'
+);
+
+ssgwp_assert_export_has_no_broken_file_preview_urls(
+	$commerce_output_dir,
+	array(
+		'index.html',
+		'shop/index.html',
+		'cart/index.html',
+		'product/triple-pack/index.html',
+		'product-category/beans/index.html',
+		'communication-preferences/index.html',
+	)
 );
 
 ssgwp_assert_contains(
@@ -1359,6 +1426,73 @@ ssgwp_assert_not_contains(
 	'[automatewoo_communication_preferences]',
 	$commerce_communication,
 	'export_to_directory does not emit raw AutomateWoo shortcode placeholders in the commerce fixture.'
+);
+
+$commerce_zip_file = $fixture_root . '/commerce-export.zip';
+$commerce_zip_result = $exporter->export_to_zip(
+	$commerce_zip_file,
+	array(
+		'max_pages'         => 10,
+		'copy_uploads'      => false,
+		'copy_theme'        => false,
+		'copy_plugins'      => false,
+		'copy_core_assets'  => false,
+		'include_manifest'  => false,
+	)
+);
+$commerce_zip = new ZipArchive();
+
+ssgwp_assert_same(
+	true,
+	true === $commerce_zip->open( $commerce_zip_file ),
+	'export_to_zip writes an inspectable commerce ZIP archive.'
+);
+
+foreach (
+	array(
+		'index.html',
+		'shop/index.html',
+		'cart/index.html',
+		'product/triple-pack/index.html',
+		'product-category/beans/index.html',
+		'wp-content/plugins/woocommerce/assets/css/woocommerce.css',
+		'wp-content/uploads/2024/11/triple-pack.jpeg',
+	) as $commerce_zip_entry
+) {
+	ssgwp_assert_same(
+		true,
+		false !== $commerce_zip->locateName( $commerce_zip_entry ),
+		'export_to_zip includes ' . $commerce_zip_entry . '.'
+	);
+}
+
+$commerce_zip_product = $commerce_zip->getFromName( 'product/triple-pack/index.html' );
+$commerce_zip_shop    = $commerce_zip->getFromName( 'shop/index.html' );
+
+$commerce_zip->close();
+
+ssgwp_assert_contains(
+	'Triple Pack',
+	$commerce_zip_product,
+	'export_to_zip stores distinct product page content.'
+);
+
+ssgwp_assert_contains(
+	'Espresso Roast',
+	$commerce_zip_shop,
+	'export_to_zip stores distinct shop page content.'
+);
+
+ssgwp_assert_not_contains(
+	'Coffee Home',
+	$commerce_zip_product,
+	'export_to_zip does not store homepage HTML in product page entries.'
+);
+
+ssgwp_assert_same(
+	true,
+	in_array( 'https://example.test/product/triple-pack/', $commerce_zip_result['exported_urls'], true ),
+	'export_to_zip reports exported product URLs.'
 );
 
 $ssgwp_test_home_url = 'https://playground.wordpress.net/scope:coffee-shop/';
@@ -2018,6 +2152,39 @@ function ssgwp_assert_not_contains( $needle, $haystack, $message ) {
 	}
 
 	ssgwp_fail( $message . ' Unexpected ' . var_export( $needle, true ) . '.' );
+}
+
+/**
+ * Assert exported HTML files are usable in extracted file previews.
+ *
+ * @param string   $output_dir Export output directory.
+ * @param string[] $files      Relative HTML files to inspect.
+ */
+function ssgwp_assert_export_has_no_broken_file_preview_urls( $output_dir, array $files ) {
+	foreach ( $files as $file ) {
+		$path = trailingslashit( $output_dir ) . $file;
+		$html = file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+
+		if ( ! is_string( $html ) ) {
+			ssgwp_fail( 'Could not read exported HTML file ' . $file . '.' );
+		}
+
+		ssgwp_assert_not_contains(
+			html_entity_decode( '&#65533;', ENT_QUOTES, 'UTF-8' ),
+			$html,
+			$file . ' does not contain replacement characters.'
+		);
+
+		ssgwp_assert_not_contains(
+			'[automatewoo_communication_preferences]',
+			$html,
+			$file . ' does not contain unresolved AutomateWoo shortcode placeholders.'
+		);
+
+		if ( preg_match( '/\s(?:href|src|action|data-large_image)=(["\'])\/(?!\/)/i', $html, $matches ) ) {
+			ssgwp_fail( $file . ' contains a root-relative URL that will break in file previews: ' . $matches[0] . '.' );
+		}
+	}
 }
 
 /**
