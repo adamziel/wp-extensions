@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: Playground Static Site Generator
+ * Plugin Name: StillPress
  * Plugin URI: https://github.com/adamziel/wp-extensions/tree/main/static-site-generator
- * Description: Exports a WordPress site to static files, with WordPress Playground-friendly admin, CLI, and Blueprint workflows.
+ * Description: Exports WordPress sites to portable static files with admin, WP-CLI, and Playground workflows.
  * Version: 0.1.0
  * Requires at least: 6.5
  * Requires PHP: 7.4

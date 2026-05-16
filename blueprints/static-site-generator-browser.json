@@ -1,8 +1,8 @@
 {
 	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
 	"meta": {
-		"title": "Static Site Generator",
-		"description": "Install the static site generator plugin and seed a richer demo site.",
+		"title": "StillPress",
+		"description": "Install StillPress and seed a richer static export demo site.",
 		"author": "Adam Zielinski",
 		"categories": ["static-sites", "publishing", "tools"]
 	},

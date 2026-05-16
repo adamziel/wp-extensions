@@ -1,8 +1,8 @@
 {
 	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
 	"meta": {
-		"title": "Static Site Generator: Coffee Shop",
-		"description": "Load the BrewCommerce coffee shop demo and install the static site generator.",
+		"title": "StillPress: Coffee Shop",
+		"description": "Load the BrewCommerce coffee shop demo and install StillPress.",
 		"author": "Adam Zielinski",
 		"categories": ["static-sites", "WooCommerce", "Store"]
 	},

@@ -16,6 +16,8 @@ $brew_commands    = ssgwp_blueprint_wp_cli_commands( $brew_blueprint );
 $cli_commands     = ssgwp_blueprint_wp_cli_commands( $cli_blueprint );
 $root_readme      = ssgwp_read_file( $repo_root . '/README.md' );
 $plugin_readme    = ssgwp_read_file( $repo_root . '/static-site-generator/README.md' );
+$plugin_file      = ssgwp_read_file( $repo_root . '/static-site-generator/static-site-generator.php' );
+$plugin_admin     = ssgwp_read_file( $repo_root . '/static-site-generator/includes/class-plugin.php' );
 $audit_plan       = ssgwp_read_file( $repo_root . '/static-site-generator/docs/audit-plan.md' );
 $branding_research = ssgwp_read_file( $repo_root . '/static-site-generator/docs/branding-research.md' );
 $brew_wxr         = ssgwp_read_file( $repo_root . '/blueprints/static-site-generator-brewcommerce-content.xml' );
@@ -189,6 +191,23 @@ ssgwp_blueprint_assert(
 		&& false === strpos( $audit_plan, 'Planned checks:' )
 		&& false !== strpos( $audit_plan, 'Completion evidence' ),
 	'Static generator audit plan records completion evidence instead of open planned deliverables.'
+);
+
+ssgwp_blueprint_assert(
+	false !== strpos( $plugin_file, 'Plugin Name: StillPress' )
+		&& false !== strpos( $plugin_admin, 'StillPress' )
+		&& false !== strpos( $root_readme, '## StillPress' )
+		&& false !== strpos( $plugin_readme, '# StillPress' )
+		&& false !== strpos( $browser_blueprint['meta']['title'], 'StillPress' )
+		&& false !== strpos( $brew_blueprint['meta']['title'], 'StillPress' ),
+	'Static generator user-facing plugin, docs, and Blueprint names use the selected StillPress brand.'
+);
+
+ssgwp_blueprint_assert(
+	false === strpos( $plugin_file, 'Plugin Name: Playground Static Site Generator' )
+		&& false === strpos( $plugin_readme, 'Playground Static Site Generator' )
+		&& false === strpos( $root_readme, 'Playground Static Site Generator' ),
+	'Static generator user-facing files do not keep the pre-brand Playground Static Site Generator name.'
 );
 
 /**
