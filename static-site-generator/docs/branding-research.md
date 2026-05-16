@@ -32,6 +32,19 @@ Known WordPress static export products already occupy the obvious naming space:
 - [Freeze](https://wordpress.org/plugins/freeze/) already occupies the
   "freeze WordPress" metaphor in the plugin directory.
 
+## Naming Iterations
+
+The naming pass avoided direct "static WordPress" phrasing because that space is
+already crowded and harder to own.
+
+| Candidate | Decision | Notes |
+| --- | --- | --- |
+| StaticPress | Rejected | Too generic and too close to existing "static" WordPress product language. |
+| PressFreeze | Rejected | Conflicts with the "Freeze" metaphor already used by a WordPress plugin. |
+| FlatPress Export | Rejected | Too close to FlatPress, an existing flat-file blog/CMS name. |
+| SnapshotPress | Rejected | "Snapshot" overlaps heavily with backup, restore, and staging products. |
+| StillPress | Selected direction | Clear WordPress signal, static-state metaphor, and less direct conflict with existing static export product names. |
+
 Adjacent names to avoid:
 
 - **SnapshotPress** or **WP Snapshot** because "snapshot" is heavily associated
@@ -52,3 +65,19 @@ or security product. The initial logo combines:
 - a still/paused line motif for the static result
 
 The first SVG lives at `static-site-generator/assets/stillpress-logo.svg`.
+
+## Logo Iterations
+
+The logo pass stayed in SVG so the repo owns the mark and the same asset can be
+used in README files, GitHub Pages, and future plugin screens.
+
+| Iteration | Direction | Result |
+| --- | --- | --- |
+| 1 | Browser window plus arrow | Rejected because it read like generic deployment or hosting. |
+| 2 | WordPress-style circular badge | Rejected because it leaned too close to WordPress core identity. |
+| 3 | Document sheet with press lines | Selected direction because it suggests rendered files, publishing origin, and a calm static result. |
+
+The selected direction is published in:
+
+- `static-site-generator/assets/stillpress-logo.svg`
+- `docs/assets/stillpress-logo.svg`

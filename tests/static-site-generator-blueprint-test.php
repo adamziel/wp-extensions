@@ -177,8 +177,18 @@ ssgwp_blueprint_assert(
 		&& false !== strpos( $branding_research, 'Staatic' )
 		&& false !== strpos( $branding_research, 'WP2Static' )
 		&& false !== strpos( $branding_research, 'Static Cache Wrangler' )
+		&& false !== strpos( $branding_research, 'Naming Iterations' )
+		&& false !== strpos( $branding_research, 'Logo Iterations' )
+		&& false !== strpos( $branding_research, 'Selected direction' )
 		&& file_exists( $repo_root . '/static-site-generator/assets/stillpress-logo.svg' ),
-	'Static generator branding research records the selected name, competitors, and logo asset.'
+	'Static generator branding research records the selected name, competitors, logo iterations, and logo asset.'
+);
+
+ssgwp_blueprint_assert(
+	false === strpos( $audit_plan, 'Planned output:' )
+		&& false === strpos( $audit_plan, 'Planned checks:' )
+		&& false !== strpos( $audit_plan, 'Completion evidence' ),
+	'Static generator audit plan records completion evidence instead of open planned deliverables.'
 );
 
 /**

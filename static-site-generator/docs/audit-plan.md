@@ -46,21 +46,27 @@ A static export cannot preserve server-side behavior such as carts, checkout,
 search, comments, protected forms, REST API writes, or nonce-based actions. The
 plugin should make that explicit.
 
-Planned improvements:
+Completion evidence:
 
-- Expand dynamic warnings as more real-world frontend patterns appear.
-- Document which WooCommerce pages are exported as rendered snapshots and which
-  interactions still need a live WordPress backend.
+- Export warnings are generated for POST forms, search forms, WooCommerce
+  cart/checkout/account-like snapshots, and REST API references.
+- README and Pages documentation explain that WooCommerce product listings and
+  static snapshots can export, while live cart mutations, checkout, accounts,
+  payments, forms, search, comments, and REST writes still need a backend or a
+  static-compatible service.
 
 ## Preview and hosting
 
 `file://` previews are useful for basic HTML and CSS, but browser module
 scripts cannot run there. Keep improving the supported preview path:
 
-- Add testing instructions that exercise both direct file inspection and local
-  HTTP previews.
-- Consider a generated `serve-static-site.sh` helper only if it stays portable
-  and does not obscure the plain command.
+Completion evidence:
+
+- Exports include `_static-export-preview.txt`.
+- README, plugin README, and Pages docs explain direct `file://` limits and the
+  `python3 -m http.server 8080` local HTTP preview path.
+- WP-CLI supports `--output-dir` for direct directory previews without
+  manually unzipping a ZIP.
 
 ## CI coverage
 
@@ -68,19 +74,21 @@ The current PHP tests cover URL parsing, export internals, Blueprint shape, and
 fixtures. The next coverage increase should use generated export artifacts,
 not only static fixture strings.
 
-Planned checks:
+Completion evidence:
 
-- Build a Playground-driven BrewCommerce export in CI if runtime cost is
-  acceptable.
-- Keep the deterministic PHP fixture that mirrors BrewCommerce page shapes and
-  verifies ZIP contents.
-- Validate the local Playground button SVG and README links.
-- Add a docs/pages build check once GitHub Pages content lands.
+- CI runs deterministic static exporter tests that mirror BrewCommerce page
+  shapes and verify directory and ZIP artifacts.
+- CI validates Blueprint JSON, Blueprint wiring, local Playground button
+  assets, README links, the cleaned BrewCommerce WXR, and Pages documentation.
+- A full Playground-driven BrewCommerce export is intentionally left out of CI:
+  it depends on browser/Playground networking, third-party package downloads,
+  and WooCommerce runtime cost. The deterministic fixture covers the static
+  export contract without that external flake surface.
 
 ## Documentation and demos
 
 The README is useful but not enough for a project-level docs surface. The Pages
-site should include:
+site now includes:
 
 - a quickstart for browser Playground
 - a quickstart for Playground CLI
@@ -93,14 +101,25 @@ site should include:
 ## Branding and GitHub Pages
 
 The final project needs a name and visual identity that do not collide with
-common static WordPress products. Branding work must include live research
-before choosing a name.
+common static WordPress products. Branding work included live research before
+choosing a name.
 
-Planned output:
+Completion evidence:
 
-- a short naming shortlist with conflict notes
-- a chosen name
-- an SVG logo owned by this repository
-- a GitHub Pages landing page with demos, docs, and the Playground launch
-  button
-- a Pages deployment workflow for `adamziel/wp-extensions`
+- `static-site-generator/docs/branding-research.md` records competitor checks,
+  naming iterations, conflict notes, the selected name, and logo iterations.
+- The selected name is **StillPress**.
+- The selected SVG logo lives in this repository and is reused by GitHub Pages.
+- The GitHub Pages site includes landing, get-started, examples, limitations,
+  local logo assets, and the branded Playground launch button.
+- `.github/workflows/deploy-pages.yml` publishes the `docs/` site for
+  `adamziel/wp-extensions`.
+
+## Optional future work
+
+- Add more dynamic warning patterns as new real-world frontend behaviors are
+  reported.
+- Add a portable `serve-static-site.sh` helper only if it stays clearer than the
+  documented `python3 -m http.server 8080` command.
+- Reconsider a Playground-driven commerce export smoke test if it can be made
+  fast, deterministic, and independent of third-party network volatility.
