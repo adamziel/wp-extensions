@@ -1,4 +1,4 @@
-# Playground Static Site Generator
+# StillPress
 
 <a href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json" target="_blank" rel="noopener noreferrer">
   <img src="assets/try-it-in-playground.svg" alt="Try it in WordPress Playground" width="260" height="64" />
@@ -10,7 +10,7 @@ admin UI or from WP-CLI.
 
 The exporter includes:
 
-- an admin screen at `Tools -> Static Site Generator`
+- an admin screen at `Tools -> StillPress`
 - a reload-safe admin progress bar with current action, percent complete, and
   an export log
 - a programmatic `ssgwp_export_static_site()` API
@@ -25,7 +25,7 @@ The exporter includes:
 
 The Blueprint installs this plugin, seeds a richer demo site with pages,
 categories, dated posts, and block content, then opens
-`Tools -> Static Site Generator`.
+`Tools -> StillPress`.
 
 Use the admin screen to download the static ZIP. The ZIP is the published
 static site; save the full Playground site separately if you want to keep an
@@ -81,8 +81,8 @@ Copy this plugin directory into `wp-content/plugins/`:
 cp -R static-site-generator /path/to/wordpress/wp-content/plugins/
 ```
 
-Then activate **Playground Static Site Generator** in `wp-admin -> Plugins`.
-Open `Tools -> Static Site Generator`, choose any extra files you want, and
+Then activate **StillPress** in `wp-admin -> Plugins`.
+Open `Tools -> StillPress`, choose any extra files you want, and
 download the static ZIP. The exporter includes required frontend assets and
 linked site pages automatically. Hosting settings can stay on the default
 unless your hosting provider specifically needs root-relative or full URLs.

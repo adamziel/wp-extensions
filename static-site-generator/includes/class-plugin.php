@@ -33,8 +33,8 @@ final class SSGWP_Plugin {
 	 */
 	public static function register_admin_page() {
 		add_management_page(
-			__( 'Static Site Generator', 'playground-static-site-generator' ),
-			__( 'Static Site Generator', 'playground-static-site-generator' ),
+			__( 'StillPress', 'playground-static-site-generator' ),
+			__( 'StillPress', 'playground-static-site-generator' ),
 			'manage_options',
 			'playground-static-site-generator',
 			array( __CLASS__, 'render_admin_page' )
@@ -75,8 +75,8 @@ final class SSGWP_Plugin {
 		$initial_is_active = is_array( $initial_progress ) && empty( $initial_progress['is_terminal'] );
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Static Site Generator', 'playground-static-site-generator' ); ?></h1>
-			<p><?php esc_html_e( 'Export public WordPress pages and frontend assets as a static zip that can be hosted anywhere.', 'playground-static-site-generator' ); ?></p>
+			<h1><?php esc_html_e( 'StillPress', 'playground-static-site-generator' ); ?></h1>
+			<p><?php esc_html_e( 'Export public WordPress pages and frontend assets as a static ZIP that can be hosted anywhere.', 'playground-static-site-generator' ); ?></p>
 
 			<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post" id="ssgwp-export-form" target="ssgwp-export-download-frame">
 				<input type="hidden" name="action" value="ssgwp_export" />
