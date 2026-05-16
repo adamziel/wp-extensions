@@ -17,6 +17,7 @@ $cli_commands     = ssgwp_blueprint_wp_cli_commands( $cli_blueprint );
 $root_readme      = ssgwp_read_file( $repo_root . '/README.md' );
 $plugin_readme    = ssgwp_read_file( $repo_root . '/static-site-generator/README.md' );
 $audit_plan       = ssgwp_read_file( $repo_root . '/static-site-generator/docs/audit-plan.md' );
+$branding_research = ssgwp_read_file( $repo_root . '/static-site-generator/docs/branding-research.md' );
 
 $delete_default_post_index = ssgwp_find_command_index( $browser_commands, 'wp post delete 1 --force' );
 $hello_world_index         = ssgwp_find_command_index( $browser_commands, '--post_name=hello-world' );
@@ -161,6 +162,16 @@ foreach (
 		'Static generator audit plan includes ' . $audit_heading . '.'
 	);
 }
+
+ssgwp_blueprint_assert(
+	false !== strpos( $branding_research, 'StillPress' )
+		&& false !== strpos( $branding_research, 'Simply Static' )
+		&& false !== strpos( $branding_research, 'Staatic' )
+		&& false !== strpos( $branding_research, 'WP2Static' )
+		&& false !== strpos( $branding_research, 'Static Cache Wrangler' )
+		&& file_exists( $repo_root . '/static-site-generator/assets/stillpress-logo.svg' ),
+	'Static generator branding research records the selected name, competitors, and logo asset.'
+);
 
 /**
  * Decode a blueprint JSON file.
