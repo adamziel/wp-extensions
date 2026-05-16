@@ -1,0 +1,44 @@
+{
+	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
+	"meta": {
+		"title": "Markdown Editor",
+		"description": "Run the Markdown-backed WordPress editor demo in the browser.",
+		"author": "Adam Zielinski",
+		"categories": ["markdown", "editor", "content"]
+	},
+	"landingPage": "/wp-admin/edit.php?post_type=page",
+	"login": true,
+	"preferredVersions": {
+		"wp": "latest",
+		"php": "8.4"
+	},
+	"steps": [
+		{
+			"step": "unzip",
+			"zipFile": {
+				"resource": "url",
+				"url": "https://github.com/adamziel/wp-extensions/releases/download/markdown-editor-latest/wp-markdown-editor.zip"
+			},
+			"extractToPath": "/wordpress"
+		},
+		{
+			"step": "mv",
+			"fromPath": "/wordpress/wp-markdown-editor/content",
+			"toPath": "/markdown-root"
+		},
+		{
+			"step": "mkdir",
+			"path": "/wordpress/wp-content/mu-plugins"
+		},
+		{
+			"step": "mv",
+			"fromPath": "/wordpress/wp-markdown-editor/markdown-editor/vendor",
+			"toPath": "/wordpress/wp-content/mu-plugins/vendor"
+		},
+		{
+			"step": "mv",
+			"fromPath": "/wordpress/wp-markdown-editor/markdown-editor/edit-markdown-mu-plugin.php",
+			"toPath": "/wordpress/wp-content/mu-plugins/edit-markdown-mu-plugin.php"
+		}
+	]
+}

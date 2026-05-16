@@ -6,6 +6,20 @@ Edit a directory of Markdown files in the WordPress block editor.
 
 ### Try The Demo
 
+#### Browser Playground
+
+Open the Markdown Editor demo in the WordPress Playground website:
+
+```text
+https://playground.wordpress.net/?php=8.4&php-extension=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fmarkdown-editor%2Fsqlite-markdown-extension%2Fdist%2Fmanifest.json&blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fmarkdown-editor-browser.json
+```
+
+This browser demo uses the published `sqlite_markdown` PHP.wasm extension and
+loads the sample Markdown tree into Playground's temporary browser filesystem.
+Changes made in the editor stay inside that Playground session.
+
+#### Local Playground CLI
+
 Download the GitHub Release package and start Playground:
 
 ```bash
