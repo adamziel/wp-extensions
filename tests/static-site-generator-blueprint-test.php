@@ -16,6 +16,7 @@ $brew_commands    = ssgwp_blueprint_wp_cli_commands( $brew_blueprint );
 $cli_commands     = ssgwp_blueprint_wp_cli_commands( $cli_blueprint );
 $root_readme      = ssgwp_read_file( $repo_root . '/README.md' );
 $plugin_readme    = ssgwp_read_file( $repo_root . '/static-site-generator/README.md' );
+$audit_plan       = ssgwp_read_file( $repo_root . '/static-site-generator/docs/audit-plan.md' );
 
 $delete_default_post_index = ssgwp_find_command_index( $browser_commands, 'wp post delete 1 --force' );
 $hello_world_index         = ssgwp_find_command_index( $browser_commands, '--post_name=hello-world' );
@@ -144,6 +145,22 @@ ssgwp_blueprint_assert(
 		&& file_exists( $repo_root . '/static-site-generator/assets/try-it-in-playground.svg' ),
 	'Static generator README buttons point to the local branded Playground button asset.'
 );
+
+foreach (
+	array(
+		'Export correctness',
+		'Dynamic WordPress behavior',
+		'Preview and hosting',
+		'CI coverage',
+		'Documentation and demos',
+		'Branding and GitHub Pages',
+	) as $audit_heading
+) {
+	ssgwp_blueprint_assert(
+		false !== strpos( $audit_plan, $audit_heading ),
+		'Static generator audit plan includes ' . $audit_heading . '.'
+	);
+}
 
 /**
  * Decode a blueprint JSON file.
