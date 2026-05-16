@@ -373,6 +373,7 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( 'Choose URL treatment to continue.', $details['dashboard']['current_action'] );
 		$this->assertSame( array( 'done', 'done', 'blocked', 'pending', 'pending', 'pending' ), array_column( $details['dashboard']['checklist'], 'state' ) );
 		$this->assertSame( 'URL treatment', $details['dashboard']['checklist'][2]['label'] );
+		$this->assertSame( 'url_treatment', $details['dashboard']['checklist'][2]['key'] );
 	}
 
 	/**
@@ -414,6 +415,9 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'function checklistStateLabel(state)', $source );
 		$this->assertStringContainsString( 'function syncPrimaryView(session)', $source );
 		$this->assertStringContainsString( 'function isImportLocked(session)', $source );
+		$this->assertStringContainsString( 'function renderStageDecision(session, stageKey)', $source );
+		$this->assertStringContainsString( 'universal-importer-stage-decision', $source );
+		$this->assertStringContainsString( 'universal-importer-card is-importing', $source );
 		$this->assertStringContainsString( 'universal-importer-start-form" class="universal-importer-start', $source );
 		$this->assertStringContainsString( 'data-url-choice="none"', $source );
 		$this->assertStringContainsString( "'primary_session_id' =>", $source );

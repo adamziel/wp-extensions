@@ -715,6 +715,10 @@ final class ImportAdminPage {
 				box-shadow: 0 1px 2px rgba(0,0,0,.04);
 				overflow: hidden;
 			}
+			.universal-importer-card.is-importing {
+				border-color: #c3c4c7;
+				box-shadow: 0 6px 18px rgba(0,0,0,.07);
+			}
 			.universal-importer-card-header,
 			.universal-importer-card-body {
 				padding: 18px 20px;
@@ -770,9 +774,9 @@ final class ImportAdminPage {
 				margin: 14px 0;
 			}
 			.universal-importer-stage-title {
-				font-size: 13px;
+				font-size: 15px;
 				font-weight: 700;
-				margin: 18px 0 8px;
+				margin: 22px 0 10px;
 			}
 			.universal-importer-checklist {
 				display: grid;
@@ -780,17 +784,20 @@ final class ImportAdminPage {
 				grid-template-columns: minmax(0, 1fr);
 				list-style: none;
 				margin: 0 0 14px;
-				max-width: 760px;
+				max-width: 880px;
 				padding: 0;
+			}
+			.universal-importer-card.is-importing .universal-importer-checklist {
+				gap: 12px;
 			}
 			.universal-importer-step {
 				align-items: start;
 				border: 1px solid var(--ui-border);
 				border-radius: 8px;
 				display: grid;
-				gap: 10px;
-				grid-template-columns: 30px minmax(0, 1fr);
-				padding: 10px 12px;
+				gap: 12px;
+				grid-template-columns: 32px minmax(0, 1fr);
+				padding: 13px 14px;
 				position: relative;
 			}
 			.universal-importer-stage-index {
@@ -802,10 +809,12 @@ final class ImportAdminPage {
 				display: inline-flex;
 				font-size: 12px;
 				font-weight: 700;
-				height: 26px;
+				height: 28px;
 				justify-content: center;
-				line-height: 1;
-				width: 26px;
+				line-height: 28px;
+				margin-top: 0;
+				text-align: center;
+				width: 28px;
 			}
 			.universal-importer-step strong {
 				display: block;
@@ -816,6 +825,11 @@ final class ImportAdminPage {
 				display: block;
 				font-size: 12px;
 				margin-top: 3px;
+			}
+			.universal-importer-step .universal-importer-stage-index {
+				align-self: start;
+				display: inline-flex;
+				margin-top: 0;
 			}
 			.universal-importer-step-heading {
 				align-items: baseline;
@@ -853,6 +867,7 @@ final class ImportAdminPage {
 			.universal-importer-step[data-state="active"] {
 				background: #f0f6fc;
 				border-color: #72aee6;
+				box-shadow: inset 3px 0 0 #3858e9;
 			}
 			.universal-importer-step[data-state="active"] .universal-importer-stage-index {
 				background: #3858e9;
@@ -862,6 +877,7 @@ final class ImportAdminPage {
 			.universal-importer-step[data-state="blocked"] {
 				background: #fcf9e8;
 				border-color: #dba617;
+				box-shadow: inset 3px 0 0 #dba617;
 			}
 			.universal-importer-step[data-state="pending"] {
 				background: #fbfbfc;
@@ -905,6 +921,23 @@ final class ImportAdminPage {
 				border-radius: 8px;
 				margin-top: 14px;
 				padding: 14px;
+			}
+			.universal-importer-stage-decision {
+				margin-top: 12px;
+			}
+			.universal-importer-stage-decision h4 {
+				font-size: 13px;
+				margin: 0 0 8px;
+			}
+			.universal-importer-stage-decision .universal-importer-decision {
+				background: #fff;
+				margin-top: 0;
+			}
+			.universal-importer-decision-actions {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				margin: 12px 0 0;
 			}
 			.universal-importer-domain-list {
 				display: grid;
@@ -1185,7 +1218,8 @@ final class ImportAdminPage {
 				var total = summary.total || '?';
 				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : session.status;
 				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>';
-				var html = '<section class="universal-importer-card" data-session-id="' + escapeHtml(session.id) + '">';
+				var importingClass = isImportLocked(session) ? ' is-importing' : '';
+				var html = '<section class="universal-importer-card' + importingClass + '" data-session-id="' + escapeHtml(session.id) + '">';
 				html += '<div class="universal-importer-card-header">';
 				html += '<div><h3 class="universal-importer-source-title">' + escapeHtml(session.source) + '</h3>';
 				html += '<p class="universal-importer-meta">' + mode + '</p></div>';
@@ -1201,12 +1235,12 @@ final class ImportAdminPage {
 				if (dashboard.attention_message) {
 					html += '<div class="notice notice-warning inline universal-importer-attention"><p><strong><?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?></strong><br>' + escapeHtml(dashboard.attention_message) + '</p></div>';
 				}
-				html += renderChecklist(dashboard.checklist || []);
+				html += renderChecklist(dashboard.checklist || [], session);
 				if (session.relationship_warnings && session.relationship_warnings.length) {
 					html += renderRelationshipWarnings(session.relationship_warnings);
 				}
-				if (session.pending_decisions.length) {
-					html += renderDecisions(session);
+				if (remainingDecisions(session).length) {
+					html += renderDecisions(session, remainingDecisions(session));
 				}
 				html += renderActivityLog(dashboard.activity_log || session.recent_events || []);
 				html += renderPipeline(session);
@@ -1217,17 +1251,43 @@ final class ImportAdminPage {
 				return html;
 			}
 
-			function renderChecklist(items) {
+			function renderChecklist(items, session) {
 				if (!items.length) {
 					return '';
 				}
 				var html = '<div class="universal-importer-stage-title"><?php echo esc_js( __( 'Import stages', 'universal-wordpress-importer' ) ); ?></div><ol class="universal-importer-checklist" aria-label="<?php echo esc_js( __( 'Import stages', 'universal-wordpress-importer' ) ); ?>">';
 				items.forEach(function(item) {
 					var state = item.state || 'pending';
-					html += '<li class="universal-importer-step" data-state="' + escapeHtml(state) + '"><span class="universal-importer-stage-index">' + escapeHtml(item.index || '') + '</span><span><span class="universal-importer-step-heading"><strong>' + escapeHtml(item.label || '') + '</strong><span class="universal-importer-step-state">' + escapeHtml(checklistStateLabel(state)) + '</span></span><span>' + escapeHtml(item.detail || '') + '</span></span></li>';
+					var itemHtml = '<li class="universal-importer-step" data-state="' + escapeHtml(state) + '"><span class="universal-importer-stage-index">' + escapeHtml(item.index || '') + '</span><span><span class="universal-importer-step-heading"><strong>' + escapeHtml(item.label || '') + '</strong><span class="universal-importer-step-state">' + escapeHtml(checklistStateLabel(state)) + '</span></span><span>' + escapeHtml(item.detail || '') + '</span>';
+					if (item.key === 'url_treatment') {
+						itemHtml += renderStageDecision(session, 'url_treatment');
+					}
+					itemHtml += '</span></li>';
+					html += itemHtml;
 				});
 				html += '</ol>';
 				return html;
+			}
+
+			function urlDecisions(session) {
+				return (session.pending_decisions || []).filter(function(decision) {
+					return decision.key === 'confirm-first-party-domains';
+				});
+			}
+
+			function remainingDecisions(session) {
+				return (session.pending_decisions || []).filter(function(decision) {
+					return decision.key !== 'confirm-first-party-domains';
+				});
+			}
+
+			function renderStageDecision(session, stageKey) {
+				var decisions = stageKey === 'url_treatment' ? urlDecisions(session) : [];
+				if (!decisions.length) {
+					return '';
+				}
+
+				return '<div class="universal-importer-stage-decision">' + renderDecisions(session, decisions) + '</div>';
 			}
 
 			function checklistStateLabel(state) {
@@ -1364,9 +1424,14 @@ final class ImportAdminPage {
 				return html;
 			}
 
-			function renderDecisions(session) {
-				var html = '<div class="universal-importer-decisions"><h4><?php echo esc_js( __( 'URL treatment', 'universal-wordpress-importer' ) ); ?></h4>';
-				session.pending_decisions.forEach(function(decision) {
+			function renderDecisions(session, decisions) {
+				decisions = decisions || session.pending_decisions || [];
+				var allUrlDecisions = decisions.length && decisions.every(function(decision) {
+					return decision.key === 'confirm-first-party-domains';
+				});
+				var title = allUrlDecisions ? '<?php echo esc_js( __( 'URL treatment', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Import decision', 'universal-wordpress-importer' ) ); ?>';
+				var html = '<div class="universal-importer-decisions"><h4>' + title + '</h4>';
+				decisions.forEach(function(decision) {
 					html += '<div class="universal-importer-decision" data-decision-key="' + escapeHtml(decision.key) + '">';
 					if (decision.key === 'confirm-first-party-domains') {
 						html += renderUrlDecision(session, decision);
@@ -1396,7 +1461,7 @@ final class ImportAdminPage {
 					html += '</span></label>';
 				});
 				html += '</div>';
-				html += '<p><button type="button" class="button button-primary universal-importer-resolve-decision" data-url-choice="selected" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '"><?php echo esc_js( __( 'Rewrite selected domains', 'universal-wordpress-importer' ) ); ?></button> ';
+				html += '<p class="universal-importer-decision-actions"><button type="button" class="button button-primary universal-importer-resolve-decision" data-url-choice="selected" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '"><?php echo esc_js( __( 'Rewrite selected domains', 'universal-wordpress-importer' ) ); ?></button> ';
 				html += '<button type="button" class="button universal-importer-resolve-decision" data-url-choice="all" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '"><?php echo esc_js( __( 'Yes, rewrite all', 'universal-wordpress-importer' ) ); ?></button> ';
 				html += '<button type="button" class="button universal-importer-resolve-decision" data-url-choice="none" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '"><?php echo esc_js( __( 'No, keep all URLs', 'universal-wordpress-importer' ) ); ?></button></p>';
 				return html;
@@ -1798,8 +1863,9 @@ final class ImportAdminPage {
 			$errors         = isset( $summary['errors'] ) ? (int) $summary['errors'] : 0;
 			$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking import state.', 'universal-wordpress-importer' );
 			$display_status = empty( $dashboard['attention_message'] ) ? (string) $session['status'] : __( 'Needs attention', 'universal-wordpress-importer' );
+			$card_class     = $this->is_active_admin_session( $session ) ? 'universal-importer-card is-importing' : 'universal-importer-card';
 			?>
-			<section class="universal-importer-card" data-session-id="<?php echo esc_attr( $session['id'] ); ?>">
+			<section class="<?php echo esc_attr( $card_class ); ?>" data-session-id="<?php echo esc_attr( $session['id'] ); ?>">
 				<div class="universal-importer-card-header">
 					<div>
 						<h3 class="universal-importer-source-title"><?php echo esc_html( $session['source'] ); ?></h3>
@@ -1835,11 +1901,11 @@ final class ImportAdminPage {
 							<p><strong><?php esc_html_e( 'Needs attention', 'universal-wordpress-importer' ); ?></strong><br><?php echo esc_html( (string) $dashboard['attention_message'] ); ?></p>
 						</div>
 					<?php endif; ?>
-					<?php $this->render_dashboard_checklist( isset( $dashboard['checklist'] ) && is_array( $dashboard['checklist'] ) ? $dashboard['checklist'] : array() ); ?>
-					<?php $this->render_pipeline_details( $session ); ?>
+					<?php $this->render_dashboard_checklist( isset( $dashboard['checklist'] ) && is_array( $dashboard['checklist'] ) ? $dashboard['checklist'] : array(), $session ); ?>
 					<?php $this->render_relationship_warnings( $session ); ?>
-					<?php $this->render_pending_decisions( $session ); ?>
+					<?php $this->render_pending_decisions( $session, true ); ?>
 					<?php $this->render_activity_log( isset( $dashboard['activity_log'] ) && is_array( $dashboard['activity_log'] ) ? $dashboard['activity_log'] : $session['recent_events'] ); ?>
+					<?php $this->render_pipeline_details( $session ); ?>
 					<?php if ( ImportSession::STATUS_DONE !== $session['status'] && ImportSession::STATUS_ABORTED !== $session['status'] ) : ?>
 						<p><button type="button" class="button universal-importer-abort" data-session-id="<?php echo esc_attr( $session['id'] ); ?>"><?php esc_html_e( 'Abort', 'universal-wordpress-importer' ); ?></button></p>
 					<?php endif; ?>
@@ -1852,10 +1918,11 @@ final class ImportAdminPage {
 	/**
 	 * Renders the compact high-level import checklist.
 	 *
-	 * @param array<int,array<string,string>> $items Checklist items.
+	 * @param array<int,array<string,string>> $items   Checklist items.
+	 * @param array<string,mixed>             $session Session snapshot.
 	 * @return void
 	 */
-	private function render_dashboard_checklist( array $items ) {
+	private function render_dashboard_checklist( array $items, array $session ) {
 		if ( empty( $items ) ) {
 			return;
 		}
@@ -1873,6 +1940,9 @@ final class ImportAdminPage {
 							<span class="universal-importer-step-state"><?php echo esc_html( $this->dashboard_stage_status_label( $state ) ); ?></span>
 						</span>
 						<span><?php echo esc_html( isset( $item['detail'] ) ? $item['detail'] : '' ); ?></span>
+						<?php if ( isset( $item['key'] ) && 'url_treatment' === $item['key'] ) : ?>
+							<?php $this->render_stage_decision( $session, 'url_treatment' ); ?>
+						<?php endif; ?>
 					</span>
 				</li>
 			<?php endforeach; ?>
@@ -1921,6 +1991,36 @@ final class ImportAdminPage {
 					<li><?php echo esc_html( isset( $event['message'] ) ? $event['message'] : '' ); ?></li>
 				<?php endforeach; ?>
 			</ol>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Renders a pending decision inside the matching checklist stage.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @param string              $stage_key Checklist stage key.
+	 * @return void
+	 */
+	private function render_stage_decision( array $session, $stage_key ) {
+		if ( 'url_treatment' !== $stage_key || empty( $session['pending_decisions'] ) ) {
+			return;
+		}
+
+		$url_decisions = array();
+		foreach ( $session['pending_decisions'] as $decision ) {
+			if ( isset( $decision['key'] ) && 'confirm-first-party-domains' === $decision['key'] ) {
+				$url_decisions[] = $decision;
+			}
+		}
+
+		if ( empty( $url_decisions ) ) {
+			return;
+		}
+
+		?>
+		<div class="universal-importer-stage-decision">
+			<?php $this->render_pending_decisions( $session, false, $url_decisions ); ?>
 		</div>
 		<?php
 	}
@@ -2149,18 +2249,41 @@ final class ImportAdminPage {
 	/**
 	 * Renders pending decision controls for one session snapshot.
 	 *
-	 * @param array<string,mixed> $session Session snapshot.
+	 * @param array<string,mixed>            $session               Session snapshot.
+	 * @param bool                           $exclude_url_decisions Whether to omit URL treatment decisions.
+	 * @param array<int,array<string,mixed>> $decisions             Decision subset to render.
 	 * @return void
 	 */
-	private function render_pending_decisions( array $session ) {
-		if ( empty( $session['pending_decisions'] ) ) {
+	private function render_pending_decisions( array $session, $exclude_url_decisions = false, array $decisions = null ) {
+		$decisions = null === $decisions ? (array) $session['pending_decisions'] : $decisions;
+
+		if ( $exclude_url_decisions ) {
+			$decisions = array_values(
+				array_filter(
+					$decisions,
+					function ( $decision ) {
+						return ! isset( $decision['key'] ) || 'confirm-first-party-domains' !== $decision['key'];
+					}
+				)
+			);
+		}
+
+		if ( empty( $decisions ) ) {
 			return;
+		}
+
+		$all_url_decisions = true;
+		foreach ( $decisions as $decision ) {
+			if ( ! isset( $decision['key'] ) || 'confirm-first-party-domains' !== $decision['key'] ) {
+				$all_url_decisions = false;
+				break;
+			}
 		}
 
 		?>
 		<div class="universal-importer-decisions">
-			<h4><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></h4>
-			<?php foreach ( $session['pending_decisions'] as $decision ) : ?>
+			<h4><?php echo esc_html( $all_url_decisions ? __( 'URL treatment', 'universal-wordpress-importer' ) : __( 'Import decision', 'universal-wordpress-importer' ) ); ?></h4>
+			<?php foreach ( $decisions as $decision ) : ?>
 				<div class="universal-importer-decision" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>">
 					<?php if ( 'confirm-first-party-domains' === $decision['key'] ) : ?>
 						<?php
@@ -2186,7 +2309,7 @@ final class ImportAdminPage {
 								</label>
 							<?php endforeach; ?>
 						</div>
-						<p>
+						<p class="universal-importer-decision-actions">
 							<button type="button" class="button button-primary universal-importer-resolve-decision" data-url-choice="selected" data-session-id="<?php echo esc_attr( $session['id'] ); ?>" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>"><?php esc_html_e( 'Rewrite selected domains', 'universal-wordpress-importer' ); ?></button>
 							<button type="button" class="button universal-importer-resolve-decision" data-url-choice="all" data-session-id="<?php echo esc_attr( $session['id'] ); ?>" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>"><?php esc_html_e( 'Yes, rewrite all', 'universal-wordpress-importer' ); ?></button>
 							<button type="button" class="button universal-importer-resolve-decision" data-url-choice="none" data-session-id="<?php echo esc_attr( $session['id'] ); ?>" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>"><?php esc_html_e( 'No, keep all URLs', 'universal-wordpress-importer' ); ?></button>
@@ -2774,36 +2897,42 @@ final class ImportAdminPage {
 		$stages = array(
 			array(
 				'index'  => '1',
+				'key'    => 'read_source',
 				'label'  => $this->admin_text( 'Read source' ),
 				'detail' => $this->admin_text( 'Not started.' ),
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '2',
+				'key'    => 'prepare_content',
 				'label'  => $this->admin_text( 'Prepare content' ),
 				'detail' => $this->admin_text( 'Not started.' ),
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '3',
+				'key'    => 'url_treatment',
 				'label'  => $this->admin_text( 'URL treatment' ),
 				'detail' => $this->admin_text( 'Not started.' ),
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '4',
+				'key'    => 'import_media',
 				'label'  => $this->admin_text( 'Import media' ),
 				'detail' => $this->admin_text( 'Not started.' ),
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '5',
+				'key'    => 'write_drafts',
 				'label'  => $this->admin_text( 'Write drafts' ),
 				'detail' => $this->admin_text( 'Not started.' ),
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '6',
+				'key'    => 'finish',
 				'label'  => $this->admin_text( 'Finish' ),
 				'detail' => $this->admin_text( 'Not started.' ),
 				'state'  => 'pending',
