@@ -3,30 +3,34 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>Formats - Universal Importer</title>
+	<meta name="description" content="Supported PortPress import formats, including Markdown, HTML, text, EPUB, PDF, WordPress REST, feeds, GitHub repositories, and WXR.">
+	<title>PortPress Import Formats</title>
+	<link rel="icon" href="../assets/portpress-logo.svg">
 	<link rel="stylesheet" href="../styles.css">
 </head>
 <body>
 	<header class="site-header">
-		<a class="product-wordmark" href="./"><span>Universal</span><strong>Importer</strong></a>
+		<a class="product-brand" href="../index.html" aria-label="PortPress home">
+			<img src="../assets/portpress-logo.svg" alt="PortPress" width="320" height="72">
+		</a>
 		<nav aria-label="Main navigation">
-			<a href="./">Overview</a>
-			<a href="get-started.html">Get Started</a>
+			<a href="./">Import</a>
+			<a href="get-started.html">Setup</a>
 			<a href="formats.html" aria-current="page">Formats</a>
 			<a href="examples.html">Examples</a>
-			<a href="../index.html">StillPress</a>
+			<a href="../get-started.html">Export</a>
 			<a href="https://github.com/adamziel/wp-extensions/tree/main/universal-wordpress-importer">GitHub</a>
 		</nav>
 	</header>
 
 	<main class="content">
-		<h1>Formats</h1>
+		<h1>Formats PortPress can import</h1>
 		<p>The importer favors predictable drafts over false fidelity. When a format cannot be mapped cleanly to native blocks, it preserves safe HTML in Classic or Custom HTML blocks rather than inventing structure.</p>
 
 		<section>
 			<h2>Documents</h2>
 			<table class="format-table">
-				<thead><tr><th>Source</th><th>Result</th><th>Notes</th></tr></thead>
+				<thead><tr><th>Source</th><th>Draft result</th><th>Notes</th></tr></thead>
 				<tbody>
 					<tr><td>Markdown</td><td>Headings, paragraphs, lists, quotes, tables, and links</td><td>Nested trees become separate draft pages.</td></tr>
 					<tr><td>HTML</td><td>Native blocks where safe, Classic or Custom HTML otherwise</td><td>Scripts and unsafe attributes are stripped.</td></tr>
@@ -38,9 +42,9 @@
 		</section>
 
 		<section>
-			<h2>Sites and Feeds</h2>
+			<h2>Sites and feeds</h2>
 			<table class="format-table">
-				<thead><tr><th>Source</th><th>Result</th><th>Notes</th></tr></thead>
+				<thead><tr><th>Source</th><th>Draft result</th><th>Notes</th></tr></thead>
 				<tbody>
 					<tr><td>WordPress REST URL</td><td>Posts, pages, featured media, comments, and terms when exposed</td><td>Uses paged REST cursors for resumable imports.</td></tr>
 					<tr><td>WordPress homepage</td><td>REST import when discoverable</td><td>Falls back to an advertised feed or the single page.</td></tr>
@@ -52,7 +56,7 @@
 		</section>
 
 		<section>
-			<h2>PDF Helpers</h2>
+			<h2>PDF helpers</h2>
 			<p>Native PDF extraction is bounded and works best on straightforward text PDFs. For layout-heavy or scanned documents, configure command templates on the host:</p>
 			<pre><code>export UNIVERSAL_IMPORTER_PDF_TEXT_COMMAND='pdftotext -layout {input} {output}'
 export UNIVERSAL_IMPORTER_PDF_OCR_COMMAND='ocrmypdf --skip-text --sidecar {output} {input} {scratch}'</code></pre>

@@ -1,0 +1,115 @@
+{
+	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
+	"meta": {
+		"title": "PortPress Demo",
+		"description": "A guided demo for importing static source files into WordPress and exporting WordPress as static HTML.",
+		"author": "Adam Zielinski",
+		"categories": ["content", "import", "static-sites", "tools"]
+	},
+	"landingPage": "/wp-admin/tools.php?page=portpress-demo",
+	"login": true,
+	"preferredVersions": {
+		"wp": "latest",
+		"php": "8.3"
+	},
+	"features": {
+		"networking": true
+	},
+	"extraLibraries": ["wp-cli"],
+	"steps": [
+		{
+			"step": "installPlugin",
+			"pluginData": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/main/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=20260517-portpress-demo"
+			},
+			"options": {
+				"activate": true,
+				"targetFolderName": "universal-wordpress-importer"
+			}
+		},
+		{
+			"step": "installPlugin",
+			"pluginData": {
+				"resource": "git:directory",
+				"url": "https://github.com/adamziel/wp-extensions",
+				"ref": "main",
+				"refType": "branch",
+				"path": "static-site-generator"
+			},
+			"options": {
+				"activate": true,
+				"targetFolderName": "static-site-generator"
+			}
+		},
+		{
+			"step": "mkdir",
+			"path": "/wordpress/wp-content/mu-plugins"
+		},
+		{
+			"step": "writeFile",
+			"path": "/wordpress/wp-content/mu-plugins/portpress-demo-guide.php",
+			"data": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/main/blueprints/portpress-demo-guide.php"
+			}
+		},
+		{
+			"step": "writeFiles",
+			"writeToPath": "/wordpress/wp-content/uploads/portpress-source",
+			"filesTree": {
+				"resource": "literal:directory",
+				"name": "portpress-source",
+				"files": {
+					"README.md": "# PortPress Sample Repository\n\nThis README.md is the first file to import in the PortPress demo.\n\nIt shows how static source material can become reviewable WordPress content before anything is published.\n\n## Try this first\n\n1. Open Tools -> Universal Importer.\n2. Paste the demo source folder path.\n3. Run a dry run, then run the import.\n",
+					"docs": {
+						"launch-plan.md": "# Launch Plan\n\n- Import the source folder into WordPress drafts.\n- Review converted blocks and internal links.\n- Export the WordPress site as static HTML.\n",
+						"publishing-notes.txt": "Plain text files are accepted too. PortPress keeps them inspectable instead of ignoring useful source material."
+					},
+					"site": {
+						"index.html": "<h1>Static HTML Source</h1><p>This HTML file is here to show that PortPress can import ordinary rendered documents alongside Markdown.</p><p><a href=\"/docs/launch-plan.md\">Internal source links should be reviewed before publishing.</a></p>"
+					}
+				}
+			}
+		},
+		{
+			"step": "setSiteOptions",
+			"options": {
+				"blogname": "PortPress Demo Site",
+				"blogdescription": "Import content, review it in WordPress, export a static snapshot."
+			}
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp option update permalink_structure '/%postname%/'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp rewrite flush --hard"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post delete 1 --force"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp term create category Field-notes --slug=field-notes"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=page --post_status=publish --post_title='About the PortPress Demo' --post_name=about-portpress-demo --post_content='<!-- wp:heading --><h2>About the PortPress Demo</h2><!-- /wp:heading --><!-- wp:paragraph --><p>This page gives the static exporter a normal WordPress page to crawl and package.</p><!-- /wp:paragraph --><!-- wp:list --><ul><li>Imported drafts can be reviewed before publishing.</li><li>Published pages can be exported as static HTML.</li><li>Same-site links and assets are rewritten for portable hosting.</li></ul><!-- /wp:list -->'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=page --post_status=publish --post_title='Static Hosting Checklist' --post_name=static-hosting-checklist --post_content='<!-- wp:heading --><h2>Static Hosting Checklist</h2><!-- /wp:heading --><!-- wp:paragraph --><p>After downloading the ZIP, extract it and preview the folder over local HTTP before hosting it.</p><!-- /wp:paragraph --><!-- wp:paragraph --><p>Check the homepage, dated posts, page links, CSS, images, and any JavaScript that expects HTTP instead of file URLs.</p><!-- /wp:paragraph -->'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=post --post_status=publish --post_title='Field Report: First Export' --post_name=first-export --post_category=field-notes --post_date='2026-05-17 09:00:00' --post_content='<!-- wp:paragraph --><p>This post gives the demo a dated permalink and archive entry for the static exporter.</p><!-- /wp:paragraph --><!-- wp:quote --><blockquote class=\"wp-block-quote\"><p>A useful export is inspectable before it is hosted.</p></blockquote><!-- /wp:quote -->'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post create --post_type=post --post_status=publish --post_title='Field Report: Asset Check' --post_name=asset-check --post_category=field-notes --post_date='2026-05-17 10:00:00' --post_content='<!-- wp:paragraph --><p>This second post makes archive and internal-link checks less trivial.</p><!-- /wp:paragraph --><!-- wp:paragraph --><p>Open this page after export to confirm the generated static site has more than one route.</p><!-- /wp:paragraph -->'"
+		}
+	]
+}

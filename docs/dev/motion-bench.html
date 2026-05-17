@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="robots" content="noindex">
+	<title>PortPress Motion Bench</title>
+	<style>
+		:root {
+			color-scheme: light;
+			--ink: #111827;
+			--muted: #56616f;
+			--paper: #fff;
+			--soft: #f5f7f8;
+			--line: #d9e1e8;
+			--blue: #3858e9;
+			--green: #0f766e;
+			--shadow: 0 18px 48px rgba(17, 24, 39, .08);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			background: var(--paper);
+			color: var(--ink);
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			line-height: 1.5;
+			margin: 0;
+			padding: clamp(20px, 4vw, 56px);
+		}
+
+		main {
+			display: grid;
+			gap: 28px;
+			margin: 0 auto;
+			max-width: 1220px;
+		}
+
+		header {
+			display: grid;
+			gap: 10px;
+		}
+
+		h1,
+		h2,
+		h3,
+		p {
+			margin: 0;
+		}
+
+		h1 {
+			font-size: clamp(34px, 5vw, 58px);
+			line-height: 1.05;
+		}
+
+		h2 {
+			font-size: clamp(24px, 3vw, 34px);
+			line-height: 1.1;
+		}
+
+		h3 {
+			font-size: 17px;
+			line-height: 1.2;
+		}
+
+		p,
+		li {
+			color: var(--muted);
+			font-size: 17px;
+		}
+
+		a {
+			color: #173f8a;
+			font-weight: 800;
+			text-decoration-thickness: 2px;
+			text-underline-offset: 4px;
+		}
+
+		.panel {
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			box-shadow: var(--shadow);
+			display: grid;
+			gap: 18px;
+			padding: clamp(16px, 2.5vw, 26px);
+		}
+
+		.preview-shell {
+			background: var(--soft);
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			overflow: hidden;
+		}
+
+		.preview-shell img,
+		.preview-shell svg {
+			display: block;
+			height: auto;
+			width: 100%;
+		}
+
+		.frame-grid {
+			display: grid;
+			gap: 14px;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+
+		.frame-card {
+			background: var(--soft);
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			display: grid;
+			gap: 10px;
+			overflow: hidden;
+			padding: 12px;
+		}
+
+		.frame-card strong {
+			color: var(--ink);
+			font-size: 13px;
+			letter-spacing: .06em;
+			text-transform: uppercase;
+		}
+
+		.frame-card svg {
+			background: #fff;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			display: block;
+			height: auto;
+			width: 100%;
+		}
+
+		.bench-frame *,
+		.bench-frame .stage-chip.export {
+			animation-delay: calc(var(--bench-time) * -1s) !important;
+			animation-play-state: paused !important;
+		}
+
+		.check-grid {
+			display: grid;
+			gap: 16px;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.check-card {
+			background: var(--soft);
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			padding: 16px;
+		}
+
+		.check-card ul {
+			display: grid;
+			gap: 8px;
+			margin: 12px 0 0;
+			padding-left: 22px;
+		}
+
+		.controls {
+			align-items: center;
+			display: flex;
+			flex-wrap: wrap;
+			gap: 12px;
+		}
+
+		button {
+			background: var(--blue);
+			border: 0;
+			border-radius: 7px;
+			color: #fff;
+			cursor: pointer;
+			font: inherit;
+			font-weight: 800;
+			padding: 10px 14px;
+		}
+
+		button.secondary {
+			background: var(--green);
+		}
+
+		.status {
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		@media (max-width: 760px) {
+			body {
+				padding: 18px;
+			}
+
+			.frame-grid,
+			.check-grid {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<header>
+			<p><a href="../index.html">Back to docs preview</a></p>
+			<h1>PortPress Motion Bench</h1>
+			<p>This bench loads the production SVG, renders the live animation, and freezes the same asset at review frames so motion edits can be judged visually.</p>
+		</header>
+
+		<section class="panel" aria-labelledby="live-title">
+			<h2 id="live-title">Live Asset</h2>
+			<div class="preview-shell">
+				<img src="../assets/portpress-flow.svg" alt="Live PortPress flow animation">
+			</div>
+			<div class="controls">
+				<button type="button" data-reload>Reload asset</button>
+				<button type="button" class="secondary" data-open>Open production page</button>
+				<span class="status" data-status>Loading frame set...</span>
+			</div>
+		</section>
+
+		<section class="panel" aria-labelledby="frames-title">
+			<h2 id="frames-title">Timeline Frames</h2>
+			<p>These frames sample the animation at fixed points. Every frame should be legible, centered, and free of accidental overlaps.</p>
+			<div class="frame-grid" data-frames></div>
+		</section>
+
+		<section class="panel" aria-labelledby="check-title">
+			<h2 id="check-title">Agent Review Checklist</h2>
+			<div class="check-grid">
+				<article class="check-card">
+					<h3>Composition</h3>
+					<ul>
+						<li>Three stages align to one grid and one baseline.</li>
+						<li>The center stage does not overpower the source and output stages.</li>
+						<li>No label depends on tiny text to explain the workflow.</li>
+					</ul>
+				</article>
+				<article class="check-card">
+					<h3>Motion</h3>
+					<ul>
+						<li>Every frozen frame looks intentional, not like a glitch.</li>
+						<li>Only one idea moves at a time per direction.</li>
+						<li>Reduced-motion keeps a useful static diagram.</li>
+					</ul>
+				</article>
+				<article class="check-card">
+					<h3>Responsive</h3>
+					<ul>
+						<li>The diagram remains understandable at 390px wide.</li>
+						<li>SVG text remains readable or becomes decorative only.</li>
+						<li>The caption supports the figure instead of competing with it.</li>
+					</ul>
+				</article>
+				<article class="check-card">
+					<h3>Production</h3>
+					<ul>
+						<li>The same SVG is used here and on the landing page.</li>
+						<li>The SVG parses with `xmllint`.</li>
+						<li>The docs test covers required labels and reduced-motion CSS.</li>
+					</ul>
+				</article>
+			</div>
+		</section>
+	</main>
+
+	<script>
+		const ASSET_URL = '../assets/portpress-flow.svg';
+		const DURATION_SECONDS = 7.2;
+		const FRAME_POINTS = [
+			{ label: '0%', seconds: 0 },
+			{ label: '20%', seconds: DURATION_SECONDS * .2 },
+			{ label: '40%', seconds: DURATION_SECONDS * .4 },
+			{ label: '60%', seconds: DURATION_SECONDS * .6 },
+			{ label: '80%', seconds: DURATION_SECONDS * .8 },
+			{ label: '100%', seconds: DURATION_SECONDS }
+		];
+
+		const frameRoot = document.querySelector('[data-frames]');
+		const status = document.querySelector('[data-status]');
+
+		async function loadFrames() {
+			status.textContent = 'Loading frame set...';
+			frameRoot.textContent = '';
+
+			const response = await fetch(`${ASSET_URL}?cache=${Date.now()}`);
+			const svgText = await response.text();
+			const parser = new DOMParser();
+
+			for (const point of FRAME_POINTS) {
+				const card = document.createElement('article');
+				card.className = 'frame-card';
+
+				const label = document.createElement('strong');
+				label.textContent = `${point.label} - ${point.seconds.toFixed(2)}s`;
+
+				const svgDocument = parser.parseFromString(svgText, 'image/svg+xml');
+				const svg = svgDocument.documentElement;
+				svg.classList.add('bench-frame');
+				svg.style.setProperty('--bench-time', point.seconds.toFixed(3));
+
+				card.append(label, document.importNode(svg, true));
+				frameRoot.append(card);
+			}
+
+			requestAnimationFrame(() => {
+				for (const svg of frameRoot.querySelectorAll('svg')) {
+					const seconds = Number(svg.style.getPropertyValue('--bench-time')) || 0;
+					if (typeof svg.pauseAnimations === 'function') {
+						svg.pauseAnimations();
+					}
+					if (typeof svg.setCurrentTime === 'function') {
+						svg.setCurrentTime(seconds);
+					}
+				}
+			});
+
+			status.textContent = 'Frame set ready.';
+		}
+
+		document.querySelector('[data-reload]').addEventListener('click', loadFrames);
+		document.querySelector('[data-open]').addEventListener('click', () => {
+			window.location.href = '../index.html';
+		});
+
+		loadFrames().catch((error) => {
+			status.textContent = `Could not load frames: ${error.message}`;
+		});
+	</script>
+</body>
+</html>

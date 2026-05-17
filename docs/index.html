@@ -3,82 +3,170 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>StillPress - Static exports for WordPress</title>
+	<meta name="description" content="PortPress imports source material into WordPress drafts and exports WordPress sites as static snapshots.">
+	<title>PortPress - WordPress import and static export workflows</title>
+	<link rel="icon" href="assets/portpress-logo.svg">
 	<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 	<header class="site-header">
-		<a class="brand" href="index.html" aria-label="StillPress home">
-			<img src="assets/stillpress-logo.svg" alt="StillPress" width="200" height="60">
+		<a class="brand" href="index.html" aria-label="PortPress home">
+			<img src="assets/portpress-logo.svg" alt="PortPress" width="320" height="72">
 		</a>
 		<nav aria-label="Main navigation">
-			<a href="get-started.html">Get Started</a>
+			<a href="importer/">Import</a>
+			<a href="get-started.html">Export</a>
 			<a href="examples.html">Examples</a>
-			<a href="limitations.html">Limitations</a>
-			<a href="importer/">Universal Importer</a>
-			<a href="https://github.com/adamziel/wp-extensions/tree/main/static-site-generator">GitHub</a>
+			<a href="limitations.html">Limits</a>
+			<a href="https://github.com/adamziel/wp-extensions/tree/main">GitHub</a>
 		</nav>
 	</header>
 
 	<main>
 		<section class="hero">
-			<div class="hero-copy">
-				<p class="eyebrow">WordPress to portable static HTML</p>
-				<h1>StillPress exports WordPress sites into files you can preview, inspect, zip, and host anywhere.</h1>
-				<p class="lede">Run it in browser Playground, Playground CLI, regular WordPress admin, or WP-CLI. It crawls public pages, rewrites same-site URLs, copies frontend assets, and keeps the export portable by default.</p>
-				<div class="actions">
-					<a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json">
-						<img src="assets/try-it-in-playground.svg" alt="Try it in WordPress Playground" width="260" height="64">
-					</a>
-					<a class="secondary-action" href="get-started.html">Read the quickstart</a>
+			<div class="hero-grid">
+				<div class="hero-copy">
+					<p class="eyebrow">Content portability for WordPress</p>
+					<h1>Import source material. Export static sites.</h1>
+					<p class="lede">PortPress turns files, feeds, archives, PDFs, repositories, WXR exports, and old sites into WordPress drafts. When the site is ready, it exports public pages as static HTML, assets, and same-site links.</p>
+					<div class="actions">
+						<a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fportpress-demo.json">
+							<img src="assets/try-it-in-playground.svg" alt="Try in WordPress Playground">
+						</a>
+						<a class="text-link" href="importer/get-started.html">Read import setup</a>
+					</div>
+				</div>
+				<div class="hero-panel hero-demo-panel" aria-label="PortPress first-run demo">
+					<span class="route-label">Start here</span>
+					<h2>Start with one guided Playground.</h2>
+					<p>The demo opens to a checklist, sample source files, seeded WordPress content, and both tools already installed.</p>
+					<div class="demo-mini-list">
+						<div><strong>1</strong><span>Import README.md into WordPress drafts</span></div>
+						<div><strong>2</strong><span>Review generated WordPress content</span></div>
+						<div><strong>3</strong><span>Export static HTML and assets</span></div>
+					</div>
 				</div>
 			</div>
-			<div class="export-diagram" aria-label="Static export flow">
-				<div>WordPress</div>
-				<span></span>
-				<div>StillPress</div>
-				<span></span>
-				<div>HTML, CSS, JS, media</div>
+		</section>
+
+		<section class="section flow-showcase">
+			<div class="section-inner">
+				<div class="section-header flow-header">
+					<div>
+						<h2>The PortPress loop</h2>
+						<p>Use WordPress as the review bench between messy source material and portable static output.</p>
+					</div>
+				</div>
+				<figure class="flow-figure">
+					<img src="assets/portpress-flow.svg" alt="Static files feeding into a WordPress review press, then coming out as a static HTML site package with CSS and assets" width="1120" height="430">
+				</figure>
+				<p class="flow-caption">The same demo follows this loop: source files become reviewable WordPress drafts, and reviewed pages become a portable static site package.</p>
 			</div>
 		</section>
 
 		<section class="section">
-			<h2>What It Exports</h2>
-			<div class="feature-grid">
-				<article>
-					<h3>Pages That Stay Pages</h3>
-					<p>Each discovered URL is rendered and written to its own static path, including linked posts, pages, categories, authors, and finite query pages.</p>
-				</article>
-				<article>
-					<h3>Portable Links</h3>
-					<p>Relative URLs are the default, so exports work from a ZIP preview, subfolder, GitHub Pages, or a local HTTP server.</p>
-				</article>
-				<article>
-					<h3>Frontend Assets</h3>
-					<p>The exporter copies uploads, active theme assets, active plugin assets, WordPress frontend assets, and same-site assets discovered in HTML and copied text files.</p>
-				</article>
-				<article>
-					<h3>CLI and Admin</h3>
-					<p>Use the WordPress admin screen for one-click ZIP downloads or `wp static-site export` for repeatable command-line builds.</p>
-				</article>
+			<div class="section-inner">
+				<div class="section-header">
+					<div>
+						<h2>What to do in the demo</h2>
+						<p>Playground runs in the browser and is disposable. Use it to learn the workflow, then move to a real WordPress install or WP-CLI for persistent storage and larger files.</p>
+					</div>
+					<div class="callout">
+						<p>Open the demo, then use this source path in the importer:</p>
+						<code>/wordpress/wp-content/uploads/portpress-source</code>
+						<div class="card-actions">
+							<a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fportpress-demo.json">
+								<img src="assets/try-it-in-playground.svg" alt="Try in WordPress Playground">
+							</a>
+						</div>
+					</div>
+				</div>
+				<div class="demo-path">
+					<article class="demo-step accent-green">
+						<span class="route-label">1. Static files -> WordPress</span>
+						<h3>Import README.md</h3>
+						<p>Open the importer, paste the bundled source path, run a dry run, then create drafts from Markdown, HTML, and text files.</p>
+					</article>
+					<article class="demo-step accent-amber">
+						<span class="route-label">Review</span>
+						<h3>Inspect drafts</h3>
+						<p>Open the generated WordPress content, check titles and blocks, and make URL decisions before publishing anything.</p>
+					</article>
+					<article class="demo-step accent-blue">
+						<span class="route-label">2. WordPress -> Static HTML</span>
+						<h3>Export the site</h3>
+						<p>Export the seeded site or your imported content, download the ZIP, then inspect static HTML, CSS, assets, and rewritten links.</p>
+					</article>
+				</div>
 			</div>
 		</section>
 
-		<section class="section split">
-			<div>
-				<h2>Demo Sites</h2>
-				<p>Start with the seeded StillPress demo for a compact content site, or open the BrewCommerce demo to test WooCommerce pages, products, cart snapshots, images, and product grid CSS.</p>
+		<section class="section">
+			<div class="section-inner">
+				<div class="section-header">
+					<div>
+						<h2>When you are ready for real work</h2>
+						<p>The demo teaches the loop. The import and export guides go deeper when you are working with a real source or site.</p>
+					</div>
+				</div>
+				<div class="two-grid">
+					<article class="card tool-card accent-green">
+						<span class="route-label">I have source material</span>
+						<h3>Import into WordPress drafts</h3>
+						<p>Prepare content, import media, record progress, and pause for URL decisions instead of guessing.</p>
+						<dl class="tool-facts">
+							<div><dt>Input</dt><dd>Files, feeds, archives, PDFs, repositories, WXR, or sites</dd></div>
+							<div><dt>Output</dt><dd>Reviewable WordPress drafts and media</dd></div>
+						</dl>
+						<div class="card-actions">
+							<a class="text-link" href="importer/">Open import docs</a>
+							<a class="text-link" href="importer/formats.html">Supported formats</a>
+						</div>
+					</article>
+					<article class="card tool-card accent-blue">
+						<span class="route-label">I have a WordPress site</span>
+						<h3>Export static HTML and assets</h3>
+						<p>Render public pages, rewrite same-site links, copy assets, and package files for static hosting.</p>
+						<dl class="tool-facts">
+							<div><dt>Input</dt><dd>A WordPress site with public pages</dd></div>
+							<div><dt>Output</dt><dd>Static HTML, CSS, assets, and links</dd></div>
+						</dl>
+						<div class="card-actions">
+							<a class="text-link" href="get-started.html">Open export docs</a>
+							<a class="text-link" href="examples.html">Export examples</a>
+						</div>
+					</article>
+				</div>
 			</div>
-			<p><a class="text-link" href="examples.html">Open examples and test instructions</a></p>
 		</section>
 
-		<section class="section split">
-			<div>
-				<h2>Universal Importer</h2>
-				<p>WP Extensions also ships a resumable importer for folders, ZIPs, Markdown, HTML, EPUB, WXR, PDFs, WordPress sites, GitHub repositories, and RSS or Atom feeds.</p>
+		<section class="section section-soft">
+			<div class="section-inner">
+				<h2>Operational notes</h2>
+				<div class="four-grid">
+					<article class="card accent-green">
+						<h3>Imports are review-first</h3>
+						<p>Imported content should be inspected as drafts before it becomes public.</p>
+					</article>
+					<article class="card accent-blue">
+						<h3>Exports are snapshots</h3>
+						<p>Dynamic features such as checkout, forms, comments, and REST writes still need a backend or replacement service.</p>
+					</article>
+					<article class="card accent-amber">
+						<h3>WP-CLI is the repeatable path</h3>
+						<p>Use command-line flows when imports or exports need to run reliably in local automation or CI.</p>
+					</article>
+					<article class="card accent-red">
+						<h3>Preview over HTTP</h3>
+						<p>Static exports can be opened from disk for quick checks, but JavaScript modules and production-like behavior need a local HTTP server.</p>
+					</article>
+				</div>
 			</div>
-			<p><a class="text-link" href="importer/">Open importer docs</a></p>
 		</section>
 	</main>
+
+	<footer class="site-footer">
+		<p>PortPress brings WordPress content portability workflows into one place: import source material, review drafts, export snapshots, and inspect the result.</p>
+	</footer>
 </body>
 </html>

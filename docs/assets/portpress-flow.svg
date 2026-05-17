@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="430" viewBox="0 0 1120 430" role="img" aria-labelledby="title desc">
+	<title id="title">PortPress import and export workflow</title>
+	<desc id="desc">Source files feed into a WordPress review press, then a static site package with HTML and assets comes out.</desc>
+	<defs>
+		<symbol id="wordpress-mark" viewBox="0 0 680 680">
+			<path fill="currentColor" d="M340 26.7a311.8 311.8 0 0 1 175.2 53.5A314.3 314.3 0 0 1 628.7 218a312.9 312.9 0 0 1-28.9 297.2A314.3 314.3 0 0 1 462 628.7a312.9 312.9 0 0 1-297.2-28.9A314.3 314.3 0 0 1 51.3 462a312.9 312.9 0 0 1 28.9-297.2A314.3 314.3 0 0 1 218 51.3a311.4 311.4 0 0 1 122-24.6m0-20a333.3 333.3 0 1 0 0 666.6 333.3 333.3 0 0 0 0-666.6z"/>
+			<path fill="currentColor" d="M62.2 340c0 110 64 205 156.6 250L86.3 227a276.7 276.7 0 0 0-24 113zm465.3-14c0-34.4-12.3-58.1-22.9-76.6-14-23-27.3-42.3-27.3-65.2 0-25.5 19.4-49.3 46.7-49.3l3.6.3a276.7 276.7 0 0 0-187.6-73c-97 0-182.4 49.8-232 125.2 6.4.2 12.6.4 17.8.4 29 0 74-3.6 74-3.6 15-.8 16.8 21.2 1.8 23 0 0-15 1.7-31.8 2.6L271 510.6l60.8-182.3-43.3-118.5c-15-1-29.2-2.7-29.2-2.7-15-.9-13.2-23.8 1.8-22.9 0 0 45.9 3.6 73.2 3.6 29 0 74-3.6 74-3.6 15-.9 16.7 21.1 1.8 23 0 0-15 1.7-31.8 2.6l100.4 298.5 28.6-90.8c12.8-39.6 20.2-67.8 20.2-91.5zM345 364.3l-83.4 242.2a277.9 277.9 0 0 0 170.8-4.5 25.3 25.3 0 0 1-2-3.8zm238.9-157.6a213.3 213.3 0 0 1 1.8 28.6c0 28.2-5.3 59.9-21.1 99.5L479.7 580a277.6 277.6 0 0 0 138-240.1 276.5 276.5 0 0 0-34-133.3z"/>
+		</symbol>
+		<linearGradient id="paper-bg" x1="0" x2="1" y1="0" y2="1">
+			<stop offset="0" stop-color="#ffffff"/>
+			<stop offset=".62" stop-color="#fbfdff"/>
+			<stop offset="1" stop-color="#eef6f8"/>
+		</linearGradient>
+		<linearGradient id="deck" x1="0" x2="1" y1="0" y2="1">
+			<stop offset="0" stop-color="#ffffff"/>
+			<stop offset="1" stop-color="#f5f8fb"/>
+		</linearGradient>
+		<linearGradient id="press-face" x1="0" x2="1" y1="0" y2="1">
+			<stop offset="0" stop-color="#182236"/>
+			<stop offset="1" stop-color="#0d1424"/>
+		</linearGradient>
+		<linearGradient id="steel" x1="0" x2="1" y1="0" y2="1">
+			<stop offset="0" stop-color="#f8fbfd"/>
+			<stop offset=".48" stop-color="#dce7ef"/>
+			<stop offset="1" stop-color="#f7fafc"/>
+		</linearGradient>
+		<linearGradient id="teal-line" x1="0" x2="1">
+			<stop offset="0" stop-color="#0f766e"/>
+			<stop offset="1" stop-color="#2dd4bf"/>
+		</linearGradient>
+		<linearGradient id="blue-line" x1="0" x2="1">
+			<stop offset="0" stop-color="#7dd3fc"/>
+			<stop offset="1" stop-color="#3858e9"/>
+		</linearGradient>
+		<filter id="soft-shadow" x="-20%" y="-30%" width="140%" height="160%">
+			<feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#111827" flood-opacity=".10"/>
+		</filter>
+		<filter id="lift-shadow" x="-20%" y="-30%" width="140%" height="160%">
+			<feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="#111827" flood-opacity=".14"/>
+		</filter>
+		<style>
+			.label { fill: #173f8a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 11px; font-weight: 850; letter-spacing: .12em; text-anchor: middle; text-transform: uppercase; }
+			.title { fill: #111827; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 24px; font-weight: 850; text-anchor: middle; }
+			.copy { fill: #56616f; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; font-weight: 750; text-anchor: middle; }
+			.mono { fill: #173f8a; font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 12px; font-weight: 850; }
+			.feed-line, .export-line { stroke-linecap: round; stroke-width: 7; stroke-dasharray: 44 420; animation: line-flow 7.2s cubic-bezier(.45, 0, .2, 1) infinite; }
+			.export-line { animation-delay: -3.35s; }
+			.press-wheel { animation: wheel-turn 7.2s linear infinite; transform-box: fill-box; transform-origin: center; }
+			.wp-stamp { animation: stamp 7.2s cubic-bezier(.42, 0, .2, 1) infinite; transform-box: fill-box; transform-origin: center; }
+			.output-stack { animation: output-settle 7.2s cubic-bezier(.42, 0, .2, 1) infinite; transform-box: fill-box; transform-origin: center; }
+			.status-dot { animation: status-dot 7.2s ease-in-out infinite; }
+			@keyframes line-flow {
+				0%, 8% { stroke-dashoffset: 430; opacity: 0; }
+				17%, 48% { opacity: .9; }
+				58%, 100% { stroke-dashoffset: 0; opacity: 0; }
+			}
+			@keyframes wheel-turn {
+				to { transform: rotate(360deg); }
+			}
+			@keyframes stamp {
+				0%, 24%, 60%, 100% { transform: translateY(0) scale(1); }
+				34%, 45% { transform: translateY(4px) scale(.96); }
+			}
+			@keyframes output-settle {
+				0%, 58%, 100% { transform: translateY(0); }
+				72%, 82% { transform: translateY(-6px); }
+			}
+			@keyframes status-dot {
+				0%, 55% { opacity: .25; }
+				68%, 100% { opacity: 1; }
+			}
+			@media (prefers-reduced-motion: reduce) {
+				.feed-line,
+				.export-line,
+				.press-wheel,
+				.wp-stamp,
+				.output-stack,
+				.status-dot {
+					animation: none;
+				}
+				.motion-sheet,
+				.motion-output {
+					display: none;
+				}
+			}
+		</style>
+	</defs>
+
+	<rect width="1120" height="430" fill="url(#paper-bg)"/>
+	<path d="M104 327C245 350 399 361 560 361C721 361 875 350 1016 327" fill="none" stroke="#d7e4ec" stroke-width="2"/>
+	<path d="M170 256C282 256 333 238 413 231" fill="none" stroke="#dce8ef" stroke-linecap="round" stroke-width="18"/>
+	<path d="M707 231C787 238 838 256 950 256" fill="none" stroke="#dce8ef" stroke-linecap="round" stroke-width="18"/>
+	<path class="feed-line" d="M170 256C282 256 333 238 413 231" fill="none" stroke="url(#teal-line)"/>
+	<path class="export-line" d="M707 231C787 238 838 256 950 256" fill="none" stroke="url(#blue-line)"/>
+
+	<g transform="translate(200 48)">
+		<text class="label">1. Import</text>
+		<text class="title" y="36">Static files</text>
+		<text class="copy" y="62">HTML, Markdown, WXR, media</text>
+	</g>
+	<g transform="translate(560 48)">
+		<text class="label">Review</text>
+		<text class="title" y="36">WordPress</text>
+		<text class="copy" y="62">drafts, media, URL decisions</text>
+	</g>
+	<g transform="translate(920 48)">
+		<text class="label">2. Export</text>
+		<text class="title" y="36">Static site</text>
+		<text class="copy" y="62">HTML, CSS, assets, links</text>
+	</g>
+
+	<g transform="translate(108 161)" filter="url(#soft-shadow)">
+		<path d="M28 123H238L211 179H54z" fill="#eef5f8" stroke="#d0dee8" stroke-width="2"/>
+		<path d="M52 100H226L238 124H40z" fill="#ffffff" stroke="#d0dee8" stroke-width="2"/>
+		<g transform="translate(40 42)" filter="url(#lift-shadow)">
+			<path d="M0 18C0 8 8 0 18 0H110L148 38V144C148 154 140 162 130 162H18C8 162 0 154 0 144z" fill="#ffffff" stroke="#111827" stroke-width="3"/>
+			<path d="M110 0v38h38" fill="none" stroke="#111827" stroke-linejoin="round" stroke-width="3"/>
+			<text class="mono" x="26" y="52">HTML</text>
+			<path d="M26 76h84M26 101h66M26 126h78" stroke="#0f766e" stroke-linecap="round" stroke-width="7"/>
+		</g>
+		<g transform="translate(106 0)" filter="url(#lift-shadow)">
+			<rect width="112" height="134" rx="16" fill="#f8fbff" stroke="#3858e9" stroke-width="3"/>
+			<text class="mono" x="25" y="36">MD</text>
+			<path d="M25 60h58M25 84h70M25 108h52" stroke="#3858e9" stroke-linecap="round" stroke-width="7"/>
+		</g>
+		<g transform="translate(112 148)" filter="url(#lift-shadow)">
+			<path d="M0 0H134L160 27V66C160 78 150 88 138 88H0z" fill="#fff7ed" stroke="#f59e0b" stroke-width="4"/>
+			<path d="M134 0l26 27H96L68 0" fill="none" stroke="#f59e0b" stroke-linecap="round" stroke-linejoin="round" stroke-width="4"/>
+			<text class="mono" x="67" y="51" fill="#92400e">WXR</text>
+		</g>
+	</g>
+
+	<g class="motion-sheet" filter="url(#lift-shadow)">
+		<path d="M214 211H290L315 236V304H214z" fill="#ffffff" stroke="#0f766e" stroke-width="3"/>
+		<path d="M290 211v25h25" fill="none" stroke="#0f766e" stroke-linejoin="round" stroke-width="3"/>
+		<text class="mono" x="231" y="246">README.md</text>
+		<path d="M231 270h52M231 289h39" stroke="#0f766e" stroke-linecap="round" stroke-width="6"/>
+		<animateTransform attributeName="transform" type="translate" dur="7.2s" repeatCount="indefinite" values="-28 0;214 -29;214 -29" keyTimes="0;.52;1" calcMode="spline" keySplines=".45 0 .2 1;0 0 1 1"/>
+		<animate attributeName="opacity" dur="7.2s" repeatCount="indefinite" values="0;1;1;0;0" keyTimes="0;.08;.52;.64;1"/>
+	</g>
+
+	<g transform="translate(390 135)" filter="url(#soft-shadow)">
+		<path d="M66 116H274C298 116 318 136 318 160V224C318 248 298 268 274 268H66C42 268 22 248 22 224V160C22 136 42 116 66 116z" fill="#ffffff" stroke="#cbd8e2" stroke-width="2"/>
+		<path d="M65 70H275C301 70 322 91 322 117V169H18V117C18 91 39 70 65 70z" fill="url(#press-face)"/>
+		<path d="M18 163H322V225C322 251 301 272 275 272H65C39 272 18 251 18 225z" fill="#ffffff" stroke="#cbd8e2" stroke-width="2"/>
+		<path d="M69 98H252" stroke="#31405a" stroke-linecap="round" stroke-width="11"/>
+		<circle cx="78" cy="118" r="8" fill="#7dd3fc"/>
+		<circle cx="108" cy="118" r="8" fill="#f59e0b"/>
+		<circle cx="138" cy="118" r="8" fill="#0f766e"/>
+		<rect x="64" y="189" width="212" height="22" rx="11" fill="#e7eef5"/>
+		<path d="M88 200h122" stroke="#0f766e" stroke-linecap="round" stroke-width="7"/>
+		<rect x="72" y="230" width="196" height="12" rx="6" fill="#dbeafe"/>
+		<g transform="translate(78 16)">
+			<g class="press-wheel">
+				<circle cx="92" cy="92" r="70" fill="url(#steel)" stroke="#cbd8e2" stroke-width="5"/>
+				<circle cx="92" cy="92" r="45" fill="#ffffff" stroke="#d5e1ea" stroke-width="5"/>
+				<path d="M92 28v31M92 125v31M28 92h31M125 92h31M47 47l22 22M115 115l22 22M137 47l-22 22M69 115l-22 22" stroke="#b8c7d2" stroke-linecap="round" stroke-width="5"/>
+			</g>
+		</g>
+		<g transform="translate(110 48)">
+			<g class="wp-stamp">
+				<circle cx="60" cy="60" r="52" fill="#eef6fb" stroke="#d4e1eb" stroke-width="6"/>
+				<circle cx="60" cy="60" r="38" fill="#ffffff" stroke="#c4d2dd" stroke-width="5"/>
+				<use href="#wordpress-mark" x="29" y="29" width="62" height="62" color="#32373c"/>
+			</g>
+		</g>
+		<path d="M4 202H53" stroke="#0f766e" stroke-linecap="round" stroke-width="11"/>
+		<path d="M287 202H336" stroke="#3858e9" stroke-linecap="round" stroke-width="11"/>
+		<path d="M108 288H232" stroke="#cbd8e2" stroke-linecap="round" stroke-width="12"/>
+	</g>
+
+	<g class="motion-output" filter="url(#lift-shadow)">
+		<path d="M707 211H807C822 211 834 223 834 238V317H707z" fill="#ffffff" stroke="#3858e9" stroke-width="3"/>
+		<path d="M707 211H834V245H707z" fill="#111827"/>
+		<circle cx="730" cy="228" r="6" fill="#f59e0b"/>
+		<circle cx="754" cy="228" r="6" fill="#7dd3fc"/>
+		<circle cx="778" cy="228" r="6" fill="#0f766e"/>
+		<path d="M733 273h76M733 295h56" stroke="#0f766e" stroke-linecap="round" stroke-width="7"/>
+		<animateTransform attributeName="transform" type="translate" dur="7.2s" begin="3.05s" repeatCount="indefinite" values="-76 -4; -76 -4; 34 10; 74 18; 74 18" keyTimes="0; .10; .34; .52; 1" calcMode="spline" keySplines=".45 0 .2 1; .45 0 .2 1; .45 0 .2 1; .45 0 .2 1"/>
+		<animate attributeName="opacity" dur="7.2s" begin="3.05s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;.08;.2;.54;.64;1"/>
+	</g>
+
+	<g transform="translate(784 100)" filter="url(#soft-shadow)">
+		<g class="output-stack">
+		<path d="M63 66H238C258 66 274 82 274 102V252C274 272 258 288 238 288H63C43 288 27 272 27 252V102C27 82 43 66 63 66z" fill="#f8fbfd" stroke="#d5e1ea" stroke-width="2"/>
+		<path d="M42 46H224C244 46 260 62 260 82V230C260 250 244 266 224 266H42C22 266 6 250 6 230V82C6 62 22 46 42 46z" fill="#ffffff" stroke="#cbd8e2" stroke-width="2"/>
+		<path d="M42 46H224C244 46 260 62 260 82V110H6V82C6 62 22 46 42 46z" fill="#111827"/>
+		<circle cx="43" cy="78" r="8" fill="#f59e0b"/>
+		<circle cx="73" cy="78" r="8" fill="#7dd3fc"/>
+		<circle cx="103" cy="78" r="8" fill="#0f766e"/>
+		<rect x="42" y="145" width="63" height="58" rx="14" fill="#eff6ff" stroke="#3858e9" stroke-width="6"/>
+		<path d="M139 152h70M139 176h48M139 200h60" stroke="#0f766e" stroke-linecap="round" stroke-width="7"/>
+		<path d="M43 232H217" stroke="#dbeafe" stroke-linecap="round" stroke-width="13"/>
+		<g transform="translate(50 258)">
+			<path d="M0 0H175C190 0 202 12 202 27V62H0z" fill="#f8fafc" stroke="#cbd8e2" stroke-width="3"/>
+			<rect x="16" y="15" width="16" height="14" rx="3" fill="#eff6ff" stroke="#3858e9" stroke-width="3"/>
+			<text class="mono" x="43" y="29">index.html</text>
+			<rect x="16" y="40" width="16" height="14" rx="3" fill="#ecfdf5" stroke="#0f766e" stroke-width="3"/>
+			<text class="mono" x="43" y="54">assets/</text>
+		</g>
+		<g class="status-dot" transform="translate(-3 34)">
+			<circle cx="32" cy="32" r="30" fill="#ecfdf5" stroke="#0f766e" stroke-width="5"/>
+			<path d="M17 33l11 11 21-25" fill="none" stroke="#0f766e" stroke-linecap="round" stroke-linejoin="round" stroke-width="7"/>
+		</g>
+		</g>
+	</g>
+</svg>
