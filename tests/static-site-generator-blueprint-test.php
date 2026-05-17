@@ -7,20 +7,23 @@
 
 $repo_root = dirname( __DIR__ );
 
-$browser_blueprint = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-browser.json' );
-$brew_blueprint    = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-brewcommerce.json' );
-$cli_blueprint     = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-cli-export.json' );
+$browser_blueprint   = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-browser.json' );
+$brew_blueprint      = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-brewcommerce.json' );
+$cli_blueprint       = ssgwp_blueprint_decode( $repo_root . '/blueprints/static-site-generator-cli-export.json' );
+$portpress_blueprint = ssgwp_blueprint_decode( $repo_root . '/blueprints/portpress-demo.json' );
 
-$browser_commands = ssgwp_blueprint_wp_cli_commands( $browser_blueprint );
-$brew_commands    = ssgwp_blueprint_wp_cli_commands( $brew_blueprint );
-$cli_commands     = ssgwp_blueprint_wp_cli_commands( $cli_blueprint );
-$root_readme      = ssgwp_read_file( $repo_root . '/README.md' );
-$plugin_readme    = ssgwp_read_file( $repo_root . '/static-site-generator/README.md' );
-$plugin_file      = ssgwp_read_file( $repo_root . '/static-site-generator/static-site-generator.php' );
-$plugin_admin     = ssgwp_read_file( $repo_root . '/static-site-generator/includes/class-plugin.php' );
-$audit_plan       = ssgwp_read_file( $repo_root . '/static-site-generator/docs/audit-plan.md' );
+$browser_commands   = ssgwp_blueprint_wp_cli_commands( $browser_blueprint );
+$brew_commands      = ssgwp_blueprint_wp_cli_commands( $brew_blueprint );
+$cli_commands       = ssgwp_blueprint_wp_cli_commands( $cli_blueprint );
+$portpress_commands = ssgwp_blueprint_wp_cli_commands( $portpress_blueprint );
+$root_readme        = ssgwp_read_file( $repo_root . '/README.md' );
+$plugin_readme      = ssgwp_read_file( $repo_root . '/static-site-generator/README.md' );
+$plugin_file        = ssgwp_read_file( $repo_root . '/static-site-generator/static-site-generator.php' );
+$plugin_admin       = ssgwp_read_file( $repo_root . '/static-site-generator/includes/class-plugin.php' );
+$audit_plan         = ssgwp_read_file( $repo_root . '/static-site-generator/docs/audit-plan.md' );
 $branding_research = ssgwp_read_file( $repo_root . '/static-site-generator/docs/branding-research.md' );
-$brew_wxr         = ssgwp_read_file( $repo_root . '/blueprints/static-site-generator-brewcommerce-content.xml' );
+$brew_wxr           = ssgwp_read_file( $repo_root . '/blueprints/static-site-generator-brewcommerce-content.xml' );
+$portpress_guide    = ssgwp_read_file( $repo_root . '/blueprints/portpress-demo-guide.php' );
 
 $delete_default_post_index = ssgwp_find_command_index( $browser_commands, 'wp post delete 1 --force' );
 $hello_world_index         = ssgwp_find_command_index( $browser_commands, '--post_name=hello-world' );
@@ -136,6 +139,38 @@ ssgwp_blueprint_assert(
 ssgwp_blueprint_assert(
 	ssgwp_command_contains( $cli_commands, 'wp static-site export --output=/exports/static-site.zip --fetch-mode=internal' ),
 	'CLI export blueprint runs the static export command with the Playground-safe fetch mode.'
+);
+
+ssgwp_blueprint_assert(
+	'/wp-admin/tools.php?page=portpress-demo' === $portpress_blueprint['landingPage'],
+	'PortPress demo blueprint lands on the guided demo page.'
+);
+
+ssgwp_blueprint_assert(
+	false !== strpos( $portpress_blueprint['meta']['title'], 'PortPress Demo' )
+		&& ssgwp_blueprint_has_static_generator_install( $portpress_blueprint )
+		&& ssgwp_blueprint_step_contains( $portpress_blueprint, 'universal-wordpress-importer-0.1.0.zip' ),
+	'PortPress demo blueprint installs both import and static export tools.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_blueprint_step_contains( $portpress_blueprint, 'portpress-demo-guide.php' )
+		&& ssgwp_blueprint_step_contains( $portpress_blueprint, '/wordpress/wp-content/uploads/portpress-source' )
+		&& ssgwp_blueprint_step_contains( $portpress_blueprint, 'README.md' ),
+	'PortPress demo blueprint writes the guide and README.md source folder.'
+);
+
+ssgwp_blueprint_assert(
+	ssgwp_command_contains( $portpress_commands, 'wp static-site export' ) === false,
+	'PortPress demo blueprint teaches the export workflow instead of auto-downloading a ZIP.'
+);
+
+ssgwp_blueprint_assert(
+	false !== strpos( $portpress_guide, 'PortPress demo' )
+		&& false !== strpos( $portpress_guide, 'Open importer' )
+		&& false !== strpos( $portpress_guide, 'Open static export' )
+		&& false !== strpos( $portpress_guide, '/wordpress/wp-content/uploads/portpress-source' ),
+	'PortPress demo guide explains the two important actions after landing.'
 );
 
 ssgwp_blueprint_assert(

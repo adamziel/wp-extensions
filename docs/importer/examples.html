@@ -3,57 +3,78 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>Examples - Universal Importer</title>
+	<meta name="description" content="PortPress import examples for bundled sample content, RSS or Atom feeds, WordPress site URLs, GitHub repositories, and CLI smoke tests.">
+	<title>PortPress Import Examples</title>
+	<link rel="icon" href="../assets/portpress-logo.svg">
 	<link rel="stylesheet" href="../styles.css">
 </head>
 <body>
 	<header class="site-header">
-		<a class="product-wordmark" href="./"><span>Universal</span><strong>Importer</strong></a>
+		<a class="product-brand" href="../index.html" aria-label="PortPress home">
+			<img src="../assets/portpress-logo.svg" alt="PortPress" width="320" height="72">
+		</a>
 		<nav aria-label="Main navigation">
-			<a href="./">Overview</a>
-			<a href="get-started.html">Get Started</a>
+			<a href="./">Import</a>
+			<a href="get-started.html">Setup</a>
 			<a href="formats.html">Formats</a>
 			<a href="examples.html" aria-current="page">Examples</a>
-			<a href="../index.html">StillPress</a>
+			<a href="../get-started.html">Export</a>
 			<a href="https://github.com/adamziel/wp-extensions/tree/main/universal-wordpress-importer">GitHub</a>
 		</nav>
 	</header>
 
 	<main class="content">
-		<h1>Examples</h1>
-		<p>These examples are deliberately small enough to verify quickly and realistic enough to exercise the importer pipeline.</p>
+		<h1>Import examples</h1>
+		<p>These examples are small enough to verify quickly and realistic enough to exercise source detection, preparation, media handling, and resumable sessions.</p>
 
 		<section>
-			<h2>Bundled Playground Source</h2>
-			<p>Open the demo, paste this path, and run a dry run before creating drafts:</p>
-			<pre><code>/wordpress/wp-content/plugins/universal-wordpress-importer/examples/playground-import</code></pre>
-			<p>The sample includes Markdown, HTML with a stripped script, plain text, and a nested appendix.</p>
+			<h2>Bundled Playground source</h2>
+			<div class="two-grid">
+				<article class="card accent-green">
+					<h3>Open the demo</h3>
+					<p><a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fportpress-demo.json"><img src="../assets/try-it-in-playground.svg" alt="Try in WordPress Playground"></a></p>
+					<p>Run a dry run before creating drafts.</p>
+				</article>
+				<article class="card accent-blue">
+					<h3>Use this source path</h3>
+					<pre><code>/wordpress/wp-content/uploads/portpress-source</code></pre>
+					<p>The sample includes README.md, Markdown notes, ordinary HTML, and plain text.</p>
+				</article>
+			</div>
 		</section>
 
 		<section>
-			<h2>RSS or Atom Feed</h2>
-			<p>Paste a public feed URL into the source field. The importer creates one draft per current feed item and resolves relative feed media against the item URL.</p>
-			<pre><code>https://wordpress.org/news/feed/</code></pre>
-		</section>
-
-		<section>
-			<h2>WordPress Site URL</h2>
-			<p>Paste a homepage or REST root. The importer tries the WordPress REST API first, then an advertised RSS or Atom feed, then the single page.</p>
-			<pre><code>https://example.com/
+			<h2>Source URLs</h2>
+			<div class="two-grid">
+				<article class="card accent-amber">
+					<h3>RSS or Atom feed</h3>
+					<p>The importer creates one draft per current feed item and resolves relative feed media against the item URL.</p>
+					<pre><code>https://wordpress.org/news/feed/</code></pre>
+				</article>
+				<article class="card accent-green">
+					<h3>WordPress site URL</h3>
+					<p>Paste a homepage or REST root. The importer tries REST first, then an advertised RSS or Atom feed, then the single page.</p>
+					<pre><code>https://example.com/
 https://example.com/wp-json/</code></pre>
+				</article>
+			</div>
 		</section>
 
 		<section>
-			<h2>GitHub Repository</h2>
-			<p>Use a public repository URL when the content already lives in GitHub.</p>
-			<pre><code>https://github.com/example/docs/tree/main/content</code></pre>
-		</section>
-
-		<section>
-			<h2>Host CLI Smoke Test</h2>
-			<p>Run a focused import from the repository checkout:</p>
-			<pre><code>wp universal-importer import ./universal-wordpress-importer/examples/playground-import
+			<h2>Repository and CLI examples</h2>
+			<div class="two-grid">
+				<article class="card accent-blue">
+					<h3>GitHub repository</h3>
+					<p>Use a public repository URL when the content already lives in GitHub.</p>
+					<pre><code>https://github.com/example/docs/tree/main/content</code></pre>
+				</article>
+				<article class="card accent-red">
+					<h3>Host CLI smoke test</h3>
+					<p>Run a focused import from the repository checkout:</p>
+					<pre><code>wp universal-importer import ./universal-wordpress-importer/examples/playground-import
 wp universal-importer status import_...</code></pre>
+				</article>
+			</div>
 		</section>
 	</main>
 </body>

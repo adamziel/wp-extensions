@@ -3,53 +3,62 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>Get Started - Universal Importer</title>
+	<meta name="description" content="Start a PortPress import session in WordPress Playground, WordPress admin, or WP-CLI and review imported content as drafts.">
+	<title>PortPress Import Setup</title>
+	<link rel="icon" href="../assets/portpress-logo.svg">
 	<link rel="stylesheet" href="../styles.css">
 </head>
 <body>
 	<header class="site-header">
-		<a class="product-wordmark" href="./"><span>Universal</span><strong>Importer</strong></a>
+		<a class="product-brand" href="../index.html" aria-label="PortPress home">
+			<img src="../assets/portpress-logo.svg" alt="PortPress" width="320" height="72">
+		</a>
 		<nav aria-label="Main navigation">
-			<a href="./">Overview</a>
-			<a href="get-started.html" aria-current="page">Get Started</a>
+			<a href="./">Import</a>
+			<a href="get-started.html" aria-current="page">Setup</a>
 			<a href="formats.html">Formats</a>
 			<a href="examples.html">Examples</a>
-			<a href="../index.html">StillPress</a>
+			<a href="../get-started.html">Export</a>
 			<a href="https://github.com/adamziel/wp-extensions/tree/main/universal-wordpress-importer">GitHub</a>
 		</nav>
 	</header>
 
 	<main class="content">
-		<h1>Get Started</h1>
-		<p>Use Playground for a quick browser test, or install the plugin in a WordPress site when you need real storage, larger files, or repeatable WP-CLI runs.</p>
+		<h1>Start an import session</h1>
+		<p>Use PortPress in Playground for a quick browser test, or install the current import plugin in WordPress when you need real storage, larger files, or repeatable WP-CLI runs.</p>
 
 		<section>
-			<h2>Browser Playground</h2>
-			<p>Open the demo, then choose <strong>Tools -> Universal Importer</strong>. Use the bundled source path below for a first import.</p>
-			<p><a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Funiversal-wordpress-importer-demo.json"><img src="../assets/try-it-in-playground.svg" alt="Try it in WordPress Playground" width="260" height="64"></a></p>
-			<pre><code>/wordpress/wp-content/plugins/universal-wordpress-importer/examples/playground-import</code></pre>
+			<h2>1. Try the Playground demo</h2>
+			<p>The demo opens a PortPress guide with the importer, exporter, and sample source folder already set up. Paste the bundled source path below, then run a dry run before creating drafts.</p>
+			<p><a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fportpress-demo.json"><img src="../assets/try-it-in-playground.svg" alt="Try in WordPress Playground"></a></p>
+			<pre><code>/wordpress/wp-content/uploads/portpress-source</code></pre>
 		</section>
 
 		<section>
-			<h2>Regular WordPress Admin</h2>
+			<h2>2. Install in WordPress</h2>
 			<pre><code>cp -R universal-wordpress-importer /path/to/wordpress/wp-content/plugins/</code></pre>
-			<p>Activate <strong>Universal WordPress Importer</strong>, open <strong>Tools -> Universal Importer</strong>, choose the source type, and start with a dry run when you want to inspect what will be created.</p>
+			<p>Activate <strong>Universal WordPress Importer</strong>, open <strong>Tools -> Universal Importer</strong>, choose the source type, and start with a dry run when you want to inspect what will be created. This is the current implementation name for the import workflow.</p>
 		</section>
 
 		<section>
-			<h2>WP-CLI</h2>
+			<h2>3. Run imports from WP-CLI</h2>
+			<p>CLI runs use the same durable tables as the admin UI, so a session can pause for a decision and resume later.</p>
 			<pre><code>wp plugin activate universal-wordpress-importer
 wp universal-importer import ./content-export.zip
 wp universal-importer status import_...
 wp universal-importer tick import_...</code></pre>
-			<p>CLI runs use the same durable tables as the admin UI, so a session can pause for a decision and resume later.</p>
 		</section>
 
 		<section>
-			<h2>URL Treatment</h2>
+			<h2>4. Decide URL treatment deliberately</h2>
 			<p>When imported content contains absolute links to the old site, the importer asks whether those hosts should move to this WordPress site. Confirm only first-party domains; social networks and external references should usually stay unchanged.</p>
 			<pre><code>wp universal-importer decide import_... confirm-first-party-domains \
   --confirmed-domains=example.com,www.example.com</code></pre>
+		</section>
+
+		<section>
+			<h2>5. Review drafts</h2>
+			<p>The importer writes draft pages so you can inspect titles, hierarchy, media, stripped scripts, rewritten links, and block conversion before publishing anything.</p>
 		</section>
 	</main>
 </body>

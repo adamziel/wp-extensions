@@ -3,61 +3,89 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>Get Started - StillPress</title>
+	<meta name="description" content="Set up the PortPress static export workflow in WordPress, WordPress Playground, or WP-CLI and export a static site ZIP or folder.">
+	<title>PortPress Export - Export WordPress to static files</title>
+	<link rel="icon" href="assets/portpress-logo.svg">
 	<link rel="stylesheet" href="styles.css">
 </head>
 <body>
 	<header class="site-header">
-		<a class="brand" href="index.html"><img src="assets/stillpress-logo.svg" alt="StillPress" width="200" height="60"></a>
+		<a class="product-brand" href="index.html" aria-label="PortPress home">
+			<img src="assets/portpress-logo.svg" alt="PortPress" width="320" height="72">
+		</a>
 		<nav aria-label="Main navigation">
-			<a href="get-started.html" aria-current="page">Get Started</a>
+			<a href="get-started.html" aria-current="page">Export</a>
 			<a href="examples.html">Examples</a>
-			<a href="limitations.html">Limitations</a>
-			<a href="importer/">Universal Importer</a>
+			<a href="limitations.html">Limits</a>
+			<a href="importer/">Import</a>
 			<a href="https://github.com/adamziel/wp-extensions/tree/main/static-site-generator">GitHub</a>
 		</nav>
 	</header>
 
-	<main class="content">
-		<h1>Get Started</h1>
-		<p>StillPress works in four environments: browser Playground, Playground CLI, regular WordPress admin, and regular WordPress WP-CLI.</p>
-
-		<section>
-			<h2>Browser Playground</h2>
-			<p>Open the demo Blueprint, then use <strong>Tools -> StillPress</strong> to download the ZIP.</p>
-			<p><a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fstatic-site-generator-browser.json"><img src="assets/try-it-in-playground.svg" alt="Try it in WordPress Playground" width="260" height="64"></a></p>
+	<main>
+		<section class="product-hero stillpress">
+			<div class="hero-grid">
+				<div class="hero-copy">
+					<p class="eyebrow">Static export workflow</p>
+					<h1>Export WordPress as a static snapshot.</h1>
+					<p class="lede">PortPress crawls public URLs, writes HTML files, copies frontend assets, and rewrites same-site links so a WordPress site can be previewed, zipped, and hosted on static infrastructure.</p>
+					<div class="actions">
+						<a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fportpress-demo.json">
+							<img src="assets/try-it-in-playground.svg" alt="Try in WordPress Playground">
+						</a>
+						<a class="text-link" href="examples.html">See export demos</a>
+					</div>
+				</div>
+				<div class="workflow-panel" aria-label="PortPress static export workflow">
+					<div class="flow-list">
+						<div class="flow-item"><strong>1. Discover URLs</strong><span>Start from public WordPress URLs that should become static pages.</span></div>
+						<div class="flow-item"><strong>2. Render pages</strong><span>Visit those URLs through WordPress or internal rendering.</span></div>
+						<div class="flow-item"><strong>3. Package output</strong><span>Rewrite same-site links, copy assets, and download a ZIP or folder.</span></div>
+					</div>
+				</div>
+			</div>
 		</section>
 
-		<section>
-			<h2>Playground CLI</h2>
-			<pre><code>mkdir -p ./static-site-output
+		<div class="content">
+			<section>
+				<h2>Choose an export path</h2>
+				<div class="two-grid">
+					<article class="card accent-blue">
+						<h3>Browser Playground</h3>
+						<p>Fastest way to see the export workflow. The PortPress demo installs both tools, seeds sample content, and opens a guide that links to the static export screen.</p>
+						<p><a class="playground-button" href="https://playground.wordpress.net/?blueprint-url=https%3A%2F%2Fraw.githubusercontent.com%2Fadamziel%2Fwp-extensions%2Fmain%2Fblueprints%2Fportpress-demo.json"><img src="assets/try-it-in-playground.svg" alt="Try in WordPress Playground"></a></p>
+					</article>
+					<article class="card accent-green">
+						<h3>Regular WordPress admin</h3>
+						<p>Use this for a real site when you want one-click ZIP downloads and persistent media.</p>
+						<pre><code>cp -R static-site-generator /path/to/wordpress/wp-content/plugins/</code></pre>
+						<p>Activate <strong>StillPress</strong>, then open <strong>Tools -> StillPress</strong>. This is the current implementation name for the static export workflow.</p>
+					</article>
+				</div>
+			</section>
+
+			<section>
+				<h2>Run repeatable exports</h2>
+				<p>Use Playground CLI for disposable WordPress runtimes, or WP-CLI from a real WordPress root for scheduled or repeatable static builds.</p>
+				<pre><code>mkdir -p ./static-site-output
 npx @wp-playground/cli@latest run-blueprint \
 	--mount=./static-site-generator:/wordpress/wp-content/plugins/static-site-generator \
 	--mount=./static-site-output:/exports \
 	--blueprint=./blueprints/static-site-generator-cli-export.json</code></pre>
-			<p>The generated ZIP is written to <code>./static-site-output/static-site.zip</code>.</p>
-		</section>
-
-		<section>
-			<h2>Regular WordPress Admin</h2>
-			<pre><code>cp -R static-site-generator /path/to/wordpress/wp-content/plugins/</code></pre>
-			<p>Activate <strong>StillPress</strong>, then open <strong>Tools -> StillPress</strong>. The default portable link mode is the right choice for ZIP previews, subfolders, and GitHub Pages.</p>
-		</section>
-
-		<section>
-			<h2>Regular WordPress WP-CLI</h2>
-			<pre><code>wp plugin activate static-site-generator
+				<p>The generated ZIP is written to <code>./static-site-output/static-site.zip</code>.</p>
+				<pre><code>wp plugin activate static-site-generator
 wp static-site export --output=./static-site.zip --fetch-mode=auto
 wp static-site export --output-dir=./static-site --fetch-mode=auto</code></pre>
-			<p>Useful flags include <code>--url-mode=relative</code>, <code>--url-mode=root</code>, <code>--url-mode=absolute</code>, <code>--fetch-mode=internal</code>, <code>--generate-sitemap</code>, <code>--generate-robots</code>, and <code>--report</code>.</p>
-		</section>
+				<p>Useful flags include <code>--url-mode=relative</code>, <code>--url-mode=root</code>, <code>--url-mode=absolute</code>, <code>--fetch-mode=internal</code>, <code>--generate-sitemap</code>, <code>--generate-robots</code>, and <code>--report</code>.</p>
+			</section>
 
-		<section>
-			<h2>Preview The Export</h2>
-			<p>After extracting the ZIP, run a local HTTP server from the extracted folder:</p>
-			<pre><code>python3 -m http.server 8080</code></pre>
-			<p>Then open <code>http://localhost:8080/</code>. Direct <code>file://</code> previews are useful for quick HTML and CSS checks, but local HTTP is the closer match for production hosting.</p>
-		</section>
+			<section>
+				<h2>Preview before hosting</h2>
+				<p>After extracting the ZIP, run a local HTTP server from the extracted folder:</p>
+				<pre><code>python3 -m http.server 8080</code></pre>
+				<p>Then open <code>http://localhost:8080/</code>. Direct <code>file://</code> previews are useful for basic HTML and CSS checks, but local HTTP is closer to production hosting.</p>
+			</section>
+		</div>
 	</main>
 </body>
 </html>
