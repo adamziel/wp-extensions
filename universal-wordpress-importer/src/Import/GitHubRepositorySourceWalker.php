@@ -10,6 +10,7 @@ namespace UniversalImporter\Import;
 // phpcs:disable WordPress.WP.AlternativeFunctions -- Remote repository archives are cached as importer-managed files.
 
 use RuntimeException;
+use Throwable;
 
 /**
  * Seeds GitHub repository URLs into the durable source queue as zip archives.
@@ -315,7 +316,7 @@ final class GitHubRepositorySourceWalker {
 
 			try {
 				$files = $this->git_fetcher->fetch( $session, $candidate, $this->cache_directory );
-			} catch ( RuntimeException $exception ) {
+			} catch ( Throwable $exception ) {
 				$metadata                      = $state->get_metadata();
 				$metadata['github_git_status'] = 'unavailable';
 				$metadata['error']             = $exception->getMessage();

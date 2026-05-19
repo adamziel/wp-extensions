@@ -9,6 +9,7 @@ namespace UniversalImporter\Import;
 
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 /**
  * Coordinates one resumable import worker tick.
@@ -433,7 +434,7 @@ final class ImportRunner {
 			$this->schedule_next_tick_if_needed( $current );
 
 			return 'processed';
-		} catch ( RuntimeException $exception ) {
+		} catch ( Throwable $exception ) {
 			$this->store->record_event(
 				$session->get_id(),
 				new ImportProgressEvent(

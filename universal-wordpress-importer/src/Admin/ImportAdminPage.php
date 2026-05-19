@@ -1196,13 +1196,33 @@ final class ImportAdminPage {
 					headers: headers,
 					body: window.FormData && body instanceof FormData ? body : body.toString()
 				}).then(function(response) {
-					return response.json();
+					return response.text().then(function(text) {
+						var payload;
+						try {
+							payload = text ? JSON.parse(text) : null;
+						} catch (error) {
+							throw new Error(nonJsonResponseMessage(response, text));
+						}
+						if (!response.ok && payload && payload.data && payload.data.message) {
+							throw new Error(payload.data.message);
+						}
+						return payload;
+					});
 				}).then(function(payload) {
 					if (!payload || !payload.success) {
 						throw new Error(payload && payload.data && payload.data.message ? payload.data.message : 'Importer request failed.');
 					}
 					return payload.data;
 				});
+			}
+
+			function nonJsonResponseMessage(response, text) {
+				var status = response && response.status ? 'HTTP ' + response.status + ': ' : '';
+				var excerpt = String(text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+				if (excerpt.length > 180) {
+					excerpt = excerpt.slice(0, 177) + '...';
+				}
+				return status + '<?php echo esc_js( __( 'Importer request returned a non-JSON response.', 'universal-wordpress-importer' ) ); ?>' + (excerpt ? ' ' + excerpt : '');
 			}
 
 			function filePath(file) {

@@ -48,8 +48,10 @@ const html = `<!doctype html>
 	window.fetch = function(url, options) {
 		window.__fetchCalls.push({ url: url, options: options });
 		return Promise.resolve({
-			json: function() {
-				return Promise.resolve({
+			ok: true,
+			status: 200,
+			text: function() {
+				return Promise.resolve(JSON.stringify({
 					success: true,
 					data: {
 						id: 'session-1',
@@ -60,7 +62,7 @@ const html = `<!doctype html>
 						recent_events: [],
 						pending_decisions: []
 					}
-				});
+				}));
 			}
 		});
 	};

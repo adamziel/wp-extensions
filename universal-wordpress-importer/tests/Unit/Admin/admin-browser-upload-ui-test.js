@@ -150,6 +150,22 @@ const sessions = new Element('universal-importer-sessions');
 const notice = new Element('universal-importer-notice');
 const noticeParagraph = { textContent: '' };
 const fetchCalls = [];
+let nextFetchResponse = {
+	ok: true,
+	status: 200,
+	body: JSON.stringify({
+		success: true,
+		data: {
+			id: 'session-1',
+			source: 'browser-upload',
+			status: 'done',
+			dry_run: true,
+			progress: { total: 0, completed: 0, errors: 0 },
+			recent_events: [],
+			pending_decisions: []
+		}
+	})
+};
 
 const elements = {
 	'universal-importer-start-form': form,
@@ -183,20 +199,12 @@ const context = {
 	},
 	fetch(url, options) {
 		fetchCalls.push({ url, options });
+		const response = nextFetchResponse;
 		return Promise.resolve({
-			json() {
-				return Promise.resolve({
-					success: true,
-					data: {
-						id: 'session-1',
-						source: 'browser-upload',
-						status: 'done',
-						dry_run: true,
-						progress: { total: 0, completed: 0, errors: 0 },
-						recent_events: [],
-						pending_decisions: []
-					}
-				});
+			ok: response.ok,
+			status: response.status,
+			text() {
+				return Promise.resolve(response.body);
 			}
 		});
 	},
@@ -307,6 +315,23 @@ dropzone.dispatch('drop', {
 
 	if (body.values.url_rewrite_mode !== 'ask') {
 		throw new Error('Upload request did not include the URL rewrite mode.');
+	}
+
+	nextFetchResponse = {
+		ok: false,
+		status: 500,
+		body: '<p>There has been a critical error on this website.</p>'
+	};
+	form.dispatch('submit', { preventDefault() {} });
+	await flushPromises();
+	await flushPromises();
+
+	if (!noticeParagraph.textContent.includes('HTTP 500:') || !noticeParagraph.textContent.includes('There has been a critical error')) {
+		throw new Error('Non-JSON AJAX failure was not surfaced clearly: ' + noticeParagraph.textContent);
+	}
+
+	if (noticeParagraph.textContent.includes('Unexpected token')) {
+		throw new Error('Raw JSON parse error leaked into the admin notice: ' + noticeParagraph.textContent);
 	}
 })().catch((error) => {
 	process.stderr.write(error.stack + '\n');

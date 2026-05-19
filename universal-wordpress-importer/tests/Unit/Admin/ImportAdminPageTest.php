@@ -413,6 +413,9 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( "filePreview.addEventListener('keydown'", $source );
 		$this->assertStringContainsString( "event.key === 'ArrowDown'", $source );
 		$this->assertStringContainsString( 'data-tree-kind', $source );
+		$this->assertStringContainsString( 'response.text()', $source );
+		$this->assertStringContainsString( 'function nonJsonResponseMessage(response, text)', $source );
+		$this->assertStringContainsString( 'Importer request returned a non-JSON response.', $source );
 		$this->assertStringContainsString( 'URL treatment', $source );
 		$this->assertStringContainsString( 'Ask when old URLs are found', $source );
 		$this->assertStringContainsString( 'Keep URLs unchanged', $source );

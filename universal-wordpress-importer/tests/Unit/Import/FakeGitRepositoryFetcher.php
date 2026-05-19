@@ -9,7 +9,7 @@ namespace UniversalImporter\Tests\Unit\Import;
 
 // phpcs:disable WordPress.WP.AlternativeFunctions -- Unit fixtures use isolated temporary files without WordPress loaded.
 
-use RuntimeException;
+use Exception;
 use UniversalImporter\Import\GitRepositoryFetcherInterface;
 use UniversalImporter\Import\ImportCacheDirectory;
 use UniversalImporter\Import\ImportSession;
@@ -68,7 +68,7 @@ final class FakeGitRepositoryFetcher implements GitRepositoryFetcherInterface {
 	 * @param array<string,mixed>  $repo            Parsed repository data.
 	 * @param ImportCacheDirectory $cache_directory Cache directory.
 	 * @return array<int,array<string,mixed>>
-	 * @throws RuntimeException When configured to fail.
+	 * @throws Exception When configured to fail.
 	 */
 	public function fetch( ImportSession $session, array $repo, ImportCacheDirectory $cache_directory ) {
 		$this->requests[] = $repo;
@@ -76,7 +76,7 @@ final class FakeGitRepositoryFetcher implements GitRepositoryFetcherInterface {
 
 		if ( isset( $this->ref_failures[ $ref ] ) ) {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Unit-test diagnostics are not rendered directly.
-			throw new RuntimeException( $this->ref_failures[ $ref ] );
+			throw new Exception( $this->ref_failures[ $ref ] );
 		}
 
 		$source_path = isset( $repo['source_path'] ) ? trim( (string) $repo['source_path'], '/' ) : '';
