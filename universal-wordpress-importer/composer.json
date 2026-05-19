@@ -5,7 +5,8 @@
   "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=7.2.24",
-    "wp-php-toolkit/data-liberation": "^0.1.5"
+    "wp-php-toolkit/data-liberation": "^0.1.5",
+    "wp-php-toolkit/git": "^0.1.5"
   },
   "require-dev": {
     "dealerdirect/phpcodesniffer-composer-installer": "^1.1",
@@ -13,6 +14,14 @@
     "wp-coding-standards/wpcs": "^3.2"
   },
   "autoload": {
+    "classmap": [
+      "vendor/wp-php-toolkit/filesystem",
+      "vendor/wp-php-toolkit/http-client",
+      "vendor/wp-php-toolkit/git"
+    ],
+    "exclude-from-classmap": [
+      "vendor/wp-php-toolkit/*/Tests/"
+    ],
     "psr-4": {
       "UniversalImporter\\": "src/"
     }

@@ -2606,6 +2606,66 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * OPML feed lists import items from the feeds they reference.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_remote_opml_feed_lists() {
+		$fetcher = new FakeRemoteContentFetcher();
+		$fetcher->add_text(
+			'https://notes.example.test/subscriptions.opml',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<opml version="2.0"><head><title>Reading List</title></head><body>'
+			. '<outline text="Notes" type="rss" xmlUrl="/feeds/notes.xml"/>'
+			. '<outline text="Ideas" type="rss" xmlUrl="https://ideas.example.test/feed.xml"/>'
+			. '</body></opml>'
+		);
+		$fetcher->add_text(
+			'https://notes.example.test/feeds/notes.xml',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<rss version="2.0"><channel><title>Notes</title>'
+			. '<item><guid>note-1</guid><title>Notebook Entry</title><link>https://notes.example.test/notebook/</link><description><![CDATA[<p>Notebook body.</p>]]></description></item>'
+			. '</channel></rss>'
+		);
+		$fetcher->add_text(
+			'https://ideas.example.test/feed.xml',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<feed xmlns="http://www.w3.org/2005/Atom"><title>Ideas</title>'
+			. '<entry><id>tag:ideas.example.test,2026:1</id><title>Idea Entry</title><link href="https://ideas.example.test/idea/"/><content type="html">&lt;p&gt;Idea body.&lt;/p&gt;</content></entry>'
+			. '</feed>'
+		);
+		$session = ImportSession::start_for_source( 'https://notes.example.test/subscriptions.opml' );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, null, $fetcher ) )->run( $session->get_id() );
+
+		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
+		$titles    = array_map(
+			function ( $document ) {
+				return $document->get_title();
+			},
+			$documents
+		);
+		sort( $titles );
+		$root   = $this->store->find_source_item( $session->get_id(), 'remote:' . hash( 'sha256', 'https://notes.example.test/subscriptions.opml' ) );
+		$events = array_map(
+			function ( $event ) {
+				return $event->get_type();
+			},
+			$this->store->list_events( $session->get_id(), 20 )
+		);
+
+		$this->assertSame( array( 'Idea Entry', 'Notebook Entry' ), $titles );
+		$this->assertSame( 'opml', $root->get_metadata()['remote_mode'] );
+		$this->assertSame( 2, $root->get_metadata()['remote_opml_feed_count'] );
+		$this->assertSame( 2, $root->get_metadata()['remote_opml_feeds_fetched'] );
+		$this->assertSame( 2, $posts->count_posts() );
+		$this->assertContains( 'https://notes.example.test/feeds/notes.xml', $fetcher->get_requested_urls() );
+		$this->assertContains( 'remote.opml_prepared', $events );
+	}
+
+	/**
 	 * Relative media references inside feed item content are resolved against the item URL.
 	 *
 	 * @return void

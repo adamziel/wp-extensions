@@ -40,6 +40,13 @@ final class GitHubRepositorySourceWalker {
 	private $content_fetcher;
 
 	/**
+	 * Git repository fetcher for php-toolkit sparse pulls.
+	 *
+	 * @var GitRepositoryFetcherInterface|null
+	 */
+	private $git_fetcher;
+
+	/**
 	 * Cache root.
 	 *
 	 * @var ImportCacheDirectory
@@ -61,11 +68,13 @@ final class GitHubRepositorySourceWalker {
 	 * @param string|ImportCacheDirectory|null         $cache_root Optional cache root.
 	 * @param ImportRemoteContentFetcherInterface|null $content_fetcher Optional GitHub tree/blob fetcher.
 	 * @param ImportRunnerControls|null                $controls Optional hidden test controls.
+	 * @param GitRepositoryFetcherInterface|null       $git_fetcher Optional Git plumbing fetcher.
 	 */
-	public function __construct( WordPressImportSessionStore $store, ImportRemoteArchiveFetcherInterface $fetcher = null, $cache_root = null, ImportRemoteContentFetcherInterface $content_fetcher = null, ImportRunnerControls $controls = null ) {
+	public function __construct( WordPressImportSessionStore $store, ImportRemoteArchiveFetcherInterface $fetcher = null, $cache_root = null, ImportRemoteContentFetcherInterface $content_fetcher = null, ImportRunnerControls $controls = null, GitRepositoryFetcherInterface $git_fetcher = null ) {
 		$this->store           = $store;
 		$this->fetcher         = null === $fetcher ? new WordPressRemoteArchiveFetcher() : $fetcher;
 		$this->content_fetcher = $content_fetcher;
+		$this->git_fetcher     = $git_fetcher;
 		$this->cache_directory = $cache_root instanceof ImportCacheDirectory ? $cache_root : ( null === $cache_root ? ImportCacheDirectory::from_environment() : new ImportCacheDirectory( $cache_root ) );
 		$this->controls        = null === $controls ? ImportRunnerControls::none() : $controls;
 	}
@@ -100,6 +109,11 @@ final class GitHubRepositorySourceWalker {
 		$existing_archive_summary = $this->existing_archive_summary( $session, $repositories );
 		if ( null !== $existing_archive_summary ) {
 			return $existing_archive_summary;
+		}
+
+		$git_summary = $this->queue_git_items( $session, $repositories );
+		if ( null !== $git_summary ) {
+			return $git_summary;
 		}
 
 		$tree_summary = $this->queue_tree_items( $session, $repositories );
@@ -264,6 +278,255 @@ final class GitHubRepositorySourceWalker {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Queues GitHub files discovered through php-toolkit Git sparse pulls.
+	 *
+	 * @param ImportSession                                                                                                    $session      Session.
+	 * @param array<int,array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string}> $repositories Candidate repositories.
+	 * @return array{discovered:int,queued:int,failed:int,complete:bool,message:string}|null
+	 * @throws RuntimeException When source item persistence fails unexpectedly.
+	 */
+	private function queue_git_items( ImportSession $session, array $repositories ) {
+		if ( null === $this->git_fetcher ) {
+			return null;
+		}
+
+		foreach ( $repositories as $candidate ) {
+			if ( ! $this->can_queue_git_items( $candidate ) ) {
+				continue;
+			}
+
+			$state = $this->git_state_item( $session, $candidate );
+			if ( $this->is_git_state_complete( $state ) ) {
+				return array(
+					'discovered' => 0,
+					'queued'     => 0,
+					'failed'     => 0,
+					'complete'   => true,
+					'message'    => 'GitHub repository files are already present in the source queue.',
+				);
+			}
+
+			if ( $this->is_git_state_unavailable( $state ) ) {
+				continue;
+			}
+
+			try {
+				$files = $this->git_fetcher->fetch( $session, $candidate, $this->cache_directory );
+			} catch ( RuntimeException $exception ) {
+				$metadata                      = $state->get_metadata();
+				$metadata['github_git_status'] = 'unavailable';
+				$metadata['error']             = $exception->getMessage();
+				$this->store->save_source_item( $state->with_status( ImportSourceItem::STATUS_SKIPPED )->with_replaced_metadata( $metadata ) );
+				$this->record_event(
+					$session,
+					'github.git_unavailable',
+					'php-toolkit Git traversal could not fetch this repository candidate; traversal will use the next available GitHub path.',
+					$candidate,
+					array(
+						'error' => $exception->getMessage(),
+					),
+					ImportProgressEvent::LEVEL_WARNING
+				);
+				continue;
+			}
+
+			$queued = 0;
+			foreach ( $files as $file ) {
+				if ( ! is_array( $file ) ) {
+					continue;
+				}
+
+				$item = $this->build_git_file_item( $session, $candidate, $file );
+				if ( null === $item ) {
+					continue;
+				}
+
+				$this->store->save_source_item( $item );
+				++$queued;
+			}
+
+			if ( 0 === $queued ) {
+				$this->mark_git_state_complete( $session, $candidate, $state, count( $files ), $queued );
+				return array(
+					'discovered' => 0,
+					'queued'     => 0,
+					'failed'     => 0,
+					'complete'   => true,
+					'message'    => 'GitHub repository files are already present in the source queue.',
+				);
+			}
+
+			$this->mark_git_state_complete( $session, $candidate, $state, count( $files ), $queued );
+			$this->mark_tree_state_complete( $session, $repositories );
+			$this->record_event(
+				$session,
+				'github.git_queued',
+				'GitHub repository files were queued through php-toolkit Git plumbing.',
+				$candidate,
+				array(
+					'files' => $queued,
+				)
+			);
+
+			return array(
+				'discovered' => $queued,
+				'queued'     => $queued,
+				'failed'     => 0,
+				'complete'   => true,
+				'message'    => 'GitHub repository files were queued through php-toolkit Git plumbing.',
+			);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Returns whether a candidate can use php-toolkit Git traversal.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo Repository data.
+	 * @return bool
+	 */
+	private function can_queue_git_items( array $repo ) {
+		$ref = isset( $repo['ref'] ) ? trim( (string) $repo['ref'] ) : '';
+
+		if ( '' === $ref || 'HEAD' === strtoupper( $ref ) ) {
+			return false;
+		}
+
+		return ! preg_match( '/^[0-9a-f]{40}$/i', $ref );
+	}
+
+	/**
+	 * Builds a discovered source item for a file fetched through Git plumbing.
+	 *
+	 * @param ImportSession                                                                                         $session Session.
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo Repository data.
+	 * @param array<string,mixed>                                                                                   $file File descriptor.
+	 * @return ImportSourceItem|null Source item to persist, or null when it already exists.
+	 */
+	private function build_git_file_item( ImportSession $session, array $repo, array $file ) {
+		$repository_path = isset( $file['repository_path'] ) ? $this->normalize_source_path( (string) $file['repository_path'] ) : '';
+		$relative_path   = isset( $file['relative_path'] ) ? trim( str_replace( '\\', '/', (string) $file['relative_path'] ), '/' ) : '';
+		$local_path      = isset( $file['local_path'] ) ? (string) $file['local_path'] : '';
+
+		if ( '' === $repository_path || '' === $relative_path || '' === $local_path ) {
+			return null;
+		}
+
+		$item_key = $this->git_item_key( $repo, $repository_path );
+		if ( null !== $this->store->find_source_item( $session->get_id(), $item_key ) ) {
+			return null;
+		}
+
+		$metadata = array(
+			'basename'             => basename( $relative_path ),
+			'bytes'                => isset( $file['bytes'] ) ? max( 0, (int) $file['bytes'] ) : 0,
+			'extension'            => strtolower( pathinfo( $relative_path, PATHINFO_EXTENSION ) ),
+			'github_owner'         => $repo['owner'],
+			'github_repository'    => $repo['name'],
+			'github_ref'           => $repo['ref'],
+			'github_requested_ref' => isset( $repo['requested_ref'] ) ? $repo['requested_ref'] : $repo['ref'],
+			'github_source_url'    => $repo['source_url'],
+			'github_source_path'   => $repo['source_path'],
+			'github_tree_path'     => $repository_path,
+			'github_git_fetch'     => true,
+		);
+
+		if ( isset( $file['metadata'] ) && is_array( $file['metadata'] ) ) {
+			$metadata += $file['metadata'];
+		}
+
+		return ImportSourceItem::queued(
+			$session->get_id(),
+			$item_key,
+			null,
+			$local_path,
+			$relative_path,
+			ImportSourceItem::TYPE_FILE,
+			$metadata
+		)->with_status( ImportSourceItem::STATUS_DISCOVERED );
+	}
+
+	/**
+	 * Returns whether a Git state item is already complete.
+	 *
+	 * @param ImportSourceItem $item Git state item.
+	 * @return bool
+	 */
+	private function is_git_state_complete( ImportSourceItem $item ) {
+		$metadata = $item->get_metadata();
+
+		return ImportSourceItem::STATUS_SKIPPED === $item->get_status() && isset( $metadata['github_git_status'] ) && 'complete' === $metadata['github_git_status'];
+	}
+
+	/**
+	 * Returns whether a Git state item has already failed over to another path.
+	 *
+	 * @param ImportSourceItem $item Git state item.
+	 * @return bool
+	 */
+	private function is_git_state_unavailable( ImportSourceItem $item ) {
+		$metadata = $item->get_metadata();
+
+		return ImportSourceItem::STATUS_SKIPPED === $item->get_status() && isset( $metadata['github_git_status'] ) && 'unavailable' === $metadata['github_git_status'];
+	}
+
+	/**
+	 * Marks Git traversal state complete.
+	 *
+	 * @param ImportSession                                                                                         $session     Session.
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo        Repository data.
+	 * @param ImportSourceItem                                                                                      $state       State item.
+	 * @param int                                                                                                   $total_files Total files discovered by Git.
+	 * @param int                                                                                                   $queued      Files queued on this tick.
+	 * @return void
+	 */
+	private function mark_git_state_complete( ImportSession $session, array $repo, ImportSourceItem $state, $total_files, $queued ) {
+		$metadata = array_merge(
+			$state->get_metadata(),
+			array(
+				'github_git_status'       => 'complete',
+				'github_git_total_files'  => max( 0, (int) $total_files ),
+				'github_git_queued_files' => max( 0, (int) $queued ),
+			)
+		);
+
+		$this->store->save_source_item( $state->with_status( ImportSourceItem::STATUS_SKIPPED )->with_replaced_metadata( $metadata ) );
+	}
+
+	/**
+	 * Builds or loads a durable Git traversal state item.
+	 *
+	 * @param ImportSession                                                                                         $session Session.
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo Repository data.
+	 * @return ImportSourceItem
+	 */
+	private function git_state_item( ImportSession $session, array $repo ) {
+		$existing = $this->store->find_source_item( $session->get_id(), $this->git_state_key( $repo ) );
+		if ( null !== $existing ) {
+			return $existing;
+		}
+
+		return ImportSourceItem::queued(
+			$session->get_id(),
+			$this->git_state_key( $repo ),
+			null,
+			$repo['source_url'],
+			$repo['source_url'],
+			ImportSourceItem::TYPE_DIRECTORY,
+			array(
+				'github_owner'         => $repo['owner'],
+				'github_repository'    => $repo['name'],
+				'github_ref'           => $repo['ref'],
+				'github_requested_ref' => isset( $repo['requested_ref'] ) ? $repo['requested_ref'] : $repo['ref'],
+				'github_source_url'    => $repo['source_url'],
+				'github_source_path'   => $repo['source_path'],
+				'github_git_status'    => 'pending',
+			)
+		);
 	}
 
 	/**
@@ -817,6 +1080,17 @@ final class GitHubRepositorySourceWalker {
 	}
 
 	/**
+	 * Builds the durable source item key for a Git-fetched repository file.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
+	 * @param string                                                                          $path Repository-relative file path.
+	 * @return string
+	 */
+	private function git_item_key( array $repo, $path ) {
+		return 'github-git-blob:' . hash( 'sha256', strtolower( $repo['owner'] ) . '/' . strtolower( $repo['name'] ) . "\n" . $repo['ref'] . "\n" . $path );
+	}
+
+	/**
 	 * Builds the durable source item key for GitHub tree traversal state.
 	 *
 	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
@@ -824,6 +1098,16 @@ final class GitHubRepositorySourceWalker {
 	 */
 	private function tree_state_key( array $repo ) {
 		return 'github-tree:' . hash( 'sha256', strtolower( $repo['owner'] ) . '/' . strtolower( $repo['name'] ) . "\n" . $repo['ref'] . "\n" . $repo['source_path'] );
+	}
+
+	/**
+	 * Builds the durable source item key for Git traversal state.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
+	 * @return string
+	 */
+	private function git_state_key( array $repo ) {
+		return 'github-git:' . hash( 'sha256', strtolower( $repo['owner'] ) . '/' . strtolower( $repo['name'] ) . "\n" . $repo['ref'] . "\n" . $repo['source_path'] );
 	}
 
 	/**

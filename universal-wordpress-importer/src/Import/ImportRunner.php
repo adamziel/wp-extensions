@@ -244,7 +244,8 @@ final class ImportRunner {
 			$local                  = ( new LocalFilesystemSourceWalker( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
 			$lock                   = $this->refresh_lock( $lock );
 			$github_content_fetcher = null === $this->remote_content_fetcher && null === $this->remote_archive_fetcher ? new WordPressRemoteContentFetcher() : $this->remote_content_fetcher;
-			$github                 = ( new GitHubRepositorySourceWalker( $this->store, $this->remote_archive_fetcher, $this->cache_directory, $github_content_fetcher, $this->controls ) )->advance( $current );
+			$github_git_fetcher     = null === $this->remote_content_fetcher && null === $this->remote_archive_fetcher ? new PhpToolkitGitRepositoryFetcher() : null;
+			$github                 = ( new GitHubRepositorySourceWalker( $this->store, $this->remote_archive_fetcher, $this->cache_directory, $github_content_fetcher, $this->controls, $github_git_fetcher ) )->advance( $current );
 			$lock                   = $this->refresh_lock( $lock );
 			$remote                 = ( new RemoteUrlSourceWalker( $this->store, $this->remote_content_fetcher, $this->controls ) )->advance( $current );
 			$lock                   = $this->refresh_lock( $lock );

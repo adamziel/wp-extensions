@@ -405,7 +405,14 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'Clear selection', $source );
 		$this->assertStringContainsString( 'countFilesByExtension(browserFiles, \'.pdf\')', $source );
 		$this->assertStringContainsString( 'URL or server path', $source );
-		$this->assertStringContainsString( 'RSS/Atom feed', $source );
+		$this->assertStringContainsString( 'RSS/Atom/OPML feed', $source );
+		$this->assertStringContainsString( 'GitHub repo', $source );
+		$this->assertStringContainsString( 'Feed or OPML', $source );
+		$this->assertStringContainsString( 'Selected file tree', $source );
+		$this->assertStringContainsString( 'role="tree"', $source );
+		$this->assertStringContainsString( "filePreview.addEventListener('keydown'", $source );
+		$this->assertStringContainsString( "event.key === 'ArrowDown'", $source );
+		$this->assertStringContainsString( 'data-tree-kind', $source );
 		$this->assertStringContainsString( 'URL treatment', $source );
 		$this->assertStringContainsString( 'Ask when old URLs are found', $source );
 		$this->assertStringContainsString( 'Keep URLs unchanged', $source );

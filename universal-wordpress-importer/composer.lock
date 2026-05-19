@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c09a793c08597c0ac1329f460e19faf7",
+    "content-hash": "3ca9213a53cee603a6d15245f2dc38e6",
     "packages": [
         {
             "name": "wp-php-toolkit/bytestream",
@@ -210,6 +210,62 @@
             "support": {
                 "issues": "https://github.com/wp-php-toolkit/filesystem/issues",
                 "source": "https://github.com/wp-php-toolkit/filesystem/tree/v0.1.5"
+            },
+            "time": "2025-10-16T08:12:07+00:00"
+        },
+        {
+            "name": "wp-php-toolkit/git",
+            "version": "v0.1.5",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/wp-php-toolkit/git.git",
+                "reference": "1f041a35396ecc935b616431be3e31be062d244b"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/wp-php-toolkit/git/zipball/1f041a35396ecc935b616431be3e31be062d244b",
+                "reference": "1f041a35396ecc935b616431be3e31be062d244b",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=7.2",
+                "wp-php-toolkit/bytestream": "^0.1.5",
+                "wp-php-toolkit/filesystem": "^0.1.5",
+                "wp-php-toolkit/http-client": "^0.1.5"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^9.5"
+            },
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "functions.php"
+                ],
+                "psr-4": {
+                    "WordPress\\Git\\": ""
+                },
+                "exclude-from-classmap": [
+                    "/Tests/"
+                ]
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "GPL-2.0-or-later"
+            ],
+            "authors": [
+                {
+                    "name": "Adam Zielinski",
+                    "email": "adam@adamziel.com"
+                },
+                {
+                    "name": "WordPress Team",
+                    "email": "wordpress@wordpress.org"
+                }
+            ],
+            "description": "Git component for WordPress.",
+            "support": {
+                "issues": "https://github.com/wp-php-toolkit/git/issues",
+                "source": "https://github.com/wp-php-toolkit/git/tree/v0.1.5"
             },
             "time": "2025-10-16T08:12:07+00:00"
         },

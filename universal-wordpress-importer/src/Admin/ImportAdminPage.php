@@ -572,6 +572,39 @@ final class ImportAdminPage {
 			.universal-importer-field {
 				margin: 0 0 18px;
 			}
+			.universal-importer-source-shortcuts {
+				display: grid;
+				gap: 10px;
+				grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+				margin: 0 0 18px;
+			}
+			.universal-importer-source-shortcut {
+				background: #fff;
+				border: 1px solid var(--ui-border);
+				border-radius: 6px;
+				color: #1d2327;
+				cursor: pointer;
+				min-height: 74px;
+				padding: 11px 12px;
+				text-align: left;
+				width: 100%;
+			}
+			.universal-importer-source-shortcut:hover,
+			.universal-importer-source-shortcut:focus {
+				border-color: var(--ui-accent);
+				box-shadow: 0 0 0 1px var(--ui-accent);
+				outline: none;
+			}
+			.universal-importer-source-shortcut strong,
+			.universal-importer-source-shortcut span {
+				display: block;
+			}
+			.universal-importer-source-shortcut span {
+				color: var(--ui-muted);
+				font-size: 12px;
+				line-height: 1.4;
+				margin-top: 4px;
+			}
 			.universal-importer-field label,
 			.universal-importer-field legend {
 				color: #1d2327;
@@ -638,13 +671,45 @@ final class ImportAdminPage {
 			.universal-importer-file-preview {
 				color: var(--ui-muted);
 				font-size: 12px;
-				margin: 6px 0 0 18px;
-				max-height: 88px;
+				list-style: none;
+				margin: 8px 0 0;
+				max-height: 150px;
 				overflow: auto;
+				padding: 0;
 			}
-			.universal-importer-file-preview li {
-				margin: 0 0 3px;
+			.universal-importer-file-preview ul {
+				list-style: none;
+				margin: 0;
+				padding-left: 18px;
+			}
+			.universal-importer-file-preview [role="treeitem"] {
+				margin: 0;
+				outline: none;
 				overflow-wrap: anywhere;
+			}
+			.universal-importer-file-preview [role="treeitem"][aria-expanded="false"] > [role="group"] {
+				display: none;
+			}
+			.universal-importer-file-preview-item {
+				align-items: start;
+				border-radius: 4px;
+				display: grid;
+				gap: 4px;
+				grid-template-columns: 14px minmax(0, 1fr);
+				line-height: 1.35;
+				min-height: 22px;
+				padding: 2px 4px;
+			}
+			.universal-importer-file-preview [role="treeitem"]:focus > .universal-importer-file-preview-item {
+				box-shadow: inset 0 0 0 2px var(--ui-accent);
+			}
+			.universal-importer-file-preview-marker {
+				color: #50575e;
+				font-family: monospace;
+				text-align: center;
+			}
+			.universal-importer-file-preview-name {
+				min-width: 0;
 			}
 			.universal-importer-url-options {
 				border: 1px solid var(--ui-border);
@@ -1001,17 +1066,39 @@ final class ImportAdminPage {
 				<h2 class="universal-importer-section-heading"><?php esc_html_e( 'Select content', 'universal-wordpress-importer' ); ?></h2>
 				<div class="universal-importer-start-grid">
 					<div>
+						<div class="universal-importer-source-shortcuts" aria-label="<?php echo esc_attr__( 'Import source shortcuts', 'universal-wordpress-importer' ); ?>">
+							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://github.com/owner/repository/tree/main/docs">
+								<strong><?php esc_html_e( 'GitHub repo', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'Branch or subdirectory URL.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/">
+								<strong><?php esc_html_e( 'WordPress site', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'REST API, pages, posts, and comments.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/feed.xml">
+								<strong><?php esc_html_e( 'Feed or OPML', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'RSS, Atom, RDF, or a feed list.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="/path/to/export">
+								<strong><?php esc_html_e( 'Server path', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'Local folder, file, or archive.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+							<button type="button" class="universal-importer-source-shortcut" data-file-trigger="folder">
+								<strong><?php esc_html_e( 'Browser folder', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'Choose a folder from this device.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+						</div>
 						<p class="universal-importer-field">
 							<label for="universal-importer-source"><?php esc_html_e( 'URL or server path', 'universal-wordpress-importer' ); ?></label>
-							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/, https://example.com/feed/, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
-							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, WordPress site URL, REST root, RSS/Atom feed, remote page, or GitHub repo.', 'universal-wordpress-importer' ); ?></span>
+							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/, https://example.com/feed.xml, https://example.com/feeds.opml, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
+							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, WordPress site URL, REST root, RSS/Atom/OPML feed, remote page, or GitHub repo.', 'universal-wordpress-importer' ); ?></span>
 						</p>
 						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
 							<div class="universal-importer-upload-copy">
 								<strong><?php esc_html_e( 'Upload files or a folder', 'universal-wordpress-importer' ); ?></strong>
 								<p class="universal-importer-hint"><?php esc_html_e( 'PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP, or a folder.', 'universal-wordpress-importer' ); ?></p>
 								<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
-								<ul id="universal-importer-file-preview" class="universal-importer-file-preview" aria-live="polite"></ul>
+								<ul id="universal-importer-file-preview" class="universal-importer-file-preview" role="tree" aria-label="<?php echo esc_attr__( 'Selected file tree', 'universal-wordpress-importer' ); ?>" aria-live="polite"></ul>
 							</div>
 							<div class="universal-importer-upload-actions">
 								<label class="button" for="universal-importer-file-picker"><?php esc_html_e( 'Choose files', 'universal-wordpress-importer' ); ?></label>
@@ -1074,9 +1161,12 @@ final class ImportAdminPage {
 			var sessions = document.getElementById('universal-importer-sessions');
 			var emptyProgress = document.getElementById('universal-importer-empty-progress');
 			var notice = document.getElementById('universal-importer-notice');
+			var sourceShortcuts = form && form.querySelectorAll ? Array.prototype.slice.call(form.querySelectorAll('.universal-importer-source-shortcut')) : [];
 			var activeSessionId = config.primary_session_id || null;
 			var timer = null;
 			var browserFiles = [];
+			var fileTreeSearch = '';
+			var fileTreeSearchTimer = null;
 
 			function showNotice(message, type) {
 				notice.className = 'notice notice-' + type;
@@ -1125,19 +1215,191 @@ final class ImportAdminPage {
 				}).length;
 			}
 
+			function buildFileTree(files) {
+				var root = {
+					name: '',
+					path: '',
+					type: 'directory',
+					children: {}
+				};
+				files.forEach(function(file) {
+					var parts = filePath(file).split('/').filter(Boolean);
+					var node = root;
+					parts.forEach(function(part, index) {
+						var type = index === parts.length - 1 ? 'file' : 'directory';
+						var path = node.path ? node.path + '/' + part : part;
+						if (!node.children[part]) {
+							node.children[part] = {
+								name: part,
+								path: path,
+								type: type,
+								children: {}
+							};
+						}
+						node = node.children[part];
+					});
+				});
+				return root;
+			}
+
+			function sortedTreeChildren(node) {
+				return Object.keys(node.children || {}).map(function(key) {
+					return node.children[key];
+				}).sort(function(a, b) {
+					if (a.type !== b.type) {
+						return a.type === 'directory' ? -1 : 1;
+					}
+					return a.name.localeCompare(b.name);
+				});
+			}
+
+			function setAttribute(element, name, value) {
+				if (element.setAttribute) {
+					element.setAttribute(name, value);
+				}
+				element[name] = value;
+			}
+
+			function appendTreeNode(parent, node, index) {
+				var item = document.createElement('li');
+				var row = document.createElement('span');
+				var marker = document.createElement('span');
+				var label = document.createElement('span');
+				var children = sortedTreeChildren(node);
+
+				setAttribute(item, 'role', 'treeitem');
+				setAttribute(item, 'tabindex', index === 0 ? '0' : '-1');
+				setAttribute(item, 'data-tree-path', node.path);
+				setAttribute(item, 'data-tree-label', node.name.toLowerCase());
+				setAttribute(item, 'data-tree-kind', node.type);
+				if (node.type === 'directory') {
+					setAttribute(item, 'aria-expanded', 'true');
+				}
+				row.className = 'universal-importer-file-preview-item';
+				marker.className = 'universal-importer-file-preview-marker';
+				marker.textContent = node.type === 'directory' ? '-' : '';
+				label.className = 'universal-importer-file-preview-name';
+				label.textContent = node.name;
+				row.appendChild(marker);
+				row.appendChild(label);
+				item.appendChild(row);
+
+				if (children.length) {
+					var group = document.createElement('ul');
+					setAttribute(group, 'role', 'group');
+					children.forEach(function(child, childIndex) {
+						appendTreeNode(group, child, index + childIndex + 1);
+					});
+					item.appendChild(group);
+				}
+
+				parent.appendChild(item);
+			}
+
 			function renderFilePreview(files) {
-				var previewFiles = files.slice(0, 5);
+				var previewFiles = files.slice(0, 120);
+				var root = buildFileTree(previewFiles);
+				var children = sortedTreeChildren(root);
 				filePreview.innerHTML = '';
-				previewFiles.forEach(function(file) {
-					var item = document.createElement('li');
-					item.textContent = filePath(file);
-					filePreview.appendChild(item);
+				children.forEach(function(child, index) {
+					appendTreeNode(filePreview, child, index);
 				});
 				if (files.length > previewFiles.length) {
 					var remaining = document.createElement('li');
+					setAttribute(remaining, 'role', 'treeitem');
+					setAttribute(remaining, 'tabindex', children.length ? '-1' : '0');
+					setAttribute(remaining, 'data-tree-label', 'more');
+					setAttribute(remaining, 'data-tree-kind', 'summary');
 					remaining.textContent = '+' + (files.length - previewFiles.length) + ' more';
 					filePreview.appendChild(remaining);
 				}
+			}
+
+			function previewTreeItems() {
+				if (!filePreview.querySelectorAll) {
+					return [];
+				}
+				return Array.prototype.slice.call(filePreview.querySelectorAll('[role="treeitem"]')).filter(function(item) {
+					return isPreviewTreeItemVisible(item);
+				});
+			}
+
+			function isPreviewTreeItemVisible(item) {
+				var node = item.parentElement;
+				while (node && node !== filePreview) {
+					if (node.getAttribute && node.getAttribute('role') === 'treeitem' && node.getAttribute('aria-expanded') === 'false') {
+						return false;
+					}
+					node = node.parentElement;
+				}
+				return true;
+			}
+
+			function focusPreviewTreeItem(item) {
+				previewTreeItems().forEach(function(treeItem) {
+					treeItem.tabIndex = -1;
+					if (treeItem.setAttribute) {
+						treeItem.setAttribute('tabindex', '-1');
+					}
+				});
+				item.tabIndex = 0;
+				if (item.setAttribute) {
+					item.setAttribute('tabindex', '0');
+				}
+				if (item.focus) {
+					item.focus();
+				}
+			}
+
+			function setTreeItemExpanded(item, expanded) {
+				if (!item || item.getAttribute('data-tree-kind') !== 'directory') {
+					return;
+				}
+				item.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+				var marker = item.querySelector ? item.querySelector('.universal-importer-file-preview-marker') : null;
+				if (marker) {
+					marker.textContent = expanded ? '-' : '+';
+				}
+			}
+
+			function parentTreeItem(item) {
+				var node = item ? item.parentElement : null;
+				while (node && node !== filePreview) {
+					if (node.getAttribute && node.getAttribute('role') === 'treeitem') {
+						return node;
+					}
+					node = node.parentElement;
+				}
+				return null;
+			}
+
+			function movePreviewFocus(item, offset) {
+				var items = previewTreeItems();
+				var index = items.indexOf(item);
+				if (-1 === index) {
+					return;
+				}
+				index = Math.max(0, Math.min(items.length - 1, index + offset));
+				focusPreviewTreeItem(items[index]);
+			}
+
+			function firstChildTreeItem(item) {
+				if (!item || !item.querySelector) {
+					return null;
+				}
+				return item.querySelector('[role="group"] > [role="treeitem"]');
+			}
+
+			function findPreviewTreeItemByPrefix(current, prefix) {
+				var items = previewTreeItems();
+				var start = Math.max(0, items.indexOf(current));
+				var ordered = items.slice(start + 1).concat(items.slice(0, start + 1));
+				for (var index = 0; index < ordered.length; index++) {
+					if ((ordered[index].getAttribute('data-tree-label') || '').indexOf(prefix) === 0) {
+						return ordered[index];
+					}
+				}
+				return null;
 			}
 
 			function setBrowserFiles(files, sourceLabel) {
@@ -1160,6 +1422,116 @@ final class ImportAdminPage {
 				fileSummary.textContent = summary + '.';
 				renderFilePreview(browserFiles);
 			}
+
+			sourceShortcuts.forEach(function(button) {
+				button.addEventListener('click', function() {
+					var trigger = button.getAttribute('data-file-trigger') || '';
+					var placeholder = button.getAttribute('data-source-placeholder') || '';
+					if (trigger === 'folder' && folderPicker && folderPicker.click) {
+						folderPicker.click();
+						return;
+					}
+					if (placeholder) {
+						sourceInput.placeholder = placeholder;
+					}
+					if (sourceInput.focus) {
+						sourceInput.focus();
+					}
+				});
+			});
+
+			filePreview.addEventListener('click', function(event) {
+				var item = event.target.closest ? event.target.closest('[role="treeitem"]') : null;
+				if (!item || item.getAttribute('data-tree-kind') !== 'directory') {
+					return;
+				}
+				var expanded = item.getAttribute('aria-expanded') !== 'false';
+				setTreeItemExpanded(item, !expanded);
+				focusPreviewTreeItem(item);
+			});
+
+			filePreview.addEventListener('keydown', function(event) {
+				var item = event.target.closest ? event.target.closest('[role="treeitem"]') : null;
+				if (!item) {
+					return;
+				}
+
+				if (event.key === 'ArrowDown') {
+					event.preventDefault();
+					movePreviewFocus(item, 1);
+					return;
+				}
+				if (event.key === 'ArrowUp') {
+					event.preventDefault();
+					movePreviewFocus(item, -1);
+					return;
+				}
+				if (event.key === 'Home') {
+					event.preventDefault();
+					var first = previewTreeItems()[0];
+					if (first) {
+						focusPreviewTreeItem(first);
+					}
+					return;
+				}
+				if (event.key === 'End') {
+					event.preventDefault();
+					var items = previewTreeItems();
+					if (items.length) {
+						focusPreviewTreeItem(items[items.length - 1]);
+					}
+					return;
+				}
+				if (event.key === 'ArrowLeft') {
+					event.preventDefault();
+					if (item.getAttribute('data-tree-kind') === 'directory' && item.getAttribute('aria-expanded') !== 'false') {
+						setTreeItemExpanded(item, false);
+						return;
+					}
+					var parent = parentTreeItem(item);
+					if (parent) {
+						focusPreviewTreeItem(parent);
+					}
+					return;
+				}
+				if (event.key === 'ArrowRight') {
+					event.preventDefault();
+					if (item.getAttribute('data-tree-kind') !== 'directory') {
+						return;
+					}
+					if (item.getAttribute('aria-expanded') === 'false') {
+						setTreeItemExpanded(item, true);
+						return;
+					}
+					var child = firstChildTreeItem(item);
+					if (child) {
+						focusPreviewTreeItem(child);
+					}
+					return;
+				}
+				if (event.key === ' ' || event.key === 'Enter') {
+					if (item.getAttribute('data-tree-kind') === 'directory') {
+						event.preventDefault();
+						setTreeItemExpanded(item, item.getAttribute('aria-expanded') === 'false');
+					}
+					return;
+				}
+				if (event.key && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+					fileTreeSearch += event.key.toLowerCase();
+					if (fileTreeSearchTimer && window.clearTimeout) {
+						window.clearTimeout(fileTreeSearchTimer);
+					}
+					if (window.setTimeout) {
+						fileTreeSearchTimer = window.setTimeout(function() {
+							fileTreeSearch = '';
+						}, 800);
+					}
+					var match = findPreviewTreeItemByPrefix(item, fileTreeSearch);
+					if (match) {
+						focusPreviewTreeItem(match);
+					}
+				}
+			});
 
 			function readDirectoryEntries(reader) {
 				return new Promise(function(resolve, reject) {

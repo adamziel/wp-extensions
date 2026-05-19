@@ -34,8 +34,8 @@ The sample data lives in
 
 - Imports local paths, browser-dropped folders/files, zip archives, nested
   archives, Markdown, HTML, text, EPUB, WXR, WordPress REST/site URLs,
-  RSS/Atom feeds, GitHub repositories, remote HTML pages, PDFs, and media
-  references.
+  RSS/Atom/RDF feeds, OPML feed lists, GitHub repositories, remote HTML pages,
+  PDFs, and media references.
 - Treats inputs as trees and stores source-item cursors so long traversals can
   resume after bounded ticks.
 - Creates WordPress draft pages and infers native blocks when the source
@@ -69,9 +69,9 @@ Activate the plugin, then open:
 Tools -> Universal Importer
 ```
 
-You can enter a server path, WordPress site URL, REST root, RSS/Atom feed URL,
-remote page URL, or GitHub repository URL. You can also choose browser
-files/folders or drop a folder onto the upload area.
+You can enter a server path, WordPress site URL, REST root, RSS/Atom/RDF feed
+URL, OPML feed-list URL, remote page URL, or GitHub repository URL. You can
+also choose browser files/folders or drop a folder onto the upload area.
 
 WP-CLI usage:
 
@@ -114,6 +114,10 @@ wp universal-importer import \
   https://github.com/example/docs/tree/main/content
 ```
 
+Explicit GitHub branch and subtree URLs first use php-toolkit Git plumbing for
+a sparse pull of the requested path. If that cannot resolve the ref or path,
+the importer falls back to GitHub tree/blob APIs and then zipball traversal.
+
 Import a public WordPress REST site:
 
 ```bash
@@ -127,10 +131,16 @@ and can fall back to an advertised feed or the page itself:
 wp universal-importer import https://example.com/
 ```
 
-Import any RSS or Atom feed:
+Import any RSS, Atom, or RDF feed:
 
 ```bash
 wp universal-importer import https://example.com/feed/
+```
+
+Import feeds listed in an OPML subscription file:
+
+```bash
+wp universal-importer import https://example.com/subscriptions.opml
 ```
 
 Import a zip archive:
@@ -164,8 +174,8 @@ export UNIVERSAL_IMPORTER_PDF_OCR_TIMEOUT=60
   produce diagnostics or can use configured external extraction/OCR helpers.
 - Remote authenticated imports require host-scoped environment variables;
   secrets are never stored in importer session tables.
-- RSS/Atom imports consume the currently advertised feed items; they do not
-  crawl historical feed archives or arbitrary site navigation.
+- RSS/Atom/RDF and OPML imports consume the currently advertised feed items;
+  they do not crawl historical feed archives or arbitrary site navigation.
 - Relationship mapping can require operator decisions when source users,
   terms, or first-party domains cannot be resolved automatically.
 - WP-Cron continuation depends on the site cron runner. Use `wp

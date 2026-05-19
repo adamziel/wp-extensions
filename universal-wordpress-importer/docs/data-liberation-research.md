@@ -1,6 +1,6 @@
 # Data Liberation Research And Upstream Assessment
 
-Last reviewed: 2026-05-14.
+Last reviewed: 2026-05-19.
 
 This note records the repo-local evidence for the original research and
 php-toolkit requirements in `.autonomous-loop/goal.md`. It is intentionally
@@ -22,6 +22,9 @@ data from closed platforms and Phase 4 as future direct WordPress-to-WordPress
 synchronization. Those phases influenced the importer toward browser folder
 upload support, staged local-tree imports, remote WordPress REST traversal, and
 durable source-item state instead of a one-shot upload-only design.
+They also point toward source formats that preserve user-owned publishing and
+reading graphs: Git repositories for docs/content-as-files, RSS/Atom/RDF feeds
+for published streams, and OPML for portable feed lists.
 
 The November 2024 Playground post is the clearest technical source for the
 streaming/resume requirements. It calls out careful URL parsing across XML,
@@ -133,15 +136,16 @@ idempotent state updates, and status files/tables that a UI can poll.
 
 ## php-toolkit Usage
 
-The repo directly depends on `wp-php-toolkit/data-liberation`:
+The repo directly depends on `wp-php-toolkit/data-liberation` and
+`wp-php-toolkit/git`:
 
 - `composer.json`
 - `composer.lock`
 
-The locked package set is `v0.1.5` for `wp-php-toolkit/data-liberation` and its
-transitive `bytestream`, `encoding`, `filesystem`, `http-client`, and `xml`
-components. The upstream php-toolkit repository has continued moving; the
-repository page showed latest release `v0.7.5` on 2026-05-14:
+The locked package set is `v0.1.5` for `wp-php-toolkit/data-liberation`,
+`wp-php-toolkit/git`, and the shared `bytestream`, `encoding`, `filesystem`,
+`http-client`, and `xml` components. The upstream php-toolkit repository has
+continued moving:
 
 - https://github.com/WordPress/php-toolkit
 
@@ -159,11 +163,39 @@ cursor metadata for resumable entity processing. Markdown, text, HTML, and PDF
 paths also use byte streams for bounded reads instead of whole-file loading
 where that matters.
 
+GitHub repository traversal now uses php-toolkit Git plumbing in
+`src/Import/PhpToolkitGitRepositoryFetcher.php`:
+
+- `WordPress\Filesystem\LocalFilesystem`
+- `WordPress\Git\GitRepository`
+- `WordPress\Git\GitFilesystem`
+- `WordPress\Git\Model\Commit`
+
+The importer sparse-pulls explicit branch/subtree URLs into an importer-managed
+cache and queues the fetched files as durable source items. GitHub tree/blob
+APIs and zipball traversal remain fallback paths for default `HEAD`, commit
+SHA-only sources, ambiguous refs that cannot be resolved by Git, API rate
+limits, or archive-only cases.
+The root Composer autoload also classmaps the locked toolkit Git, Filesystem,
+and HTTP client packages because the `v0.1.5` package files use `class-*.php`
+filenames that Composer's PSR-4 loader does not discover on its own.
+
+The admin folder preview intentionally follows the keyboard model used by the
+Playground/php-toolkit `FilePickerTree` component: hierarchical tree rows,
+ArrowLeft/ArrowRight collapse and expand behavior, ArrowUp/ArrowDown movement,
+Home/End movement, Space/Enter folder toggles, and typeahead. In this plugin
+the behavior is implemented as inline wp-admin JavaScript rather than importing
+the React component, because the admin page is server-rendered and does not
+currently ship a React bundle.
+
 Local verification evidence:
 
 - `tests/Unit/Import/ImportRunnerTest.php` covers WXR cursor resume,
   WXR comments, postmeta, attachments, relationship mapping, menu persistence,
   and attachment metadata/parent repair paths.
+- `tests/Unit/Import/GitHubRepositorySourceWalkerTest.php` covers
+  php-toolkit-backed GitHub subtree queueing and fallback from an ambiguous
+  slash-containing ref candidate to the intended branch plus subtree path.
 - `tests/Unit/Import/ImportRunnerTest.php` also includes split executable HTML
   stripping coverage that exercises byte-stream chunk boundaries.
 - `docs/architecture.md` records the WXR/php-toolkit streaming design.

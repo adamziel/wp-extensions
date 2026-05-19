@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added php-toolkit Git plumbing for explicit GitHub branch/subtree imports,
+  with GitHub tree/blob and zipball fallbacks, and added OPML feed-list imports.
+- Added admin source shortcuts and a keyboard-navigable browser folder tree
+  preview for selected files.
 - Fixed autonomous loop prompt rendering so literal backticked guidance remains
   in agent prompts instead of being interpreted by the shell, and expanded the
   runner smoke test to verify prompt integrity.
