@@ -18,7 +18,7 @@
 			"step": "installPlugin",
 			"pluginData": {
 				"resource": "url",
-				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/5f12fb9acc21438492784c24c8a61481a13ee284/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=20260520-sparse-git-only"
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/ec2e6a040881ef5ebdf8116456f62f6d0983ae0a/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=20260520-git-progress"
 			},
 			"options": {
 				"activate": true,
