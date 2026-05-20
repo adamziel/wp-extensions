@@ -28,6 +28,8 @@ class Element {
 		this.innerHTML = '';
 		this.children = [];
 		this.style = {};
+		this.attributes = {};
+		this.value = '';
 		this.firstChild = null;
 		this.firstElementChild = {};
 		this.classList = {
@@ -53,6 +55,18 @@ class Element {
 
 	querySelectorAll() {
 		return [];
+	}
+
+	setAttribute(name, value) {
+		this.attributes[name] = String(value);
+	}
+
+	getAttribute(name) {
+		return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : '';
+	}
+
+	removeAttribute(name) {
+		delete this.attributes[name];
 	}
 
 	appendChild(child) {
@@ -146,6 +160,12 @@ const clearFilesButton = new Element('universal-importer-clear-files');
 const dropzone = new Element('universal-importer-dropzone');
 const fileSummary = new Element('universal-importer-file-summary');
 const filePreview = new Element('universal-importer-file-preview');
+const githubPicker = new Element('universal-importer-github-picker');
+githubPicker.setAttribute('hidden', 'hidden');
+const githubBrowseButton = new Element('universal-importer-github-browse');
+const githubPickerStatus = new Element('universal-importer-github-picker-status');
+const githubSelection = new Element('universal-importer-github-selection');
+const githubTree = new Element('universal-importer-github-tree');
 const sessions = new Element('universal-importer-sessions');
 const notice = new Element('universal-importer-notice');
 const noticeParagraph = { textContent: '' };
@@ -176,6 +196,11 @@ const elements = {
 	'universal-importer-dropzone': dropzone,
 	'universal-importer-file-summary': fileSummary,
 	'universal-importer-file-preview': filePreview,
+	'universal-importer-github-picker': githubPicker,
+	'universal-importer-github-browse': githubBrowseButton,
+	'universal-importer-github-picker-status': githubPickerStatus,
+	'universal-importer-github-selection': githubSelection,
+	'universal-importer-github-tree': githubTree,
 	'universal-importer-sessions': sessions,
 	'universal-importer-notice': notice
 };
@@ -220,6 +245,78 @@ const context = {
 
 vm.runInNewContext(script, context, { filename: 'ImportAdminPage.inline.js' });
 
+sourceInput.value = 'https://github.com/example/repository';
+sourceInput.dispatch('input', {});
+
+if (githubPicker.getAttribute('hidden')) {
+	throw new Error('GitHub directory picker should be visible for GitHub repository URLs.');
+}
+
+nextFetchResponse = {
+	ok: true,
+	status: 200,
+	body: JSON.stringify({
+		success: true,
+		data: {
+			selected_path: 'docs',
+			directories: [
+				{
+					path: '',
+					name: 'repository',
+					depth: 0,
+					source_url: 'https://github.com/example/repository/tree/main'
+				},
+				{
+					path: 'docs',
+					name: 'docs',
+					depth: 1,
+					source_url: 'https://github.com/example/repository/tree/main/docs'
+				}
+			]
+		}
+	})
+};
+githubBrowseButton.dispatch('click', {});
+
+(async () => {
+	await flushPromises();
+	await flushPromises();
+
+	const browseCall = fetchCalls.find((call) => String(call.options.body).includes('source=https%3A%2F%2Fgithub.com%2Fexample%2Frepository'));
+
+	if (!browseCall) {
+		throw new Error('GitHub directory browser request was not sent.');
+	}
+
+	if (!String(browseCall.options.body).includes('source=https%3A%2F%2Fgithub.com%2Fexample%2Frepository')) {
+		throw new Error('GitHub directory browser request did not include the source URL: ' + browseCall.options.body);
+	}
+
+	if (!githubTree.innerHTML.includes('docs') || !githubTree.innerHTML.includes('data-source-url="https://github.com/example/repository/tree/main/docs"')) {
+		throw new Error('GitHub directory tree was not rendered: ' + githubTree.innerHTML);
+	}
+
+	if (!githubSelection.textContent.includes('docs')) {
+		throw new Error('GitHub directory selection was not summarized: ' + githubSelection.textContent);
+	}
+
+	nextFetchResponse = {
+		ok: true,
+		status: 200,
+		body: JSON.stringify({
+			success: true,
+			data: {
+				id: 'session-1',
+				source: 'browser-upload',
+				status: 'done',
+				dry_run: true,
+				progress: { total: 0, completed: 0, errors: 0 },
+				recent_events: [],
+				pending_decisions: []
+			}
+		})
+	};
+
 filePicker.files = [{ name: 'Annual Report.pdf' }];
 filePicker.dispatch('change', {});
 
@@ -253,9 +350,8 @@ dropzone.dispatch('drop', {
 	}
 });
 
-(async () => {
-	await flushPromises();
-	await flushPromises();
+await flushPromises();
+await flushPromises();
 
 	if (!fileSummary.textContent.includes('3 files ready')) {
 		throw new Error('Dropped directory files were not summarized: ' + fileSummary.textContent);

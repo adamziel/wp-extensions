@@ -1066,7 +1066,7 @@ final class GitHubRepositorySourceWalker {
 	 * @return string
 	 */
 	private function tree_api_url( array $repo ) {
-		return 'https://api.github.com/repos/' . rawurlencode( $repo['owner'] ) . '/' . rawurlencode( $repo['name'] ) . '/git/trees/' . str_replace( '%2F', '/', rawurlencode( $repo['ref'] ) ) . '?recursive=1';
+		return GitHubRepositorySourceUrl::tree_api_url( $repo );
 	}
 
 	/**
@@ -1157,73 +1157,7 @@ final class GitHubRepositorySourceWalker {
 	 * @return array{owner:string,name:string,ref:string,source_path:string,source_url:string,fallback_ref?:string,fallback_source_path?:string}|null
 	 */
 	private function parse_repository_url( $source ) {
-		$source = trim( (string) $source );
-		$parts  = parse_url( $source );
-
-		if ( ! is_array( $parts ) || empty( $parts['host'] ) || 'github.com' !== strtolower( $parts['host'] ) ) {
-			return null;
-		}
-
-		$path = isset( $parts['path'] ) ? trim( (string) $parts['path'], '/' ) : '';
-
-		if ( '' === $path ) {
-			return null;
-		}
-
-		$segments = explode( '/', $path );
-
-		if ( count( $segments ) < 2 ) {
-			return null;
-		}
-
-		$owner = $this->normalize_slug( $segments[0] );
-		$name  = $this->normalize_slug( preg_replace( '/\.git$/', '', $segments[1] ) );
-
-		if ( '' === $owner || '' === $name ) {
-			return null;
-		}
-
-		$ref         = 'HEAD';
-		$source_path = '';
-		$fallbacks   = array();
-
-		if ( isset( $segments[2] ) && 'tree' === $segments[2] && isset( $segments[3] ) ) {
-			$tree_segments = array_slice( $segments, 3 );
-			$ref           = implode( '/', $tree_segments );
-			for ( $length = count( $tree_segments ) - 1; $length >= 1; --$length ) {
-				$fallback_path = $this->normalize_source_path( implode( '/', array_slice( $tree_segments, $length ) ) );
-				if ( '' === $fallback_path ) {
-					continue;
-				}
-
-				$fallbacks[] = array(
-					'ref'         => implode( '/', array_slice( $tree_segments, 0, $length ) ),
-					'source_path' => $fallback_path,
-				);
-			}
-		} elseif ( ! empty( $parts['query'] ) ) {
-			parse_str( $parts['query'], $query );
-			if ( isset( $query['ref'] ) && '' !== trim( (string) $query['ref'] ) ) {
-				$ref = trim( (string) $query['ref'] );
-			}
-			if ( isset( $query['path'] ) && '' !== trim( (string) $query['path'] ) ) {
-				$source_path = $this->normalize_source_path( (string) $query['path'] );
-			}
-		}
-
-		$repo = array(
-			'owner'       => $owner,
-			'name'        => $name,
-			'ref'         => $this->normalize_ref( $ref ),
-			'source_path' => $source_path,
-			'source_url'  => $source,
-		);
-
-		if ( ! empty( $fallbacks ) ) {
-			$repo['fallback_candidates'] = $fallbacks;
-		}
-
-		return $repo;
+		return GitHubRepositorySourceUrl::parse( $source );
 	}
 
 	/**
@@ -1233,66 +1167,7 @@ final class GitHubRepositorySourceWalker {
 	 * @return array<int,array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string}>
 	 */
 	private function candidate_repositories( array $repo ) {
-		$candidates = array(
-			array(
-				'owner'       => $repo['owner'],
-				'name'        => $repo['name'],
-				'ref'         => $repo['ref'],
-				'source_path' => $repo['source_path'],
-				'source_url'  => $repo['source_url'],
-			),
-		);
-		$seen       = array( $repo['ref'] . "\n" . $repo['source_path'] => true );
-
-		foreach ( isset( $repo['fallback_candidates'] ) ? $repo['fallback_candidates'] : array() as $fallback ) {
-			$fallback_ref = $this->normalize_ref( $fallback['ref'] );
-			$source_path  = $this->normalize_source_path( $fallback['source_path'] );
-			$key          = $fallback_ref . "\n" . $source_path;
-
-			if ( isset( $seen[ $key ] ) || $fallback_ref === $repo['ref'] ) {
-				continue;
-			}
-
-			$candidates[] = array(
-				'owner'         => $repo['owner'],
-				'name'          => $repo['name'],
-				'ref'           => $fallback_ref,
-				'source_path'   => $source_path,
-				'source_url'    => $repo['source_url'],
-				'requested_ref' => $repo['ref'],
-			);
-			$seen[ $key ] = true;
-		}
-
-		return $candidates;
-	}
-
-	/**
-	 * Normalizes owner and repository slugs.
-	 *
-	 * @param string $slug Slug.
-	 * @return string
-	 */
-	private function normalize_slug( $slug ) {
-		$slug = trim( (string) $slug );
-
-		return preg_match( '/^[A-Za-z0-9_.-]+$/', $slug ) ? $slug : '';
-	}
-
-	/**
-	 * Normalizes a Git ref for API use.
-	 *
-	 * @param string $ref Ref.
-	 * @return string
-	 */
-	private function normalize_ref( $ref ) {
-		$ref = trim( str_replace( '\\', '/', (string) $ref ), '/' );
-
-		if ( '' === $ref || false !== strpos( $ref, '..' ) || false !== strpos( $ref, "\0" ) ) {
-			return 'HEAD';
-		}
-
-		return $ref;
+		return GitHubRepositorySourceUrl::candidates( $repo );
 	}
 
 	/**
@@ -1302,22 +1177,7 @@ final class GitHubRepositorySourceWalker {
 	 * @return string
 	 */
 	private function normalize_source_path( $path ) {
-		$path = trim( str_replace( '\\', '/', rawurldecode( (string) $path ) ), '/' );
-
-		if ( '' === $path || false !== strpos( $path, "\0" ) ) {
-			return '';
-		}
-
-		$parts = array();
-
-		foreach ( explode( '/', $path ) as $part ) {
-			if ( '' === $part || '.' === $part || '..' === $part ) {
-				return '';
-			}
-			$parts[] = $part;
-		}
-
-		return implode( '/', $parts );
+		return GitHubRepositorySourceUrl::normalize_source_path( $path );
 	}
 
 	/**

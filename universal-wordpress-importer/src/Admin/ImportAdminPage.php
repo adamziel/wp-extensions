@@ -9,16 +9,19 @@ namespace UniversalImporter\Admin;
 
 use InvalidArgumentException;
 use RuntimeException;
+use UniversalImporter\Import\GitHubRepositorySourceUrl;
 use UniversalImporter\Import\ImportCacheDirectory;
 use UniversalImporter\Import\ImportDecision;
 use UniversalImporter\Import\ImportMediaReference;
 use UniversalImporter\Import\ImportPreparedDocument;
 use UniversalImporter\Import\ImportProgressEvent;
+use UniversalImporter\Import\ImportRemoteContentFetcherInterface;
 use UniversalImporter\Import\ImportRelationshipMappingDecision;
 use UniversalImporter\Import\ImportRunner;
 use UniversalImporter\Import\ImportSession;
 use UniversalImporter\Import\ImportSessionId;
 use UniversalImporter\Import\ImportSourceItem;
+use UniversalImporter\Import\WordPressRemoteContentFetcher;
 use UniversalImporter\Import\WordPressImportSessionStore;
 use UniversalImporter\Plugin;
 
@@ -33,6 +36,7 @@ final class ImportAdminPage {
 	const AJAX_KEEPALIVE        = 'universal_importer_keepalive';
 	const AJAX_ABORT            = 'universal_importer_abort_session';
 	const AJAX_DECIDE           = 'universal_importer_resolve_decision';
+	const AJAX_GITHUB_DIRS      = 'universal_importer_github_directories';
 	const CAPABILITY            = 'manage_options';
 	const RECENT_SESSIONS       = 10;
 	const MAX_UPLOAD_FILES      = 500;
@@ -68,18 +72,27 @@ final class ImportAdminPage {
 	private $cache_directory;
 
 	/**
+	 * Optional remote content fetcher override.
+	 *
+	 * @var ImportRemoteContentFetcherInterface|null
+	 */
+	private $content_fetcher;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param WordPressImportSessionStore|null $store          Optional session store.
-	 * @param callable|null                    $scheduler      Optional continuation scheduler.
-	 * @param callable|null                    $runner_factory Optional runner factory.
-	 * @param ImportCacheDirectory|null        $cache_directory Optional upload cache directory.
+	 * @param WordPressImportSessionStore|null         $store          Optional session store.
+	 * @param callable|null                            $scheduler      Optional continuation scheduler.
+	 * @param callable|null                            $runner_factory Optional runner factory.
+	 * @param ImportCacheDirectory|null                $cache_directory Optional upload cache directory.
+	 * @param ImportRemoteContentFetcherInterface|null $content_fetcher Optional GitHub directory fetcher.
 	 */
-	public function __construct( WordPressImportSessionStore $store = null, callable $scheduler = null, callable $runner_factory = null, ImportCacheDirectory $cache_directory = null ) {
+	public function __construct( WordPressImportSessionStore $store = null, callable $scheduler = null, callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, ImportRemoteContentFetcherInterface $content_fetcher = null ) {
 		$this->store           = $store;
 		$this->scheduler       = $scheduler;
 		$this->runner_factory  = $runner_factory;
 		$this->cache_directory = $cache_directory;
+		$this->content_fetcher = $content_fetcher;
 	}
 
 	/**
@@ -103,6 +116,7 @@ final class ImportAdminPage {
 		add_action( 'wp_ajax_' . self::AJAX_KEEPALIVE, array( $this, 'ajax_keepalive' ) );
 		add_action( 'wp_ajax_' . self::AJAX_ABORT, array( $this, 'ajax_abort_session' ) );
 		add_action( 'wp_ajax_' . self::AJAX_DECIDE, array( $this, 'ajax_resolve_decision' ) );
+		add_action( 'wp_ajax_' . self::AJAX_GITHUB_DIRS, array( $this, 'ajax_github_directories' ) );
 	}
 
 	/**
@@ -244,6 +258,49 @@ final class ImportAdminPage {
 		$this->schedule_continuation( $session->get_id() );
 
 		return $this->get_status_snapshot( $session->get_id() );
+	}
+
+	/**
+	 * Lists repository directories available for optional GitHub subtree selection.
+	 *
+	 * @param string $source GitHub repository URL.
+	 * @return array<string,mixed>
+	 * @throws InvalidArgumentException When the URL is not a supported GitHub repository URL.
+	 * @throws RuntimeException When GitHub directory loading fails.
+	 */
+	public function list_github_directories( $source ) {
+		$repo = GitHubRepositorySourceUrl::parse( $source );
+
+		if ( null === $repo ) {
+			throw new InvalidArgumentException( 'Enter a GitHub repository URL to browse directories.' );
+		}
+
+		$fetcher = $this->get_content_fetcher();
+
+		if ( 'HEAD' === strtoupper( $repo['ref'] ) ) {
+			$repo['ref'] = $this->fetch_github_default_branch( $fetcher, $repo );
+		}
+
+		$last_exception = null;
+
+		foreach ( GitHubRepositorySourceUrl::candidates( $repo ) as $candidate ) {
+			try {
+				$tree = $fetcher->fetch_json( GitHubRepositorySourceUrl::tree_api_url( $candidate ) );
+
+				if ( ! is_array( $tree ) || ! isset( $tree['tree'] ) || ! is_array( $tree['tree'] ) ) {
+					throw new RuntimeException( 'GitHub tree response was malformed.' );
+				}
+
+				return $this->github_directory_snapshot( $candidate, $tree );
+			} catch ( RuntimeException $exception ) {
+				$last_exception = $exception;
+			}
+		}
+
+		$message = null === $last_exception ? 'GitHub directory tree could not be loaded.' : $last_exception->getMessage();
+
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are returned through escaped AJAX JSON.
+		throw new RuntimeException( 'GitHub directory tree could not be loaded: ' . $message );
 	}
 
 	/**
@@ -711,6 +768,66 @@ final class ImportAdminPage {
 			.universal-importer-file-preview-name {
 				min-width: 0;
 			}
+			.universal-importer-github-picker {
+				background: #fbfbfc;
+				border: 1px solid var(--ui-border);
+				border-radius: 8px;
+				margin: -6px 0 18px;
+				padding: 12px;
+			}
+			.universal-importer-github-picker[hidden] {
+				display: none;
+			}
+			.universal-importer-github-picker-header {
+				align-items: center;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				justify-content: space-between;
+				margin-bottom: 8px;
+			}
+			.universal-importer-github-picker-status,
+			.universal-importer-github-selection {
+				color: var(--ui-muted);
+				font-size: 12px;
+				margin: 0;
+			}
+			.universal-importer-github-tree {
+				list-style: none;
+				margin: 8px 0 0;
+				max-height: 220px;
+				overflow: auto;
+				padding: 0;
+			}
+			.universal-importer-github-tree li {
+				margin: 0;
+			}
+			.universal-importer-github-directory {
+				background: transparent;
+				border: 0;
+				border-radius: 4px;
+				color: #1d2327;
+				cursor: pointer;
+				display: block;
+				line-height: 1.4;
+				min-height: 28px;
+				overflow-wrap: anywhere;
+				padding-bottom: 5px;
+				padding-top: 5px;
+				text-align: left;
+				width: 100%;
+			}
+			.universal-importer-github-directory:hover,
+			.universal-importer-github-directory:focus {
+				background: #f0f6fc;
+				box-shadow: inset 0 0 0 2px var(--ui-accent);
+				outline: none;
+			}
+			.universal-importer-github-directory.is-selected {
+				background: #f0f6e8;
+				box-shadow: inset 3px 0 0 #008a20;
+				font-weight: 600;
+			}
 			.universal-importer-url-options {
 				border: 1px solid var(--ui-border);
 				border-radius: 8px;
@@ -1093,6 +1210,15 @@ final class ImportAdminPage {
 							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/, https://example.com/feed.xml, https://example.com/feeds.opml, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
 							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, WordPress site URL, REST root, RSS/Atom/OPML feed, remote page, or GitHub repo.', 'universal-wordpress-importer' ); ?></span>
 						</p>
+						<div id="universal-importer-github-picker" class="universal-importer-github-picker" hidden>
+							<div class="universal-importer-github-picker-header">
+								<strong><?php esc_html_e( 'GitHub directory', 'universal-wordpress-importer' ); ?></strong>
+								<button type="button" class="button" id="universal-importer-github-browse"><?php esc_html_e( 'Browse directories', 'universal-wordpress-importer' ); ?></button>
+							</div>
+							<p id="universal-importer-github-picker-status" class="universal-importer-github-picker-status" aria-live="polite"></p>
+							<p id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"></p>
+							<ul id="universal-importer-github-tree" class="universal-importer-github-tree" role="tree" aria-label="<?php echo esc_attr__( 'GitHub repository directories', 'universal-wordpress-importer' ); ?>"></ul>
+						</div>
 						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
 							<div class="universal-importer-upload-copy">
 								<strong><?php esc_html_e( 'Upload files or a folder', 'universal-wordpress-importer' ); ?></strong>
@@ -1158,12 +1284,18 @@ final class ImportAdminPage {
 			var dropzone = document.getElementById('universal-importer-dropzone');
 			var fileSummary = document.getElementById('universal-importer-file-summary');
 			var filePreview = document.getElementById('universal-importer-file-preview');
+			var githubPicker = document.getElementById('universal-importer-github-picker');
+			var githubBrowseButton = document.getElementById('universal-importer-github-browse');
+			var githubPickerStatus = document.getElementById('universal-importer-github-picker-status');
+			var githubSelection = document.getElementById('universal-importer-github-selection');
+			var githubTree = document.getElementById('universal-importer-github-tree');
 			var sessions = document.getElementById('universal-importer-sessions');
 			var emptyProgress = document.getElementById('universal-importer-empty-progress');
 			var notice = document.getElementById('universal-importer-notice');
 			var sourceShortcuts = form && form.querySelectorAll ? Array.prototype.slice.call(form.querySelectorAll('.universal-importer-source-shortcut')) : [];
 			var activeSessionId = config.primary_session_id || null;
 			var timer = null;
+			var keepaliveInFlight = false;
 			var browserFiles = [];
 			var fileTreeSearch = '';
 			var fileTreeSearchTimer = null;
@@ -1223,6 +1355,110 @@ final class ImportAdminPage {
 					excerpt = excerpt.slice(0, 177) + '...';
 				}
 				return status + '<?php echo esc_js( __( 'Importer request returned a non-JSON response.', 'universal-wordpress-importer' ) ); ?>' + (excerpt ? ' ' + excerpt : '');
+			}
+
+			function isGitHubRepositoryInput(value) {
+				return /^https?:\/\/github\.com\/[^\/\s]+\/[^\/\s]+/i.test(String(value || '').trim());
+			}
+
+			function syncGithubPickerVisibility() {
+				if (!githubPicker) {
+					return;
+				}
+				var visible = browserFiles.length < 1 && isGitHubRepositoryInput(sourceInput.value || '');
+				if (visible) {
+					githubPicker.removeAttribute('hidden');
+				} else {
+					githubPicker.setAttribute('hidden', 'hidden');
+					if (githubPickerStatus) {
+						githubPickerStatus.textContent = '';
+					}
+					if (githubSelection) {
+						githubSelection.textContent = '';
+					}
+					if (githubTree) {
+						githubTree.innerHTML = '';
+					}
+				}
+			}
+
+			function loadGithubDirectories() {
+				var source = String(sourceInput.value || '').trim();
+				if (!isGitHubRepositoryInput(source)) {
+					showNotice('<?php echo esc_js( __( 'Enter a GitHub repository URL before browsing directories.', 'universal-wordpress-importer' ) ); ?>', 'error');
+					return;
+				}
+
+				if (githubBrowseButton) {
+					githubBrowseButton.disabled = true;
+				}
+				if (githubPickerStatus) {
+					githubPickerStatus.textContent = '<?php echo esc_js( __( 'Loading directories...', 'universal-wordpress-importer' ) ); ?>';
+				}
+				if (githubTree) {
+					githubTree.innerHTML = '';
+				}
+
+				request('<?php echo esc_js( self::AJAX_GITHUB_DIRS ); ?>', { source: source }).then(function(data) {
+					renderGithubDirectories(data);
+				}).catch(function(error) {
+					if (githubPickerStatus) {
+						githubPickerStatus.textContent = error.message;
+					}
+					showNotice(error.message, 'error');
+				}).then(function() {
+					if (githubBrowseButton) {
+						githubBrowseButton.disabled = false;
+					}
+				});
+			}
+
+			function renderGithubDirectories(data) {
+				var directories = data && data.directories ? data.directories : [];
+				var selectedPath = data && typeof data.selected_path === 'string' ? data.selected_path : '';
+
+				if (githubPickerStatus) {
+					githubPickerStatus.textContent = directories.length + ' <?php echo esc_js( __( 'directories found.', 'universal-wordpress-importer' ) ); ?>';
+				}
+				if (githubSelection) {
+					githubSelection.textContent = selectedPath ? '<?php echo esc_js( __( 'Selected:', 'universal-wordpress-importer' ) ); ?> ' + selectedPath : '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
+				}
+				if (!githubTree) {
+					return;
+				}
+
+				githubTree.innerHTML = directories.map(function(directory) {
+					var path = directory.path || '';
+					var name = path ? directory.name || path : '<?php echo esc_js( __( 'Repository root', 'universal-wordpress-importer' ) ); ?>';
+					var depth = Math.max(0, Number(directory.depth || 0));
+					var selected = path === selectedPath ? ' is-selected' : '';
+					var padding = 10 + depth * 18;
+					return '<li role="treeitem"><button type="button" class="universal-importer-github-directory' + selected + '" data-source-url="' + escapeHtml(directory.source_url || '') + '" data-path="' + escapeHtml(path) + '" style="padding-left:' + padding + 'px">' + escapeHtml(name) + '</button></li>';
+				}).join('');
+			}
+
+			function chooseGithubDirectory(button) {
+				var sourceUrl = button.getAttribute('data-source-url') || '';
+				var path = button.getAttribute('data-path') || '';
+
+				if (!sourceUrl) {
+					return;
+				}
+
+				sourceInput.value = sourceUrl;
+				if (githubSelection) {
+					githubSelection.textContent = path ? '<?php echo esc_js( __( 'Selected:', 'universal-wordpress-importer' ) ); ?> ' + path : '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
+				}
+				if (githubTree && githubTree.querySelectorAll) {
+					Array.prototype.slice.call(githubTree.querySelectorAll('.universal-importer-github-directory')).forEach(function(item) {
+						if (item.classList && item.classList.remove) {
+							item.classList.remove('is-selected');
+						}
+					});
+				}
+				if (button.classList && button.classList.add) {
+					button.classList.add('is-selected');
+				}
 			}
 
 			function filePath(file) {
@@ -1426,6 +1662,7 @@ final class ImportAdminPage {
 				browserFiles = files || [];
 				sourceInput.required = browserFiles.length < 1;
 				clearFilesButton.disabled = browserFiles.length < 1;
+				syncGithubPickerVisibility();
 				if (!browserFiles.length) {
 					fileSummary.textContent = '';
 					filePreview.innerHTML = '';
@@ -1459,6 +1696,22 @@ final class ImportAdminPage {
 					}
 				});
 			});
+
+			sourceInput.addEventListener('input', syncGithubPickerVisibility);
+			sourceInput.addEventListener('change', syncGithubPickerVisibility);
+
+			if (githubBrowseButton) {
+				githubBrowseButton.addEventListener('click', loadGithubDirectories);
+			}
+
+			if (githubTree) {
+				githubTree.addEventListener('click', function(event) {
+					var button = event.target.closest ? event.target.closest('.universal-importer-github-directory') : null;
+					if (button) {
+						chooseGithubDirectory(button);
+					}
+				});
+			}
 
 			filePreview.addEventListener('click', function(event) {
 				var item = event.target.closest ? event.target.closest('[role="treeitem"]') : null;
@@ -1983,9 +2236,10 @@ final class ImportAdminPage {
 			}
 
 			function tick() {
-				if (!activeSessionId) {
+				if (!activeSessionId || keepaliveInFlight) {
 					return;
 				}
+				keepaliveInFlight = true;
 				request('<?php echo esc_js( self::AJAX_KEEPALIVE ); ?>', { session_id: activeSessionId }).then(function(data) {
 					if (data.session) {
 						upsertSession(data.session);
@@ -1998,6 +2252,8 @@ final class ImportAdminPage {
 					}
 				}).catch(function(error) {
 					showNotice(error.message, 'error');
+				}).then(function() {
+					keepaliveInFlight = false;
 				});
 			}
 
@@ -2126,6 +2382,7 @@ final class ImportAdminPage {
 				});
 			});
 
+			syncGithubPickerVisibility();
 			reattachActiveSession();
 		}());
 		</script>
@@ -2234,6 +2491,25 @@ final class ImportAdminPage {
 			);
 
 			wp_send_json_success( $this->resolve_import_decision( $session_id, $decision_key, $answer ) );
+		} catch ( InvalidArgumentException $exception ) {
+			wp_send_json_error( array( 'message' => $exception->getMessage() ), 400 );
+		} catch ( RuntimeException $exception ) {
+			wp_send_json_error( array( 'message' => $exception->getMessage() ), 500 );
+		}
+	}
+
+	/**
+	 * Handles GitHub directory picker AJAX requests.
+	 *
+	 * @return void
+	 */
+	public function ajax_github_directories() {
+		$this->assert_ajax_permission();
+
+		try {
+			$source = $this->read_post_string( 'source' );
+
+			wp_send_json_success( $this->list_github_directories( $source ) );
 		} catch ( InvalidArgumentException $exception ) {
 			wp_send_json_error( array( 'message' => $exception->getMessage() ), 400 );
 		} catch ( RuntimeException $exception ) {
@@ -2883,6 +3159,102 @@ final class ImportAdminPage {
 		}
 
 		return $this->cache_directory;
+	}
+
+	/**
+	 * Loads the remote content fetcher.
+	 *
+	 * @return ImportRemoteContentFetcherInterface
+	 */
+	private function get_content_fetcher() {
+		if ( null === $this->content_fetcher ) {
+			$this->content_fetcher = new WordPressRemoteContentFetcher();
+		}
+
+		return $this->content_fetcher;
+	}
+
+	/**
+	 * Fetches the default branch for a GitHub repository.
+	 *
+	 * @param ImportRemoteContentFetcherInterface $fetcher Remote JSON fetcher.
+	 * @param array{owner:string,name:string}     $repo    Repository data.
+	 * @return string
+	 * @throws RuntimeException When the repository response is malformed.
+	 */
+	private function fetch_github_default_branch( ImportRemoteContentFetcherInterface $fetcher, array $repo ) {
+		$metadata = $fetcher->fetch_json( GitHubRepositorySourceUrl::repository_api_url( $repo ) );
+		$branch   = isset( $metadata['default_branch'] ) ? GitHubRepositorySourceUrl::normalize_ref( (string) $metadata['default_branch'] ) : '';
+
+		if ( '' === $branch || 'HEAD' === strtoupper( $branch ) ) {
+			throw new RuntimeException( 'GitHub repository response did not include a default branch.' );
+		}
+
+		return $branch;
+	}
+
+	/**
+	 * Builds an admin directory picker snapshot from a GitHub tree response.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo Repository data.
+	 * @param array<string,mixed>                                                                                   $tree GitHub tree response.
+	 * @return array<string,mixed>
+	 */
+	private function github_directory_snapshot( array $repo, array $tree ) {
+		$paths = array( '' => true );
+
+		foreach ( isset( $tree['tree'] ) && is_array( $tree['tree'] ) ? $tree['tree'] : array() as $entry ) {
+			if ( ! is_array( $entry ) || ! isset( $entry['type'], $entry['path'] ) || 'tree' !== (string) $entry['type'] ) {
+				continue;
+			}
+
+			$path = GitHubRepositorySourceUrl::normalize_source_path( (string) $entry['path'] );
+			if ( '' !== $path ) {
+				$paths[ $path ] = true;
+			}
+		}
+
+		$path_list = array_keys( $paths );
+		usort(
+			$path_list,
+			function ( $a, $b ) {
+				if ( '' === $a ) {
+					return -1;
+				}
+				if ( '' === $b ) {
+					return 1;
+				}
+
+				return strcmp( $a, $b );
+			}
+		);
+
+		$selected_path = GitHubRepositorySourceUrl::normalize_source_path( $repo['source_path'] );
+		if ( ! isset( $paths[ $selected_path ] ) ) {
+			$selected_path = '';
+		}
+
+		$directories = array();
+		foreach ( $path_list as $path ) {
+			$directories[] = array(
+				'path'       => $path,
+				'name'       => '' === $path ? $repo['name'] : basename( $path ),
+				'depth'      => '' === $path ? 0 : substr_count( $path, '/' ) + 1,
+				'source_url' => GitHubRepositorySourceUrl::source_url( $repo, $path ),
+			);
+		}
+
+		return array(
+			'owner'               => $repo['owner'],
+			'repository'          => $repo['name'],
+			'ref'                 => $repo['ref'],
+			'requested_ref'       => isset( $repo['requested_ref'] ) ? $repo['requested_ref'] : $repo['ref'],
+			'selected_path'       => $selected_path,
+			'selected_source_url' => GitHubRepositorySourceUrl::source_url( $repo, $selected_path ),
+			'source_url'          => GitHubRepositorySourceUrl::source_url( $repo, '' ),
+			'truncated'           => ! empty( $tree['truncated'] ),
+			'directories'         => $directories,
+		);
 	}
 
 	/**

@@ -24,6 +24,7 @@ use UniversalImporter\Import\ImportSessionId;
 use UniversalImporter\Import\ImportSourceItem;
 use UniversalImporter\Import\SourceItemDocumentProcessor;
 use UniversalImporter\Import\WordPressImportSessionStore;
+use UniversalImporter\Tests\Unit\Import\FakeRemoteContentFetcher;
 use UniversalImporter\Tests\Unit\Import\FakePostGateway;
 use UniversalImporter\Tests\Unit\Import\FakeWpdb;
 
@@ -441,6 +442,105 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'function sessionNeedsKeepalive(session)', $source );
 		$this->assertStringContainsString( 'function reattachActiveSession()', $source );
 		$this->assertStringContainsString( 'reattachActiveSession();', $source );
+		$this->assertStringContainsString( 'universal-importer-github-picker', $source );
+		$this->assertStringContainsString( 'Browse directories', $source );
+		$this->assertStringContainsString( 'universal-importer-github-tree', $source );
+		$this->assertStringContainsString( 'GitHub repository directories', $source );
+		$this->assertStringContainsString( 'function loadGithubDirectories()', $source );
+		$this->assertStringContainsString( 'function renderGithubDirectories(data)', $source );
+		$this->assertStringContainsString( 'function chooseGithubDirectory(button)', $source );
+		$this->assertStringContainsString( 'AJAX_GITHUB_DIRS', $source );
+		$this->assertStringContainsString( 'var keepaliveInFlight = false', $source );
+		$this->assertStringContainsString( 'if (!activeSessionId || keepaliveInFlight)', $source );
+	}
+
+	/**
+	 * GitHub directory browsing resolves the default branch and returns selectable repository paths.
+	 *
+	 * @return void
+	 */
+	public function test_list_github_directories_returns_default_branch_tree_picker() {
+		$fetcher = new FakeRemoteContentFetcher();
+		$fetcher->add_json(
+			'https://api.github.com/repos/example/repository',
+			array(
+				'default_branch' => 'main',
+			)
+		);
+		$fetcher->add_json(
+			'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
+			array(
+				'tree' => array(
+					array(
+						'path' => 'docs',
+						'type' => 'tree',
+					),
+					array(
+						'path' => 'docs/api',
+						'type' => 'tree',
+					),
+					array(
+						'path' => 'README.md',
+						'type' => 'blob',
+					),
+				),
+			)
+		);
+
+		$result = $this->create_page( null, null, $fetcher )->list_github_directories( 'https://github.com/example/repository' );
+
+		$this->assertSame( 'main', $result['ref'] );
+		$this->assertSame( '', $result['selected_path'] );
+		$this->assertSame( 'https://github.com/example/repository/tree/main', $result['selected_source_url'] );
+		$this->assertSame( array( '', 'docs', 'docs/api' ), array_column( $result['directories'], 'path' ) );
+		$this->assertSame( 'https://github.com/example/repository/tree/main/docs/api', $result['directories'][2]['source_url'] );
+		$this->assertSame(
+			array(
+				'https://api.github.com/repos/example/repository',
+				'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
+			),
+			$fetcher->get_requested_urls()
+		);
+	}
+
+	/**
+	 * GitHub directory browsing uses branch/path fallback for slash-containing tree URLs.
+	 *
+	 * @return void
+	 */
+	public function test_list_github_directories_falls_back_to_branch_plus_path() {
+		$fetcher = new FakeRemoteContentFetcher();
+		$fetcher->add_json_error(
+			'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk/docs?recursive=1',
+			'GitHub tree ref was not found.'
+		);
+		$fetcher->add_json(
+			'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk?recursive=1',
+			array(
+				'tree' => array(
+					array(
+						'path' => 'docs',
+						'type' => 'tree',
+					),
+					array(
+						'path' => 'docs/reference',
+						'type' => 'tree',
+					),
+					array(
+						'path' => 'packages',
+						'type' => 'tree',
+					),
+				),
+			)
+		);
+
+		$result = $this->create_page( null, null, $fetcher )->list_github_directories( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
+
+		$this->assertSame( 'trunk', $result['ref'] );
+		$this->assertSame( 'trunk/docs', $result['requested_ref'] );
+		$this->assertSame( 'docs', $result['selected_path'] );
+		$this->assertSame( 'https://github.com/WordPress/gutenberg/tree/trunk/docs', $result['selected_source_url'] );
+		$this->assertSame( array( '', 'docs', 'docs/reference', 'packages' ), array_column( $result['directories'], 'path' ) );
 	}
 
 	/**
@@ -1089,11 +1189,12 @@ final class ImportAdminPageTest extends TestCase {
 	/**
 	 * Creates an admin page with fake dependencies.
 	 *
-	 * @param callable|null             $runner_factory  Optional runner factory.
-	 * @param ImportCacheDirectory|null $cache_directory Optional upload cache directory.
+	 * @param callable|null                 $runner_factory  Optional runner factory.
+	 * @param ImportCacheDirectory|null     $cache_directory Optional upload cache directory.
+	 * @param FakeRemoteContentFetcher|null $content_fetcher Optional remote content fetcher.
 	 * @return ImportAdminPage
 	 */
-	private function create_page( callable $runner_factory = null, ImportCacheDirectory $cache_directory = null ) {
+	private function create_page( callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, FakeRemoteContentFetcher $content_fetcher = null ) {
 		return new ImportAdminPage(
 			$this->store,
 			function ( ImportSessionId $session_id ) {
@@ -1102,7 +1203,8 @@ final class ImportAdminPageTest extends TestCase {
 			null === $runner_factory ? function ( WordPressImportSessionStore $store ) {
 				return new FakeAdminRunner( $store );
 			} : $runner_factory,
-			$cache_directory
+			$cache_directory,
+			$content_fetcher
 		);
 	}
 

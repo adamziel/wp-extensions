@@ -208,11 +208,7 @@ final class ImportRunner {
 		$lock = $this->store->acquire_lock( $session->get_id(), $this->owner, $this->lock_ttl_seconds );
 
 		if ( null === $lock ) {
-			$this->record_skipped_event(
-				$session,
-				'session.locked',
-				'Another importer worker owns this session lock.'
-			);
+			$this->record_locked_event_once( $session );
 			$this->schedule_locked_retry( $session );
 			return 'locked';
 		}
@@ -593,6 +589,26 @@ final class ImportRunner {
 					'status' => $session->get_status(),
 				)
 			)
+		);
+	}
+
+	/**
+	 * Records one lock collision event without flooding the activity log.
+	 *
+	 * @param ImportSession $session Session being skipped.
+	 * @return void
+	 */
+	private function record_locked_event_once( ImportSession $session ) {
+		$events = $this->store->list_events( $session->get_id(), 1 );
+
+		if ( ! empty( $events ) && 'session.locked' === $events[0]->get_type() ) {
+			return;
+		}
+
+		$this->record_skipped_event(
+			$session,
+			'session.locked',
+			'Another importer worker owns this session lock.'
 		);
 	}
 

@@ -7257,6 +7257,39 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Repeated lock collisions do not flood the activity log.
+	 *
+	 * @return void
+	 */
+	public function test_runner_deduplicates_consecutive_locked_session_events() {
+		$session = ImportSession::start_for_source( 'local://book.md' );
+		$this->store->save( $session );
+		$this->store->acquire_lock( $session->get_id(), 'other-worker', 60 );
+
+		( new ImportRunner( $this->store, 'unit-test', 60 ) )->run( $session->get_id() );
+		( new ImportRunner( $this->store, 'unit-test', 60 ) )->run( $session->get_id() );
+
+		$event_types = array_map(
+			function ( ImportProgressEvent $event ) {
+				return $event->get_type();
+			},
+			$this->store->list_events( $session->get_id(), 10 )
+		);
+
+		$this->assertSame(
+			array( 'session.locked' ),
+			array_values(
+				array_filter(
+					$event_types,
+					function ( $type ) {
+						return 'session.locked' === $type;
+					}
+				)
+			)
+		);
+	}
+
+	/**
 	 * Locked runnable sessions request another tick so stale locks are revisited.
 	 *
 	 * @return void
