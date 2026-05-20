@@ -238,23 +238,22 @@ final class ImportRunner {
 				return 'skipped';
 			}
 
-			$local                  = ( new LocalFilesystemSourceWalker( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
-			$github_content_fetcher = null === $this->remote_content_fetcher && null === $this->remote_archive_fetcher ? new WordPressRemoteContentFetcher() : $this->remote_content_fetcher;
-			$github_git_fetcher     = null === $this->remote_content_fetcher && null === $this->remote_archive_fetcher ? new PhpToolkitGitRepositoryFetcher() : null;
-			$github                 = ( new GitHubRepositorySourceWalker( $this->store, $this->remote_archive_fetcher, $this->cache_directory, $github_content_fetcher, $this->controls, $github_git_fetcher ) )->advance( $current );
-			$lock                   = $this->refresh_lock( $lock );
-			$remote                 = ( new RemoteUrlSourceWalker( $this->store, $this->remote_content_fetcher, $this->controls ) )->advance( $current );
-			$lock                   = $this->refresh_lock( $lock );
-			$traversal              = $this->combine_traversal_summaries( $local, $github, $remote );
-			$archives               = ( new ZipArchiveSourceWalker( $this->store, $this->cache_directory, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
-			$documents              = ( new SourceItemDocumentProcessor( $this->store, $this->cache_directory, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
-			$urls                   = ( new ImportUrlInference( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
-			$media                  = $urls['blocked'] ? $this->blocked_media_summary() : ( new ImportMediaReferenceDetector( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
+			$local              = ( new LocalFilesystemSourceWalker( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
+			$github_git_fetcher = null === $this->remote_content_fetcher && null === $this->remote_archive_fetcher ? new PhpToolkitGitRepositoryFetcher() : null;
+			$github             = ( new GitHubRepositorySourceWalker( $this->store, $this->remote_archive_fetcher, $this->cache_directory, null, $this->controls, $github_git_fetcher ) )->advance( $current );
+			$lock               = $this->refresh_lock( $lock );
+			$remote             = ( new RemoteUrlSourceWalker( $this->store, $this->remote_content_fetcher, $this->controls ) )->advance( $current );
+			$lock               = $this->refresh_lock( $lock );
+			$traversal          = $this->combine_traversal_summaries( $local, $github, $remote );
+			$archives           = ( new ZipArchiveSourceWalker( $this->store, $this->cache_directory, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
+			$documents          = ( new SourceItemDocumentProcessor( $this->store, $this->cache_directory, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
+			$urls               = ( new ImportUrlInference( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
+			$media              = $urls['blocked'] ? $this->blocked_media_summary() : ( new ImportMediaReferenceDetector( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
 			if ( $current->is_dry_run() ) {
 				$rewrites       = $urls['blocked'] ? $this->blocked_rewrite_summary() : ( new ImportUrlRewriter( $this->store, $this->local_site_url, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
 				$lock           = $this->refresh_lock( $lock );
