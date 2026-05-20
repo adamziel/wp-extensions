@@ -1052,6 +1052,45 @@ final class ImportAdminPageTest extends TestCase {
 	}
 
 	/**
+	 * GitHub sparse checkout progress is shown without counting internal state as a source file.
+	 *
+	 * @return void
+	 */
+	public function test_status_snapshot_exposes_active_github_sparse_checkout() {
+		$page     = $this->create_page();
+		$snapshot = $page->create_import_session( 'https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture' );
+		$session  = $this->store->find( ImportSessionId::from_string( $snapshot['id'] ) );
+		$session  = $session->mark_running();
+		$this->store->save( $session );
+
+		$this->store->save_source_item(
+			ImportSourceItem::queued(
+				$session->get_id(),
+				'github-git:state',
+				null,
+				$session->get_source(),
+				$session->get_source(),
+				ImportSourceItem::TYPE_DIRECTORY,
+				array(
+					'github_git_status'        => 'pulling',
+					'github_git_status_detail' => 'Fetching repository files through sparse Git checkout.',
+					'github_git_started_at'    => '2026-05-20T11:00:00+00:00',
+					'github_ref'               => 'trunk',
+					'github_source_path'       => 'docs/explanations/architecture',
+				)
+			)->with_status( ImportSourceItem::STATUS_PROCESSING )
+		);
+		$details = $page->get_status_snapshot( $session->get_id() );
+
+		$this->assertSame( 0, $details['source_items']['total'] );
+		$this->assertSame( 0, $details['source_items']['statuses'][ ImportSourceItem::STATUS_PROCESSING ] );
+		$this->assertTrue( $details['github_git']['active'] );
+		$this->assertTrue( $details['dashboard']['indeterminate'] );
+		$this->assertSame( 'Fetching repository files with sparse Git.', $details['dashboard']['current_action'] );
+		$this->assertSame( 'Fetching repository files with sparse Git.', $details['dashboard']['checklist'][0]['detail'] );
+	}
+
+	/**
 	 * Status snapshots expose relationship warnings for browser operators.
 	 *
 	 * @return void

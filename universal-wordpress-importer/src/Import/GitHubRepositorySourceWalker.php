@@ -150,6 +150,8 @@ final class GitHubRepositorySourceWalker {
 				continue;
 			}
 
+			$this->mark_git_state_processing( $session, $candidate, $state );
+
 			try {
 				$files = $this->git_fetcher->fetch( $session, $candidate, $this->cache_directory );
 			} catch ( Throwable $exception ) {
@@ -331,6 +333,37 @@ final class GitHubRepositorySourceWalker {
 		);
 
 		$this->store->save_source_item( $state->with_status( ImportSourceItem::STATUS_SKIPPED )->with_replaced_metadata( $metadata ) );
+	}
+
+	/**
+	 * Marks Git traversal state processing before the remote pull begins.
+	 *
+	 * @param ImportSession                                                                                         $session Session.
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo    Repository data.
+	 * @param ImportSourceItem                                                                                      $state   State item.
+	 * @return void
+	 */
+	private function mark_git_state_processing( ImportSession $session, array $repo, ImportSourceItem $state ) {
+		$metadata = array_merge(
+			$state->get_metadata(),
+			array(
+				'github_git_status'        => 'pulling',
+				'github_git_status_detail' => 'Fetching repository files through sparse Git checkout.',
+				'github_git_started_at'    => gmdate( 'c' ),
+			)
+		);
+
+		$this->store->save_source_item( $state->with_status( ImportSourceItem::STATUS_PROCESSING )->with_replaced_metadata( $metadata ) );
+		$this->record_event(
+			$session,
+			'github.git_fetching',
+			'Fetching GitHub repository files through sparse Git checkout.',
+			$repo,
+			array(
+				'ref'  => $repo['ref'],
+				'path' => $repo['source_path'],
+			)
+		);
 	}
 
 	/**

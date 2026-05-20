@@ -554,6 +554,7 @@ final class ImportAdminPage {
 		);
 		$media              = $this->get_media_reference_snapshot( $source_id );
 		$remote_backoff     = $this->get_remote_rate_limit_snapshot( $source_id );
+		$github_git         = $this->get_github_git_snapshot( $source_id );
 		$pdf_documents      = $this->get_pdf_document_snapshot( $source_id );
 		$epub_tocs          = $this->get_epub_toc_snapshot( $source_id );
 		$warnings           = $this->get_relationship_warning_snapshot( $source_id );
@@ -579,6 +580,7 @@ final class ImportAdminPage {
 			'comments'              => $comments,
 			'media'                 => $media,
 			'remote_backoff'        => $remote_backoff,
+			'github_git'            => $github_git,
 			'pdf_documents'         => $pdf_documents,
 			'epub_tocs'             => $epub_tocs,
 			'relationship_warnings' => $warnings,
@@ -1152,6 +1154,19 @@ final class ImportAdminPage {
 				display: block;
 				height: 100%;
 				min-width: 4px;
+			}
+			.universal-importer-progressbar.is-indeterminate span {
+				animation: universal-importer-progress-indeterminate 1.2s ease-in-out infinite;
+				min-width: 35%;
+				width: 35%;
+			}
+			@keyframes universal-importer-progress-indeterminate {
+				0% {
+					transform: translateX(-120%);
+				}
+				100% {
+					transform: translateX(300%);
+				}
 			}
 			.universal-importer-current-action {
 				font-size: 14px;
@@ -2352,6 +2367,7 @@ final class ImportAdminPage {
 				var summary = dashboard.summary || { total: 0, completed: 0, errors: 0 };
 				var percent = Math.max(0, Math.min(100, Number(dashboard.percentage || 0)));
 				var total = summary.total || '?';
+				var progressClass = dashboard.indeterminate ? ' is-indeterminate' : '';
 				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : session.status;
 				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : (session.post_status === 'draft' ? '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Publishes pages', 'universal-wordpress-importer' ) ); ?>');
 				var importingClass = isImportLocked(session) ? ' is-importing' : '';
@@ -2362,7 +2378,7 @@ final class ImportAdminPage {
 				html += '<span class="universal-importer-status-pill">' + escapeHtml(displayStatus) + '</span>';
 				html += '</div><div class="universal-importer-card-body">';
 				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
-				html += '<div class="universal-importer-progressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
+				html += '<div class="universal-importer-progressbar' + progressClass + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
 				html += '<p class="universal-importer-meta">' + percent + '% · ' + summary.completed + ' / ' + total + ' <?php echo esc_js( __( 'items complete', 'universal-wordpress-importer' ) ); ?>';
 				if (summary.errors) {
 					html += ' · ' + summary.errors + ' <?php echo esc_js( __( 'errors', 'universal-wordpress-importer' ) ); ?>';
@@ -3068,6 +3084,7 @@ final class ImportAdminPage {
 			$dashboard      = isset( $session['dashboard'] ) && is_array( $session['dashboard'] ) ? $session['dashboard'] : array();
 			$summary        = isset( $dashboard['summary'] ) && is_array( $dashboard['summary'] ) ? $dashboard['summary'] : array();
 			$percentage     = isset( $dashboard['percentage'] ) ? max( 0, min( 100, (int) $dashboard['percentage'] ) ) : 0;
+			$progress_class = ! empty( $dashboard['indeterminate'] ) ? ' universal-importer-progressbar is-indeterminate' : ' universal-importer-progressbar';
 			$total          = empty( $summary['total'] ) ? '?' : (string) $summary['total'];
 			$completed      = isset( $summary['completed'] ) ? (int) $summary['completed'] : 0;
 			$errors         = isset( $summary['errors'] ) ? (int) $summary['errors'] : 0;
@@ -3088,7 +3105,7 @@ final class ImportAdminPage {
 				</div>
 				<div class="universal-importer-card-body">
 					<p class="universal-importer-current-action"><?php echo esc_html( $current_action ); ?></p>
-					<div class="universal-importer-progressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( (string) $percentage ); ?>">
+					<div class="<?php echo esc_attr( trim( $progress_class ) ); ?>" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( (string) $percentage ); ?>">
 						<span style="width:<?php echo esc_attr( (string) $percentage ); ?>%"></span>
 					</div>
 					<p class="universal-importer-meta">
@@ -4015,6 +4032,7 @@ final class ImportAdminPage {
 
 		return array(
 			'percentage'        => $percentage,
+			'indeterminate'     => $this->dashboard_progress_is_indeterminate( $session ),
 			'current_action'    => $this->dashboard_current_action( $session ),
 			'attention_message' => $this->dashboard_attention_message( $session ),
 			'needs_keepalive'   => $this->dashboard_needs_keepalive( $session ),
@@ -4026,6 +4044,26 @@ final class ImportAdminPage {
 			'checklist'         => $this->dashboard_checklist( $session, $source_counts ),
 			'activity_log'      => $this->dashboard_activity_log( $session ),
 		);
+	}
+
+	/**
+	 * Returns whether progress is active without a known item total yet.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return bool
+	 */
+	private function dashboard_progress_is_indeterminate( array $session ) {
+		if ( ImportSession::STATUS_RUNNING !== $session['status'] ) {
+			return false;
+		}
+
+		if ( ! empty( $session['github_git']['active'] ) ) {
+			return true;
+		}
+
+		$source_total = isset( $session['source_items']['total'] ) ? (int) $session['source_items']['total'] : 0;
+
+		return 0 === $source_total;
 	}
 
 	/**
@@ -4074,6 +4112,10 @@ final class ImportAdminPage {
 
 		if ( ! empty( $session['remote_backoff']['total'] ) ) {
 			return $this->admin_text( 'Waiting for the remote source.' );
+		}
+
+		if ( ! empty( $session['github_git']['active'] ) ) {
+			return $this->admin_text( 'Fetching repository files with sparse Git.' );
 		}
 
 		$source_statuses = isset( $session['source_items']['statuses'] ) && is_array( $session['source_items']['statuses'] ) ? $session['source_items']['statuses'] : array();
@@ -4260,6 +4302,7 @@ final class ImportAdminPage {
 		$media_failed         = (int) ( isset( $media_statuses['failed'] ) ? $media_statuses['failed'] : 0 );
 		$has_decision         = ! empty( $session['pending_decisions'] );
 		$is_done              = ImportSession::STATUS_DONE === $session['status'];
+		$github_git_active    = ! empty( $session['github_git']['active'] );
 
 		$stages = array(
 			array(
@@ -4315,7 +4358,7 @@ final class ImportAdminPage {
 
 		if ( 0 === $source_total ) {
 			if ( ! $is_done ) {
-				$stages[0]['detail'] = $this->admin_text( 'Queued.' );
+				$stages[0]['detail'] = $github_git_active ? $this->admin_text( 'Fetching repository files with sparse Git.' ) : $this->admin_text( 'Queued.' );
 				$stages[0]['state']  = 'active';
 				return $stages;
 			}
@@ -4434,20 +4477,89 @@ final class ImportAdminPage {
 			ImportSourceItem::STATUS_SKIPPED,
 			ImportSourceItem::STATUS_FAILED,
 		);
-		$counts   = array();
+		$counts   = array_fill_keys( $statuses, 0 );
+		$recent   = array();
+		$items    = $store->list_source_items_by_statuses( $id, $statuses, 1500 );
 
-		foreach ( $statuses as $status ) {
-			$counts[ $status ] = $store->count_source_items_by_statuses( $id, array( $status ) );
+		foreach ( $items as $item ) {
+			if ( $this->is_internal_source_item( $item ) ) {
+				continue;
+			}
+
+			$status = $item->get_status();
+			if ( isset( $counts[ $status ] ) ) {
+				++$counts[ $status ];
+			}
+
+			if ( count( $recent ) < 8 ) {
+				$recent[] = $this->source_item_to_snapshot( $item );
+			}
 		}
 
 		return array(
 			'total'    => array_sum( $counts ),
 			'statuses' => $counts,
-			'recent'   => array_map(
-				array( $this, 'source_item_to_snapshot' ),
-				$store->list_recent_source_items( $id, 8 )
-			),
+			'recent'   => $recent,
 		);
+	}
+
+	/**
+	 * Returns whether a source item is internal traversal bookkeeping.
+	 *
+	 * @param ImportSourceItem $item Source item.
+	 * @return bool
+	 */
+	private function is_internal_source_item( ImportSourceItem $item ) {
+		return 0 === strpos( $item->get_key(), 'github-git:' );
+	}
+
+	/**
+	 * Builds active GitHub sparse Git traversal details for the dashboard.
+	 *
+	 * @param ImportSessionId $id Session id.
+	 * @return array<string,mixed>
+	 */
+	private function get_github_git_snapshot( ImportSessionId $id ) {
+		$items = $this->get_store()->list_source_items_by_statuses(
+			$id,
+			array(
+				ImportSourceItem::STATUS_PROCESSING,
+				ImportSourceItem::STATUS_SKIPPED,
+				ImportSourceItem::STATUS_FAILED,
+			),
+			50
+		);
+
+		$snapshot = array(
+			'active' => false,
+			'recent' => array(),
+		);
+
+		foreach ( $items as $item ) {
+			$metadata = $item->get_metadata();
+			if ( empty( $metadata['github_git_status'] ) ) {
+				continue;
+			}
+
+			$entry = array(
+				'status'      => (string) $metadata['github_git_status'],
+				'ref'         => isset( $metadata['github_ref'] ) ? (string) $metadata['github_ref'] : '',
+				'source_path' => isset( $metadata['github_source_path'] ) ? (string) $metadata['github_source_path'] : '',
+				'detail'      => isset( $metadata['github_git_status_detail'] ) ? (string) $metadata['github_git_status_detail'] : '',
+				'started_at'  => isset( $metadata['github_git_started_at'] ) ? (string) $metadata['github_git_started_at'] : '',
+			);
+
+			if ( ImportSourceItem::STATUS_PROCESSING === $item->get_status() && 'pulling' === $entry['status'] ) {
+				$snapshot['active']  = true;
+				$snapshot['current'] = $entry;
+			}
+
+			if ( count( $snapshot['recent'] ) < 5 ) {
+				$snapshot['recent'][] = $entry;
+			}
+		}
+
+		return $snapshot;
 	}
 
 	/**
