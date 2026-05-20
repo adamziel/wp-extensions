@@ -519,19 +519,12 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
-	 * GitHub repository URLs are downloaded as zip archives and handed to the existing tree pipeline.
+	 * GitHub repository URLs never fall back to zipball downloads.
 	 *
 	 * @return void
 	 */
-	public function test_runner_downloads_github_repository_archives() {
-		$archive = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/README.md'    => "# GitHub Readme\n\nImported from a repository archive.",
-				'example-main/docs/page.md' => "# Repo Page\n\nNested documentation.",
-			)
-		);
-		$fetcher = new FakeRemoteArchiveFetcher( $archive );
+	public function test_runner_does_not_download_github_repository_zipballs() {
+		$fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main' );
 		$posts   = new FakePostGateway();
 		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
@@ -543,42 +536,31 @@ final class ImportRunnerTest extends TestCase {
 		$runner->run( $session->get_id() );
 
 		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
-		$items     = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED, ImportSourceItem::STATUS_SKIPPED ), 10 );
+		$failed    = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_FAILED ), 10 );
 		$events    = array_map(
 			function ( $event ) {
 				return $event->get_type();
 			},
 			$this->store->list_events( $session->get_id(), 20 )
 		);
-		$skipped   = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_SKIPPED ), 10 );
 
-		$this->assertCount( 2, $documents );
-		$this->assertSame( 2, $posts->count_posts() );
-		$this->assertSame( 'https://api.github.com/repos/example/repository/zipball/main', $fetcher->get_requested_url() );
-		$this->assertContains( 'github.archive_downloaded', $events );
-		$this->assertContains( 'archive.expanded', $events );
-		$this->assertSame( 1, $this->count_github_archive_items( $skipped ) );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'github' ) );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'archives' ) );
+		$this->assertCount( 0, $documents );
+		$this->assertSame( 0, $posts->count_posts() );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertCount( 1, $failed );
+		$this->assertSame( false, $failed[0]->get_metadata()['github_zipball'] );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_downloaded', $events );
+		$this->assertNotContains( 'archive.expanded', $events );
 	}
 
 	/**
-	 * GitHub tree URLs fall back to subtree imports when the slash-ref candidate is not found.
+	 * GitHub tree URLs do not download zipballs when sparse Git and tree traversal are unavailable.
 	 *
 	 * @return void
 	 */
-	public function test_runner_imports_github_tree_subpath_without_importing_siblings() {
-		$archive = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/README.md'            => "# GitHub Readme\n\nRoot file.",
-				'example-main/docs/page.md'         => "# Repo Page\n\nNested documentation.",
-				'example-main/docs/guide.md'        => "# Guide\n\nSubtree documentation.",
-				'example-main/src/internal.md'      => "# Internal\n\nImplementation notes.",
-				'example-main/docs/deeper/note.txt' => 'Plain subtree note.',
-			)
-		);
-		$fetcher = new FakeRemoteArchiveFetcher( $archive, array( 'GitHub archive download returned HTTP 404.', '' ) );
+	public function test_runner_does_not_download_github_tree_subpath_zipballs() {
+		$fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main/docs' );
 		$posts   = new FakePostGateway();
 		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
@@ -607,25 +589,14 @@ final class ImportRunnerTest extends TestCase {
 		);
 		$archive = $this->find_github_archive_item( $items );
 
-		$this->assertSame( array( 'Guide', 'Repo Page', 'note' ), $titles );
-		$this->assertSame( 3, $posts->count_posts() );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository/zipball/main/docs',
-				'https://api.github.com/repos/example/repository/zipball/main',
-			),
-			$fetcher->get_requested_urls()
-		);
-		$this->assertCount( 0, $failed );
-		$this->assertNotNull( $archive );
-		$this->assertSame( 'main', $archive->get_metadata()['github_ref'] );
-		$this->assertSame( 'main/docs', $archive->get_metadata()['github_requested_ref'] );
-		$this->assertSame( 'docs', $archive->get_metadata()['github_source_path'] );
-		$this->assertSame( 'docs', $archive->get_metadata()['archive_entry_prefix'] );
-		$this->assertContains( 'github.archive_downloaded', $events );
-		$this->assertContains( 'archive.expanded', $events );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'github' ) );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'archives' ) );
+		$this->assertSame( array(), $titles );
+		$this->assertSame( 0, $posts->count_posts() );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertCount( 1, $failed );
+		$this->assertNull( $archive );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_downloaded', $events );
+		$this->assertNotContains( 'archive.expanded', $events );
 	}
 
 	/**
@@ -696,7 +667,6 @@ final class ImportRunnerTest extends TestCase {
 		$this->store->save( $session );
 
 		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
-		$runner->run( $session->get_id() );
 		$runner->run( $session->get_id() );
 
 		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
@@ -943,20 +913,12 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
-	 * Truncated GitHub tree API responses fall back to zipball traversal.
+	 * Truncated GitHub tree API responses do not fall back to zipball traversal.
 	 *
 	 * @return void
 	 */
-	public function test_runner_falls_back_to_github_archive_when_tree_response_is_truncated() {
-		$archive         = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/README.md'     => "# GitHub Readme\n\nRoot file.",
-				'example-main/docs/page.md'  => "# Repo Page\n\nNested documentation.",
-				'example-main/docs/guide.md' => "# Guide\n\nSubtree documentation.",
-			)
-		);
-		$archive_fetcher = new FakeRemoteArchiveFetcher( $archive, array( 'GitHub archive download returned HTTP 404.', '' ) );
+	public function test_runner_does_not_download_zipball_when_tree_response_is_truncated() {
+		$archive_fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$fetcher         = new FakeRemoteContentFetcher();
 		$fetcher->add_json_error(
 			'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1',
@@ -983,7 +945,6 @@ final class ImportRunnerTest extends TestCase {
 
 		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
 		$runner->run( $session->get_id() );
-		$runner->run( $session->get_id() );
 
 		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
 		$titles    = array_map(
@@ -1001,18 +962,13 @@ final class ImportRunnerTest extends TestCase {
 			$this->store->list_events( $session->get_id(), 20 )
 		);
 
-		$this->assertSame( array( 'Guide', 'Repo Page' ), $titles );
-		$this->assertSame( 2, $posts->count_posts() );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository/zipball/main/docs',
-				'https://api.github.com/repos/example/repository/zipball/main',
-			),
-			$archive_fetcher->get_requested_urls()
-		);
-		$this->assertContains( 'github.archive_downloaded', $events );
+		$this->assertSame( array(), $titles );
+		$this->assertSame( 0, $posts->count_posts() );
+		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_downloaded', $events );
 		$this->assertNotContains( 'github.tree_queued', $events );
-		$this->assertSame( 1, $this->count_github_archive_items( $items ) );
+		$this->assertSame( 0, $this->count_github_archive_items( $items ) );
 	}
 
 	/**
@@ -1094,19 +1050,12 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
-	 * Tree blob failures do not persist a partial tree before archive fallback.
+	 * Tree blob failures do not fall back to zipball downloads.
 	 *
 	 * @return void
 	 */
-	public function test_runner_falls_back_to_github_archive_without_partial_tree_items_when_blob_fetch_fails() {
-		$archive         = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/docs/page.md'  => "# Repo Page\n\nArchive documentation.",
-				'example-main/docs/guide.md' => "# Guide\n\nArchive guide.",
-			)
-		);
-		$archive_fetcher = new FakeRemoteArchiveFetcher( $archive, array( 'GitHub archive download returned HTTP 404.', '' ) );
+	public function test_runner_does_not_download_zipball_when_tree_blob_fetch_fails() {
+		$archive_fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$fetcher         = new FakeRemoteContentFetcher();
 		$fetcher->add_json_error(
 			'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1',
@@ -1143,7 +1092,6 @@ final class ImportRunnerTest extends TestCase {
 
 		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
 		$runner->run( $session->get_id() );
-		$runner->run( $session->get_id() );
 
 		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
 		$titles    = array_map(
@@ -1161,15 +1109,9 @@ final class ImportRunnerTest extends TestCase {
 			$this->store->list_events( $session->get_id(), 20 )
 		);
 
-		$this->assertSame( array( 'Guide', 'Repo Page' ), $titles );
-		$this->assertSame( 2, $posts->count_posts() );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository/zipball/main/docs',
-				'https://api.github.com/repos/example/repository/zipball/main',
-			),
-			$archive_fetcher->get_requested_urls()
-		);
+		$this->assertSame( array(), $titles );
+		$this->assertSame( 0, $posts->count_posts() );
+		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
 		$this->assertSame(
 			array(
 				'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1',
@@ -1179,25 +1121,20 @@ final class ImportRunnerTest extends TestCase {
 			),
 			$fetcher->get_requested_urls()
 		);
-		$this->assertContains( 'github.archive_downloaded', $events );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_downloaded', $events );
 		$this->assertNotContains( 'github.tree_queued', $events );
 		$this->assertSame( 0, $this->count_github_tree_items( $items ) );
-		$this->assertSame( 1, $this->count_github_archive_items( $items ) );
+		$this->assertSame( 0, $this->count_github_archive_items( $items ) );
 	}
 
 	/**
-	 * GitHub tree URLs keep slash-containing refs when the first archive candidate succeeds.
+	 * GitHub tree URLs with slash refs do not download zipballs.
 	 *
 	 * @return void
 	 */
-	public function test_runner_preserves_successful_github_tree_slash_refs() {
-		$archive = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-release/README.md' => "# Release Branch\n\nImported from a slash ref.",
-			)
-		);
-		$fetcher = new FakeRemoteArchiveFetcher( $archive );
+	public function test_runner_does_not_download_zipball_for_github_tree_slash_refs() {
+		$fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/release/1.0' );
 		$posts   = new FakePostGateway();
 		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
@@ -1212,12 +1149,9 @@ final class ImportRunnerTest extends TestCase {
 		$items     = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED, ImportSourceItem::STATUS_SKIPPED ), 10 );
 		$archive   = $this->find_github_archive_item( $items );
 
-		$this->assertCount( 1, $documents );
-		$this->assertSame( 'Release Branch', $documents[0]->get_title() );
-		$this->assertSame( array( 'https://api.github.com/repos/example/repository/zipball/release/1.0' ), $fetcher->get_requested_urls() );
-		$this->assertNotNull( $archive );
-		$this->assertSame( 'release/1.0', $archive->get_metadata()['github_ref'] );
-		$this->assertSame( '', $archive->get_metadata()['github_source_path'] );
+		$this->assertCount( 0, $documents );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertNull( $archive );
 	}
 
 	/**
@@ -1289,11 +1223,11 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
-	 * GitHub archive download failures are durable and actionable.
+	 * Missing GitHub traversal support is durable and actionable.
 	 *
 	 * @return void
 	 */
-	public function test_runner_records_github_archive_download_failures() {
+	public function test_runner_records_github_traversal_failures_without_zipballs() {
 		$fetcher = new FakeRemoteArchiveFetcher( null, 'GitHub archive download returned HTTP 404.' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/missing?ref=release/1.0' );
 		$this->store->save( $session );
@@ -1309,23 +1243,19 @@ final class ImportRunnerTest extends TestCase {
 		);
 
 		$this->assertCount( 1, $failed );
-		$this->assertSame( 'GitHub archive download returned HTTP 404.', $failed[0]->get_metadata()['error'] );
+		$this->assertStringContainsString( 'Zipball fallback is disabled', $failed[0]->get_metadata()['error'] );
 		$this->assertSame( 'release/1.0', $failed[0]->get_metadata()['github_ref'] );
-		$this->assertContains( 'github.archive_failed', $events );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_failed', $events );
 	}
 
 	/**
-	 * Previously failed GitHub archive downloads are retried on a later continuation.
+	 * Previously failed GitHub traversal does not retry zipball downloads.
 	 *
 	 * @return void
 	 */
-	public function test_runner_retries_failed_github_archive_downloads() {
-		$archive = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/README.md' => "# GitHub Retry\n\nRecovered after a transient download failure.",
-			)
-		);
+	public function test_runner_does_not_retry_failed_github_traversal_as_zipball_download() {
 		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository?ref=main' );
 		$this->store->save( $session );
@@ -1335,10 +1265,10 @@ final class ImportRunnerTest extends TestCase {
 
 		$failed = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_FAILED ), 10 );
 		$this->assertCount( 1, $failed );
-		$this->assertSame( 'Temporary GitHub archive outage.', $failed[0]->get_metadata()['error'] );
+		$this->assertStringContainsString( 'Zipball fallback is disabled', $failed[0]->get_metadata()['error'] );
 
 		$posts           = new FakePostGateway();
-		$success_fetcher = new FakeRemoteArchiveFetcher( $archive );
+		$success_fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$runner          = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $success_fetcher, null, null, $cache );
 		$runner->run( $session->get_id() );
 		$runner->run( $session->get_id() );
@@ -1354,24 +1284,23 @@ final class ImportRunnerTest extends TestCase {
 			$this->store->list_events( $session->get_id(), 20 )
 		);
 
-		$this->assertCount( 0, $remaining_failed );
-		$this->assertCount( 1, $documents );
-		$this->assertSame( 'GitHub Retry', $documents[0]->get_title() );
-		$this->assertSame( 1, $posts->count_posts() );
-		$this->assertSame( array( 'https://api.github.com/repos/example/repository/zipball/main' ), $success_fetcher->get_requested_urls() );
-		$this->assertNotNull( $github_archive );
-		$this->assertSame( 1, $github_archive->get_metadata()['github_retry_count'] );
-		$this->assertContains( 'github.archive_retrying', $events );
-		$this->assertContains( 'github.archive_downloaded', $events );
-		$this->assertContains( 'archive.expanded', $events );
+		$this->assertCount( 1, $remaining_failed );
+		$this->assertCount( 0, $documents );
+		$this->assertSame( 0, $posts->count_posts() );
+		$this->assertSame( array(), $success_fetcher->get_requested_urls() );
+		$this->assertNull( $github_archive );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_retrying', $events );
+		$this->assertNotContains( 'github.archive_downloaded', $events );
+		$this->assertNotContains( 'archive.expanded', $events );
 	}
 
 	/**
-	 * WordPress upload cache failures are recorded on GitHub source items.
+	 * GitHub traversal failures do not call the archive fetcher even with an unavailable cache.
 	 *
 	 * @return void
 	 */
-	public function test_runner_records_github_cache_directory_failures() {
+	public function test_runner_does_not_download_zipball_when_cache_directory_is_unavailable() {
 		$cache   = ImportCacheDirectory::from_wordpress_upload_dir( array( 'error' => 'Upload path is not writable.' ) );
 		$fetcher = new FakeRemoteArchiveFetcher( null );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository' );
@@ -1389,9 +1318,10 @@ final class ImportRunnerTest extends TestCase {
 
 		$this->assertSame( 1, $summary['processed'] );
 		$this->assertCount( 1, $failed );
-		$this->assertSame( 'WordPress upload directory is unavailable for importer cache: Upload path is not writable.', $failed[0]->get_metadata()['error'] );
-		$this->assertNull( $fetcher->get_requested_url() );
-		$this->assertContains( 'github.archive_failed', $events );
+		$this->assertStringContainsString( 'Zipball fallback is disabled', $failed[0]->get_metadata()['error'] );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_failed', $events );
 	}
 
 	/**

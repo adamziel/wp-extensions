@@ -111,7 +111,7 @@ final class GitHubRepositorySourceWalkerTest extends TestCase {
 	}
 
 	/**
-	 * Ambiguous slash-ref tree URLs skip Git plumbing and use the tree API.
+	 * Ambiguous slash-ref tree URLs try sparse Git candidates before the tree API.
 	 *
 	 * @return void
 	 */
@@ -205,10 +205,10 @@ final class GitHubRepositorySourceWalkerTest extends TestCase {
 		$this->assertSame( 2, $summary['queued'] );
 		$this->assertTrue( $summary['complete'] );
 		$this->assertSame( array( 'api.md', 'images/diagram.md' ), $paths );
-		$this->assertSame( array(), $git_fetcher->get_requests() );
+		$this->assertCount( 3, $git_fetcher->get_requests() );
 		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
 		$this->assertContains( 'github.tree_queued', $events );
-		$this->assertNotContains( 'github.git_unavailable', $events );
+		$this->assertContains( 'github.git_unavailable', $events );
 	}
 
 	/**

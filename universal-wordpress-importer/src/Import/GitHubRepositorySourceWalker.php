@@ -7,16 +7,15 @@
 
 namespace UniversalImporter\Import;
 
-// phpcs:disable WordPress.WP.AlternativeFunctions -- Remote repository archives are cached as importer-managed files.
+// phpcs:disable WordPress.WP.AlternativeFunctions -- Importer-managed cache files are written outside the uploads API by design.
 
 use RuntimeException;
 use Throwable;
 
 /**
- * Seeds GitHub repository URLs into the durable source queue as zip archives.
+ * Seeds GitHub repository URLs into the durable source queue through sparse Git or GitHub tree traversal.
  */
 final class GitHubRepositorySourceWalker {
-	const MAX_ARCHIVE_BYTES       = 268435456;
 	const TREE_BLOB_LIMIT         = 100;
 	const CONTENTS_API_FILE_LIMIT = 1000;
 
@@ -26,13 +25,6 @@ final class GitHubRepositorySourceWalker {
 	 * @var WordPressImportSessionStore
 	 */
 	private $store;
-
-	/**
-	 * Remote archive fetcher.
-	 *
-	 * @var ImportRemoteArchiveFetcherInterface
-	 */
-	private $fetcher;
 
 	/**
 	 * Remote JSON fetcher for GitHub tree/blob APIs.
@@ -66,15 +58,14 @@ final class GitHubRepositorySourceWalker {
 	 * Constructor.
 	 *
 	 * @param WordPressImportSessionStore              $store      Durable store.
-	 * @param ImportRemoteArchiveFetcherInterface|null $fetcher  Optional fetcher.
+	 * @param ImportRemoteArchiveFetcherInterface|null $fetcher  Deprecated archive fetcher argument, ignored for GitHub imports.
 	 * @param string|ImportCacheDirectory|null         $cache_root Optional cache root.
 	 * @param ImportRemoteContentFetcherInterface|null $content_fetcher Optional GitHub tree/blob fetcher.
 	 * @param ImportRunnerControls|null                $controls Optional hidden test controls.
-	 * @param GitRepositoryFetcherInterface|null       $git_fetcher Optional Git plumbing fetcher.
+	 * @param GitRepositoryFetcherInterface|null       $git_fetcher Optional Git sparse checkout fetcher.
 	 */
 	public function __construct( WordPressImportSessionStore $store, ImportRemoteArchiveFetcherInterface $fetcher = null, $cache_root = null, ImportRemoteContentFetcherInterface $content_fetcher = null, ImportRunnerControls $controls = null, GitRepositoryFetcherInterface $git_fetcher = null ) {
 		$this->store           = $store;
-		$this->fetcher         = null === $fetcher ? new WordPressRemoteArchiveFetcher() : $fetcher;
 		$this->content_fetcher = $content_fetcher;
 		$this->git_fetcher     = $git_fetcher;
 		$this->cache_directory = $cache_root instanceof ImportCacheDirectory ? $cache_root : ( null === $cache_root ? ImportCacheDirectory::from_environment() : new ImportCacheDirectory( $cache_root ) );
@@ -108,11 +99,6 @@ final class GitHubRepositorySourceWalker {
 			return $deferred;
 		}
 
-		$existing_archive_summary = $this->existing_archive_summary( $session, $repositories );
-		if ( null !== $existing_archive_summary ) {
-			return $existing_archive_summary;
-		}
-
 		$git_summary = $this->queue_git_items( $session, $repositories );
 		if ( null !== $git_summary ) {
 			return $git_summary;
@@ -123,163 +109,33 @@ final class GitHubRepositorySourceWalker {
 			return $tree_summary;
 		}
 
-		$failed_items = array();
-
-		foreach ( $repositories as $candidate ) {
-			$existing = $this->store->find_source_item( $session->get_id(), $this->item_key( $candidate ) );
-			if ( null !== $existing ) {
-				if ( ImportSourceItem::STATUS_FAILED === $existing->get_status() ) {
-					$failed_items[ $this->item_key( $candidate ) ] = $existing;
-					continue;
-				}
-
-				$summary['complete']   = ImportSourceItem::STATUS_FAILED !== $existing->get_status();
-				$summary['message']    = 'GitHub repository archive is already present in the source queue.';
-				$summary['discovered'] = 1;
-				$summary['failed']     = 0;
-				return $summary;
-			}
-		}
-
-		$last_exception = null;
-		$last_repo      = $repo;
-		$last_target    = $repo['source_url'];
-
-		foreach ( $repositories as $candidate ) {
-			$item_key = $this->item_key( $candidate );
-			$target   = $candidate['source_url'];
-
-			try {
-				if ( isset( $failed_items[ $item_key ] ) ) {
-					$previous_metadata = $failed_items[ $item_key ]->get_metadata();
-					$this->record_event(
-						$session,
-						'github.archive_retrying',
-						'Retrying a previously failed GitHub repository archive download.',
-						$candidate,
-						array(
-							'previous_error' => isset( $previous_metadata['error'] ) ? (string) $previous_metadata['error'] : '',
-						)
-					);
-				}
-
-				$target = $this->cache_path( $session, $candidate );
-				$this->cache_directory->ensure_parent_directory( $target );
-				$fetch = $this->fetcher->fetch( $this->zipball_api_url( $candidate ), $target );
-
-				if ( ! is_file( $target ) || ! is_readable( $target ) ) {
-					throw new RuntimeException( 'GitHub archive cache file is not readable after download.' );
-				}
-
-				if ( self::MAX_ARCHIVE_BYTES < filesize( $target ) ) {
-					unlink( $target );
-					throw new RuntimeException( 'GitHub archive exceeds the importer repository archive size limit.' );
-				}
-
-				$this->store->save_source_item(
-					ImportSourceItem::queued(
-						$session->get_id(),
-						$item_key,
-						null,
-						$target,
-						$candidate['owner'] . '/' . $candidate['name'] . '.zip',
-						ImportSourceItem::TYPE_FILE,
-						array(
-							'basename'                   => $candidate['name'] . '.zip',
-							'bytes'                      => filesize( $target ),
-							'extension'                  => 'zip',
-							'github_owner'               => $candidate['owner'],
-							'github_repository'          => $candidate['name'],
-							'github_ref'                 => $candidate['ref'],
-							'github_requested_ref'       => isset( $candidate['requested_ref'] ) ? $candidate['requested_ref'] : $candidate['ref'],
-							'github_source_url'          => $candidate['source_url'],
-							'github_source_path'         => $candidate['source_path'],
-							'github_zipball'             => $this->zipball_api_url( $candidate ),
-							'github_fetch'               => $fetch,
-							'github_retry_count'         => $this->retry_count( isset( $failed_items[ $item_key ] ) ? $failed_items[ $item_key ] : null ),
-							'archive_entry_prefix'       => $candidate['source_path'],
-							'archive_strip_root_segment' => '' === $candidate['source_path'] ? false : true,
-						)
-						+ $this->cache_directory->metadata_for( 'github', $target )
-					)->with_status( ImportSourceItem::STATUS_DISCOVERED )
-				);
-				$this->record_event(
-					$session,
-					'github.archive_downloaded',
-					'GitHub repository archive was downloaded into the source queue.',
-					$candidate,
-					array(
-						'bytes'      => filesize( $target ),
-						'cache_path' => $target,
-					)
-				);
-				$this->mark_tree_state_complete( $session, $repositories );
-				$summary['discovered'] = 1;
-				$summary['queued']     = 1;
-				$summary['complete']   = true;
-				$summary['message']    = 'GitHub repository archive was downloaded and queued for zip traversal.';
-				return $summary;
-			} catch ( RuntimeException $exception ) {
-				$last_exception = $exception;
-				$last_repo      = $candidate;
-				$last_target    = $target;
-			}
-		}
-
-		$message = null === $last_exception ? 'GitHub archive download failed.' : $last_exception->getMessage();
+		$message = 'GitHub repository traversal could not queue files through sparse Git or the GitHub tree API. Zipball fallback is disabled for GitHub imports.';
 		$this->store->save_source_item(
 			ImportSourceItem::queued(
 				$session->get_id(),
-				$this->item_key( $last_repo ),
+				$this->item_key( $repo ),
 				null,
-				$last_target,
-				$last_repo['owner'] . '/' . $last_repo['name'] . '.zip',
-				ImportSourceItem::TYPE_FILE,
+				$repo['source_url'],
+				$repo['source_url'],
+				ImportSourceItem::TYPE_DIRECTORY,
 				array(
-					'extension'            => 'zip',
-					'github_owner'         => $last_repo['owner'],
-					'github_repository'    => $last_repo['name'],
-					'github_ref'           => $last_repo['ref'],
-					'github_requested_ref' => isset( $last_repo['requested_ref'] ) ? $last_repo['requested_ref'] : $last_repo['ref'],
-					'github_source_url'    => $last_repo['source_url'],
-					'github_source_path'   => $last_repo['source_path'],
+					'github_owner'         => $repo['owner'],
+					'github_repository'    => $repo['name'],
+					'github_ref'           => $repo['ref'],
+					'github_requested_ref' => isset( $repo['requested_ref'] ) ? $repo['requested_ref'] : $repo['ref'],
+					'github_source_url'    => $repo['source_url'],
+					'github_source_path'   => $repo['source_path'],
+					'github_zipball'       => false,
 					'error'                => $message,
-					'github_retry_count'   => $this->retry_count( isset( $failed_items[ $this->item_key( $last_repo ) ] ) ? $failed_items[ $this->item_key( $last_repo ) ] : null ),
 				)
 			)->with_status( ImportSourceItem::STATUS_FAILED )
 		);
-		$this->record_event( $session, 'github.archive_failed', $message, $last_repo, array() );
+		$this->record_event( $session, 'github.traversal_failed', $message, $repo, array(), ImportProgressEvent::LEVEL_ERROR );
 		$summary['failed']   = 1;
 		$summary['complete'] = true;
 		$summary['message']  = $message;
 
 		return $summary;
-	}
-
-	/**
-	 * Returns a traversal summary when an archive source item already exists.
-	 *
-	 * @param ImportSession                                                                                                    $session      Session.
-	 * @param array<int,array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string}> $repositories Candidate repositories.
-	 * @return array{discovered:int,queued:int,failed:int,complete:bool,message:string}|null
-	 */
-	private function existing_archive_summary( ImportSession $session, array $repositories ) {
-		foreach ( $repositories as $candidate ) {
-			$existing = $this->store->find_source_item( $session->get_id(), $this->item_key( $candidate ) );
-			if ( null === $existing || ImportSourceItem::STATUS_FAILED === $existing->get_status() ) {
-				continue;
-			}
-
-			return array(
-				'discovered' => 1,
-				'queued'     => 0,
-				'failed'     => 0,
-				'complete'   => true,
-				'message'    => 'GitHub repository archive is already present in the source queue.',
-			);
-		}
-
-		return null;
 	}
 
 	/**
@@ -292,10 +148,6 @@ final class GitHubRepositorySourceWalker {
 	 */
 	private function queue_git_items( ImportSession $session, array $repositories ) {
 		if ( null === $this->git_fetcher ) {
-			return null;
-		}
-
-		if ( $this->has_ambiguous_slash_ref_candidates( $repositories ) ) {
 			return null;
 		}
 
@@ -370,7 +222,7 @@ final class GitHubRepositorySourceWalker {
 			$this->record_event(
 				$session,
 				'github.git_queued',
-				'GitHub repository files were queued through php-toolkit Git plumbing.',
+				'GitHub repository files were queued through php-toolkit Git sparse checkout.',
 				$candidate,
 				array(
 					'files' => $queued,
@@ -382,31 +234,11 @@ final class GitHubRepositorySourceWalker {
 				'queued'     => $queued,
 				'failed'     => 0,
 				'complete'   => true,
-				'message'    => 'GitHub repository files were queued through php-toolkit Git plumbing.',
+				'message'    => 'GitHub repository files were queued through php-toolkit Git sparse checkout.',
 			);
 		}
 
 		return null;
-	}
-
-	/**
-	 * Returns whether a tree URL was split into possible slash-ref/path candidates.
-	 *
-	 * These URLs are cheaper and more reliable through the GitHub tree/blob API.
-	 * php-toolkit sparse pulls can spend a full admin request trying invalid
-	 * branch splits before the importer reaches the valid path fallback.
-	 *
-	 * @param array<int,array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string}> $repositories Candidate repositories.
-	 * @return bool
-	 */
-	private function has_ambiguous_slash_ref_candidates( array $repositories ) {
-		foreach ( $repositories as $candidate ) {
-			if ( isset( $candidate['requested_ref'] ) && (string) $candidate['requested_ref'] !== (string) $candidate['ref'] ) {
-				return true;
-			}
-		}
-
-		return false;
 	}
 
 	/**
@@ -426,7 +258,7 @@ final class GitHubRepositorySourceWalker {
 	}
 
 	/**
-	 * Builds a discovered source item for a file fetched through Git plumbing.
+	 * Builds a discovered source item for a file fetched through sparse Git.
 	 *
 	 * @param ImportSession                                                                                         $session Session.
 	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo Repository data.
@@ -631,7 +463,7 @@ final class GitHubRepositorySourceWalker {
 					$this->record_event(
 						$session,
 						'github.tree_queued',
-						'GitHub repository tree files were queued without downloading a repository archive.',
+						'GitHub repository tree files were queued without downloading a repository zipball.',
 						$candidate,
 						array(
 							'files' => count( $items ),
@@ -671,7 +503,7 @@ final class GitHubRepositorySourceWalker {
 					'queued'     => count( $items ),
 					'failed'     => 0,
 					'complete'   => $is_complete,
-					'message'    => $is_complete ? 'GitHub repository tree files were queued without downloading an archive.' : 'GitHub repository tree files were partially queued without downloading an archive.',
+					'message'    => $is_complete ? 'GitHub repository tree files were queued without downloading a zipball.' : 'GitHub repository tree files were partially queued without downloading a zipball.',
 				);
 			} catch ( ImportRemoteRateLimitException $exception ) {
 				return $this->defer_rate_limited_tree( $session, $candidate, $exception );
@@ -790,7 +622,7 @@ final class GitHubRepositorySourceWalker {
 	}
 
 	/**
-	 * Marks a partially queued GitHub tree traversal failed without archive fallback.
+	 * Marks a partially queued GitHub tree traversal failed without zipball fallback.
 	 *
 	 * @param ImportSession                                                                                         $session   Session.
 	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo      Repository data.
@@ -807,7 +639,7 @@ final class GitHubRepositorySourceWalker {
 		$this->record_event(
 			$session,
 			'github.tree_failed',
-			'GitHub tree/blob traversal failed after partial progress; archive fallback was skipped to avoid duplicate imported files.',
+			'GitHub tree/blob traversal failed after partial progress; zipball fallback is disabled for GitHub imports.',
 			$repo,
 			array(
 				'error' => $exception->getMessage(),
@@ -957,7 +789,7 @@ final class GitHubRepositorySourceWalker {
 					return $this->fetch_contents_file_entries( $repo );
 				}
 
-				throw new RuntimeException( 'GitHub tree response was truncated; falling back to archive traversal.' );
+				throw new RuntimeException( 'GitHub tree response was truncated; sparse Git or Contents API traversal is required.' );
 			}
 
 			$entries = $this->filter_tree_file_entries( $tree, $repo['source_path'] );
@@ -1543,7 +1375,7 @@ final class GitHubRepositorySourceWalker {
 	}
 
 	/**
-	 * Returns GitHub archive fetch candidates for a parsed URL.
+	 * Returns GitHub traversal candidates for a parsed URL.
 	 *
 	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,fallback_candidates?:array<int,array{ref:string,source_path:string}>} $repo Parsed repository data.
 	 * @return array<int,array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string}>
@@ -1563,16 +1395,6 @@ final class GitHubRepositorySourceWalker {
 	}
 
 	/**
-	 * Builds the GitHub REST zipball URL.
-	 *
-	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
-	 * @return string
-	 */
-	private function zipball_api_url( array $repo ) {
-		return 'https://api.github.com/repos/' . rawurlencode( $repo['owner'] ) . '/' . rawurlencode( $repo['name'] ) . '/zipball/' . str_replace( '%2F', '/', rawurlencode( $repo['ref'] ) );
-	}
-
-	/**
 	 * Builds the durable source item key.
 	 *
 	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
@@ -1580,37 +1402,6 @@ final class GitHubRepositorySourceWalker {
 	 */
 	private function item_key( array $repo ) {
 		return 'github:' . hash( 'sha256', strtolower( $repo['owner'] ) . '/' . strtolower( $repo['name'] ) . "\n" . $repo['ref'] . "\n" . $repo['source_path'] );
-	}
-
-	/**
-	 * Builds the local cache path for a downloaded repository archive.
-	 *
-	 * @param ImportSession                                                                   $session Session.
-	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo    Repository data.
-	 * @return string
-	 */
-	private function cache_path( ImportSession $session, array $repo ) {
-		return $this->cache_directory->path_for(
-			$session->get_id(),
-			'github',
-			array( hash( 'sha256', strtolower( $repo['owner'] ) . '/' . strtolower( $repo['name'] ) . "\n" . $repo['ref'] . "\n" . $repo['source_path'] ) . '.zip' )
-		);
-	}
-
-	/**
-	 * Returns the next retry count for a previously failed GitHub source item.
-	 *
-	 * @param ImportSourceItem|null $failed_item Previously failed source item, if any.
-	 * @return int Retry count.
-	 */
-	private function retry_count( ImportSourceItem $failed_item = null ) {
-		if ( null === $failed_item ) {
-			return 0;
-		}
-
-		$metadata = $failed_item->get_metadata();
-
-		return max( 0, isset( $metadata['github_retry_count'] ) ? (int) $metadata['github_retry_count'] : 0 ) + 1;
 	}
 
 	/**
