@@ -600,7 +600,7 @@ final class GitHubRepositorySourceWalker {
 					);
 				}
 
-				$page_entries = array_slice( $remaining_entries, 0, self::TREE_BLOB_LIMIT );
+				$page_entries = $this->expand_tree_entries_with_markdown_links( $candidate, array_slice( $remaining_entries, 0, self::TREE_BLOB_LIMIT ) );
 				$items        = array();
 				foreach ( $page_entries as $entry ) {
 					$item = $this->build_tree_file_item( $session, $candidate, $entry );
@@ -1070,6 +1070,221 @@ final class GitHubRepositorySourceWalker {
 	}
 
 	/**
+	 * Adds local Markdown files linked from discovered GitHub Markdown files.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
+	 * @param array<int,array{path:string,url:string,size:int,content?:string}>               $entries Tree entries.
+	 * @return array<int,array{path:string,url:string,size:int,content?:string}>
+	 */
+	private function expand_tree_entries_with_markdown_links( array $repo, array $entries ) {
+		$indexed = array();
+		$queue   = array();
+
+		foreach ( $entries as $entry ) {
+			$path = $this->normalize_source_path( isset( $entry['path'] ) ? (string) $entry['path'] : '' );
+			if ( '' === $path ) {
+				continue;
+			}
+			$entry['path']    = $path;
+			$indexed[ $path ] = $entry;
+			$queue[]          = $path;
+		}
+
+		$indexed_count = count( $indexed );
+		while ( ! empty( $queue ) && $indexed_count < self::CONTENTS_API_FILE_LIMIT ) {
+			$path = array_shift( $queue );
+			if ( ! isset( $indexed[ $path ] ) || ! $this->is_markdown_repository_path( $path ) ) {
+				continue;
+			}
+
+			$content = isset( $indexed[ $path ]['content'] ) ? (string) $indexed[ $path ]['content'] : '';
+			if ( '' === $content ) {
+				try {
+					$content = $this->decode_blob_content( $this->content_fetcher->fetch_json( $indexed[ $path ]['url'] ) );
+				} catch ( RuntimeException $exception ) {
+					$indexed[ $path ]['content_fetch_failed'] = true;
+					continue;
+				}
+				$indexed[ $path ]['content'] = $content;
+			}
+
+			foreach ( $this->local_markdown_paths_from_markdown( $content, $path ) as $target_path ) {
+				if ( isset( $indexed[ $target_path ] ) || count( $indexed ) >= self::CONTENTS_API_FILE_LIMIT ) {
+					continue;
+				}
+
+				try {
+					$entry = $this->fetch_contents_file_entry( $repo, $target_path );
+				} catch ( RuntimeException $exception ) {
+					continue;
+				}
+
+				if ( null === $entry ) {
+					continue;
+				}
+
+				$indexed[ $entry['path'] ] = $entry;
+				$indexed_count             = count( $indexed );
+				$queue[]                   = $entry['path'];
+			}
+		}
+
+		$entries = array_values( $indexed );
+		usort(
+			$entries,
+			function ( $a, $b ) {
+				return strcmp( $a['path'], $b['path'] );
+			}
+		);
+
+		return $entries;
+	}
+
+	/**
+	 * Fetches one Contents API file entry.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
+	 * @param string                                                                          $path Repository-relative path.
+	 * @return array{path:string,url:string,size:int}|null
+	 */
+	private function fetch_contents_file_entry( array $repo, $path ) {
+		$contents = $this->content_fetcher->fetch_json( $this->contents_api_url( $repo, $path ) );
+
+		return $this->is_contents_file_entry( $contents ) ? $this->contents_file_entry_to_tree_entry( $contents ) : null;
+	}
+
+	/**
+	 * Extracts local Markdown target paths from a Markdown document.
+	 *
+	 * @param string $content Markdown content.
+	 * @param string $source_path Repository-relative source file path.
+	 * @return array<int,string>
+	 */
+	private function local_markdown_paths_from_markdown( $content, $source_path ) {
+		$paths  = array();
+		$length = strlen( (string) $content );
+
+		for ( $index = 0; $index < $length; ++$index ) {
+			if ( '[' !== $content[ $index ] ) {
+				continue;
+			}
+
+			$label_end = $this->find_markdown_closing_delimiter( $content, $index + 1, ']' );
+			if ( null === $label_end || ! isset( $content[ $label_end + 1 ] ) || '(' !== $content[ $label_end + 1 ] ) {
+				continue;
+			}
+
+			$href_start = $label_end + 2;
+			$href_end   = $this->find_markdown_closing_delimiter( $content, $href_start, ')' );
+			if ( null === $href_end ) {
+				continue;
+			}
+
+			$href = trim( substr( $content, $href_start, $href_end - $href_start ) );
+			if ( false !== strpos( $href, ' ' ) ) {
+				$href = substr( $href, 0, strpos( $href, ' ' ) );
+			}
+			$path = $this->local_markdown_repository_path( $href, $source_path );
+			if ( null !== $path ) {
+				$paths[ $path ] = $path;
+			}
+			$index = $href_end;
+		}
+
+		return array_values( $paths );
+	}
+
+	/**
+	 * Finds an unescaped Markdown closing delimiter.
+	 *
+	 * @param string $content Content.
+	 * @param int    $offset Offset.
+	 * @param string $delimiter Delimiter.
+	 * @return int|null
+	 */
+	private function find_markdown_closing_delimiter( $content, $offset, $delimiter ) {
+		$length = strlen( (string) $content );
+		for ( $index = (int) $offset; $index < $length; ++$index ) {
+			if ( '\\' === $content[ $index ] ) {
+				++$index;
+				continue;
+			}
+			if ( $delimiter === $content[ $index ] ) {
+				return $index;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Converts a Markdown href into a repository path when it targets a local Markdown file.
+	 *
+	 * @param string $href Href.
+	 * @param string $source_path Repository-relative source file path.
+	 * @return string|null
+	 */
+	private function local_markdown_repository_path( $href, $source_path ) {
+		$href = trim( html_entity_decode( (string) $href, ENT_QUOTES, 'UTF-8' ), '<>' );
+
+		if ( '' === $href || '#' === substr( $href, 0, 1 ) || '//' === substr( $href, 0, 2 ) ) {
+			return null;
+		}
+
+		if ( preg_match( '/^[a-z][a-z0-9+.-]*:/i', $href ) ) {
+			return null;
+		}
+
+		$parts = parse_url( $href ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- WordPress is not loaded in importer unit tests.
+		if ( false === $parts || empty( $parts['path'] ) ) {
+			return null;
+		}
+
+		$path = (string) $parts['path'];
+		if ( ! $this->is_markdown_repository_path( $path ) ) {
+			return null;
+		}
+
+		return '/' === substr( $path, 0, 1 )
+			? $this->normalize_source_path( ltrim( $path, '/' ) )
+			: $this->normalize_repository_link_path( dirname( $source_path ) . '/' . $path );
+	}
+
+	/**
+	 * Normalizes a repository path that may contain relative segments.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	private function normalize_repository_link_path( $path ) {
+		$segments = array();
+		foreach ( explode( '/', str_replace( '\\', '/', (string) $path ) ) as $segment ) {
+			if ( '' === $segment || '.' === $segment ) {
+				continue;
+			}
+			if ( '..' === $segment ) {
+				array_pop( $segments );
+				continue;
+			}
+			$segments[] = $segment;
+		}
+
+		return implode( '/', $segments );
+	}
+
+	/**
+	 * Returns whether a repository path points to Markdown.
+	 *
+	 * @param string $path Path.
+	 * @return bool
+	 */
+	private function is_markdown_repository_path( $path ) {
+		$extension = strtolower( pathinfo( (string) $path, PATHINFO_EXTENSION ) );
+
+		return in_array( $extension, array( 'md', 'markdown', 'mdown' ), true );
+	}
+
+	/**
 	 * Filters tree entries to importable files under the requested source path.
 	 *
 	 * @param array<string,mixed> $tree        GitHub tree response.
@@ -1151,8 +1366,11 @@ final class GitHubRepositorySourceWalker {
 			return null;
 		}
 
-		$blob    = $this->content_fetcher->fetch_json( $entry['url'] );
-		$content = $this->decode_blob_content( $blob );
+		if ( ! empty( $entry['content_fetch_failed'] ) ) {
+			throw new RuntimeException( 'GitHub blob content could not be loaded.' );
+		}
+
+		$content = isset( $entry['content'] ) ? (string) $entry['content'] : $this->decode_blob_content( $this->content_fetcher->fetch_json( $entry['url'] ) );
 		$target  = $this->tree_cache_path( $session, $repo, $entry['path'] );
 		$this->cache_directory->ensure_parent_directory( $target );
 		if ( false === file_put_contents( $target, $content ) ) {

@@ -32,6 +32,7 @@ const html = `<!doctype html>
 		<input type="text" id="universal-importer-source" name="source" required>
 		<input type="text" id="universal-importer-domains" name="confirmed_domains">
 		<input type="radio" name="url_rewrite_mode" value="ask" checked>
+		<input type="checkbox" name="import_as_drafts" value="1" checked>
 		<input type="checkbox" name="dry_run" value="1" checked>
 		<div id="universal-importer-dropzone">
 			<input type="file" id="universal-importer-file-picker" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
@@ -192,6 +193,7 @@ const html = `<!doctype html>
 			var paths = [];
 			var filenames = [];
 			var urlRewriteMode = '';
+			var importAsDrafts = '';
 			for (var pair of uploadCall.options.body.entries()) {
 				if (pair[0] === 'paths[]') {
 					paths.push(pair[1]);
@@ -201,6 +203,9 @@ const html = `<!doctype html>
 				}
 				if (pair[0] === 'url_rewrite_mode') {
 					urlRewriteMode = pair[1];
+				}
+				if (pair[0] === 'import_as_drafts') {
+					importAsDrafts = pair[1];
 				}
 			}
 			paths.sort();
@@ -218,6 +223,11 @@ const html = `<!doctype html>
 
 			if (urlRewriteMode !== 'ask') {
 				fail('Upload request did not include the URL rewrite mode.');
+				return;
+			}
+
+			if (importAsDrafts !== '1') {
+				fail('Upload request did not include the post status preference.');
 				return;
 			}
 

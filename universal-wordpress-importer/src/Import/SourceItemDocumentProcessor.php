@@ -208,6 +208,7 @@ final class SourceItemDocumentProcessor {
 						'absolute_url_domains'  => $document['absolute_url_domains'],
 						'absolute_url_examples' => $document['absolute_url_examples'],
 					),
+					$this->source_item_prepared_metadata( $item ),
 					$document['metadata']
 				)
 			);
@@ -1960,6 +1961,7 @@ final class SourceItemDocumentProcessor {
 							'absolute_url_domains'     => array_keys( $url_domains ),
 							'absolute_url_examples'    => $url_domains,
 						),
+						$this->source_item_prepared_metadata( $item ),
 						$chunk_metadata
 					)
 				)
@@ -9216,6 +9218,37 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return pathinfo( $item->get_source_uri(), PATHINFO_FILENAME );
+	}
+
+	/**
+	 * Copies source metadata needed by downstream document resolvers.
+	 *
+	 * @param ImportSourceItem $item Source item.
+	 * @return array<string,mixed>
+	 */
+	private function source_item_prepared_metadata( ImportSourceItem $item ) {
+		$metadata = $item->get_metadata();
+		$keys     = array(
+			'github_owner',
+			'github_repository',
+			'github_ref',
+			'github_requested_ref',
+			'github_source_url',
+			'github_source_path',
+			'github_tree_path',
+			'github_blob_url',
+			'github_tree_fetch',
+			'github_git_fetch',
+		);
+		$copy     = array();
+
+		foreach ( $keys as $key ) {
+			if ( array_key_exists( $key, $metadata ) ) {
+				$copy[ $key ] = $metadata[ $key ];
+			}
+		}
+
+		return $copy;
 	}
 
 	/**

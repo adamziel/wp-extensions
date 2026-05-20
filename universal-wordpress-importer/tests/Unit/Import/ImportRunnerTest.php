@@ -788,9 +788,29 @@ final class ImportRunnerTest extends TestCase {
 				),
 			)
 		);
-		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/readme', $this->github_blob_response( "# Architecture\n\nArchitecture overview." ) );
+		$fetcher->add_json(
+			'https://api.github.com/repos/WordPress/gutenberg/contents/docs/explanations/architecture/key-concepts.md?ref=trunk',
+			array(
+				'path'    => 'docs/explanations/architecture/key-concepts.md',
+				'type'    => 'file',
+				'git_url' => 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/key-concepts',
+				'size'    => 48,
+			)
+		);
+		$fetcher->add_json(
+			'https://api.github.com/repos/WordPress/gutenberg/contents/docs/contributors/folder-structure.md?ref=trunk',
+			array(
+				'path'    => 'docs/contributors/folder-structure.md',
+				'type'    => 'file',
+				'git_url' => 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/folder-structure',
+				'size'    => 52,
+			)
+		);
+		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/readme', $this->github_blob_response( "# Architecture\n\nArchitecture overview.\n\nRead [Key concepts](/docs/explanations/architecture/key-concepts.md) and [Folder structure](/docs/contributors/folder-structure.md)." ) );
 		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/data-flow', $this->github_blob_response( "# Data Flow\n\nData movement." ) );
 		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/modules', $this->github_blob_response( "# Modules\n\nModule boundaries." ) );
+		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/key-concepts', $this->github_blob_response( "# Key Concepts\n\nConcept map." ) );
+		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/folder-structure', $this->github_blob_response( "# Folder Structure\n\nRepository layout." ) );
 
 		$session = ImportSession::start_for_source( $source );
 		$posts   = new FakePostGateway();
@@ -821,8 +841,14 @@ final class ImportRunnerTest extends TestCase {
 		);
 
 		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
-		$this->assertSame( array( 'Architecture', 'Data Flow', 'Modules' ), $titles );
-		$this->assertSame( 3, $posts->count_posts() );
+		$this->assertSame( array( 'Architecture', 'Data Flow', 'Folder Structure', 'Key Concepts', 'Modules' ), $titles );
+		$this->assertSame( 5, $posts->count_posts() );
+		$posts_by_title = $this->posts_by_title( $posts );
+		$this->assertSame( 'publish', $posts_by_title['Architecture']['post_status'] );
+		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Key Concepts']['ID'] ), $posts_by_title['Architecture']['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Folder Structure']['ID'] ), $posts_by_title['Architecture']['post_content'] );
+		$this->assertStringNotContainsString( '/docs/explanations/architecture/key-concepts.md', $posts_by_title['Architecture']['post_content'] );
+		$this->assertStringNotContainsString( '/docs/contributors/folder-structure.md', $posts_by_title['Architecture']['post_content'] );
 		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
 		$this->assertContains( 'github.tree_queued', $events );
 		$this->assertNotContains( 'github.archive_downloaded', $events );

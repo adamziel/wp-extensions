@@ -874,7 +874,7 @@ if ( $pdf_attachment_id < 1 ) {
 $markdown_posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 10,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -912,13 +912,13 @@ foreach ( $markdown_posts as $post ) {
 }
 
 if ( ! $found_markdown ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft Markdown page with rewritten local media. Draft Markdown titles found: ' . ( empty( $titles ) ? 'none' : implode( ', ', $titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported Markdown page with rewritten local media. Imported titles found: ' . ( empty( $titles ) ? 'none' : implode( ', ', $titles ) ) . '.' );
 }
 
 $html_posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 10,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -1332,7 +1332,7 @@ if ( $html_post_id < 1 ) {
 		break;
 	}
 
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft page from the HTML fixture. Draft HTML titles found: ' . ( empty( $html_titles ) ? 'none' : implode( ', ', $html_titles ) ) . '.' . $html_debug );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported page from the HTML fixture. Imported titles found: ' . ( empty( $html_titles ) ? 'none' : implode( ', ', $html_titles ) ) . '.' . $html_debug );
 }
 
 $html_widget_post_id = 0;
@@ -1361,13 +1361,13 @@ foreach ( $html_posts as $post ) {
 }
 
 if ( $html_widget_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not preserve the expected legacy widget Classic fallback page from the HTML widget fixture. Draft HTML titles found: ' . ( empty( $html_titles ) ? 'none' : implode( ', ', $html_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not preserve the expected legacy widget Classic fallback page from the HTML widget fixture. Imported titles found: ' . ( empty( $html_titles ) ? 'none' : implode( ', ', $html_titles ) ) . '.' );
 }
 
 $archive_posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 10,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -1401,13 +1401,13 @@ foreach ( $archive_posts as $post ) {
 }
 
 if ( $archive_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft Markdown page from the zip archive. Draft Markdown titles found: ' . ( empty( $archive_titles ) ? 'none' : implode( ', ', $archive_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported Markdown page from the zip archive. Imported titles found: ' . ( empty( $archive_titles ) ? 'none' : implode( ', ', $archive_titles ) ) . '.' );
 }
 
 $wxr_posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 10,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -1442,13 +1442,13 @@ foreach ( $wxr_posts as $post ) {
 }
 
 if ( $wxr_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft page from the WXR export. Draft WXR titles found: ' . ( empty( $wxr_titles ) ? 'none' : implode( ', ', $wxr_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported page from the WXR export. Imported titles found: ' . ( empty( $wxr_titles ) ? 'none' : implode( ', ', $wxr_titles ) ) . '.' );
 }
 
 $epub_posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 10,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -1495,17 +1495,17 @@ foreach ( $epub_posts as $post ) {
 }
 
 if ( $epub_first_post_id < 1 || $epub_second_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft pages from the EPUB spine. Draft EPUB titles found: ' . ( empty( $epub_titles ) ? 'none' : implode( ', ', $epub_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported pages from the EPUB spine. Imported titles found: ' . ( empty( $epub_titles ) ? 'none' : implode( ', ', $epub_titles ) ) . '.' );
 }
 
 if ( false !== strpos( $epub_first_content, 'chapter-two.xhtml' ) || false !== strpos( $epub_first_content, 'href="#universal-importer-epub-' ) || false === strpos( $epub_first_content, '#part' ) ) {
-	throw new Exception( 'WP-CLI smoke import did not resolve the EPUB internal chapter link in the first imported draft page.' );
+	throw new Exception( 'WP-CLI smoke import did not resolve the EPUB internal chapter link in the first imported page.' );
 }
 
 $pdf_posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 10,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -1686,11 +1686,11 @@ foreach ( $pdf_posts as $post ) {
 }
 
 if ( $pdf_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft page, embedded image attachment rewrite, and PDF media extraction metadata from the PDF fixture. Draft PDF titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported page, embedded image attachment rewrite, and PDF media extraction metadata from the PDF fixture. Imported titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
 }
 
 if ( $unsupported_pdf_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not preserve unsupported embedded PDF media diagnostics for the unsupported-media PDF fixture. Draft PDF titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not preserve unsupported embedded PDF media diagnostics for the unsupported-media PDF fixture. Imported titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
 }
 
 $unsupported_pdf_events = (int) $wpdb->get_var(
@@ -1704,15 +1704,15 @@ if ( 1 > $unsupported_pdf_events ) {
 }
 
 if ( $external_pdf_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft page and external text metadata from the textless PDF fixture. Draft PDF titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported page and external text metadata from the textless PDF fixture. Imported titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
 }
 
 if ( $layout_pdf_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected layout-aware PDF table block and pdf_table metadata from the textless PDF fixture. Draft PDF titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected layout-aware PDF table block and pdf_table metadata from the textless PDF fixture. Imported titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
 }
 
 if ( $corrupt_pdf_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not preserve corrupt PDF structure diagnostics for the corrupt-structure PDF fixture. Draft PDF titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not preserve corrupt PDF structure diagnostics for the corrupt-structure PDF fixture. Imported titles found: ' . ( empty( $pdf_titles ) ? 'none' : implode( ', ', $pdf_titles ) ) . '.' );
 }
 
 $layout_pdf_events = (int) $wpdb->get_var(
@@ -1841,7 +1841,7 @@ if ( $rest_attachment_id < 1 ) {
 $rest_posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 10,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -1883,7 +1883,7 @@ foreach ( $rest_posts as $post ) {
 }
 
 if ( $rest_post_id < 1 ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft page from the WordPress REST traversal. Draft REST titles found: ' . ( empty( $rest_titles ) ? 'none' : implode( ', ', $rest_titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported page from the WordPress REST traversal. Imported titles found: ' . ( empty( $rest_titles ) ? 'none' : implode( ', ', $rest_titles ) ) . '.' );
 }
 
 $rest_comments = get_comments(
@@ -1916,7 +1916,7 @@ foreach ( $rest_comments as $comment ) {
 }
 
 if ( null === $parent_comment || null === $child_comment ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected REST comments on the imported draft page.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected REST comments on the imported page.' );
 }
 
 if (
@@ -2070,7 +2070,7 @@ if ( ! function_exists( 'get_posts' ) || ! function_exists( 'get_post_meta' ) ||
 \$posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 10,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -2096,12 +2096,12 @@ foreach ( \$posts as \$post ) {
 }
 
 if ( null === \$rest_post ) {
-	throw new Exception( 'WP-CLI smoke import did not find the REST draft page while verifying resolved relationship mapping.' );
+	throw new Exception( 'WP-CLI smoke import did not find the REST imported page while verifying resolved relationship mapping.' );
 }
 
 \$answer = get_post_meta( \$rest_post->ID, '_universal_importer_relationship_mapping_answer', true );
 if ( ! is_array( \$answer ) || empty( \$answer['author']['local_user_id'] ) || empty( \$answer['terms'][ {$taxonomy} ][0]['local_term_id'] ) ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the resolved REST relationship mapping answer on the imported draft.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the resolved REST relationship mapping answer on the imported page.' );
 }
 
 \$local_user_id = (int) \$answer['author']['local_user_id'];
@@ -2109,7 +2109,7 @@ if ( ! is_array( \$answer ) || empty( \$answer['author']['local_user_id'] ) || e
 \$local_term    = get_term_by( 'slug', {$term_slug}, 'category' );
 
 if ( (int) \$rest_post->post_author !== \$local_user_id ) {
-	throw new Exception( 'WP-CLI smoke import did not apply the resolved REST author mapping to the imported draft.' );
+	throw new Exception( 'WP-CLI smoke import did not apply the resolved REST author mapping to the imported page.' );
 }
 
 if ( false === \$local_term || (int) \$local_term->term_id !== \$local_term_id ) {
@@ -2129,7 +2129,7 @@ if ( is_wp_error( \$assigned_terms ) ) {
 }
 
 if ( ! in_array( \$local_term_id, array_map( 'intval', \$assigned_terms ), true ) ) {
-	throw new Exception( 'WP-CLI smoke import did not assign the resolved REST term mapping to the imported draft.' );
+	throw new Exception( 'WP-CLI smoke import did not assign the resolved REST term mapping to the imported page.' );
 }
 
 \$remote_terms = get_post_meta( \$rest_post->ID, '_universal_importer_remote_terms', true );
@@ -2209,7 +2209,7 @@ if ( ! function_exists( 'get_posts' ) || ! function_exists( 'get_post_meta' ) ) 
 \$posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 20,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -2243,7 +2243,7 @@ foreach ( \$posts as \$post ) {
 }
 
 if ( null === \$github_post ) {
-	throw new Exception( 'WP-CLI smoke import did not persist the expected draft Markdown page from the GitHub repository subtree. Draft Markdown titles found: ' . ( empty( \$titles ) ? 'none' : implode( ', ', \$titles ) ) . '.' );
+	throw new Exception( 'WP-CLI smoke import did not persist the expected imported Markdown page from the GitHub repository subtree. Imported titles found: ' . ( empty( \$titles ) ? 'none' : implode( ', ', \$titles ) ) . '.' );
 }
 
 \$session_id = (string) get_post_meta( \$github_post->ID, '_universal_importer_session_id', true );
@@ -2392,7 +2392,7 @@ if ( ! function_exists( 'get_posts' ) || ! function_exists( 'get_post_meta' ) ) 
 \$posts = get_posts(
 	array(
 		'post_type'              => 'page',
-		'post_status'            => 'draft',
+		'post_status'            => 'any',
 		'posts_per_page'         => 20,
 		'orderby'                => 'ID',
 		'order'                  => 'DESC',
@@ -2425,7 +2425,7 @@ foreach ( \$posts as \$post ) {
 }
 
 if ( null === \$browser_post ) {
-	throw new Exception( 'Admin browser-upload smoke did not persist the expected draft Markdown page. Draft titles for session ' . \$session_id . ': ' . ( empty( \$titles ) ? 'none' : implode( ', ', \$titles ) ) . '.' );
+	throw new Exception( 'Admin browser-upload smoke did not persist the expected imported Markdown page. Imported titles for session ' . \$session_id . ': ' . ( empty( \$titles ) ? 'none' : implode( ', ', \$titles ) ) . '.' );
 }
 
 \$session_row = \$wpdb->get_row(
@@ -3787,7 +3787,7 @@ PHP;
 				return $this->run_command(
 					$this->build_wp_cli_command( $wp_cli, $wp_path, array( 'eval', $this->import_assertion_wp_cli_code() ) ),
 					$workdir,
-					'verify local WordPress imported draft page after tick ' . $tick,
+					'verify local WordPress imported page after tick ' . $tick,
 					true
 				);
 			} catch ( RuntimeException $error ) {
@@ -3796,7 +3796,7 @@ PHP;
 		}
 
 		throw new RuntimeException(
-			'Local WordPress smoke did not persist the sample draft page after '
+			'Local WordPress smoke did not persist the sample imported page after '
 			. self::IMPORT_SMOKE_MAX_TICKS
 			. " importer ticks.\nLast assertion failure:\n"
 			. ( null === $last_assertion_error ? 'No assertion was run.' : $last_assertion_error->getMessage() )
@@ -4157,7 +4157,7 @@ PHP;
 				return $this->run_command(
 					$this->build_wp_cli_command( $wp_cli, $wp_path, array( 'eval', $this->rest_import_assertion_wp_cli_code() ) ),
 					$workdir,
-					'verify local WordPress imported REST draft page after tick ' . $tick,
+					'verify local WordPress imported REST imported page after tick ' . $tick,
 					true
 				);
 			} catch ( RuntimeException $error ) {
@@ -4166,7 +4166,7 @@ PHP;
 		}
 
 		throw new RuntimeException(
-			'Local WordPress smoke did not persist the REST draft page after '
+			'Local WordPress smoke did not persist the REST imported page after '
 			. self::IMPORT_SMOKE_MAX_TICKS
 			. " importer ticks.\nLast assertion failure:\n"
 			. ( null === $last_assertion_error ? 'No assertion was run.' : $last_assertion_error->getMessage() )
@@ -4196,7 +4196,7 @@ PHP;
 				return $this->run_command(
 					$this->build_wp_cli_command( $wp_cli, $wp_path, array( 'eval', $this->github_import_assertion_wp_cli_code() ) ),
 					$workdir,
-					'verify local WordPress imported GitHub draft page after tick ' . $tick,
+					'verify local WordPress imported GitHub imported page after tick ' . $tick,
 					true
 				);
 			} catch ( RuntimeException $error ) {
@@ -4205,7 +4205,7 @@ PHP;
 		}
 
 		throw new RuntimeException(
-			'Local WordPress smoke did not persist the GitHub draft page after '
+			'Local WordPress smoke did not persist the GitHub imported page after '
 			. self::IMPORT_SMOKE_MAX_TICKS
 			. " importer ticks.\nLast assertion failure:\n"
 			. ( null === $last_assertion_error ? 'No assertion was run.' : $last_assertion_error->getMessage() )
@@ -4235,7 +4235,7 @@ PHP;
 				return $this->run_command(
 					$this->build_wp_cli_command( $wp_cli, $wp_path, array( 'eval', $this->browser_upload_assertion_wp_cli_code() ) ),
 					$workdir,
-					'verify local WordPress imported browser-upload draft page after tick ' . $tick,
+					'verify local WordPress imported browser-upload imported page after tick ' . $tick,
 					true
 				);
 			} catch ( RuntimeException $error ) {
@@ -4244,7 +4244,7 @@ PHP;
 		}
 
 		throw new RuntimeException(
-			'Local WordPress smoke did not persist the browser-upload draft page after '
+			'Local WordPress smoke did not persist the browser-upload imported page after '
 			. self::IMPORT_SMOKE_MAX_TICKS
 			. " importer ticks.\nLast assertion failure:\n"
 			. ( null === $last_assertion_error ? 'No assertion was run.' : $last_assertion_error->getMessage() )

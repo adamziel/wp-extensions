@@ -163,6 +163,7 @@ form.formValues = {
 	source: '',
 	confirmed_domains: '',
 	url_rewrite_mode: 'ask',
+	import_as_drafts: '1',
 	dry_run: '1'
 };
 const sourceInput = new Element('universal-importer-source');
@@ -473,6 +474,10 @@ await flushPromises();
 
 	if (body.values.url_rewrite_mode !== 'ask') {
 		throw new Error('Upload request did not include the URL rewrite mode.');
+	}
+
+	if (body.values.import_as_drafts !== '1') {
+		throw new Error('Upload request did not include the post status preference.');
 	}
 
 	nextFetchResponse = {

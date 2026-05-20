@@ -351,10 +351,11 @@ final class FakePostGateway implements ImportPostGatewayInterface {
 	 *
 	 * @param ImportPreparedDocument $document Prepared document.
 	 * @param int|null               $post_id  Existing post id to update.
+	 * @param string                 $post_status Post status to assign.
 	 * @return int Persisted post id.
 	 * @throws RuntimeException When configured to fail writes.
 	 */
-	public function insert_or_update( ImportPreparedDocument $document, $post_id = null ) {
+	public function insert_or_update( ImportPreparedDocument $document, $post_id = null, $post_status = 'publish' ) {
 		if ( null !== $this->failure_message ) {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are not rendered directly.
 			throw new RuntimeException( $this->failure_message );
@@ -365,6 +366,7 @@ final class FakePostGateway implements ImportPostGatewayInterface {
 		}
 
 		$this->last_relationship_diagnostics = array();
+		$post_status                         = 'draft' === (string) $post_status ? 'draft' : 'publish';
 
 		if ( null === $post_id ) {
 			$post_id = $this->next_id;
@@ -376,7 +378,7 @@ final class FakePostGateway implements ImportPostGatewayInterface {
 		$this->posts[ $post_id ] = array(
 			'ID'              => $post_id,
 			'post_type'       => 'page',
-			'post_status'     => 'draft',
+			'post_status'     => $post_status,
 			'post_title'      => $document->get_title(),
 			'post_content'    => $document->get_block_markup(),
 			'source_item_key' => $document->get_source_item_key(),

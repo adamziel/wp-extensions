@@ -14,6 +14,7 @@ use UniversalImporter\Import\ImportCacheDirectory;
 use UniversalImporter\Import\ImportDecision;
 use UniversalImporter\Import\ImportMediaReference;
 use UniversalImporter\Import\ImportPreparedDocument;
+use UniversalImporter\Import\ImportPostPersister;
 use UniversalImporter\Import\ImportProgressEvent;
 use UniversalImporter\Import\ImportRemoteContentFetcherInterface;
 use UniversalImporter\Import\ImportRelationshipMappingDecision;
@@ -111,6 +112,7 @@ final class ImportAdminPage {
 	 */
 	public function register() {
 		add_action( 'admin_menu', array( $this, 'register_menu' ) );
+		add_action( 'pre_get_posts', array( $this, 'filter_imported_content_query' ) );
 		add_action( 'wp_ajax_' . self::AJAX_CREATE, array( $this, 'ajax_create_session' ) );
 		add_action( 'wp_ajax_' . self::AJAX_UPLOAD, array( $this, 'ajax_upload_session' ) );
 		add_action( 'wp_ajax_' . self::AJAX_KEEPALIVE, array( $this, 'ajax_keepalive' ) );
@@ -135,16 +137,62 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Filters the Pages list to content imported by one session.
+	 *
+	 * @param mixed $query WordPress query object.
+	 * @return void
+	 */
+	public function filter_imported_content_query( $query ) {
+		if ( ! function_exists( 'is_admin' ) || ! is_admin() || ! is_object( $query ) || ! method_exists( $query, 'is_main_query' ) || ! $query->is_main_query() ) {
+			return;
+		}
+
+		$raw = filter_input( INPUT_GET, 'universal_importer_session_id', FILTER_UNSAFE_RAW );
+		if ( ! is_string( $raw ) || '' === trim( $raw ) ) {
+			return;
+		}
+
+		if ( method_exists( $query, 'get' ) && 'page' !== (string) $query->get( 'post_type' ) ) {
+			return;
+		}
+
+		$raw = function_exists( 'wp_unslash' ) ? wp_unslash( $raw ) : $raw;
+		$raw = function_exists( 'sanitize_text_field' ) ? sanitize_text_field( $raw ) : trim( (string) $raw );
+
+		try {
+			$session_id = ImportSessionId::from_string( $raw );
+		} catch ( InvalidArgumentException $exception ) {
+			return;
+		}
+
+		$meta_query = method_exists( $query, 'get' ) ? $query->get( 'meta_query' ) : array();
+		if ( ! is_array( $meta_query ) ) {
+			$meta_query = array();
+		}
+
+		$meta_query[] = array(
+			'key'   => '_universal_importer_session_id',
+			'value' => $session_id->to_string(),
+		);
+
+		if ( method_exists( $query, 'set' ) ) {
+			$query->set( 'post_type', 'page' );
+			$query->set( 'meta_query', $meta_query );
+		}
+	}
+
+	/**
 	 * Creates and queues an import session from admin input.
 	 *
 	 * @param string            $source            Source path or URL.
 	 * @param array<int,string> $confirmed_domains Confirmed first-party domains.
 	 * @param bool              $dry_run           Whether this is a dry run.
 	 * @param string            $url_rewrite_mode  URL rewrite mode: ask, rewrite, or preserve.
+	 * @param bool              $import_as_drafts  Whether imported posts should remain drafts.
 	 * @return array<string,mixed>
 	 * @throws InvalidArgumentException When source input is invalid.
 	 */
-	public function create_import_session( $source, array $confirmed_domains = array(), $dry_run = false, $url_rewrite_mode = 'ask' ) {
+	public function create_import_session( $source, array $confirmed_domains = array(), $dry_run = false, $url_rewrite_mode = 'ask', $import_as_drafts = false ) {
 		$source = trim( (string) $source );
 
 		if ( '' === $source ) {
@@ -170,6 +218,7 @@ final class ImportAdminPage {
 		);
 
 		$this->save_initial_url_rewrite_preference( $session->get_id(), $confirmed_domains, $url_rewrite_mode );
+		$this->save_initial_post_status_preference( $session->get_id(), (bool) $import_as_drafts );
 
 		$this->schedule_continuation( $session->get_id() );
 
@@ -184,10 +233,11 @@ final class ImportAdminPage {
 	 * @param array<int,string>              $confirmed_domains Confirmed first-party domains.
 	 * @param bool                           $dry_run           Whether this is a dry run.
 	 * @param string                         $url_rewrite_mode  URL rewrite mode: ask, rewrite, or preserve.
+	 * @param bool                           $import_as_drafts  Whether imported posts should remain drafts.
 	 * @return array<string,mixed>
 	 * @throws InvalidArgumentException When upload input is invalid or staging fails.
 	 */
-	public function create_import_session_from_uploaded_files( array $files, array $relative_paths = array(), array $confirmed_domains = array(), $dry_run = false, $url_rewrite_mode = 'ask' ) {
+	public function create_import_session_from_uploaded_files( array $files, array $relative_paths = array(), array $confirmed_domains = array(), $dry_run = false, $url_rewrite_mode = 'ask', $import_as_drafts = false ) {
 		if ( empty( $files ) ) {
 			throw new InvalidArgumentException( 'At least one uploaded file is required.' );
 		}
@@ -254,6 +304,7 @@ final class ImportAdminPage {
 		);
 
 		$this->save_initial_url_rewrite_preference( $session->get_id(), $confirmed_domains, $url_rewrite_mode );
+		$this->save_initial_post_status_preference( $session->get_id(), (bool) $import_as_drafts );
 
 		$this->schedule_continuation( $session->get_id() );
 
@@ -497,6 +548,7 @@ final class ImportAdminPage {
 		$posts              = array(
 			'persisted' => $store->count_idempotency_records_by_resource_type( $source_id, 'post' ),
 		);
+		$post_status        = $this->post_status_for_snapshot( $source_id );
 		$comments           = array(
 			'persisted' => $store->count_idempotency_records_by_resource_type( $source_id, 'comment' ),
 		);
@@ -523,6 +575,7 @@ final class ImportAdminPage {
 			'source_items'          => $source_items,
 			'prepared_documents'    => $prepared_documents,
 			'posts'                 => $posts,
+			'post_status'           => $post_status,
 			'comments'              => $comments,
 			'media'                 => $media,
 			'remote_backoff'        => $remote_backoff,
@@ -533,9 +586,52 @@ final class ImportAdminPage {
 			'recent_events'         => $recent_events,
 		);
 
-		$snapshot['dashboard'] = $this->build_dashboard_snapshot( $snapshot );
+		$snapshot['dashboard']                         = $this->build_dashboard_snapshot( $snapshot );
+		$snapshot['dashboard']['imported_content_url'] = $this->imported_content_url( $source_id, $posts );
 
 		return $snapshot;
+	}
+
+	/**
+	 * Returns the selected post status for admin display.
+	 *
+	 * @param ImportSessionId $session_id Session id.
+	 * @return string
+	 */
+	private function post_status_for_snapshot( ImportSessionId $session_id ) {
+		$decision = $this->get_store()->find_decision( $session_id, ImportPostPersister::POST_STATUS_DECISION_KEY );
+
+		if ( null === $decision || ImportDecision::STATUS_RESOLVED !== $decision->get_status() ) {
+			return 'publish';
+		}
+
+		$answer = $decision->get_answer();
+
+		return isset( $answer['post_status'] ) && 'draft' === (string) $answer['post_status'] ? 'draft' : 'publish';
+	}
+
+	/**
+	 * Builds the admin URL for viewing imported pages from one session.
+	 *
+	 * @param ImportSessionId     $session_id Session id.
+	 * @param array<string,mixed> $posts      Post snapshot.
+	 * @return string
+	 */
+	private function imported_content_url( ImportSessionId $session_id, array $posts ) {
+		if ( empty( $posts['persisted'] ) || ! function_exists( 'admin_url' ) ) {
+			return '';
+		}
+
+		$query = array(
+			'post_type'                     => 'page',
+			'universal_importer_session_id' => $session_id->to_string(),
+		);
+
+		if ( function_exists( 'add_query_arg' ) ) {
+			return (string) add_query_arg( $query, admin_url( 'edit.php' ) );
+		}
+
+		return admin_url( 'edit.php?post_type=page&universal_importer_session_id=' . rawurlencode( $session_id->to_string() ) );
 	}
 
 	/**
@@ -1285,7 +1381,7 @@ final class ImportAdminPage {
 		</style>
 		<div class="wrap universal-importer-admin">
 			<h1><?php esc_html_e( 'Universal Importer', 'universal-wordpress-importer' ); ?></h1>
-			<p class="universal-importer-lede"><?php esc_html_e( 'Import files, folders, archives, or reachable URLs into WordPress drafts.', 'universal-wordpress-importer' ); ?></p>
+			<p class="universal-importer-lede"><?php esc_html_e( 'Import files, folders, archives, or reachable URLs into WordPress pages.', 'universal-wordpress-importer' ); ?></p>
 			<?php if ( '' !== $error ) : ?>
 				<div class="notice notice-error"><p><?php echo esc_html( $error ); ?></p></div>
 			<?php endif; ?>
@@ -1366,6 +1462,10 @@ final class ImportAdminPage {
 								<span class="universal-importer-hint"><?php esc_html_e( 'Optional unless you choose Rewrite listed domains.', 'universal-wordpress-importer' ); ?></span>
 							</label>
 						</fieldset>
+						<label class="universal-importer-option">
+							<input type="checkbox" name="import_as_drafts" value="1">
+							<span><strong><?php esc_html_e( 'Import as drafts', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Leave unchecked to publish imported pages immediately.', 'universal-wordpress-importer' ); ?></span></span>
+						</label>
 						<label class="universal-importer-option">
 							<input type="checkbox" name="dry_run" value="1">
 							<span><strong><?php esc_html_e( 'Dry run', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Traverse and prepare the import without writing WordPress posts.', 'universal-wordpress-importer' ); ?></span></span>
@@ -2253,7 +2353,7 @@ final class ImportAdminPage {
 				var percent = Math.max(0, Math.min(100, Number(dashboard.percentage || 0)));
 				var total = summary.total || '?';
 				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : session.status;
-				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>';
+				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : (session.post_status === 'draft' ? '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Publishes pages', 'universal-wordpress-importer' ) ); ?>');
 				var importingClass = isImportLocked(session) ? ' is-importing' : '';
 				var html = '<section class="universal-importer-card' + importingClass + '" data-session-id="' + escapeHtml(session.id) + '">';
 				html += '<div class="universal-importer-card-header">';
@@ -2284,6 +2384,9 @@ final class ImportAdminPage {
 				}
 				html += renderActivityLog(dashboard.activity_log || session.recent_events || []);
 				html += renderPipeline(session);
+				if (session.status === 'done' && dashboard.imported_content_url) {
+					html += '<p><a class="button button-primary" href="' + escapeHtml(dashboard.imported_content_url) + '"><?php echo esc_js( __( 'View imported content', 'universal-wordpress-importer' ) ); ?></a></p>';
+				}
 				if (session.status !== 'done' && session.status !== 'aborted') {
 					html += '<p><button type="button" class="button universal-importer-abort" data-session-id="' + escapeHtml(session.id) + '"><?php echo esc_js( __( 'Abort', 'universal-wordpress-importer' ) ); ?></button></p>';
 				}
@@ -2648,6 +2751,7 @@ final class ImportAdminPage {
 					source: data.get('source') || '',
 					confirmed_domains: data.get('confirmed_domains') || '',
 					url_rewrite_mode: data.get('url_rewrite_mode') || 'ask',
+					import_as_drafts: data.get('import_as_drafts') ? '1' : '',
 					dry_run: data.get('dry_run') ? '1' : ''
 				};
 
@@ -2656,6 +2760,7 @@ final class ImportAdminPage {
 					payload = new FormData();
 					payload.set('confirmed_domains', data.get('confirmed_domains') || '');
 					payload.set('url_rewrite_mode', data.get('url_rewrite_mode') || 'ask');
+					payload.set('import_as_drafts', data.get('import_as_drafts') ? '1' : '');
 					payload.set('dry_run', data.get('dry_run') ? '1' : '');
 					browserFiles.forEach(function(file) {
 						payload.append('files[]', file, file.name);
@@ -2785,8 +2890,9 @@ final class ImportAdminPage {
 			$confirmed_domains = $this->parse_domain_list( $this->read_post_string( 'confirmed_domains' ) );
 			$dry_run           = $this->read_post_bool( 'dry_run' );
 			$url_rewrite_mode  = $this->read_post_string( 'url_rewrite_mode' );
+			$import_as_drafts  = $this->read_post_bool( 'import_as_drafts' );
 
-			wp_send_json_success( $this->create_import_session( $source, $confirmed_domains, $dry_run, $url_rewrite_mode ) );
+			wp_send_json_success( $this->create_import_session( $source, $confirmed_domains, $dry_run, $url_rewrite_mode, $import_as_drafts ) );
 		} catch ( InvalidArgumentException $exception ) {
 			wp_send_json_error( array( 'message' => $exception->getMessage() ), 400 );
 		} catch ( RuntimeException $exception ) {
@@ -2808,8 +2914,9 @@ final class ImportAdminPage {
 			$confirmed_domains = $this->parse_domain_list( $this->read_post_string( 'confirmed_domains' ) );
 			$dry_run           = $this->read_post_bool( 'dry_run' );
 			$url_rewrite_mode  = $this->read_post_string( 'url_rewrite_mode' );
+			$import_as_drafts  = $this->read_post_bool( 'import_as_drafts' );
 
-			wp_send_json_success( $this->create_import_session_from_uploaded_files( $files, $paths, $confirmed_domains, $dry_run, $url_rewrite_mode ) );
+			wp_send_json_success( $this->create_import_session_from_uploaded_files( $files, $paths, $confirmed_domains, $dry_run, $url_rewrite_mode, $import_as_drafts ) );
 		} catch ( InvalidArgumentException $exception ) {
 			wp_send_json_error( array( 'message' => $exception->getMessage() ), 400 );
 		} catch ( RuntimeException $exception ) {
@@ -2967,13 +3074,14 @@ final class ImportAdminPage {
 			$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking import state.', 'universal-wordpress-importer' );
 			$display_status = empty( $dashboard['attention_message'] ) ? (string) $session['status'] : __( 'Needs attention', 'universal-wordpress-importer' );
 			$card_class     = $this->is_active_admin_session( $session ) ? 'universal-importer-card is-importing' : 'universal-importer-card';
+			$mode_label     = ! empty( $session['dry_run'] ) ? __( 'Dry run', 'universal-wordpress-importer' ) : ( isset( $session['post_status'] ) && 'draft' === $session['post_status'] ? __( 'Creates drafts', 'universal-wordpress-importer' ) : __( 'Publishes pages', 'universal-wordpress-importer' ) );
 			?>
 			<section class="<?php echo esc_attr( $card_class ); ?>" data-session-id="<?php echo esc_attr( $session['id'] ); ?>">
 				<div class="universal-importer-card-header">
 					<div>
 						<h3 class="universal-importer-source-title"><?php echo esc_html( $session['source'] ); ?></h3>
 						<p class="universal-importer-meta">
-							<?php echo esc_html( $session['dry_run'] ? __( 'Dry run', 'universal-wordpress-importer' ) : __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>
+							<?php echo esc_html( $mode_label ); ?>
 						</p>
 					</div>
 					<span class="universal-importer-status-pill"><?php echo esc_html( $display_status ); ?></span>
@@ -3012,6 +3120,9 @@ final class ImportAdminPage {
 					<?php $this->render_pending_decisions( $session, true ); ?>
 					<?php $this->render_activity_log( isset( $dashboard['activity_log'] ) && is_array( $dashboard['activity_log'] ) ? $dashboard['activity_log'] : $session['recent_events'] ); ?>
 					<?php $this->render_pipeline_details( $session ); ?>
+					<?php if ( ImportSession::STATUS_DONE === $session['status'] && ! empty( $dashboard['imported_content_url'] ) ) : ?>
+						<p><a class="button button-primary" href="<?php echo esc_url( $dashboard['imported_content_url'] ); ?>"><?php esc_html_e( 'View imported content', 'universal-wordpress-importer' ); ?></a></p>
+					<?php endif; ?>
 					<?php if ( ImportSession::STATUS_DONE !== $session['status'] && ImportSession::STATUS_ABORTED !== $session['status'] ) : ?>
 						<p><button type="button" class="button universal-importer-abort" data-session-id="<?php echo esc_attr( $session['id'] ); ?>"><?php esc_html_e( 'Abort', 'universal-wordpress-importer' ); ?></button></p>
 					<?php endif; ?>
@@ -3712,6 +3823,24 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Stores the initial imported post status preference.
+	 *
+	 * @param ImportSessionId $session_id        Session id.
+	 * @param bool            $import_as_drafts Whether imported posts should remain drafts.
+	 * @return void
+	 */
+	private function save_initial_post_status_preference( ImportSessionId $session_id, $import_as_drafts ) {
+		$this->get_store()->save_decision(
+			$session_id,
+			ImportDecision::pending(
+				ImportPostPersister::POST_STATUS_DECISION_KEY,
+				'Choose whether imported pages should be published or saved as drafts.',
+				array()
+			)->resolve( array( 'post_status' => $import_as_drafts ? 'draft' : 'publish' ) )
+		);
+	}
+
+	/**
 	 * Normalizes an admin URL rewrite mode.
 	 *
 	 * @param string $mode Raw mode.
@@ -3990,7 +4119,7 @@ final class ImportAdminPage {
 		}
 
 		if ( 0 < $document_total && $post_total < $document_total ) {
-			return $this->admin_text( 'Writing drafts.' );
+			return $this->admin_text( 'Writing pages.' );
 		}
 
 		if ( ! empty( $session['relationship_warnings'] ) ) {
@@ -4163,8 +4292,8 @@ final class ImportAdminPage {
 			),
 			array(
 				'index'  => '5',
-				'key'    => 'write_drafts',
-				'label'  => $this->admin_text( 'Write drafts' ),
+				'key'    => 'write_pages',
+				'label'  => $this->admin_text( 'Write pages' ),
 				'detail' => $this->admin_text( 'Not started.' ),
 				'state'  => 'pending',
 			),
@@ -4244,14 +4373,14 @@ final class ImportAdminPage {
 		$stages[3]['state']  = 'done';
 
 		if ( $is_dry_run ) {
-			$stages[4]['detail'] = $this->admin_text( 'Dry run: no drafts written.' );
+			$stages[4]['detail'] = $this->admin_text( 'Dry run: no pages written.' );
 			$stages[4]['state']  = 'done';
 		} elseif ( 0 < $document_total && $post_total < $document_total ) {
-			$stages[4]['detail'] = sprintf( $this->admin_text( '%1$d of %2$d drafts written.' ), $post_total, $document_total );
+			$stages[4]['detail'] = sprintf( $this->admin_text( '%1$d of %2$d pages written.' ), $post_total, $document_total );
 			$stages[4]['state']  = 'active';
 			return $stages;
 		} else {
-			$stages[4]['detail'] = 0 < $document_total ? sprintf( $this->admin_text( '%1$d of %2$d drafts written.' ), $post_total, $document_total ) : $this->admin_text( 'No drafts to write.' );
+			$stages[4]['detail'] = 0 < $document_total ? sprintf( $this->admin_text( '%1$d of %2$d pages written.' ), $post_total, $document_total ) : $this->admin_text( 'No pages to write.' );
 			$stages[4]['state']  = 'done';
 		}
 

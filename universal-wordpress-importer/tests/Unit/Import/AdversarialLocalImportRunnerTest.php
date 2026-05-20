@@ -143,7 +143,7 @@ final class AdversarialLocalImportRunnerTest extends TestCase {
 	}
 
 	/**
-	 * Re-running completed local ticks does not duplicate WordPress draft pages.
+	 * Re-running completed local ticks does not duplicate WordPress imported pages.
 	 *
 	 * @return void
 	 */

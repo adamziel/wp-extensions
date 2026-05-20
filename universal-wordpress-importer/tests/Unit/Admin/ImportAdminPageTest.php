@@ -423,6 +423,11 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'Rewrite listed domains', $source );
 		$this->assertStringContainsString( 'Old site domains', $source );
 		$this->assertStringContainsString( 'url_rewrite_mode', $source );
+		$this->assertStringContainsString( 'Import as drafts', $source );
+		$this->assertStringContainsString( 'import_as_drafts', $source );
+		$this->assertStringContainsString( 'Publishes pages', $source );
+		$this->assertStringContainsString( 'View imported content', $source );
+		$this->assertStringContainsString( 'universal_importer_session_id', $source );
 		$this->assertStringContainsString( 'universal-importer-progressbar', $source );
 		$this->assertStringContainsString( 'universal-importer-current-action', $source );
 		$this->assertStringContainsString( 'universal-importer-stage-title', $source );
