@@ -18,7 +18,7 @@
 			"step": "installPlugin",
 			"pluginData": {
 				"resource": "url",
-				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/aba4dd73d009789725ef8f6579365338179a01a0/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=20260520-subtree-fallback"
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/1f03701963bbe17a63869625dc03a1b0ebf4cd6e/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=20260520-imported-pages"
 			},
 			"options": {
 				"activate": true,
