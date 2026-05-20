@@ -12,6 +12,9 @@
 - Fixed GitHub subtree imports when an ambiguous slash-containing ref candidate
   throws a php-toolkit Git exception, and made admin AJAX failures report
   non-JSON server responses instead of leaking raw JSON parse errors.
+- Fixed slash-ambiguous GitHub subtree imports to skip slow Git candidate
+  probes, fall back to the Contents API for precise subtrees, and treat GitHub
+  API exhaustion as retryable backoff instead of downloading a full archive.
 - Reduced noisy admin lock collisions by avoiding overlapping browser
   keepalive requests and de-duplicating consecutive session lock events.
 - Fixed autonomous loop prompt rendering so literal backticked guidance remains

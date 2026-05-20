@@ -727,6 +727,109 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * The reported Gutenberg architecture subtree imports through Contents API fallback.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_reported_gutenberg_architecture_subtree_without_archive_download() {
+		$archive_fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
+		$fetcher         = new FakeRemoteContentFetcher();
+		$source          = 'https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture';
+		$tree_error      = 'GitHub tree ref was not found.';
+
+		foreach (
+			array(
+				'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk/docs/explanations/architecture?recursive=1',
+				'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk/docs/explanations?recursive=1',
+				'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk/docs?recursive=1',
+				'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk?recursive=1',
+			) as $url
+		) {
+			$fetcher->add_json_error( $url, $tree_error );
+		}
+
+		$fetcher->add_json_error(
+			'https://api.github.com/repos/WordPress/gutenberg/contents/architecture?ref=trunk/docs/explanations',
+			'GitHub contents ref was not found.'
+		);
+		$fetcher->add_json_error(
+			'https://api.github.com/repos/WordPress/gutenberg/contents/explanations/architecture?ref=trunk/docs',
+			'GitHub contents ref was not found.'
+		);
+		$fetcher->add_json(
+			'https://api.github.com/repos/WordPress/gutenberg/contents/docs/explanations/architecture?ref=trunk',
+			array(
+				array(
+					'path'    => 'docs/explanations/architecture/README.md',
+					'type'    => 'file',
+					'git_url' => 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/readme',
+					'size'    => 44,
+				),
+				array(
+					'path'    => 'docs/explanations/architecture/data-flow.md',
+					'type'    => 'file',
+					'git_url' => 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/data-flow',
+					'size'    => 42,
+				),
+				array(
+					'path' => 'docs/explanations/architecture/assets',
+					'type' => 'dir',
+				),
+			)
+		);
+		$fetcher->add_json(
+			'https://api.github.com/repos/WordPress/gutenberg/contents/docs/explanations/architecture/assets?ref=trunk',
+			array(
+				array(
+					'path'    => 'docs/explanations/architecture/assets/modules.md',
+					'type'    => 'file',
+					'git_url' => 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/modules',
+					'size'    => 41,
+				),
+			)
+		);
+		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/readme', $this->github_blob_response( "# Architecture\n\nArchitecture overview." ) );
+		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/data-flow', $this->github_blob_response( "# Data Flow\n\nData movement." ) );
+		$fetcher->add_json( 'https://api.github.com/repos/WordPress/gutenberg/git/blobs/modules', $this->github_blob_response( "# Modules\n\nModule boundaries." ) );
+
+		$session = ImportSession::start_for_source( $source );
+		$posts   = new FakePostGateway();
+		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
+		$this->store->save( $session );
+
+		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
+		for ( $tick = 0; $tick < 6; ++$tick ) {
+			$runner->run( $session->get_id() );
+			if ( ImportSession::STATUS_DONE === $this->store->find( $session->get_id() )->get_status() ) {
+				break;
+			}
+		}
+
+		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
+		$titles    = array_map(
+			function ( $document ) {
+				return $document->get_title();
+			},
+			$documents
+		);
+		sort( $titles );
+		$events = array_map(
+			function ( $event ) {
+				return $event->get_type();
+			},
+			$this->store->list_events( $session->get_id(), 30 )
+		);
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( array( 'Architecture', 'Data Flow', 'Modules' ), $titles );
+		$this->assertSame( 3, $posts->count_posts() );
+		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
+		$this->assertContains( 'github.tree_queued', $events );
+		$this->assertNotContains( 'github.archive_downloaded', $events );
+		$this->assertNotContains( 'github.archive_failed', $events );
+	}
+
+	/**
 	 * Large GitHub tree/blob traversals store a cursor and resume on later ticks.
 	 *
 	 * @return void

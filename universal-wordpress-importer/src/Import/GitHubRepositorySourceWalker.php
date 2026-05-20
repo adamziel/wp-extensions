@@ -16,8 +16,9 @@ use Throwable;
  * Seeds GitHub repository URLs into the durable source queue as zip archives.
  */
 final class GitHubRepositorySourceWalker {
-	const MAX_ARCHIVE_BYTES = 268435456;
-	const TREE_BLOB_LIMIT   = 100;
+	const MAX_ARCHIVE_BYTES       = 268435456;
+	const TREE_BLOB_LIMIT         = 100;
+	const CONTENTS_API_FILE_LIMIT = 1000;
 
 	/**
 	 * Durable store.
@@ -294,6 +295,10 @@ final class GitHubRepositorySourceWalker {
 			return null;
 		}
 
+		if ( $this->has_ambiguous_slash_ref_candidates( $repositories ) ) {
+			return null;
+		}
+
 		foreach ( $repositories as $candidate ) {
 			if ( ! $this->can_queue_git_items( $candidate ) ) {
 				continue;
@@ -382,6 +387,26 @@ final class GitHubRepositorySourceWalker {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Returns whether a tree URL was split into possible slash-ref/path candidates.
+	 *
+	 * These URLs are cheaper and more reliable through the GitHub tree/blob API.
+	 * php-toolkit sparse pulls can spend a full admin request trying invalid
+	 * branch splits before the importer reaches the valid path fallback.
+	 *
+	 * @param array<int,array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string}> $repositories Candidate repositories.
+	 * @return bool
+	 */
+	private function has_ambiguous_slash_ref_candidates( array $repositories ) {
+		foreach ( $repositories as $candidate ) {
+			if ( isset( $candidate['requested_ref'] ) && (string) $candidate['requested_ref'] !== (string) $candidate['ref'] ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -556,13 +581,7 @@ final class GitHubRepositorySourceWalker {
 					);
 				}
 
-				$tree = $this->fetch_tree( $candidate );
-
-				if ( ! empty( $tree['truncated'] ) ) {
-					throw new RuntimeException( 'GitHub tree response was truncated; falling back to archive traversal.' );
-				}
-
-				$entries = $this->filter_tree_file_entries( $tree, $candidate['source_path'] );
+				$entries = $this->fetch_tree_file_entries( $candidate );
 				if ( empty( $entries ) ) {
 					throw new RuntimeException( 'GitHub tree response did not contain importable files.' );
 				}
@@ -923,6 +942,134 @@ final class GitHubRepositorySourceWalker {
 	}
 
 	/**
+	 * Fetches importable GitHub tree entries for a candidate repository path.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
+	 * @return array<int,array{path:string,url:string,size:int}>
+	 * @throws RuntimeException When no tree or contents fallback can be loaded.
+	 */
+	private function fetch_tree_file_entries( array $repo ) {
+		try {
+			$tree = $this->fetch_tree( $repo );
+
+			if ( ! empty( $tree['truncated'] ) ) {
+				if ( '' !== trim( (string) $repo['source_path'], '/' ) ) {
+					return $this->fetch_contents_file_entries( $repo );
+				}
+
+				throw new RuntimeException( 'GitHub tree response was truncated; falling back to archive traversal.' );
+			}
+
+			$entries = $this->filter_tree_file_entries( $tree, $repo['source_path'] );
+			if ( ! empty( $entries ) || '' === trim( (string) $repo['source_path'], '/' ) ) {
+				return $entries;
+			}
+		} catch ( RuntimeException $exception ) {
+			if ( '' === trim( (string) $repo['source_path'], '/' ) ) {
+				throw $exception;
+			}
+		}
+
+		return $this->fetch_contents_file_entries( $repo );
+	}
+
+	/**
+	 * Fetches importable files under a repository path through the Contents API.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
+	 * @return array<int,array{path:string,url:string,size:int}>
+	 * @throws RuntimeException When the contents response is malformed or too large.
+	 */
+	private function fetch_contents_file_entries( array $repo ) {
+		$path    = $this->normalize_source_path( $repo['source_path'] );
+		$entries = array();
+
+		if ( '' === $path ) {
+			throw new RuntimeException( 'GitHub contents traversal requires a repository path.' );
+		}
+
+		$this->collect_contents_file_entries( $repo, $path, $entries );
+
+		usort(
+			$entries,
+			function ( $a, $b ) {
+				return strcmp( $a['path'], $b['path'] );
+			}
+		);
+
+		return $entries;
+	}
+
+	/**
+	 * Recursively collects GitHub Contents API file entries.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string} $repo Repository data.
+	 * @param string                                                                          $path Repository-relative path.
+	 * @param array<int,array{path:string,url:string,size:int}>                               $entries Collected entries.
+	 * @return void
+	 * @throws RuntimeException When the contents response is malformed or too large.
+	 */
+	private function collect_contents_file_entries( array $repo, $path, array &$entries ) {
+		if ( self::CONTENTS_API_FILE_LIMIT <= count( $entries ) ) {
+			throw new RuntimeException( 'GitHub contents traversal exceeded the importer repository file limit.' );
+		}
+
+		$contents = $this->content_fetcher->fetch_json( $this->contents_api_url( $repo, $path ) );
+
+		if ( $this->is_contents_file_entry( $contents ) ) {
+			$entries[] = $this->contents_file_entry_to_tree_entry( $contents );
+			return;
+		}
+
+		if ( ! is_array( $contents ) ) {
+			throw new RuntimeException( 'GitHub contents response was malformed.' );
+		}
+
+		foreach ( $contents as $entry ) {
+			if ( ! is_array( $entry ) || empty( $entry['type'] ) || empty( $entry['path'] ) ) {
+				continue;
+			}
+
+			if ( 'file' === (string) $entry['type'] && $this->is_contents_file_entry( $entry ) ) {
+				$entries[] = $this->contents_file_entry_to_tree_entry( $entry );
+				continue;
+			}
+
+			if ( 'dir' === (string) $entry['type'] ) {
+				$this->collect_contents_file_entries( $repo, $this->normalize_source_path( (string) $entry['path'] ), $entries );
+			}
+		}
+	}
+
+	/**
+	 * Returns whether a Contents API entry points to a fetchable file blob.
+	 *
+	 * @param mixed $entry Contents API entry.
+	 * @return bool
+	 */
+	private function is_contents_file_entry( $entry ) {
+		return is_array( $entry )
+			&& isset( $entry['type'], $entry['path'], $entry['git_url'] )
+			&& 'file' === (string) $entry['type']
+			&& '' !== $this->normalize_source_path( (string) $entry['path'] )
+			&& '' !== trim( (string) $entry['git_url'] );
+	}
+
+	/**
+	 * Converts a Contents API file entry into the tree entry shape.
+	 *
+	 * @param array<string,mixed> $entry Contents API entry.
+	 * @return array{path:string,url:string,size:int}
+	 */
+	private function contents_file_entry_to_tree_entry( array $entry ) {
+		return array(
+			'path' => $this->normalize_source_path( (string) $entry['path'] ),
+			'url'  => (string) $entry['git_url'],
+			'size' => isset( $entry['size'] ) ? max( 0, (int) $entry['size'] ) : 0,
+		);
+	}
+
+	/**
 	 * Filters tree entries to importable files under the requested source path.
 	 *
 	 * @param array<string,mixed> $tree        GitHub tree response.
@@ -1067,6 +1214,23 @@ final class GitHubRepositorySourceWalker {
 	 */
 	private function tree_api_url( array $repo ) {
 		return GitHubRepositorySourceUrl::tree_api_url( $repo );
+	}
+
+	/**
+	 * Builds the GitHub Contents API URL for a repository path.
+	 *
+	 * @param array{owner:string,name:string,ref:string} $repo Repository data.
+	 * @param string                                     $path Repository-relative path.
+	 * @return string
+	 */
+	private function contents_api_url( array $repo, $path ) {
+		$path = $this->normalize_source_path( $path );
+
+		return GitHubRepositorySourceUrl::repository_api_url( $repo )
+			. '/contents/'
+			. str_replace( '%2F', '/', rawurlencode( $path ) )
+			. '?ref='
+			. str_replace( '%2F', '/', rawurlencode( $repo['ref'] ) );
 	}
 
 	/**
