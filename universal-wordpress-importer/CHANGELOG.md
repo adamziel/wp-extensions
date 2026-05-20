@@ -6,9 +6,9 @@
   with GitHub tree/blob and zipball fallbacks, and added OPML feed-list imports.
 - Added admin source shortcuts and a keyboard-navigable browser folder tree
   preview for selected files.
-- Added an admin GitHub directory picker that resolves default branches and
-  ambiguous branch/path URLs before setting the import source to a chosen
-  repository subtree.
+- Added an admin GitHub directory picker modal with filtering, keyboard
+  navigation, focus handling, and explicit confirmation before setting the
+  import source to a chosen repository subtree.
 - Fixed GitHub subtree imports when an ambiguous slash-containing ref candidate
   throws a php-toolkit Git exception, and made admin AJAX failures report
   non-JSON server responses instead of leaking raw JSON parse errors.

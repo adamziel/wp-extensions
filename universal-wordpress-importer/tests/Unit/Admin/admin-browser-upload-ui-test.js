@@ -49,8 +49,18 @@ class Element {
 		(this.listeners[type] || []).forEach((listener) => listener(event));
 	}
 
-	querySelector() {
-		return this.id === 'universal-importer-notice' ? noticeParagraph : null;
+	focus() {
+		activeElement = this;
+	}
+
+	querySelector(selector) {
+		if (this.id === 'universal-importer-notice') {
+			return noticeParagraph;
+		}
+		if (this.id === 'universal-importer-github-modal' && selector === '.universal-importer-modal-dialog') {
+			return githubModalDialog;
+		}
+		return null;
 	}
 
 	querySelectorAll() {
@@ -63,6 +73,10 @@ class Element {
 
 	getAttribute(name) {
 		return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : '';
+	}
+
+	hasAttribute(name) {
+		return Object.prototype.hasOwnProperty.call(this.attributes, name);
 	}
 
 	removeAttribute(name) {
@@ -163,12 +177,21 @@ const filePreview = new Element('universal-importer-file-preview');
 const githubPicker = new Element('universal-importer-github-picker');
 githubPicker.setAttribute('hidden', 'hidden');
 const githubBrowseButton = new Element('universal-importer-github-browse');
+const githubModal = new Element('universal-importer-github-modal');
+githubModal.setAttribute('hidden', 'hidden');
+const githubModalDialog = new Element('universal-importer-modal-dialog');
+const githubCloseButton = new Element('universal-importer-github-close');
+const githubCancelButton = new Element('universal-importer-github-cancel');
+const githubUseButton = new Element('universal-importer-github-use');
+const githubSearch = new Element('universal-importer-github-search');
 const githubPickerStatus = new Element('universal-importer-github-picker-status');
 const githubSelection = new Element('universal-importer-github-selection');
+const githubModalSelection = new Element('universal-importer-github-modal-selection');
 const githubTree = new Element('universal-importer-github-tree');
 const sessions = new Element('universal-importer-sessions');
 const notice = new Element('universal-importer-notice');
 const noticeParagraph = { textContent: '' };
+let activeElement = null;
 const fetchCalls = [];
 let nextFetchResponse = {
 	ok: true,
@@ -198,8 +221,14 @@ const elements = {
 	'universal-importer-file-preview': filePreview,
 	'universal-importer-github-picker': githubPicker,
 	'universal-importer-github-browse': githubBrowseButton,
+	'universal-importer-github-modal': githubModal,
+	'universal-importer-github-close': githubCloseButton,
+	'universal-importer-github-cancel': githubCancelButton,
+	'universal-importer-github-use': githubUseButton,
+	'universal-importer-github-search': githubSearch,
 	'universal-importer-github-picker-status': githubPickerStatus,
 	'universal-importer-github-selection': githubSelection,
+	'universal-importer-github-modal-selection': githubModalSelection,
 	'universal-importer-github-tree': githubTree,
 	'universal-importer-sessions': sessions,
 	'universal-importer-notice': notice
@@ -215,6 +244,9 @@ const context = {
 	console,
 	ajaxurl: 'admin-ajax.php',
 	document: {
+		get activeElement() {
+			return activeElement;
+		},
 		getElementById(id) {
 			return elements[id] || null;
 		},
@@ -259,6 +291,7 @@ nextFetchResponse = {
 		success: true,
 		data: {
 			selected_path: 'docs',
+			selected_source_url: 'https://github.com/example/repository/tree/main/docs',
 			directories: [
 				{
 					path: '',
@@ -292,12 +325,41 @@ githubBrowseButton.dispatch('click', {});
 		throw new Error('GitHub directory browser request did not include the source URL: ' + browseCall.options.body);
 	}
 
+	if (githubModal.hasAttribute('hidden')) {
+		throw new Error('GitHub directory modal should open while browsing directories.');
+	}
+
 	if (!githubTree.innerHTML.includes('docs') || !githubTree.innerHTML.includes('data-source-url="https://github.com/example/repository/tree/main/docs"')) {
 		throw new Error('GitHub directory tree was not rendered: ' + githubTree.innerHTML);
 	}
 
 	if (!githubSelection.textContent.includes('docs')) {
 		throw new Error('GitHub directory selection was not summarized: ' + githubSelection.textContent);
+	}
+
+	if (!githubModalSelection.textContent.includes('docs') || !githubModalSelection.textContent.includes('https://github.com/example/repository/tree/main/docs')) {
+		throw new Error('GitHub modal selection was not summarized: ' + githubModalSelection.textContent);
+	}
+
+	if (sourceInput.value !== 'https://github.com/example/repository') {
+		throw new Error('GitHub source should not change until the modal selection is confirmed.');
+	}
+
+	githubSearch.value = 'docs';
+	githubSearch.dispatch('input', {});
+
+	if (!githubTree.innerHTML.includes('docs') || githubTree.innerHTML.includes('Repository root')) {
+		throw new Error('GitHub directory filter did not narrow the rendered tree: ' + githubTree.innerHTML);
+	}
+
+	githubUseButton.dispatch('click', {});
+
+	if (sourceInput.value !== 'https://github.com/example/repository/tree/main/docs') {
+		throw new Error('GitHub selected directory was not applied to the source URL: ' + sourceInput.value);
+	}
+
+	if (!githubModal.hasAttribute('hidden')) {
+		throw new Error('GitHub directory modal should close after applying a selection.');
 	}
 
 	nextFetchResponse = {

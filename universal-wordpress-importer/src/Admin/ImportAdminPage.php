@@ -786,18 +786,110 @@ final class ImportAdminPage {
 				justify-content: space-between;
 				margin-bottom: 8px;
 			}
-			.universal-importer-github-picker-status,
 			.universal-importer-github-selection {
 				color: var(--ui-muted);
 				font-size: 12px;
 				margin: 0;
 			}
-			.universal-importer-github-tree {
-				list-style: none;
-				margin: 8px 0 0;
-				max-height: 220px;
-				overflow: auto;
+			.universal-importer-modal[hidden] {
+				display: none;
+			}
+			.universal-importer-modal {
+				align-items: center;
+				background: rgba(30, 30, 30, .55);
+				bottom: 0;
+				display: flex;
+				justify-content: center;
+				left: 0;
+				padding: 24px;
+				position: fixed;
+				right: 0;
+				top: 0;
+				z-index: 100000;
+			}
+			.universal-importer-modal-dialog {
+				background: #fff;
+				border-radius: 8px;
+				box-shadow: 0 22px 70px rgba(0,0,0,.28);
+				display: grid;
+				grid-template-rows: auto minmax(0, 1fr) auto;
+				max-height: min(760px, calc(100vh - 48px));
+				max-width: 760px;
+				min-height: 420px;
+				outline: none;
+				overflow: hidden;
+				width: min(760px, calc(100vw - 48px));
+			}
+			.universal-importer-modal-header,
+			.universal-importer-modal-footer {
+				align-items: center;
+				display: flex;
+				gap: 12px;
+				justify-content: space-between;
+				padding: 16px 18px;
+			}
+			.universal-importer-modal-header {
+				border-bottom: 1px solid var(--ui-border);
+			}
+			.universal-importer-modal-header h2 {
+				font-size: 18px;
+				line-height: 1.3;
+				margin: 0;
+			}
+			.universal-importer-modal-close {
+				align-items: center;
+				background: transparent;
+				border: 0;
+				border-radius: 4px;
+				color: #50575e;
+				cursor: pointer;
+				display: inline-flex;
+				font-size: 24px;
+				height: 32px;
+				justify-content: center;
+				line-height: 1;
 				padding: 0;
+				width: 32px;
+			}
+			.universal-importer-modal-close:hover,
+			.universal-importer-modal-close:focus {
+				box-shadow: inset 0 0 0 2px var(--ui-accent);
+				outline: none;
+			}
+			.universal-importer-modal-body {
+				display: grid;
+				grid-template-rows: auto auto minmax(0, 1fr);
+				min-height: 0;
+				padding: 16px 18px;
+			}
+			.universal-importer-github-filter {
+				margin: 0 0 12px;
+			}
+			.universal-importer-github-filter label {
+				color: #1d2327;
+				display: block;
+				font-size: 13px;
+				font-weight: 600;
+				margin: 0 0 7px;
+			}
+			.universal-importer-github-filter input[type="search"] {
+				border-radius: 6px;
+				min-height: 38px;
+				width: 100%;
+			}
+			.universal-importer-github-picker-status {
+				color: var(--ui-muted);
+				font-size: 12px;
+				margin: 0 0 10px;
+			}
+			.universal-importer-github-tree {
+				border: 1px solid var(--ui-border);
+				border-radius: 6px;
+				list-style: none;
+				margin: 0;
+				min-height: 180px;
+				overflow: auto;
+				padding: 6px;
 			}
 			.universal-importer-github-tree li {
 				margin: 0;
@@ -827,6 +919,25 @@ final class ImportAdminPage {
 				background: #f0f6e8;
 				box-shadow: inset 3px 0 0 #008a20;
 				font-weight: 600;
+			}
+			.universal-importer-github-empty {
+				color: var(--ui-muted);
+				margin: 12px;
+			}
+			.universal-importer-modal-footer {
+				border-top: 1px solid var(--ui-border);
+			}
+			.universal-importer-modal-actions {
+				display: flex;
+				flex: 0 0 auto;
+				gap: 8px;
+			}
+			.universal-importer-modal-selection {
+				color: var(--ui-muted);
+				font-size: 12px;
+				margin: 0;
+				min-width: 0;
+				overflow-wrap: anywhere;
 			}
 			.universal-importer-url-options {
 				border: 1px solid var(--ui-border);
@@ -1213,11 +1324,9 @@ final class ImportAdminPage {
 						<div id="universal-importer-github-picker" class="universal-importer-github-picker" hidden>
 							<div class="universal-importer-github-picker-header">
 								<strong><?php esc_html_e( 'GitHub directory', 'universal-wordpress-importer' ); ?></strong>
-								<button type="button" class="button" id="universal-importer-github-browse"><?php esc_html_e( 'Browse directories', 'universal-wordpress-importer' ); ?></button>
+								<button type="button" class="button" id="universal-importer-github-browse"><?php esc_html_e( 'Choose directory', 'universal-wordpress-importer' ); ?></button>
 							</div>
-							<p id="universal-importer-github-picker-status" class="universal-importer-github-picker-status" aria-live="polite"></p>
 							<p id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"></p>
-							<ul id="universal-importer-github-tree" class="universal-importer-github-tree" role="tree" aria-label="<?php echo esc_attr__( 'GitHub repository directories', 'universal-wordpress-importer' ); ?>"></ul>
 						</div>
 						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
 							<div class="universal-importer-upload-copy">
@@ -1272,6 +1381,29 @@ final class ImportAdminPage {
 			<div id="universal-importer-sessions" class="universal-importer-sessions<?php echo null === $primary_session ? ' is-empty' : ''; ?>">
 				<?php $this->render_session_list( null === $primary_session ? array() : array( $primary_session ) ); ?>
 			</div>
+			<div id="universal-importer-github-modal" class="universal-importer-modal" role="dialog" aria-modal="true" aria-labelledby="universal-importer-github-modal-title" hidden>
+				<div class="universal-importer-modal-dialog" tabindex="-1">
+					<div class="universal-importer-modal-header">
+						<h2 id="universal-importer-github-modal-title"><?php esc_html_e( 'Choose GitHub directory', 'universal-wordpress-importer' ); ?></h2>
+						<button type="button" class="universal-importer-modal-close" id="universal-importer-github-close" aria-label="<?php echo esc_attr__( 'Close', 'universal-wordpress-importer' ); ?>">×</button>
+					</div>
+					<div class="universal-importer-modal-body">
+						<p class="universal-importer-github-filter">
+							<label for="universal-importer-github-search"><?php esc_html_e( 'Filter directories', 'universal-wordpress-importer' ); ?></label>
+							<input type="search" id="universal-importer-github-search" autocomplete="off">
+						</p>
+						<p id="universal-importer-github-picker-status" class="universal-importer-github-picker-status" aria-live="polite"></p>
+						<ul id="universal-importer-github-tree" class="universal-importer-github-tree" role="tree" aria-label="<?php echo esc_attr__( 'GitHub repository directories', 'universal-wordpress-importer' ); ?>"></ul>
+					</div>
+					<div class="universal-importer-modal-footer">
+						<p id="universal-importer-github-modal-selection" class="universal-importer-modal-selection" aria-live="polite"></p>
+						<span class="universal-importer-modal-actions">
+							<button type="button" class="button" id="universal-importer-github-cancel"><?php esc_html_e( 'Cancel', 'universal-wordpress-importer' ); ?></button>
+							<button type="button" class="button button-primary" id="universal-importer-github-use"><?php esc_html_e( 'Use directory', 'universal-wordpress-importer' ); ?></button>
+						</span>
+					</div>
+				</div>
+			</div>
 		</div>
 		<script>
 		(function() {
@@ -1286,8 +1418,15 @@ final class ImportAdminPage {
 			var filePreview = document.getElementById('universal-importer-file-preview');
 			var githubPicker = document.getElementById('universal-importer-github-picker');
 			var githubBrowseButton = document.getElementById('universal-importer-github-browse');
+			var githubModal = document.getElementById('universal-importer-github-modal');
+			var githubModalDialog = githubModal && githubModal.querySelector ? githubModal.querySelector('.universal-importer-modal-dialog') : null;
+			var githubCloseButton = document.getElementById('universal-importer-github-close');
+			var githubCancelButton = document.getElementById('universal-importer-github-cancel');
+			var githubUseButton = document.getElementById('universal-importer-github-use');
+			var githubSearch = document.getElementById('universal-importer-github-search');
 			var githubPickerStatus = document.getElementById('universal-importer-github-picker-status');
 			var githubSelection = document.getElementById('universal-importer-github-selection');
+			var githubModalSelection = document.getElementById('universal-importer-github-modal-selection');
 			var githubTree = document.getElementById('universal-importer-github-tree');
 			var sessions = document.getElementById('universal-importer-sessions');
 			var emptyProgress = document.getElementById('universal-importer-empty-progress');
@@ -1299,6 +1438,10 @@ final class ImportAdminPage {
 			var browserFiles = [];
 			var fileTreeSearch = '';
 			var fileTreeSearchTimer = null;
+			var githubDirectories = [];
+			var githubSelectedPath = '';
+			var githubSelectedSourceUrl = '';
+			var githubPreviousFocus = null;
 
 			function showNotice(message, type) {
 				notice.className = 'notice notice-' + type;
@@ -1368,8 +1511,12 @@ final class ImportAdminPage {
 				var visible = browserFiles.length < 1 && isGitHubRepositoryInput(sourceInput.value || '');
 				if (visible) {
 					githubPicker.removeAttribute('hidden');
+					if (githubSelection && !githubSelection.textContent) {
+						githubSelection.textContent = '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
+					}
 				} else {
 					githubPicker.setAttribute('hidden', 'hidden');
+					closeGithubDirectoryModal(false);
 					if (githubPickerStatus) {
 						githubPickerStatus.textContent = '';
 					}
@@ -1379,6 +1526,38 @@ final class ImportAdminPage {
 					if (githubTree) {
 						githubTree.innerHTML = '';
 					}
+					githubDirectories = [];
+				}
+			}
+
+			function isGithubModalOpen() {
+				return githubModal && !githubModal.hasAttribute('hidden');
+			}
+
+			function openGithubDirectoryModal() {
+				if (!githubModal) {
+					return;
+				}
+				githubPreviousFocus = document.activeElement || githubBrowseButton || sourceInput;
+				githubModal.removeAttribute('hidden');
+				if (githubSearch) {
+					githubSearch.value = '';
+				}
+				if (githubModalDialog && githubModalDialog.focus) {
+					githubModalDialog.focus();
+				}
+				if (githubSearch && githubSearch.focus) {
+					githubSearch.focus();
+				}
+			}
+
+			function closeGithubDirectoryModal(restoreFocus) {
+				if (!githubModal || !isGithubModalOpen()) {
+					return;
+				}
+				githubModal.setAttribute('hidden', 'hidden');
+				if (restoreFocus !== false && githubPreviousFocus && githubPreviousFocus.focus) {
+					githubPreviousFocus.focus();
 				}
 			}
 
@@ -1389,12 +1568,14 @@ final class ImportAdminPage {
 					return;
 				}
 
+				openGithubDirectoryModal();
 				if (githubBrowseButton) {
 					githubBrowseButton.disabled = true;
 				}
 				if (githubPickerStatus) {
 					githubPickerStatus.textContent = '<?php echo esc_js( __( 'Loading directories...', 'universal-wordpress-importer' ) ); ?>';
 				}
+				updateGithubSelectedSummary('', '');
 				if (githubTree) {
 					githubTree.innerHTML = '';
 				}
@@ -1414,16 +1595,37 @@ final class ImportAdminPage {
 			}
 
 			function renderGithubDirectories(data) {
-				var directories = data && data.directories ? data.directories : [];
-				var selectedPath = data && typeof data.selected_path === 'string' ? data.selected_path : '';
+				githubDirectories = data && data.directories ? data.directories : [];
+				githubSelectedPath = data && typeof data.selected_path === 'string' ? data.selected_path : '';
+				githubSelectedSourceUrl = data && data.selected_source_url ? data.selected_source_url : '';
+				renderGithubDirectoryRows();
+			}
+
+			function filteredGithubDirectories() {
+				var query = githubSearch ? String(githubSearch.value || '').toLowerCase().trim() : '';
+
+				if (!query) {
+					return githubDirectories;
+				}
+
+				return githubDirectories.filter(function(directory) {
+					return String(directory.path || '').toLowerCase().indexOf(query) !== -1 || String(directory.name || '').toLowerCase().indexOf(query) !== -1;
+				});
+			}
+
+			function renderGithubDirectoryRows() {
+				var directories = filteredGithubDirectories();
 
 				if (githubPickerStatus) {
-					githubPickerStatus.textContent = directories.length + ' <?php echo esc_js( __( 'directories found.', 'universal-wordpress-importer' ) ); ?>';
+					githubPickerStatus.textContent = directories.length + ' <?php echo esc_js( __( 'directories shown.', 'universal-wordpress-importer' ) ); ?>';
 				}
-				if (githubSelection) {
-					githubSelection.textContent = selectedPath ? '<?php echo esc_js( __( 'Selected:', 'universal-wordpress-importer' ) ); ?> ' + selectedPath : '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
-				}
+				updateGithubSelectedSummary(githubSelectedPath, githubSelectedSourceUrl);
 				if (!githubTree) {
+					return;
+				}
+
+				if (!directories.length) {
+					githubTree.innerHTML = '<li class="universal-importer-github-empty"><?php echo esc_js( __( 'No directories match this filter.', 'universal-wordpress-importer' ) ); ?></li>';
 					return;
 				}
 
@@ -1431,9 +1633,10 @@ final class ImportAdminPage {
 					var path = directory.path || '';
 					var name = path ? directory.name || path : '<?php echo esc_js( __( 'Repository root', 'universal-wordpress-importer' ) ); ?>';
 					var depth = Math.max(0, Number(directory.depth || 0));
-					var selected = path === selectedPath ? ' is-selected' : '';
+					var selected = path === githubSelectedPath ? ' is-selected' : '';
 					var padding = 10 + depth * 18;
-					return '<li role="treeitem"><button type="button" class="universal-importer-github-directory' + selected + '" data-source-url="' + escapeHtml(directory.source_url || '') + '" data-path="' + escapeHtml(path) + '" style="padding-left:' + padding + 'px">' + escapeHtml(name) + '</button></li>';
+					var tabIndex = path === githubSelectedPath || (!githubSelectedPath && directories.indexOf(directory) === 0) ? '0' : '-1';
+					return '<li role="none"><button type="button" role="treeitem" tabindex="' + tabIndex + '" class="universal-importer-github-directory' + selected + '" data-source-url="' + escapeHtml(directory.source_url || '') + '" data-path="' + escapeHtml(path) + '" style="padding-left:' + padding + 'px">' + escapeHtml(name) + '</button></li>';
 				}).join('');
 			}
 
@@ -1445,10 +1648,9 @@ final class ImportAdminPage {
 					return;
 				}
 
-				sourceInput.value = sourceUrl;
-				if (githubSelection) {
-					githubSelection.textContent = path ? '<?php echo esc_js( __( 'Selected:', 'universal-wordpress-importer' ) ); ?> ' + path : '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
-				}
+				githubSelectedPath = path;
+				githubSelectedSourceUrl = sourceUrl;
+				updateGithubSelectedSummary(path, sourceUrl);
 				if (githubTree && githubTree.querySelectorAll) {
 					Array.prototype.slice.call(githubTree.querySelectorAll('.universal-importer-github-directory')).forEach(function(item) {
 						if (item.classList && item.classList.remove) {
@@ -1458,6 +1660,121 @@ final class ImportAdminPage {
 				}
 				if (button.classList && button.classList.add) {
 					button.classList.add('is-selected');
+				}
+				focusGithubDirectory(button);
+			}
+
+			function updateGithubSelectedSummary(path, sourceUrl) {
+				var label = path ? '<?php echo esc_js( __( 'Selected:', 'universal-wordpress-importer' ) ); ?> ' + path : '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
+				if (githubSelection) {
+					githubSelection.textContent = label;
+				}
+				if (githubModalSelection) {
+					githubModalSelection.textContent = sourceUrl ? label + ' · ' + sourceUrl : label;
+				}
+				if (githubUseButton) {
+					githubUseButton.disabled = !sourceUrl;
+				}
+			}
+
+			function applyGithubDirectorySelection() {
+				if (!githubSelectedSourceUrl) {
+					return;
+				}
+				sourceInput.value = githubSelectedSourceUrl;
+				closeGithubDirectoryModal(true);
+				syncGithubPickerVisibility();
+			}
+
+			function githubDirectoryButtons() {
+				if (!githubTree || !githubTree.querySelectorAll) {
+					return [];
+				}
+				return Array.prototype.slice.call(githubTree.querySelectorAll('.universal-importer-github-directory'));
+			}
+
+			function focusGithubDirectory(button) {
+				githubDirectoryButtons().forEach(function(item) {
+					item.tabIndex = -1;
+					if (item.setAttribute) {
+						item.setAttribute('tabindex', '-1');
+					}
+				});
+				button.tabIndex = 0;
+				if (button.setAttribute) {
+					button.setAttribute('tabindex', '0');
+				}
+				if (button.focus) {
+					button.focus();
+				}
+			}
+
+			function moveGithubDirectoryFocus(current, offset) {
+				var buttons = githubDirectoryButtons();
+				var index = buttons.indexOf(current);
+				if (-1 === index || !buttons.length) {
+					return;
+				}
+				index = Math.max(0, Math.min(buttons.length - 1, index + offset));
+				focusGithubDirectory(buttons[index]);
+			}
+
+			function focusFirstGithubDirectory() {
+				var buttons = githubDirectoryButtons();
+				if (buttons.length) {
+					focusGithubDirectory(buttons[0]);
+				}
+			}
+
+			function focusLastGithubDirectory() {
+				var buttons = githubDirectoryButtons();
+				if (buttons.length) {
+					focusGithubDirectory(buttons[buttons.length - 1]);
+				}
+			}
+
+			function githubModalFocusableElements() {
+				if (!githubModal || !githubModal.querySelectorAll) {
+					return [];
+				}
+				return Array.prototype.slice.call(githubModal.querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])')).filter(function(element) {
+					return !element.disabled && !(element.hasAttribute && element.hasAttribute('hidden'));
+				});
+			}
+
+			function trapGithubModalFocus(event) {
+				var focusable = githubModalFocusableElements();
+				var currentIndex = focusable.indexOf(document.activeElement);
+
+				if (!focusable.length) {
+					event.preventDefault();
+					if (githubModalDialog && githubModalDialog.focus) {
+						githubModalDialog.focus();
+					}
+					return;
+				}
+
+				if (event.shiftKey && currentIndex <= 0) {
+					event.preventDefault();
+					focusable[focusable.length - 1].focus();
+					return;
+				}
+
+				if (!event.shiftKey && (currentIndex === -1 || currentIndex === focusable.length - 1)) {
+					event.preventDefault();
+					focusable[0].focus();
+				}
+			}
+
+			function handleGithubModalKeydown(event) {
+				if (event.key === 'Escape') {
+					event.preventDefault();
+					closeGithubDirectoryModal(true);
+					return;
+				}
+
+				if (event.key === 'Tab') {
+					trapGithubModalFocus(event);
 				}
 			}
 
@@ -1711,6 +2028,72 @@ final class ImportAdminPage {
 						chooseGithubDirectory(button);
 					}
 				});
+				githubTree.addEventListener('keydown', function(event) {
+					var button = event.target.closest ? event.target.closest('.universal-importer-github-directory') : null;
+					if (!button) {
+						return;
+					}
+
+					if (event.key === 'ArrowDown') {
+						event.preventDefault();
+						moveGithubDirectoryFocus(button, 1);
+						return;
+					}
+					if (event.key === 'ArrowUp') {
+						event.preventDefault();
+						moveGithubDirectoryFocus(button, -1);
+						return;
+					}
+					if (event.key === 'Home') {
+						event.preventDefault();
+						focusFirstGithubDirectory();
+						return;
+					}
+					if (event.key === 'End') {
+						event.preventDefault();
+						focusLastGithubDirectory();
+						return;
+					}
+					if (event.key === ' ' || event.key === 'Enter') {
+						event.preventDefault();
+						chooseGithubDirectory(button);
+					}
+				});
+			}
+
+			if (githubSearch) {
+				githubSearch.addEventListener('input', renderGithubDirectoryRows);
+				githubSearch.addEventListener('keydown', function(event) {
+					if (event.key === 'ArrowDown') {
+						event.preventDefault();
+						focusFirstGithubDirectory();
+					}
+				});
+			}
+
+			if (githubCloseButton) {
+				githubCloseButton.addEventListener('click', function() {
+					closeGithubDirectoryModal(true);
+				});
+			}
+
+			if (githubCancelButton) {
+				githubCancelButton.addEventListener('click', function() {
+					closeGithubDirectoryModal(true);
+				});
+			}
+
+			if (githubUseButton) {
+				githubUseButton.addEventListener('click', applyGithubDirectorySelection);
+			}
+
+			if (githubModal) {
+				githubModal.addEventListener('click', function(event) {
+					if (event.target === githubModal) {
+						closeGithubDirectoryModal(true);
+					}
+				});
+				githubModal.addEventListener('keydown', handleGithubModalKeydown);
 			}
 
 			filePreview.addEventListener('click', function(event) {
