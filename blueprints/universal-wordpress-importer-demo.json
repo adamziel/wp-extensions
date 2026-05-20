@@ -18,7 +18,7 @@
 			"step": "installPlugin",
 			"pluginData": {
 				"resource": "url",
-				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/codex/github-importer-sources/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=20260520-picker-modal"
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/2248394eddd599665cac6bbdc33af91807b7033d/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=20260520-picker-modal"
 			},
 			"options": {
 				"activate": true,
