@@ -1166,3 +1166,13 @@ The URL-decision focus state also holds up. In normal mobile, the card-level ins
 This is the right kind of polish for the artifact: it improves wayfinding and accessibility without adding controls, copy, states, or runtime behavior. The focus style is visually stronger, but it does not make the setup or URL-decision areas feel bloated because it appears only on the active card and falls back cleanly in forced-colors. The current feature surface remains intact, and the no-overflow metrics across all four screenshots support keeping the change.
 
 Recommendation: keep the Pass 106 card-focus CSS direction. No HTML, plugin, or runtime edit is needed from this evidence. Carry this as the expected production behavior: full-card `:focus-within`/focused-choice indicators should survive forced-colors, avoid box-shadow-only focus, and remain layout-neutral across source type, editable settings, and URL-decision choices.
+
+## Pass 108 Critique
+
+The 390px narrow-mobile evidence confirms the full-card focus ring remains layout-neutral. All three captures report no horizontal overflow (`innerWidth=390`, `clientWidth=390`, `scrollWidth=390`, `bodyScrollWidth=390`), and the focused cards stay inside the viewport: the source type card ends at `right=362`, the editable setting row at `right=363`, and the URL-decision card at `right=346`. The focus shadow is visible in each case, but it does not increase measured page width or clip against the viewport edge.
+
+Readability also holds at this narrower width. The source type choice is compact at `167px` by `42px`, but the focus ring now marks the whole perceived choice instead of only the `13px` radio. The editable setting row has enough height for wrapped explanatory copy (`336px` by `80.171875px`) without becoming hard to scan, and the URL-decision option remains readable as a taller focused label (`302px` by `74.171875px`) with the native radio spanning the multiline text area.
+
+This is the intended accessibility polish rather than new UI. The artifact keeps the same journey and feature surface: source choice, editable safety setting, and URL decision are easier to locate during keyboard navigation, but no new controls, copy, states, or runtime behavior are introduced. The stronger focus treatment improves confidence at the narrowest tested mobile width without making the setup or scan-decision steps feel heavier.
+
+Recommendation: keep the Pass 106 card-focus CSS as-is after Pass 108. No HTML, plugin, or runtime edit is needed. The full-card focus ring is readable and layout-neutral at 390px narrow mobile across source type, editable setting, and URL-decision choices.
