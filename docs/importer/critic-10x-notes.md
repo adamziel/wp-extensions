@@ -1358,3 +1358,13 @@ The narrow forced-colors capture is acceptable. All row actions measure `127px` 
 I do not see evidence of target-size regression, hidden actions, ambiguous hierarchy, or action bloat from this change. The remaining cost is vertical length in the dry-run result, especially on mobile large text, but that was already inherent in showing item-level evidence and one resolution example. Compressing these links again would trade away the accessibility gain for little clarity benefit.
 
 Recommendation: make no HTML change for Pass 126 and do not touch plugin or runtime code. Keep the scoped `.result-table .button-link` target-size fix as-is; it improves row-action usability across large text and forced colors while preserving the secondary visual hierarchy.
+
+## Pass 127 Critique
+
+The focused row actions are visible enough after the target-size fix. Desktop "Review match" is the clearest example: the focused control measures about `91.640625px` by `40px`, the active element matches the intended button, and the blue `0 0 0 2px` focus shadow gives a clear rectangular target without turning the row action into a primary button. The ring sits inside the result table area without horizontal overflow or clipping, and the row hierarchy still reads correctly: outcome, item evidence, owner, then a secondary next action.
+
+Mobile also holds. The focused "Replace media" action measures `197px` by `40px`, has no horizontal overflow, and the visible focus shape is large enough to track while scanning stacked result cards. The added target depth does not crowd the warning row or collide with the neighboring "Next" label, and the secondary link styling keeps the action below the item evidence rather than competing with the main result summary or the later resolution panel.
+
+The narrow forced-colors evidence is acceptable. "Add title or skip" remains the active element, measures `127px` by `40px`, and switches from the normal blue shadow to a solid `2px` outline with no box shadow. That is the right fallback: focus does not depend on color glow, the outline is not clipped by the card border, and there is still no horizontal overflow. The forced-colors treatment is more severe visually, but it exposes focus and preserves the result-row structure.
+
+Recommendation: make no HTML change for Pass 127 and do not touch plugin or runtime code. The scoped row-action target-size and focus treatment are doing the right job across desktop, mobile, and narrow forced-colors evidence; I do not see overlap, clipped rings, forced-colors failure, ambiguous hierarchy, or target-size regression.
