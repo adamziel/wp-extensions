@@ -1604,3 +1604,9 @@ The dark color-scheme evidence does not show a true dark-mode, readability, or o
 The measured containment also holds. At 500px and 1440px, `clientWidth`, `scrollWidth`, and `bodyScrollWidth` all match, `overflowCount=0`, and the primary button remains readable and target-safe. The screenshots show light sections with dark text and no clipped controls, hidden content, or page-level horizontal scrolling.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 153. Do not add a dark theme or `prefers-color-scheme` branch to this static artifact; that would broaden scope without fixing a demonstrated defect. If production later supports WordPress admin color-scheme adaptation, handle it as a separate implementation concern rather than inside this static journey artifact.
+
+## Pass 154 Critique
+
+The Chromium DOM integrity evidence does not show a true defect. Duplicate IDs are absent, all hash navigation targets resolve, and every `aria-labelledby`, `aria-describedby`, and `aria-controls` reference points at an existing element. The 12-heading outline has no bad jumps, every button has an accessible name, and the desktop containment check reports `overflowCount=0`.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 154. Treat the DOM integrity, navigation, accessibility-reference, heading, unnamed-control, and desktop-overflow checks as passing unless future evidence identifies a specific broken reference, missing target, unnamed control, heading regression, or visible overflow.
