@@ -43,6 +43,7 @@
 - Pass 20 reviewed the updated mobile first-screen screenshot after the WordPress export helper edit and kept the HTML unchanged. The longer phrase still reads as secondary helper copy, the dry-run action remains the dominant next step, and the guarantee, upload fallback, source type selector, and editable settings keep their previous hierarchy without needing new UI or copy.
 - Pass 21 reviewed the full desktop and mobile screenshots after the helper edit and kept the HTML unchanged. The artifact still reads as one sequence across setup, scan decision, dry-run result, issue resolution, and real import; no source matrix, extra state, new control, or runtime/plugin change is needed.
 - Pass 22 reviewed the opened support disclosure after the helper edit and kept the HTML unchanged. "WordPress exports" works as a short first-screen acceptance hint, while the disclosure's "WordPress site" and WXR details act as optional proof below the setup path rather than a capability matrix.
+- Pass 23 reviewed the narrow mobile and tablet screenshots after the helper edit and kept the HTML unchanged. The first-screen action path, two-column mobile source selector, setup summary, and scan decision remain readable without a new source-catalog feel; the long URL/path content is bounded or wrapped instead of forcing a visible horizontal layout regression.
 
 ## Remaining Concerns
 

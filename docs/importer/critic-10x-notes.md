@@ -290,3 +290,11 @@ The new helper wording also removes the one vague coverage cue without creating 
 Source coverage is clear enough for this design-only artifact. The cards remain compact, source-family based, and scannable; they do not add alternate journeys, per-format examples, or source-specific result states. The one small wording imperfection is that WordPress exports now appear in both the helper and disclosure, but that is acceptable because the two placements serve different levels of attention.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny follow-up is justified in this pass. Do not add a visible source matrix, more format examples, or another alternate-source flow unless human review identifies a specific misunderstanding.
+
+## Pass 23 Critique
+
+The tablet-width screenshot remains stable after the helper edit. The setup hierarchy is intact: the source field, dry-run action, guarantee, source-type selector, editable settings, and collapsed support disclosure all fit without crowding, and the support disclosure does not reintroduce source-catalog bloat.
+
+The narrow-mobile screenshot shows one concrete breakpoint issue. The setup panel appears clipped at the right edge: the intro helper line, long source value, setting helper text, and the "Archive or document" source option lose visible content instead of wrapping or being fully contained. That is hierarchy damage at the narrowest breakpoint because it makes the first-screen setup feel mechanically cropped, even though the dry-run CTA and guarantee still remain legible.
+
+Recommendation: do not add more source coverage, states, or explanatory UI. A tiny follow-up is justified only for narrow mobile containment: make the source-type choices and long setup helper/value text wrap or stack cleanly at the narrow breakpoint, with no copy expansion and no new journey content. Tablet can remain unchanged.
