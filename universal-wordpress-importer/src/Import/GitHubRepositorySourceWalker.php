@@ -155,14 +155,15 @@ final class GitHubRepositorySourceWalker {
 			try {
 				$files = $this->git_fetcher->fetch( $session, $candidate, $this->cache_directory );
 			} catch ( Throwable $exception ) {
+				$error_message                 = $this->git_unavailable_message( $candidate, $exception );
 				$metadata                      = $state->get_metadata();
 				$metadata['github_git_status'] = 'unavailable';
-				$metadata['error']             = $exception->getMessage();
+				$metadata['error']             = $error_message;
 				$this->store->save_source_item( $state->with_status( ImportSourceItem::STATUS_SKIPPED )->with_replaced_metadata( $metadata ) );
 				$this->record_event(
 					$session,
 					'github.git_unavailable',
-					'php-toolkit Git traversal could not fetch this repository candidate; traversal will use the next available GitHub path.',
+					$error_message,
 					$candidate,
 					array(
 						'error' => $exception->getMessage(),
@@ -219,6 +220,24 @@ final class GitHubRepositorySourceWalker {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Builds an operator-facing sparse Git failure message.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo      Repository data.
+	 * @param Throwable                                                                                          $exception Failure.
+	 * @return string Failure message.
+	 */
+	private function git_unavailable_message( array $repo, Throwable $exception ) {
+		$path = isset( $repo['source_path'] ) && '' !== (string) $repo['source_path'] ? (string) $repo['source_path'] : '/';
+
+		return sprintf(
+			'php-toolkit Git traversal failed for ref "%1$s" at path "%2$s": %3$s The importer will try the next GitHub path candidate.',
+			(string) $repo['ref'],
+			$path,
+			$exception->getMessage()
+		);
 	}
 
 	/**
