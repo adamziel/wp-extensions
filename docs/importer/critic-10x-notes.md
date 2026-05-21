@@ -476,3 +476,11 @@ The desktop dry-run result area has one high-confidence review-friction issue in
 The warning ownership and resolver placement are otherwise strong enough to keep. The warning row names the content owner, the open-warnings panel repeats that media belongs to the content owner and title belongs to the editor, and the resolver panel sits directly under the table with the selected `Block rendering` warning still visible nearby. The count cards remain acceptable as a summary because the table immediately below samples each outcome type and the final gate repeats the exact consequences.
 
 Recommendation: keep the content stable and make only the scoped table-layout fix. Use fixed table layout, explicit column widths, and wrapping link-style actions so the existing action text is visible without horizontal scrolling. Do not add another warning panel or expand the counts; the concrete problem is clipped action affordance, not missing feature surface.
+
+## Pass 44 Critique
+
+The selected resolver panel has one high-confidence design-only defect in the supplied desktop screenshot: the `Replacement` label collides with its value and reads as `Replacementuploads/importer/block-rendering.svg`. That makes the replacement path look malformed even though the actual path is short, relevant, and otherwise readable. The `Affected`, `Missing`, and `Result` rows are clear, and the panel is correctly scoped to one selected missing-media issue.
+
+Path wrapping does not need a new resolver workflow. The existing `.path-value` wrapping handles the missing and replacement file paths, and the panel already shows the evidence chain: affected draft, missing source file, replacement file, and changed import consequence. The only necessary UI change is to give resolver labels enough column width so label/value separation stays intact.
+
+Recommendation: keep the resolver content and workflow stable. Make the scoped CSS fix by widening the resolver label column; do not add upload progress, file validation, bulk replacement, or another issue-resolution state for this PR.
