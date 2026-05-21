@@ -1404,3 +1404,13 @@ Focus and forced-colors behavior also hold. Normal mobile keeps a clear full-car
 The first viewport survives the extra target height. "Start dry run" stays visible at about `643.390625px` on mobile and mobile large text, and at about `674.578125px` in narrow forced colors. Those positions are still consistent with the intended setup order: source type, source field, primary dry-run action, then safety guarantee and upload fallback. I do not see horizontal scroll, clipped focus, forced-colors failure, or a meaningful vertical regression.
 
 Recommendation: make no HTML change for Pass 131 and do not touch plugin or runtime code. Keep the scoped `.source-tab { min-height: 44px; }` artifact fix as-is; it resolves the compact target issue without expanding the journey or weakening first-viewport clarity.
+
+## Pass 132 Critique
+
+The editable settings are clear enough after the source-section changes. They now read as secondary real-import preferences below source type, source entry, the primary dry-run action, the dry-run guarantee, and the upload fallback. That hierarchy is correct: the fixed first-run safety remains separate, while drafts, URL rewriting, and duplicate reporting are the only editable choices shown before preview.
+
+The supplied mobile, narrow, and desktop evidence shows no horizontal overflow, and the card sizes are healthy for target area: about `336px` by `80px` on mobile, `266px` by `80px` on narrow, and `250.66px` by `97.56px` on desktop. The native checkbox is small, but the full label card is the interaction target, so there is no target-size issue comparable to the earlier row-action links. The desktop cards are a little taller because the three-column row equalizes around the longest wrapped description, but that does not create bloat or visual competition with the source form.
+
+The labels are specific enough. "Save new content as drafts," "Ask before URL rewriting," and "Report duplicate matches" each name the setting and the helper text explains the consequence without turning the section into another safety catalog. I do not see ambiguity worth fixing; replacing these with longer labels would likely make the compact cards heavier, especially on the `266px` narrow layout.
+
+Recommendation: make no HTML change for Pass 132 and do not touch plugin or runtime code. Keep the editable-settings section as-is; it is clear, contained, target-safe, and properly subordinate to the source and dry-run path.
