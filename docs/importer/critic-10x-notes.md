@@ -952,3 +952,13 @@ The shortened media and title warning bullets preserve the three things they nee
 The warning rail is now close to the right density for desktop. It is not empty summary copy, because it still explains duplicate reporting, media ownership, title ownership, and the already-applied old-site-link decision. It is also no longer asking to be read as a second policy document before the real-import gate. The final gate below still owns the heavier write consequence, which is where that repetition belongs.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched. Do not trim the media or title warning bullets further; a follow-up trim would now be over-optimization and would risk removing the owner/fix/confidence cues that make the result review actionable. If any later copy edit is considered, it should require fresh evidence of reader confusion, not just a desire to make the rail shorter.
+
+## Pass 89 Critique
+
+The 500px mobile result-to-final-gate screenshot confirms that the Pass 87 warning-copy trim improved scanning without weakening the journey. The capture has no horizontal overflow (`innerWidth=500`, `clientWidth=500`, `scrollWidth=500`, `bodyScrollWidth=500`), and the result state starts at `resultTop=253`, so the user reaches the dry-run outcome in a stable single-column layout. The real-import gate remains much lower at `realImportTop=2365`, which means the warning panel still has to bridge a long mobile scroll between review evidence and the write boundary.
+
+The trimmed warning copy is now doing the right amount of work. It no longer reads like a second policy document, but it still preserves the cues mobile users need before continuing: duplicate reporting remains active, the media warning has an owner and a fix, the title warning has an owner and a fix/skip choice, and the old-site-link decision is acknowledged as already applied. That is enough context to understand why the final import can be allowed with warnings before the user reaches the final gate.
+
+Further trimming would be harmful unless new evidence shows confusion. Removing the duplicate, media, or title bullets would make the result panel less actionable and force the final gate to carry too much explanation by itself. Removing the old-site-link line is now less attractive than it was before the trim because the line is short and reinforces that an earlier scan decision still affects the import. The mobile page is long, but the length is carrying review evidence, not bloat.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched. Do not trim the warning panel further for Pass 89; the current copy is the minimum useful bridge from dry-run result evidence to the real-import gate.
