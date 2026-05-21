@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>44 Mobile Scanner · Universal Importer</title>
+<style>
+:root{--bg:#0d0d12;--phone:#191923;--ink:#f3f3f7;--accent:#0eddc4;--soft:#0e3833;--muted:#8e8ea0;--ring:#0eddc4;--warn:#fca311}
+*{box-sizing:border-box}
+html,body{margin:0;background:radial-gradient(ellipse at top,#1c1c2a 0,#0d0d12 70%);color:var(--ink);font:14px/1.5 "SF Pro Text","Inter",ui-sans-serif,system-ui}
+button,input{font:inherit;color:inherit}
+.scene{min-height:100vh;display:grid;grid-template-columns:340px 1fr 360px;gap:30px;padding:30px;align-items:center}
+.brand{align-self:start}
+.brand h1{margin:0 0 6px;font-size:24px;letter-spacing:.02em}
+.brand p{margin:0 0 18px;color:var(--muted)}
+.brand .chips{display:flex;flex-direction:column;gap:8px}
+.brand .chip{padding:10px 12px;background:#191923;border:1px solid #2a2a3a;border-radius:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center}
+.brand .chip.on{border-color:var(--accent);box-shadow:0 0 0 3px rgba(14,221,196,.15)}
+.brand .chip span{color:var(--muted);font-size:12px}
+.brand .badge{display:inline-block;padding:4px 10px;border:1px solid var(--accent);color:var(--accent);border-radius:999px;margin-bottom:12px;font-size:12px;letter-spacing:.18em}
+.phone{justify-self:center;width:340px;height:680px;background:var(--phone);border:4px solid #2a2a3a;border-radius:54px;padding:18px 16px;box-shadow:0 30px 80px rgba(0,0,0,.5),inset 0 0 0 2px #000;position:relative;display:grid;grid-template-rows:auto auto 1fr auto auto;gap:10px}
+.phone .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:130px;height:24px;background:#000;border-radius:0 0 18px 18px}
+.phone .statusbar{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);padding:0 14px;margin-top:4px}
+.phone .header{display:flex;justify-content:space-between;align-items:center;padding:4px 6px}
+.phone h2{margin:0;font-size:17px;font-weight:700}
+.phone .header button{padding:6px;background:transparent;border:0;color:var(--accent)}
+.viewfinder{position:relative;border:2px dashed #2a2a3a;border-radius:18px;overflow:hidden;background:#0a0a12;display:grid;place-items:center}
+.viewfinder::before,.viewfinder::after{content:"";position:absolute;width:30px;height:30px;border:3px solid var(--ring)}
+.viewfinder::before{top:8px;left:8px;border-right:0;border-bottom:0;border-radius:8px 0 0 0}
+.viewfinder::after{bottom:8px;right:8px;border-left:0;border-top:0;border-radius:0 0 8px 0}
+.viewfinder .qr{font:600 18px ui-monospace,monospace;color:var(--ring);text-align:center;padding:0 18px}
+.viewfinder .qr small{display:block;margin-top:6px;color:var(--muted);font-weight:400;font-size:11px;letter-spacing:.06em}
+.beam{position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,transparent,var(--ring),transparent);animation:scan 2.4s ease-in-out infinite}
+@keyframes scan{0%{top:6%}50%{top:90%}100%{top:6%}}
+.phone .input{display:grid;grid-template-columns:1fr auto;gap:6px}
+.phone input{background:#0a0a12;border:1px solid #2a2a3a;border-radius:10px;padding:10px 12px;color:#fff;width:100%}
+.phone .toolbar{display:flex;gap:6px;flex-wrap:wrap}
+.phone .tool{background:#0a0a12;border:1px solid #2a2a3a;border-radius:8px;padding:6px 10px;font-size:12px;color:#c0c0d0;cursor:pointer}
+.phone .tool.on{background:var(--soft);border-color:var(--accent);color:var(--accent)}
+.phone .primary{padding:14px;border-radius:14px;background:var(--accent);color:#001f1b;font-weight:800;letter-spacing:.06em;border:0;cursor:pointer;font-size:15px}
+.phone .primary:disabled{opacity:.65}
+.phone .home{height:5px;width:120px;background:#fff;border-radius:5px;justify-self:center;opacity:.5}
+.right{align-self:start}
+.right .run{background:#191923;border:1px solid #2a2a3a;border-radius:14px;padding:18px}
+.right h3{margin:0 0 4px;font-size:16px}
+.right .lead{color:var(--muted);font-size:12.5px}
+.bar{height:10px;background:#0a0a12;border-radius:999px;overflow:hidden;margin:14px 0 8px}
+.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),#ffd166);transition:width .3s}
+.right ol{margin:0;padding-left:18px;font-size:12.5px;color:#c0c0d0;max-height:140px;overflow:auto}
+.right .res{margin-top:10px;padding:10px;border:1px dashed var(--accent);border-radius:10px;color:#e0fbf6}
+.right .fout{margin-top:14px;padding:8px 10px;background:#0a0a12;border:1px solid #2a2a3a;border-left:3px solid var(--warn);border-radius:6px;font-size:12px;color:#ffd9a3}
+@media(max-width:1100px){.scene{grid-template-columns:1fr;padding:20px}.phone{width:100%;max-width:360px}}
+</style>
+</head>
+<body>
+<div class="scene">
+  <div class="brand">
+    <span class="badge">v4 · 44 / 60</span>
+    <h1>Scan a source</h1>
+    <p>Point the importer at a URL, repo link, or RSS feed. Decide what features to use, then tap the green button.</p>
+    <div class="chips">
+      <div class="chip on" data-c="GitHub mode: clones repo, parses markdown, infers titles and slugs."><b>GitHub repo</b><span>git · md · slugs</span></div>
+      <div class="chip" data-c="RSS mode: paginates feed, downloads media, normalizes timestamps."><b>RSS / feed</b><span>xml · pagination</span></div>
+      <div class="chip" data-c="Sitemap mode: walks all URLs, deduplicates, applies URL policy."><b>XML sitemap</b><span>walk · dedupe</span></div>
+      <div class="chip" data-c="OPML mode: imports blogroll, expands subscriptions, runs each feed."><b>OPML bundle</b><span>nested feeds</span></div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="statusbar"><span>9:41</span><span>● ● ● ●  100%</span></div>
+    <div class="header">
+      <button>‹</button>
+      <h2>WP · Scanner</h2>
+      <button>⋯</button>
+    </div>
+    <div class="viewfinder"><div class="beam"></div><div class="qr">📡 ▒▓█▓▒<small>aim at source — release to lock</small></div></div>
+    <div class="input"><input id="src" value="github.com/WordPress/gutenberg/tree/trunk/docs"><button class="tool">↻</button></div>
+    <div class="toolbar">
+      <button class="tool on">Drafts</button>
+      <button class="tool">Publish</button>
+      <button class="tool">Media on</button>
+      <button class="tool">Rewrite URLs</button>
+      <button class="tool">Skip dupes</button>
+    </div>
+    <button class="primary" id="go">⬤ Lock &amp; import</button>
+    <div class="home"></div>
+  </div>
+
+  <div class="right">
+    <div class="run">
+      <h3>Run feed</h3>
+      <p class="lead">Live status appears here as the import progresses, just like a notification stream.</p>
+      <div class="bar"><span id="bf"></span></div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted)"><span id="ph">Ready</span><span id="cnt">0 / 64</span></div>
+      <ol id="log"><li>Waiting for scan.</li></ol>
+      <div class="res" id="res">Results will appear after a complete run.</div>
+      <div class="fout" id="fout">GitHub mode: clones repo, parses markdown, infers titles and slugs.</div>
+    </div>
+  </div>
+</div>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+document.querySelectorAll(".chip").forEach(c=>c.addEventListener("click",()=>{
+  document.querySelectorAll(".chip").forEach(x=>x.classList.remove("on"));
+  c.classList.add("on");document.getElementById("fout").textContent=c.dataset.c;
+}));
+document.querySelectorAll(".phone .tool").forEach(c=>c.addEventListener("click",()=>c.classList.toggle("on")));
+document.getElementById("go").addEventListener("click",e=>{
+  e.preventDefault();const go=document.getElementById("go");go.disabled=true;
+  const log=document.getElementById("log");log.innerHTML="";
+  let i=0;const t=setInterval(()=>{
+    const ph=phases[i],pct=Math.round(i/(phases.length-1)*100);
+    document.getElementById("ph").textContent=ph;document.getElementById("bf").style.width=pct+"%";document.getElementById("cnt").textContent=Math.min(64,Math.round(pct*.64))+" / 64";
+    const li=document.createElement("li");li.textContent=ph;log.appendChild(li);log.scrollTop=log.scrollHeight;
+    if(ph==="complete"){clearInterval(t);go.disabled=false;document.getElementById("res").innerHTML="✓ <b>Complete</b> · 38 drafts, 22 media, 4 URL rules. Tap to open review.";}
+    i++;
+  },560);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Importer Progress Flow Explorations v4</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0e1116;color:#e6edf3;font:14px/1.5 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+a{color:#7ee787;text-decoration:none}
+header.page{padding:36px 24px 18px;max-width:1900px;margin:auto;display:grid;grid-template-columns:1fr auto;gap:18px;align-items:end;border-bottom:1px solid #21262d}
+header.page h1{margin:0 0 6px;font-size:30px;letter-spacing:-.01em}
+header.page p{margin:0;color:#8b949e;max-width:62ch}
+header.page .stamp{padding:8px 12px;border:1px solid #30363d;border-radius:999px;color:#7ee787;font-weight:700}
+nav.jump{position:sticky;top:0;z-index:5;background:rgba(14,17,22,.94);backdrop-filter:blur(6px);border-bottom:1px solid #21262d;padding:10px 24px;display:flex;gap:6px;overflow:auto;max-width:1900px;margin:auto}
+nav.jump a{padding:6px 10px;border:1px solid #30363d;border-radius:6px;background:#161b22;font-size:12px;white-space:nowrap;color:#c9d1d9}
+nav.jump a:hover{border-color:#7ee787;color:#7ee787}
+main{max-width:1900px;margin:auto;padding:18px 24px 60px}
+.intro{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:14px 0 22px}
+.intro div{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:14px}
+.intro strong{display:block;font-size:11px;letter-spacing:.12em;color:#7ee787;text-transform:uppercase;margin-bottom:6px}
+.intro p{margin:0;color:#c9d1d9}
+.gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.proposal{background:#0d1117;border:1px solid #21262d;border-radius:12px;overflow:hidden}
+.proposal header{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid #21262d;background:linear-gradient(180deg,#161b22,#0d1117)}
+.proposal .num{font:700 22px/1 ui-monospace,monospace;color:#7ee787;background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:8px 10px;min-width:50px;text-align:center}
+.proposal h2{margin:0 0 3px;font-size:16px;color:#e6edf3}
+.proposal p{margin:0;color:#8b949e;font-size:13px}
+.proposal .open{padding:7px 11px;border:1px solid #30363d;border-radius:6px;background:#161b22;color:#c9d1d9;font-size:12px}
+.proposal .open:hover{border-color:#7ee787;color:#7ee787}
+iframe{display:block;width:100%;height:660px;border:0;background:#fff}
+footer{margin:30px auto 0;max-width:1900px;padding:0 24px;color:#8b949e;font-size:12px}
+@media(max-width:1100px){.gallery{grid-template-columns:1fr}iframe{height:760px}.intro{grid-template-columns:repeat(2,1fr)}header.page{grid-template-columns:1fr}}
+@media(max-width:700px){.intro{grid-template-columns:1fr}main{padding:14px}iframe{height:880px}.proposal header{grid-template-columns:auto 1fr;row-gap:8px}.proposal .open{grid-column:1/-1;justify-self:start}}
+</style>
+</head>
+<body>
+<header class="page">
+<div><h1>Universal Importer · v4 · 20 distinct compositions</h1><p>Twenty proposals built to look and behave unlike v2 and v3. Every entry uses a different information architecture, visual register, and primary interaction. All are self-contained, responsive, and clickable.</p></div>
+<span class="stamp">v4 / options 41 – 60</span>
+</header>
+<nav class="jump">
+<a href="#p41">41 Map Board</a><a href="#p42">42 Timeline Wall</a><a href="#p43">43 Spreadsheet</a><a href="#p44">44 Mobile Scanner</a><a href="#p45">45 Cockpit</a><a href="#p46">46 Modal Workflow</a><a href="#p47">47 Canvas Planner</a><a href="#p48">48 Sidebar App</a><a href="#p49">49 Doc Annotation</a><a href="#p50">50 Media Wall</a><a href="#p51">51 Rules Graph</a><a href="#p52">52 Marketplace</a><a href="#p53">53 Risk Radar</a><a href="#p54">54 Pub. Calendar</a><a href="#p55">55 Lab Notebook</a><a href="#p56">56 Split Terminal</a><a href="#p57">57 Blueprint</a><a href="#p58">58 Recovery Console</a><a href="#p59">59 Conveyor</a><a href="#p60">60 Minimal Prompt</a>
+</nav>
+<main>
+<section class="intro">
+<div><strong>Brief</strong><p>First screen: source selection and primary action visible in viewport.</p></div>
+<div><strong>Discovery</strong><p>Each option has feature controls that change visible content.</p></div>
+<div><strong>Run</strong><p>Import button simulates queued → reading → preparing → URLs → media → writing → complete.</p></div>
+<div><strong>Spread</strong><p>Twenty different layouts: maps, calendars, terminals, blueprints, conveyors.</p></div>
+</section>
+<section class="gallery">
+<section class="proposal" id="p41"><header><span class="num">41</span><div><h2>Map Board</h2><p>Pin sources onto a stylized site map. Run animates a route across regions.</p></div><a class="open" href="options/option-41.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-41.html" title="41 Map Board" loading="lazy"></iframe></section>
+<section class="proposal" id="p42"><header><span class="num">42</span><div><h2>Timeline Wall</h2><p>Horizontal ribbon of dated content. The run moves a play-head across the wall.</p></div><a class="open" href="options/option-42.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-42.html" title="42 Timeline Wall" loading="lazy"></iframe></section>
+<section class="proposal" id="p43"><header><span class="num">43</span><div><h2>Dense Spreadsheet</h2><p>Excel-style ribbon, formula bar, and per-page rows with column-driven options.</p></div><a class="open" href="options/option-43.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-43.html" title="43 Spreadsheet" loading="lazy"></iframe></section>
+<section class="proposal" id="p44"><header><span class="num">44</span><div><h2>Mobile Scanner</h2><p>Phone-frame UI with a camera-style scan viewfinder for source URLs.</p></div><a class="open" href="options/option-44.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-44.html" title="44 Mobile Scanner" loading="lazy"></iframe></section>
+<section class="proposal" id="p45"><header><span class="num">45</span><div><h2>Dashboard Cockpit</h2><p>BI dashboard with KPI tiles, gauges, sparklines and a dark neon palette.</p></div><a class="open" href="options/option-45.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-45.html" title="45 Cockpit" loading="lazy"></iframe></section>
+<section class="proposal" id="p46"><header><span class="num">46</span><div><h2>Modal Workflow</h2><p>A focused modal sequence over a dimmed background. Step dots drive content.</p></div><a class="open" href="options/option-46.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-46.html" title="46 Modal Workflow" loading="lazy"></iframe></section>
+<section class="proposal" id="p47"><header><span class="num">47</span><div><h2>Canvas Planner</h2><p>Whiteboard with sticky notes for each page. Run sweeps from upper-left.</p></div><a class="open" href="options/option-47.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-47.html" title="47 Canvas Planner" loading="lazy"></iframe></section>
+<section class="proposal" id="p48"><header><span class="num">48</span><div><h2>Sidebar App</h2><p>Persistent left rail with icon nav, secondary list, and a dense work area.</p></div><a class="open" href="options/option-48.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-48.html" title="48 Sidebar App" loading="lazy"></iframe></section>
+<section class="proposal" id="p49"><header><span class="num">49</span><div><h2>Document Annotation</h2><p>Source rendered as a page with margin comments and editorial markup.</p></div><a class="open" href="options/option-49.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-49.html" title="49 Doc Annotation" loading="lazy"></iframe></section>
+<section class="proposal" id="p50"><header><span class="num">50</span><div><h2>Media Wall</h2><p>Masonry image grid as the entry point for image-heavy imports.</p></div><a class="open" href="options/option-50.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-50.html" title="50 Media Wall" loading="lazy"></iframe></section>
+<section class="proposal" id="p51"><header><span class="num">51</span><div><h2>Rules Graph</h2><p>Node-edge editor: source, parsers, decisions, sink, with an inspector pane.</p></div><a class="open" href="options/option-51.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-51.html" title="51 Rules Graph" loading="lazy"></iframe></section>
+<section class="proposal" id="p52"><header><span class="num">52</span><div><h2>Source Marketplace</h2><p>App-store layout for source connectors with featured hero and tile grid.</p></div><a class="open" href="options/option-52.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-52.html" title="52 Marketplace" loading="lazy"></iframe></section>
+<section class="proposal" id="p53"><header><span class="num">53</span><div><h2>Risk Radar</h2><p>Polar radar plot of dependency risks with a live scan sweep arm.</p></div><a class="open" href="options/option-53.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-53.html" title="53 Risk Radar" loading="lazy"></iframe></section>
+<section class="proposal" id="p54"><header><span class="num">54</span><div><h2>Publication Calendar</h2><p>Editorial month grid: pages occupy date cells; run colors days as they fill.</p></div><a class="open" href="options/option-54.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-54.html" title="54 Pub. Calendar" loading="lazy"></iframe></section>
+<section class="proposal" id="p55"><header><span class="num">55</span><div><h2>Lab Notebook</h2><p>Jupyter-style cells: setup, run, output. Kernel and run badges throughout.</p></div><a class="open" href="options/option-55.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-55.html" title="55 Lab Notebook" loading="lazy"></iframe></section>
+<section class="proposal" id="p56"><header><span class="num">56</span><div><h2>Split Terminal</h2><p>Three-pane terminal with ASCII bars, scrolling logs, and keybinding hints.</p></div><a class="open" href="options/option-56.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-56.html" title="56 Split Terminal" loading="lazy"></iframe></section>
+<section class="proposal" id="p57"><header><span class="num">57</span><div><h2>Site Blueprint</h2><p>Architectural blueprint where sections are rooms and pages are tagged objects.</p></div><a class="open" href="options/option-57.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-57.html" title="57 Blueprint" loading="lazy"></iframe></section>
+<section class="proposal" id="p58"><header><span class="num">58</span><div><h2>Recovery Console</h2><p>Amber-and-red ops console for retries, restores, and post-failure runs.</p></div><a class="open" href="options/option-58.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-58.html" title="58 Recovery Console" loading="lazy"></iframe></section>
+<section class="proposal" id="p59"><header><span class="num">59</span><div><h2>Batch Conveyor</h2><p>Industrial conveyor belt where each page is a parcel moving along stations.</p></div><a class="open" href="options/option-59.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-59.html" title="59 Conveyor" loading="lazy"></iframe></section>
+<section class="proposal" id="p60"><header><span class="num">60</span><div><h2>Minimal Prompt</h2><p>One huge input on a near-empty canvas. Expands inline as it runs.</p></div><a class="open" href="options/option-60.html" target="_blank" rel="noopener">Open full page →</a></header><iframe src="options/option-60.html" title="60 Minimal Prompt" loading="lazy"></iframe></section>
+</section>
+</main>
+<footer>v4 explorations · self-contained option pages under <code>options/</code> · no external runtime, inline CSS &amp; JS only.</footer>
+</body>
+</html>

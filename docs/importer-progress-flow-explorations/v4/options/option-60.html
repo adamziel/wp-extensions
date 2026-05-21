@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>60 Recipe Card · Universal Importer</title>
+<style>
+:root{
+  --cream:#fbf3df;--card:#fffaee;--ink:#3b2a1e;--rule:#d6c197;--ruleD:#a48650;
+  --accent:#bb3838;--sage:#7b9b5f;--mustard:#d99a1b;--plum:#8a4271;--berry:#d23b6a;
+  --stove-r:#ff5a30;--stove-y:#ffb83a;--stove-g:#6ec46a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--cream);background-image:
+  radial-gradient(rgba(120,80,30,.07) 1px,transparent 1.4px),
+  linear-gradient(180deg,#fbf3df,#f4e8c8);
+  background-size:20px 20px,100% 100%;color:var(--ink);font:14px/1.55 "Caladea","Iowan Old Style","Georgia",serif;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+.kitchen{display:grid;grid-template-columns:1fr 1fr;height:100vh;min-height:760px;padding:22px;gap:22px}
+
+.card{background:var(--card);border:1px solid var(--ruleD);border-radius:6px;box-shadow:0 4px 0 rgba(140,100,40,.18),0 14px 30px rgba(80,40,10,.18);padding:26px;display:flex;flex-direction:column;gap:14px;overflow:auto;position:relative;background-image:linear-gradient(transparent 27px,rgba(164,134,80,.18) 28px);background-size:100% 28px;background-position:0 18px}
+.card::before{content:"";position:absolute;left:50px;top:0;bottom:0;width:1px;background:#d23b6a;opacity:.45}
+.card .recipe-no{display:inline-flex;align-items:center;gap:8px;font:700 11px/1 ui-sans-serif;letter-spacing:.22em;color:var(--accent);text-transform:uppercase}
+.card .recipe-no::before,.card .recipe-no::after{content:"";display:block;width:30px;height:1px;background:var(--accent)}
+.card h1{font:italic 900 36px/1.05 "Playfair Display","Caladea",serif;margin:6px 0 4px;letter-spacing:-.01em}
+.card .byline{color:#7a5f3a;font-style:italic;border-bottom:1.5px solid var(--rule);padding-bottom:12px}
+
+.meta{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;text-align:center;margin:2px 0 4px}
+.meta .pill{padding:8px 6px;background:#fff7e0;border:1px dashed var(--ruleD);border-radius:6px}
+.meta .pill b{display:block;font:900 16px/1 "Playfair Display",serif;color:var(--accent)}
+.meta .pill span{font-size:11px;letter-spacing:.14em;color:#7a5f3a;text-transform:uppercase}
+
+.servings{display:flex;align-items:center;gap:10px;font-size:13.5px}
+.servings .btn{width:28px;height:28px;border:1.5px solid var(--ruleD);background:#fff;border-radius:50%;cursor:pointer;font-weight:800;color:var(--ink)}
+.servings .num{font:800 18px/1 "Playfair Display",serif;width:30px;text-align:center;color:var(--accent)}
+
+h2.section{font:italic 800 22px/1 "Playfair Display",serif;margin:8px 0 2px;color:var(--ink);position:relative}
+h2.section::after{content:"";display:block;width:60px;height:2px;background:var(--accent);margin-top:6px}
+
+.source{display:grid;gap:6px}
+.source .label{font:700 11px ui-sans-serif;letter-spacing:.16em;color:#7a5f3a;text-transform:uppercase}
+.source-tabs{display:flex;background:#fff;border:1.5px solid var(--ruleD);border-radius:999px;padding:3px;gap:2px}
+.source-tabs button{flex:1;padding:6px 10px;background:transparent;border:0;border-radius:999px;cursor:pointer;font-size:12px;color:#7a5f3a;font-weight:700;letter-spacing:.06em}
+.source-tabs button.on{background:var(--accent);color:#fff;box-shadow:0 1px 0 rgba(0,0,0,.1)}
+.source input{padding:10px 12px;background:#fff;border:1.5px solid var(--ruleD);border-radius:6px;font-family:inherit;font-style:italic;color:#3b2a1e}
+
+.ingredients{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.ingredients li{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:center;padding:8px 4px 8px 0;border-bottom:1px dotted var(--ruleD);font-size:13.5px}
+.ingredients li .amount{font:800 14px/1 "Playfair Display",serif;color:var(--accent);text-align:right}
+.ingredients li .what{font-style:italic;color:#3b2a1e}
+.ingredients li .what b{font-style:normal;font-weight:700}
+.ingredients li label{display:flex;align-items:center;gap:8px;cursor:pointer}
+.ingredients li input{accent-color:var(--accent);width:18px;height:18px}
+.ingredients li.off{opacity:.45;text-decoration:line-through wavy rgba(187,56,56,.5);text-decoration-skip-ink:none}
+
+.tip{font-style:italic;color:#5a4632;background:#fff7e0;border-left:3px solid var(--mustard);padding:9px 11px;border-radius:0 6px 6px 0;font-size:13px}
+.tip b{font-style:normal;color:var(--accent)}
+
+.cook{margin-top:auto;padding:14px;background:var(--ink);color:var(--cream);border:0;border-radius:8px;font:900 14px/1 ui-sans-serif;letter-spacing:.22em;text-transform:uppercase;cursor:pointer;box-shadow:0 4px 0 #1a120a}
+.cook::before{content:"🍳 "}
+.cook:disabled{opacity:.6;cursor:wait}
+
+/* RIGHT: kitchen */
+.kitchen-right{display:grid;grid-template-rows:auto 1fr auto;gap:14px;min-height:0}
+.shelf{background:var(--card);border:1px solid var(--ruleD);border-radius:6px;padding:16px 18px;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:16px;box-shadow:0 2px 0 rgba(140,100,40,.18)}
+.timer{font:900 30px/1 "Playfair Display",serif;color:var(--accent);letter-spacing:.04em;display:flex;align-items:baseline;gap:4px}
+.timer span{font-size:14px;font-family:ui-sans-serif;color:#7a5f3a;letter-spacing:.1em}
+.stove{display:flex;gap:8px;align-items:center}
+.burner{width:54px;height:54px;border-radius:50%;background:repeating-radial-gradient(circle at center,#2a1812 0,#2a1812 5px,#3a261c 5px,#3a261c 10px);border:3px solid #1a0e08;box-shadow:inset 0 0 10px rgba(0,0,0,.6),0 2px 0 #7a5530;position:relative}
+.burner.on{background:repeating-radial-gradient(circle at center,#ff3a14 0,#ff3a14 4px,#ff7a2a 4px,#ff7a2a 8px,#ffa83a 8px,#ffa83a 12px);box-shadow:inset 0 0 14px rgba(0,0,0,.4),0 0 18px rgba(255,90,40,.6)}
+.burner.simmer{background:repeating-radial-gradient(circle at center,#ff8a14 0,#ff8a14 5px,#ffc83a 5px,#ffc83a 10px)}
+.lights{display:flex;gap:6px;align-items:center;font-size:11px;letter-spacing:.14em;color:#7a5f3a;text-transform:uppercase}
+.lights .dot{width:12px;height:12px;border-radius:50%;background:#dbcfa6;border:1px solid var(--ruleD)}
+.lights .dot.on{background:var(--stove-g);box-shadow:0 0 8px var(--stove-g)}
+.lights .dot.warn{background:var(--stove-y);box-shadow:0 0 8px var(--stove-y)}
+.lights .dot.hot{background:var(--stove-r);box-shadow:0 0 8px var(--stove-r);animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.5}}
+
+.stove-large{position:relative;background:#28160e;border:6px solid #1a0c06;border-radius:14px;padding:30px;display:grid;place-items:center;box-shadow:inset 0 0 30px rgba(0,0,0,.6),0 8px 18px rgba(40,15,5,.4);overflow:hidden}
+.tile-pattern{position:absolute;inset:0;background:
+  linear-gradient(45deg,#3a2218 25%,transparent 25%,transparent 75%,#3a2218 75%) 0 0/40px 40px,
+  linear-gradient(45deg,#3a2218 25%,transparent 25%,transparent 75%,#3a2218 75%) 20px 20px/40px 40px,
+  #28160e;opacity:.5}
+.pot-area{position:relative;width:280px;height:280px;display:grid;place-items:center;z-index:2}
+.pot{position:relative;width:200px;height:140px;background:linear-gradient(180deg,#5a5a5a,#202024);border-radius:0 0 100px 100px / 0 0 70px 70px;border:3px solid #0a0a0a;box-shadow:inset 8px -8px 14px rgba(0,0,0,.5),0 10px 12px rgba(0,0,0,.4)}
+.pot::before{content:"";position:absolute;left:-30px;top:30px;width:30px;height:14px;border:3px solid #0a0a0a;border-right:0;border-radius:14px 0 0 14px;background:#3a3a3e}
+.pot::after{content:"";position:absolute;right:-30px;top:30px;width:30px;height:14px;border:3px solid #0a0a0a;border-left:0;border-radius:0 14px 14px 0;background:#3a3a3e}
+.broth{position:absolute;left:14px;right:14px;top:34px;bottom:14px;background:linear-gradient(180deg,#d97a2a,#a84818);border-radius:0 0 80px 80px / 0 0 50px 50px;overflow:hidden;border-top:3px solid #fff7c0}
+.bubble{position:absolute;width:18px;height:18px;border-radius:50%;background:rgba(255,255,255,.4);animation:bub 2.6s ease-in infinite;opacity:0}
+@keyframes bub{0%{transform:translateY(40px) scale(.4);opacity:0}30%{opacity:.7}100%{transform:translateY(-60px) scale(1.2);opacity:0}}
+.steam{position:absolute;left:30%;right:30%;top:-30px;height:80px;pointer-events:none}
+.steam i{position:absolute;width:18px;height:18px;background:rgba(255,255,255,.6);border-radius:50%;filter:blur(8px);animation:rise 2.4s ease-out infinite}
+@keyframes rise{0%{transform:translateY(40px) scale(.6);opacity:.8}100%{transform:translateY(-80px) scale(1.6);opacity:0}}
+.label-tag{position:absolute;left:50%;top:-28px;transform:translateX(-50%);background:var(--card);border:1.5px dashed var(--ruleD);padding:5px 12px;border-radius:6px;font:italic 700 13px/1 "Playfair Display",serif;color:var(--ink);z-index:3}
+
+.journal{background:var(--card);border:1px solid var(--ruleD);border-radius:6px;padding:16px 18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;box-shadow:0 2px 0 rgba(140,100,40,.18)}
+.steps ol{margin:0;padding-left:22px;font-size:13px;line-height:1.55;color:#3b2a1e}
+.steps ol li{padding:3px 0;border-bottom:1px dotted var(--ruleD)}
+.steps ol li.active{font-weight:800;color:var(--accent);background:linear-gradient(90deg,#fff7e0,transparent);padding-left:6px}
+.steps ol li.done{color:var(--sage);text-decoration:line-through;text-decoration-color:rgba(123,155,95,.6)}
+.steps h3{margin:0 0 8px;font:italic 800 18px/1 "Playfair Display",serif}
+.gauge{height:12px;background:#fff7e0;border:1px solid var(--ruleD);border-radius:999px;overflow:hidden}
+.gauge i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--sage),var(--mustard),var(--accent));transition:width .3s}
+.taste{margin-top:10px;font-style:italic;color:#5a4632;font-size:13px}
+.served{margin-top:10px;padding:9px 12px;background:#fff7e0;border:1.5px dashed var(--accent);border-radius:6px;display:none;font-style:italic;color:var(--accent)}
+.served.show{display:block}
+
+@media(max-width:1100px){.kitchen{grid-template-columns:1fr;height:auto;overflow:auto}.kitchen-right{grid-template-rows:auto auto auto}.pot-area{width:220px;height:220px}.pot{width:160px;height:110px}}
+</style>
+</head>
+<body>
+<div class="kitchen">
+  <article class="card">
+    <span class="recipe-no">Recipe № 60 · The Universal Importer</span>
+    <h1>Hand-pulled Migration <em style="color:var(--accent);font-style:italic">à la maison</em></h1>
+    <div class="byline">A slow-simmered import from the family cookbook · serves one website</div>
+
+    <div class="meta">
+      <div class="pill"><b>3 min</b><span>prep</span></div>
+      <div class="pill"><b>~3 min</b><span>cook</span></div>
+      <div class="pill"><b>1</b><span>site</span></div>
+      <div class="pill"><b>Easy</b><span>level</span></div>
+    </div>
+
+    <div class="servings">
+      <span style="color:#7a5f3a;letter-spacing:.12em;font-size:11.5px;text-transform:uppercase;font-weight:700">Servings</span>
+      <button class="btn" id="dec">−</button><span class="num" id="serve">38</span><button class="btn" id="inc">+</button>
+      <span style="color:#7a5f3a;font-style:italic">pages</span>
+    </div>
+
+    <h2 class="section">From the pantry</h2>
+    <div class="source">
+      <span class="label">Source ingredient</span>
+      <div class="source-tabs">
+        <button class="on" data-k="url">URL</button>
+        <button data-k="wxr">.WXR</button>
+        <button data-k="rss">RSS</button>
+        <button data-k="md">Markdown</button>
+      </div>
+      <input id="src" value="https://oldblog.example.com/sitemap.xml">
+    </div>
+
+    <h2 class="section">Ingredients</h2>
+    <ul class="ingredients" id="ings">
+      <li><span class="amount">38</span><label class="what"><input type="checkbox" data-i="content" checked><span><b>Posts &amp; pages</b>, finely chopped — primary dish</span></label></li>
+      <li><span class="amount">22</span><label class="what"><input type="checkbox" data-i="media" checked><span><b>Images &amp; media</b>, washed and patted dry</span></label></li>
+      <li><span class="amount">14</span><label class="what"><input type="checkbox" data-i="urls" checked><span><b>URL rewrites</b>, zested from old domain</span></label></li>
+      <li class="off"><span class="amount">4</span><label class="what"><input type="checkbox" data-i="authors"><span><b>Author profiles</b>, optional garnish</span></label></li>
+      <li class="off"><span class="amount">11</span><label class="what"><input type="checkbox" data-i="tax"><span><b>Tags &amp; categories</b>, julienned (optional)</span></label></li>
+    </ul>
+
+    <div class="tip" id="tip">Chef's tip · <b>3 ingredients</b> selected. Reduce on low heat for best flavor — serves <b>38</b> pages.</div>
+    <button class="cook" id="cook">Bring to a simmer · Review &amp; import</button>
+  </article>
+
+  <div class="kitchen-right">
+    <div class="shelf">
+      <div class="timer">00:00<span>elapsed</span></div>
+      <div class="stove">
+        <div class="burner" id="b1" title="Source burner"></div>
+        <div class="burner" id="b2" title="Main burner"></div>
+        <div class="burner" id="b3" title="Sauce burner"></div>
+      </div>
+      <div class="lights">
+        <span class="dot" id="L1"></span> Read
+        <span class="dot" id="L2"></span> Heat
+        <span class="dot" id="L3"></span> Done
+      </div>
+    </div>
+
+    <div class="stove-large">
+      <div class="tile-pattern"></div>
+      <div class="pot-area">
+        <div class="label-tag" id="dishname">Mise en place</div>
+        <div class="steam" id="steam"></div>
+        <div class="pot">
+          <div class="broth" id="broth">
+            <span class="bubble" style="left:20%;animation-delay:0s"></span>
+            <span class="bubble" style="left:45%;animation-delay:.6s"></span>
+            <span class="bubble" style="left:70%;animation-delay:1.2s"></span>
+            <span class="bubble" style="left:35%;animation-delay:1.8s"></span>
+            <span class="bubble" style="left:60%;animation-delay:.3s"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="journal">
+      <div class="steps">
+        <h3>Method</h3>
+        <ol id="ol">
+          <li data-ph="queued">Place the source in the cold pan.</li>
+          <li data-ph="reading source">Read the recipe from the source.</li>
+          <li data-ph="preparing content">Sift &amp; sort the content.</li>
+          <li data-ph="URL treatment">Deglaze with URL rewrites.</li>
+          <li data-ph="importing media">Fold in the media gently.</li>
+          <li data-ph="writing pages">Plate the pages in the destination.</li>
+          <li data-ph="complete">Garnish and serve.</li>
+        </ol>
+      </div>
+      <div>
+        <h3 style="margin:0 0 8px;font:italic 800 18px/1 'Playfair Display',serif">Tasting notes</h3>
+        <div class="gauge"><i id="bar"></i></div>
+        <div class="taste"><b id="phaseT" style="color:var(--accent);font-style:normal;letter-spacing:.04em">Awaiting heat…</b> <span id="pct">0%</span></div>
+        <div class="taste">Aroma · <i id="aroma">none yet</i></div>
+        <div class="taste">Texture · <i id="texture">cold pantry</i></div>
+        <div class="served" id="served">Bon appétit — your import is plated and ready to taste.</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+const aromas={queued:"flour dust",
+  "reading source":"old paper and ink",
+  "preparing content":"fresh basil and garlic",
+  "URL treatment":"caramelized onion",
+  "importing media":"toasted hazelnut",
+  "writing pages":"warm sourdough",
+  complete:"butter and citrus"};
+const textures={queued:"cold pantry",
+  "reading source":"raw mise",
+  "preparing content":"glossy ribbon",
+  "URL treatment":"silken reduction",
+  "importing media":"creamy emulsion",
+  "writing pages":"crisp plating",
+  complete:"silken finish"};
+const dishes={queued:"Mise en place",
+  "reading source":"Reading the source",
+  "preparing content":"Chopping content",
+  "URL treatment":"Deglazing URLs",
+  "importing media":"Folding in media",
+  "writing pages":"Plating pages",
+  complete:"Bon appétit"};
+
+const tip=document.getElementById("tip");
+function refreshTip(){
+  const on=[...document.querySelectorAll(".ingredients input:checked")];
+  const total=on.reduce((a,b)=>a+parseInt(b.closest("li").querySelector(".amount").textContent),0);
+  tip.innerHTML=`Chef's tip · <b>${on.length} ingredients</b> selected. Reduce on low heat — serves <b>${total}</b> portions.`;
+}
+document.querySelectorAll(".ingredients input").forEach(cb=>cb.addEventListener("change",()=>{
+  cb.closest("li").classList.toggle("off",!cb.checked);refreshTip();
+}));
+document.querySelectorAll(".source-tabs button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".source-tabs button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  const k=b.dataset.k,src=document.getElementById("src");
+  if(k==="url")src.value="https://oldblog.example.com/sitemap.xml";
+  if(k==="wxr")src.value="grandmas-export-2026.wxr";
+  if(k==="rss")src.value="https://rss.example.com/feed.xml";
+  if(k==="md")src.value="~/Documents/notes/*.md";
+  refreshTip();
+}));
+const serve=document.getElementById("serve");
+document.getElementById("dec").addEventListener("click",()=>{const n=parseInt(serve.textContent);if(n>1)serve.textContent=n-1;});
+document.getElementById("inc").addEventListener("click",()=>{const n=parseInt(serve.textContent);serve.textContent=n+1;});
+
+const cook=document.getElementById("cook"),bar=document.getElementById("bar"),phaseT=document.getElementById("phaseT"),pct=document.getElementById("pct"),aroma=document.getElementById("aroma"),texture=document.getElementById("texture"),dish=document.getElementById("dishname"),served=document.getElementById("served");
+const b1=document.getElementById("b1"),b2=document.getElementById("b2"),b3=document.getElementById("b3"),L1=document.getElementById("L1"),L2=document.getElementById("L2"),L3=document.getElementById("L3");
+const timer=document.querySelector(".timer");
+cook.addEventListener("click",()=>{
+  cook.disabled=true;served.classList.remove("show");
+  document.querySelectorAll("#ol li").forEach(l=>l.classList.remove("active","done"));
+  let i=0,sec=0;
+  const t=setInterval(()=>{sec++;timer.firstChild.textContent=String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")},1000);
+  function step(){
+    if(i>=phases.length){clearInterval(t);cook.disabled=false;return;}
+    const ph=phases[i],p=Math.round(i/(phases.length-1)*100);
+    phaseT.textContent=ph.toUpperCase();pct.textContent=p+"%";bar.style.width=p+"%";
+    aroma.textContent=aromas[ph];texture.textContent=textures[ph];dish.textContent=dishes[ph];
+    document.querySelectorAll("#ol li").forEach(li=>{
+      const idx=phases.indexOf(li.dataset.ph);
+      li.classList.toggle("active",idx===i);
+      li.classList.toggle("done",idx<i);
+    });
+    if(ph==="reading source"){b1.classList.add("simmer");L1.className="dot warn"}
+    if(ph==="preparing content"||ph==="URL treatment"){b2.classList.add("on");L2.className="dot hot"}
+    if(ph==="importing media"){b3.classList.add("simmer");}
+    if(ph==="writing pages"){b1.classList.add("on");}
+    if(ph==="complete"){[b1,b2,b3].forEach(b=>b.className="burner");L1.className="dot on";L2.className="dot on";L3.className="dot on";served.classList.add("show");cook.disabled=false;}
+    i++;setTimeout(step,800);
+  }
+  step();
+});
+refreshTip();
+</script>
+</body>
+</html>

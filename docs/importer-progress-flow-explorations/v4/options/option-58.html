@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>58 Greenhouse · Universal Importer</title>
+<style>
+:root{
+  --paper:#f6f1e2;--cream:#fbf6e8;--ink:#2a3018;--leaf:#3e7c3a;--leaf-deep:#1e4d22;--bark:#7a5a3a;
+  --bloom:#e8557a;--sun:#f0b537;--sky:#cfe4d2;--rule:#cdbd95;--soft:#e6efd2;--terra:#c87a4e
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);background-image:radial-gradient(rgba(120,90,40,.08) 1px,transparent 1.4px);background-size:18px 18px;color:var(--ink);font:14px/1.55 "Source Serif Pro","Iowan Old Style",Georgia,serif;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+.frame{display:grid;grid-template-columns:380px 1fr;height:100vh;min-height:740px}
+aside.greenhouse{background:linear-gradient(180deg,#fff,#fbf2dc);border-right:3px double var(--rule);padding:22px 22px 0;display:flex;flex-direction:column;overflow:hidden;position:relative}
+aside .tag{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;background:var(--leaf);color:#fff;font:600 11px/1.4 ui-sans-serif;letter-spacing:.18em;border-radius:999px;text-transform:uppercase;align-self:flex-start}
+aside h1{font:italic 700 28px/1.1 "Playfair Display","Source Serif Pro",serif;margin:10px 0 4px;letter-spacing:-.01em}
+aside .lead{color:#5a5a3e;margin:0 0 14px;font-size:13.5px;font-style:italic;border-bottom:1px solid var(--rule);padding-bottom:12px}
+.row{margin-bottom:12px}
+.row label{display:block;font:700 11px/1.4 ui-sans-serif;letter-spacing:.16em;color:#6b5e3a;text-transform:uppercase;margin-bottom:5px}
+.kinds{display:flex;gap:4px;background:#eaddb6;padding:4px;border-radius:999px}
+.kinds button{flex:1;padding:6px 0;background:transparent;border:0;border-radius:999px;cursor:pointer;font-size:12px;color:#6b5e3a;font-weight:600}
+.kinds button.on{background:var(--cream);color:var(--leaf-deep);box-shadow:0 1px 0 #b9a472,0 2px 4px rgba(0,0,0,.08)}
+.row input,.row select{width:100%;padding:9px 11px;border:1.5px solid var(--rule);background:var(--cream);border-radius:8px;font-size:13.5px}
+.varieties{display:grid;gap:8px}
+.variety{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:center;padding:8px 10px;background:var(--cream);border:1.5px solid var(--rule);border-radius:10px;cursor:pointer}
+.variety .ico{width:34px;height:34px;border-radius:8px;background:var(--soft);display:grid;place-items:center;font-size:18px}
+.variety .meta b{font:700 13px/1.3 ui-sans-serif;letter-spacing:.02em;color:var(--ink);display:block}
+.variety .meta span{font-size:11.5px;color:#6b5e3a;font-style:italic}
+.variety input{accent-color:var(--leaf)}
+.variety.off{opacity:.55}
+.notebook{background:#fff8e8;border:1px solid var(--rule);border-radius:10px;padding:10px 12px;font-style:italic;color:#5a5238;font-size:13px;margin:10px 0}
+.notebook b{font-style:normal;color:var(--leaf-deep)}
+.plant{margin-top:auto;padding:14px 0 18px;display:flex;align-items:flex-end;justify-content:center;gap:8px;border-top:1px dashed var(--rule)}
+.go{width:100%;padding:13px;background:linear-gradient(180deg,#4f9a4e,#2a6b2a);color:#fff;border:0;border-radius:10px;font:800 14px/1 ui-sans-serif;letter-spacing:.16em;text-transform:uppercase;cursor:pointer;box-shadow:0 4px 0 #1a4d1a,0 6px 14px rgba(40,120,50,.3);margin-bottom:14px}
+.go:disabled{opacity:.6;cursor:wait}
+
+section.garden{position:relative;background:linear-gradient(180deg,var(--sky) 0,var(--sky) 56%,#a07a4e 56%,#7b5430 62%,#5b3920 100%);overflow:hidden}
+.sun{position:absolute;top:42px;right:60px;width:80px;height:80px;border-radius:50%;background:radial-gradient(circle,#fff2b0 0,var(--sun) 60%,transparent 75%);filter:blur(.5px)}
+.sunray{position:absolute;top:48px;right:60px;width:80px;height:80px;border-radius:50%;background:conic-gradient(from 0deg,rgba(240,181,55,.15) 0deg,rgba(240,181,55,.15) 12deg,transparent 12deg,transparent 30deg);animation:rays 12s linear infinite;opacity:.6}
+@keyframes rays{to{transform:rotate(360deg)}}
+.cloud{position:absolute;background:#fff;border-radius:50%;opacity:.75;filter:blur(.5px)}
+.cloud:before,.cloud:after{content:"";position:absolute;background:#fff;border-radius:50%}
+.cloud.c1{width:120px;height:30px;top:80px;left:80px;border-radius:30px}
+.cloud.c1:before{width:60px;height:60px;top:-30px;left:20px}
+.cloud.c2{width:80px;height:24px;top:130px;left:55%;border-radius:24px}
+.cloud.c2:before{width:40px;height:40px;top:-18px;left:14px}
+
+.toolbar{position:absolute;top:18px;left:18px;background:rgba(255,250,232,.92);border:1.5px solid var(--rule);border-radius:12px;padding:8px 10px;display:flex;gap:6px;font-size:12px;align-items:center;box-shadow:0 4px 14px rgba(0,0,0,.08)}
+.toolbar b{font-family:"Playfair Display",serif;font-style:italic;font-weight:700;font-size:14px}
+.toolbar .dot{width:10px;height:10px;border-radius:50%;background:var(--leaf);display:inline-block;margin:0 4px}
+.season{margin-left:8px;padding:3px 8px;border-radius:999px;background:var(--soft);color:var(--leaf-deep);font:700 11px ui-sans-serif;letter-spacing:.1em;text-transform:uppercase}
+
+.bed{position:absolute;left:0;right:0;bottom:0;top:56%;display:flex;align-items:flex-end;justify-content:space-around;padding:0 6%;gap:18px}
+.plot{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;max-width:140px}
+.stem{width:6px;background:linear-gradient(180deg,#3a6b2a,#1e4d22);border-radius:3px;transform-origin:bottom;transform:scaleY(0);transition:transform 1.4s cubic-bezier(.2,.7,.2,1)}
+.leaf-l,.leaf-r{position:absolute;width:42px;height:24px;background:radial-gradient(ellipse at center,#5fa84d 0,#2a6b2a 80%);border-radius:50% 0 50% 0;opacity:0;transition:opacity .6s,transform .6s}
+.leaf-l{transform:translate(-30px,0) rotate(-20deg)}
+.leaf-r{transform:translate(30px,0) rotate(160deg)}
+.bud{position:absolute;width:26px;height:26px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffd9b0,var(--bloom));top:-12px;opacity:0;transform:scale(.4);transition:all .6s}
+.plot.alive .stem{transform:scaleY(1)}
+.plot.alive .leaf-l,.plot.alive .leaf-r{opacity:1}
+.plot.bloom .bud{opacity:1;transform:scale(1)}
+.plot .pot{width:80px;height:46px;background:linear-gradient(180deg,var(--terra),#8a4e2a);border:1.5px solid #4a2418;border-radius:6px 6px 14px 14px;position:relative}
+.plot .pot:before{content:"";position:absolute;left:0;right:0;top:0;height:8px;background:#4a2418;border-radius:6px 6px 0 0}
+.plot .pot:after{content:attr(data-label);position:absolute;left:0;right:0;top:14px;text-align:center;color:#fff7e0;font:700 10px/1.2 ui-sans-serif;letter-spacing:.14em;text-transform:uppercase}
+.stemwrap{position:relative;height:0;display:flex;justify-content:center;align-items:flex-end}
+.plot.alive .stemwrap{height:120px;transition:height 1s}
+
+.journal{position:absolute;right:18px;top:18px;width:300px;background:rgba(255,250,232,.96);border:1.5px solid var(--rule);border-radius:14px;padding:14px;box-shadow:0 6px 18px rgba(0,0,0,.12);max-height:calc(100vh - 36px);overflow:auto}
+.journal h3{margin:0 0 6px;font:italic 700 18px/1 "Playfair Display",serif}
+.journal .status{font-family:ui-monospace,monospace;font-size:12px;color:var(--leaf-deep);background:var(--soft);padding:4px 8px;border-radius:6px;display:inline-block;margin-bottom:6px}
+.gauge{height:12px;background:#eaddb6;border-radius:999px;overflow:hidden;border:1px solid var(--rule)}
+.gauge i{display:block;height:100%;width:0;background:linear-gradient(90deg,#a3d977,var(--leaf),var(--bloom));transition:width .4s}
+.log{margin:10px 0 0;list-style:none;padding:0;font-size:12.5px}
+.log li{padding:4px 0;border-bottom:1px dashed var(--rule);display:grid;grid-template-columns:18px 1fr auto;gap:6px;color:#5a5238}
+.log li b{color:var(--leaf-deep);font-weight:700}
+.harvest{margin-top:10px;padding:9px 10px;background:#fff;border:1.5px dashed var(--bloom);border-radius:8px;font-style:italic;display:none}
+.harvest.show{display:block}
+.fineprint{margin-top:12px;font-size:11.5px;color:#6b5e3a;font-style:italic;text-align:center}
+@media(max-width:980px){.frame{grid-template-columns:1fr}.journal{position:static;width:auto;margin:14px}.bed{position:static;height:240px}}
+</style>
+</head>
+<body>
+<div class="frame">
+  <aside class="greenhouse">
+    <span class="tag">🌱 58 / 60 · UNIVERSAL IMPORTER</span>
+    <h1>Plant a new garden.</h1>
+    <p class="lead">Pick a seed source, choose what to grow, and water the bed. Your imported pages will sprout in the plots below.</p>
+
+    <div class="row">
+      <label>Seed source</label>
+      <div class="kinds">
+        <button class="on" data-k="url">URL</button>
+        <button data-k="zip">.WXR</button>
+        <button data-k="rss">RSS</button>
+        <button data-k="gh">Git</button>
+      </div>
+      <input id="src" value="https://oldblog.example.com" style="margin-top:8px">
+    </div>
+
+    <div class="row">
+      <label>Varieties to plant</label>
+      <div class="varieties" id="vars">
+        <label class="variety"><div class="ico" style="background:#f5d5d8">🌹</div><div class="meta"><b>Bloom · Posts &amp; pages</b><span>38 cuttings detected · primary harvest</span></div><input type="checkbox" data-v="content" checked></label>
+        <label class="variety"><div class="ico" style="background:#e8d4b6">🌻</div><div class="meta"><b>Sunflower · Media</b><span>22 images &amp; thumbnails</span></div><input type="checkbox" data-v="media" checked></label>
+        <label class="variety"><div class="ico" style="background:#cfe5d4">🌿</div><div class="meta"><b>Vine · URL grafting</b><span>old → new domain rewrites</span></div><input type="checkbox" data-v="urls" checked></label>
+        <label class="variety off"><div class="ico" style="background:#dfe6f0">🌾</div><div class="meta"><b>Wheat · Authors</b><span>4 contributor seedlings</span></div><input type="checkbox" data-v="authors"></label>
+        <label class="variety off"><div class="ico" style="background:#efe1bd">🍃</div><div class="meta"><b>Herb · Taxonomy</b><span>Categories &amp; tags</span></div><input type="checkbox" data-v="tax"></label>
+      </div>
+    </div>
+
+    <div class="notebook" id="note">Gardener's note: <b>3 varieties</b> selected · the bed will need <b>~3 minutes</b> of watering. Expected yield: <b>38</b> blooms and <b>22</b> media stems.</div>
+
+    <button class="go" id="go">🌧 Begin watering · Review &amp; import</button>
+  </aside>
+
+  <section class="garden">
+    <div class="sun"></div>
+    <div class="sunray"></div>
+    <div class="cloud c1"></div>
+    <div class="cloud c2"></div>
+
+    <div class="toolbar"><b>Greenhouse</b><span class="dot"></span><span id="lbl">South bed · seeds resting</span><span class="season">Spring</span></div>
+
+    <div class="bed">
+      <div class="plot" data-ph="reading source"><div class="stemwrap"><div class="leaf-l"></div><div class="leaf-r"></div><div class="bud"></div><div class="stem"></div></div><div class="pot" data-label="Read"></div></div>
+      <div class="plot" data-ph="preparing content"><div class="stemwrap"><div class="leaf-l"></div><div class="leaf-r"></div><div class="bud"></div><div class="stem"></div></div><div class="pot" data-label="Prep"></div></div>
+      <div class="plot" data-ph="URL treatment"><div class="stemwrap"><div class="leaf-l"></div><div class="leaf-r"></div><div class="bud"></div><div class="stem"></div></div><div class="pot" data-label="URLs"></div></div>
+      <div class="plot" data-ph="importing media"><div class="stemwrap"><div class="leaf-l"></div><div class="leaf-r"></div><div class="bud"></div><div class="stem"></div></div><div class="pot" data-label="Media"></div></div>
+      <div class="plot" data-ph="writing pages"><div class="stemwrap"><div class="leaf-l"></div><div class="leaf-r"></div><div class="bud"></div><div class="stem"></div></div><div class="pot" data-label="Pages"></div></div>
+      <div class="plot" data-ph="complete"><div class="stemwrap"><div class="leaf-l"></div><div class="leaf-r"></div><div class="bud"></div><div class="stem"></div></div><div class="pot" data-label="Harvest"></div></div>
+    </div>
+
+    <aside class="journal">
+      <h3>Field journal</h3>
+      <span class="status" id="phaseT">Seeds in packet · 0%</span>
+      <div class="gauge"><i id="bar"></i></div>
+      <ul class="log" id="log"><li><b>—</b><span>The greenhouse is quiet.</span><span></span></li></ul>
+      <div class="harvest" id="harvest">Harvest day: <b>38</b> pages bloomed, <b>22</b> media seeds sprouted, <b>14</b> vines grafted to new domain.</div>
+      <div class="fineprint">— Tended by the Universal Importer —</div>
+    </aside>
+  </section>
+</div>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+const note=document.getElementById("note");
+
+function refreshNote(){
+  const on=[...document.querySelectorAll(".variety input:checked")].length;
+  const total=document.querySelectorAll(".variety input").length;
+  const map={content:"38 blooms",media:"22 media stems",urls:"14 grafted vines",authors:"4 author roots",tax:"11 herb sprigs"};
+  const lst=[...document.querySelectorAll(".variety input:checked")].map(x=>map[x.dataset.v]).join(", ");
+  note.innerHTML=`Gardener's note: <b>${on}/${total} varieties</b> selected · ${lst||"—"}. The bed will need <b>~3 minutes</b> of watering.`;
+}
+document.querySelectorAll(".variety input").forEach(cb=>cb.addEventListener("change",()=>{
+  cb.closest(".variety").classList.toggle("off",!cb.checked);refreshNote();
+}));
+document.querySelectorAll(".kinds button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".kinds button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  const k=b.dataset.k,src=document.getElementById("src");
+  if(k==="url")src.value="https://oldblog.example.com";
+  if(k==="zip")src.value="blog-archive-2026.wxr";
+  if(k==="rss")src.value="https://rss.example.com/feed.xml";
+  if(k==="gh")src.value="github.com/myorg/handbook";
+  refreshNote();
+}));
+
+const go=document.getElementById("go"),bar=document.getElementById("bar"),phaseT=document.getElementById("phaseT"),log=document.getElementById("log"),plots=document.querySelectorAll(".plot"),lbl=document.getElementById("lbl"),harvest=document.getElementById("harvest");
+go.addEventListener("click",()=>{
+  go.disabled=true;log.innerHTML="";harvest.classList.remove("show");
+  plots.forEach(p=>p.classList.remove("alive","bloom"));
+  let i=0;
+  function step(){
+    if(i>=phases.length){go.disabled=false;return;}
+    const ph=phases[i],pct=Math.round(i/(phases.length-1)*100);
+    phaseT.textContent=ph.toUpperCase()+" · "+pct+"%";
+    bar.style.width=pct+"%";
+    lbl.textContent="Tending · "+ph;
+    const plot=[...plots].find(p=>p.dataset.ph===ph);
+    if(plot){plot.classList.add("alive");setTimeout(()=>plot.classList.add("bloom"),700);}
+    const li=document.createElement("li");
+    const icons={queued:"🟫","reading source":"📖","preparing content":"✂️","URL treatment":"🌿","importing media":"🌻","writing pages":"📝",complete:"🌸"};
+    li.innerHTML=`<b>${icons[ph]||"·"}</b><span>${ph}</span><span>${pct}%</span>`;log.appendChild(li);log.scrollTop=log.scrollHeight;
+    if(ph==="complete"){harvest.classList.add("show");lbl.textContent="Harvest complete";go.disabled=false;}
+    i++;setTimeout(step,750);
+  }
+  step();
+});
+refreshNote();
+</script>
+</body>
+</html>

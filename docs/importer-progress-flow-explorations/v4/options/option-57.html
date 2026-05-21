@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>57 DJ Mixer · Universal Importer</title>
+<style>
+:root{
+  --case:#1c1410;--metal:#2a201c;--brushed:#3a302a;--ink:#fff4e0;--muted:#a99887;
+  --red:#ff3b30;--amber:#ffb800;--green:#22c55e;--blue:#3aa7ff;--magenta:#ff4f9a;
+  --led:#ffd33d;--knob:#0f0a08
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:radial-gradient(ellipse at top,#2a1e18 0,#0e0907 80%);color:var(--ink);font:13px/1.4 "Helvetica Neue",ui-sans-serif,system-ui;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+.deck{display:grid;grid-template-rows:auto 1fr auto;height:100vh;min-height:720px;padding:14px;gap:12px}
+.console{background:linear-gradient(180deg,var(--metal),var(--case));border:2px solid #000;border-radius:18px;padding:14px 18px;display:grid;grid-template-columns:auto 1fr auto;gap:18px;align-items:center;box-shadow:0 8px 30px rgba(0,0,0,.6),inset 0 1px 0 #5a4632}
+.logo{display:flex;flex-direction:column;line-height:1}
+.logo b{font:900 22px/1 "Bebas Neue","Impact",sans-serif;letter-spacing:.16em;color:#fff;text-shadow:0 1px 0 #000}
+.logo span{color:var(--led);font-size:11px;letter-spacing:.3em}
+.scope{height:48px;background:#0a0705;border:1px solid #000;border-radius:8px;position:relative;overflow:hidden;box-shadow:inset 0 0 30px rgba(0,0,0,.8)}
+.scope canvas{width:100%;height:100%;display:block}
+.right-chip{display:flex;gap:6px}
+.chip{font-family:"VT323","Courier New",monospace;font-size:18px;color:var(--led);background:#1a0e08;border:1px solid #000;border-radius:6px;padding:4px 10px;letter-spacing:.06em;box-shadow:inset 0 0 12px rgba(255,211,61,.15)}
+.chip.red{color:#ff7565}
+
+.bench{display:grid;grid-template-columns:300px 1fr 300px;gap:14px;min-height:0}
+.panel{background:linear-gradient(180deg,#2a201c,#1a120e);border:2px solid #000;border-radius:14px;padding:14px;box-shadow:0 4px 14px rgba(0,0,0,.5),inset 0 1px 0 #4a3a2c;display:flex;flex-direction:column;gap:10px;min-height:0}
+.panel h2{margin:0;font:700 11px/1 "Helvetica Neue",sans-serif;color:var(--muted);letter-spacing:.22em;text-transform:uppercase;border-bottom:1px dashed #4a3a2c;padding-bottom:6px}
+.crate{display:grid;gap:8px}
+.crate label{font-size:11px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+.crate input,.crate select{padding:9px 10px;background:#0a0705;border:1px solid #000;border-radius:8px;color:var(--ink);box-shadow:inset 0 2px 4px rgba(0,0,0,.8)}
+.kinds{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.kinds button{padding:8px 0;background:#0a0705;border:1px solid #000;border-radius:6px;color:var(--muted);cursor:pointer;font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.kinds button.on{background:var(--led);color:#1a0e08;font-weight:800;border-color:#000;box-shadow:0 0 8px rgba(255,211,61,.5)}
+.cue{padding:10px 12px;background:#160e0a;border:1px dashed #4a3a2c;border-radius:8px;font-size:12px;color:#fce8b3}
+.cue b{color:var(--led)}
+
+/* center mixer */
+.mixer{background:linear-gradient(180deg,#3a2c24,#1a120e);border:2px solid #000;border-radius:14px;padding:16px;box-shadow:0 6px 18px rgba(0,0,0,.6),inset 0 1px 0 #5a4632;display:flex;flex-direction:column;gap:12px;min-height:0}
+.platters{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.platter{position:relative;aspect-ratio:1;background:radial-gradient(circle at 50% 50%,#000 0,#000 8%,#1a0e08 9%,#1a0e08 14%,#221610 15%,#221610 30%,#1a0e08 31%,#1a0e08 90%,#000 91%);border:3px solid #000;border-radius:50%;box-shadow:0 0 0 6px #3a2c24,0 6px 14px rgba(0,0,0,.6);overflow:hidden}
+.platter::after{content:"";position:absolute;inset:0;background:repeating-conic-gradient(from 0deg,rgba(255,255,255,.03) 0deg,rgba(255,255,255,.03) 6deg,transparent 6deg,transparent 12deg);border-radius:50%}
+.platter .label{position:absolute;inset:30% 30%;background:var(--red);border-radius:50%;display:grid;place-items:center;color:#fff;font:900 11px/1.1 "Bebas Neue","Impact",sans-serif;letter-spacing:.1em;text-align:center;padding:6px;border:2px solid #000}
+.platter.B .label{background:var(--blue)}
+.platter.spin{animation:spin 3s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.arm{position:absolute;width:6px;height:55%;background:linear-gradient(180deg,#9a8a78,#5a4a3a);top:-8%;right:8%;border-radius:3px;transform-origin:top center;transform:rotate(20deg);border:1px solid #000}
+
+.knobs{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.knob{display:flex;flex-direction:column;align-items:center;gap:4px}
+.knob .dial{width:54px;height:54px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#5a4632,#1a0e08 70%);border:2px solid #000;position:relative;cursor:pointer;box-shadow:0 3px 6px rgba(0,0,0,.6),inset 0 -2px 4px rgba(0,0,0,.6)}
+.knob .dial::after{content:"";position:absolute;left:50%;top:6px;width:3px;height:18px;background:var(--led);transform:translateX(-50%);border-radius:2px}
+.knob .name{font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+.knob .val{font-family:"VT323",monospace;font-size:14px;color:var(--led)}
+
+.faders{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-items:end;height:160px;border-top:1px dashed #4a3a2c;padding-top:14px}
+.fader{display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:6px;cursor:pointer}
+.fader .track{width:6px;height:100%;background:#0a0705;border:1px solid #000;border-radius:3px;position:relative;box-shadow:inset 0 0 6px rgba(0,0,0,.8)}
+.fader .nub{position:absolute;left:-10px;width:26px;height:14px;background:linear-gradient(180deg,#3a2c24,#1a0e08);border:1px solid #000;border-radius:3px}
+.fader .nub.red{background:linear-gradient(180deg,#ff7565,#a01a0e)}
+.fader .nub.amber{background:linear-gradient(180deg,#ffb800,#7a4a00)}
+.fader .nub.green{background:linear-gradient(180deg,#22c55e,#0a4d24)}
+.fader .nub.blue{background:linear-gradient(180deg,#3aa7ff,#0a4880)}
+.fader .nub.magenta{background:linear-gradient(180deg,#ff4f9a,#6e0e3a)}
+.fader .name{font-size:10px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}
+.fader.off .nub{filter:grayscale(.8) brightness(.5)}
+
+.bigplay{margin-top:8px;padding:14px;background:linear-gradient(180deg,#ff3b30,#7a1308);color:#fff;border:2px solid #000;border-radius:10px;font:900 16px/1 "Bebas Neue","Impact",sans-serif;letter-spacing:.3em;cursor:pointer;box-shadow:0 4px 0 #3a0808,inset 0 1px 0 #ff9088}
+.bigplay:active{transform:translateY(2px);box-shadow:0 2px 0 #3a0808}
+.bigplay:disabled{opacity:.6;cursor:wait;background:linear-gradient(180deg,#6a3a32,#3a1a14)}
+
+/* meters */
+.meters{display:grid;grid-template-columns:1fr 1fr;gap:8px;background:#0a0705;border:1px solid #000;border-radius:8px;padding:8px}
+.meter{height:14px;background:#160e0a;border-radius:3px;overflow:hidden;display:flex;gap:1px;padding:1px}
+.meter i{flex:1;background:#3a2c24;border-radius:1px}
+.meter i.on1{background:var(--green)}
+.meter i.on2{background:var(--amber)}
+.meter i.on3{background:var(--red)}
+
+/* setlist */
+.setlist{flex:1;overflow:auto;font:12px/1.5 "VT323","Courier New",monospace;color:#fce8b3;background:#0a0705;border:1px solid #000;border-radius:8px;padding:10px}
+.setlist .row{display:grid;grid-template-columns:32px 1fr auto;gap:6px;padding:1px 0;color:var(--muted)}
+.setlist .row.active{color:var(--led)}
+.setlist .row.done{color:var(--green)}
+.now{padding:10px 12px;background:#160e0a;border:1px dashed #4a3a2c;border-radius:8px;display:flex;justify-content:space-between;align-items:baseline}
+.now b{font:700 13px "Helvetica Neue",sans-serif;letter-spacing:.06em;color:#fff}
+.now span{font-family:"VT323",monospace;color:var(--led);font-size:18px}
+
+.footer{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;letter-spacing:.15em;text-transform:uppercase;padding:0 8px}
+.footer span{color:#fce8b3}
+
+@media(max-width:1100px){.bench{grid-template-columns:1fr}.platters{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="deck">
+  <div class="console">
+    <div class="logo"><b>UNIVERSAL IMPORTER</b><span>BROADCAST DECK · MK-57</span></div>
+    <div class="scope"><canvas id="scope"></canvas></div>
+    <div class="right-chip">
+      <span class="chip" id="bpm">BPM 0</span>
+      <span class="chip red" id="rec">● REC</span>
+      <span class="chip">57/60</span>
+    </div>
+  </div>
+
+  <div class="bench">
+    <aside class="panel">
+      <h2>A · Source crate</h2>
+      <div class="kinds">
+        <button class="on" data-k="url">URL</button>
+        <button data-k="wxr">.WXR</button>
+        <button data-k="rss">RSS</button>
+      </div>
+      <div class="crate">
+        <label>Track / Source</label>
+        <input id="src" value="https://oldblog.example.com/feed">
+        <label>Destination deck</label>
+        <select><option>This site (Deck B)</option><option>Staging deck</option></select>
+      </div>
+      <div class="cue" id="cue">Cue locked. Source feed detected · <b>38 tracks</b>. Press <b>PLAY</b> to crossfade onto Deck B.</div>
+    </aside>
+
+    <section class="mixer">
+      <div class="platters">
+        <div class="platter A" id="pa"><div class="arm"></div><div class="label">SRC<br>OLDBLOG</div></div>
+        <div class="platter B" id="pb"><div class="arm"></div><div class="label">DEST<br>MYBLOG</div></div>
+      </div>
+      <div class="knobs">
+        <div class="knob"><div class="dial" data-k="gain" style="transform:rotate(-30deg)"></div><div class="name">Gain</div><div class="val">+3 dB</div></div>
+        <div class="knob"><div class="dial" data-k="hi" style="transform:rotate(0deg)"></div><div class="name">URL Hi</div><div class="val">0</div></div>
+        <div class="knob"><div class="dial" data-k="mid" style="transform:rotate(40deg)"></div><div class="name">Media Mid</div><div class="val">+4</div></div>
+        <div class="knob"><div class="dial" data-k="lo" style="transform:rotate(-20deg)"></div><div class="name">Tags Lo</div><div class="val">-2</div></div>
+        <div class="knob"><div class="dial" data-k="fx" style="transform:rotate(110deg)"></div><div class="name">FX Wet</div><div class="val">88%</div></div>
+      </div>
+      <div class="faders" id="faders">
+        <div class="fader" data-f="content"><div class="track"><div class="nub red" style="bottom:80%"></div></div><div class="name">Content</div></div>
+        <div class="fader" data-f="media"><div class="track"><div class="nub amber" style="bottom:65%"></div></div><div class="name">Media</div></div>
+        <div class="fader" data-f="urls"><div class="track"><div class="nub green" style="bottom:70%"></div></div><div class="name">URL FX</div></div>
+        <div class="fader off" data-f="authors"><div class="track"><div class="nub blue" style="bottom:15%"></div></div><div class="name">Authors</div></div>
+        <div class="fader off" data-f="tax"><div class="track"><div class="nub magenta" style="bottom:10%"></div></div><div class="name">Tags</div></div>
+      </div>
+      <button class="bigplay" id="play">▶ PLAY · REVIEW &amp; IMPORT</button>
+    </section>
+
+    <aside class="panel">
+      <h2>B · Now playing</h2>
+      <div class="now"><b id="nowtxt">Idle on the platter</b><span id="elapsed">0:00</span></div>
+      <div class="meters">
+        <div class="meter" id="mA"></div>
+        <div class="meter" id="mB"></div>
+      </div>
+      <div class="setlist" id="set"><div class="row"><span>00</span><span>—</span><span>queued</span></div></div>
+      <div class="cue" id="result" style="display:none">Mix complete · 38 tracks dropped, 22 samples cleared.</div>
+    </aside>
+  </div>
+
+  <div class="footer">
+    <span>CHANNEL A · SRC</span>
+    <span>MASTER GAIN: 0.0 dB</span>
+    <span>CHANNEL B · DEST</span>
+  </div>
+</div>
+
+<script>
+// build meters
+function buildMeter(id){const m=document.getElementById(id);for(let i=0;i<24;i++){const e=document.createElement("i");m.appendChild(e);}}
+buildMeter("mA");buildMeter("mB");
+
+// scope canvas
+const cv=document.getElementById("scope"),ctx=cv.getContext("2d");
+function resizeScope(){cv.width=cv.clientWidth*devicePixelRatio;cv.height=cv.clientHeight*devicePixelRatio;ctx.scale(devicePixelRatio,devicePixelRatio)}
+let lvl=0,t0=0;
+function drawScope(){
+  const w=cv.clientWidth,h=cv.clientHeight;
+  ctx.clearRect(0,0,w,h);
+  ctx.strokeStyle="#ffd33d";ctx.lineWidth=1.5;ctx.beginPath();
+  for(let x=0;x<w;x+=2){
+    const y=h/2+Math.sin((x+t0)*0.08)*(h*0.35)*lvl + Math.sin((x+t0)*0.27)*(h*0.18)*lvl;
+    if(x===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+  ctx.strokeStyle="rgba(255,211,61,.15)";ctx.beginPath();ctx.moveTo(0,h/2);ctx.lineTo(w,h/2);ctx.stroke();
+  t0+=4;
+  requestAnimationFrame(drawScope);
+}
+addEventListener("resize",resizeScope);resizeScope();drawScope();
+
+// source kind
+document.querySelectorAll(".kinds button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".kinds button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  const k=b.dataset.k,src=document.getElementById("src");
+  if(k==="url")src.value="https://oldblog.example.com/feed";
+  if(k==="wxr")src.value="myblog-export.wxr";
+  if(k==="rss")src.value="https://rss.example.com/posts.xml";
+  refreshCue();
+}));
+
+// fader click toggles
+document.querySelectorAll(".fader").forEach(f=>f.addEventListener("click",()=>{
+  f.classList.toggle("off");
+  const nub=f.querySelector(".nub");const b=parseInt(nub.style.bottom)||50;
+  nub.style.bottom=(f.classList.contains("off")?10:Math.max(50,b))+"%";
+  refreshCue();
+}));
+
+// knob rotate on click
+document.querySelectorAll(".dial").forEach(d=>d.addEventListener("click",()=>{
+  const cur=parseInt(d.style.transform.match(/-?\d+/)?.[0]||"0");
+  const nx=((cur+30+360)%360)-180;
+  d.style.transform=`rotate(${nx}deg)`;
+  const v=d.nextElementSibling?.nextElementSibling;
+  if(v)v.textContent=(nx>0?"+":"")+Math.round(nx/12)+" dB";
+}));
+
+function refreshCue(){
+  const on=[...document.querySelectorAll(".fader:not(.off)")].map(x=>x.dataset.f);
+  document.getElementById("cue").innerHTML=`Cue locked · channels live: <b>${on.join(", ")||"none"}</b>. Press <b>PLAY</b> to crossfade source → destination.`;
+}
+
+// playback simulation
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+const play=document.getElementById("play"),set=document.getElementById("set"),nowtxt=document.getElementById("nowtxt"),elapsed=document.getElementById("elapsed"),bpm=document.getElementById("bpm"),rec=document.getElementById("rec"),pa=document.getElementById("pa"),pb=document.getElementById("pb");
+play.addEventListener("click",()=>{
+  play.disabled=true;set.innerHTML="";document.getElementById("result").style.display="none";
+  pa.classList.add("spin");pb.classList.add("spin");rec.textContent="● LIVE";rec.style.color="#22c55e";
+  let i=0,sec=0;
+  const tick=setInterval(()=>{sec++;elapsed.textContent=Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0");bpm.textContent="BPM "+(96+Math.floor(Math.sin(sec/3)*8))},1000);
+  function step(){
+    if(i>=phases.length){clearInterval(tick);play.disabled=false;rec.textContent="● DONE";rec.style.color="#ffd33d";lvl=0;return;}
+    const ph=phases[i],p=Math.round(i/(phases.length-1)*100);
+    nowtxt.textContent=ph.toUpperCase();
+    lvl=ph==="complete"?0.1:0.4+Math.random()*0.6;
+    // animate meters
+    const mA=document.querySelectorAll("#mA i"),mB=document.querySelectorAll("#mB i");
+    mA.forEach((e,k)=>{e.className=k<lvl*mA.length?(k>20?"on3":k>14?"on2":"on1"):"";});
+    mB.forEach((e,k)=>{const l2=Math.min(1,lvl*0.8);e.className=k<l2*mB.length?(k>20?"on3":k>14?"on2":"on1"):"";});
+    const row=document.createElement("div");row.className="row done";
+    row.innerHTML=`<span>${String(i).padStart(2,"0")}</span><span>${ph}</span><span>${p}%</span>`;set.appendChild(row);set.scrollTop=set.scrollHeight;
+    if(ph==="complete"){const r=document.getElementById("result");r.style.display="block";r.innerHTML="Mix complete · <b>38</b> tracks dropped, <b>22</b> samples cleared, <b>14</b> URL FX applied.";pa.classList.remove("spin");}
+    i++;setTimeout(step,650);
+  }
+  step();
+});
+refreshCue();
+</script>
+</body>
+</html>

@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>55 Lab Notebook · Universal Importer</title>
+<style>
+:root{--bg:#f7f7f9;--ink:#212121;--muted:#616161;--rule:#e1e4e8;--accent:#4f46e5;--code:#1f2933;--codetx:#e5e9f0;--in:#1f6feb;--out:#22863a;--warn:#b45309;--err:#b91c1c;--paper:#ffffff;--strip:#fafafa}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+.nbk{max-width:1100px;margin:0 auto;background:var(--paper);min-height:100vh;border-left:1px solid var(--rule);border-right:1px solid var(--rule)}
+.menubar{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;padding:8px 14px;border-bottom:1px solid var(--rule);background:#fff;position:sticky;top:0;z-index:5}
+.menubar .brand{display:flex;align-items:center;gap:10px;font-weight:700}
+.menubar .brand .py{font:800 14px/1 ui-monospace,Menlo,monospace;background:#fef3c7;color:#92400e;padding:4px 6px;border-radius:3px;letter-spacing:.04em}
+.menus{display:flex;gap:14px;font-size:13px;color:#4a4a4a}
+.menus span{cursor:default}
+.kernel{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);padding:4px 10px;border:1px solid var(--rule);border-radius:999px}
+.kernel .pulse{width:8px;height:8px;border-radius:50%;background:var(--out);box-shadow:0 0 0 0 var(--out);animation:pulse 1.4s infinite}
+.kernel.busy .pulse{background:var(--warn);animation:pulse .6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 currentColor}70%{box-shadow:0 0 0 8px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.toolbar{display:flex;gap:6px;padding:6px 14px;border-bottom:1px solid var(--rule);background:#fbfbfd;align-items:center}
+.toolbar button{padding:6px 10px;border:1px solid var(--rule);background:#fff;border-radius:4px;cursor:pointer;font-size:12px;display:flex;align-items:center;gap:6px}
+.toolbar button:hover{background:#f0f2f5}
+.toolbar button.run{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:700}
+.toolbar button.run:disabled{opacity:.65;cursor:wait}
+.toolbar .stretch{flex:1}
+.toolbar select{padding:6px 10px;border:1px solid var(--rule);background:#fff;border-radius:4px;font-size:12px}
+.title{padding:18px 28px 6px;font:800 26px/1.2 "Iowan Old Style",Georgia,serif;letter-spacing:-.01em}
+.title small{display:block;font:400 13px/1 ui-sans-serif;color:var(--muted);margin-top:6px}
+.cell{margin:14px 24px;border:1px solid var(--rule);border-radius:6px;background:#fff;overflow:hidden}
+.cell.markdown{border-color:transparent;margin:0 24px}
+.cell.markdown p{color:#374151;margin:6px 0 10px}
+.cellhead{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;padding:6px 10px;background:var(--strip);border-bottom:1px solid var(--rule)}
+.cellhead .prompt{font:700 11px/1 ui-monospace,Menlo,monospace;color:var(--in);min-width:62px}
+.cellhead .ctype{font-size:11px;color:var(--muted);letter-spacing:.16em;text-transform:uppercase}
+.cellhead .runcell{padding:4px 10px;border:1px solid var(--rule);background:#fff;border-radius:4px;cursor:pointer;font-size:11px}
+.cellbody{font:13px/1.6 ui-monospace,"SF Mono",Menlo,monospace;background:#fcfcfe;padding:10px 14px;color:var(--code)}
+.cellbody.dark{background:var(--code);color:var(--codetx)}
+.cellbody .kw{color:#c678dd}
+.cellbody .str{color:#98c379}
+.cellbody .num{color:#d19a66}
+.cellbody .com{color:#7f848e;font-style:italic}
+.cellbody .var{color:#61afef}
+.cellbody .fn{color:#e5c07b}
+.cellbody input,.cellbody select{font:inherit;background:transparent;border:0;color:inherit;outline:0;border-bottom:1px dashed currentColor;padding:0 2px;min-width:0}
+.cellbody input{width:auto}
+.cellbody .strarg{color:#98c379;background:rgba(152,195,121,.08);padding:0 4px;border-radius:3px}
+.cellbody .strarg input{color:#98c379;width:48ch;max-width:100%}
+.cellbody .boolarg select{color:#d19a66}
+.params{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 14px;padding:10px 14px;background:#fcfcfe;border-top:1px dashed var(--rule);font-size:12.5px}
+.params label{display:grid;grid-template-columns:120px 1fr;gap:8px;align-items:center;color:#4b5563}
+.params input[type=text],.params select{padding:5px 8px;border:1px solid var(--rule);border-radius:4px;background:#fff}
+.params .ck{display:flex;align-items:center;gap:6px}
+.outwrap{padding:0}
+.outhd{padding:4px 14px;font:700 10px/1 ui-monospace;color:var(--out);letter-spacing:.16em;text-transform:uppercase;background:#f0fdf4;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.outhd.warn{background:#fffbeb;color:var(--warn)}
+.outhd.err{background:#fef2f2;color:var(--err)}
+.outbody{padding:10px 14px;font:12.5px/1.55 ui-monospace,Menlo,monospace;background:#fff;white-space:pre-wrap;color:#1f2933;max-height:0;overflow:hidden;transition:max-height .3s ease;opacity:0}
+.outbody.show{max-height:480px;opacity:1;padding:10px 14px}
+.outbody .ok{color:var(--out)}
+.outbody .warn{color:var(--warn)}
+.outbody .row{display:grid;grid-template-columns:14ch 1fr;gap:8px}
+.outbody .row b{color:var(--accent)}
+.dfwrap{margin-top:8px;border:1px solid var(--rule);border-radius:4px;overflow:auto;font-size:11.5px}
+.dfwrap table{border-collapse:collapse;width:100%;font-family:ui-monospace,Menlo,monospace}
+.dfwrap th,.dfwrap td{padding:4px 8px;border-bottom:1px solid var(--rule);text-align:left}
+.dfwrap thead th{background:#f3f4f6;font-weight:700;font-size:11px;letter-spacing:.04em}
+.dfwrap tbody tr:nth-child(even){background:#fafbfc}
+.dfwrap tr.ing td:first-child::before{content:"▸ ";color:var(--accent)}
+.barv{display:inline-block;height:8px;background:linear-gradient(90deg,var(--accent),var(--out));border-radius:2px;vertical-align:middle}
+.pyplot{padding:14px;background:#fff;border-top:1px solid var(--rule);max-height:0;overflow:hidden;transition:max-height .4s}
+.pyplot.show{max-height:280px}
+.pyplot .axes{display:grid;grid-template-columns:48px 1fr;gap:6px;align-items:end}
+.pyplot .yax{display:flex;flex-direction:column-reverse;font:10px/1 ui-monospace;color:var(--muted);text-align:right;padding-right:6px;border-right:1px solid var(--rule);height:180px;justify-content:space-between}
+.pyplot .plotgrid{position:relative;height:180px;background:linear-gradient(to top,transparent 0,transparent 19%,#f0f2f5 19%,#f0f2f5 20%,transparent 20%) 0 0/100% 20% repeat-y;display:flex;align-items:flex-end;gap:10px;padding:0 8px;border-left:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.pyplot .plotgrid .b{flex:1;background:var(--accent);border-radius:3px 3px 0 0;transition:height .3s;position:relative;min-height:2px}
+.pyplot .plotgrid .b.done{background:var(--out)}
+.pyplot .plotgrid .b::after{content:attr(data-label);position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);font:10px/1 ui-sans-serif;color:var(--muted);white-space:nowrap}
+.pyplot .legend{font:11px/1 ui-sans-serif;color:var(--muted);margin-top:24px;text-align:center}
+.statusfoot{padding:10px 24px;border-top:1px solid var(--rule);background:#fafafa;font:12px/1 ui-monospace,Menlo,monospace;color:var(--muted);display:grid;grid-template-columns:1fr auto auto auto;gap:18px}
+.statusfoot b{color:var(--ink)}
+@media(max-width:760px){.params{grid-template-columns:1fr}.params label{grid-template-columns:1fr;gap:2px}.menus{display:none}}
+</style>
+</head>
+<body>
+<article class="nbk">
+  <header class="menubar">
+    <div class="brand"><span class="py">{ }</span> universal_importer.ipynb</div>
+    <nav class="menus"><span>File</span><span>Edit</span><span>View</span><span>Run</span><span>Kernel</span><span>Help</span></nav>
+    <div class="kernel" id="kernel"><span class="pulse"></span><span id="kstate">Python 3 · idle</span></div>
+  </header>
+
+  <div class="toolbar">
+    <button title="Save">💾 Save</button>
+    <button title="Add">+ Cell</button>
+    <button title="Cut">✂︎</button>
+    <button title="Copy">⧉</button>
+    <button title="Paste">⎘</button>
+    <button class="run" id="runall">▶ Review import (Run all)</button>
+    <button id="reset" title="Reset kernel">⟳ Reset</button>
+    <div class="stretch"></div>
+    <select id="trust"><option>Trusted</option><option>Read-only</option></select>
+  </div>
+
+  <h1 class="title">Universal Importer · Lab notebook<small>Cells execute top to bottom. Edit any parameter to change the import preview.</small></h1>
+
+  <!-- Markdown intro -->
+  <section class="cell markdown">
+    <p><b>Goal.</b> Pull a remote source into WordPress as draft pages with image rewrites, URL treatment, and a publish-ready review at the end. This notebook walks the operator through the pipeline as discrete, re-runnable cells.</p>
+  </section>
+
+  <!-- Cell 1: Import + Source -->
+  <section class="cell" data-cell="1">
+    <div class="cellhead"><span class="prompt" id="p1">In [1]:</span><span class="ctype">Code · setup</span><button class="runcell">▶ Run cell</button></div>
+    <div class="cellbody"><span class="com"># Connect to the source</span>
+<span class="kw">from</span> <span class="var">wp_importer</span> <span class="kw">import</span> <span class="fn">Source</span>, <span class="fn">Pipeline</span>
+<span class="var">src</span> = <span class="fn">Source</span>(url=<span class="strarg"><input id="srcUrl" value="https://github.com/WordPress/gutenberg/tree/trunk/docs"></span>,
+             kind=<span class="boolarg"><select id="srcKind"><option>auto</option><option>github_md</option><option>wxr</option><option>sitemap</option><option>rss</option></select></span>)
+<span class="var">src</span>.<span class="fn">probe</span>()</div>
+    <div class="outwrap"><div class="outhd">Out [1]:</div><div class="outbody show" id="o1"><span class="ok">✓ Source resolved</span>  ·  reachable=True
+host: <b>github.com</b>  kind=<b id="o1Kind">github_md</b>  depth=3
+<span class="row"><b>candidates</b><span id="o1Cands">38 files (.md), 4 folders skipped, 22 image refs</span></span></div></div>
+  </section>
+
+  <!-- Cell 2: Discovery / config -->
+  <section class="cell" data-cell="2">
+    <div class="cellhead"><span class="prompt" id="p2">In [2]:</span><span class="ctype">Code · features</span><button class="runcell">▶ Run cell</button></div>
+    <div class="cellbody"><span class="com"># Toggle features — re-run to recompute scope</span>
+<span class="var">cfg</span> = {</div>
+    <div class="params" id="params">
+      <label><span>frontmatter</span><span class="ck"><input type="checkbox" id="ck_frontmatter" checked> bool</span></label>
+      <label><span>rewrite_images</span><span class="ck"><input type="checkbox" id="ck_images" checked> bool</span></label>
+      <label><span>generate_redirects</span><span class="ck"><input type="checkbox" id="ck_redirects"> bool</span></label>
+      <label><span>tag_strategy</span><select id="tagstrat"><option>frontmatter</option><option>folder</option><option>none</option></select></label>
+      <label><span>author_map</span><select id="authmap"><option>by_commit</option><option>single</option><option>none</option></select></label>
+      <label><span>image_quality</span><input type="text" id="iq" value="85"></label>
+      <label><span>max_pages</span><input type="text" id="mp" value="∞"></label>
+      <label><span>dry_run</span><span class="ck"><input type="checkbox" id="ck_dry"> bool</span></label>
+    </div>
+    <div class="cellbody">}
+<span class="fn">print</span>(<span class="var">cfg</span>)</div>
+    <div class="outwrap"><div class="outhd">Out [2]:</div><div class="outbody show" id="o2">scope_pages = <b id="o2Pages">38</b>, scope_media = <b id="o2Media">22</b>, redirects = <b id="o2Red">0</b>, dry_run = <b id="o2Dry">False</b></div></div>
+  </section>
+
+  <!-- Cell 3: Pipeline run -->
+  <section class="cell" data-cell="3">
+    <div class="cellhead"><span class="prompt" id="p3">In [3]:</span><span class="ctype">Code · pipeline</span><button class="runcell">▶ Run cell</button></div>
+    <div class="cellbody dark"><span class="com"># Execute the full pipeline</span>
+<span class="var">pl</span> = <span class="fn">Pipeline</span>(<span class="var">src</span>, <span class="var">cfg</span>)
+<span class="var">run</span> = <span class="var">pl</span>.<span class="fn">execute</span>(progress=<span class="kw">True</span>)
+<span class="var">run</span>.<span class="fn">summary</span>()</div>
+    <div class="outwrap"><div class="outhd" id="oh3">Out [3]:</div>
+      <div class="outbody show" id="o3">Pipeline staged — press <b>Review import (Run all)</b> above to execute.
+<span class="row"><b>phases</b>queued → reading → preparing → URLs → media → writing → complete</span></div>
+      <div class="dfwrap"><table><thead><tr><th>#</th><th>phase</th><th>state</th><th>progress</th><th>notes</th></tr></thead>
+      <tbody id="dfrows"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- Cell 4: Plot output -->
+  <section class="cell" data-cell="4">
+    <div class="cellhead"><span class="prompt" id="p4">In [4]:</span><span class="ctype">Code · plot</span><button class="runcell">▶ Run cell</button></div>
+    <div class="cellbody"><span class="com"># Items processed per phase</span>
+<span class="var">run</span>.<span class="fn">plot</span>(kind=<span class="strarg">'bar'</span>, color=<span class="strarg">'#4f46e5'</span>)</div>
+    <div class="pyplot show" id="plot">
+      <div class="axes">
+        <div class="yax"><span>0</span><span>20</span><span>40</span><span>60</span><span>80</span></div>
+        <div class="plotgrid" id="bars">
+          <div class="b" data-label="queue" data-i="0" style="height:5%"></div>
+          <div class="b" data-label="read" data-i="1" style="height:5%"></div>
+          <div class="b" data-label="prep" data-i="2" style="height:5%"></div>
+          <div class="b" data-label="url" data-i="3" style="height:5%"></div>
+          <div class="b" data-label="media" data-i="4" style="height:5%"></div>
+          <div class="b" data-label="write" data-i="5" style="height:5%"></div>
+          <div class="b" data-label="done" data-i="6" style="height:5%"></div>
+        </div>
+      </div>
+      <div class="legend">Figure 1 · items moved per phase (live)</div>
+    </div>
+  </section>
+
+  <!-- Cell 5: Review -->
+  <section class="cell" data-cell="5">
+    <div class="cellhead"><span class="prompt" id="p5">In [5]:</span><span class="ctype">Code · review</span><button class="runcell">▶ Run cell</button></div>
+    <div class="cellbody"><span class="var">run</span>.<span class="fn">review</span>()</div>
+    <div class="outwrap"><div class="outhd" id="oh5">Out [5]:</div><div class="outbody" id="o5"></div></div>
+  </section>
+
+  <footer class="statusfoot">
+    <span>universal_importer.ipynb · <b id="cellCt">5 cells</b></span>
+    <span>kernel: <b id="kstateFoot">idle</b></span>
+    <span>last run: <b id="lastrun">—</b></span>
+    <span>Trusted ●</span>
+  </footer>
+</article>
+
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+const counts=[5,18,38,38,22,38,38];
+const cfg={frontmatter:true,images:true,redirects:false,dry:false,tags:"frontmatter",auth:"by_commit",iq:"85",mp:"∞"};
+
+function refreshScope(){
+  cfg.frontmatter=document.getElementById("ck_frontmatter").checked;
+  cfg.images=document.getElementById("ck_images").checked;
+  cfg.redirects=document.getElementById("ck_redirects").checked;
+  cfg.dry=document.getElementById("ck_dry").checked;
+  cfg.tags=document.getElementById("tagstrat").value;
+  cfg.auth=document.getElementById("authmap").value;
+  cfg.iq=document.getElementById("iq").value;
+  cfg.mp=document.getElementById("mp").value;
+  const kind=document.getElementById("srcKind").value;
+  document.getElementById("o1Kind").textContent=kind;
+  const pages=cfg.mp==="∞"||isNaN(parseInt(cfg.mp))?38:Math.min(38,parseInt(cfg.mp));
+  document.getElementById("o2Pages").textContent=pages;
+  document.getElementById("o2Media").textContent=cfg.images?22:0;
+  document.getElementById("o2Red").textContent=cfg.redirects?pages:0;
+  document.getElementById("o2Dry").textContent=cfg.dry?"True":"False";
+  document.getElementById("o1Cands").textContent=pages+" files (.md), 4 folders skipped, "+(cfg.images?22:0)+" image refs";
+}
+document.querySelectorAll("#params input, #params select, #srcKind").forEach(el=>el.addEventListener("change",refreshScope));
+document.getElementById("srcUrl").addEventListener("input",()=>{
+  document.getElementById("o1Kind").parentElement.previousElementSibling;
+  refreshScope();
+});
+
+document.querySelectorAll(".runcell").forEach(b=>b.addEventListener("click",e=>{
+  const cell=e.target.closest(".cell").dataset.cell;
+  const prompt=document.getElementById("p"+cell);
+  prompt.textContent="In ["+cell+"]:";
+  if(cell==="1")refreshScope();
+  if(cell==="2")refreshScope();
+  if(cell==="3")runPipeline();
+}));
+
+const dfRows=document.getElementById("dfrows");
+function buildRows(){
+  dfRows.innerHTML="";
+  phases.forEach((p,i)=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML="<td>"+i+"</td><td>"+p+"</td><td class='st'>—</td><td class='pr'><span class='barv' style='width:0px'></span> 0%</td><td class='nt'></td>";
+    dfRows.appendChild(tr);
+  });
+}
+buildRows();
+
+function runPipeline(){
+  const btn=document.getElementById("runall");btn.disabled=true;
+  const kernel=document.getElementById("kernel");kernel.classList.add("busy");
+  document.getElementById("kstate").textContent="Python 3 · busy";
+  document.getElementById("kstateFoot").textContent="busy";
+  buildRows();
+  document.getElementById("o5").classList.remove("show");
+  document.getElementById("o5").innerHTML="";
+  // Reset prompts to *
+  [3,4,5].forEach(n=>{document.getElementById("p"+n).textContent="In [*]:"});
+  // Reset bars
+  document.querySelectorAll(".plotgrid .b").forEach(b=>{b.style.height="5%";b.classList.remove("done")});
+  let i=0;
+  const t=setInterval(()=>{
+    const rows=document.querySelectorAll("#dfrows tr");
+    if(i>0){rows[i-1].querySelector(".st").textContent="✓ done";rows[i-1].classList.remove("ing");rows[i-1].querySelector(".pr").innerHTML="<span class='barv' style='width:80px;background:var(--out)'></span> 100%"}
+    rows[i].classList.add("ing");rows[i].querySelector(".st").innerHTML="<b style='color:var(--accent)'>running</b>";
+    const pct=Math.round(i/(phases.length-1)*100);
+    rows[i].querySelector(".pr").innerHTML="<span class='barv' style='width:"+(pct*0.8)+"px'></span> "+pct+"%";
+    rows[i].querySelector(".nt").textContent=counts[i]+" items";
+    // Plot bar
+    const b=document.querySelector(".plotgrid .b[data-i='"+i+"']");
+    if(b){b.style.height=(counts[i]/40*90+5)+"%"}
+    // Output cell text
+    const ph=phases[i];
+    if(ph==="complete"){
+      clearInterval(t);btn.disabled=false;
+      kernel.classList.remove("busy");
+      document.getElementById("kstate").textContent="Python 3 · idle";
+      document.getElementById("kstateFoot").textContent="idle";
+      rows[i].classList.remove("ing");rows[i].querySelector(".st").textContent="✓ done";rows[i].querySelector(".pr").innerHTML="<span class='barv' style='width:80px;background:var(--out)'></span> 100%";
+      document.querySelectorAll(".plotgrid .b").forEach(b=>b.classList.add("done"));
+      document.getElementById("p3").textContent="In [3]:";
+      document.getElementById("p4").textContent="In [4]:";
+      document.getElementById("p5").textContent="In [5]:";
+      document.getElementById("o5").classList.add("show");
+      document.getElementById("o5").innerHTML="<span class='ok'>✓ Review ready.</span> "+counts[5]+" draft pages staged · "+(cfg.images?22:0)+" media items rewritten · "+(cfg.redirects?counts[5]:0)+" redirects.\n  <b style='color:var(--accent)'>→</b> Open <b>/wp-admin/edit.php?post_status=draft</b> to publish.";
+      document.getElementById("lastrun").textContent=new Date().toLocaleTimeString();
+    }
+    i++;
+  },620);
+}
+
+document.getElementById("runall").addEventListener("click",runPipeline);
+document.getElementById("reset").addEventListener("click",()=>{
+  buildRows();
+  document.getElementById("o5").classList.remove("show");
+  document.getElementById("o5").innerHTML="";
+  document.querySelectorAll(".plotgrid .b").forEach(b=>{b.style.height="5%";b.classList.remove("done")});
+  [1,2,3,4,5].forEach(n=>document.getElementById("p"+n).textContent="In ["+n+"]:");
+});
+refreshScope();
+</script>
+</body>
+</html>

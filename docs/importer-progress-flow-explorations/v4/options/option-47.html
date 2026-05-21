@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>47 Canvas Planner · Universal Importer</title>
+<style>
+:root{--paper:#f5efe2;--grid:#e2dac8;--ink:#23231a;--accent:#d63b14;--soft:#fde4d3;--ok:#3b8c2f;--y:#fff89a;--p:#ffb8d6;--b:#bcdcff;--g:#c8f1c8}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);background-image:radial-gradient(var(--grid) 1.5px,transparent 1.5px);background-size:22px 22px;color:var(--ink);font:14px/1.45 "Marker Felt","Bradley Hand","Comic Sans MS",cursive}
+button,input{font:inherit;color:inherit}
+.workspace{position:relative;min-height:100vh;padding:18px}
+.toolbar{display:grid;grid-template-columns:auto 1fr auto auto;gap:12px;align-items:center;padding:10px 14px;background:rgba(255,253,247,.92);border:2px solid var(--ink);border-radius:14px;box-shadow:4px 4px 0 rgba(0,0,0,.12);margin-bottom:14px}
+.toolbar h1{margin:0;font-size:24px;letter-spacing:.02em}
+.toolbar .crumb{color:#666;font-size:13px}
+.toolbar .badge{padding:5px 12px;border:2px solid var(--ink);border-radius:999px;background:var(--y);font-weight:700}
+.toolbar .pens{display:flex;gap:6px}
+.pen{width:28px;height:28px;border-radius:50%;border:2px solid var(--ink);cursor:pointer}
+.pen.on{transform:scale(1.18);box-shadow:0 0 0 3px rgba(0,0,0,.15)}
+.canvas{position:relative;min-height:560px;background:rgba(255,253,247,.55);border:2px dashed var(--ink);border-radius:18px;padding:16px;overflow:hidden}
+.note{position:absolute;width:180px;min-height:90px;padding:10px 12px;border:2px solid var(--ink);border-radius:6px;box-shadow:3px 3px 0 rgba(0,0,0,.15);transform:rotate(var(--r,-2deg));transition:transform .25s, box-shadow .25s, opacity .25s}
+.note h3{margin:0 0 4px;font-size:14px}
+.note small{display:block;color:#555;font-size:11px}
+.note.y{background:var(--y)}.note.p{background:var(--p)}.note.b{background:var(--b)}.note.g{background:var(--g)}
+.note.done{background:#dfffd5;box-shadow:3px 3px 0 rgba(0,80,0,.25)}
+.note.now{transform:rotate(0) scale(1.06);box-shadow:6px 6px 0 rgba(214,59,20,.3);z-index:2}
+.note .pin{position:absolute;top:-10px;left:50%;transform:translateX(-50%);width:14px;height:14px;border-radius:50%;background:radial-gradient(circle at 30% 30%,#fff 0,#bbb 25%,#444 80%);box-shadow:0 2px 0 rgba(0,0,0,.4)}
+.start-card{position:absolute;left:24px;top:24px;width:340px;background:#fff;border:3px solid var(--ink);border-radius:14px;padding:16px;box-shadow:6px 6px 0 rgba(0,0,0,.15);z-index:5;transform:rotate(-1.5deg)}
+.start-card h2{margin:0 0 6px;font-size:20px}
+.start-card .src{display:grid;grid-template-columns:1fr auto;gap:6px;margin:8px 0}
+.start-card input{padding:8px 10px;border:2px solid var(--ink);border-radius:6px;background:#fffef4;font-family:inherit}
+.start-card .browse{padding:8px 10px;border:2px solid var(--ink);border-radius:6px;background:var(--y);font-weight:700;cursor:pointer}
+.tags{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}
+.tag{padding:5px 9px;border:2px solid var(--ink);border-radius:999px;background:#fffef4;cursor:pointer;font-size:12px;font-weight:700}
+.tag.on{background:var(--accent);color:#fff}
+.fout{padding:6px 9px;background:var(--soft);border-left:3px solid var(--accent);font-size:12.5px;border-radius:0 6px 6px 0}
+.go{margin-top:6px;width:100%;padding:12px;background:var(--accent);color:#fff;border:3px solid var(--ink);border-radius:10px;font-weight:800;letter-spacing:.06em;cursor:pointer;font-size:15px;box-shadow:4px 4px 0 rgba(0,0,0,.18)}
+.go:disabled{opacity:.7;cursor:wait}
+.run-card{position:absolute;right:24px;top:24px;width:280px;background:#fff;border:3px solid var(--ink);border-radius:14px;padding:14px;box-shadow:6px 6px 0 rgba(0,0,0,.15);z-index:5;transform:rotate(1.5deg)}
+.run-card h2{margin:0 0 6px}
+.bar{height:14px;border:2px solid var(--ink);border-radius:999px;overflow:hidden;background:#fffef4}
+.bar span{display:block;height:100%;width:0;background:repeating-linear-gradient(45deg,var(--accent),var(--accent) 6px,#ff6b3d 6px,#ff6b3d 12px);transition:width .3s}
+.log{max-height:120px;overflow:auto;padding-left:18px;margin:8px 0 0;font-size:12.5px}
+.res{margin-top:8px;padding:8px;border:2px dashed var(--accent);border-radius:6px;background:var(--soft)}
+.swatch{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(255,253,247,.92);border:2px solid var(--ink);border-radius:999px;padding:6px 14px;font-size:12px;display:flex;gap:14px}
+@media(max-width:980px){.start-card,.run-card{position:static;width:auto;transform:none;margin:10px 0}.note{position:relative;display:inline-block;margin:8px;left:auto !important;top:auto !important;right:auto !important;bottom:auto !important}}
+</style>
+</head>
+<body>
+<div class="workspace">
+  <div class="toolbar">
+    <h1>Import Canvas</h1>
+    <div class="crumb">Sketch your import like a planning wall · drag, pin, send</div>
+    <div class="pens">
+      <span class="pen" style="background:var(--y)" title="Yellow"></span>
+      <span class="pen on" style="background:var(--p)" title="Pink"></span>
+      <span class="pen" style="background:var(--b)" title="Blue"></span>
+      <span class="pen" style="background:var(--g)" title="Green"></span>
+    </div>
+    <span class="badge">v4 · 47/60</span>
+  </div>
+  <div class="canvas" id="canvas">
+    <section class="start-card">
+      <h2>Pin a source</h2>
+      <p style="margin:0;color:#555;font-size:13px">Where should we copy content from?</p>
+      <div class="src"><input value="https://github.com/WordPress/gutenberg/tree/trunk/docs"><button class="browse">browse</button></div>
+      <div class="tags">
+        <button class="tag on" data-c="View ‘Everything’ shows every note on the board.">Everything</button>
+        <button class="tag" data-c="View ‘Drafts’ pinks out anything that will publish.">Drafts</button>
+        <button class="tag" data-c="View ‘Media’ greys notes without media.">Media</button>
+        <button class="tag" data-c="View ‘Conflicts’ highlights only conflict cards.">Conflicts</button>
+        <button class="tag" data-c="View ‘URLs’ shows old → new URL note cards.">URLs</button>
+      </div>
+      <div class="fout" id="fout">View ‘Everything’ shows every note on the board.</div>
+      <button class="go" id="go">Send to wall &amp; import</button>
+    </section>
+
+    <section class="run-card">
+      <h2>Wall status</h2>
+      <p style="margin:0;color:#555;font-size:13px"><span id="ph">Idle</span> · <span id="cnt">0 / 64</span></p>
+      <div class="bar"><span id="bf"></span></div>
+      <ol class="log" id="log"><li>No run yet</li></ol>
+      <div class="res" id="res">Results will appear here.</div>
+    </section>
+
+    <div class="note y" style="--r:-3deg;left:380px;top:48px"><span class="pin"></span><h3>What is WP</h3><small>doc · 1 image · draft</small></div>
+    <div class="note p" style="--r:2deg;left:560px;top:80px"><span class="pin"></span><h3>Block editor primer</h3><small>tutorial · 4 images · draft</small></div>
+    <div class="note b" style="--r:-1.5deg;left:380px;top:200px"><span class="pin"></span><h3>theme.json reference</h3><small>reference · 0 images</small></div>
+    <div class="note g" style="--r:3deg;left:560px;top:230px"><span class="pin"></span><h3>Patterns gallery</h3><small>gallery · 12 images</small></div>
+    <div class="note y" style="--r:-2deg;left:380px;top:360px"><span class="pin"></span><h3>FSE preview</h3><small>beta · 3 images</small></div>
+    <div class="note p" style="--r:2.5deg;left:560px;top:380px"><span class="pin"></span><h3>Site editor walkthrough</h3><small>video · 6 images</small></div>
+    <div class="note b" style="--r:-2deg;left:760px;top:80px"><span class="pin"></span><h3>i18n localization</h3><small>note · drafts</small></div>
+    <div class="note g" style="--r:1deg;left:760px;top:230px"><span class="pin"></span><h3>Hooks digest</h3><small>reference · 0 images</small></div>
+    <div class="note y" style="--r:-1.5deg;left:760px;top:380px"><span class="pin"></span><h3>Migration case</h3><small>case · 9 images</small></div>
+    <div class="note p" style="--r:2deg;left:940px;top:80px"><span class="pin"></span><h3>SEO playbook</h3><small>guide · 3 images</small></div>
+    <div class="note b" style="--r:-1deg;left:940px;top:230px"><span class="pin"></span><h3>Accessibility audit</h3><small>audit · 5 images</small></div>
+    <div class="note g" style="--r:2deg;left:940px;top:380px"><span class="pin"></span><h3>Performance notes</h3><small>note · 0 images</small></div>
+
+    <div class="swatch">Tip: Notes go green as the run completes them ·  marker is just a UI metaphor</div>
+  </div>
+</div>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+document.querySelectorAll(".tag").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".tag").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");document.getElementById("fout").textContent=b.dataset.c;
+}));
+document.querySelectorAll(".pen").forEach(p=>p.addEventListener("click",()=>{
+  document.querySelectorAll(".pen").forEach(x=>x.classList.remove("on"));p.classList.add("on");
+}));
+document.getElementById("go").addEventListener("click",e=>{
+  e.preventDefault();const go=document.getElementById("go");go.disabled=true;
+  const notes=document.querySelectorAll(".note");
+  notes.forEach(n=>n.classList.remove("done","now"));
+  const log=document.getElementById("log");log.innerHTML="";
+  let i=0;const t=setInterval(()=>{
+    const ph=phases[i],pct=Math.round(i/(phases.length-1)*100);
+    document.getElementById("ph").textContent=ph;document.getElementById("bf").style.width=pct+"%";document.getElementById("cnt").textContent=Math.min(64,Math.round(pct*.64))+" / 64";
+    const upto=Math.floor(notes.length*pct/100);
+    notes.forEach((n,idx)=>{n.classList.remove("now");if(idx<upto)n.classList.add("done");else if(idx===upto)n.classList.add("now")});
+    const li=document.createElement("li");li.textContent=ph;log.appendChild(li);log.scrollTop=log.scrollHeight;
+    if(ph==="complete"){clearInterval(t);go.disabled=false;document.getElementById("res").innerHTML="<b>All notes pinned!</b> 38 drafts · 22 media · 4 URL rules";}
+    i++;
+  },560);
+});
+</script>
+</body>
+</html>

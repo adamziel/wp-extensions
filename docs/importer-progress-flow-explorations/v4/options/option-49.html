@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>49 Document Annotation · Universal Importer</title>
+<style>
+:root{--paper:#fefcf7;--ink:#1a1612;--mute:#6b6155;--rule:#e6dfd1;--accent:#3a6ee8;--accent2:#0c3e83;--mark:#ffe681;--hi:#ffd2a8;--hi2:#c8e9c2;--hi3:#d8d2ff;--ok:#1e7a4f;--warn:#b86b00}
+*{box-sizing:border-box}
+html,body{margin:0;background:#e9e3d4;color:var(--ink);font:14px/1.6 "Charter","Iowan Old Style","Georgia",serif}
+button,input,select,textarea{font:inherit;color:inherit;border:0;background:transparent}
+.app{display:grid;grid-template-rows:auto 1fr;min-height:100vh}
+/* === Doc ribbon === */
+.ribbon{background:#f8f3e3;border-bottom:1px solid #c8bfa9;padding:8px 22px;display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;position:sticky;top:0;z-index:5}
+.ribbon .docname{display:flex;flex-direction:column;line-height:1.1}
+.ribbon .docname b{font:600 17px/1.1 "Charter",serif}
+.ribbon .docname small{color:var(--mute);font-size:11.5px;font-style:italic}
+.ribbon .menu{display:flex;gap:14px;color:var(--mute);font-size:12.5px}
+.ribbon .menu span{cursor:pointer;padding:3px 6px;border-radius:4px}
+.ribbon .menu span:hover{background:#eee5cc;color:var(--ink)}
+.ribbon .actions{display:flex;gap:8px;align-items:center}
+.ribbon .who{width:30px;height:30px;border-radius:50%;background:#3a6ee8;color:#fff;display:grid;place-items:center;font-weight:700;font-size:12px;border:2px solid #fff}
+.ribbon .review{padding:9px 16px;background:var(--accent);color:#fff;border-radius:6px;cursor:pointer;font-weight:700;font-family:ui-sans-serif,sans-serif;font-size:13px;letter-spacing:.02em;box-shadow:0 4px 10px rgba(58,110,232,.35)}
+.ribbon .review:disabled{opacity:.7;cursor:wait}
+.toolbar{background:#fff;border-bottom:1px solid var(--rule);padding:7px 22px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-family:ui-sans-serif,sans-serif;font-size:12.5px}
+.toolbar .grp{display:flex;gap:4px;padding-right:10px;border-right:1px solid var(--rule);margin-right:6px}
+.toolbar button{padding:5px 9px;border-radius:4px;color:#444;cursor:pointer;font-weight:600;border:1px solid transparent}
+.toolbar button:hover{background:#f3edda;border-color:var(--rule)}
+.toolbar .source{flex:1;display:flex;gap:6px;align-items:center;background:#f3edda;border:1px solid var(--rule);border-radius:6px;padding:5px 10px;min-width:280px}
+.toolbar .source input{flex:1;background:transparent;font-family:ui-monospace,monospace;font-size:12.5px}
+.toolbar .source .ico{color:var(--accent);font-weight:700}
+/* === Document layout === */
+.surface{display:grid;grid-template-columns:1fr 320px;gap:24px;padding:28px 30px 60px;max-width:1280px;margin:auto}
+.page{background:var(--paper);box-shadow:0 0 0 1px #d6cdb6,0 6px 30px rgba(0,0,0,.12);padding:60px 70px;border-radius:2px;position:relative;min-height:780px}
+.page::before,.page::after{content:"";position:absolute;top:8px;bottom:8px;left:0;right:0;background:var(--paper);box-shadow:0 0 0 1px #d6cdb6;border-radius:2px;z-index:-1}
+.page::before{transform:translate(4px,4px)}
+.page::after{transform:translate(8px,8px);opacity:.7}
+.page h1.title{font-size:30px;margin:0 0 6px;font-weight:700;letter-spacing:-.01em}
+.page .meta{color:var(--mute);font-size:13px;margin-bottom:30px;font-style:italic;border-bottom:1px solid var(--rule);padding-bottom:14px}
+.page h2{font-size:18px;margin:24px 0 8px;letter-spacing:.01em}
+.page p{margin:0 0 12px;color:#2c2520}
+.page p span.h{background:linear-gradient(transparent 60%,var(--mark) 60%);padding:0 2px;cursor:pointer;border-radius:2px;transition:background .25s}
+.page p span.h.h1{background:linear-gradient(transparent 60%,var(--mark) 60%)}
+.page p span.h.h2{background:linear-gradient(transparent 60%,var(--hi) 60%)}
+.page p span.h.h3{background:linear-gradient(transparent 60%,var(--hi2) 60%)}
+.page p span.h.h4{background:linear-gradient(transparent 60%,var(--hi3) 60%)}
+.page p span.h.lit{outline:2px dashed var(--accent);outline-offset:1px}
+.page .lnk{color:var(--accent);text-decoration:underline;text-decoration-style:dotted}
+.page figure.img{margin:14px 0;padding:14px;border:1px dashed #c9b993;background:repeating-linear-gradient(45deg,#fbf4dc,#fbf4dc 6px,#f6ebc4 6px,#f6ebc4 12px);border-radius:4px;display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:center}
+.page figure.img .ph{width:80px;height:60px;background:linear-gradient(135deg,#bcaa78,#8e7c45);border-radius:3px;display:grid;place-items:center;color:#fff;font-family:ui-monospace,monospace;font-size:10px}
+.page figure.img figcaption{font-size:12.5px;color:var(--mute);font-style:italic}
+.page del{color:#a33;text-decoration:line-through;background:#fff0f0}
+.page ins{color:var(--ok);text-decoration:none;background:#eaf7ee;padding:0 2px}
+.page .pageno{position:absolute;right:30px;bottom:18px;color:var(--mute);font-size:11px;font-style:italic}
+/* === Margin comments === */
+.margin{display:flex;flex-direction:column;gap:12px;font-family:ui-sans-serif,sans-serif;position:sticky;top:120px;align-self:start;max-height:calc(100vh - 130px);overflow:auto;padding:2px 4px 16px}
+.comment{background:#fff;border:1px solid var(--rule);border-radius:8px;padding:11px 13px;box-shadow:0 2px 5px rgba(0,0,0,.06);cursor:pointer;border-left:3px solid var(--mark);transition:transform .2s,box-shadow .2s,border-color .2s}
+.comment.c2{border-left-color:var(--hi)}
+.comment.c3{border-left-color:var(--hi2)}
+.comment.c4{border-left-color:var(--hi3)}
+.comment.on{transform:translateX(-6px);box-shadow:0 8px 22px rgba(0,0,0,.12);border-left-width:5px}
+.comment header{display:flex;gap:8px;align-items:center;margin-bottom:5px}
+.comment header .av{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700}
+.comment header b{font-size:12.5px}
+.comment header small{color:var(--mute);font-size:11px;margin-left:auto}
+.comment .body{font-size:12.5px;color:#3a322a;margin-bottom:7px}
+.comment .body code{background:#f3edda;padding:1px 5px;border-radius:3px;font-family:ui-monospace,monospace;font-size:11.5px}
+.comment .ctrls{display:flex;gap:5px;flex-wrap:wrap}
+.comment .ctrls button{padding:3px 8px;border:1px solid var(--rule);border-radius:999px;background:#f8f3e3;font-size:11px;cursor:pointer;color:#3a322a}
+.comment .ctrls button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.comment.resolved{opacity:.6;background:#eef6ed}
+.comment.resolved::after{content:"✓ resolved";color:var(--ok);font-size:11px;font-weight:700;float:right}
+/* Status strip at top of margin */
+.runcard{background:#fff;border:1px solid var(--rule);border-radius:8px;padding:12px;position:sticky;top:0;z-index:1}
+.runcard b.t{font-size:13px;display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+.runcard b.t small{color:var(--mute);font-weight:400;font-size:11.5px}
+.steps{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:6px}
+.step{height:6px;background:#e8e1cf;border-radius:3px;position:relative;overflow:hidden}
+.step.done{background:var(--ok)}
+.step.now{background:linear-gradient(90deg,var(--accent),var(--accent2));animation:flow 1.2s linear infinite}
+@keyframes flow{from{background-position:0 0}to{background-position:30px 0}}
+.runcard ul{margin:6px 0 0;padding-left:18px;font-size:11.5px;color:var(--mute);max-height:80px;overflow:auto}
+@media(max-width:1000px){.surface{grid-template-columns:1fr}.margin{position:static;max-height:none}.page{padding:30px 22px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="ribbon">
+    <div class="docname"><b>Untitled import · Gutenberg/docs</b><small>Draft review · Universal Importer · v4 · 49 / 60</small></div>
+    <nav class="menu"><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Format</span><span>Tools</span></nav>
+    <div class="actions">
+      <div class="who" title="Adam Z.">AZ</div>
+      <button class="review" id="review">Review &amp; import →</button>
+    </div>
+  </header>
+  <div class="toolbar">
+    <div class="grp"><button>↶</button><button>↷</button></div>
+    <div class="grp"><button style="font-weight:900">B</button><button style="font-style:italic">I</button><button style="text-decoration:underline">U</button></div>
+    <div class="grp"><button>¶</button><button>•</button><button>1.</button></div>
+    <div class="source"><span class="ico">⌘</span><input id="src" value="https://github.com/WordPress/gutenberg/tree/trunk/docs"><button title="Browse">↻</button></div>
+    <div class="grp" style="border:0;margin:0"><button>Suggest</button><button>Comment</button></div>
+  </div>
+  <div class="surface">
+    <article class="page">
+      <h1 class="title" contenteditable="true" spellcheck="false">Block Editor Handbook</h1>
+      <div class="meta">imported from <code>github.com/WordPress/gutenberg/tree/trunk/docs</code> · <span style="color:var(--ok)">live preview</span> · 38 pages staged</div>
+
+      <h2>Introduction</h2>
+      <p>The block editor (Gutenberg) is the modern editing experience in WordPress. <span class="h h1" data-c="c1">All headings and ordered TOC entries are extracted automatically</span> — they will become the parent slugs in your handbook. The first paragraph of each page is used as the meta description unless a frontmatter field overrides it.</p>
+
+      <p>Inside this document you will find <span class="h h2" data-c="c2">references to images stored under <code style="background:#f3edda;padding:0 4px;border-radius:3px">/docs/assets/</code></span>, which the importer rewrites to your media library URL. <span class="h h3" data-c="c3">External anchors to MDN and other docs sites keep their fragments</span>; internal anchors are remapped to the new slugs.</p>
+
+      <figure class="img"><div class="ph">PNG · 1.2MB</div><figcaption>hero/block-editor-overview.png — will be recompressed to WebP and resized to 1600×900 max.</figcaption></figure>
+
+      <h2>Getting started</h2>
+      <p>You can install Gutenberg from the plugin directory or download a release. <del>The legacy editor remains available via the Classic Editor plugin.</del> <ins>Note: this paragraph is rewritten to remove obsolete advice — see comment on the right.</ins> Once installed, every new post uses blocks by default.</p>
+
+      <p><span class="h h4" data-c="c4">Authors referenced as <code style="background:#f3edda;padding:0 4px;border-radius:3px">@gziolo</code>, <code style="background:#f3edda;padding:0 4px;border-radius:3px">@youknowriad</code>, <code style="background:#f3edda;padding:0 4px;border-radius:3px">@ellatrix</code> are mapped to existing WP users</span>. If a contributor cannot be matched, the page is attributed to the importer's owner.
+
+      <h2>Theme.json</h2>
+      <p>The <code style="background:#f3edda;padding:0 4px;border-radius:3px">theme.json</code> file is a configuration mechanism for global styles. Read about <a class="lnk" href="#">block supports</a>, <a class="lnk" href="#">style variations</a>, and <a class="lnk" href="#">layout</a>. Links are inspected before publish.</p>
+
+      <h2>Patterns</h2>
+      <p>Block patterns are predefined arrangements of blocks. The importer detects pattern files at <code style="background:#f3edda;padding:0 4px;border-radius:3px">docs/patterns/*.html</code> and registers them as theme patterns rather than pages.</p>
+
+      <div class="pageno">page 1 of 38 · live preview</div>
+    </article>
+
+    <aside class="margin">
+      <div class="runcard">
+        <b class="t"><span>Import run</span><small id="cur">Idle</small></b>
+        <div class="steps">
+          <div class="step" data-k="queued"></div>
+          <div class="step" data-k="reading"></div>
+          <div class="step" data-k="preparing"></div>
+          <div class="step" data-k="urls"></div>
+          <div class="step" data-k="media"></div>
+          <div class="step" data-k="writing"></div>
+          <div class="step" data-k="complete"></div>
+        </div>
+        <ul id="log"><li>No run yet. Choose options below, then click <b>Review &amp; import</b>.</li></ul>
+      </div>
+
+      <div class="comment" data-c="c1">
+        <header><div class="av">RR</div><b>Content rules</b><small>4 m</small></header>
+        <div class="body">Found <b>38 pages</b> across 7 sections. Pick which categories to import. Headings &amp; TOCs are always preserved.</div>
+        <div class="ctrls"><button class="on" data-cnt="38 pages staged for import.">Handbook</button><button data-cnt="Tutorials added — 47 pages staged.">Tutorials</button><button data-cnt="API reference excluded — 38 pages remain.">API ref</button><button data-cnt="Changelogs excluded — 38 pages remain.">Changelogs</button></div>
+      </div>
+
+      <div class="comment c2" data-c="c2">
+        <header><div class="av" style="background:#b86b00">EM</div><b>Media handling</b><small>3 m</small></header>
+        <div class="body">22 images detected at <code>/docs/assets/</code>. They will be downloaded, deduplicated, and re-encoded.</div>
+        <div class="ctrls"><button class="on" data-cnt="Re-encode to WebP at quality 82, keep originals.">WebP</button><button data-cnt="Keep originals as-is. Bigger but loss-less.">As-is</button><button data-cnt="Strip EXIF and GPS metadata before upload.">Strip EXIF</button></div>
+      </div>
+
+      <div class="comment c3" data-c="c3">
+        <header><div class="av" style="background:#1e7a4f">GZ</div><b>URL treatment</b><small>2 m</small></header>
+        <div class="body">4 rewrite rules generated. Anchors preserve fragments; absolute github paths become handbook slugs.</div>
+        <div class="ctrls"><button class="on" data-cnt="Internal links rewritten to /handbook/ — external links kept verbatim.">Smart</button><button data-cnt="Every link including external rewritten to relative paths.">Aggressive</button><button data-cnt="No rewriting — keep all URLs as-is.">Off</button></div>
+      </div>
+
+      <div class="comment c4" data-c="c4">
+        <header><div class="av" style="background:#7a48b8">YR</div><b>Authors</b><small>1 m</small></header>
+        <div class="body">Map 3 GitHub handles to WP users. Unmapped commits will fall back to the job owner.</div>
+        <div class="ctrls"><button class="on" data-cnt="Existing WP users matched — 3 / 3 mapped.">Match by email</button><button data-cnt="Create new WP users for unmapped handles.">Create users</button></div>
+      </div>
+
+      <div class="comment resolved">
+        <header><div class="av" style="background:#6b6155">SY</div><b>Conflict scan</b><small>just now</small></header>
+        <div class="body">No slug collisions with existing handbook pages. Safe to publish as drafts.</div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+// Highlight ↔ margin link
+const comments=document.querySelectorAll(".comment[data-c]");
+const highlights=document.querySelectorAll(".page span.h");
+function link(c){
+  comments.forEach(x=>x.classList.toggle("on",x.dataset.c===c));
+  highlights.forEach(h=>h.classList.toggle("lit",h.dataset.c===c));
+}
+comments.forEach(c=>c.addEventListener("click",()=>link(c.dataset.c)));
+highlights.forEach(h=>h.addEventListener("click",()=>{link(h.dataset.c);document.querySelector('.comment[data-c="'+h.dataset.c+'"]').scrollIntoView({block:"nearest",behavior:"smooth"})}));
+// Feature controls inside each comment change body text
+document.querySelectorAll(".comment .ctrls").forEach(wrap=>{
+  wrap.querySelectorAll("button").forEach(b=>b.addEventListener("click",e=>{
+    e.stopPropagation();
+    wrap.querySelectorAll("button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on");
+    const body=wrap.parentElement.querySelector(".body");
+    if(b.dataset.cnt) body.textContent=b.dataset.cnt;
+  }));
+});
+
+// Run simulation
+const steps=[...document.querySelectorAll(".step")];
+const phaseNames={queued:"queued",reading:"reading source",preparing:"preparing content",urls:"URL treatment",media:"importing media",writing:"writing pages",complete:"complete"};
+const order=["queued","reading","preparing","urls","media","writing","complete"];
+const log=document.getElementById("log");
+const cur=document.getElementById("cur");
+const review=document.getElementById("review");
+review.addEventListener("click",()=>{
+  review.disabled=true;log.innerHTML="";steps.forEach(s=>s.classList.remove("done","now"));
+  comments.forEach(c=>c.classList.remove("on"));highlights.forEach(h=>h.classList.remove("lit"));
+  let i=0;const t=setInterval(()=>{
+    const k=order[i];
+    steps.forEach((s,idx)=>{s.classList.remove("now","done");if(idx<i)s.classList.add("done");else if(idx===i)s.classList.add("now")});
+    cur.textContent=phaseNames[k];
+    const li=document.createElement("li");li.textContent=phaseNames[k]+" · "+Math.round(i/6*100)+"%";log.appendChild(li);log.scrollTop=log.scrollHeight;
+    // Light up margin comments in sync
+    const cmap=["c1","c1","c1","c2","c3","c4","c4"];link(cmap[i]);
+    if(k==="complete"){
+      clearInterval(t);review.disabled=false;
+      steps.forEach(s=>{s.classList.remove("now");s.classList.add("done")});
+      // Mark unresolved comments resolved at end
+      document.querySelectorAll(".comment:not(.resolved)").forEach(c=>{c.classList.remove("on");c.classList.add("resolved")});
+      const done=document.createElement("li");done.innerHTML='<b style="color:var(--ok)">Imported 38 drafts, 22 media, 4 URL rules.</b>';log.appendChild(done);
+    }
+    i++;
+  },560);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>43 Spreadsheet · Universal Importer</title>
+<style>
+:root{--green:#0f6f3c;--ink:#1d1d1d;--rule:#d4d4d4;--head:#eef3f8;--sel:#1a73e8;--soft:#e7f0ff}
+*{box-sizing:border-box}
+html,body{margin:0;background:#fafafa;color:var(--ink);font:13px/1.45 "Segoe UI",ui-sans-serif,system-ui}
+button,input,select{font:inherit;color:inherit}
+.book{display:grid;grid-template-rows:32px auto auto 32px 1fr 26px;height:100vh;min-height:680px;background:#fff}
+.title{display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--green);color:#fff;font-weight:600;letter-spacing:.04em}
+.title .file{font-weight:400;opacity:.85}
+.title .spacer{flex:1}
+.title .badge{padding:2px 10px;border:1px solid rgba(255,255,255,.5);border-radius:999px;font-size:11px}
+.menu{display:flex;gap:0;padding:0 14px;border-bottom:1px solid var(--rule);background:#fff}
+.menu span{padding:6px 10px;color:#333;font-size:13px;cursor:default}
+.menu span.active{border-bottom:2px solid var(--green);color:var(--green);font-weight:600}
+.ribbon{display:flex;align-items:center;gap:14px;padding:8px 14px;background:#f5f7f9;border-bottom:1px solid var(--rule);overflow:auto}
+.group{display:flex;flex-direction:column;align-items:center;gap:3px;padding:0 8px;border-right:1px solid var(--rule);min-width:80px}
+.group .icons{display:flex;gap:4px}
+.group .lbl{font-size:11px;color:#666}
+.group button{padding:5px 8px;border:1px solid #cdd5db;background:#fff;border-radius:3px;cursor:pointer;font-weight:600}
+.group button.on{background:var(--soft);border-color:var(--sel);color:var(--sel)}
+.formula{display:grid;grid-template-columns:60px 24px 1fr auto;align-items:center;gap:6px;padding:5px 10px;border-bottom:1px solid var(--rule);background:#fff}
+.formula .ref{font:600 12px ui-monospace,monospace;background:#f5f7f9;border:1px solid var(--rule);padding:4px 8px;border-radius:3px;text-align:center}
+.formula .fx{font:italic 700 14px serif;color:#666}
+.formula input{padding:5px 8px;border:1px solid var(--rule);border-radius:3px;font:13px ui-monospace,monospace;background:#fff}
+.formula .start{padding:5px 14px;background:var(--green);color:#fff;border:1px solid var(--green);border-radius:3px;cursor:pointer;font-weight:700}
+.formula .start:disabled{opacity:.6}
+.tabs{display:flex;align-items:center;gap:0;border-bottom:1px solid var(--rule);background:#f5f7f9}
+.tabs button{padding:6px 14px;border:0;background:transparent;border-right:1px solid var(--rule);cursor:pointer}
+.tabs button.on{background:#fff;border-bottom:2px solid var(--green);color:var(--green);font-weight:700}
+.grid{overflow:auto;background:#fff}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{background:var(--head);position:sticky;top:0;border:1px solid var(--rule);padding:6px 8px;font-weight:600;color:#444;text-align:left}
+td{border:1px solid #eaeaea;padding:5px 8px;vertical-align:middle}
+td.idx{background:var(--head);text-align:center;font-weight:600;color:#666;width:38px}
+td.done{background:#eaf6ec;color:#0f6f3c}
+td.now{background:#fff6d4}
+td.url{font-family:ui-monospace,monospace;color:#1a73e8}
+.pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600}
+.pill.draft{background:#fef3c7;color:#92400e}.pill.publish{background:#dcfce7;color:#15803d}.pill.skip{background:#fee2e2;color:#991b1b}
+tr.now{outline:2px solid var(--sel);outline-offset:-2px}
+.status-bar{display:grid;grid-template-columns:auto auto 1fr auto auto;gap:14px;align-items:center;padding:0 14px;background:#f5f7f9;border-top:1px solid var(--rule);font-size:12px;color:#444}
+.status-bar .bar{height:8px;width:200px;background:#dcdcde;border-radius:999px;overflow:hidden}
+.status-bar .bar span{display:block;height:100%;width:0;background:var(--green);transition:width .3s}
+.fout{padding:4px 10px;background:#fff;border-left:3px solid var(--sel);font-style:italic;color:#444}
+@media(max-width:900px){.ribbon{flex-wrap:wrap}.group{border:0;min-width:0}}
+</style>
+</head>
+<body>
+<div class="book">
+  <div class="title"><strong>WP Import Workbook</strong><span class="file">— gutenberg-docs.csv</span><div class="spacer"></div><span class="badge">43 / 60 · v4</span></div>
+  <div class="menu"><span>File</span><span class="active">Import</span><span>Data</span><span>View</span><span>Tools</span><span>Help</span></div>
+  <div class="ribbon">
+    <div class="group"><div class="icons"><button class="on">Source</button></div><span class="lbl">Connect</span></div>
+    <div class="group"><div class="icons"><button class="on" data-c="Showing columns: title, type, media, URL change, status">Default</button><button data-c="Showing columns: title, alt text, accessibility, link integrity">A11y</button><button data-c="Showing columns: title, conflict, resolution, owner">Conflicts</button><button data-c="Showing columns: title, redirect from → to, http code">URL rules</button></div><span class="lbl">Lenses</span></div>
+    <div class="group"><div class="icons"><button>Filter ▾</button><button>Sort A→Z</button></div><span class="lbl">View</span></div>
+    <div class="group"><div class="icons"><button>Validate</button><button>Dry run</button></div><span class="lbl">Test</span></div>
+    <div class="group"><div class="icons"><button>?</button></div><span class="lbl">Help</span></div>
+  </div>
+  <div class="formula"><span class="ref">A1</span><span class="fx">ƒ𝑥</span><input value="=IMPORT_SOURCE(&quot;https://github.com/WordPress/gutenberg/tree/trunk/docs&quot;,{drafts:true})"><button class="start" id="go">▶ Run import</button></div>
+  <div class="tabs"><button class="on">Sheet1 · Pages</button><button>Sheet2 · Media</button><button>Sheet3 · URLs</button><button>+</button></div>
+  <div class="grid">
+    <table id="t">
+      <thead><tr><th></th><th>Title</th><th>Type</th><th>Media</th><th>URL change</th><th>Status</th><th>Phase</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="status-bar"><span>Ready · <b id="ph">idle</b></span><div class="bar"><span id="bf"></span></div><span class="fout" id="fout">Showing columns: title, type, media, URL change, status</span><span id="cnt">0 / 18</span><span>Sum: 18 rows · 22 media · 4 URL rules</span></div>
+</div>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+const titles=["What is WordPress","Setup guide","Block editor primer","Themes vs plugins","FSE preview","Site editor walkthrough","theme.json reference","Patterns gallery","Interactivity API","Performance notes","i18n localization","REST endpoints","SEO playbook","Accessibility audit","Multilingual strategy","Migration case","Hooks digest","FAQ"];
+const types=["doc","guide","tutorial","reference","beta","video","reference","gallery","tutorial","note","note","reference","guide","audit","guide","case","reference","support"];
+const media=[1,2,4,0,3,6,0,12,4,0,1,2,3,5,1,9,0,0];
+const url=["—","/setup → /docs/setup","—","/themes-vs-plugins → /docs/compare","—","—","—","/patterns → /docs/patterns","—","—","—","/api → /docs/api","—","—","—","—","—","—"];
+const stat=["draft","publish","draft","draft","draft","publish","publish","draft","draft","publish","draft","publish","publish","draft","draft","publish","publish","skip"];
+const body=document.getElementById("rows");
+titles.forEach((t,i)=>{
+  const tr=document.createElement("tr");tr.innerHTML=`<td class="idx">${i+1}</td><td>${t}</td><td>${types[i]}</td><td>${media[i]||"—"}</td><td class="url">${url[i]}</td><td><span class="pill ${stat[i]}">${stat[i]}</span></td><td class="phase">—</td>`;body.appendChild(tr);
+});
+document.querySelectorAll(".group .icons button[data-c]").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".group:nth-child(2) button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");document.getElementById("fout").textContent=b.dataset.c;
+}));
+document.getElementById("go").addEventListener("click",e=>{
+  e.preventDefault();const go=document.getElementById("go");go.disabled=true;
+  const rows=document.querySelectorAll("#rows tr");rows.forEach(r=>{r.classList.remove("now");r.querySelector(".phase").textContent="—";r.querySelector(".phase").className="phase";});
+  let i=0;const t=setInterval(()=>{
+    const ph=phases[i],pct=Math.round(i/(phases.length-1)*100);
+    document.getElementById("ph").textContent=ph;document.getElementById("bf").style.width=pct+"%";document.getElementById("cnt").textContent=Math.min(18,Math.round(pct*.18))+" / 18";
+    const upto=Math.floor(rows.length*pct/100);
+    rows.forEach((r,idx)=>{r.classList.remove("now");const cell=r.querySelector(".phase");cell.className="phase";if(idx<upto){cell.classList.add("done");cell.textContent="written"}else if(idx===upto){cell.classList.add("now");cell.textContent=ph;r.classList.add("now")}});
+    if(ph==="complete"){clearInterval(t);go.disabled=false;document.getElementById("ph").textContent="complete · 18 rows imported"}
+    i++;
+  },560);
+});
+</script>
+</body>
+</html>

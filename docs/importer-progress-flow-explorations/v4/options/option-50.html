@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>50 Media Wall · Universal Importer</title>
+<style>
+:root{--bg:#0a0a0c;--panel:#15151a;--panel2:#1c1c24;--ink:#f5f5f7;--mute:#8e8e98;--accent:#ff3d7f;--accent2:#ffd54a;--ok:#3ddc97;--warn:#ff9d3a;--rule:#26262e}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","SF Pro Text",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit;border:0;background:transparent}
+.app{display:grid;grid-template-rows:auto auto 1fr;min-height:100vh}
+/* === Hero source bar === */
+.hero{padding:20px 28px 14px;background:radial-gradient(ellipse at 30% 0%,#2a1730 0%,transparent 50%),radial-gradient(ellipse at 80% 0%,#08221f 0%,transparent 50%),var(--bg);border-bottom:1px solid var(--rule)}
+.hero .row1{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.hero .brand{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.01em;font-size:18px}
+.hero .brand .gem{width:26px;height:26px;background:conic-gradient(from 0deg,var(--accent),var(--accent2),var(--ok),var(--accent));border-radius:6px;transform:rotate(45deg)}
+.hero .tag{padding:4px 10px;border:1px solid var(--rule);border-radius:999px;font-size:11.5px;color:var(--mute);background:rgba(255,255,255,.03)}
+.hero h1{margin:6px 0 4px;font-size:30px;letter-spacing:-.02em;font-weight:800}
+.hero h1 .grad{background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.hero p{margin:0;color:var(--mute);max-width:60ch}
+.srcbar{margin-top:18px;display:grid;grid-template-columns:auto 1fr auto auto auto;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--rule);border-radius:14px;padding:8px 8px 8px 16px;box-shadow:0 12px 40px rgba(255,61,127,.08)}
+.srcbar .icon{font-size:18px}
+.srcbar input{padding:11px 0;font-family:ui-monospace,monospace;font-size:13px;background:transparent;color:var(--ink)}
+.srcbar input:focus{outline:0}
+.srcbar select{padding:8px 12px;background:var(--panel2);border:1px solid var(--rule);border-radius:8px;font-size:12.5px}
+.srcbar .scan{padding:9px 14px;background:var(--panel2);border:1px solid var(--rule);border-radius:8px;cursor:pointer;font-size:12.5px}
+.srcbar .scan:hover{border-color:var(--accent)}
+.srcbar .go{padding:10px 18px;background:linear-gradient(135deg,var(--accent),#ff7a3a);color:#fff;border-radius:10px;cursor:pointer;font-weight:800;letter-spacing:.04em;box-shadow:0 8px 20px rgba(255,61,127,.4)}
+.srcbar .go:disabled{opacity:.6;cursor:wait}
+/* === Filter ribbon === */
+.filters{padding:12px 28px;border-bottom:1px solid var(--rule);background:#0e0e12;display:flex;gap:8px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:3;backdrop-filter:blur(6px)}
+.filters .chip{padding:7px 13px;border:1px solid var(--rule);border-radius:999px;background:var(--panel);font-size:12.5px;cursor:pointer;color:var(--ink);font-weight:600;display:flex;gap:6px;align-items:center;transition:all .2s}
+.filters .chip:hover{border-color:var(--accent)}
+.filters .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.filters .chip small{padding:1px 6px;background:rgba(255,255,255,.18);border-radius:999px;font-size:10.5px;font-weight:700}
+.filters .chip.on small{background:rgba(0,0,0,.25)}
+.filters .stat{margin-left:auto;display:flex;gap:14px;font-size:12px;color:var(--mute);font-family:ui-monospace,monospace}
+.filters .stat b{color:var(--ink)}
+.hint{padding:8px 28px;color:var(--mute);font-size:12.5px;background:#0e0e12;border-bottom:1px solid var(--rule)}
+.hint b{color:var(--accent2)}
+/* === Masonry wall === */
+.wall{padding:18px 22px 60px;column-count:6;column-gap:10px}
+.tile{break-inside:avoid;margin:0 0 10px;border-radius:12px;overflow:hidden;background:#1a1a22;border:1px solid var(--rule);position:relative;cursor:pointer;transition:transform .25s,box-shadow .25s}
+.tile:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(0,0,0,.4)}
+.tile .img{display:block;width:100%;background:linear-gradient(135deg,var(--g1,#5a4a7a),var(--g2,#2a3a5a))}
+.tile.t1 .img{aspect-ratio:1/1.4}
+.tile.t2 .img{aspect-ratio:1/1}
+.tile.t3 .img{aspect-ratio:4/3}
+.tile.t4 .img{aspect-ratio:1/1.8}
+.tile.t5 .img{aspect-ratio:3/4}
+.tile .tag{position:absolute;top:8px;left:8px;padding:3px 8px;border-radius:999px;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.tile .size{position:absolute;bottom:8px;right:8px;padding:3px 8px;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);font-size:10px;font-family:ui-monospace,monospace}
+.tile .info{padding:9px 11px 11px;font-size:12px}
+.tile .info b{display:block;margin-bottom:2px;font-weight:600;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
+.tile .info small{color:var(--mute);font-size:11px}
+/* Run states */
+.tile .status{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:6px;background:rgba(0,0,0,.55);backdrop-filter:blur(2px);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.tile.q .status{display:flex;color:var(--mute)}
+.tile.r .status{display:flex;color:var(--accent2)}
+.tile.p .status{display:flex;color:var(--warn)}
+.tile.w .status{display:flex;color:#fff;background:rgba(255,61,127,.25)}
+.tile.done .status{display:flex;color:var(--ok)}
+.tile.done{border-color:var(--ok)}
+.tile .ring{width:36px;height:36px;border-radius:50%;border:3px solid transparent;border-top-color:currentColor;animation:spin 1s linear infinite}
+.tile.done .ring{border:0;background:var(--ok);color:#0a0a0c;display:grid;place-items:center;font-size:20px}
+.tile.done .ring::before{content:"✓";color:#0a0a0c}
+.tile.q .ring{border-color:var(--rule);border-top-color:var(--mute);animation:none}
+.tile.q .ring::before{content:"⏳";color:var(--mute);font-size:14px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.tile.hide{display:none}
+/* Run banner */
+.runner{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(15,15,20,.94);border:1px solid var(--rule);border-radius:16px;padding:10px 14px;display:flex;gap:14px;align-items:center;backdrop-filter:blur(10px);box-shadow:0 10px 30px rgba(0,0,0,.45);min-width:520px;z-index:10}
+.runner .pulse{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:pulse 1.5s infinite}
+.runner.idle .pulse{background:var(--mute);animation:none}
+.runner.done .pulse{background:var(--ok);animation:none}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,61,127,.6)}70%{box-shadow:0 0 0 12px rgba(255,61,127,0)}100%{box-shadow:0 0 0 0 rgba(255,61,127,0)}}
+.runner b{font-size:12.5px}
+.runner .trk{flex:1;height:6px;background:#26262e;border-radius:99px;overflow:hidden;min-width:160px}
+.runner .trk i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .3s}
+.runner .pct{font-family:ui-monospace,monospace;font-size:12px;color:var(--mute);min-width:42px;text-align:right}
+.runner .pname{font-family:ui-monospace,monospace;font-size:11.5px;color:var(--mute)}
+@media(max-width:1300px){.wall{column-count:5}}
+@media(max-width:1100px){.wall{column-count:4}.srcbar{grid-template-columns:1fr;text-align:left}.runner{min-width:auto;width:90%}}
+@media(max-width:760px){.wall{column-count:2}.hero h1{font-size:22px}.filters .stat{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="hero">
+    <div class="row1">
+      <div class="brand"><span class="gem"></span>Universal Importer</div>
+      <span class="tag">v4 · 50 / 60 · Media Wall</span>
+    </div>
+    <h1>Bring in the <span class="grad">whole gallery</span> before you publish a line.</h1>
+    <p>Drop a source. We&rsquo;ll show you every image, video and embed first — pick what stays, then watch them flow into your library.</p>
+    <div class="srcbar">
+      <span class="icon">🔗</span>
+      <input id="src" value="https://github.com/WordPress/gutenberg/tree/trunk/docs">
+      <select><option>Auto-detect</option><option>GitHub repo</option><option>WXR XML</option><option>RSS</option><option>Sitemap</option></select>
+      <button class="scan">Re-scan</button>
+      <button class="go" id="run">Review &amp; import 22 →</button>
+    </div>
+  </header>
+
+  <nav class="filters" id="filters">
+    <span class="chip on" data-f="all">All <small>22</small></span>
+    <span class="chip" data-f="hero">Hero <small>4</small></span>
+    <span class="chip" data-f="inline">Inline <small>10</small></span>
+    <span class="chip" data-f="gallery">Gallery <small>5</small></span>
+    <span class="chip" data-f="featured">Featured <small>3</small></span>
+    <span class="chip" data-f="vid">Video <small>2</small></span>
+    <span class="chip" data-f="dup">Duplicates <small>1</small></span>
+    <span class="stat"><span>filtered <b id="vis">22</b></span><span>total <b>22</b></span><span>size <b>14.6 MB</b></span></span>
+  </nav>
+  <div class="hint" id="hint"><b>All media</b> · 22 items. Click a chip to scope the wall, then click <b>Review &amp; import</b> to begin.</div>
+
+  <main class="wall" id="wall"></main>
+</div>
+
+<div class="runner idle" id="runner">
+  <span class="pulse"></span>
+  <b><span id="pname">Idle</span></b>
+  <span class="trk"><i id="trk"></i></span>
+  <span class="pct" id="pct">0%</span>
+  <span class="pname" id="cnt">0 / 22 ready</span>
+</div>
+
+<script>
+// Build 22 media tiles
+const items=[
+  {n:"hero-overview.png",sz:"1.2 MB · 2400×1200",cat:"hero",t:1,g1:"#ff5fa2",g2:"#7a2bff"},
+  {n:"hero-fse.webp",sz:"880 KB · 2200×1100",cat:"hero",t:3,g1:"#ff9d3a",g2:"#c81d6a"},
+  {n:"hero-patterns.png",sz:"1.6 MB · 2400×1400",cat:"hero",t:1,g1:"#3ddc97",g2:"#0e6b3f"},
+  {n:"hero-themejson.svg",sz:"24 KB",cat:"hero",t:2,g1:"#4ac1ff",g2:"#1d3580"},
+  {n:"inline-1.png",sz:"180 KB · 800×600",cat:"inline",t:2,g1:"#7a5aff",g2:"#2a2050"},
+  {n:"inline-2.png",sz:"260 KB · 1024×768",cat:"inline",t:3,g1:"#ffd54a",g2:"#b86b00"},
+  {n:"inline-3.jpg",sz:"460 KB · 1200×900",cat:"inline",t:5,g1:"#ff3d7f",g2:"#480420"},
+  {n:"inline-4.png",sz:"320 KB · 1100×700",cat:"inline",t:3,g1:"#4ac1ff",g2:"#0c3e83"},
+  {n:"inline-5.png",sz:"240 KB",cat:"inline",t:2,g1:"#9b59ff",g2:"#2c0e5a"},
+  {n:"inline-6.svg",sz:"6 KB",cat:"inline",t:2,g1:"#3ddc97",g2:"#0b2f23"},
+  {n:"inline-7.jpg",sz:"720 KB",cat:"inline",t:1,g1:"#ff7a3a",g2:"#5a1b08"},
+  {n:"inline-8.png",sz:"310 KB",cat:"inline",t:3,g1:"#ffd54a",g2:"#7a4400"},
+  {n:"inline-9.png",sz:"190 KB",cat:"inline",t:2,g1:"#ff3d7f",g2:"#2a081a"},
+  {n:"inline-10.gif",sz:"840 KB",cat:"inline",t:5,g1:"#7a5aff",g2:"#170a3a"},
+  {n:"gallery-1.png",sz:"640 KB",cat:"gallery",t:4,g1:"#3ddc97",g2:"#082a1a"},
+  {n:"gallery-2.png",sz:"700 KB",cat:"gallery",t:3,g1:"#ff9d3a",g2:"#3a1b00"},
+  {n:"gallery-3.png",sz:"610 KB",cat:"gallery",t:5,g1:"#4ac1ff",g2:"#0a1d3a"},
+  {n:"gallery-4.png",sz:"580 KB",cat:"gallery",t:2,g1:"#ff3d7f",g2:"#3a081c"},
+  {n:"gallery-5.png",sz:"650 KB",cat:"gallery",t:3,g1:"#9b59ff",g2:"#170a3a"},
+  {n:"featured-1.jpg",sz:"1.4 MB",cat:"featured",t:1,g1:"#ffd54a",g2:"#7a4400"},
+  {n:"featured-2.jpg",sz:"1.1 MB",cat:"featured",t:4,g1:"#3ddc97",g2:"#082a1a"},
+  {n:"featured-3.jpg",sz:"1.3 MB",cat:"featured",t:3,g1:"#ff7a3a",g2:"#3a1208"}
+];
+// Video & duplicate flags (extras the chips reveal)
+items.push({n:"intro-demo.mp4",sz:"3.2 MB · 720p",cat:"vid",t:3,g1:"#222",g2:"#000",video:true});
+items.push({n:"site-editor.mp4",sz:"4.6 MB · 720p",cat:"vid",t:4,g1:"#0e6b3f",g2:"#000",video:true});
+items.push({n:"hero-overview-copy.png",sz:"1.2 MB · DUP",cat:"dup",t:1,g1:"#ff5fa2",g2:"#7a2bff",dup:true});
+
+const wall=document.getElementById("wall");
+items.forEach((it,i)=>{
+  const d=document.createElement("article");
+  d.className="tile t"+it.t+" q "+(it.cat==="vid"?"vid ":"")+(it.dup?"dup ":"")+it.cat;
+  d.dataset.cat=it.cat;d.dataset.i=i;
+  d.style.setProperty("--g1",it.g1);d.style.setProperty("--g2",it.g2);
+  d.innerHTML=`
+    <div class="img"></div>
+    <span class="tag">${it.cat}${it.video?" · ▶":""}${it.dup?" · DUP":""}</span>
+    <span class="size">${it.sz}</span>
+    <div class="info"><b>${it.n}</b><small>imported as media · WebP@82</small></div>
+    <div class="status"><span class="ring"></span><span class="lab">queued</span></div>`;
+  wall.appendChild(d);
+});
+
+// Filters
+const tiles=[...document.querySelectorAll(".tile")];
+document.querySelectorAll("#filters .chip").forEach(c=>c.addEventListener("click",()=>{
+  document.querySelectorAll("#filters .chip").forEach(x=>x.classList.remove("on"));
+  c.classList.add("on");const f=c.dataset.f;
+  let visible=0;
+  tiles.forEach(t=>{const ok=(f==="all"||t.dataset.cat===f);t.classList.toggle("hide",!ok);if(ok)visible++});
+  document.getElementById("vis").textContent=visible;
+  const map={all:"All media · 22 items.",hero:"Hero images — used as featured images on landing pages.",inline:"Inline images — embedded inside post bodies.",gallery:"Galleries — exported as <code>core/gallery</code> blocks with linked images.",featured:"Featured images — assigned as post thumbnails.",vid:"Videos — uploaded then embedded with the <code>core/video</code> block.",dup:"Duplicates — one perceptual-hash match. Will be skipped."};
+  document.getElementById("hint").innerHTML="<b>"+c.textContent.split(" ")[0]+"</b> · "+map[f];
+}));
+
+// Run simulation — waves through every tile
+const phases=[{k:"queued",l:"queued",cls:"q"},{k:"reading",l:"reading source",cls:"r"},{k:"preparing",l:"preparing content",cls:"p"},{k:"urls",l:"URL treatment",cls:"p"},{k:"media",l:"importing media",cls:"w"},{k:"writing",l:"writing pages",cls:"w"},{k:"complete",l:"complete",cls:"done"}];
+const runner=document.getElementById("runner"),trk=document.getElementById("trk"),pct=document.getElementById("pct"),pname=document.getElementById("pname"),cnt=document.getElementById("cnt");
+document.getElementById("run").addEventListener("click",()=>{
+  const btn=document.getElementById("run");btn.disabled=true;runner.classList.remove("idle","done");
+  tiles.forEach(t=>{t.classList.remove("r","p","w","done");t.classList.add("q");const lab=t.querySelector(".lab");if(lab)lab.textContent="queued"});
+  let i=0;const t=setInterval(()=>{
+    const p=phases[i];pname.textContent=p.l;const pc=Math.round(i/(phases.length-1)*100);pct.textContent=pc+"%";trk.style.width=pc+"%";
+    const cut=Math.floor(tiles.length*pc/100);
+    tiles.forEach((tl,idx)=>{
+      tl.classList.remove("q","r","p","w","done");
+      if(idx<cut-2)tl.classList.add("done");
+      else if(idx<cut)tl.classList.add(p.cls);
+      else tl.classList.add("q");
+      const lab=tl.querySelector(".lab");
+      if(lab) lab.textContent=tl.classList.contains("done")?"imported":p.l;
+    });
+    cnt.textContent=Math.min(tiles.length,cut)+" / "+tiles.length+" ready";
+    if(p.k==="complete"){
+      clearInterval(t);btn.disabled=false;runner.classList.add("done");
+      tiles.forEach(tl=>{tl.classList.remove("q","r","p","w");tl.classList.add("done");const lab=tl.querySelector(".lab");if(lab)lab.textContent="imported"});
+      cnt.textContent=tiles.length+" / "+tiles.length+" imported";pname.textContent="Complete · 22 media in library, 38 drafts, 4 URL rules";
+    }
+    i++;
+  },560);
+});
+</script>
+</body>
+</html>

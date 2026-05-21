@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>42 Timeline Wall · Universal Importer</title>
+<style>
+:root{--bg:#fbfafd;--ink:#181520;--accent:#5d3ad6;--soft:#ece4ff;--rail:#d6d2e3;--ok:#0a8a4a;--warn:#d97706}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 "Inter",ui-sans-serif,system-ui}
+button,input,select{font:inherit;color:inherit}
+.app{display:grid;grid-template-rows:64px auto 1fr auto;height:100vh;min-height:680px}
+.top{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;padding:0 20px;background:#fff;border-bottom:1px solid var(--rail)}
+.logo{font-weight:900;letter-spacing:.18em}
+.logo span{color:var(--accent)}
+.search{max-width:520px;width:100%;justify-self:center;display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;border:1px solid var(--rail);border-radius:999px;padding:6px 12px;background:#faf8ff}
+.search input{border:0;background:transparent;outline:none}
+.search .lbl{color:#6b6580;font-size:12px}
+.run-btn{padding:9px 16px;background:var(--accent);color:#fff;border:0;border-radius:999px;font-weight:700;cursor:pointer;display:inline-flex;gap:8px;align-items:center}
+.run-btn:disabled{opacity:.7;cursor:wait}
+.lens{display:flex;gap:6px;padding:10px 20px;border-bottom:1px solid var(--rail);background:#fff;overflow:auto}
+.lens button{padding:6px 12px;border:1px solid var(--rail);border-radius:999px;background:#fff;cursor:pointer;font-weight:600;color:#6b6580}
+.lens button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.wall{position:relative;overflow:auto;padding:30px 30px 50px;background:repeating-linear-gradient(180deg,transparent 0,transparent 88px,#eeebf5 88px,#eeebf5 89px)}
+.wall h2{margin:0 0 4px;font-size:13px;letter-spacing:.18em;color:#6b6580;text-transform:uppercase}
+.wall p.lead{margin:0 0 18px;color:#4a4760;max-width:60ch}
+.ribbon{position:relative;display:grid;grid-template-rows:30px 8px;margin:30px 0 20px}
+.ticks{display:grid;grid-template-columns:repeat(12,1fr);font-size:11px;color:#6b6580;letter-spacing:.05em}
+.ticks span{border-left:1px dashed var(--rail);padding-left:6px}
+.rail{position:relative;height:8px;background:var(--rail);border-radius:999px;overflow:hidden}
+.rail .play{position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,var(--accent),var(--ok));width:0;transition:width .3s}
+.head{position:absolute;top:-7px;width:22px;height:22px;border-radius:50%;border:3px solid #fff;background:var(--accent);box-shadow:0 2px 8px rgba(93,58,214,.4);transform:translateX(-50%);transition:left .3s}
+.events{display:grid;grid-template-columns:repeat(12,1fr);gap:6px 4px;align-items:end;min-height:200px}
+.event{background:#fff;border:1px solid var(--rail);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.35;box-shadow:0 1px 0 var(--rail);transition:all .2s}
+.event strong{display:block;font-size:13px;margin-bottom:2px}
+.event.dim{opacity:.55;filter:saturate(.5)}
+.event.done{border-color:var(--ok);background:#ecfdf3}
+.event.now{border-color:var(--accent);background:var(--soft);transform:translateY(-3px);box-shadow:0 4px 14px rgba(93,58,214,.18)}
+.row{margin-top:12px;display:grid;grid-template-columns:140px 1fr;gap:14px;align-items:start}
+.row .label{font-weight:700;color:#6b6580;letter-spacing:.08em;text-transform:uppercase;font-size:11px;padding-top:10px}
+.foot{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;padding:14px 20px;border-top:1px solid var(--rail);background:#fff;align-items:center}
+.foot .status{color:#6b6580;font-size:13px}
+.foot .status b{color:var(--ink)}
+.foot .summary{font-size:12.5px;color:#4a4760;justify-self:end;max-width:32ch;text-align:right}
+.fout{font-size:12px;color:#4a4760;background:var(--soft);padding:6px 10px;border-radius:6px}
+@media(max-width:900px){.events{grid-template-columns:repeat(4,1fr)}.row{grid-template-columns:1fr}.search{justify-self:stretch}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="logo">WP<span>·</span>IMPORTER<span>·</span>TIMELINE</div>
+    <div class="search"><span class="lbl">SOURCE</span><input value="https://blog.gutenberg.org/feed.xml"><button class="run-btn" id="go">▶ Start &amp; review</button></div>
+    <div class="fout" id="fout">Lens: Chronology — events ordered by publish date.</div>
+  </header>
+  <nav class="lens">
+    <button class="on" data-c="Lens: Chronology — events ordered by publish date.">Chronology</button>
+    <button data-c="Lens: Authors — events grouped by contributor lanes.">Authors</button>
+    <button data-c="Lens: Media — image/video items only on the wall.">Media</button>
+    <button data-c="Lens: URL changes — old → new mappings on the wall.">URL changes</button>
+    <button data-c="Lens: Conflicts — only conflicting events surfaced.">Conflicts</button>
+    <button data-c="Lens: Drafts — items that will land as drafts only.">Drafts only</button>
+  </nav>
+  <section class="wall">
+    <h2>Source timeline</h2>
+    <p class="lead">A scrubbable wall of every post the source contains. Pick a lens to refilter the wall, then press <b>Start</b> to import in chronological order. The play-head moves as the run progresses.</p>
+
+    <div class="ribbon">
+      <div class="ticks"><span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span><span>Sep</span><span>Oct</span><span>Nov</span><span>Dec</span></div>
+      <div class="rail"><div class="play" id="play"></div><div class="head" id="head" style="left:0%"></div></div>
+    </div>
+
+    <div class="row">
+      <div class="label">Q1 · founding</div>
+      <div class="events" id="row1">
+        <div class="event"><strong>What is WP</strong>Intro · 1 image</div>
+        <div class="event" style="grid-column:span 2"><strong>Block Editor primer</strong>Long-form · 4 images</div>
+        <div class="event"><strong>Setup guide</strong>How-to</div>
+        <div class="event"><strong>Glossary v1</strong>Reference</div>
+        <div class="event" style="grid-column:span 2"><strong>Themes vs. plugins</strong>Comparison</div>
+        <div class="event"><strong>Roadmap</strong>Plans</div>
+        <div class="event"><strong>FAQ</strong>Support</div>
+        <div class="event"><strong>FSE preview</strong>Beta</div>
+        <div class="event"><strong>Patterns</strong>Showcase</div>
+        <div class="event"><strong>Block API</strong>Reference</div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="label">Q2 · growth</div>
+      <div class="events" id="row2">
+        <div class="event" style="grid-column:span 2"><strong>Site editor walkthrough</strong>Video + 6 images</div>
+        <div class="event"><strong>theme.json deep</strong>Reference</div>
+        <div class="event"><strong>Patterns II</strong>Gallery</div>
+        <div class="event"><strong>Interactivity API</strong>Long-form</div>
+        <div class="event"><strong>Performance</strong>Benchmarks</div>
+        <div class="event"><strong>i18n notes</strong>Localization</div>
+        <div class="event" style="grid-column:span 3"><strong>Block development tutorial</strong>Multi-part · 12 images</div>
+        <div class="event"><strong>Plugin API</strong>Reference</div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="label">Q3 · scale</div>
+      <div class="events" id="row3">
+        <div class="event"><strong>Schedule</strong>Editorial</div>
+        <div class="event"><strong>Patterns III</strong>Gallery</div>
+        <div class="event" style="grid-column:span 2"><strong>WP REST endpoints survey</strong>Long-form · diagrams</div>
+        <div class="event"><strong>SEO playbook</strong>Guide</div>
+        <div class="event"><strong>Accessibility</strong>Audit notes</div>
+        <div class="event"><strong>Multilingual</strong>Strategy</div>
+        <div class="event" style="grid-column:span 2"><strong>Migration case study</strong>Field report · 9 images</div>
+        <div class="event"><strong>Q3 retro</strong>Editorial</div>
+        <div class="event"><strong>Hooks digest</strong>Reference</div>
+      </div>
+    </div>
+  </section>
+  <footer class="foot">
+    <div class="status">Phase <b id="ph">awaiting start</b> · <span id="cnt">0/64</span> · lens <b id="lns">Chronology</b></div>
+    <div class="status"><button class="run-btn" id="go2" style="background:#fff;color:var(--accent);border:1px solid var(--accent)">Replay last run</button></div>
+    <div class="summary" id="res">No run yet. Press start above.</div>
+  </footer>
+</div>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+const events=[...document.querySelectorAll(".event")];
+document.querySelectorAll(".lens button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".lens button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");document.getElementById("fout").textContent=b.dataset.c;
+  document.getElementById("lns").textContent=b.textContent;
+  events.forEach(ev=>ev.classList.toggle("dim",Math.random()<.35));
+}));
+function run(){
+  const go=document.getElementById("go"),go2=document.getElementById("go2");
+  go.disabled=go2.disabled=true;
+  const play=document.getElementById("play"),head=document.getElementById("head"),ph=document.getElementById("ph"),cnt=document.getElementById("cnt"),res=document.getElementById("res");
+  events.forEach(e=>e.classList.remove("done","now","dim"));
+  let i=0;const t=setInterval(()=>{
+    const phase=phases[i],pct=Math.round(i/(phases.length-1)*100);
+    play.style.width=pct+"%";head.style.left=pct+"%";ph.textContent=phase;cnt.textContent=Math.min(64,Math.round(pct*.64))+"/64";
+    const upto=Math.floor(events.length*pct/100);
+    events.forEach((ev,idx)=>{ev.classList.remove("now");if(idx<upto)ev.classList.add("done");else if(idx===upto)ev.classList.add("now")});
+    if(phase==="complete"){clearInterval(t);go.disabled=go2.disabled=false;res.innerHTML="<b>Complete</b> — 38 drafts in chronological order. 22 media items. 4 URL rules. 2 conflicts queued for review.";}
+    i++;
+  },560);
+}
+document.getElementById("go").addEventListener("click",e=>{e.preventDefault();run()});
+document.getElementById("go2").addEventListener("click",e=>{e.preventDefault();run()});
+</script>
+</body>
+</html>

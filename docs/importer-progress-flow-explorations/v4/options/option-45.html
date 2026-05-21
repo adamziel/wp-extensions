@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>45 Dashboard Cockpit · Universal Importer</title>
+<style>
+:root{--bg:#070b13;--card:#0f1626;--ink:#d8e2f4;--accent:#22d3ee;--warn:#fbbf24;--ok:#34d399;--bad:#f87171;--muted:#67718a;--rule:#1a2438;--glow:0 0 0 1px rgba(34,211,238,.25),0 8px 30px rgba(34,211,238,.08)}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 "JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;background-image:linear-gradient(rgba(34,211,238,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(34,211,238,.04) 1px,transparent 1px);background-size:48px 48px}
+button,input{font:inherit;color:inherit}
+.cockpit{display:grid;grid-template-rows:48px 1fr;height:100vh;min-height:680px}
+.hud{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:18px;padding:0 18px;border-bottom:1px solid var(--rule);background:#0a1120}
+.hud .ident{font-weight:700;letter-spacing:.24em;color:var(--accent)}
+.hud .ident b{color:var(--ink)}
+.hud .meta{display:flex;gap:18px;color:var(--muted);font-size:11px;letter-spacing:.18em;text-transform:uppercase;justify-content:center}
+.hud .meta b{color:var(--ok);margin-right:6px}
+.hud .badge{padding:4px 10px;border:1px solid var(--accent);color:var(--accent);border-radius:4px;font-size:11px;letter-spacing:.22em}
+.body{display:grid;grid-template-columns:repeat(12,1fr);grid-template-rows:repeat(6,1fr);gap:14px;padding:14px}
+.tile{background:var(--card);border:1px solid var(--rule);border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:8px;position:relative;overflow:hidden}
+.tile h3{margin:0;font-size:11px;color:var(--muted);letter-spacing:.18em;text-transform:uppercase}
+.tile .v{font:700 28px/1 "JetBrains Mono",ui-monospace;color:var(--accent)}
+.tile .delta{color:var(--ok);font-size:11px}
+.span4{grid-column:span 4}.span6{grid-column:span 6}.span3{grid-column:span 3}.span8{grid-column:span 8}.span12{grid-column:span 12}
+.r2{grid-row:span 2}.r3{grid-row:span 3}
+.dial{position:relative;width:140px;height:140px;justify-self:center}
+.dial svg{transform:rotate(-90deg)}
+.dial .label{position:absolute;inset:0;display:grid;place-items:center;text-align:center}
+.dial .label b{display:block;font-size:24px;color:var(--ink)}
+.dial .label span{font-size:10px;color:var(--muted);letter-spacing:.18em}
+.input-row{display:grid;grid-template-columns:90px 1fr auto;gap:8px;align-items:center}
+.input-row label{color:var(--muted);font-size:11px;letter-spacing:.18em}
+.input-row input{padding:8px 10px;border:1px solid var(--rule);border-radius:4px;background:#08101e;color:var(--ink)}
+.input-row .browse{padding:8px 12px;border:1px solid var(--rule);background:#08101e;color:var(--accent);border-radius:4px;cursor:pointer}
+.go{margin-top:8px;width:100%;padding:14px;background:var(--accent);color:#001016;border:0;border-radius:4px;font-weight:900;letter-spacing:.22em;cursor:pointer;font-size:13px;text-transform:uppercase;box-shadow:var(--glow)}
+.go:disabled{opacity:.6}
+.modes{display:flex;flex-wrap:wrap;gap:6px}
+.modes button{padding:6px 10px;border:1px solid var(--rule);background:transparent;color:var(--muted);border-radius:3px;cursor:pointer;font-size:11px;letter-spacing:.12em}
+.modes button.on{border-color:var(--accent);color:var(--accent);background:rgba(34,211,238,.08)}
+.fout{padding:8px;border-left:2px solid var(--accent);background:rgba(34,211,238,.05);font-size:11.5px;color:#bcd}
+.spark{height:60px;display:flex;align-items:flex-end;gap:3px}
+.spark span{flex:1;background:linear-gradient(180deg,var(--accent),#2563eb);border-radius:1px;transition:height .3s}
+.log{font-size:11px;color:#a4b1cb;max-height:100%;overflow:auto;padding-right:4px}
+.log li{list-style:none;display:grid;grid-template-columns:64px 1fr;gap:8px;padding:2px 0;border-bottom:1px dashed var(--rule)}
+.log li time{color:var(--accent)}
+.tick{font-size:10px;letter-spacing:.2em;color:var(--muted)}
+.bigbar{height:18px;border:1px solid var(--rule);background:#08101e;border-radius:2px;overflow:hidden;position:relative}
+.bigbar span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--ok));transition:width .3s}
+.bigbar::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent 0,transparent 9px,rgba(0,0,0,.4) 10px,transparent 11px);background-size:10px 100%}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:4px}
+.kpis .k{background:#08101e;border:1px solid var(--rule);padding:8px;border-radius:4px;text-align:center}
+.kpis .k b{display:block;font-size:18px;color:var(--accent)}
+.kpis .k span{font-size:10px;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
+@media(max-width:1100px){.body{grid-template-columns:repeat(2,1fr);grid-auto-rows:auto;grid-template-rows:auto}.span4,.span6,.span3,.span8,.span12,.r2,.r3{grid-column:auto;grid-row:auto}}
+</style>
+</head>
+<body>
+<div class="cockpit">
+  <header class="hud">
+    <div class="ident"><b>WP-IMPORTER</b> · COCKPIT v4</div>
+    <div class="meta"><span><b>ONLINE</b>RUNNER</span><span><b>OK</b>SOURCE</span><span><b>READY</b>QUEUE</span><span>UTC 09:41:22</span></div>
+    <span class="badge">45 / 60</span>
+  </header>
+  <section class="body">
+    <div class="tile span4 r3">
+      <h3>Source · primary input</h3>
+      <div class="input-row"><label>URL</label><input value="https://github.com/WordPress/gutenberg/tree/trunk/docs"><button class="browse">Browse</button></div>
+      <div class="input-row"><label>Auth</label><input value="github-pat-…(stored)"><button class="browse">Test</button></div>
+      <h3>Run modes</h3>
+      <div class="modes">
+        <button class="on" data-c="Drafts mode — pages land unpublished for review.">Drafts</button>
+        <button data-c="Publish mode — pages go live as they finish writing.">Publish</button>
+        <button data-c="Schedule mode — pages get future-dated publish times.">Schedule</button>
+        <button data-c="Dry run — no DB writes, just a manifest.">Dry run</button>
+      </div>
+      <h3>Features</h3>
+      <div class="modes">
+        <button class="on" data-c="Media import on. Will fetch and reattach 22 assets.">Media</button>
+        <button data-c="URL rewriting on. Old → new rules tested before run.">URLs</button>
+        <button data-c="Author mapping on. 4 contributors mapped to WP users.">Authors</button>
+        <button data-c="Conflict detection on. 2 candidates flagged for review.">Conflicts</button>
+        <button data-c="Diff mode on. Side-by-side comparison after run.">Diffs</button>
+      </div>
+      <div class="fout" id="fout">Drafts mode — pages land unpublished for review.</div>
+      <button class="go" id="go">▶ Begin import sequence</button>
+    </div>
+
+    <div class="tile span2 r2"><h3>Throughput</h3><div class="v" id="thr">0.0</div><div class="delta">pages / sec</div><div class="spark" id="spark"></div></div>
+    <div class="tile span2 r2"><h3>Queue depth</h3><div class="v" id="qd">0</div><div class="delta">of 64 expected</div></div>
+    <div class="tile span4 r2"><h3>Runner</h3><div class="dial"><svg width="140" height="140"><circle cx="70" cy="70" r="58" fill="none" stroke="#1a2438" stroke-width="14"/><circle id="ring" cx="70" cy="70" r="58" fill="none" stroke="#22d3ee" stroke-width="14" stroke-dasharray="0 364"/></svg><div class="label"><b id="pct">0%</b><span id="ph">IDLE</span></div></div></div>
+
+    <div class="tile span2"><h3>Pages</h3><div class="v" id="pgs">0</div><div class="tick">of 38</div></div>
+    <div class="tile span2"><h3>Media</h3><div class="v" id="med">0</div><div class="tick">of 22</div></div>
+
+    <div class="tile span8 r3"><h3>Run log · live</h3><div class="bigbar"><span id="bf"></span></div><ol class="log" id="log"><li><time>--:--</time><span>Stand by for ignition.</span></li></ol><div class="kpis"><div class="k"><b id="kp">0</b><span>Pages</span></div><div class="k"><b id="km">0</b><span>Media</span></div><div class="k"><b id="ku">0</b><span>URL rules</span></div><div class="k"><b id="kc">0</b><span>Conflicts</span></div></div></div>
+  </section>
+</div>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+document.querySelectorAll(".modes button").forEach(b=>b.addEventListener("click",()=>{
+  const parent=b.parentElement;
+  parent.querySelectorAll("button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");document.getElementById("fout").textContent=b.dataset.c;
+}));
+const spark=document.getElementById("spark");for(let i=0;i<28;i++){const s=document.createElement("span");s.style.height=(8+Math.random()*16)+"px";spark.appendChild(s)}
+document.getElementById("go").addEventListener("click",e=>{
+  e.preventDefault();const go=document.getElementById("go");go.disabled=true;
+  const log=document.getElementById("log");log.innerHTML="";
+  let i=0;const t=setInterval(()=>{
+    const ph=phases[i],pct=Math.round(i/(phases.length-1)*100);
+    document.getElementById("ph").textContent=ph.toUpperCase();
+    document.getElementById("pct").textContent=pct+"%";
+    document.getElementById("ring").setAttribute("stroke-dasharray",(pct*3.64)+" 364");
+    document.getElementById("bf").style.width=pct+"%";
+    document.getElementById("thr").textContent=(pct/100*2.4).toFixed(1);
+    document.getElementById("qd").textContent=Math.min(64,Math.round(pct*.64));
+    document.getElementById("pgs").textContent=Math.min(38,Math.round(pct*.38));
+    document.getElementById("med").textContent=Math.min(22,Math.round(pct*.22));
+    document.getElementById("kp").textContent=Math.min(38,Math.round(pct*.38));
+    document.getElementById("km").textContent=Math.min(22,Math.round(pct*.22));
+    document.getElementById("ku").textContent=Math.min(4,Math.round(pct*.04));
+    document.getElementById("kc").textContent=Math.min(2,Math.round(pct*.02));
+    spark.querySelectorAll("span").forEach(s=>s.style.height=(8+Math.random()*40)+"px");
+    const li=document.createElement("li");li.innerHTML=`<time>${new Date().toLocaleTimeString().slice(-8)}</time><span>${ph} · ${pct}%</span>`;log.appendChild(li);log.scrollTop=log.scrollHeight;
+    if(ph==="complete"){clearInterval(t);go.disabled=false;document.getElementById("ph").textContent="COMPLETE";}
+    i++;
+  },560);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>54 Publication Calendar · Universal Importer</title>
+<style>
+:root{--paper:#fbfaf7;--ink:#1a1a1a;--muted:#6b6f76;--rule:#e6e3da;--accent:#b91c1c;--soft:#f1eee5;--draft:#fde68a;--ready:#bbf7d0;--media:#bae6fd;--url:#ddd6fe;--pub:#fecaca}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.5 "Charter","Iowan Old Style",Georgia,serif}
+button,input,select{font:inherit;color:inherit}
+.mast{display:grid;grid-template-columns:auto 1fr auto;align-items:end;gap:24px;padding:22px 28px 14px;border-bottom:2px solid var(--ink);background:var(--paper)}
+.mast h1{margin:0;font:900 38px/1 "Charter","Iowan Old Style",Georgia,serif;letter-spacing:-.02em}
+.mast h1 em{font-style:italic;color:var(--accent)}
+.mast .sub{color:var(--muted);font-style:italic;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);padding:4px 0;letter-spacing:.06em;text-transform:uppercase;font-size:11px;font-family:ui-sans-serif,sans-serif}
+.mast .vol{text-align:right;color:var(--muted);font-style:italic}
+.mast .vol b{color:var(--ink);display:block;font-size:22px}
+.deskbar{display:grid;grid-template-columns:1fr 1.2fr 1fr;gap:18px;padding:18px 28px;border-bottom:1px solid var(--rule);background:#fff}
+.deskbar h2{margin:0 0 6px;font:700 11px/1 ui-sans-serif;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+.deskbar .row{display:grid;grid-template-columns:1fr auto;gap:8px}
+.deskbar input{padding:9px 11px;border:1px solid var(--ink);border-radius:0;background:#fff;font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.deskbar .browse{padding:9px 14px;border:1px solid var(--ink);background:#fff;font-weight:700;cursor:pointer;font-family:ui-sans-serif,sans-serif;letter-spacing:.06em}
+.deskbar .go{padding:11px 14px;background:var(--ink);color:#fff;border:0;font-weight:800;letter-spacing:.16em;cursor:pointer;text-transform:uppercase;width:100%;margin-top:6px;font-family:ui-sans-serif,sans-serif}
+.deskbar .go:disabled{opacity:.6;cursor:wait}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.chip{padding:5px 10px;border:1px solid var(--ink);background:#fff;font-family:ui-sans-serif,sans-serif;font-size:11.5px;letter-spacing:.04em;cursor:pointer}
+.chip.on{background:var(--ink);color:var(--paper)}
+.layers{display:grid;gap:6px;margin-top:6px;font-family:ui-sans-serif,sans-serif;font-size:12px}
+.layers label{display:grid;grid-template-columns:14px 14px 1fr;gap:8px;align-items:center;cursor:pointer}
+.layers .sw{width:14px;height:14px;border:1px solid var(--ink);background:#fff;display:inline-block}
+.layers input{display:none}
+.layers input:checked+.sw{background:var(--ink)}
+.layers .lg{width:14px;height:14px;border-radius:50%;border:1px solid var(--ink);display:inline-block}
+.fout{font-family:ui-sans-serif,sans-serif;font-size:11.5px;padding:8px 10px;border-left:3px solid var(--accent);background:var(--soft);margin-top:10px;color:#374151}
+.cal{padding:20px 28px 28px}
+.calhead{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px;margin-bottom:10px}
+.calhead h2{margin:0;font:800 22px/1;letter-spacing:-.01em}
+.calhead h2 small{display:block;font:400 12px/1 ui-sans-serif;color:var(--muted);letter-spacing:.18em;text-transform:uppercase;margin-top:6px}
+.calhead .nav{display:flex;gap:6px;justify-self:center}
+.calhead .nav button{padding:6px 12px;border:1px solid var(--ink);background:#fff;cursor:pointer;font-family:ui-sans-serif,sans-serif;font-size:12px;font-weight:700}
+.calhead .nav button.on{background:var(--ink);color:#fff}
+.calhead .key{font-family:ui-sans-serif,sans-serif;font-size:11px;color:var(--muted);letter-spacing:.16em;text-transform:uppercase}
+.weekrow{display:grid;grid-template-columns:repeat(7,1fr);border-top:2px solid var(--ink);border-left:2px solid var(--ink)}
+.weekrow div{border-right:2px solid var(--ink);border-bottom:1px solid var(--ink);padding:6px 8px;font:800 10.5px/1 ui-sans-serif;letter-spacing:.18em;text-transform:uppercase;background:var(--ink);color:var(--paper)}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);grid-auto-rows:106px;border-left:2px solid var(--ink);border-bottom:2px solid var(--ink)}
+.cell{border-right:2px solid var(--ink);border-top:1px solid var(--rule);padding:6px 6px;position:relative;display:flex;flex-direction:column;gap:3px;background:#fff;overflow:hidden}
+.cell.dim{background:repeating-linear-gradient(45deg,#fafafa,#fafafa 6px,#f3f3f3 6px,#f3f3f3 12px);color:#bbb}
+.cell.today{box-shadow:inset 0 0 0 3px var(--accent)}
+.cell .day{font:800 16px/1 "Charter",serif;display:flex;justify-content:space-between;align-items:center}
+.cell .day b{color:var(--accent)}
+.cell .day em{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;color:var(--muted);font-style:normal;letter-spacing:.1em}
+.cell .pages{display:flex;flex-direction:column;gap:2px;flex:1}
+.pg{font:600 10.5px/1.2 ui-sans-serif;padding:2px 4px;border-radius:2px;background:var(--soft);border-left:3px solid #bbb;color:#222;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pg.t-draft{background:#fef9c3;border-color:#ca8a04}
+.pg.t-ready{background:#dcfce7;border-color:#16a34a}
+.pg.t-media{background:#dbeafe;border-color:#2563eb}
+.pg.t-url{background:#ede9fe;border-color:#7c3aed}
+.pg.t-pub{background:#fee2e2;border-color:#dc2626}
+.pg.t-hidden{display:none}
+.cell .more{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;color:var(--muted)}
+.cell.filling{animation:fill .8s ease}
+@keyframes fill{0%{background:#fff7d6}100%{background:#fff}}
+.timeline{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;padding:14px 28px;border-top:1px solid var(--rule);background:#fff}
+.tile{border:1px solid var(--ink);padding:8px 10px;background:#fff;font-family:ui-sans-serif,sans-serif}
+.tile b{font:800 11px/1;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:6px}
+.tile .lbl{font:700 13px/1 "Charter",serif;color:var(--ink)}
+.tile .lbl small{display:block;font:400 11px/1.4 ui-sans-serif;color:var(--muted);margin-top:3px}
+.tile.now{background:var(--accent);color:#fff}
+.tile.now b,.tile.now .lbl small{color:#fff;opacity:.8}
+.tile.now .lbl{color:#fff}
+.tile.done{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.tile.done b,.tile.done .lbl small{color:#fff;opacity:.7}
+.tile.done .lbl{color:#fff}
+.status{padding:12px 28px;border-top:1px solid var(--rule);font-family:ui-sans-serif,sans-serif;font-size:12px;color:var(--muted);display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;background:#fcfaf2}
+.barwrap{height:6px;background:var(--soft);overflow:hidden;border-radius:0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.barwrap span{display:block;height:100%;background:var(--ink);width:0;transition:width .3s}
+.byline{font-family:ui-sans-serif,sans-serif;font-style:italic;font-size:12px;color:var(--muted)}
+@media(max-width:1100px){.deskbar{grid-template-columns:1fr 1fr}.timeline{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:680px){.deskbar{grid-template-columns:1fr}.grid{grid-auto-rows:84px}.mast{grid-template-columns:1fr}.mast h1{font-size:30px}}
+</style>
+</head>
+<body>
+<section class="mast">
+  <h1>The <em>Universal</em> Importer Gazette</h1>
+  <div class="sub">Editorial desk · vol. 54 · staffed by the desk-side importer</div>
+  <div class="vol"><b>NOV 2026</b>Issue dated daily</div>
+</section>
+
+<section class="deskbar">
+  <div>
+    <h2>Source for this issue</h2>
+    <div class="row">
+      <input id="src" value="https://archive.example.com/blog/wxr-export.xml">
+      <button class="browse" type="button">Browse</button>
+    </div>
+    <button class="go" id="start" type="button">Review import · publish to calendar</button>
+  </div>
+  <div>
+    <h2>Editorial filters · change what runs to press</h2>
+    <div class="chips" id="cats">
+      <button class="chip on" data-cat="news">News</button>
+      <button class="chip on" data-cat="feature">Features</button>
+      <button class="chip on" data-cat="essay">Essays</button>
+      <button class="chip" data-cat="review">Reviews</button>
+      <button class="chip" data-cat="photo">Photo essays</button>
+      <button class="chip" data-cat="ops">Ops</button>
+    </div>
+    <div class="fout" id="fout">38 entries qualify across News, Features and Essays. 6 cells will fill across the month.</div>
+  </div>
+  <div>
+    <h2>Layer toggles · change what each day shows</h2>
+    <div class="layers">
+      <label><input type="checkbox" id="L1" checked><span class="sw"></span> Drafts (yellow)</label>
+      <label><input type="checkbox" id="L2" checked><span class="sw"></span> Image-bound entries (blue)</label>
+      <label><input type="checkbox" id="L3" checked><span class="sw"></span> URL-rewrite needed (purple)</label>
+      <label><input type="checkbox" id="L4" checked><span class="sw"></span> Ready-to-publish (green)</label>
+    </div>
+  </div>
+</section>
+
+<section class="cal">
+  <div class="calhead">
+    <h2>November <small>Issue planning grid · drag-free</small></h2>
+    <div class="nav"><button data-m="oct">Oct</button><button data-m="nov" class="on">Nov</button><button data-m="dec">Dec</button></div>
+    <div class="key">28 days planned · 6 weeks shown</div>
+  </div>
+  <div class="weekrow"><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div><div>Sun</div></div>
+  <div class="grid" id="grid"></div>
+</section>
+
+<section class="timeline" id="tline">
+  <div class="tile" data-i="0"><b>1 · queued</b><div class="lbl">Awaiting press<small>Sources stacked at the desk</small></div></div>
+  <div class="tile" data-i="1"><b>2 · reading</b><div class="lbl">Reading source<small>Parse XML feed</small></div></div>
+  <div class="tile" data-i="2"><b>3 · preparing</b><div class="lbl">Prep content<small>Slugs &amp; bylines</small></div></div>
+  <div class="tile" data-i="3"><b>4 · URLs</b><div class="lbl">URL treatment<small>Rewrites &amp; redirects</small></div></div>
+  <div class="tile" data-i="4"><b>5 · media</b><div class="lbl">Importing media<small>Photo essays staged</small></div></div>
+  <div class="tile" data-i="5"><b>6 · writing</b><div class="lbl">Writing pages<small>Drafts land in calendar</small></div></div>
+  <div class="tile" data-i="6"><b>7 · complete</b><div class="lbl">Edition complete<small>Reviewable</small></div></div>
+</section>
+
+<section class="status">
+  <span id="phwrap"><b id="phlbl" style="color:var(--ink)">Idle</b> · <span id="phpct">0%</span></span>
+  <div class="barwrap"><span id="bar"></span></div>
+  <span class="byline" id="byline">Press hasn't rolled. Set source &amp; filters, then hit Review import.</span>
+</section>
+
+<script>
+// Build calendar — Nov 2026 starts on a Sunday in our editorial universe
+const grid=document.getElementById("grid");
+const sources={
+  news:["Council budget vote","Riverside transit","Health levy details","Town hall recap","Storm bulletin","School ratings"],
+  feature:["The slow ferry","A baker's atlas","Inside the import bay","After the floods","Twelve coffees","Maps that lie"],
+  essay:["On migration","The map is the territory","Quiet news","Memory palaces","Of small ports","Drafts and dust"],
+  review:["Café Acanto","Solaris (1972)","The new Verge","Halo, mapped","Salt House menu","Pier Books"],
+  photo:["Fog on Pier 4","Market gallery","Night freight","Saltworks","Two weddings","Brick &amp; rain"],
+  ops:["Crawl audit","Redirect map","Permalink sweep","Index check","Robots tune","Cache warm"]
+};
+const allCats=["news","feature","essay","review","photo","ops"];
+let activeCats=new Set(["news","feature","essay"]);
+let entries=[];
+function buildMonth(){
+  grid.innerHTML="";
+  entries=[];
+  // 35 cells: prefix 0 dim days, days 1..30, suffix dim days (Nov 2026 starts Sunday in our model)
+  const leading=6, days=30, total=42;
+  for(let i=0;i<total;i++){
+    const d=document.createElement("div");d.className="cell";
+    const dayNum=i-leading+1;
+    if(dayNum<1){
+      d.classList.add("dim");
+      d.innerHTML='<div class="day">'+(30+dayNum)+'<em>OCT</em></div>';
+    } else if(dayNum>days){
+      d.classList.add("dim");
+      d.innerHTML='<div class="day">'+(dayNum-days)+'<em>DEC</em></div>';
+    } else {
+      const isToday=dayNum===14;
+      if(isToday)d.classList.add("today");
+      d.innerHTML='<div class="day">'+(isToday?'<b>'+dayNum+'</b>':dayNum)+'<em>'+(dayNum===1?'NOV':dayNum%7===0?'WK':'')+'</em></div><div class="pages"></div>';
+      entries.push({el:d,day:dayNum,pages:d.querySelector(".pages")});
+    }
+    grid.appendChild(d);
+  }
+  populate();
+}
+function populate(){
+  entries.forEach(e=>e.pages.innerHTML="");
+  // distribute 38 pages across visible cells based on active cats
+  const pool=[];
+  allCats.forEach(c=>{ if(activeCats.has(c)) sources[c].forEach((t,k)=>pool.push({t,c,k})); });
+  // schedule pages across days — every other day with some clusters
+  const tags=["t-draft","t-media","t-url","t-ready"];
+  let idx=0;
+  entries.forEach((e,i)=>{
+    const slot=(i%2===0)?2:0; // every other day gets pages
+    for(let k=0;k<slot;k++){
+      if(idx>=pool.length)break;
+      const p=pool[idx++];
+      const li=document.createElement("div");li.className="pg t-draft";
+      // assign tag class
+      const tag=tags[(i+k)%tags.length];
+      li.classList.add(tag);
+      li.dataset.tag=tag;
+      li.dataset.cat=p.c;
+      li.textContent=p.t;
+      e.pages.appendChild(li);
+    }
+    if(idx<pool.length && (i%5===0)){
+      const more=document.createElement("div");more.className="more";more.textContent="+ "+Math.min(2,pool.length-idx)+" more";e.pages.appendChild(more);
+    }
+  });
+  applyLayers();
+  updateFout();
+}
+function applyLayers(){
+  document.querySelectorAll(".pg").forEach(p=>{
+    const t=p.dataset.tag;
+    const id=t==="t-draft"?"L1":t==="t-media"?"L2":t==="t-url"?"L3":"L4";
+    const checkbox=document.getElementById(id);
+    if(checkbox && !checkbox.checked) p.classList.add("t-hidden"); else p.classList.remove("t-hidden");
+  });
+}
+function updateFout(){
+  const visible=document.querySelectorAll(".pg:not(.t-hidden)").length;
+  const cells=[...document.querySelectorAll(".cell:not(.dim)")].filter(c=>c.querySelectorAll(".pg:not(.t-hidden)").length>0).length;
+  document.getElementById("fout").textContent=visible+" entries qualify across "+[...activeCats].join(", ")+". "+cells+" cells will fill across the month.";
+}
+document.getElementById("cats").addEventListener("click",e=>{
+  const c=e.target.closest(".chip");if(!c)return;
+  c.classList.toggle("on");const cat=c.dataset.cat;
+  if(activeCats.has(cat))activeCats.delete(cat);else activeCats.add(cat);
+  populate();
+});
+["L1","L2","L3","L4"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{applyLayers();updateFout()}));
+document.querySelectorAll(".calhead .nav button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".calhead .nav button").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on");
+  document.querySelector(".calhead h2").innerHTML=(b.dataset.m==="oct"?"October":b.dataset.m==="dec"?"December":"November")+' <small>Issue planning grid · drag-free</small>';
+}));
+
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+document.getElementById("start").addEventListener("click",()=>{
+  const btn=document.getElementById("start");btn.disabled=true;
+  document.querySelectorAll(".tile").forEach(t=>t.classList.remove("now","done"));
+  document.querySelectorAll(".cell.filling").forEach(c=>c.classList.remove("filling"));
+  document.querySelectorAll(".pg").forEach(p=>p.style.opacity=.4);
+  const phlbl=document.getElementById("phlbl"),phpct=document.getElementById("phpct"),bar=document.getElementById("bar"),byline=document.getElementById("byline"),tiles=document.querySelectorAll(".tile");
+  let i=0;
+  const t=setInterval(()=>{
+    if(i>0){tiles[i-1].classList.remove("now");tiles[i-1].classList.add("done")}
+    tiles[i].classList.add("now");
+    const ph=phases[i],pct=Math.round(i/(phases.length-1)*100);
+    phlbl.textContent=ph;phpct.textContent=pct+"%";
+    bar.style.width=pct+"%";
+    // fill calendar cells progressively in writing phase
+    const visibleCells=[...document.querySelectorAll(".cell:not(.dim)")];
+    const totalCells=visibleCells.length;
+    const upTo=Math.round((i+1)/phases.length*totalCells);
+    visibleCells.slice(0,upTo).forEach(c=>{
+      if(!c.classList.contains("filling")){
+        c.classList.add("filling");
+        c.querySelectorAll(".pg").forEach(p=>p.style.opacity=1);
+      }
+    });
+    byline.textContent="Press rolling — "+ph+". Stage "+(i+1)+" of "+phases.length+".";
+    if(ph==="complete"){
+      clearInterval(t);btn.disabled=false;tiles[i].classList.add("done");
+      document.querySelectorAll(".pg").forEach(p=>p.style.opacity=1);
+      byline.textContent="Edition complete. 38 drafts placed across 22 days, 14 images staged, 4 URL rewrites recorded.";
+    }
+    i++;
+  },620);
+});
+buildMonth();
+</script>
+</body>
+</html>

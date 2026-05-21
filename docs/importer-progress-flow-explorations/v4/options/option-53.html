@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>53 Risk Radar · Universal Importer</title>
+<style>
+:root{--bg:#020617;--panel:#0b1322;--ink:#d8e6ff;--muted:#5c7494;--rule:#1b2a44;--green:#22c55e;--yellow:#facc15;--orange:#fb923c;--red:#f43f5e;--cyan:#22d3ee;--sweep:rgba(34,211,238,.65)}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.5 ui-sans-serif,-apple-system,"Segoe UI",sans-serif;background-image:radial-gradient(ellipse at 50% 0%,rgba(34,211,238,.08),transparent 60%)}
+button,input{font:inherit;color:inherit}
+.scope{display:grid;grid-template-columns:340px 1fr 340px;gap:18px;padding:18px;min-height:100vh;align-items:start}
+.hdr{grid-column:1/-1;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:18px;padding:12px 18px;border:1px solid var(--rule);background:rgba(11,19,34,.7);backdrop-filter:blur(8px);border-radius:14px}
+.hdr h1{margin:0;font-size:14px;letter-spacing:.32em;color:var(--cyan)}
+.hdr h1 b{color:var(--ink)}
+.hdr .stamp{padding:4px 10px;border:1px solid var(--cyan);color:var(--cyan);border-radius:4px;font-size:11px;letter-spacing:.24em}
+.hdr .heart{display:flex;align-items:center;gap:6px;color:var(--green);font-size:11px;letter-spacing:.2em;text-transform:uppercase}
+.hdr .heart::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green);animation:beat 1.2s infinite}
+@keyframes beat{0%,100%{opacity:1}50%{opacity:.4}}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:14px;padding:16px}
+.panel h2{margin:0 0 10px;font-size:11px;letter-spacing:.22em;color:var(--muted);text-transform:uppercase}
+.lblrow{display:grid;grid-template-columns:90px 1fr;gap:8px;margin-bottom:8px;align-items:center}
+.lblrow label{color:var(--muted);font-size:11px;letter-spacing:.16em;text-transform:uppercase}
+.lblrow input,.lblrow select{width:100%;padding:8px 10px;border:1px solid var(--rule);background:#050b18;border-radius:6px;color:var(--ink)}
+.go{margin-top:10px;width:100%;padding:13px;background:linear-gradient(180deg,var(--cyan),#0891b2);color:#031018;border:0;border-radius:8px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;cursor:pointer;box-shadow:0 0 0 1px rgba(34,211,238,.25),0 12px 30px -10px rgba(34,211,238,.45)}
+.go:disabled{opacity:.55;cursor:wait}
+.filters{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 6px}
+.filter{padding:6px 10px;border:1px solid var(--rule);background:transparent;color:var(--muted);border-radius:999px;cursor:pointer;font-size:11px;letter-spacing:.06em}
+.filter.on{border-color:var(--cyan);background:rgba(34,211,238,.1);color:var(--cyan)}
+.feature-out{font-size:11.5px;color:#9fb3d6;background:rgba(34,211,238,.06);border-left:2px solid var(--cyan);padding:8px;border-radius:0 6px 6px 0}
+.scopebody{position:relative;aspect-ratio:1;min-height:520px;background:radial-gradient(circle at center,rgba(34,211,238,.08) 0%,transparent 70%);border:1px solid var(--rule);border-radius:18px;display:grid;place-items:center;overflow:hidden}
+.scopebody svg{position:absolute;inset:0;width:100%;height:100%}
+.ring{fill:none;stroke:var(--rule);stroke-width:1}
+.spoke{stroke:var(--rule);stroke-width:1}
+.sweep{transform-origin:center;animation:none}
+.spinning .sweep{animation:spin 2.4s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.risk{position:absolute;width:24px;height:24px;border-radius:50%;border:2px solid #fff;transform:translate(-50%,-50%);display:grid;place-items:center;cursor:pointer;font-weight:800;font-size:10px;color:#031018;transition:transform .25s,box-shadow .25s;box-shadow:0 0 0 0 currentColor}
+.risk[data-sev="low"]{background:var(--green)}
+.risk[data-sev="med"]{background:var(--yellow)}
+.risk[data-sev="hi"]{background:var(--orange)}
+.risk[data-sev="crit"]{background:var(--red);color:#fff}
+.risk.ping{animation:ping .9s ease-out}
+@keyframes ping{0%{transform:translate(-50%,-50%) scale(1);box-shadow:0 0 0 0 var(--cyan)}80%{transform:translate(-50%,-50%) scale(1.4);box-shadow:0 0 0 18px rgba(34,211,238,0)}100%{transform:translate(-50%,-50%) scale(1)}}
+.risk.cleared{filter:saturate(.3) brightness(.65);border-color:#37486a}
+.center{position:relative;z-index:2;width:120px;height:120px;border-radius:50%;background:#050b18;border:2px solid var(--cyan);display:grid;place-items:center;text-align:center;box-shadow:0 0 22px rgba(34,211,238,.4)}
+.center b{display:block;font:800 22px/1 ui-monospace;color:var(--cyan)}
+.center span{font-size:9px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase}
+.legend{position:absolute;bottom:14px;left:14px;display:flex;flex-direction:column;gap:6px;font-size:11px;background:rgba(11,19,34,.6);padding:8px 10px;border-radius:8px;border:1px solid var(--rule)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.tally{position:absolute;top:14px;right:14px;background:rgba(11,19,34,.6);border:1px solid var(--rule);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--muted);letter-spacing:.12em;text-transform:uppercase}
+.tally b{color:var(--cyan);margin-left:6px}
+.phasecol{display:grid;gap:8px;margin-top:8px}
+.phaseline{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;background:#050b18;font-size:12px}
+.phaseline .n{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:#0b1322;font-size:11px;color:var(--muted);border:1px solid var(--rule)}
+.phaseline.now{border-color:var(--cyan);background:rgba(34,211,238,.08)}
+.phaseline.now .n{background:var(--cyan);color:#031018}
+.phaseline.done{border-color:#163d29;background:rgba(22,197,94,.06);color:#a7f3d0}
+.phaseline.done .n{background:var(--green);color:#031018}
+.statusbar{display:grid;grid-template-columns:1fr auto;align-items:center;gap:10px;padding:10px;background:#050b18;border:1px solid var(--rule);border-radius:8px;margin-top:10px}
+.statusbar .lbl{font-size:11px;letter-spacing:.18em;color:var(--muted);text-transform:uppercase}
+.statusbar .val{color:var(--cyan);font:700 13px ui-monospace}
+.barstrip{height:8px;background:#050b18;border:1px solid var(--rule);border-radius:999px;overflow:hidden;margin-top:6px}
+.barstrip span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--cyan),var(--green));transition:width .3s}
+.result{margin-top:10px;padding:10px;border:1px dashed var(--green);background:rgba(34,197,94,.06);border-radius:8px;font-size:12px;color:#bbf7d0}
+@media(max-width:1100px){.scope{grid-template-columns:1fr}.scopebody{aspect-ratio:auto;min-height:420px}}
+</style>
+</head>
+<body>
+<main class="scope">
+  <header class="hdr">
+    <h1>UNIVERSAL <b>IMPORTER</b> · RISK RADAR</h1>
+    <span class="heart">Telemetry online · scanning bay</span>
+    <span class="stamp">53 / 60</span>
+  </header>
+
+  <aside class="panel">
+    <h2>Source acquisition</h2>
+    <div class="lblrow"><label>Protocol</label>
+      <select id="proto">
+        <option>HTTPS feed</option><option>Git repository</option><option>WXR file</option><option>Sitemap walk</option>
+      </select>
+    </div>
+    <div class="lblrow"><label>Target</label>
+      <input id="src" value="https://hub.example.com/sites/docs/sitemap.xml">
+    </div>
+    <div class="lblrow"><label>Depth</label>
+      <input id="depth" value="3" type="number" min="1" max="9">
+    </div>
+    <button class="go" id="start" type="button">Review import &amp; scan</button>
+
+    <h2 style="margin-top:18px">Risk surfaces</h2>
+    <div class="filters" id="filters">
+      <button class="filter on" data-cat="auth">Auth</button>
+      <button class="filter on" data-cat="media">Media</button>
+      <button class="filter on" data-cat="urls">URLs</button>
+      <button class="filter" data-cat="schema">Schema</button>
+      <button class="filter" data-cat="encoding">Encoding</button>
+      <button class="filter" data-cat="rate">Rate-limit</button>
+    </div>
+    <div class="feature-out" id="fout">3 surfaces armed. Radar will paint 9 markers across auth, media and URL bands.</div>
+  </aside>
+
+  <section class="scopebody" id="board">
+    <svg viewBox="0 0 600 600" aria-hidden="true">
+      <circle class="ring" cx="300" cy="300" r="80"/>
+      <circle class="ring" cx="300" cy="300" r="160"/>
+      <circle class="ring" cx="300" cy="300" r="240"/>
+      <circle class="ring" cx="300" cy="300" r="280"/>
+      <line class="spoke" x1="300" y1="20" x2="300" y2="580"/>
+      <line class="spoke" x1="20" y1="300" x2="580" y2="300"/>
+      <line class="spoke" x1="92" y1="92" x2="508" y2="508"/>
+      <line class="spoke" x1="508" y1="92" x2="92" y2="508"/>
+      <defs>
+        <linearGradient id="sg" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#22d3ee" stop-opacity="0"/>
+          <stop offset="100%" stop-color="#22d3ee" stop-opacity=".6"/>
+        </linearGradient>
+      </defs>
+      <g class="sweep">
+        <path d="M 300 300 L 580 300 A 280 280 0 0 0 506 102 Z" fill="url(#sg)"/>
+      </g>
+    </svg>
+    <div class="center" id="cnt"><b id="count">0</b><span>scans</span></div>
+    <div class="tally"><span>RISKS</span><b id="tally">0 / 9</b></div>
+    <div class="legend">
+      <div><i style="background:var(--green)"></i>low</div>
+      <div><i style="background:var(--yellow)"></i>medium</div>
+      <div><i style="background:var(--orange)"></i>high</div>
+      <div><i style="background:var(--red)"></i>critical</div>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <h2>Run telemetry</h2>
+    <div class="statusbar">
+      <div><div class="lbl">Phase</div><div class="val" id="ph">idle</div></div>
+      <div><div class="lbl">Elapsed</div><div class="val" id="el">00:00</div></div>
+    </div>
+    <div class="barstrip"><span id="bar"></span></div>
+    <div class="phasecol" id="phc">
+      <div class="phaseline" data-i="0"><span class="n">1</span><span>queued</span><span>·</span></div>
+      <div class="phaseline" data-i="1"><span class="n">2</span><span>reading source</span><span>·</span></div>
+      <div class="phaseline" data-i="2"><span class="n">3</span><span>preparing content</span><span>·</span></div>
+      <div class="phaseline" data-i="3"><span class="n">4</span><span>URL treatment</span><span>·</span></div>
+      <div class="phaseline" data-i="4"><span class="n">5</span><span>importing media</span><span>·</span></div>
+      <div class="phaseline" data-i="5"><span class="n">6</span><span>writing pages</span><span>·</span></div>
+      <div class="phaseline" data-i="6"><span class="n">7</span><span>complete</span><span>·</span></div>
+    </div>
+    <div class="result" id="res">Radar idle. Press Review import to begin a sweep.</div>
+  </aside>
+</main>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+const riskPool=[
+ {cat:"auth", a:18,r:.34,sev:"med",label:"A1"},
+ {cat:"auth", a:42,r:.78,sev:"hi", label:"A2"},
+ {cat:"media",a:78,r:.52,sev:"low",label:"M1"},
+ {cat:"media",a:112,r:.86,sev:"crit",label:"M2"},
+ {cat:"media",a:138,r:.42,sev:"med",label:"M3"},
+ {cat:"urls", a:170,r:.66,sev:"hi", label:"U1"},
+ {cat:"urls", a:208,r:.30,sev:"low",label:"U2"},
+ {cat:"urls", a:240,r:.74,sev:"med",label:"U3"},
+ {cat:"schema",a:268,r:.58,sev:"hi",label:"S1"},
+ {cat:"schema",a:296,r:.40,sev:"med",label:"S2"},
+ {cat:"encoding",a:322,r:.82,sev:"low",label:"E1"},
+ {cat:"encoding",a:350,r:.50,sev:"med",label:"E2"},
+ {cat:"rate", a:8,r:.7,sev:"med",label:"R1"},
+ {cat:"rate", a:355,r:.20,sev:"low",label:"R2"}
+];
+let active={auth:true,media:true,urls:true,schema:false,encoding:false,rate:false};
+function placeRisks(){
+  const board=document.getElementById("board");
+  board.querySelectorAll(".risk").forEach(x=>x.remove());
+  const visible=riskPool.filter(r=>active[r.cat]);
+  const w=board.clientWidth,h=board.clientHeight,cx=w/2,cy=h/2,R=Math.min(w,h)/2-30;
+  visible.forEach(r=>{
+    const rad=(r.a-90)*Math.PI/180;
+    const x=cx+Math.cos(rad)*R*r.r;
+    const y=cy+Math.sin(rad)*R*r.r;
+    const el=document.createElement("button");
+    el.className="risk";el.dataset.sev=r.sev;el.dataset.label=r.label;
+    el.style.left=x+"px";el.style.top=y+"px";
+    el.textContent=r.label;
+    el.title=r.cat+" · "+r.sev;
+    board.appendChild(el);
+  });
+  document.getElementById("tally").textContent="0 / "+visible.length;
+  const cats=Object.keys(active).filter(k=>active[k]).length;
+  document.getElementById("fout").textContent=cats+" surfaces armed. Radar will paint "+visible.length+" markers across "+Object.keys(active).filter(k=>active[k]).join(", ")+".";
+}
+window.addEventListener("resize",placeRisks);
+document.getElementById("filters").addEventListener("click",e=>{
+  const f=e.target.closest(".filter");if(!f)return;
+  f.classList.toggle("on");active[f.dataset.cat]=f.classList.contains("on");
+  placeRisks();
+});
+document.getElementById("start").addEventListener("click",()=>{
+  const btn=document.getElementById("start");btn.disabled=true;
+  document.getElementById("board").classList.add("spinning");
+  const risks=document.querySelectorAll(".risk");
+  risks.forEach(r=>r.classList.remove("cleared","ping"));
+  const phaseLines=document.querySelectorAll(".phaseline");
+  phaseLines.forEach(p=>p.classList.remove("now","done"));
+  let i=0,scans=0,start=Date.now(),cleared=0;
+  const total=risks.length||1;
+  const t=setInterval(()=>{
+    if(i>0){phaseLines[i-1].classList.remove("now");phaseLines[i-1].classList.add("done")}
+    phaseLines[i].classList.add("now");
+    const ph=phases[i],pct=Math.round(i/(phases.length-1)*100);
+    document.getElementById("ph").textContent=ph;
+    document.getElementById("bar").style.width=pct+"%";
+    const targets=[...risks].slice(cleared,cleared+Math.ceil(total/(phases.length-1)));
+    targets.forEach((r,k)=>setTimeout(()=>{r.classList.add("ping");setTimeout(()=>r.classList.add("cleared"),700);cleared++;document.getElementById("tally").textContent=cleared+" / "+total},k*120));
+    scans++;document.getElementById("count").textContent=scans;
+    if(ph==="complete"){
+      clearInterval(t);btn.disabled=false;phaseLines[i].classList.add("done");document.getElementById("board").classList.remove("spinning");
+      risks.forEach(r=>r.classList.add("cleared"));
+      document.getElementById("tally").textContent=total+" / "+total;
+      document.getElementById("res").textContent="Sweep complete — "+total+" risk markers cleared, 38 pages staged, 22 media items verified.";
+    }
+    i++;
+  },680);
+  const tick=setInterval(()=>{
+    if(btn.disabled){
+      const s=Math.floor((Date.now()-start)/1000);
+      document.getElementById("el").textContent=String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0");
+    } else clearInterval(tick);
+  },500);
+});
+setTimeout(placeRisks,50);
+</script>
+</body>
+</html>

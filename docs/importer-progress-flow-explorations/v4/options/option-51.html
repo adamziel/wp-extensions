@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>51 Rules Graph · Universal Importer</title>
+<style>
+:root{--bg:#0d1421;--grid:#152035;--rule:#1f2c45;--panel:#10192a;--panel2:#172238;--ink:#dbe3f3;--mute:#7a8aaa;--src:#4ec1ff;--parser:#7c5cff;--url:#ffd54a;--media:#ff7a3a;--decision:#3ddc97;--sink:#ff3d7f;--ok:#3ddc97;--warn:#ffd54a}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.5 ui-sans-serif,-apple-system,"Inter","SF Pro Text",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit;border:0;background:transparent}
+.app{display:grid;grid-template-columns:auto 1fr 380px;grid-template-rows:auto 1fr;height:100vh;min-height:680px}
+/* === Top bar === */
+.topbar{grid-column:1/-1;display:grid;grid-template-columns:auto 1fr auto auto;gap:14px;align-items:center;padding:9px 14px;background:linear-gradient(180deg,#101a2c,#0b1322);border-bottom:1px solid var(--rule)}
+.topbar .name{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.01em}
+.topbar .name .dot{width:10px;height:10px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.topbar .crumbs{color:var(--mute);font-size:12px;font-family:ui-monospace,monospace}
+.topbar .crumbs b{color:var(--ink)}
+.topbar button{padding:6px 12px;border:1px solid var(--rule);border-radius:6px;background:var(--panel);color:var(--ink);cursor:pointer;font-size:12.5px}
+.topbar button:hover{border-color:var(--src)}
+.topbar .pill{padding:4px 10px;border:1px solid var(--rule);border-radius:999px;color:var(--mute);font-size:11px}
+/* === Tool dock === */
+.dock{background:var(--panel);border-right:1px solid var(--rule);display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;width:64px}
+.dock .tool{width:46px;border-radius:9px;padding:9px 6px;text-align:center;border:1px solid transparent;cursor:grab;background:rgba(255,255,255,.02);font-size:10.5px;color:var(--mute);font-weight:600;letter-spacing:.02em}
+.dock .tool:hover{border-color:var(--rule);color:var(--ink)}
+.dock .tool .icon{width:24px;height:24px;border-radius:6px;margin:0 auto 5px;display:grid;place-items:center;font-size:12px;color:#0d1421;font-weight:900}
+.dock .tool.src .icon{background:var(--src)}
+.dock .tool.parser .icon{background:var(--parser);color:#fff}
+.dock .tool.url .icon{background:var(--url)}
+.dock .tool.media .icon{background:var(--media);color:#fff}
+.dock .tool.decision .icon{background:var(--decision)}
+.dock .tool.sink .icon{background:var(--sink);color:#fff}
+.dock hr{width:80%;border:0;border-top:1px solid var(--rule);margin:8px 0}
+/* === Canvas === */
+.canvas{position:relative;overflow:hidden;background:
+  linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+  linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+  radial-gradient(ellipse at 50% 50%,#152035 0%,#0b1322 80%)}
+.canvas svg.edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.canvas svg.edges path{fill:none;stroke:var(--rule);stroke-width:2;stroke-linecap:round}
+.canvas svg.edges path.act{stroke:url(#grad1);stroke-width:2.5;stroke-dasharray:8 4;animation:dash 1s linear infinite}
+@keyframes dash{to{stroke-dashoffset:-12}}
+.canvas svg.edges path.done{stroke:var(--ok)}
+.node{position:absolute;width:170px;border:2px solid var(--rule);border-radius:12px;background:var(--panel);padding:10px 12px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.4);transition:transform .15s,border-color .2s,box-shadow .2s}
+.node:hover{transform:translateY(-2px)}
+.node.sel{box-shadow:0 0 0 2px var(--src),0 8px 24px rgba(78,193,255,.3)}
+.node header{display:flex;align-items:center;gap:7px;margin-bottom:6px}
+.node header .badge{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-weight:900;color:#0d1421;font-size:11px}
+.node header b{font-size:12.5px;font-weight:700}
+.node header .ph{margin-left:auto;font-size:9.5px;color:var(--mute);font-family:ui-monospace,monospace;text-transform:uppercase;letter-spacing:.08em}
+.node .desc{font-size:11.5px;color:var(--mute);margin-bottom:6px;line-height:1.4}
+.node .ports{display:flex;justify-content:space-between;font-size:10px;color:var(--mute);font-family:ui-monospace,monospace}
+.node.src{border-top:3px solid var(--src)}
+.node.src header .badge{background:var(--src)}
+.node.parser{border-top:3px solid var(--parser)}
+.node.parser header .badge{background:var(--parser);color:#fff}
+.node.url{border-top:3px solid var(--url)}
+.node.url header .badge{background:var(--url)}
+.node.media{border-top:3px solid var(--media)}
+.node.media header .badge{background:var(--media);color:#fff}
+.node.decision{border-top:3px solid var(--decision)}
+.node.decision header .badge{background:var(--decision)}
+.node.sink{border-top:3px solid var(--sink)}
+.node.sink header .badge{background:var(--sink);color:#fff}
+.node.run-now{box-shadow:0 0 0 2px var(--warn),0 0 24px rgba(255,213,74,.4);animation:nodePulse 1.2s ease-in-out infinite}
+@keyframes nodePulse{0%,100%{box-shadow:0 0 0 2px var(--warn),0 0 18px rgba(255,213,74,.35)}50%{box-shadow:0 0 0 3px var(--warn),0 0 28px rgba(255,213,74,.65)}}
+.node.run-done{border-color:var(--ok)}
+.node.run-done header .ph{color:var(--ok)}
+.node .progress{height:3px;background:#1f2c45;border-radius:99px;margin-top:6px;overflow:hidden;display:none}
+.node.run-now .progress,.node.run-done .progress{display:block}
+.node .progress i{display:block;height:100%;width:0;background:var(--warn);transition:width .4s}
+.node.run-done .progress i{background:var(--ok);width:100% !important}
+/* === Inspector === */
+.inspector{background:var(--panel);border-left:1px solid var(--rule);display:grid;grid-template-rows:auto 1fr auto;overflow:hidden}
+.insp-head{padding:14px 16px;border-bottom:1px solid var(--rule);display:flex;align-items:center;gap:10px}
+.insp-head .swatch{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;font-weight:900;color:#0d1421}
+.insp-head b{font-size:14px;display:block}
+.insp-head small{color:var(--mute);font-size:11px;font-family:ui-monospace,monospace}
+.insp-body{padding:14px 16px;overflow:auto}
+.insp-body h4{margin:0 0 6px;font-size:10.5px;letter-spacing:.14em;color:var(--mute);text-transform:uppercase}
+.insp-body section{margin-bottom:14px}
+.insp-body input[type=text],.insp-body input[type=url],.insp-body select,.insp-body textarea{width:100%;padding:9px 11px;background:#0a1424;border:1px solid var(--rule);border-radius:7px;color:var(--ink);font-family:ui-monospace,monospace;font-size:12px}
+.insp-body textarea{font-family:ui-monospace,monospace;min-height:70px;resize:vertical}
+.insp-body label{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--rule);font-size:12.5px;cursor:pointer}
+.insp-body label small{color:var(--mute);font-size:11px;margin-top:2px}
+.insp-body label .toggle{width:34px;height:20px;background:#26334d;border-radius:99px;position:relative;flex-shrink:0}
+.insp-body label .toggle::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
+.insp-body label input{display:none}
+.insp-body label input:checked+.toggle{background:var(--src)}
+.insp-body label input:checked+.toggle::after{left:16px}
+.insp-body .kv{display:grid;grid-template-columns:1fr auto;gap:6px;padding:6px 0;border-bottom:1px dashed var(--rule);font-size:12px}
+.insp-body .kv b{color:var(--src);font-family:ui-monospace,monospace;font-weight:600}
+.insp-body .chips{display:flex;flex-wrap:wrap;gap:5px}
+.insp-body .chips span{padding:4px 9px;border:1px solid var(--rule);border-radius:99px;background:#0a1424;font-size:11px;cursor:pointer}
+.insp-body .chips span.on{background:var(--src);color:#0d1421;border-color:var(--src);font-weight:700}
+/* Source-node footer with primary action */
+.insp-foot{padding:12px 16px;border-top:1px solid var(--rule);background:#0c1422}
+.insp-foot .go{width:100%;padding:12px;background:linear-gradient(135deg,var(--src),#3a8edb);color:#0d1421;font-weight:900;border-radius:9px;cursor:pointer;letter-spacing:.04em;box-shadow:0 8px 18px rgba(78,193,255,.3);font-size:13px}
+.insp-foot .go:disabled{opacity:.7;cursor:wait}
+.insp-foot .phases{display:flex;justify-content:space-between;gap:3px;margin-top:10px}
+.insp-foot .phases div{flex:1;text-align:center;font-size:9.5px;color:var(--mute);font-family:ui-monospace,monospace;letter-spacing:.04em;text-transform:uppercase;padding:5px 0;border-radius:5px;background:#0a1424;border:1px solid var(--rule)}
+.insp-foot .phases div.now{background:var(--warn);color:#0d1421;border-color:var(--warn);font-weight:800}
+.insp-foot .phases div.done{background:var(--ok);color:#0d1421;border-color:var(--ok)}
+/* Token particles */
+.particle{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--warn);box-shadow:0 0 10px var(--warn);pointer-events:none;opacity:0}
+.particle.on{opacity:1}
+@media(max-width:1000px){.app{grid-template-columns:64px 1fr;grid-template-rows:auto 1fr auto}.inspector{grid-column:1/-1;border-left:0;border-top:1px solid var(--rule);max-height:340px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="name"><span class="dot"></span>Importer · Flow editor</div>
+    <div class="crumbs">jobs / <b>imp_482</b> · graph · 6 nodes · 5 edges</div>
+    <span class="pill">v4 · 51 / 60</span>
+    <button>⌘ Save graph</button>
+  </header>
+
+  <aside class="dock">
+    <div class="tool src" title="Source"><div class="icon">S</div>Source</div>
+    <div class="tool parser" title="Parser"><div class="icon">P</div>Parser</div>
+    <div class="tool url" title="URL"><div class="icon">U</div>URL</div>
+    <div class="tool media" title="Media"><div class="icon">M</div>Media</div>
+    <div class="tool decision" title="Decision"><div class="icon">?</div>If</div>
+    <div class="tool sink" title="Sink"><div class="icon">→</div>Sink</div>
+    <hr>
+    <div class="tool" style="color:var(--mute)"><div class="icon" style="background:#26334d;color:#dbe3f3">▶</div>Run</div>
+  </aside>
+
+  <section class="canvas" id="canvas">
+    <svg class="edges" viewBox="0 0 1000 600" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="grad1" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0%" stop-color="#4ec1ff"/>
+          <stop offset="100%" stop-color="#ffd54a"/>
+        </linearGradient>
+      </defs>
+      <path id="e1" d="M 165 130 C 230 130, 230 130, 290 130"/>
+      <path id="e2" d="M 460 130 C 540 130, 540 230, 290 230"/>
+      <path id="e3" d="M 460 130 C 540 130, 540 360, 290 360"/>
+      <path id="e4" d="M 460 230 C 600 230, 700 290, 760 290"/>
+      <path id="e5" d="M 460 360 C 600 360, 700 290, 760 290"/>
+    </svg>
+
+    <div class="node src sel" data-n="src" style="left:50px;top:90px">
+      <header><span class="badge">S</span><b>HTTPS source</b><span class="ph">A</span></header>
+      <div class="desc">github.com/WordPress/gutenberg/tree/trunk/docs</div>
+      <div class="ports"><span>•</span><span>out →</span></div>
+      <div class="progress"><i></i></div>
+    </div>
+    <div class="node parser" data-n="parser" style="left:300px;top:90px">
+      <header><span class="badge">P</span><b>Markdown reader</b><span class="ph">B</span></header>
+      <div class="desc">Walk tree · extract h1–h6 · 38 pages</div>
+      <div class="ports"><span>← in</span><span>out →</span></div>
+      <div class="progress"><i></i></div>
+    </div>
+    <div class="node url" data-n="url" style="left:300px;top:200px">
+      <header><span class="badge">U</span><b>URL rewriter</b><span class="ph">C</span></header>
+      <div class="desc">4 rules · github → /handbook/</div>
+      <div class="ports"><span>← in</span><span>out →</span></div>
+      <div class="progress"><i></i></div>
+    </div>
+    <div class="node media" data-n="media" style="left:300px;top:320px">
+      <header><span class="badge">M</span><b>Media pipeline</b><span class="ph">D</span></header>
+      <div class="desc">Dedupe · WebP@82 · 22 items</div>
+      <div class="ports"><span>← in</span><span>out →</span></div>
+      <div class="progress"><i></i></div>
+    </div>
+    <div class="node decision" data-n="decision" style="left:530px;top:90px">
+      <header><span class="badge">?</span><b>Has frontmatter?</b><span class="ph">·</span></header>
+      <div class="desc">Routes pages with YAML headers separately.</div>
+      <div class="ports"><span>← in</span><span>yes / no</span></div>
+    </div>
+    <div class="node sink" data-n="sink" style="left:770px;top:250px">
+      <header><span class="badge">→</span><b>WP drafts</b><span class="ph">E</span></header>
+      <div class="desc">Writes to <code>/wp-json/wp/v2/pages</code></div>
+      <div class="ports"><span>← in</span><span>—</span></div>
+      <div class="progress"><i></i></div>
+    </div>
+  </section>
+
+  <aside class="inspector">
+    <div class="insp-head" id="iHead">
+      <div class="swatch" id="iSw" style="background:var(--src)">S</div>
+      <div><b id="iTitle">HTTPS source</b><small id="iSub">node A · type: source</small></div>
+    </div>
+    <div class="insp-body" id="iBody"></div>
+    <div class="insp-foot">
+      <button class="go" id="go">▶ Review &amp; import — run graph</button>
+      <div class="phases" id="phases">
+        <div data-k="queued">QUE</div>
+        <div data-k="reading">READ</div>
+        <div data-k="preparing">PREP</div>
+        <div data-k="urls">URLS</div>
+        <div data-k="media">MEDIA</div>
+        <div data-k="writing">WRITE</div>
+        <div data-k="complete">DONE</div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+// Inspector content by selected node
+const insps={
+  src:{title:"HTTPS source",sub:"node A · type: source",sw:"S",swbg:"var(--src)",html:`
+    <section><h4>Source URL</h4><input type="url" id="urlInput" value="https://github.com/WordPress/gutenberg/tree/trunk/docs"></section>
+    <section><h4>Auth</h4><select><option>Public · no token</option><option>Personal access token</option><option>OAuth (GitHub)</option></select></section>
+    <section><h4>Branch / ref</h4><div class="chips"><span class="on">trunk</span><span>6.5</span><span>6.4</span><span>release/6.6</span></div></section>
+    <section><h4>Subtree</h4><input type="text" value="/docs"></section>
+    <section><h4>Discovered</h4><div class="kv">files<b id="kFiles">64</b></div><div class="kv">md pages<b>38</b></div><div class="kv">media<b>22</b></div><div class="kv">size<b>14.6 MB</b></div></section>`},
+  parser:{title:"Markdown reader",sub:"node B · type: parser",sw:"P",swbg:"var(--parser)",html:`
+    <section><h4>Format</h4><div class="chips"><span class="on">CommonMark</span><span>GFM</span><span>MDX</span></div></section>
+    <section><h4>Frontmatter</h4><label><span>YAML headers <small>extract slug, title, tags</small></span><input type="checkbox" checked><span class="toggle"></span></label><label><span>Strip TOC blocks</span><input type="checkbox" checked><span class="toggle"></span></label><label><span>Convert callouts to blocks</span><input type="checkbox"><span class="toggle"></span></label></section>
+    <section><h4>Sample extract</h4><textarea readonly># Block Editor Handbook
+The block editor (Gutenberg) is the modern editing experience…
+- intro
+- getting-started</textarea></section>`},
+  url:{title:"URL rewriter",sub:"node C · type: transformer",sw:"U",swbg:"var(--url)",html:`
+    <section><h4>Strategy</h4><div class="chips"><span>Off</span><span class="on">Smart</span><span>Aggressive</span></div></section>
+    <section><h4>Rules</h4>
+      <div class="kv">github.com/.../docs/<b>→ /handbook/</b></div>
+      <div class="kv">raw.githubusercontent.com<b>→ /uploads/imp/</b></div>
+      <div class="kv">#anchors<b>preserve</b></div>
+      <div class="kv">external<b>rel=&quot;noopener&quot;</b></div>
+    </section>
+    <section><h4>Custom regex</h4><input type="text" placeholder="^/blog/(.*)$ → /posts/$1"></section>`},
+  media:{title:"Media pipeline",sub:"node D · type: transformer",sw:"M",swbg:"var(--media)",html:`
+    <section><h4>Format</h4><div class="chips"><span class="on">WebP</span><span>AVIF</span><span>Keep</span></div></section>
+    <section><h4>Behaviour</h4>
+      <label><span>Dedupe by perceptual hash</span><input type="checkbox" checked><span class="toggle"></span></label>
+      <label><span>Strip EXIF / GPS</span><input type="checkbox" checked><span class="toggle"></span></label>
+      <label><span>Generate alt-text (AI)</span><input type="checkbox"><span class="toggle"></span></label>
+      <label><span>Lazy-load by default</span><input type="checkbox" checked><span class="toggle"></span></label>
+    </section>
+    <section><h4>Limits</h4><div class="kv">max width<b>1600 px</b></div><div class="kv">quality<b>82</b></div><div class="kv">max size<b>500 KB</b></div></section>`},
+  decision:{title:"Has frontmatter?",sub:"node · type: decision",sw:"?",swbg:"var(--decision)",html:`
+    <section><h4>Condition</h4><textarea readonly>page.frontmatter.title != null
+&amp;&amp; page.frontmatter.slug != null</textarea></section>
+    <section><h4>Yes branch</h4><div class="kv">target<b>URL rewriter</b></div></section>
+    <section><h4>No branch</h4><div class="kv">target<b>Media pipeline</b></div></section>
+    <section><h4>Counts</h4><div class="kv">yes<b>31</b></div><div class="kv">no<b>7</b></div></section>`},
+  sink:{title:"WP drafts",sub:"node E · type: sink",sw:"→",swbg:"var(--sink)",html:`
+    <section><h4>Endpoint</h4><input type="text" value="https://site.local/wp-json/wp/v2/pages"></section>
+    <section><h4>Defaults</h4>
+      <label><span>Status · draft</span><input type="checkbox" checked><span class="toggle"></span></label>
+      <label><span>Open editor on first item</span><input type="checkbox"><span class="toggle"></span></label>
+      <label><span>Email summary</span><input type="checkbox" checked><span class="toggle"></span></label>
+    </section>
+    <section><h4>Auth</h4><select><option>Application password (current user)</option><option>JWT</option><option>OAuth</option></select></section>`}
+};
+const iBody=document.getElementById("iBody"),iTitle=document.getElementById("iTitle"),iSub=document.getElementById("iSub"),iSw=document.getElementById("iSw");
+function showInspector(k){
+  const v=insps[k];
+  iTitle.textContent=v.title;iSub.textContent=v.sub;iSw.textContent=v.sw;iSw.style.background=v.swbg;
+  iBody.innerHTML=v.html;
+}
+showInspector("src");
+const nodes=[...document.querySelectorAll(".node")];
+nodes.forEach(n=>n.addEventListener("click",()=>{
+  nodes.forEach(x=>x.classList.remove("sel"));n.classList.add("sel");showInspector(n.dataset.n);
+}));
+
+// Run simulation
+const phases=[
+  {k:"queued",l:"queued",node:"src",edges:[]},
+  {k:"reading",l:"reading source",node:"src",edges:["e1"]},
+  {k:"preparing",l:"preparing content",node:"parser",edges:["e1","e2","e3"]},
+  {k:"urls",l:"URL treatment",node:"url",edges:["e1","e2","e3","e4"]},
+  {k:"media",l:"importing media",node:"media",edges:["e1","e2","e3","e4","e5"]},
+  {k:"writing",l:"writing pages",node:"sink",edges:["e1","e2","e3","e4","e5"]},
+  {k:"complete",l:"complete",node:null,edges:["e1","e2","e3","e4","e5"]}
+];
+const edges={e1:document.getElementById("e1"),e2:document.getElementById("e2"),e3:document.getElementById("e3"),e4:document.getElementById("e4"),e5:document.getElementById("e5")};
+const go=document.getElementById("go"),phaseDivs=document.querySelectorAll("#phases div");
+go.addEventListener("click",()=>{
+  go.disabled=true;
+  Object.values(edges).forEach(e=>e.classList.remove("act","done"));
+  nodes.forEach(n=>{n.classList.remove("run-now","run-done");const p=n.querySelector(".progress i");if(p)p.style.width="0%"});
+  let i=0;const t=setInterval(()=>{
+    const p=phases[i];
+    phaseDivs.forEach((d,idx)=>{d.classList.remove("now","done");if(idx<i)d.classList.add("done");else if(idx===i)d.classList.add("now")});
+    // Edges
+    Object.entries(edges).forEach(([id,el])=>{
+      el.classList.remove("act","done");
+      if(p.edges.includes(id)){if(i===phases.length-1)el.classList.add("done");else el.classList.add("act")}
+    });
+    // Nodes
+    nodes.forEach(n=>{n.classList.remove("run-now");if(n.dataset.n===p.node)n.classList.add("run-now");});
+    // Mark prior nodes done
+    const order=["src","parser","url","media","sink"];
+    const cur=order.indexOf(p.node);
+    order.forEach((nm,idx)=>{const nd=document.querySelector(`.node[data-n="${nm}"]`);if(!nd)return;const pr=nd.querySelector(".progress i");if(idx<cur){nd.classList.add("run-done");if(pr)pr.style.width="100%"}else if(idx===cur&&pr){pr.style.width=(60+i*5)+"%"}});
+    if(p.k==="complete"){
+      clearInterval(t);go.disabled=false;
+      nodes.forEach(n=>{n.classList.remove("run-now");n.classList.add("run-done");const pr=n.querySelector(".progress i");if(pr)pr.style.width="100%"});
+      // Reveal a result note in inspector
+      iTitle.textContent="Run complete";iSub.textContent="38 drafts · 22 media · 4 URL rules";iSw.textContent="✓";iSw.style.background="var(--ok)";
+      iBody.innerHTML='<section><h4>Result</h4><div class="kv">drafts<b>38</b></div><div class="kv">media<b>22</b></div><div class="kv">url rules<b>4</b></div><div class="kv">duration<b>3.9 s</b></div></section><section><h4>Next</h4><div class="chips"><span class="on">Open first draft</span><span>Run again</span><span>Edit graph</span></div></section>';
+    }
+    i++;
+  },560);
+});
+</script>
+</body>
+</html>

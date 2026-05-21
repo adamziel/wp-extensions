@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>48 Sidebar App · Universal Importer</title>
+<style>
+:root{--bg:#0f1115;--rail:#16181f;--panel:#1c1f29;--panel2:#262a37;--ink:#e6e9f2;--mute:#8a90a3;--ok:#3ddc97;--warn:#ffb259;--accent:#7c5cff;--accent2:#4ec1ff;--rule:#2b2f3d;--row:#23273440}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 ui-sans-serif,-apple-system,"SF Pro Text","Segoe UI",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit;border:0;background:transparent}
+.app{display:grid;grid-template-columns:60px 280px 1fr;height:100vh;min-height:680px}
+/* === Icon rail === */
+.rail{background:var(--rail);border-right:1px solid #0a0c10;display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px}
+.rail .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;color:#fff;font-weight:900;font-size:14px;margin-bottom:6px;box-shadow:0 6px 14px rgba(124,92,255,.35)}
+.rail button{width:42px;height:42px;border-radius:10px;display:grid;place-items:center;color:var(--mute);cursor:pointer;position:relative}
+.rail button:hover{background:#222632;color:var(--ink)}
+.rail button.on{background:#222632;color:var(--ink)}
+.rail button.on::before{content:"";position:absolute;left:-7px;top:8px;bottom:8px;width:3px;border-radius:2px;background:var(--accent)}
+.rail svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.rail .me{margin-top:auto;width:28px;height:28px;border-radius:50%;background:#3a3f53;display:grid;place-items:center;color:#fff;font-weight:700;margin-bottom:6px;font-size:11px}
+/* === Source list === */
+.list{background:var(--panel);border-right:1px solid #0a0c10;display:flex;flex-direction:column;overflow:hidden}
+.list .hd{padding:12px 14px 8px;border-bottom:1px solid var(--rule);display:flex;justify-content:space-between;align-items:center}
+.list .hd b{font-size:14px}
+.list .hd .new{padding:3px 8px;border-radius:6px;background:var(--accent);color:#fff;font-size:11px;font-weight:700;cursor:pointer}
+.list .find{padding:8px 14px;border-bottom:1px solid var(--rule)}
+.list .find input{width:100%;padding:7px 10px;background:#11131a;border:1px solid var(--rule);border-radius:6px;color:var(--ink);font-size:12.5px}
+.list .group{padding:10px 14px 4px;color:var(--mute);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;display:flex;justify-content:space-between}
+.row{display:grid;grid-template-columns:18px 1fr auto;gap:9px;align-items:center;padding:7px 14px;cursor:pointer;border-left:2px solid transparent}
+.row:hover{background:var(--row)}
+.row.sel{background:#262a37;border-left-color:var(--accent)}
+.row .dot{width:9px;height:9px;border-radius:50%;background:#41475a;justify-self:center}
+.row.q .dot{background:var(--mute)}
+.row.r .dot{background:var(--accent2);box-shadow:0 0 0 3px rgba(78,193,255,.18)}
+.row.p .dot{background:var(--warn)}
+.row.w .dot{background:var(--accent);box-shadow:0 0 0 3px rgba(124,92,255,.22)}
+.row.done .dot{background:var(--ok)}
+.row .t{display:flex;flex-direction:column;min-width:0}
+.row .t b{font-size:12.5px;font-weight:600;text-overflow:ellipsis;white-space:nowrap;overflow:hidden}
+.row .t small{color:var(--mute);font-size:11px}
+.row .badge{font-size:10px;padding:2px 6px;border:1px solid var(--rule);border-radius:999px;color:var(--mute);background:#161a23}
+.list .scroller{overflow:auto;flex:1}
+/* === Work area === */
+.work{display:grid;grid-template-rows:auto auto 1fr auto;min-width:0}
+.crumbs{padding:10px 18px;border-bottom:1px solid var(--rule);display:flex;gap:10px;align-items:center;color:var(--mute);font-size:12px}
+.crumbs b{color:var(--ink);font-weight:700}
+.crumbs .ver{margin-left:auto;padding:3px 8px;border:1px solid var(--rule);border-radius:999px;font-size:11px}
+.src{padding:16px 18px;display:grid;grid-template-columns:auto 1fr auto auto;gap:10px;align-items:center;border-bottom:1px solid var(--rule);background:linear-gradient(180deg,#191c25,#16181f)}
+.src .label{font-size:11px;color:var(--mute);letter-spacing:.12em;text-transform:uppercase}
+.src input.url{padding:11px 13px;background:#11131a;border:1px solid var(--rule);border-radius:8px;color:var(--ink);font-family:ui-monospace,monospace;font-size:13px}
+.src .browse{padding:10px 12px;background:#262a37;border:1px solid var(--rule);border-radius:8px;cursor:pointer;color:var(--ink)}
+.src .go{padding:11px 18px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-radius:8px;cursor:pointer;font-weight:800;letter-spacing:.04em;box-shadow:0 8px 18px rgba(124,92,255,.4)}
+.src .go:disabled{opacity:.7;cursor:wait}
+.body{display:grid;grid-template-columns:1fr 320px;min-height:0}
+.center{padding:12px 18px;overflow:auto}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--rule);margin-bottom:12px}
+.tab{padding:9px 14px;color:var(--mute);cursor:pointer;border-bottom:2px solid transparent;font-weight:600}
+.tab.on{color:var(--ink);border-bottom-color:var(--accent)}
+.panes>section{display:none}
+.panes>section.on{display:block;animation:fade .25s}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+.panes h3{margin:4px 0 8px;font-size:14px}
+.panes p{color:var(--mute);margin:0 0 10px}
+.swit{display:grid;grid-template-columns:1fr auto;gap:8px;padding:10px 12px;background:var(--panel);border:1px solid var(--rule);border-radius:8px;margin-bottom:8px}
+.swit b{font-size:12.5px}
+.swit small{display:block;color:var(--mute);font-size:11px}
+.toggle{width:38px;height:22px;border-radius:999px;background:#2a2f3d;position:relative;cursor:pointer}
+.toggle::after{content:"";position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
+.toggle.on{background:var(--accent)}
+.toggle.on::after{left:19px}
+.kvs{display:grid;gap:6px}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:8px;padding:7px 10px;border:1px solid var(--rule);border-radius:6px;background:#191c25;font-family:ui-monospace,monospace;font-size:12px}
+.kv b{color:var(--accent2);font-weight:600}
+.pillrow{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.pillrow .pill{padding:5px 10px;border:1px solid var(--rule);border-radius:999px;background:#191c25;font-size:11.5px;color:var(--mute)}
+.urlrow{display:grid;grid-template-columns:1fr 16px 1fr;gap:8px;font-family:ui-monospace,monospace;font-size:12px;padding:8px;background:#191c25;border:1px solid var(--rule);border-radius:6px;margin-bottom:6px}
+.urlrow span:nth-child(2){color:var(--accent);text-align:center}
+.mediagrid{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.mediagrid div{aspect-ratio:1;border-radius:5px;background:linear-gradient(135deg,#2d3242,#1a1d27);border:1px solid var(--rule);display:grid;place-items:center;color:var(--mute);font-size:10px}
+/* === Right inspector === */
+.right{border-left:1px solid var(--rule);background:var(--panel);padding:14px;overflow:auto}
+.right h4{margin:0 0 8px;font-size:11px;letter-spacing:.14em;color:var(--mute);text-transform:uppercase}
+.phase{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12px;color:var(--mute)}
+.phase .pd{width:14px;height:14px;border-radius:50%;border:2px solid var(--rule);display:grid;place-items:center;font-size:9px}
+.phase.now{color:var(--ink)}
+.phase.now .pd{border-color:var(--accent2);background:var(--accent2);color:#0f1115}
+.phase.done{color:var(--mute)}
+.phase.done .pd{background:var(--ok);border-color:var(--ok);color:#0f1115}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:10px}
+.stat{padding:9px 11px;background:#191c25;border:1px solid var(--rule);border-radius:6px}
+.stat b{display:block;font-size:18px;font-weight:800;letter-spacing:-.01em}
+.stat small{color:var(--mute);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
+/* === Status bar === */
+.statusbar{grid-column:1/-1;border-top:1px solid var(--rule);background:#0c0e13;padding:6px 18px;display:flex;gap:14px;font-size:11.5px;color:var(--mute);font-family:ui-monospace,monospace}
+.statusbar b{color:var(--accent2)}
+.statusbar .right-side{margin-left:auto;display:flex;gap:14px}
+@media(max-width:1100px){.app{grid-template-columns:60px 240px 1fr}.body{grid-template-columns:1fr}.right{border-left:0;border-top:1px solid var(--rule)}}
+@media(max-width:760px){.app{grid-template-columns:1fr}.rail{flex-direction:row;width:auto;height:54px;border-right:0;border-bottom:1px solid #0a0c10;overflow:auto}.list{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Icon rail -->
+  <nav class="rail">
+    <div class="logo">UI</div>
+    <button class="on" title="Inbox"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 13l9 4 9-4"/><path d="M3 19l9 4 9-4"/></svg></button>
+    <button title="Sources"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r="1"/><circle cx="7" cy="17" r="1"/></svg></button>
+    <button title="Pages"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></button>
+    <button title="Media"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M3 17l5-4 4 3 4-5 5 6"/></svg></button>
+    <button title="URLs"><svg viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1"/><path d="M14 10a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"/></svg></button>
+    <button title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.13-1.3l2-1.5-2-3.5-2.4.9a7 7 0 0 0-2.3-1.3L13.5 3h-3l-.7 2.3a7 7 0 0 0-2.3 1.3L5.1 5.7l-2 3.5 2 1.5A7 7 0 0 0 5 12c0 .45.05.88.13 1.3l-2 1.5 2 3.5 2.4-.9a7 7 0 0 0 2.3 1.3L10.5 21h3l.7-2.3a7 7 0 0 0 2.3-1.3l2.4.9 2-3.5-2-1.5c.08-.42.13-.85.13-1.3z"/></svg></button>
+    <div class="me">AZ</div>
+  </nav>
+
+  <!-- Source / pages list -->
+  <aside class="list">
+    <div class="hd"><b>WordPress / Gutenberg / docs</b><span class="new" id="new">＋ Source</span></div>
+    <div class="find"><input placeholder="Filter 64 pages…"></div>
+    <div class="scroller" id="scroller">
+      <div class="group"><span>Drafts · 38</span><span style="color:#3ddc97">●</span></div>
+      <div class="row q sel" data-i="0"><span class="dot"></span><div class="t"><b>Block Editor Handbook</b><small>handbook · 0 conflicts</small></div><span class="badge">md</span></div>
+      <div class="row q" data-i="1"><span class="dot"></span><div class="t"><b>theme.json reference</b><small>reference · 4 imgs</small></div><span class="badge">md</span></div>
+      <div class="row q" data-i="2"><span class="dot"></span><div class="t"><b>What is Gutenberg?</b><small>intro · 2 imgs</small></div><span class="badge">md</span></div>
+      <div class="row q" data-i="3"><span class="dot"></span><div class="t"><b>Patterns API</b><small>tutorial · 5 imgs</small></div><span class="badge">md</span></div>
+      <div class="row q" data-i="4"><span class="dot"></span><div class="t"><b>Site Editor primer</b><small>guide · 8 imgs</small></div><span class="badge">md</span></div>
+      <div class="row q" data-i="5"><span class="dot"></span><div class="t"><b>FSE roadmap</b><small>note · 1 img</small></div><span class="badge">md</span></div>
+      <div class="row q" data-i="6"><span class="dot"></span><div class="t"><b>Block supports</b><small>reference · 0 imgs</small></div><span class="badge">md</span></div>
+      <div class="row q" data-i="7"><span class="dot"></span><div class="t"><b>Hooks digest</b><small>reference</small></div><span class="badge">md</span></div>
+      <div class="group"><span>Media · 22</span></div>
+      <div class="row q" data-i="8"><span class="dot"></span><div class="t"><b>Hero illustrations</b><small>12 imgs · 4 MB</small></div><span class="badge">png</span></div>
+      <div class="row q" data-i="9"><span class="dot"></span><div class="t"><b>Block icons</b><small>10 imgs · SVG</small></div><span class="badge">svg</span></div>
+      <div class="group"><span>URL rules · 4</span></div>
+      <div class="row q" data-i="10"><span class="dot"></span><div class="t"><b>github.com → site.local</b><small>host swap</small></div><span class="badge">map</span></div>
+      <div class="row q" data-i="11"><span class="dot"></span><div class="t"><b>/docs/* → /handbook/*</b><small>prefix</small></div><span class="badge">map</span></div>
+      <div class="row q" data-i="12"><span class="dot"></span><div class="t"><b>raw.githubusercontent → media</b><small>asset</small></div><span class="badge">map</span></div>
+      <div class="row q" data-i="13"><span class="dot"></span><div class="t"><b>Anchor links</b><small>preserve fragments</small></div><span class="badge">map</span></div>
+    </div>
+  </aside>
+
+  <!-- Work area -->
+  <section class="work">
+    <div class="crumbs"><span>Workspace</span><span>›</span><b>Universal importer</b><span>›</span><span>New job</span><span class="ver">v4 · 48 / 60 · Sidebar app</span></div>
+    <div class="src">
+      <div><div class="label">Source</div></div>
+      <input class="url" value="https://github.com/WordPress/gutenberg/tree/trunk/docs">
+      <button class="browse">Browse…</button>
+      <button class="go" id="run">Review &amp; import →</button>
+    </div>
+    <div class="body">
+      <main class="center">
+        <div class="tabs" id="tabs">
+          <div class="tab on" data-p="ov">Overview</div>
+          <div class="tab" data-p="ct">Content rules</div>
+          <div class="tab" data-p="md">Media</div>
+          <div class="tab" data-p="ur">URL treatment</div>
+          <div class="tab" data-p="au">Authors</div>
+          <div class="tab" data-p="sc">Schedule</div>
+        </div>
+        <div class="panes">
+          <section class="on" data-p="ov">
+            <h3>Discovered 64 items in this source</h3>
+            <p>The connector walked the source tree and bundled candidates into three lanes: pages, media, and URL rules. Use the tabs to fine-tune any of them before clicking <b>Review &amp; import</b>.</p>
+            <div class="stats">
+              <div class="stat"><small>Pages</small><b>38</b></div>
+              <div class="stat"><small>Media</small><b>22</b></div>
+              <div class="stat"><small>URL rules</small><b>4</b></div>
+              <div class="stat"><small>Authors</small><b>3</b></div>
+            </div>
+          </section>
+          <section data-p="ct">
+            <h3>Content rules</h3>
+            <p>Toggle which kinds of pages to bring across. The list on the left updates instantly.</p>
+            <div class="swit"><div><b>Handbooks &amp; references</b><small>Long-form documentation with TOCs</small></div><div class="toggle on"></div></div>
+            <div class="swit"><div><b>Tutorials</b><small>Step-by-step walkthroughs</small></div><div class="toggle on"></div></div>
+            <div class="swit"><div><b>API reference</b><small>Auto-generated function and hook docs</small></div><div class="toggle"></div></div>
+            <div class="swit"><div><b>Changelogs</b><small>Per-release notes (often huge)</small></div><div class="toggle"></div></div>
+          </section>
+          <section data-p="md">
+            <h3>Media (22 items)</h3>
+            <p>Thumbnails the importer detected. They will be deduplicated and re-encoded to WebP.</p>
+            <div class="mediagrid">
+              <div>1.png</div><div>2.png</div><div>3.svg</div><div>4.svg</div><div>5.gif</div><div>6.png</div>
+              <div>7.svg</div><div>8.svg</div><div>9.png</div><div>10.png</div><div>11.svg</div><div>12.svg</div>
+            </div>
+            <div class="pillrow" style="margin-top:10px"><span class="pill">Dedupe by hash</span><span class="pill">Recompress &gt; 200KB</span><span class="pill">Strip EXIF</span><span class="pill">Generate alt-text</span></div>
+          </section>
+          <section data-p="ur">
+            <h3>URL treatment</h3>
+            <p>Every detected outgoing link gets a rule. Click a rule on the left to edit.</p>
+            <div class="urlrow"><span>github.com/WordPress/gutenberg/blob/trunk/docs/</span><span>→</span><span>/handbook/</span></div>
+            <div class="urlrow"><span>raw.githubusercontent.com/.../*.png</span><span>→</span><span>/wp-content/uploads/imp/</span></div>
+            <div class="urlrow"><span>#headings</span><span>=</span><span>preserve fragment</span></div>
+            <div class="urlrow"><span>external (npmjs, mdn…)</span><span>+</span><span>rel=&quot;noopener noreferrer&quot;</span></div>
+          </section>
+          <section data-p="au">
+            <h3>Authors</h3>
+            <p>Map source committers to WordPress users.</p>
+            <div class="kvs">
+              <div class="kv">@gziolo<b>gziolo@wp.org</b></div>
+              <div class="kv">@youknowriad<b>riad@wp.org</b></div>
+              <div class="kv">@ellatrix<b>ella@wp.org</b></div>
+            </div>
+            <div class="pillrow" style="margin-top:10px"><span class="pill">Create missing users</span><span class="pill">Use git timestamps</span></div>
+          </section>
+          <section data-p="sc">
+            <h3>Schedule</h3>
+            <p>Run now or queue.</p>
+            <div class="pillrow"><span class="pill" style="background:var(--accent);color:#fff;border-color:transparent">Run on click</span><span class="pill">Tonight 02:00</span><span class="pill">After PR #4220 merges</span></div>
+            <div class="swit"><div><b>Email me the summary</b><small>azielinski@a8c.com</small></div><div class="toggle on"></div></div>
+            <div class="swit"><div><b>Open results in editor</b><small>Jump straight into the first imported draft</small></div><div class="toggle"></div></div>
+          </section>
+        </div>
+      </main>
+      <!-- Right inspector with run state -->
+      <aside class="right">
+        <h4>Run plan</h4>
+        <div id="phases">
+          <div class="phase" data-k="queued"><span class="pd">1</span>queued</div>
+          <div class="phase" data-k="reading"><span class="pd">2</span>reading source</div>
+          <div class="phase" data-k="preparing"><span class="pd">3</span>preparing content</div>
+          <div class="phase" data-k="urls"><span class="pd">4</span>URL treatment</div>
+          <div class="phase" data-k="media"><span class="pd">5</span>importing media</div>
+          <div class="phase" data-k="writing"><span class="pd">6</span>writing pages</div>
+          <div class="phase" data-k="complete"><span class="pd">✓</span>complete</div>
+        </div>
+        <h4 style="margin-top:14px">Live counts</h4>
+        <div class="stats">
+          <div class="stat"><small>Read</small><b id="cR">0</b></div>
+          <div class="stat"><small>Written</small><b id="cW">0</b></div>
+          <div class="stat"><small>Media</small><b id="cM">0</b></div>
+          <div class="stat"><small>URLs</small><b id="cU">0</b></div>
+        </div>
+        <h4 style="margin-top:14px">Result</h4>
+        <div id="result" style="padding:9px 11px;background:#191c25;border:1px dashed var(--rule);border-radius:6px;color:var(--mute);font-size:12px">Nothing imported yet — click <b style="color:var(--ink)">Review &amp; import</b> above.</div>
+      </aside>
+    </div>
+    <footer class="statusbar">
+      <span>job <b>imp_482</b></span><span>source: <b>github</b></span><span>target: <b>site.local</b></span>
+      <span class="right-side"><span id="cur">idle</span><span>cmd-K to focus</span></span>
+    </footer>
+  </section>
+</div>
+
+<script>
+// Tabs (feature discovery — changes visible content)
+document.querySelectorAll("#tabs .tab").forEach(t=>t.addEventListener("click",()=>{
+  document.querySelectorAll("#tabs .tab").forEach(x=>x.classList.remove("on"));
+  t.classList.add("on");
+  const p=t.dataset.p;
+  document.querySelectorAll(".panes>section").forEach(s=>s.classList.toggle("on",s.dataset.p===p));
+}));
+document.querySelectorAll(".toggle").forEach(tg=>tg.addEventListener("click",()=>tg.classList.toggle("on")));
+document.querySelectorAll(".row").forEach(r=>r.addEventListener("click",()=>{
+  document.querySelectorAll(".row").forEach(x=>x.classList.remove("sel"));r.classList.add("sel");
+}));
+
+// Run simulation
+const phaseKeys=["queued","reading","preparing","urls","media","writing","complete"];
+const cls={queued:"q",reading:"r",preparing:"p",urls:"p",media:"p",writing:"w",complete:"done"};
+const rows=[...document.querySelectorAll(".row")];
+const cR=document.getElementById("cR"),cW=document.getElementById("cW"),cM=document.getElementById("cM"),cU=document.getElementById("cU"),cur=document.getElementById("cur");
+document.getElementById("run").addEventListener("click",()=>{
+  const btn=document.getElementById("run");btn.disabled=true;
+  rows.forEach(r=>{r.classList.remove("q","r","p","w","done");r.classList.add("q")});
+  document.querySelectorAll(".phase").forEach(p=>p.classList.remove("now","done"));
+  cR.textContent="0";cW.textContent="0";cM.textContent="0";cU.textContent="0";
+  document.getElementById("result").innerHTML='Run in progress…';
+  let i=0;const t=setInterval(()=>{
+    const k=phaseKeys[i];cur.textContent=k.replace(/^./,c=>c.toUpperCase());
+    document.querySelectorAll(".phase").forEach((p,idx)=>{p.classList.remove("now","done");if(idx<i)p.classList.add("done");else if(idx===i)p.classList.add("now");});
+    // Drive the list
+    const cut=Math.floor(rows.length*i/(phaseKeys.length-1));
+    rows.forEach((r,idx)=>{
+      r.classList.remove("q","r","p","w","done");
+      if(idx<cut-1)r.classList.add("done");
+      else if(idx===cut-1||idx===cut)r.classList.add(cls[k]||"r");
+      else r.classList.add("q");
+    });
+    cR.textContent=Math.min(38,Math.round(38*i/6));
+    cW.textContent=i>=5?Math.min(38,Math.round(38*(i-4)/2)):0;
+    cM.textContent=i>=4?Math.min(22,Math.round(22*(i-3)/3)):0;
+    cU.textContent=i>=3?Math.min(4,Math.round(4*(i-2)/4)):0;
+    if(k==="complete"){
+      clearInterval(t);btn.disabled=false;cur.textContent="done";
+      rows.forEach(r=>{r.classList.remove("q","r","p","w");r.classList.add("done")});
+      cR.textContent="38";cW.textContent="38";cM.textContent="22";cU.textContent="4";
+      document.getElementById("result").innerHTML='<b style="color:var(--ok)">Imported ·</b> 38 drafts, 22 media, 4 URL rules. <a href="#" style="color:var(--accent2)">Open editor →</a>';
+    }
+    i++;
+  },560);
+});
+document.getElementById("new").addEventListener("click",()=>document.querySelector(".url").focus());
+</script>
+</body>
+</html>
