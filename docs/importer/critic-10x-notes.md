@@ -374,3 +374,13 @@ The tablet-width result remains readable after the recent trims. The dry-run cou
 Item-level evidence is still reviewable at this width. The skipped-title row retains the necessary chain: `Skip`, `Untitled appendix`, `appendix/no-title.md`, `No readable title found`, `Editor`, and `Add title or skip`. The warning row also still leads cleanly into remediation: `Block rendering` identifies the missing `images/block-rendering.svg`, the evidence says the linked media is absent from the source checkout, and the `Replace media` action matches the selected replacement panel below.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No layout or copy adjustment is justified for this pass.
+
+## Pass 33 Critique
+
+The mobile scan-decision state explains the interruption without extra policy copy. "Scan decision," "Needs decision," and "Handle old-site URLs" establish why the dry run stopped, while the sentence about 7 links in 3 draft pages gives the concrete scope and says the dry run cannot finish until the choice is made.
+
+The two radio choices are enough because each names the behavior and the consequence: keep the links unchanged in the preview, or rewrite known old URLs to matching draft pages while reporting unresolved links. The affected-content proof is also appropriately small: one old URL example, three affected page names, and a "View affected content" action. That gives confidence without turning the card into a URL policy document.
+
+The action pair is clear in context. "Apply decision and continue" advances the paused dry run with the selected handling, and "Pause dry run" gives a safe exit without adding another explanation block. The progress stack below reinforces that this is an active dry run waiting on URL handling, not a new setup step.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass; adding more policy text would make this mobile state heavier without improving the decision.
