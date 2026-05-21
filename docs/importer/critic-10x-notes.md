@@ -1572,3 +1572,11 @@ The Pass 148 button wrapping fix resolves the containment defect without creatin
 Tablet and desktop also hold. At 768px and 1440px, the main desktop/tablet buttons keep `nowrap` where expected, while row link-style result actions are allowed to wrap and become about `94px` by `45.69px` when labels are longer. That is not a hierarchy regression; those controls still read as secondary row actions, and the extra height improves target area instead of adding visual weight or new behavior.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 149. Keep the scoped wrapping behavior from Pass 148 as-is; reintroducing `nowrap` would risk restoring the narrow overflow defect without improving the importer journey.
+
+## Pass 150 Critique
+
+The 320px large-text keyboard-focus evidence does not show a real focus, target-size, wrapping, hierarchy, or overflow defect. All four focused states remain page-contained at `scrollWidth=320` with `overflowCount=0`, and each focused action has a visible `2px` focus shadow inside the viewport.
+
+The wrapped primary labels are acceptable large-text behavior rather than a regression. `Apply decision and continue` and `Run real import as drafts` grow to about `70.19px` tall, which improves target area while preserving the primary-action hierarchy; `Download report` and `Back to dry-run result` remain about `44.09px` tall and readable. The blue and green primary actions still read as the main commitments, while the white secondary/report actions stay visually subordinate.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 150. Keep the Pass 148 containment and button-wrapping fix as-is; it resolves the narrow large-text overflow without creating a focus or hierarchy problem.
