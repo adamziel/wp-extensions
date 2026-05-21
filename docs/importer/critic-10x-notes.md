@@ -280,3 +280,13 @@ Sequence clarity holds across the whole page. Setup, scan decision, dry-run resu
 Source coverage is also stable. The first-screen helper now names WordPress exports while the disclosure continues to carry the broader proof for GitHub, WordPress sites and WXR, feeds and OPML, server paths, browser uploads, archives, documents, SQL, XML, Markdown, HTML, PDF, EPUB, and plain text files. That is enough for this design-only artifact; adding a visible source matrix or alternate-source journey would be bloat.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny follow-up is justified in this pass. Remaining concerns are production handoff caveats only: real validation, source-specific adaptation, keyboard and focus behavior, live progress announcements, high-contrast QA, and large-result responsive testing.
+
+## Pass 22 Critique
+
+The opened support disclosure still feels secondary to the dry-run path after the helper edit. In the mobile screenshot, the required source field, "Start dry run" action, fixed dry-run guarantee, upload fallback, source-type choice, and editable settings all appear before the support cards. Opening the disclosure adds proof of coverage, but it does not compete with the main paste-preview action or turn the first screen into a source matrix.
+
+The new helper wording also removes the one vague coverage cue without creating duplicate copy. "WordPress exports" appears in the short helper as a concrete example, while the disclosure gives the fuller source proof through "WordPress site" with REST/WXR and "Archive or document" with WXR, Markdown, HTML, PDF, EPUB, XML, SQL, OPML, and plain text. That repetition is useful layered disclosure rather than bloat because the helper answers "can I paste this kind of source?" and the opened cards answer "what does each source family cover?"
+
+Source coverage is clear enough for this design-only artifact. The cards remain compact, source-family based, and scannable; they do not add alternate journeys, per-format examples, or source-specific result states. The one small wording imperfection is that WordPress exports now appear in both the helper and disclosure, but that is acceptable because the two placements serve different levels of attention.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny follow-up is justified in this pass. Do not add a visible source matrix, more format examples, or another alternate-source flow unless human review identifies a specific misunderstanding.
