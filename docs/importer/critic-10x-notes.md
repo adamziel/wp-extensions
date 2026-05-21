@@ -1802,3 +1802,11 @@ The 320px forced-colors full-flow regression passes. Forced colors is active, ev
 The scan stage dots also survive system-color mapping. Their custom backgrounds collapse to white and the glyphs map to black, so the check, alert, and number symbols remain legible without a bespoke forced-colors rule. The state labels and status text continue to carry meaning if color distinctions are unavailable.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 178. Keep forced-colors behavior delegated to system colors.
+
+## Pass 179 Critique
+
+The motion/style scan does not show an interaction or accessibility defect. The artifact has no `animation`, `transition`, `transform`, `@keyframes`, `scroll-behavior`, or `prefers-reduced-motion` rules. The only match is `text-transform: uppercase`, which is static label styling rather than motion.
+
+That is the right posture for this importer surface. The design is an operational admin workflow, so avoiding decorative movement keeps attention on source selection, dry-run evidence, warning resolution, and the final import boundary.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 179. Do not add motion unless a future implementation has a concrete state-change need and a reduced-motion fallback.
