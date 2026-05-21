@@ -14,6 +14,7 @@ use WordPress\Filesystem\LocalFilesystem;
 use WordPress\Git\GitFilesystem;
 use WordPress\Git\GitRepository;
 use WordPress\Git\Model\Commit;
+use WordPress\HttpClient\Client;
 
 /**
  * Fetches GitHub repository subtrees through php-toolkit Git plumbing.
@@ -52,10 +53,11 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 		$git_repository = new GitRepository( LocalFilesystem::create( $repository_root ), array( 'default_branch' => $branch ) );
 		$branch_ref     = 'refs/heads/' . $branch;
 		$remote_url     = 'https://github.com/' . rawurlencode( (string) $repo['owner'] ) . '/' . rawurlencode( (string) $repo['name'] ) . '.git';
+		$http_client    = $this->http_client();
 
 		$git_repository->add_remote( 'origin', $remote_url );
 		$git_repository->set_branch_tip( $branch_ref, Commit::NULL_HASH );
-		$git_repository->get_remote_client( 'origin' )->pull(
+		$git_repository->get_remote_client( 'origin', array( 'http_client' => $http_client ) )->pull(
 			$branch_ref,
 			array(
 				'force'   => true,
@@ -73,7 +75,7 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 
 		$files = array();
 		$this->collect_files( $filesystem, $root, $repo, $session, $cache_directory, $files );
-		$this->expand_files_with_markdown_links( $git_repository, $filesystem, $branch_ref, $repo, $session, $cache_directory, $files );
+		$this->expand_files_with_markdown_links( $git_repository, $filesystem, $branch_ref, $repo, $session, $cache_directory, $files, $http_client );
 
 		if ( empty( $files ) ) {
 			throw new RuntimeException( 'php-toolkit Git traversal did not find importable files.' );
@@ -93,9 +95,28 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 			! class_exists( GitRepository::class )
 			|| ! class_exists( GitFilesystem::class )
 			|| ! class_exists( LocalFilesystem::class )
+			|| ! class_exists( Client::class )
 		) {
 			throw new RuntimeException( 'wp-php-toolkit/git is not available.' );
 		}
+	}
+
+	/**
+	 * Builds the HTTP client used for Git upload-pack requests.
+	 *
+	 * @return object HTTP client.
+	 */
+	private function http_client() {
+		if ( function_exists( 'wp_remote_request' ) ) {
+			return new WordPressGitHttpClient();
+		}
+
+		return new Client(
+			array(
+				'transport'  => 'sockets',
+				'timeout_ms' => 300000,
+			)
+		);
 	}
 
 	/**
@@ -186,9 +207,10 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 	 * @param ImportSession                  $session Import session.
 	 * @param ImportCacheDirectory           $cache_directory Cache directory.
 	 * @param array<int,array<string,mixed>> $files Files collected so far.
+	 * @param object                         $http_client Git HTTP client.
 	 * @return void
 	 */
-	private function expand_files_with_markdown_links( GitRepository $git_repository, $filesystem, $branch_ref, array $repo, ImportSession $session, ImportCacheDirectory $cache_directory, array &$files ) {
+	private function expand_files_with_markdown_links( GitRepository $git_repository, $filesystem, $branch_ref, array $repo, ImportSession $session, ImportCacheDirectory $cache_directory, array &$files, $http_client ) {
 		$indexed = array();
 		$queue   = array();
 
@@ -224,7 +246,7 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 				}
 
 				try {
-					$git_repository->get_remote_client( 'origin' )->pull(
+					$git_repository->get_remote_client( 'origin', array( 'http_client' => $http_client ) )->pull(
 						$branch_ref,
 						array(
 							'force'   => true,
