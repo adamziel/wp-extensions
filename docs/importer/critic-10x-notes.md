@@ -322,3 +322,11 @@ The skipped-title evidence trim did not remove necessary evidence. In the mobile
 The surrounding copy also preserves the next action and import consequence. "Warnings still open" says the title warning can be fixed by adding a title or confirming the skip, the real-import gate says unresolved items will be skipped, and the "Before running" panel repeats that importing the appendix requires adding a title in the dry-run result. That layering is useful rather than bloated because each placement answers a different user question: item evidence, remaining issue, final write consequence, and pre-run remediation.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy adjustment is justified for this pass.
+
+## Pass 27 Critique
+
+The "Ready for real import" section works as the last pre-write decision. It is consequence-explicit before the green action: running is allowed because warnings are non-blocking, content stays unpublished, 9 drafts are created, 3 drafts are updated, 0 items publish, 7 old-site URLs remain external, 1 untitled document is skipped, and 1 media warning is carried into the final report. The adjacent "Before running" panel also keeps remediation choices pre-run rather than implying the import has already succeeded.
+
+The "After running" block is close to the boundary but still acceptable. It does not introduce a success dashboard, retry queue, rollback flow, or completed-import state; it simply confirms where the user lands after the write: edit drafts, review updates, see the skipped item, and open the final report. That helps users understand what will happen after pressing the button without bloating the pre-run state into a post-import experience.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or structure trim is justified in this pass. If future review says the post-run promise feels too strong, the only acceptable trim would be to shorten "After running" to a single sentence promising created/updated draft links and a final report, but that is not needed based on the current screenshot.
