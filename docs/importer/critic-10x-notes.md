@@ -420,3 +420,13 @@ The opened "Upload files instead" disclosure has the right clarity-to-bloat bala
 Coverage is clear enough for the optional path. The helper names local archives, folders, documents, feed lists, and exports that are not available at a URL, which covers browser-selected files, folders, local archive/export cases, and non-URL feed lists without turning the setup panel into another source matrix. The source-type grid immediately below still reinforces "Browser upload" and "Archive or document" as secondary source families.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass; adding more upload examples would create bloat, and moving the disclosure lower would make the legitimate local-file fallback harder to find.
+
+## Pass 38 Critique
+
+The desktop setup hierarchy remains clear rather than bloated with the upload disclosure closed. The primary path is still visually dominant: source type, source field, "Start dry run," and the fixed dry-run guarantee sit together in the main panel, while optional upload appears as a single collapsed disclosure after the guarantee. That ordering keeps browser upload available without making it compete with the paste-or-path route.
+
+The editable settings and current setup summary still help more than they distract. The three settings are compact, consequence-focused, and below the main action, so they read as import defaults rather than setup prerequisites. The summary panel earns its space because it repeats the selected source, path, preview-only mode, draft behavior, URL policy, and next steps in one glance; it supports confidence before preview instead of introducing another decision.
+
+The collapsed source-support disclosure remains secondary. It is available after the required action, guarantee, optional upload fallback, and settings, so it preserves feature proof without reintroducing a visible source matrix. On desktop, the right rail plus this disclosure do make the setup section informationally dense, but the density is aligned with review confidence and does not obscure what the user should do first.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass.
