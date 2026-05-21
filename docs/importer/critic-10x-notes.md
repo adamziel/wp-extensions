@@ -1596,3 +1596,11 @@ The A4 print evidence does not show a true print, readability, handoff, or overf
 The roughly `4502px` body height is expected for a static artifact that prints the complete importer journey. Setup and result are taller than one A4 viewport, but the screenshot shows readable content, preserved action order, and no clipped controls or horizontal crop. For handoff, a multi-page printout is acceptable because it keeps the full setup, scan decision, dry-run result, and real-import gate visible without hiding importer behavior.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 152. Do not add print-only compression, forced page breaks, or feature trimming unless future PDF evidence shows split controls, orphaned headings, missing state context, or actual clipped content.
+
+## Pass 153 Critique
+
+The dark color-scheme evidence does not show a true dark-mode, readability, or overflow defect. `prefers-color-scheme: dark` is active, but the artifact continues to use the intended WordPress admin light palette: dark text on `#f0f0f1`, white panels, and blue primary actions with white labels. That is consistent rather than mixed; the UI is not pretending to be dark mode while leaving unreadable light/dark pairings behind.
+
+The measured containment also holds. At 500px and 1440px, `clientWidth`, `scrollWidth`, and `bodyScrollWidth` all match, `overflowCount=0`, and the primary button remains readable and target-safe. The screenshots show light sections with dark text and no clipped controls, hidden content, or page-level horizontal scrolling.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 153. Do not add a dark theme or `prefers-color-scheme` branch to this static artifact; that would broaden scope without fixing a demonstrated defect. If production later supports WordPress admin color-scheme adaptation, handle it as a separate implementation concern rather than inside this static journey artifact.
