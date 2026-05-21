@@ -152,6 +152,47 @@ final class GitHubRepositorySourceWalkerTest extends TestCase {
 	}
 
 	/**
+	 * Sparse Git failures include the attempted ref, path, and exception detail.
+	 *
+	 * @return void
+	 */
+	public function test_walker_records_sparse_git_failure_reason() {
+		$git_fetcher = new FakeGitRepositoryFetcher();
+		$git_fetcher->fail_ref( 'trunk/docs/explanations/architecture', 'Git ref was not found.' );
+		$git_fetcher->fail_ref( 'trunk/docs/explanations', 'Git ref was not found.' );
+		$git_fetcher->fail_ref( 'trunk/docs', 'Git ref was not found.' );
+		$git_fetcher->fail_ref( 'trunk', 'Remote upload-pack returned HTTP 500.' );
+
+		$session = ImportSession::start_for_source( 'https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture' );
+		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
+		$this->store->save( $session );
+
+		( new GitHubRepositorySourceWalker( $this->store, null, $cache, null, ImportRunnerControls::none(), $git_fetcher ) )->advance( $session );
+
+		$events = $this->store->list_events( $session->get_id(), 20 );
+		$messages = array_map(
+			function ( $event ) {
+				return $event->get_message();
+			},
+			$events
+		);
+
+		$git_failure_messages = array_values(
+			array_filter(
+				$messages,
+				function ( $message ) {
+					return false !== strpos( $message, 'Remote upload-pack returned HTTP 500.' );
+				}
+			)
+		);
+
+		$this->assertNotEmpty( $git_failure_messages );
+		$this->assertStringContainsString( 'ref "trunk"', $git_failure_messages[0] );
+		$this->assertStringContainsString( 'path "docs/explanations/architecture"', $git_failure_messages[0] );
+		$this->assertStringContainsString( 'Remote upload-pack returned HTTP 500.', $git_failure_messages[0] );
+	}
+
+	/**
 	 * Creates a temporary directory tracked for cleanup.
 	 *
 	 * @return string

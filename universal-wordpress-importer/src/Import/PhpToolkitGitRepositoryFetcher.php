@@ -107,10 +107,6 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 	 * @return object HTTP client.
 	 */
 	private function http_client() {
-		if ( function_exists( 'wp_remote_request' ) ) {
-			return new WordPressGitHttpClient();
-		}
-
 		return new Client(
 			array(
 				'transport'  => 'sockets',
