@@ -1296,3 +1296,13 @@ The hierarchy is also right for a paused scan decision. "View affected links" na
 The metrics support avoiding another change. The primary button is already contained across mobile, narrow mobile, and desktop, with no horizontal overflow and stable `40px` height. The narrow mobile primary width is only `302px`, so echoing "keep as external links" or "leave 7 links unchanged" would either wrap, truncate, or force a shorter bespoke phrase that hides the broader apply-and-continue meaning.
 
 Recommendation: keep the primary label as "Apply decision and continue." Let the selected radio text carry the selected keep-links consequence, and keep the primary button generic because it applies the active choice rather than one hard-coded outcome. Do not edit the HTML, plugin code, or runtime for Pass 120.
+
+## Pass 121 Critique
+
+The result-row action labels should stay as they are. "Review match," "Replace media," and "Add title or skip" are concrete enough to explain the next step for each dry-run result without inflating the row into a mini workflow. They also preserve the existing feature surface: review a duplicate match, replace a media item, or resolve a missing title by adding one or skipping. The mobile and narrow-mobile captures have no horizontal overflow, and even though the link-style actions are only about `18.84px` tall, that is consistent with inline row actions rather than primary buttons. I would not change this copy just to make the controls look larger.
+
+The desktop "Download report" sizing is a layout bug and should be fixed in the design artifact. Its desktop rectangle is `300px` wide by about `126.48px` tall, while the same action is a normal `40px` tall button on mobile and narrow mobile. That means the desktop layout is stretching the action vertically because of its grid or alignment context, not because the label needs more room. It makes a secondary export action visually compete with the result content and creates the impression of a large panel or tile, which works against the clearer journey goal.
+
+This is worth a layout-only follow-up, not a copy or runtime change. The target behavior should be the same `40px` button height seen on mobile, with desktop alignment adjusted so the action sizes to its content or to the intended control height instead of filling the row. Fixing that would reduce visual noise without adding controls, changing labels, or touching plugin/runtime code.
+
+Recommendation: fix the desktop "Download report" stretch as a layout bug in the HTML artifact when the designer next edits it. Keep the result-row action labels unchanged; they are specific, contained, and do not need copy churn for Pass 121.
