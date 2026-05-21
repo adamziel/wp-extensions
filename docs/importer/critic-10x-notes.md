@@ -1706,3 +1706,11 @@ The post-import link target fix does not create a hierarchy, overflow, or comple
 The after-running gate stays proportionate. It measures 190.89px high at 500px, 272.08px at 320px, and 170.59px at 1440px, which is still a compact proof list after the final import action rather than a new dashboard. The target floor improves keyboard and pointer tolerance without changing labels, order, content, or import behavior.
 
 Recommendation: make no further HTML, CSS, copy, plugin, or runtime change for Pass 166. Keep the Pass 165 fix exactly scoped to `.after-import-gate a`.
+
+## Pass 167 Critique
+
+The broader 320px target audit supports stopping the current target-size thread. When grouped native controls are measured by the visible label/card surface rather than by the internal radio or checkbox glyph, the artifact has 35 focusable stops, zero surfaces below 24px, and zero surfaces below 40px in both dimensions.
+
+That result matters because it separates real small targets from measurement noise. The remaining 13px values belong to native glyphs inside source tabs, check cards, and URL radio cards; the user-facing targets are the surrounding labels/cards already reviewed in Passes 162 and 163. The post-import links were the one real sub-24px focus surface, and Pass 165 corrected them without broadening the UI.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 167. Treat target sizing as covered unless future screenshots or production constraints introduce new controls.
