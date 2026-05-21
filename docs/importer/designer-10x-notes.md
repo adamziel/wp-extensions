@@ -40,6 +40,7 @@
 - Pass 17 reviewed the mobile edge-case evidence and kept the HTML unchanged. The clean committed-artifact DOM measurements at 420/390/360/500 and the mobile screenshots show no concrete overflow blocker, so the evidence does not justify another design artifact change.
 - Pass 18 reviewed the artifact as an implementation handoff and kept the HTML unchanged. The visible UI gives a production team concrete direction for the core journey: source selection, guaranteed dry run, blocking scan decision, result evidence, in-place issue resolution, exact real-import consequences, and post-import proof are all represented without adding screens, states, matrices, setup fields, or runtime code.
 - Pass 19 changed the first-screen helper phrase to "uploads, WordPress exports, and documents." The mobile screenshot shows the helper is already a compact two-line secondary hint between Browse and Start dry run, so naming WordPress exports resolves the repeated ambiguity without adding another source card, format list, or setup step.
+- Pass 20 reviewed the updated mobile first-screen screenshot after the WordPress export helper edit and kept the HTML unchanged. The longer phrase still reads as secondary helper copy, the dry-run action remains the dominant next step, and the guarantee, upload fallback, source type selector, and editable settings keep their previous hierarchy without needing new UI or copy.
 
 ## Remaining Concerns
 

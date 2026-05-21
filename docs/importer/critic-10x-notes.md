@@ -262,3 +262,11 @@ Recommendation: do not edit `docs/importer/user-journey-10x-clarity.html` in thi
 The tiny copy edit is now justified. The Pass 19 mobile first-screen screenshot shows the helper phrase "uploads, exports, and documents" plainly in the setup panel while the source-support disclosure that names WordPress REST/WXR is not visible yet. Combined with the repeated reviewer-handoff concern from Passes 12, 14, 16, and 18, "exports" is doing too little work for a WordPress importer in the exact place reviewers will skim first.
 
 The only justified edit is replacing that phrase with "uploads, WordPress exports, and documents." Do not add a sentence, source examples, a visible matrix, controls, or any other explanation; the disclosure already carries the detailed coverage.
+
+## Pass 20 Critique
+
+The updated mobile first-screen screenshot does not show a regression from adding "WordPress" to the helper line. The phrase now wraps as "uploads, / WordPress exports, and documents" inside the same two-line help block, with no awkward orphaning, no new crowding around the source field, and no hierarchy damage to the full-width "Start dry run" action or the fixed dry-run guarantee.
+
+The wording also does not imply that only WordPress exports are supported. The same line still leads with URLs, repositories, feeds, server paths, and uploads, and the visible source-type grid immediately reinforces GitHub, WordPress site, Feed or OPML, Server path, Browser upload, and Archive or document as parallel options. "WordPress exports" reads as one concrete supported input inside a broader importer, which is exactly the clarification the first screen needed.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No follow-up HTML edit is justified for this pass.
