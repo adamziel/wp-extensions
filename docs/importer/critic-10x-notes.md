@@ -1714,3 +1714,11 @@ The broader 320px target audit supports stopping the current target-size thread.
 That result matters because it separates real small targets from measurement noise. The remaining 13px values belong to native glyphs inside source tabs, check cards, and URL radio cards; the user-facing targets are the surrounding labels/cards already reviewed in Passes 162 and 163. The post-import links were the one real sub-24px focus surface, and Pass 165 corrected them without broadening the UI.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 167. Treat target sizing as covered unless future screenshots or production constraints introduce new controls.
+
+## Pass 168 Critique
+
+The mobile journey navigation had a small accessible-name consistency issue. The visual short labels are appropriate for 500px layout, but the accessibility tree exposed `Decide`, `Result`, and `Import` on mobile while wider breakpoints exposed `Scan decision`, `Dry-run result`, and `Real import`. Those shortened names are understandable in context, but they are less stable handoff labels than the full state names.
+
+Adding `aria-label` to the four nav links is a narrow markup-only fix. The visual labels stay unchanged, the mobile nav still fits, and the accessible link names are now consistent across 500px, 800px, and 1440px: `Setup`, `Scan decision`, `Dry-run result`, and `Real import`. The recheck also reports no horizontal overflow at any tested width.
+
+Recommendation: keep the Pass 168 nav-label fix and make no plugin or runtime change. Do not add visible nav copy or longer mobile labels unless future visual evidence shows the compact labels are unclear for sighted users.
