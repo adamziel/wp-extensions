@@ -193,6 +193,7 @@
 - Pass 177 regression-checked the full journey at 320px with an 18px body-text override and kept the HTML unchanged. The artifact remains horizontally contained with `clientWidth=320`, `scrollWidth=320`, `bodyScrollWidth=320`, and `overflowCount=0`; all four states stay at 296px width. The full page is about 8536.16px tall, but that is expected for the complete static handoff under enlarged text rather than a clipping or overflow problem.
 - Pass 178 regression-checked the 320px forced-colors full journey and kept the HTML unchanged. Forced colors is active, all four states remain 296px wide, and the page is contained with `clientWidth=320`, `scrollWidth=320`, `bodyScrollWidth=320`, and `overflowCount=0`. The stage dots map to black glyphs on white system backgrounds, preserving their visible symbols without a custom forced-colors override.
 - Pass 179 reviewed motion/style behavior and kept the HTML unchanged. The artifact contains no animation, transition, transform, keyframe, smooth-scroll, or reduced-motion CSS; the only `transform` match is `text-transform: uppercase` for static label styling. This remains appropriate for a quiet admin workflow surface.
+- Pass 180 replaced the three post-import `href="#"` placeholders with concrete illustrative admin/report URLs. The completion state now models real navigation targets for created drafts, updated drafts, and the final report without adding controls, copy, plugin code, or runtime behavior.
 
 ## Remaining Concerns
 
@@ -203,6 +204,6 @@
 - The mobile result cards now reduce density, but production should still test larger result sets and localized labels for scan speed, pagination, and repeated-action ergonomics.
 - "Allowed with warnings" is shown as a static condition. Production should compute this from warning severity and disable the real import when blocking warnings remain.
 - The new resolver demonstrates only one warning path. Production still needs the actual state model for replacement upload errors, duplicate-match changes, title confirmation, accepted warnings, and how resolved warnings update counts.
-- The post-import block is deliberately tiny. Production still needs real edit/report URLs, write failure handling, permissions checks, and focus/live-region behavior after the import completes.
+- The post-import block is deliberately tiny. Production still needs generated edit/report URLs, write failure handling, permissions checks, and focus/live-region behavior after the import completes.
 - This pass did not add live regions, focus management, interactive state changes, or high-contrast QA. Those remain implementation concerns beyond the static artifact.
 - The source-support disclosure still contains a compact capability list. It remains collapsed so it does not compete with the action-first path, but production should keep watching that it does not grow back into a matrix.

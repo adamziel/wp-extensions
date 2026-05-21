@@ -1810,3 +1810,11 @@ The motion/style scan does not show an interaction or accessibility defect. The 
 That is the right posture for this importer surface. The design is an operational admin workflow, so avoiding decorative movement keeps attention on source selection, dry-run evidence, warning resolution, and the final import boundary.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 179. Do not add motion unless a future implementation has a concrete state-change need and a reduced-motion fallback.
+
+## Pass 180 Critique
+
+The post-import completion links no longer model dead navigation. The three final-state anchors now point to illustrative WordPress admin/report URLs instead of `href="#"`: created drafts use a filtered Pages list, updated drafts use the same session-scoped list with an updated status, and the final report returns to the importer Tools page with the report id.
+
+This is the right level of specificity for a static artifact. The links are still illustrative, so production must generate real session ids, enforce permissions, and decide the exact report route, but the design no longer advertises inert controls at the moment the user expects to continue work.
+
+Recommendation: keep the scoped link-target fix. Do not add more post-import surface or touch plugin/runtime code for this PR.
