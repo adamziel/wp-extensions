@@ -37,6 +37,7 @@
 - Pass 14 ran a narrow source-coverage audit against the required PR #28 surface. The lean first screen still covers source types, fixed dry-run safety, draft-versus-publish behavior, URL decisions, evidence, warnings, duplicate matches, affected examples, and reports without adding visible setup weight; only the collapsed support disclosure was tightened to name ZIP/archive paths and plain text files explicitly.
 - Pass 15 reviewed the opened "What each source supports" disclosure and kept the HTML unchanged. Expanded, it proves source coverage with six compact cards, but it stays visually secondary to the dry-run path and does not become a table, matrix, or extra source journey.
 - Pass 16 reviewer-handoff audit kept the HTML unchanged. A reviewer can open the artifact as a self-contained product direction piece: visible copy stays user-facing, caveats remain in notes/PR context, and the first-screen dry-run path remains stronger than the collapsed source-coverage disclosure.
+- Pass 17 reviewed the mobile edge-case evidence and kept the HTML unchanged. The clean committed-artifact DOM measurements at 420/390/360/500 and the mobile screenshots show no concrete overflow blocker, so the evidence does not justify another design artifact change.
 
 ## Remaining Concerns
 

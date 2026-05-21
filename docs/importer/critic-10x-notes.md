@@ -240,3 +240,11 @@ Visible copy no longer feels like scaffolding. The removed state labels and save
 Caveats are properly contained outside the UI. Static sample data, non-functional source adaptation, validation, accessibility behavior, live progress announcements, high-contrast QA, and large-result responsive testing should stay in notes or the PR body. Adding those caveats to the visible artifact would make the UI over-explain itself and weaken the current handoff.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for review. The only tiny copy edit previously identified, changing "uploads, exports, and documents" to mention WordPress exports, is not justified now because the opened disclosure already exposes WXR and WordPress REST coverage. Do not edit the artifact unless a human reviewer identifies a concrete misunderstanding in the visible UI.
+
+## Pass 17 Critique
+
+The mobile edge-case evidence does not show a concrete layout blocker. The Pass 17 bitmaps make the right edge look clipped at the 420px capture, especially around the header nav and long source value, but the DOM overflow check reports `client=485 scroll=485 bad=[]`. That means the committed CSS is not producing document-level horizontal overflow in the measured viewport; the 420px image is more likely a headless capture scaling artifact than proof that the page is wider than the viewport.
+
+The existing 500px mobile screenshot should remain the authoritative mobile evidence for this PR. It shows the intended mobile hierarchy clearly: title, "Add source," source field, "Start dry run," fixed dry-run guarantee, upload fallback, source type, editable settings, and source-support disclosure. The Pass 17 images are still useful as stress evidence for narrow capture and larger text, but they should not override the cleaner mobile screenshot unless a reproducible DOM measurement or browser inspection identifies a specific overflowing element.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. A tiny CSS edit is not justified without a concrete blocker because it would churn the design artifact to fix a screenshot artifact. If this reappears in manual browser testing, the right fix would be a narrowly targeted nav/value wrapping adjustment, not a new state, control, source example, or spec expansion.
