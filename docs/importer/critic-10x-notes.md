@@ -1698,3 +1698,11 @@ The after-running proof list exposes one small target-size inconsistency. The li
 The scoped `.after-import-gate a` fix is proportionate. It changes only the final proof-list links to `inline-flex` with `min-height: 24px`, avoiding a button treatment, avoiding new copy, and preserving the tiny post-import boundary. Recheck shows `Edit drafts`, `Review updates`, and `Open final report` all measure 24px high at 500px, 320px, and 320px forced colors; forced colors keeps a visible 2px outline and all runs remain width-contained with `overflowCount=0`.
 
 Recommendation: keep the Pass 165 CSS change and make no plugin or runtime change. Do not expand the after-running proof into a larger completion dashboard unless future evidence shows users need a richer post-import workflow.
+
+## Pass 166 Critique
+
+The post-import link target fix does not create a hierarchy, overflow, or completion-dashboard regression. At 500px, 320px, 320px forced colors, and 1440px, the page remains width-contained with `overflowCount=0`, and all three after-running links measure 24px high. Forced colors keeps the links visible with a 2px system outline rather than depending on the normal box shadow.
+
+The after-running gate stays proportionate. It measures 190.89px high at 500px, 272.08px at 320px, and 170.59px at 1440px, which is still a compact proof list after the final import action rather than a new dashboard. The target floor improves keyboard and pointer tolerance without changing labels, order, content, or import behavior.
+
+Recommendation: make no further HTML, CSS, copy, plugin, or runtime change for Pass 166. Keep the Pass 165 fix exactly scoped to `.after-import-gate a`.
