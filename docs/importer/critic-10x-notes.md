@@ -190,3 +190,11 @@ The shorter source help still preserves feature coverage because the detailed co
 The one small risk is that "exports" in the inline help is less concrete than "WXR" for WordPress reviewers, but the disclosure covers it immediately below. I would not restore the long accepted-format sentence; it made the first task harder to scan and duplicated the source-support panel. If any copy changes are made, keep them copy-only and tiny: consider "uploads, exports, and document files" or "WordPress exports and documents" only if reviewers miss WXR at first glance.
 
 Recommendation: keep the HTML as-is. Do not restore the removed labels, the saved-setup action, or the long source-help list. The only optional final adjustment is PR-description or notes copy that explicitly says the collapsed source disclosure carries the full format coverage while the primary field help stays intentionally short.
+
+## Pass 12 Critique
+
+The shortened source help is generic, but not too generic for this draft because the nearby disclosure carries the WordPress/WXR coverage. The primary field help should stay short so the first task remains "paste a source and preview it"; forcing WXR, REST, feeds, archives, and document formats back into that line would make the setup feel like a format catalog again.
+
+If the author wants one copy-only polish, the smallest useful wording is to replace "uploads, exports, and documents" with "uploads, WordPress exports, and documents." That adds a WordPress-specific cue without restoring the long accepted-format list or editing the HTML structure.
+
+Recommendation: keep as-is unless a reviewer specifically says WXR is not discoverable. If changing before review, edit only that one phrase; otherwise leave it to reviewer feedback.
