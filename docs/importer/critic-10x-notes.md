@@ -1236,3 +1236,13 @@ The repetition in the opened state is noticeable but not harmful. The help text 
 The vertical measurements support keeping the copy stable for now. The helper text remains compact at roughly one line on desktop, two lines on mobile, and three lines on narrow mobile, while the details region stays contained at about `140px` to `180px`. That is not bloat for an explicitly opened fallback control. The main journey still leads with the source field, "Browse repo," and dry-run action; upload detail appears only when the user asks for it.
 
 Recommendation: keep the label and help text as-is. The echo is an acceptable tradeoff because it preserves source coverage and the URL-vs-local distinction without adding controls, states, or runtime behavior. Do not edit the HTML, plugin code, or runtime for Pass 114; if reviewers later call the repetition out, make a copy-only helper trim that keeps archives, documents, feed lists, exports, and the "not available at a URL" rule visible.
+
+## Pass 115 Critique
+
+The trimmed upload helper preserves the important fallback meaning. "Choose files, folders, or exports" now carries the closed-state support clearly enough: folder support and export support are both visible before the user opens the disclosure, and "files" is broad enough to cover archive/document/feed-list cases without forcing every format into the summary row. The helper no longer repeats those nouns immediately, but it still explains why the fallback exists: local sources rather than URL-available sources.
+
+The remaining risk is archive/feed/document specificity, not folder or export discovery. The new help text says "archives, documents, or feed lists" directly, so those supported cases are still visible once the disclosure is open. It also keeps the local-versus-URL distinction in a shorter sentence, which is the right prioritization for the journey: the main path remains URL/repo first, and browser upload remains the secondary path for local material.
+
+The metrics support keeping the trim. Mobile and narrow mobile still have no overflow, the helper is only about `40.6px` high, and the details region is stable at about `160px`; desktop keeps the helper to about `20.3px` with a `139.9px` details region. That is a clearer opened state with less echo, not a hidden capability or added bloat.
+
+Recommendation: keep the trimmed helper. Do not edit the HTML, plugin code, or runtime for Pass 115. The label now carries files, folders, and exports clearly enough, while the helper preserves archives, documents, feed lists, and the local-source rule without reopening the upload disclosure as a source catalog.
