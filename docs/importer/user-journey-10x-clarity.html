@@ -752,7 +752,7 @@
 
 		.result-table {
 			border-collapse: collapse;
-			min-width: 760px;
+			min-width: 640px;
 			width: 100%;
 		}
 
@@ -777,6 +777,10 @@
 		.result-table tr:last-child th,
 		.result-table tr:last-child td {
 			border-bottom: 0;
+		}
+
+		.result-table [data-label]::before {
+			content: none;
 		}
 
 		.status-pill {
@@ -981,6 +985,66 @@
 
 			.state-list-label {
 				display: none;
+			}
+
+			.result-table-wrap {
+				overflow-x: visible;
+			}
+
+			.result-table {
+				min-width: 0;
+			}
+
+			.result-table,
+			.result-table tbody,
+			.result-table tr,
+			.result-table th,
+			.result-table td {
+				display: block;
+			}
+
+			.result-table thead {
+				display: none;
+			}
+
+			.result-table tbody {
+				display: grid;
+				gap: 10px;
+			}
+
+			.result-table tr {
+				border: 1px solid var(--line);
+				border-radius: 4px;
+				padding: 10px;
+			}
+
+			.result-table tr:last-child th,
+			.result-table tr:last-child td,
+			.result-table th,
+			.result-table td {
+				border-bottom: 0;
+			}
+
+			.result-table th,
+			.result-table td {
+				display: grid;
+				font-size: 13px;
+				gap: 5px;
+				grid-template-columns: minmax(82px, 0.36fr) minmax(0, 1fr);
+				padding: 5px 0;
+			}
+
+			.result-table th[data-label]::before,
+			.result-table td[data-label]::before {
+				color: var(--muted);
+				content: attr(data-label);
+				font-size: 11px;
+				font-weight: 700;
+				text-transform: uppercase;
+			}
+
+			.result-table .button-link {
+				text-align: left;
 			}
 		}
 	</style>
@@ -1274,32 +1338,32 @@
 									</thead>
 									<tbody>
 										<tr>
-											<th scope="row"><span class="status-pill is-create">Create</span></th>
-											<td><strong>Architecture overview</strong><br><span class="path-value">docs/explanations/architecture/index.md</span></td>
-											<td>No existing slug found. Old-site links already set to stay external.</td>
-											<td>Importer</td>
-											<td>Will create a draft page.</td>
+											<th scope="row" data-label="Outcome"><span class="status-pill is-create">Create</span></th>
+											<td data-label="Item"><strong>Architecture overview</strong><br><span class="path-value">docs/explanations/architecture/index.md</span></td>
+											<td data-label="Evidence">No existing slug found. Old-site links already set to stay external.</td>
+											<td data-label="Owner">Importer</td>
+											<td data-label="Next">Will create a draft page.</td>
 										</tr>
 										<tr>
-											<th scope="row"><span class="status-pill is-update">Update</span></th>
-											<td><strong>Data flow</strong><br><span class="path-value">/architecture/data-flow</span></td>
-											<td>Duplicate evidence: existing draft has same slug and a 92% title match.</td>
-											<td>Editor</td>
-											<td><button class="button-link" type="button">Review match</button></td>
+											<th scope="row" data-label="Outcome"><span class="status-pill is-update">Update</span></th>
+											<td data-label="Item"><strong>Data flow</strong><br><span class="path-value">/architecture/data-flow</span></td>
+											<td data-label="Evidence">Duplicate evidence: existing draft has same slug and a 92% title match.</td>
+											<td data-label="Owner">Editor</td>
+											<td data-label="Next"><button class="button-link" type="button">Review match</button></td>
 										</tr>
 										<tr>
-											<th scope="row"><span class="status-pill is-warning">Warning</span></th>
-											<td><strong>Block rendering</strong><br><span class="path-value">images/block-rendering.svg</span></td>
-											<td>Linked media is missing from the source checkout.</td>
-											<td>Content owner</td>
-											<td><button class="button-link" type="button">Replace media</button></td>
+											<th scope="row" data-label="Outcome"><span class="status-pill is-warning">Warning</span></th>
+											<td data-label="Item"><strong>Block rendering</strong><br><span class="path-value">images/block-rendering.svg</span></td>
+											<td data-label="Evidence">Linked media is missing from the source checkout.</td>
+											<td data-label="Owner">Content owner</td>
+											<td data-label="Next"><button class="button-link" type="button">Replace media</button></td>
 										</tr>
 										<tr>
-											<th scope="row"><span class="status-pill is-skip">Skip</span></th>
-											<td><strong>Untitled appendix</strong><br><span class="path-value">appendix/no-title.md</span></td>
-											<td>No readable title found in front matter, first heading, or filename.</td>
-											<td>Editor</td>
-											<td><button class="button-link" type="button">Add title or skip</button></td>
+											<th scope="row" data-label="Outcome"><span class="status-pill is-skip">Skip</span></th>
+											<td data-label="Item"><strong>Untitled appendix</strong><br><span class="path-value">appendix/no-title.md</span></td>
+											<td data-label="Evidence">No readable title found in front matter, first heading, or filename.</td>
+											<td data-label="Owner">Editor</td>
+											<td data-label="Next"><button class="button-link" type="button">Add title or skip</button></td>
 										</tr>
 									</tbody>
 								</table>

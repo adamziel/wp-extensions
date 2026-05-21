@@ -17,6 +17,7 @@
 - Pass 3 made the dry-run result inspectable with semantic result counts and a compact table of item outcomes, including create/update/skip/warning state, duplicate evidence, warning ownership, and direct paths to review matches, replace missing media, or add/confirm a title.
 - Pass 3 changed the real-import state to consequence-first copy: the primary action says it will run as drafts, the panel explicitly says publishing count is zero, unresolved warnings are allowed but non-blocking, and skipped/unresolved items remain visible before the green action.
 - Pass 3 tightened static semantics by connecting help text with `aria-describedby`, removing redundant radio-group labeling around the native source fieldset, and exposing result counts as list items plus detailed outcomes as a table.
+- Pass 4 kept the dry-run result inspectable as a full table on desktop, but converts the same semantic rows into labeled card-style rows on mobile. This removes the narrow-screen horizontal-scroll dependency while preserving outcome, item, evidence, owner, and next-action visibility.
 
 ## Remaining Concerns
 
@@ -24,5 +25,5 @@
 - The source type radio switcher is static, so the selected source does not change the example label or input help. The production version should update labels and examples per source type.
 - Browser upload is now behind a native disclosure to protect the first viewport. A production drag-and-drop target would still need keyboard, error, and accepted-format behavior.
 - Counts and report details are illustrative. Real copy should come from actual scan result data and should handle localization, very long source names, and larger browser text.
-- The table-like dry-run result intentionally favors inspection density. A production mobile implementation may need row cards or column controls instead of horizontal table overflow.
+- The mobile result cards now reduce density, but production should still test larger result sets and localized labels for scan speed, pagination, and repeated-action ergonomics.
 - "Allowed with warnings" is shown as a static condition. Production should compute this from warning severity and disable the real import when blocking warnings remain.
