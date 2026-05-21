@@ -48,6 +48,7 @@
 - Pass 25 trimmed one result-table reason from "No readable title found in front matter, first heading, or filename" to "No readable title found." The shorter copy keeps the user-facing consequence clear without exposing parser/source-format details or adding any new UI.
 - Pass 26 reviewed the mobile dry-run result after the Pass 25 evidence trim and kept the HTML unchanged. The skipped card still shows outcome, item path, concise evidence, editor ownership, and the "Add title or skip" action, so it remains actionable without reintroducing front matter, heading, filename, or other parser-specific detail.
 - Pass 27 reviewed the real-import handoff and kept the HTML unchanged. The tiny "After running" block improves consequence clarity because it acts as proof of what the selected run will produce, stays inside the pre-run gate, and remains much smaller than the dry-run result instead of becoming an early post-import dashboard.
+- Pass 28 reviewed the mobile real-import handoff and made one copy trim in the final gate: "Running is allowed because..." became "Allowed because..." The buttons, after-running mini-outcome, and before-running advice remain scannable without adding sections, controls, workflows, or a larger post-import surface.
 
 ## Remaining Concerns
 
