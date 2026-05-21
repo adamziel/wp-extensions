@@ -1674,3 +1674,11 @@ The full 500px keyboard focus sequence after the disclosure-focus fix does not s
 The 13px native radio and checkbox measurements are not a usability failure in this artifact because they measure only the internal control glyphs. The actual selectable surfaces are the label/card controls around them: source tabs measure 222x44, editable check cards measure 446x62.78, and URL radio cards measure 412x56.78 or taller. Those surrounding controls carry the visible focus state through `:focus-within`, including forced-colors mode, so adding another focus style to the native glyphs would duplicate the signal without making the journey clearer.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 162. Preserve only a production QA note: the implementation should keep label/card activation and focus-visible state for grouped native controls, so the visible target remains the larger card even though the radio or checkbox glyph itself is small.
+
+## Pass 163 Critique
+
+The 320px grouped-control focus evidence does not show a narrow-screen target-size, focus, forced-colors, or containment defect. The selected source tab, long "Archive or document" source tab, draft setting card, and URL decision card all remain horizontally contained in normal and forced-colors modes with `clientWidth=320`, `scrollWidth=320`, `bodyScrollWidth=320`, and `overflowCount=0`.
+
+The tightest source-tab targets are still usable: both sampled source cards are about 89.33px wide by 49.5px tall, including the long "Archive or document" label. The draft setting card is 266x80.17, and the URL decision card is 232x74.17. Forced colors removes the decorative box shadows but exposes a 2px system outline on the surrounding card, so keyboard position stays visible without depending on color glow.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 163. The 320px evidence reinforces the Pass 162 decision: the internal radio/checkbox glyph size is not the target-size contract; the label/card surface is.
