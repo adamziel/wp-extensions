@@ -210,3 +210,15 @@ No issue is severe enough to justify a tiny HTML edit before review. The only vi
 Deferred production risks should be named only as framing: this is static sample data; alternate source types do not actually adapt labels or evidence here; production still needs real validation, keyboard/focus behavior, live progress announcements, high-contrast QA, and responsive testing for larger result sets. Those caveats support review context, not more UI in this PR.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for review and use the PR description to frame the remaining production risks.
+
+## Pass 14 Critique
+
+The current artifact preserves the full feature surface without letting the first task become a source catalog again. The setup path stays lean: choose or paste one source, start a guaranteed dry run, then inspect evidence before the real import. Coverage is still present through the source selector, the collapsed "What each source supports" disclosure, editable draft/URL/duplicate settings, the scan decision, item-level result evidence, the missing-media resolution example, report download, and the real-import consequence summary.
+
+The collapsed support disclosure is enough for review. It names the important source families and formats, including WordPress REST/WXR, feeds/OPML, archives, documents, SQL, XML, Markdown, HTML, PDF, EPUB, server paths, browser uploads, folders, URLs, and linked assets. The only tiny wording improvement remains optional: "uploads, WordPress exports, and documents" would make the primary helper line more WordPress-specific, but the current "uploads, exports, and documents" is not misleading because WXR is visible in the disclosure immediately below. I would not edit the HTML for that unless a reviewer says WordPress exports are hard to find.
+
+Source adaptation and alternate-source examples are correctly deferred. The PR proves one representative GitHub-folder journey end to end, and that is the right product argument for this draft. Adding WordPress-site or feed examples in the UI would undercut the bloat trim by turning the artifact back into multiple source journeys. The honest review framing is that source type will adapt labels, accepted examples, scan evidence, and warning copy in production, while this static HTML uses one sample path to prove the shared four-step journey.
+
+No missing coverage justifies an HTML edit before review. The artifact is not under-proving the importer surface; the remaining caveats are implementation caveats: static sample data, no live source-specific adaptation, no real validation, no keyboard/focus or live-region behavior, and no large-result responsive testing. Those should stay short in the PR framing and should not become more UI in this design-only PR.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. Do not add a visible matrix, alternate source journey, extra state, or pre-review copy tweak unless reviewer feedback identifies a concrete misunderstanding.
