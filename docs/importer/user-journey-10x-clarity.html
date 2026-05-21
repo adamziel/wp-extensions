@@ -1109,10 +1109,13 @@
 			.input-line,
 			.safety-list,
 			.source-cards,
-			.result-grid,
 			.resolve-detail div,
 			.report-row {
 				grid-template-columns: 1fr;
+			}
+
+			.result-grid {
+				grid-template-columns: repeat(2, minmax(0, 1fr));
 			}
 
 			.button-primary,
