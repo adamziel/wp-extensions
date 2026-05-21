@@ -1326,3 +1326,13 @@ The surrounding import-ready content is also unaffected in the supplied evidence
 This is the right endpoint for the shared report-button fix. It reduces visual noise without changing the journey, adding controls, changing copy, or touching plugin/runtime behavior. The final gate still feels like a deliberate confirmation step rather than a new feature surface, and the report-button layout correction did not regress the real-import handoff.
 
 Recommendation: keep the shared `align-content: start` fix and make no further HTML, plugin, or runtime edits for Pass 123. The final gate is layout-stable, consequence-clear, and still aligned with the clearer journey goal.
+
+## Pass 124 Critique
+
+The large-text evidence confirms that the report-button layout fix survives the result and final-gate states. All supplied captures have no horizontal overflow, and the "Download report" action remains a normal control rather than a stretched tile: about `416px` by `44.09px` on mobile large text and `300px` by `44.09px` on desktop large text. That is the right behavior for a secondary export action in an accessibility-stress pass.
+
+The final-gate action also remains contained under large text. On mobile large text, "Run real import as drafts" is below the first viewport at `416px` wide and `44.09px` tall; on desktop large text it is a normal `253.67px` by `44.09px` control. This means the shared layout fix is not merely tuned for default text size. The controls keep their intended hierarchy and do not create horizontal scrolling, oversized blocks, or competing button shapes when text grows.
+
+The vertical length is acceptable for this artifact, with one caveat. The mobile large-text result and final states are long enough that the real import action can sit well below the viewport, especially in the final gate at roughly `1375px` from the top. That is a real cost, but it is a defensible cost because the page is showing a review-and-confirm journey with item evidence, report access, warnings, and final consequences before writing content. Compressing this state just to bring the import button higher would risk hiding the evidence that makes the journey trustworthy. For production, a sticky step header or anchored action region could be evaluated, but that would be a new interaction design concern and is outside this static artifact pass.
+
+Recommendation: keep the layout fix and do not edit the HTML, plugin code, or runtime for Pass 124. The large-text result and final-gate states are layout-stable, overflow-free, and still aligned with the clearer journey goal; the remaining vertical length is acceptable for a static evidence-heavy importer review surface.
