@@ -1,343 +1,117 @@
 <!doctype html>
 <html lang="en">
 <head>
-	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>Universal Importer - WordPress Admin Prototype</title>
-	<link rel="stylesheet" href="./styles.css">
-	<script src="./scenarios.js" defer></script>
-	<script src="./app.js" defer></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Importer Progress Flow Explorations v2</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f0f0f1;color:#1d2327;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:#2271b1;text-decoration:none}main{padding:20px;max-width:1800px;margin:auto}.hero{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;align-items:end;margin-bottom:16px}.hero h1{font-size:30px;margin:0 0 6px}.hero p{color:#646970;margin:0}.nav{position:sticky;top:0;z-index:2;background:#f0f0f1;border-bottom:1px solid #dcdcde;padding:10px 0;display:flex;gap:8px;overflow:auto}.nav a,.proposal header a{background:white;border:1px solid #dcdcde;border-radius:999px;padding:7px 10px;white-space:nowrap}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}.proposal{background:white;border:1px solid #dcdcde;border-radius:8px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.05)}.proposal header{min-height:74px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border-bottom:1px solid #dcdcde;padding:12px 14px}.proposal h2{font-size:17px;margin:0 0 3px}.proposal p{margin:0;color:#646970}iframe{display:block;width:100%;height:620px;border:0;background:white}@media(max-width:1100px){.grid{grid-template-columns:1fr}.hero{display:block}iframe{height:720px}}@media(max-width:700px){main{padding:12px}.proposal header{display:block}iframe{height:820px}}
+</style>
 </head>
-<body class="wp-admin wp-core-ui tools_page_universal-importer">
-	<div id="wpadminbar" class="nojq" role="navigation" aria-label="Toolbar">
-		<div class="quicklinks">
-			<ul id="wp-admin-bar-root-default" class="ab-top-menu">
-				<li id="wp-admin-bar-wp-logo" class="menupop">
-					<a class="ab-item" href="#" aria-label="About WordPress">W</a>
-				</li>
-				<li id="wp-admin-bar-site-name" class="menupop">
-					<a class="ab-item" href="#">Example Newsroom</a>
-				</li>
-				<li id="wp-admin-bar-updates">
-					<a class="ab-item" href="#">2 updates</a>
-				</li>
-				<li id="wp-admin-bar-comments">
-					<a class="ab-item" href="#">0 comments</a>
-				</li>
-				<li id="wp-admin-bar-new-content" class="menupop">
-					<a class="ab-item" href="#">New</a>
-				</li>
-			</ul>
-			<ul id="wp-admin-bar-top-secondary" class="ab-top-secondary ab-top-menu">
-				<li id="wp-admin-bar-my-account" class="menupop with-avatar">
-					<a class="ab-item" href="#">Howdy, admin</a>
-				</li>
-			</ul>
-		</div>
-	</div>
+<body>
+<main>
+	<header class="hero"><div><h1>Universal Importer: 20 Different First-Screen Journeys</h1><p>Each proposal is a separate high-fidelity clickable prototype. Click feature controls, then click the primary import button inside any frame to experience the run.</p></div><strong>v2 gallery</strong></header>
+	<nav class="nav" aria-label="Proposal jump links"><a href="#proposal-01">01 Command Center</a><a href="#proposal-02">02 Source Inspector</a><a href="#proposal-03">03 Guided Wizard</a><a href="#proposal-04">04 Spreadsheet Mapper</a><a href="#proposal-05">05 Kanban Triage</a><a href="#proposal-06">06 Diff Review</a><a href="#proposal-07">07 Media Workbench</a><a href="#proposal-08">08 Graph Dependencies</a><a href="#proposal-09">09 Timeline Runner</a><a href="#proposal-10">10 Decision Inbox</a><a href="#proposal-11">11 Rules Builder</a><a href="#proposal-12">12 Content Type Tabs</a><a href="#proposal-13">13 Terminal Runbook</a><a href="#proposal-14">14 Visual Source Browser</a><a href="#proposal-15">15 Batch QA Board</a><a href="#proposal-16">16 Compact Expert Panel</a><a href="#proposal-17">17 Preset Library</a><a href="#proposal-18">18 Import Health Check</a><a href="#proposal-19">19 Relationship Resolver</a><a href="#proposal-20">20 Minimal One-Screen</a></nav>
+	<div class="grid">
+		<section class="proposal" id="proposal-01">
+			<header><div><h2>01 Command Center</h2><p>Ops dashboard with queue, current run, blockers, and finish panel.</p></div><a href="options/option-01.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-01.html" title="01 Command Center"></iframe>
+		</section>
 
-	<div id="wpwrap">
-		<div id="adminmenumain" role="navigation" aria-label="Main menu">
-			<div id="adminmenuback"></div>
-			<div id="adminmenuwrap">
-				<ul id="adminmenu">
-					<li class="wp-first-item menu-top menu-icon-dashboard">
-						<a href="#" class="wp-first-item menu-top">Dashboard</a>
-					</li>
-					<li class="wp-menu-separator" aria-hidden="true"><div class="separator"></div></li>
-					<li class="menu-top menu-icon-post">
-						<a href="#" class="menu-top">Posts</a>
-					</li>
-					<li class="menu-top menu-icon-media">
-						<a href="#" class="menu-top">Media</a>
-					</li>
-					<li class="menu-top menu-icon-page">
-						<a href="#" class="menu-top">Pages</a>
-					</li>
-					<li class="menu-top menu-icon-comments">
-						<a href="#" class="menu-top">Comments</a>
-					</li>
-					<li class="wp-menu-separator" aria-hidden="true"><div class="separator"></div></li>
-					<li class="menu-top menu-icon-appearance">
-						<a href="#" class="menu-top">Appearance</a>
-					</li>
-					<li class="menu-top menu-icon-plugins">
-						<a href="#" class="menu-top">Plugins</a>
-					</li>
-					<li class="menu-top menu-icon-users">
-						<a href="#" class="menu-top">Users</a>
-					</li>
-					<li class="wp-has-current-submenu wp-menu-open menu-top menu-icon-tools" id="menu-tools">
-						<a href="#" class="wp-has-current-submenu wp-menu-open menu-top" aria-current="page">Tools</a>
-						<ul class="wp-submenu wp-submenu-wrap">
-							<li class="wp-submenu-head" aria-hidden="true">Tools</li>
-							<li><a href="#">Available Tools</a></li>
-							<li><a href="#">Import</a></li>
-							<li><a href="#">Export</a></li>
-							<li><a href="#">Site Health</a></li>
-							<li><a href="#">Export Personal Data</a></li>
-							<li><a href="#">Erase Personal Data</a></li>
-							<li class="current">
-								<a href="#" aria-current="page">Universal Importer</a>
-							</li>
-						</ul>
-					</li>
-					<li class="menu-top menu-icon-settings">
-						<a href="#" class="menu-top">Settings</a>
-					</li>
-				</ul>
-			</div>
-		</div>
+		<section class="proposal" id="proposal-02">
+			<header><div><h2>02 Source Inspector</h2><p>Source-first parser view with detected content and confidence.</p></div><a href="options/option-02.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-02.html" title="02 Source Inspector"></iframe>
+		</section>
 
-		<div id="wpcontent">
-			<div id="wpbody" role="main">
-				<div id="wpbody-content">
-					<div id="screen-meta-links">
-						<button type="button" id="show-settings-link" class="button show-settings" aria-controls="screen-options-wrap" aria-expanded="false">Screen Options</button>
-						<button type="button" id="contextual-help-link" class="button show-settings" aria-controls="contextual-help-wrap" aria-expanded="false">Help</button>
-					</div>
+		<section class="proposal" id="proposal-03">
+			<header><div><h2>03 Guided Wizard</h2><p>Step-by-step import with a persistent live summary rail.</p></div><a href="options/option-03.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-03.html" title="03 Guided Wizard"></iframe>
+		</section>
 
-					<div class="wrap universal-importer" id="universal-importer-app" data-screen="first-run">
-						<h1 class="wp-heading-inline">Universal Importer</h1>
-						<a href="#" class="page-title-action" id="import-history-link">Import history</a>
-						<hr class="wp-header-end">
+		<section class="proposal" id="proposal-04">
+			<header><div><h2>04 Spreadsheet Mapper</h2><p>Grid-first field mapping for people who think in tables.</p></div><a href="options/option-04.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-04.html" title="04 Spreadsheet Mapper"></iframe>
+		</section>
 
-						<nav class="importer-breadcrumb" aria-label="Breadcrumb">
-							<a href="#">Tools</a>
-							<span aria-hidden="true">/</span>
-							<span aria-current="page">Universal Importer</span>
-						</nav>
+		<section class="proposal" id="proposal-05">
+			<header><div><h2>05 Kanban Triage</h2><p>Records move through ready, warning, blocked, writing, and done lanes.</p></div><a href="options/option-05.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-05.html" title="05 Kanban Triage"></iframe>
+		</section>
 
-						<div class="notice notice-info importer-first-run-notice" id="first-run-notice">
-							<p><strong>Import content into WordPress.</strong> Start with a source, review what will be created or updated, then run the import with checkpoints and rollback details.</p>
-						</div>
+		<section class="proposal" id="proposal-06">
+			<header><div><h2>06 Diff Review</h2><p>Git-style incoming versus WordPress preview before commit.</p></div><a href="options/option-06.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-06.html" title="06 Diff Review"></iframe>
+		</section>
 
-						<main class="importer-admin-screen" id="importer-admin-screen">
-							<section class="importer-first-screen" id="first-screen" aria-labelledby="first-screen-heading">
-								<div class="importer-source-card" id="source-card">
-									<div class="importer-section-heading">
-										<p class="importer-kicker">Tools > Universal Importer</p>
-										<h2 id="first-screen-heading">What do you want to import?</h2>
-										<p class="description">Paste a URL, choose an export file, or drop a source archive. The importer will inspect the source before anything is written to the site.</p>
-									</div>
+		<section class="proposal" id="proposal-07">
+			<header><div><h2>07 Media Workbench</h2><p>Media-heavy import with downloads, alt text, galleries, and failures.</p></div><a href="options/option-07.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-07.html" title="07 Media Workbench"></iframe>
+		</section>
 
-									<div class="source-mode-selector" id="source-mode-selector" role="group" aria-label="Source type">
-										<button type="button" class="source-mode-button is-active" id="source-mode-url" data-source-mode="url" aria-pressed="true">URL</button>
-										<button type="button" class="source-mode-button" id="source-mode-file" data-source-mode="file" aria-pressed="false">File</button>
-										<button type="button" class="source-mode-button" id="source-mode-archive" data-source-mode="archive" aria-pressed="false">Archive</button>
-										<button type="button" class="source-mode-button" id="source-mode-service" data-source-mode="service" aria-pressed="false">Connected service</button>
-									</div>
+		<section class="proposal" id="proposal-08">
+			<header><div><h2>08 Graph Dependencies</h2><p>Relationship graph for authors, terms, media, and parent pages.</p></div><a href="options/option-08.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-08.html" title="08 Graph Dependencies"></iframe>
+		</section>
 
-									<form class="source-input-form" id="source-input-form" action="#" method="post">
-										<input type="hidden" name="page" value="universal-importer">
-										<input type="hidden" name="action" value="inspect_source">
+		<section class="proposal" id="proposal-09">
+			<header><div><h2>09 Timeline Runner</h2><p>Large event timeline with durable runner status and checkpoints.</p></div><a href="options/option-09.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-09.html" title="09 Timeline Runner"></iframe>
+		</section>
 
-										<div class="source-input-row" id="source-input-row">
-											<label for="source-input">Source URL, file name, or feed path</label>
-											<div class="source-input-control">
-												<input id="source-input" class="regular-text importer-source-input" name="source" type="text" inputmode="url" autocomplete="off" placeholder="https://example.com/feed.xml">
-												<button type="button" class="button" id="choose-source-button" data-action="choose-source">Choose file</button>
-											</div>
-											<input id="source-file-input" class="screen-reader-text importer-source-file-input" name="source_file" type="file" accept=".xml,.wxr,.csv,.json,.zip,.md,.html,text/xml,text/csv,application/json,application/zip">
-											<p class="description" id="source-help">Supported sources include WordPress XML, CSV, JSON, ZIP archives, Markdown, HTML, RSS, and Atom feeds.</p>
-										</div>
+		<section class="proposal" id="proposal-10">
+			<header><div><h2>10 Decision Inbox</h2><p>Inbox for decisions that need user attention during an import.</p></div><a href="options/option-10.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-10.html" title="10 Decision Inbox"></iframe>
+		</section>
 
-										<div class="source-dropzone" id="source-dropzone" data-dropzone="source">
-											<p class="source-dropzone-title">Drop a source file here</p>
-											<p class="description">The prototype keeps this as the first screen: source, target, readiness, and review controls are all reachable without opening a gallery.</p>
-										</div>
+		<section class="proposal" id="proposal-11">
+			<header><div><h2>11 Rules Builder</h2><p>Transformation rules before the run starts.</p></div><a href="options/option-11.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-11.html" title="11 Rules Builder"></iframe>
+		</section>
 
-										<div class="source-examples" id="source-examples" aria-label="Example sources">
-											<button type="button" class="button button-secondary source-example-button" data-scenario="wordpress-newsroom">Newsroom WXR</button>
-											<button type="button" class="button button-secondary source-example-button" data-scenario="commerce-csv">Products CSV</button>
-											<button type="button" class="button button-secondary source-example-button" data-scenario="docs-markdown">Docs archive</button>
-										</div>
+		<section class="proposal" id="proposal-12">
+			<header><div><h2>12 Content Type Tabs</h2><p>Pages, posts, media, users, and terms as first-class setup areas.</p></div><a href="options/option-12.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-12.html" title="12 Content Type Tabs"></iframe>
+		</section>
 
-										<div class="source-actions">
-											<button type="submit" class="button button-primary button-hero importer-primary-action" id="import-button" data-action="inspect-source">Review import</button>
-											<button type="button" class="button importer-secondary-action" id="save-draft-button" data-action="save-draft">Save setup</button>
-										</div>
-									</form>
-								</div>
+		<section class="proposal" id="proposal-13">
+			<header><div><h2>13 Terminal Runbook</h2><p>Operator-style runbook with plain language plus technical details.</p></div><a href="options/option-13.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-13.html" title="13 Terminal Runbook"></iframe>
+		</section>
 
-								<aside class="importer-target-summary" id="target-summary-panel" aria-labelledby="target-summary-heading">
-									<h2 id="target-summary-heading">Target site</h2>
-									<dl class="target-summary-list">
-										<div>
-											<dt>Site</dt>
-											<dd>Example Newsroom</dd>
-										</div>
-										<div>
-											<dt>User</dt>
-											<dd>admin with manage_options</dd>
-										</div>
-										<div>
-											<dt>Default author</dt>
-											<dd>Editorial Desk</dd>
-										</div>
-										<div>
-											<dt>Duplicate policy</dt>
-											<dd>Review before updating</dd>
-										</div>
-									</dl>
-									<div class="target-summary-actions">
-										<button type="button" class="button" id="target-settings-button" data-action="target-settings">Change target settings</button>
-									</div>
-								</aside>
-							</section>
+		<section class="proposal" id="proposal-14">
+			<header><div><h2>14 Visual Source Browser</h2><p>Repository and archive browser before selecting what to import.</p></div><a href="options/option-14.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-14.html" title="14 Visual Source Browser"></iframe>
+		</section>
 
-							<section class="feature-discovery" id="feature-discovery" aria-labelledby="feature-discovery-heading">
-								<div class="importer-section-heading">
-									<p class="importer-kicker">Feature discovery</p>
-									<h2 id="feature-discovery-heading">See how the importer will handle this source</h2>
-								</div>
+		<section class="proposal" id="proposal-15">
+			<header><div><h2>15 Batch QA Board</h2><p>Sample, approve, and flag batches before publishing.</p></div><a href="options/option-15.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-15.html" title="15 Batch QA Board"></iframe>
+		</section>
 
-								<div class="feature-tabs" id="feature-tabs" role="tablist" aria-label="Importer capabilities">
-									<button type="button" class="feature-tab-button is-active" id="feature-tab-detect" role="tab" aria-selected="true" aria-controls="feature-panel-detect" data-feature-tab="detect">Detect</button>
-									<button type="button" class="feature-tab-button" id="feature-tab-map" role="tab" aria-selected="false" aria-controls="feature-panel-map" data-feature-tab="map">Map fields</button>
-									<button type="button" class="feature-tab-button" id="feature-tab-media" role="tab" aria-selected="false" aria-controls="feature-panel-media" data-feature-tab="media">Media</button>
-									<button type="button" class="feature-tab-button" id="feature-tab-conflicts" role="tab" aria-selected="false" aria-controls="feature-panel-conflicts" data-feature-tab="conflicts">Conflicts</button>
-									<button type="button" class="feature-tab-button" id="feature-tab-review" role="tab" aria-selected="false" aria-controls="feature-panel-review" data-feature-tab="review">Review</button>
-								</div>
+		<section class="proposal" id="proposal-16">
+			<header><div><h2>16 Compact Expert Panel</h2><p>Dense one-screen controls for repeat imports.</p></div><a href="options/option-16.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-16.html" title="16 Compact Expert Panel"></iframe>
+		</section>
 
-								<div class="feature-panel-grid" id="feature-panel-grid">
-									<article class="feature-panel is-active" id="feature-panel-detect" role="tabpanel" aria-labelledby="feature-tab-detect" data-feature-panel="detect">
-										<h3>Source detection</h3>
-										<p>Identify content types, authors, taxonomies, media references, and likely permalink structures before writing records.</p>
-									</article>
-									<article class="feature-panel" id="feature-panel-map" role="tabpanel" aria-labelledby="feature-tab-map" data-feature-panel="map" hidden>
-										<h3>Field mapping</h3>
-										<p>Preview how source fields become posts, pages, custom post types, terms, comments, users, and post meta.</p>
-									</article>
-									<article class="feature-panel" id="feature-panel-media" role="tabpanel" aria-labelledby="feature-tab-media" data-feature-panel="media" hidden>
-										<h3>Media handling</h3>
-										<p>Track remote downloads, missing files, duplicate attachments, alt text, featured images, and gallery relationships.</p>
-									</article>
-									<article class="feature-panel" id="feature-panel-conflicts" role="tabpanel" aria-labelledby="feature-tab-conflicts" data-feature-panel="conflicts" hidden>
-										<h3>Conflict resolution</h3>
-										<p>Resolve duplicate slugs, existing users, renamed taxonomies, and blocked records from a single decision queue.</p>
-									</article>
-									<article class="feature-panel" id="feature-panel-review" role="tabpanel" aria-labelledby="feature-tab-review" data-feature-panel="review" hidden>
-										<h3>Review before run</h3>
-										<p>Approve a dry-run summary with counts, warnings, sample diffs, rollback notes, and scheduled background work.</p>
-									</article>
-								</div>
-							</section>
+		<section class="proposal" id="proposal-17">
+			<header><div><h2>17 Preset Library</h2><p>Reusable import recipes with previewable defaults.</p></div><a href="options/option-17.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-17.html" title="17 Preset Library"></iframe>
+		</section>
 
-							<section class="live-prototype-region" id="live-prototype-region" aria-labelledby="live-prototype-heading">
-								<div class="importer-section-heading">
-									<p class="importer-kicker">Live prototype</p>
-									<h2 id="live-prototype-heading">Inspection, decisions, progress, and result</h2>
-								</div>
+		<section class="proposal" id="proposal-18">
+			<header><div><h2>18 Import Health Check</h2><p>Site Health style readiness checks before the run.</p></div><a href="options/option-18.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-18.html" title="18 Import Health Check"></iframe>
+		</section>
 
-								<div class="prototype-workbench" id="prototype-workbench" data-prototype-state="idle">
-									<section class="status-panel" id="status-panel" aria-labelledby="status-panel-heading">
-										<div class="panel-header">
-											<h3 id="status-panel-heading">Status</h3>
-											<span class="status-badge" id="status-badge" data-status="idle">Waiting for source</span>
-										</div>
-										<ul class="status-list" id="status-list">
-											<li class="status-item" data-status-item="source">No source inspected yet.</li>
-											<li class="status-item" data-status-item="permissions">Target site permissions ready.</li>
-											<li class="status-item" data-status-item="storage">Uploads directory writable.</li>
-										</ul>
-									</section>
+		<section class="proposal" id="proposal-19">
+			<header><div><h2>19 Relationship Resolver</h2><p>Focused resolver for missing authors, terms, and links.</p></div><a href="options/option-19.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-19.html" title="19 Relationship Resolver"></iframe>
+		</section>
 
-									<section class="progress-panel" id="progress-panel" aria-labelledby="progress-panel-heading" aria-live="polite">
-										<div class="panel-header">
-											<h3 id="progress-panel-heading">Progress</h3>
-											<span class="progress-count" id="progress-count">0 of 0 records</span>
-										</div>
-										<div class="progress-meter" id="progress-meter" role="progressbar" aria-label="Import progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-											<span class="progress-meter-fill" id="progress-meter-fill"></span>
-										</div>
-										<ol class="progress-steps" id="progress-steps">
-											<li class="progress-step is-current" data-progress-step="inspect">Inspect source</li>
-											<li class="progress-step" data-progress-step="map">Confirm mapping</li>
-											<li class="progress-step" data-progress-step="decide">Resolve decisions</li>
-											<li class="progress-step" data-progress-step="run">Run import</li>
-											<li class="progress-step" data-progress-step="review">Review result</li>
-										</ol>
-										<div class="activity-log" id="activity-log" aria-label="Import activity log">
-											<p class="activity-log-empty" id="activity-log-empty">Activity will appear here after the source is inspected.</p>
-										</div>
-									</section>
-
-									<section class="decision-panels" id="decision-panels" aria-labelledby="decision-panels-heading">
-										<div class="panel-header">
-											<h3 id="decision-panels-heading">Decisions</h3>
-											<span class="decision-count" id="decision-count">0 open</span>
-										</div>
-										<article class="decision-panel" id="decision-panel-mapping" data-decision-panel="mapping">
-											<h4>Mapping review</h4>
-											<p class="description">Fields that cannot be matched automatically will appear here with suggested WordPress destinations.</p>
-											<div class="decision-actions">
-												<button type="button" class="button decision-action-button" id="accept-mapping-button" data-decision-action="accept-mapping">Accept suggestion</button>
-												<button type="button" class="button decision-action-button" id="edit-mapping-button" data-decision-action="edit-mapping">Edit mapping</button>
-											</div>
-										</article>
-										<article class="decision-panel" id="decision-panel-conflict" data-decision-panel="conflict">
-											<h4>Conflict review</h4>
-											<p class="description">Duplicate slugs, existing media, and user matches will be paused here before the import continues.</p>
-											<div class="decision-actions">
-												<button type="button" class="button decision-action-button" id="skip-conflict-button" data-decision-action="skip-conflict">Skip record</button>
-												<button type="button" class="button decision-action-button" id="update-conflict-button" data-decision-action="update-conflict">Update existing</button>
-											</div>
-										</article>
-										<article class="decision-panel" id="decision-panel-media" data-decision-panel="media">
-											<h4>Media review</h4>
-											<p class="description">Missing or slow remote media downloads will surface here with retry, replace, and continue options.</p>
-											<div class="decision-actions">
-												<button type="button" class="button decision-action-button" id="retry-media-button" data-decision-action="retry-media">Retry media</button>
-												<button type="button" class="button decision-action-button" id="continue-without-media-button" data-decision-action="continue-without-media">Continue without file</button>
-											</div>
-										</article>
-									</section>
-
-									<section class="review-result" id="review-result" aria-labelledby="review-result-heading">
-										<div class="panel-header">
-											<h3 id="review-result-heading">Review result</h3>
-											<span class="review-result-state" id="review-result-state" data-result-state="not-run">Not run</span>
-										</div>
-										<div class="review-result-summary" id="review-result-summary">
-											<p>After the dry run or import completes, this area will show created records, updated records, skipped records, warnings, and rollback details.</p>
-										</div>
-										<div class="review-result-actions" id="review-result-actions">
-											<button type="button" class="button button-primary" id="run-import-button" data-action="run-import" disabled>Run import</button>
-											<button type="button" class="button" id="download-report-button" data-action="download-report" disabled>Download report</button>
-										</div>
-									</section>
-								</div>
-							</section>
-						</main>
-					</div>
-
-					<div class="clear"></div>
-				</div>
-			</div>
-		</div>
-	</div>
-
-	<template id="status-item-template">
-		<li class="status-item" data-status-item="">
-			<span class="status-item-label"></span>
-			<span class="status-item-detail"></span>
-		</li>
-	</template>
-
-	<template id="activity-log-template">
-		<p class="activity-log-entry" data-log-level="">
-			<span class="activity-log-time"></span>
-			<span class="activity-log-message"></span>
-		</p>
-	</template>
-
-	<template id="decision-panel-template">
-		<article class="decision-panel" data-decision-panel="">
-			<h4 class="decision-panel-title"></h4>
-			<p class="description decision-panel-description"></p>
-			<div class="decision-actions"></div>
-		</article>
-	</template>
+		<section class="proposal" id="proposal-20">
+			<header><div><h2>20 Minimal One-Screen</h2><p>Smallest complete importer surface for a first-run user.</p></div><a href="options/option-20.html" target="_blank" rel="noopener">Open full page</a></header>
+			<iframe src="options/option-20.html" title="20 Minimal One-Screen"></iframe>
+		</section></div>
+</main>
 </body>
 </html>
