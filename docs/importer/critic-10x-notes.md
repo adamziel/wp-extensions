@@ -718,3 +718,15 @@ Editable settings remain easy to scan. The two-column settings grid fits the tab
 The current setup summary is improved by the path-row behavior. The GitHub path now wraps as a full-width value inside the summary instead of being squeezed beside the label, and the mode, drafts, and URL rows stay compact. The first numbered next steps are visible at the bottom of the screenshot, so the handoff from setup confirmation to dry-run journey remains understandable even though the full three-step list is below the crop.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for this pass. No tablet regression is visible in setup readability, source tabs, editable settings, current setup path wrapping, or the first numbered next steps. Do not edit the HTML, add copy, remove controls, or change the feature surface from the Pass 67 evidence.
+
+## Pass 68 Critique
+
+The 1440px desktop setup baseline still has a clear source-to-dry-run flow after the current-setup path-row refinement. The main column leads with "Add source," a single selected source type, the source URL/path field, Browse fallback, "Start dry run," and the fixed no-write dry-run guarantee. That remains the correct hierarchy: the user can understand the required action before encountering upload fallback, editable settings, or source-support reference.
+
+The current setup rail is doing useful confirmation work rather than competing with the form. It states "Ready to preview," repeats that the guaranteed first step scans without writing, and lists the three next steps in plain order: scan source, resolve duplicate and URL decisions, then review the dry-run result. That keeps the desktop baseline oriented toward preview evidence instead of making the right rail feel like another control surface.
+
+The summary path wrapping is acceptable in this 1440px evidence. The long GitHub path wraps as a full value below its "Path" label, stays inside the rail, and remains readable without horizontal overflow. It is still visually heavier than the shorter Source, Mode, Drafts, and URLs rows, but that is a normal cost of showing a real path in a narrow confirmation rail. Further tuning would risk spending design effort on a solved edge rather than improving the journey.
+
+Editable settings and alternate source support remain secondary. The settings sit below the dry-run action and guarantee, with compact checked defaults that do not look like the main task. The source-support disclosure is closed, visible only as a reference link below the settings, so it preserves feature coverage without reopening the source catalog in the first desktop viewport.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for this pass. Do not edit the HTML, add copy, widen the summary rail, or change feature coverage. The desktop setup baseline is clear enough, the path wrapping is acceptable, and the secondary controls remain subordinate to the safe preview path.
