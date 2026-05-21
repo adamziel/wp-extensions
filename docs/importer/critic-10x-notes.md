@@ -256,3 +256,9 @@ As an implementation handoff and reviewer-facing draft, the artifact should rema
 The one remaining vague spot is the setup helper phrase "uploads, exports, and documents." On its own, "exports" is less WordPress-specific than "WXR exports," so a reviewer skimming only the first setup field could briefly wonder whether WordPress export support is represented. The opened "What each source supports" disclosure resolves that ambiguity by naming WordPress REST/WXR and the archive/document formats, so changing the primary helper would be optional copy polish rather than a justified design fix.
 
 Recommendation: do not edit `docs/importer/user-journey-10x-clarity.html` in this pass. A tiny HTML edit would only be justified if a human reviewer specifically misses WordPress export/WXR support; in that case, change only the helper phrase to "uploads, WordPress exports, and documents." Do not add more setup copy, alternate source examples, validation behavior, upload flows, completion states, or implementation caveats to the visible UI.
+
+## Pass 19 Critique
+
+The tiny copy edit is now justified. The Pass 19 mobile first-screen screenshot shows the helper phrase "uploads, exports, and documents" plainly in the setup panel while the source-support disclosure that names WordPress REST/WXR is not visible yet. Combined with the repeated reviewer-handoff concern from Passes 12, 14, 16, and 18, "exports" is doing too little work for a WordPress importer in the exact place reviewers will skim first.
+
+The only justified edit is replacing that phrase with "uploads, WordPress exports, and documents." Do not add a sentence, source examples, a visible matrix, controls, or any other explanation; the disclosure already carries the detailed coverage.
