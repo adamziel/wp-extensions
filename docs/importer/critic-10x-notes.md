@@ -412,3 +412,11 @@ The final mobile handoff remains consequence-explicit even after the long dry-ru
 The tiny "After running" block is still useful rather than bloat. It is short, stays inside the pre-run gate, and answers the natural last question: where the user lands after pressing the real-import button. Because it only promises draft links, update review, the skipped item, and the final report, it does not become a success dashboard, retry queue, rollback story, or expanded completion state.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass. The only future edit worth considering would be a one-sentence "After running" trim if reviewers specifically say the final mobile gate feels heavy, but the current 500px evidence does not justify that change.
+
+## Pass 37 Critique
+
+The opened "Upload files instead" disclosure has the right clarity-to-bloat balance. In the 500px mobile screenshot, the primary URL/path route still comes first: source field, Browse, helper text, "Start dry run," and the fixed dry-run guarantee all appear before the upload fallback. Opening the disclosure adds one browser file picker and one short helper sentence, so it does not steal priority from the main paste-or-path journey.
+
+Coverage is clear enough for the optional path. The helper names local archives, folders, documents, feed lists, and exports that are not available at a URL, which covers browser-selected files, folders, local archive/export cases, and non-URL feed lists without turning the setup panel into another source matrix. The source-type grid immediately below still reinforces "Browser upload" and "Archive or document" as secondary source families.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass; adding more upload examples would create bloat, and moving the disclosure lower would make the legitimate local-file fallback harder to find.
