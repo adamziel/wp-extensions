@@ -198,3 +198,15 @@ The shortened source help is generic, but not too generic for this draft because
 If the author wants one copy-only polish, the smallest useful wording is to replace "uploads, exports, and documents" with "uploads, WordPress exports, and documents." That adds a WordPress-specific cue without restoring the long accepted-format list or editing the HTML structure.
 
 Recommendation: keep as-is unless a reviewer specifically says WXR is not discoverable. If changing before review, edit only that one phrase; otherwise leave it to reviewer feedback.
+
+## Pass 13 Critique
+
+The fresh mobile first viewport still proves the simplest path. The screen opens with "Import content," "Add source," one labeled source field, the pasted GitHub path, a full-width "Start dry run" action, and the fixed green dry-run guarantee before the secondary upload and source-type choices. That is the right priority after the bloat trim: paste or pick a source, preview safely, then review evidence before the real import. The header and four-step nav consume some vertical space, but they no longer break the first task or turn the top of the phone into a capability catalog.
+
+Desktop also holds together as one journey. The page reads down the expected path: setup, scan decision, dry-run result, and real-import readiness. The source-support inventory is collapsed, the setup sidebar is contextual rather than dominant, and the result area shows enough item-level evidence and one compact resolution example without adding more states. The whole tall screenshot is long, but it feels like a guided review surface rather than a matrix of everything the importer could ever do.
+
+No issue is severe enough to justify a tiny HTML edit before review. The only visible nits are review-level tradeoffs: the mobile first viewport ends just as editable settings begin, the source type grid is still visible below the main action, and the desktop result table is dense. None of those regress the core story after the trim, and touching the HTML now would risk reopening scope.
+
+Deferred production risks should be named only as framing: this is static sample data; alternate source types do not actually adapt labels or evidence here; production still needs real validation, keyboard/focus behavior, live progress announcements, high-contrast QA, and responsive testing for larger result sets. Those caveats support review context, not more UI in this PR.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for review and use the PR description to frame the remaining production risks.
