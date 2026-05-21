@@ -1434,3 +1434,13 @@ The coverage is not dangerously hidden. The primary UI already exposes the sourc
 I do not see horizontal overflow, clipped cards, ambiguous support copy, or excessive bloat from the expanded state. The Browser upload and Archive/document split remains useful because upload explains the local fallback reason while archive/document carries the detailed format list.
 
 Recommendation: make no HTML change for Pass 134 and do not touch plugin or runtime code. Keep the source-support disclosure as-is; it preserves broad coverage as on-demand evidence without burdening the main importer path.
+
+## Pass 135 Critique
+
+The scan-decision step is clear enough and does not add bloat. The state answers the important questions in one compact surface: scan is paused, 7 old-site links in 3 draft pages need a URL-handling decision, the selected "Keep as external links" choice says exactly what will happen, and the dry run continues only after the decision is applied. The progress stack beside or below it reinforces that this is a blocking scan step rather than a separate workflow.
+
+Primary and secondary actions are not confused in the supplied evidence. "View affected links" is secondary and attached to the visible affected-link example, while the blue "Apply decision and continue" remains the dominant action. "Pause dry run" is correctly weaker and below the primary action. The affected-link evidence is not hidden: one concrete URL and the three affected page names are visible before the user opens the secondary detail action.
+
+Targets and wrapping are acceptable. Desktop, mobile, and narrow have no horizontal overflow; the primary and secondary buttons are all `40px` tall, and the radio choices are comfortably taller than the minimum target baseline. The only visible rough edge is the narrow URL wrapping, where `old.example.com/docs/getting-started` can break inside the word. That is not worth an HTML change for this pass because the evidence remains readable and the current wrapping prevents overflow on the tightest viewport.
+
+Recommendation: make no HTML change for Pass 135 and do not touch plugin or runtime code. Keep the scan-decision state as-is; it is consequence-clear, evidence-backed, target-safe, and compact enough for the importer journey.
