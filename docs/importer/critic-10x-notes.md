@@ -306,3 +306,11 @@ The Pass 23 clipping concern is not actionable with the new DOM measurement. The
 The tablet screenshot remains stable, and the measured document width matching the scroll width clears the specific concern that the setup panel, helper text, source value, or source-type grid is forcing page-level overflow. The visible 390px crop is still useful as evidence that the capture setup can make the first screen look clipped, but it is not enough to justify changing the design artifact.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny follow-up is justified unless a manual browser check or a DOM measurement at an actual 390px layout viewport reproduces `scrollWidth > clientWidth` or identifies a specific overflowing element.
+
+## Pass 25 Critique
+
+Reviewer readiness is strong enough without another HTML edit. The artifact does not visibly leak implementation caveats, TODO-style annotations, accessibility notes, validation warnings, or PR-body framing into the UI. What remains on screen reads as product copy: dry-run safety, source coverage, URL decisions, item-level evidence, warning ownership, and real-import consequences.
+
+The most explanatory visible pieces are still justified. "What each source supports" is on-demand feature proof, not a spec matrix; "First run is always a dry run" and "Allowed with warnings" explain user consequences at decision points; and the result table evidence is needed for reviewer confidence. Moving any of those out of the artifact would weaken the journey rather than reduce bloat.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny visible-copy trim is justified in this pass. Production caveats such as static sample data, source-specific adaptation, validation, keyboard/focus behavior, live progress announcements, contrast QA, and large-result testing should stay in notes or the PR body, not in the visible design artifact.
