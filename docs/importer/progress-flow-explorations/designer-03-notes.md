@@ -1,7 +1,7 @@
 # Designer 03 Notes
 
-1. [GitHub Browse To Import](designer-03-journey-11.html) - Browsing ends with an explicit selected path and a single primary action.
-2. [URL Decisions Inline](designer-03-journey-12.html) - Link rewriting pauses become understandable, bounded decisions.
-3. [Warning Resolution](designer-03-journey-13.html) - Relationship warnings point to the affected draft and the required fix.
-4. [Abort And Resume](designer-03-journey-14.html) - Stopping an import explains what remains and what can continue.
-5. [Long Import Operator](designer-03-journey-15.html) - Large imports separate current item, totals, retries, and next action.
+1. [Media Import Workbench](designer-03-journey-11.html) - A media-first workbench for found images, missing files, alt text, and gallery assignment.
+2. [Rules Engine Builder](designer-03-journey-12.html) - A rule-block interface for transformations, routing, slugs, defaults, and conditional mapping.
+3. [Timeline Runner](designer-03-journey-13.html) - A vertical execution timeline for batches, checkpoints, pauses, retries, and recovery.
+4. [Content Type Tabs](designer-03-journey-14.html) - A content-type-first setup for Pages, Posts, Terms, Media, Users, and custom post types.
+5. [Minimal Power Panel](designer-03-journey-15.html) - A compact expert panel with collapsible advanced sections and inline progress.
