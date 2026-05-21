@@ -1588,3 +1588,11 @@ The combined 320px large-text plus forced-colors focus evidence does not show a 
 The absence of `boxShadow` is expected in forced-colors mode, and the focused controls still have a visible `2px` outline. The wrapped primary actions grow to about `232-236px` by `70.19px`, while `Back to dry-run result` remains about `236px` by `44.09px`; those sizes are target-safe and the wrapping does not change the import hierarchy.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 151. Keep the Pass 148 containment and button-wrapping fix as-is; the forced-colors focus treatment remains visible, contained, and proportionate.
+
+## Pass 152 Critique
+
+The A4 print evidence does not show a true print, readability, handoff, or overflow defect. The print viewport is fully contained at `794px` with `scrollWidth=794`, `bodyScrollWidth=794`, and `overflowCount=0`; the sidebar collapses into a short `794px` by `60.30px` top band instead of stealing page width, and each journey section is constrained to about `738px` wide.
+
+The roughly `4502px` body height is expected for a static artifact that prints the complete importer journey. Setup and result are taller than one A4 viewport, but the screenshot shows readable content, preserved action order, and no clipped controls or horizontal crop. For handoff, a multi-page printout is acceptable because it keeps the full setup, scan decision, dry-run result, and real-import gate visible without hiding importer behavior.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 152. Do not add print-only compression, forced page breaks, or feature trimming unless future PDF evidence shows split controls, orphaned headings, missing state context, or actual clipped content.
