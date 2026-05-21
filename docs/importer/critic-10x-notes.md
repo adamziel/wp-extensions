@@ -1770,3 +1770,11 @@ The artifact drift scan does not show a true bloat, palette, or visual-style reg
 The color scan is still anchored in WordPress admin and semantic tokens. The most frequent values are `var(--line)`, `var(--muted)`, `#fff`, `var(--focus)`, `var(--blue)`, `#e6d67a`, `var(--amber)`, and the green/blue/amber soft state colors. That is consistent with a quiet wp-admin tool surface rather than a decorative palette drift.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 174. Keep using targeted evidence before adding any more visual treatment.
+
+## Pass 175 Critique
+
+The full-flow visual regression after recent target, nav, and contrast refinements passes. At 500px, the artifact remains contained with `clientWidth=500`, `scrollWidth=500`, `bodyScrollWidth=500`, and `overflowCount=0`; setup, scan decision, dry-run result, and real import remain ordered and contained at 476px width. At 1440px, the same containment holds with 1156px-wide sections and no page-level overflow.
+
+The full-page heights are still high, about 5803.81px on 500px and 3168.63px on 1440px, but that is expected because the artifact shows the full journey in one static handoff. The recent link target, nav label, and stage-dot contrast fixes do not introduce a new visual section, competing dashboard, or horizontal layout regression.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 175. Keep the artifact stable unless future screenshots show a concrete readability failure.
