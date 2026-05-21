@@ -23,11 +23,13 @@
 - Pass 6 added the smallest post-import outcome proof inside the existing real-import state. The new "After running" block shows created draft links, updated draft links, the skipped item, and the remaining media warning with a final-report link.
 - Pass 6 also aligned the final unresolved media count with the focused resolver example: after replacing one missing media file, the real import carries 1 unresolved media warning instead of 2.
 - Pass 6 intentionally did not add recovery, retry, publish, or bulk-fix flows. Those would make the static artifact heavier than the current PR needs.
+- Pass 7 tested a compact source-adaptation table inside the collapsed source-support disclosure, then removed it after critic review because it risked pulling the artifact back toward a capability matrix. The principle remains in notes: source type should adapt labels, examples, scan evidence, and warning copy without changing the four-step journey.
+- Pass 7 intentionally kept the first screen unchanged: the visible setup still leads with source type, source input, Start dry run, and the dry-run guarantee before optional source details.
 
 ## Remaining Concerns
 
 - This is still a single static HTML artifact. A real implementation should route these as separate screens or replace lower states dynamically as the import advances.
-- The source type radio switcher is static, so the selected source does not change the example label or input help. The production version should update labels and examples per source type.
+- The source type radio switcher is static, so the selected source does not actually change the example label or input help. Production should adapt labels, examples, scan evidence, and warning copy to the selected radio value without changing the four-step journey.
 - Browser upload is now behind a native disclosure to protect the first viewport. A production drag-and-drop target would still need keyboard, error, and accepted-format behavior.
 - Counts and report details are illustrative. Real copy should come from actual scan result data and should handle localization, very long source names, and larger browser text.
 - The mobile result cards now reduce density, but production should still test larger result sets and localized labels for scan speed, pagination, and repeated-action ergonomics.
