@@ -366,3 +366,11 @@ The opened "What each source supports" disclosure has the right coverage-to-bloa
 No coverage gap in the opened disclosure justifies expanding the HTML. The card labels match the source selector families, and the format examples are broad enough for reviewer confidence while staying compact. Adding per-format rows, examples, compatibility rules, or separate WordPress/feed/archive journeys would reintroduce the matrix problem this pass is trying to avoid.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy adjustment is justified in this pass.
+
+## Pass 32 Critique
+
+The tablet-width result remains readable after the recent trims. The dry-run counts fit in one row, the result table stays inside the panel, and the visible columns still let a reviewer scan outcome, item, evidence, owner, and next action without switching context.
+
+Item-level evidence is still reviewable at this width. The skipped-title row retains the necessary chain: `Skip`, `Untitled appendix`, `appendix/no-title.md`, `No readable title found`, `Editor`, and `Add title or skip`. The warning row also still leads cleanly into remediation: `Block rendering` identifies the missing `images/block-rendering.svg`, the evidence says the linked media is absent from the source checkout, and the `Replace media` action matches the selected replacement panel below.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No layout or copy adjustment is justified for this pass.
