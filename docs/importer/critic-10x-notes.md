@@ -624,3 +624,13 @@ The cards do compete mildly with the "Current setup" summary because they sit im
 The tablet layout is also more efficient than the mobile opened state. The six cards form two compact rows, text wraps cleanly, and the card grid does not create horizontal overflow or push the summary several screens away. Compressing the cards further would save some vertical space but would likely make source coverage harder to scan, which is not a worthwhile tradeoff for an optional disclosure.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tablet-specific edit is justified from this evidence; the opened support proof has some visual weight, but it does not block the dry-run action or bury the current setup summary enough to warrant another layout pass. Continue to avoid adding source examples, extra cards, or new controls inside the disclosure.
+
+## Pass 59 Critique
+
+The 1440px desktop first viewport provides enough orientation even though the scan decision starts below the fold. The left rail names the full journey, the page header states the safe sequence, and the right "Current setup" panel gives a concrete next-step list: scan without writing, resolve duplicate and URL decisions, then review the dry-run result. That is sufficient source-to-dry-run-to-preview framing before the user reaches the scan decision surface.
+
+The primary setup task remains clear. The source type, source path, Browse affordance, "Start dry run" action, and fixed dry-run guarantee are all visible in the main panel, with optional upload and editable settings placed after the action. The right summary repeats the selected source and safety defaults, but in this screenshot it reads as confirmation rather than a second form; it helps explain what will happen after the dry run starts.
+
+No extra above-the-fold handoff is needed. Adding a preview banner, inline scan-decision teaser, or expanded support proof would make the first viewport heavier without solving a concrete misunderstanding. The only visible tradeoff is that the scan-decision state itself is just below the first screen, but the sidebar step labels and numbered setup summary already cover that transition.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. Do not edit the HTML for this pass; the desktop first viewport is doing enough orientation work while preserving a lean setup task and the same feature surface.
