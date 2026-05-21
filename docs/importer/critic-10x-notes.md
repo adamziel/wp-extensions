@@ -1424,3 +1424,13 @@ The narrow forced-colors evidence is also acceptable. The focused duplicate repo
 Large text does not reveal a regression. Each mobile settings card remains about `336px` by `80px`, the labels and helper text still fit, and there is no horizontal overflow. The meaning is not hidden: drafts, URL rewriting, and duplicate reporting each name the editable setting and state the consequence in one short helper line. The section is still secondary to the dry-run path and does not compete with the primary action.
 
 Recommendation: make no HTML change for Pass 133 and do not touch plugin or runtime code. The editable-settings cards are target-safe, focus-visible, forced-colors compatible, and stable under large text; further refinement here would mostly add weight without improving the journey.
+
+## Pass 134 Critique
+
+The source-support disclosure is the right tradeoff in the supplied evidence. Collapsed on mobile, it costs only the `336px` by `20.296875px` summary row, so it does not compete with source type, source entry, the dry-run action, upload fallback, or editable settings. Expanded, it is tall on mobile (`336px` by `700.53125px`) and especially narrow (`266px` by `761.421875px`), but that height appears only after the user asks for coverage proof. Desktop remains compact enough at `772px` by `267.96875px`.
+
+The coverage is not dangerously hidden. The primary UI already exposes the source-type choices, and the source field helper names the broad accepted inputs. The disclosure then gives reviewer-level proof for GitHub, WordPress sites, feeds/OPML, server paths, browser upload, and archive/document imports without turning the first task into a capability matrix. The summary text, "What each source supports," is clear enough; "source type" would be slightly more precise, but not enough to justify another pass.
+
+I do not see horizontal overflow, clipped cards, ambiguous support copy, or excessive bloat from the expanded state. The Browser upload and Archive/document split remains useful because upload explains the local fallback reason while archive/document carries the detailed format list.
+
+Recommendation: make no HTML change for Pass 134 and do not touch plugin or runtime code. Keep the source-support disclosure as-is; it preserves broad coverage as on-demand evidence without burdening the main importer path.
