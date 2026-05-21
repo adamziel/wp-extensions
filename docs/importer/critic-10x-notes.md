@@ -440,3 +440,11 @@ The setup summary earns its own block at tablet width. It repeats the GitHub fol
 The URL handling decision, progress stack, and result counts also connect cleanly. The scan decision names the 7 links in 3 draft pages, the selected URL handling option explains the consequence, the progress stack shows URL handling as the current pause, and the dry-run result counts appear immediately below with create/update/skip/warning totals. The page is long, but the visible sequence answers "what source, what decision, what is paused, what result follows" without adding another explanatory layer.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No copy or layout adjustment is justified for this pass; trimming the setup summary or progress stack would save space but weaken the tablet handoff.
+
+## Pass 40 Critique
+
+The 900px tablet journey is long but still coherent from setup through scan decision, dry-run result, and the real-import gate. The repeated consequence copy is doing useful work at the major boundaries: setup says dry run is safe, the scan decision explains why the preview is paused, the dry-run result shows item-level evidence, and the final gate restates exactly what WordPress will write.
+
+The one high-confidence hierarchy issue is in the final gate. In the supplied tablet screenshot, the green "Run real import as drafts" button appears before the "Before running" remediation list, so the final chances to publish immediately, import the skipped appendix, or clear media warnings sit after the action they are meant to inform. That hides risk at the only write boundary.
+
+Recommendation: tighten the opening gate copy around the highest-risk promise, then move the existing "Before running" bullets into the amber real-import gate above the action row. This preserves every feature and every consequence, removes the separate sidecar block at tablet width, and makes the final run decision read in the right order: draft-only safety, allowed-with-warnings reason, write consequences, last pre-run choices, then the green action.

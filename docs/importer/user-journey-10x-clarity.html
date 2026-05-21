@@ -1456,8 +1456,8 @@
 						<span class="badge is-amber">Allowed with warnings</span>
 						<h4>Run real import: creates drafts, skips unresolved items</h4>
 						<div class="import-gate">
-							<strong>Allowed because unresolved warnings are non-blocking.</strong>
-							<span class="result-note">The import will not publish content. It will skip the untitled document and keep the missing media references reported for follow-up.</span>
+							<strong>Drafts only; nothing publishes from this run.</strong>
+							<span class="result-note">Allowed with warnings because remaining issues are non-blocking. WordPress skips the untitled document and reports the missing media for follow-up.</span>
 						</div>
 						<ul>
 							<li>Create 9 new draft pages.</li>
@@ -1467,6 +1467,14 @@
 							<li>Skip 1 untitled document because no title was confirmed.</li>
 							<li>Carry 1 unresolved media warning into the final report.</li>
 						</ul>
+						<div class="import-gate">
+							<strong>Before running</strong>
+							<ul>
+								<li>To publish immediately, change the draft setting before running.</li>
+								<li>To import the skipped appendix, add a title in the dry-run result.</li>
+								<li>To remove media warnings, replace the missing files before running.</li>
+							</ul>
+						</div>
 						<div class="action-row">
 							<button class="button-primary is-green" type="button">Run real import as drafts</button>
 							<button class="button-secondary" type="button">Back to dry-run result</button>
@@ -1481,15 +1489,6 @@
 							</ul>
 						</div>
 					</div>
-
-					<aside class="result-list">
-						<h4>Before running</h4>
-						<ul>
-							<li>To publish immediately, change the draft setting before running.</li>
-							<li>To import the skipped appendix, add a title in the dry-run result.</li>
-							<li>To remove media warnings, replace the missing files before running.</li>
-						</ul>
-					</aside>
 				</div>
 			</section>
 		</main>
