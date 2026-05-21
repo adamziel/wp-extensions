@@ -1206,3 +1206,13 @@ The label is also clearer for this selected source state. Because the current se
 The over-specificity risk should remain a production note, not a reason to revert the artifact. In a real implementation, this action should be source-aware: "Browse repo" for GitHub repositories, different wording or accessible names for WordPress sites, feeds, server paths, uploads, archives, or documents as appropriate. The static artifact does not need to demonstrate every label variant, and adding those variants would reopen the source-catalog bloat the current journey has avoided.
 
 Recommendation: keep the "Browse repo" label for the selected GitHub source state. Do not edit plugin or runtime code, and do not add alternate-source examples or conditional-label UI to the HTML. Carry only a production copy note that browse labels and accessible names should adapt to the selected source type.
+
+## Pass 112 Critique
+
+The browser-upload fallback label is clear and appropriately secondary. "Choose files from this browser" distinguishes the fallback from the primary URL/repo path without sounding like a competing first step, and the open-state evidence shows it remains contained across mobile, desktop, and narrow mobile with no overflow. It also avoids the Pass 110 ambiguity: users can tell this action opens local browser file selection rather than repo browsing.
+
+The help text preserves the needed feature surface without expanding into a source catalog. "Use this for local archives, folders, documents, feed lists, or exports that are not available at a URL." names the important fallback cases directly: archives, folders, documents, feed lists, and exports. The final URL qualifier is doing useful prioritization work because it tells users why this path exists while keeping URL/repo import as the preferred journey when a source is available online.
+
+The vertical cost is acceptable. The details region is about `160px` on mobile, `140px` on desktop, and `180px` on narrow mobile; that is real space, but it appears only after the fallback is opened and the copy is concise. There is no evidence that it distracts from the primary source field or "Browse repo" action in the closed state. In the open state, the extra specificity is warranted because folder/archive/export support is exactly what users need confirmed before choosing local files.
+
+Recommendation: keep the upload fallback label and help text as-is. Do not edit the HTML, plugin code, or runtime. Carry only the same production principle forward: keep browser upload visibly available as a fallback for local archives, folders, documents, feed lists, and exports, while the URL/repo path remains the primary flow.
