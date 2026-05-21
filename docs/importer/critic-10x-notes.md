@@ -1102,3 +1102,13 @@ The action is framed as resolving a warning, not writing content. The panel head
 The focus state is visible enough in this capture. The focused button has a strong filled treatment plus an outline/shadow that stands out inside the resolver panel, and it is not clipped by the viewport even though the result section begins above the screenshot (`resultTop=-297`). The surrounding result rows and the "Dry run complete" state below keep the user oriented within review rather than implying that content will be written immediately.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 101. The resolver focus state is visible, correctly framed as a warning-resolution action, and safely distinct from the later real-import write action. In production QA, preserve this distinction through tab order, focus styling, and action labels so resolver buttons cannot be mistaken for commit buttons.
+
+## Pass 102 Critique
+
+The corrected desktop affected item improves resolver clarity. The selected warning now names "Block rendering media file" as the affected item, while the result row still ties the warning back to the source content item "Block rendering" and the missing media path `images/block-rendering.svg`. That distinction matters: the resolver panel is no longer implying that the page itself is the replacement target, and the user can read the issue as a media-file resolution attached to a content warning.
+
+The surrounding desktop layout supports that correction. The result state starts at `resultTop=261`, with the resolver visible in the same review panel as the item evidence, warning bridge, and report action. There is no horizontal overflow in the capture (`innerWidth=1440`, `clientWidth=1440`, `scrollWidth=1440`, `bodyScrollWidth=1440`), and the path strings wrap inside the available width without forcing the interface wider. The real-import gate begins later at `realImportTop=1157`, which leaves enough room for users to inspect and resolve the warning before reaching the write boundary.
+
+No desktop follow-up is needed from this evidence. The resolver now says what is affected, what path is missing, what replacement path will be used, and what consequence follows: "Warning clears; the real import carries 1 media warning instead of 2." That is the right amount of specificity for a static design artifact. Adding more desktop UI around this fix would risk expanding the remediation model rather than clarifying the journey.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 102. The affected-item fix resolves the main clarity problem in the media resolver, and the desktop screenshot shows a contained, readable result-to-import handoff with no new layout or bloat issue.
