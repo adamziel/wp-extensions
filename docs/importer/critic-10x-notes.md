@@ -542,3 +542,13 @@ The 430px first viewport after the shell-height fix does not show a high-confide
 The first action is still reached quickly enough. The viewport opens with the product title, four-step nav, "Import content," "Add source," the required source field, Browse fallback, helper copy, the full-width "Start dry run" action, and the fixed dry-run guarantee. Optional upload and the source type grid are visible below the action, but they do not delay the primary paste-or-path route. The source type grid also holds its two-column mobile layout without clipped labels or unstable row heights.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. Do not edit the HTML or CSS for the apparent right-edge cropping in this screenshot; it is not reproducible as layout overflow at 430px and changing the nav or source field now would be churn.
+
+## Pass 51 Critique
+
+The 768px tablet first viewport holds after the shell-height fix. The dark header is still stable, the active Setup tab is clear, the page title and setup state badge are not compressed, and there is no visible artifact from `min-height: 0` on the collapsed shell. The setup card keeps the source choice, source field, Browse fallback, "Start dry run" action, dry-run guarantee, upload disclosure, and the top of editable settings in a coherent first-screen order.
+
+The source type tabs are the tightest part of the viewport. Several labels wrap across two or three lines, especially "Archive or document," but the six source choices remain legible, evenly bounded, and visibly tab-like. This does not justify another breakpoint or collapsing the chooser because the selected GitHub tab is obvious and the primary source field/action hierarchy still appears immediately below it. The URL text is truncated in the input, but that is expected for a long source path and the Browse button remains subordinate to the field rather than competing with "Start dry run."
+
+Settings begin at the bottom of the viewport, but they do not delay the first action. The first dry-run CTA appears before optional upload and settings, and the green dry-run guarantee reinforces the safety model without adding another panel. No concrete tablet-only defect in the supplied screenshot warrants editing the HTML or CSS.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. Do not add a compact tab mode, shrink the header, or move settings upward for this pass; the current 768px first viewport preserves the feature surface while keeping the first action reachable.
