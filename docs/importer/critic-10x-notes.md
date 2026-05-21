@@ -584,3 +584,13 @@ Warning repetition is present across the dry-run side panel and final gate, but 
 No layout artifact from the recent CSS changes is visible in the supplied screenshot. The result grid, resolver box, warning side panel, and amber final gate align cleanly, and the lower gate content remains readable even though the screenshot crops before the full after-running area.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. Do not edit the HTML or CSS for this pass; the remaining cost is intentional review density, not a concrete design-only regression.
+
+## Pass 55 Critique
+
+The 500px mobile full journey holds after the recent desktop/tablet setup changes. The shell is stable: the dark header fits the viewport, the four journey tabs remain readable, and there is no visible horizontal-scroll regression. The setup state also keeps the right order on mobile: source field, Browse fallback, "Start dry run," fixed dry-run guarantee, optional upload, source type, editable settings, and collapsed source-support proof. The settings cards are stacked, legible, and subordinate to the dry-run action rather than becoming a new first task.
+
+Long path handling is acceptable in the supplied evidence. The text input clips the pasted GitHub path, which is expected input behavior, while the "Ready to preview" path wraps inside the summary without pushing the card wider. Resolver labels and values stay separated, and the result rows preserve complete action labels such as "Review match," "Replace media," and "Add title or skip." The final gate also keeps the corrected order: allowed-with-warnings state, draft-only promise, exact write consequences, before-running guidance, green import action, and then after-running links.
+
+The remaining mobile cost is vertical fatigue from the result and final gate, especially where media/title/skipped-item warnings appear in item evidence, selected resolution, warning summary, and final write consequences. That repetition is visible, but it is not accidental enough to justify a trim: each occurrence answers a different question before content is written. Removing one would make the mobile page shorter at the cost of weaker safety or less explicit final-import consequences.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for this pass. No concrete 500px mobile regression in settings layout, action hierarchy, path wrapping, resolver labels, warning repetition, final gate order, or shell/header behavior justifies an HTML/CSS edit. If future review asks for a shorter mobile experience, test a dedicated mobile result-review pattern rather than shaving isolated warnings from this static full journey.
