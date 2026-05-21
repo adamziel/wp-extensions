@@ -1746,3 +1746,11 @@ The contrast audit exposed a real visual bug in the scan progress stage dots. `.
 The scoped fix is correct: `.stage-list .stage-dot { color: #fff; }` restores the intended glyph color without changing stage copy, order, layout, or semantics. Recheck measured contrast ratios of 4.51 for the completed green checks, 4.84 for the amber current marker, and 5.53 for the muted queued marker; the 500px page remains width-contained with `overflowCount=0`, and the broader contrast audit reports no remaining findings.
 
 Recommendation: keep the Pass 171 CSS specificity fix and make no plugin or runtime change.
+
+## Pass 172 Critique
+
+The forced-colors regression check for the stage-dot contrast fix passes. In normal color mode the dots keep the intended white glyphs on green, amber, and muted backgrounds. In forced-colors mode Chromium maps the dot glyphs to black text on white backgrounds, keeps each marker at 22x22, and the page remains width-contained with `overflowCount=0`.
+
+This means the Pass 171 specificity fix does not need a special forced-colors branch. Adding one would risk fighting system color mapping without improving meaning, especially because the stage labels and status text already carry the state.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 172. Keep the stage-dot contrast fix as-is.
