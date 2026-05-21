@@ -1464,3 +1464,13 @@ The repeated labels are doing useful work here. Removing "Evidence," "Owner," or
 There is one tiny CSS-only refinement worth considering: compact the mobile/narrow card chrome by reclaiming width from redundant row labels, ideally by letting the outcome pill and item title share the first row while keeping "Evidence," "Owner," and "Next" labels visible. That preserves every feature and evidence field, keeps owners and next actions explicit, and gives long paths and evidence text a little more room without changing copy or the desktop table.
 
 Recommendation: no markup or runtime change for Pass 137. If the designer takes one artifact-only follow-up, make only the scoped mobile/narrow CSS compaction and re-run the same desktop, mobile, and narrow overflow checks; otherwise the current result cards are acceptable evidence density rather than a failed journey.
+
+## Pass 138 Critique
+
+The Pass 137 result-card compaction survives the focused, forced-colors, and large-text evidence. On mobile, the focused "Replace media" action remains a `197px` by `40px` target with no horizontal overflow, and the visible `2px` blue focus shadow is not clipped by the compact card row. The first row still scans correctly because the outcome pill and item title are the two highest-signal fields; suppressing the generated "Outcome" and "Item" labels there does not remove meaning.
+
+The narrow forced-colors capture is also acceptable. The focused "Replace media" action measures `127px` by `40px`, exposes a `2px` system outline, and does not depend on a clipped box-shadow or color-only state. The status pill text, item title, visible row labels, and button text carry the hierarchy after colors collapse, so the compact first row does not create an accessibility regression.
+
+Large text keeps the review contract intact. "Evidence," "Owner," and "Next" remain visible full-width labeled rows, which is the important part for auditing warnings and skips. The item title has a little less horizontal room than before, but there is still no horizontal overflow and the card height reduction does not hide evidence, owners, or next actions.
+
+Recommendation: make no HTML change for Pass 138 and do not touch plugin or runtime code. I do not see a real problem that warrants another artifact-only CSS or copy refinement; the scoped mobile/narrow compaction improves density while preserving focus visibility, forced-colors behavior, large-text readability, and all dry-run evidence.
