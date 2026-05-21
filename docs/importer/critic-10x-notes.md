@@ -1006,3 +1006,13 @@ The default desktop setup remains heavier than a minimal importer would be, but 
 No new desktop regression is visible from the warning-copy trim. The scan decision still has enough context to pause the dry run, the result still bridges clearly into the final gate, and the real-import section still repeats the consequences where commitment happens. Further copy removal in the warning rail would risk making unresolved work feel decorative instead of actionable.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 93. Do not add a new transition, expand source coverage, or trim the warning rail further. The default desktop journey is long but coherent, and the shorter warning rail now sits at the right weight inside the full flow.
+
+## Pass 94 Critique
+
+The 390px narrow-mobile result evidence remains contained after the warning-copy trim. The capture metrics show no horizontal overflow (`innerWidth=390`, `clientWidth=390`, `scrollWidth=390`, `bodyScrollWidth=390`, `overflow=[]`), and the visible result state stacks into a single readable column: counts, consequence line, item evidence cards, selected issue resolution, warning summary, and report action. Long paths such as `docs/explanations/architecture/index.md`, `images/block-rendering.svg`, and the replacement upload path wrap inside their cards rather than forcing sideways scroll or clipping controls.
+
+The trim helped at the narrowest reviewed width because the warning summary now reads as a bridge, not a second policy panel. It still preserves consequence clarity: duplicate reporting remains on, the media warning has an owner and a replacement action, the title warning has an editor action, and the old-site-link decision is acknowledged as already applied. That is enough context before the user reaches the real-import gate, which starts much lower at `realImportTop=2435`.
+
+No clipping or lost consequence is visible in the result view. The primary concern is just the unavoidable vertical length of a phone-sized evidence review: the real-import gate sits far below the result start at `resultTop=184`. That length is defensible because each block carries import evidence or a decision consequence, not extra explanation. Cutting more warning copy now would make unresolved work less actionable and force the final gate to carry too much of the user's understanding.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 94. Do not trim the warning panel further and do not add a mobile transition or sticky summary; the 390px result view is contained, readable, and still clear about what remains unresolved before the real import.
