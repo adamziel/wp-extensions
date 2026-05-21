@@ -1754,3 +1754,11 @@ The forced-colors regression check for the stage-dot contrast fix passes. In nor
 This means the Pass 171 specificity fix does not need a special forced-colors branch. Adding one would risk fighting system color mapping without improving meaning, especially because the stage labels and status text already carry the state.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 172. Keep the stage-dot contrast fix as-is.
+
+## Pass 173 Critique
+
+The A4 print regression after the recent CSS and markup refinements passes. The print viewport remains contained at `794px`, with `scrollWidth=794`, `bodyScrollWidth=794`, and `overflowCount=0`. The four main sections still render at a readable 738px width: setup, scan decision, dry-run result, and real import.
+
+The body is about 4552.73px tall, slightly taller than earlier print checks, but that reflects the complete static walkthrough plus the small target-size and proof refinements. It is not a clipping, horizontal crop, or broken handoff issue. Compressing print-only layout would remove useful review context without fixing a measured failure.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 173. Keep print behavior unchanged.
