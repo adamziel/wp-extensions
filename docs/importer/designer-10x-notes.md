@@ -20,6 +20,9 @@
 - Pass 4 kept the dry-run result inspectable as a full table on desktop, but converts the same semantic rows into labeled card-style rows on mobile. This removes the narrow-screen horizontal-scroll dependency while preserving outcome, item, evidence, owner, and next-action visibility.
 - Pass 5 added one compact, non-modal resolver inside the dry-run result. It uses the selected missing-media warning to show the missing path, chosen replacement, consequence, and two local actions without adding another top-level state or turning the static artifact into a full remediation app.
 - Pass 5 kept the real-import state consequence-first and unchanged in structure: unresolved warnings remain explicitly allowed but carried forward, skipped content remains visible, and the primary action still says it runs as drafts.
+- Pass 6 added the smallest post-import outcome proof inside the existing real-import state. The new "After running" block shows created draft links, updated draft links, the skipped item, and the remaining media warning with a final-report link.
+- Pass 6 also aligned the final unresolved media count with the focused resolver example: after replacing one missing media file, the real import carries 1 unresolved media warning instead of 2.
+- Pass 6 intentionally did not add recovery, retry, publish, or bulk-fix flows. Those would make the static artifact heavier than the current PR needs.
 
 ## Remaining Concerns
 
@@ -30,3 +33,4 @@
 - The mobile result cards now reduce density, but production should still test larger result sets and localized labels for scan speed, pagination, and repeated-action ergonomics.
 - "Allowed with warnings" is shown as a static condition. Production should compute this from warning severity and disable the real import when blocking warnings remain.
 - The new resolver demonstrates only one warning path. Production still needs the actual state model for replacement upload errors, duplicate-match changes, title confirmation, accepted warnings, and how resolved warnings update counts.
+- The post-import block is deliberately tiny. Production still needs real edit/report URLs, write failure handling, permissions checks, and focus/live-region behavior after the import completes.
