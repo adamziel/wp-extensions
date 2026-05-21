@@ -38,6 +38,7 @@
 - Pass 15 reviewed the opened "What each source supports" disclosure and kept the HTML unchanged. Expanded, it proves source coverage with six compact cards, but it stays visually secondary to the dry-run path and does not become a table, matrix, or extra source journey.
 - Pass 16 reviewer-handoff audit kept the HTML unchanged. A reviewer can open the artifact as a self-contained product direction piece: visible copy stays user-facing, caveats remain in notes/PR context, and the first-screen dry-run path remains stronger than the collapsed source-coverage disclosure.
 - Pass 17 reviewed the mobile edge-case evidence and kept the HTML unchanged. The clean committed-artifact DOM measurements at 420/390/360/500 and the mobile screenshots show no concrete overflow blocker, so the evidence does not justify another design artifact change.
+- Pass 18 reviewed the artifact as an implementation handoff and kept the HTML unchanged. The visible UI gives a production team concrete direction for the core journey: source selection, guaranteed dry run, blocking scan decision, result evidence, in-place issue resolution, exact real-import consequences, and post-import proof are all represented without adding screens, states, matrices, setup fields, or runtime code.
 
 ## Remaining Concerns
 
