@@ -17,6 +17,7 @@ final class RemoteUrlSourceWalker {
 	const REST_COMMENT_LIMIT   = 25;
 	const REST_EMBED_RELATIONS = 'author,wp:term,wp:featuredmedia';
 	const RSS_ITEM_LIMIT       = 50;
+	const OPML_FEED_LIMIT      = 20;
 
 	/**
 	 * Built-in REST collection bases used when post type discovery is unavailable.
@@ -711,6 +712,11 @@ final class RemoteUrlSourceWalker {
 			return $this->prepare_feed_documents( $session, $root, $root->get_source_uri(), $feed, 'direct-feed', $rest_failure_msg );
 		}
 
+		$opml_feed_urls = $this->parse_opml_feed_urls( $response['body'], $root->get_source_uri() );
+		if ( ! empty( $opml_feed_urls ) ) {
+			return $this->prepare_opml_feed_documents( $session, $root, $root->get_source_uri(), $opml_feed_urls, $rest_failure_msg );
+		}
+
 		$feed_url = $this->discover_feed_url_from_html_response( $root->get_source_uri(), $response );
 
 		if ( '' !== $feed_url ) {
@@ -831,18 +837,7 @@ final class RemoteUrlSourceWalker {
 	 * @throws RuntimeException When the feed has no importable content.
 	 */
 	private function prepare_feed_documents( ImportSession $session, ImportSourceItem $root, $feed_url, array $feed, $discovered_by, $rest_failure_msg ) {
-		$prepared = 0;
-		$items    = isset( $feed['items'] ) && is_array( $feed['items'] ) ? array_slice( $feed['items'], 0, self::RSS_ITEM_LIMIT ) : array();
-
-		foreach ( $items as $index => $item ) {
-			if ( ! is_array( $item ) ) {
-				continue;
-			}
-
-			if ( $this->prepare_feed_item_document( $session, $root, $feed_url, $feed, $item, (int) $index ) ) {
-				++$prepared;
-			}
-		}
+		$prepared = $this->prepare_feed_item_documents( $session, $root, $feed_url, $feed );
 
 		if ( 0 === $prepared ) {
 			throw new RuntimeException( 'Remote RSS/Atom feed did not contain importable items.' );
@@ -882,6 +877,119 @@ final class RemoteUrlSourceWalker {
 			'complete'   => true,
 			'message'    => 'Remote RSS/Atom feed items were staged as prepared documents.',
 		);
+	}
+
+	/**
+	 * Prepares feeds listed in an OPML outline.
+	 *
+	 * @param ImportSession     $session          Session.
+	 * @param ImportSourceItem  $root             Root remote item.
+	 * @param string            $opml_url         OPML URL.
+	 * @param array<int,string> $feed_urls        Feed URLs listed in the OPML document.
+	 * @param string            $rest_failure_msg REST detection failure.
+	 * @return array{discovered:int,queued:int,failed:int,complete:bool,message:string}
+	 * @throws ImportRemoteRateLimitException When a listed feed asks the importer to retry later.
+	 * @throws RuntimeException When no listed feed has importable content.
+	 */
+	private function prepare_opml_feed_documents( ImportSession $session, ImportSourceItem $root, $opml_url, array $feed_urls, $rest_failure_msg ) {
+		$prepared = 0;
+		$fetched  = 0;
+		$warnings = array();
+		$limited  = array_slice( array_values( $feed_urls ), 0, self::OPML_FEED_LIMIT );
+
+		foreach ( $limited as $feed_url ) {
+			try {
+				$feed_response = $this->fetcher->fetch_text( $feed_url );
+				$feed          = $this->parse_feed_response( $feed_response['body'], $feed_url );
+				++$fetched;
+
+				if ( null === $feed ) {
+					$warnings[] = array(
+						'feed_url' => $feed_url,
+						'error'    => 'Feed XML was not recognized.',
+					);
+					continue;
+				}
+
+				$prepared += $this->prepare_feed_item_documents( $session, $root, $feed_url, $feed );
+			} catch ( ImportRemoteRateLimitException $exception ) {
+				throw $exception;
+			} catch ( RuntimeException $exception ) {
+				$warnings[] = array(
+					'feed_url' => $feed_url,
+					'error'    => $exception->getMessage(),
+				);
+			}
+		}
+
+		if ( 0 === $prepared ) {
+			throw new RuntimeException( 'Remote OPML feed list did not contain importable feed items.' );
+		}
+
+		$metadata = array_merge(
+			$root->get_metadata(),
+			array(
+				'remote_mode'               => 'opml',
+				'remote_complete'           => true,
+				'remote_status'             => 'complete',
+				'remote_documents_prepared' => $prepared,
+				'remote_opml_url'           => $opml_url,
+				'remote_opml_feed_count'    => count( $feed_urls ),
+				'remote_opml_feeds_fetched' => $fetched,
+				'remote_opml_warnings'      => array_slice( $warnings, -10 ),
+				'remote_rest_fallback'      => $rest_failure_msg,
+			)
+		);
+
+		$this->store->save_source_item( $root->with_status( ImportSourceItem::STATUS_SKIPPED )->with_metadata( $metadata ) );
+		$this->record_event(
+			$session,
+			'remote.opml_prepared',
+			'Remote OPML feed list items were staged as prepared documents.',
+			$root,
+			array(
+				'opml_url'   => $opml_url,
+				'feeds'      => count( $feed_urls ),
+				'fetched'    => $fetched,
+				'prepared'   => $prepared,
+				'warnings'   => count( $warnings ),
+				'feed_limit' => self::OPML_FEED_LIMIT,
+			)
+		);
+
+		return array(
+			'discovered' => $prepared,
+			'queued'     => $prepared,
+			'failed'     => 0,
+			'complete'   => true,
+			'message'    => 'Remote OPML feed list items were staged as prepared documents.',
+		);
+	}
+
+	/**
+	 * Prepares all importable items in a feed.
+	 *
+	 * @param ImportSession       $session  Session.
+	 * @param ImportSourceItem    $root     Root remote item.
+	 * @param string              $feed_url Feed URL.
+	 * @param array<string,mixed> $feed     Parsed feed payload.
+	 * @return int Prepared document count.
+	 */
+	private function prepare_feed_item_documents( ImportSession $session, ImportSourceItem $root, $feed_url, array $feed ) {
+		$prepared = 0;
+		$items    = isset( $feed['items'] ) && is_array( $feed['items'] ) ? array_slice( $feed['items'], 0, self::RSS_ITEM_LIMIT ) : array();
+
+		foreach ( $items as $index => $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+
+			if ( $this->prepare_feed_item_document( $session, $root, $feed_url, $feed, $item, (int) $index ) ) {
+				++$prepared;
+			}
+		}
+
+		return $prepared;
 	}
 
 	/**
@@ -1369,6 +1477,65 @@ final class RemoteUrlSourceWalker {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Parses feed URLs from an OPML outline.
+	 *
+	 * @param string $body     OPML response body.
+	 * @param string $base_url OPML URL for resolving relative feed references.
+	 * @return array<int,string>
+	 */
+	private function parse_opml_feed_urls( $body, $base_url ) {
+		$body = trim( (string) $body );
+
+		if ( '' === $body || '<' !== substr( $body, 0, 1 ) ) {
+			return array();
+		}
+
+		$previous = libxml_use_internal_errors( true );
+		$xml      = simplexml_load_string( $body, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA );
+		libxml_clear_errors();
+		libxml_use_internal_errors( $previous );
+
+		if ( false === $xml || 'opml' !== strtolower( $xml->getName() ) ) {
+			return array();
+		}
+
+		$urls     = array();
+		$seen     = array();
+		$outlines = $xml->xpath( '//*[local-name()="outline"]' );
+
+		foreach ( false === $outlines ? array() : $outlines as $outline ) {
+			$attributes = $outline->attributes();
+			$url        = '';
+
+			if ( isset( $attributes['xmlUrl'] ) ) {
+				$url = (string) $attributes['xmlUrl'];
+			} elseif ( isset( $attributes['url'] ) ) {
+				$url = (string) $attributes['url'];
+			}
+
+			$url = trim( $url );
+			if ( '' === $url ) {
+				continue;
+			}
+
+			$url = $this->absolute_url( html_entity_decode( $url, ENT_QUOTES, 'UTF-8' ), $base_url );
+			if ( '' === $url || ! $this->is_remote_http_source( $url ) ) {
+				continue;
+			}
+
+			$key = strtolower( $url );
+			if ( isset( $seen[ $key ] ) ) {
+				continue;
+			}
+
+			$seen[ $key ] = true;
+			$urls[]       = $url;
+		}
+
+		return $urls;
 	}
 
 	/**

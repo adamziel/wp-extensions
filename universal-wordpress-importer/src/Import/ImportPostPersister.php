@@ -13,7 +13,8 @@ use RuntimeException;
  * Persists staged block markup as idempotent WordPress pages.
  */
 final class ImportPostPersister {
-	const DEFAULT_DOCUMENT_LIMIT = 100;
+	const DEFAULT_DOCUMENT_LIMIT   = 100;
+	const POST_STATUS_DECISION_KEY = 'import-post-status';
 
 	/**
 	 * Durable import store.
@@ -230,7 +231,7 @@ final class ImportPostPersister {
 		}
 
 		try {
-			$post_id = $this->posts->insert_or_update( $document, $existing_post_id );
+			$post_id = $this->posts->insert_or_update( $document, $existing_post_id, $this->post_status( $session ) );
 			$this->record_relationship_diagnostics( $session, $document, $post_id );
 
 			if ( $this->controls->should_simulate_fatal_after_post_write() ) {
@@ -284,7 +285,7 @@ final class ImportPostPersister {
 				new ImportProgressEvent(
 					ImportProgressEvent::LEVEL_INFO,
 					null === $existing_post_id ? 'post.created' : 'post.updated',
-					null === $existing_post_id ? 'Prepared document was inserted as a WordPress draft page.' : 'Prepared document changed; the existing WordPress draft page was updated.',
+					null === $existing_post_id ? 'Prepared document was inserted as a WordPress page.' : 'Prepared document changed; the existing WordPress page was updated.',
 					array(
 						'post_id'         => $post_id,
 						'source_item_key' => $document->get_source_item_key(),
@@ -312,6 +313,24 @@ final class ImportPostPersister {
 
 			return 'failed';
 		}
+	}
+
+	/**
+	 * Returns the selected post status for imported pages.
+	 *
+	 * @param ImportSession $session Session.
+	 * @return string
+	 */
+	private function post_status( ImportSession $session ) {
+		$decision = $this->store->find_decision( $session->get_id(), self::POST_STATUS_DECISION_KEY );
+
+		if ( null === $decision || ImportDecision::STATUS_RESOLVED !== $decision->get_status() ) {
+			return 'publish';
+		}
+
+		$answer = $decision->get_answer();
+
+		return isset( $answer['post_status'] ) && 'draft' === (string) $answer['post_status'] ? 'draft' : 'publish';
 	}
 
 	/**

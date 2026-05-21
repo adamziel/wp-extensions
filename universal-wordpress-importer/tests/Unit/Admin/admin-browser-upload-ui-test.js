@@ -28,6 +28,8 @@ class Element {
 		this.innerHTML = '';
 		this.children = [];
 		this.style = {};
+		this.attributes = {};
+		this.value = '';
 		this.firstChild = null;
 		this.firstElementChild = {};
 		this.classList = {
@@ -47,12 +49,38 @@ class Element {
 		(this.listeners[type] || []).forEach((listener) => listener(event));
 	}
 
-	querySelector() {
-		return this.id === 'universal-importer-notice' ? noticeParagraph : null;
+	focus() {
+		activeElement = this;
+	}
+
+	querySelector(selector) {
+		if (this.id === 'universal-importer-notice') {
+			return noticeParagraph;
+		}
+		if (this.id === 'universal-importer-github-modal' && selector === '.universal-importer-modal-dialog') {
+			return githubModalDialog;
+		}
+		return null;
 	}
 
 	querySelectorAll() {
 		return [];
+	}
+
+	setAttribute(name, value) {
+		this.attributes[name] = String(value);
+	}
+
+	getAttribute(name) {
+		return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : '';
+	}
+
+	hasAttribute(name) {
+		return Object.prototype.hasOwnProperty.call(this.attributes, name);
+	}
+
+	removeAttribute(name) {
+		delete this.attributes[name];
 	}
 
 	appendChild(child) {
@@ -135,6 +163,7 @@ form.formValues = {
 	source: '',
 	confirmed_domains: '',
 	url_rewrite_mode: 'ask',
+	import_as_drafts: '1',
 	dry_run: '1'
 };
 const sourceInput = new Element('universal-importer-source');
@@ -146,10 +175,41 @@ const clearFilesButton = new Element('universal-importer-clear-files');
 const dropzone = new Element('universal-importer-dropzone');
 const fileSummary = new Element('universal-importer-file-summary');
 const filePreview = new Element('universal-importer-file-preview');
+const githubPicker = new Element('universal-importer-github-picker');
+githubPicker.setAttribute('hidden', 'hidden');
+const githubBrowseButton = new Element('universal-importer-github-browse');
+const githubModal = new Element('universal-importer-github-modal');
+githubModal.setAttribute('hidden', 'hidden');
+const githubModalDialog = new Element('universal-importer-modal-dialog');
+const githubCloseButton = new Element('universal-importer-github-close');
+const githubCancelButton = new Element('universal-importer-github-cancel');
+const githubUseButton = new Element('universal-importer-github-use');
+const githubSearch = new Element('universal-importer-github-search');
+const githubPickerStatus = new Element('universal-importer-github-picker-status');
+const githubSelection = new Element('universal-importer-github-selection');
+const githubModalSelection = new Element('universal-importer-github-modal-selection');
+const githubTree = new Element('universal-importer-github-tree');
 const sessions = new Element('universal-importer-sessions');
 const notice = new Element('universal-importer-notice');
 const noticeParagraph = { textContent: '' };
+let activeElement = null;
 const fetchCalls = [];
+let nextFetchResponse = {
+	ok: true,
+	status: 200,
+	body: JSON.stringify({
+		success: true,
+		data: {
+			id: 'session-1',
+			source: 'browser-upload',
+			status: 'done',
+			dry_run: true,
+			progress: { total: 0, completed: 0, errors: 0 },
+			recent_events: [],
+			pending_decisions: []
+		}
+	})
+};
 
 const elements = {
 	'universal-importer-start-form': form,
@@ -160,6 +220,17 @@ const elements = {
 	'universal-importer-dropzone': dropzone,
 	'universal-importer-file-summary': fileSummary,
 	'universal-importer-file-preview': filePreview,
+	'universal-importer-github-picker': githubPicker,
+	'universal-importer-github-browse': githubBrowseButton,
+	'universal-importer-github-modal': githubModal,
+	'universal-importer-github-close': githubCloseButton,
+	'universal-importer-github-cancel': githubCancelButton,
+	'universal-importer-github-use': githubUseButton,
+	'universal-importer-github-search': githubSearch,
+	'universal-importer-github-picker-status': githubPickerStatus,
+	'universal-importer-github-selection': githubSelection,
+	'universal-importer-github-modal-selection': githubModalSelection,
+	'universal-importer-github-tree': githubTree,
 	'universal-importer-sessions': sessions,
 	'universal-importer-notice': notice
 };
@@ -174,6 +245,9 @@ const context = {
 	console,
 	ajaxurl: 'admin-ajax.php',
 	document: {
+		get activeElement() {
+			return activeElement;
+		},
 		getElementById(id) {
 			return elements[id] || null;
 		},
@@ -183,20 +257,12 @@ const context = {
 	},
 	fetch(url, options) {
 		fetchCalls.push({ url, options });
+		const response = nextFetchResponse;
 		return Promise.resolve({
-			json() {
-				return Promise.resolve({
-					success: true,
-					data: {
-						id: 'session-1',
-						source: 'browser-upload',
-						status: 'done',
-						dry_run: true,
-						progress: { total: 0, completed: 0, errors: 0 },
-						recent_events: [],
-						pending_decisions: []
-					}
-				});
+			ok: response.ok,
+			status: response.status,
+			text() {
+				return Promise.resolve(response.body);
 			}
 		});
 	},
@@ -211,6 +277,108 @@ const context = {
 };
 
 vm.runInNewContext(script, context, { filename: 'ImportAdminPage.inline.js' });
+
+sourceInput.value = 'https://github.com/example/repository';
+sourceInput.dispatch('input', {});
+
+if (githubPicker.getAttribute('hidden')) {
+	throw new Error('GitHub directory picker should be visible for GitHub repository URLs.');
+}
+
+nextFetchResponse = {
+	ok: true,
+	status: 200,
+	body: JSON.stringify({
+		success: true,
+		data: {
+			selected_path: 'docs',
+			selected_source_url: 'https://github.com/example/repository/tree/main/docs',
+			directories: [
+				{
+					path: '',
+					name: 'repository',
+					depth: 0,
+					source_url: 'https://github.com/example/repository/tree/main'
+				},
+				{
+					path: 'docs',
+					name: 'docs',
+					depth: 1,
+					source_url: 'https://github.com/example/repository/tree/main/docs'
+				}
+			]
+		}
+	})
+};
+githubBrowseButton.dispatch('click', {});
+
+(async () => {
+	await flushPromises();
+	await flushPromises();
+
+	const browseCall = fetchCalls.find((call) => String(call.options.body).includes('source=https%3A%2F%2Fgithub.com%2Fexample%2Frepository'));
+
+	if (!browseCall) {
+		throw new Error('GitHub directory browser request was not sent.');
+	}
+
+	if (!String(browseCall.options.body).includes('source=https%3A%2F%2Fgithub.com%2Fexample%2Frepository')) {
+		throw new Error('GitHub directory browser request did not include the source URL: ' + browseCall.options.body);
+	}
+
+	if (githubModal.hasAttribute('hidden')) {
+		throw new Error('GitHub directory modal should open while browsing directories.');
+	}
+
+	if (!githubTree.innerHTML.includes('docs') || !githubTree.innerHTML.includes('data-source-url="https://github.com/example/repository/tree/main/docs"')) {
+		throw new Error('GitHub directory tree was not rendered: ' + githubTree.innerHTML);
+	}
+
+	if (!githubSelection.textContent.includes('docs')) {
+		throw new Error('GitHub directory selection was not summarized: ' + githubSelection.textContent);
+	}
+
+	if (!githubModalSelection.textContent.includes('docs') || !githubModalSelection.textContent.includes('https://github.com/example/repository/tree/main/docs')) {
+		throw new Error('GitHub modal selection was not summarized: ' + githubModalSelection.textContent);
+	}
+
+	if (sourceInput.value !== 'https://github.com/example/repository') {
+		throw new Error('GitHub source should not change until the modal selection is confirmed.');
+	}
+
+	githubSearch.value = 'docs';
+	githubSearch.dispatch('input', {});
+
+	if (!githubTree.innerHTML.includes('docs') || githubTree.innerHTML.includes('Repository root')) {
+		throw new Error('GitHub directory filter did not narrow the rendered tree: ' + githubTree.innerHTML);
+	}
+
+	githubUseButton.dispatch('click', {});
+
+	if (sourceInput.value !== 'https://github.com/example/repository/tree/main/docs') {
+		throw new Error('GitHub selected directory was not applied to the source URL: ' + sourceInput.value);
+	}
+
+	if (!githubModal.hasAttribute('hidden')) {
+		throw new Error('GitHub directory modal should close after applying a selection.');
+	}
+
+	nextFetchResponse = {
+		ok: true,
+		status: 200,
+		body: JSON.stringify({
+			success: true,
+			data: {
+				id: 'session-1',
+				source: 'browser-upload',
+				status: 'done',
+				dry_run: true,
+				progress: { total: 0, completed: 0, errors: 0 },
+				recent_events: [],
+				pending_decisions: []
+			}
+		})
+	};
 
 filePicker.files = [{ name: 'Annual Report.pdf' }];
 filePicker.dispatch('change', {});
@@ -245,9 +413,8 @@ dropzone.dispatch('drop', {
 	}
 });
 
-(async () => {
-	await flushPromises();
-	await flushPromises();
+await flushPromises();
+await flushPromises();
 
 	if (!fileSummary.textContent.includes('3 files ready')) {
 		throw new Error('Dropped directory files were not summarized: ' + fileSummary.textContent);
@@ -307,6 +474,27 @@ dropzone.dispatch('drop', {
 
 	if (body.values.url_rewrite_mode !== 'ask') {
 		throw new Error('Upload request did not include the URL rewrite mode.');
+	}
+
+	if (body.values.import_as_drafts !== '1') {
+		throw new Error('Upload request did not include the post status preference.');
+	}
+
+	nextFetchResponse = {
+		ok: false,
+		status: 500,
+		body: '<p>There has been a critical error on this website.</p>'
+	};
+	form.dispatch('submit', { preventDefault() {} });
+	await flushPromises();
+	await flushPromises();
+
+	if (!noticeParagraph.textContent.includes('HTTP 500:') || !noticeParagraph.textContent.includes('There has been a critical error')) {
+		throw new Error('Non-JSON AJAX failure was not surfaced clearly: ' + noticeParagraph.textContent);
+	}
+
+	if (noticeParagraph.textContent.includes('Unexpected token')) {
+		throw new Error('Raw JSON parse error leaked into the admin notice: ' + noticeParagraph.textContent);
 	}
 })().catch((error) => {
 	process.stderr.write(error.stack + '\n');

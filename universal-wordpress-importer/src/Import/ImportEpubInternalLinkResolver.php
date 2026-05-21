@@ -288,7 +288,7 @@ final class ImportEpubInternalLinkResolver {
 			new ImportProgressEvent(
 				ImportProgressEvent::LEVEL_WARNING,
 				'epub.internal_links_deferred',
-				'EPUB internal links are waiting for target draft pages or permalinks.',
+				'EPUB internal links are waiting for target pages or permalinks.',
 				array(
 					'source_item_key' => $document->get_source_item_key(),
 					'deferred'        => count( $deferred_links ),

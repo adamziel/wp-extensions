@@ -57,11 +57,11 @@ final class ImportPostPersisterTest extends TestCase {
 	}
 
 	/**
-	 * Prepared documents are inserted as draft pages and remembered idempotently.
+	 * Prepared documents are published as pages and remembered idempotently.
 	 *
 	 * @return void
 	 */
-	public function test_persister_creates_draft_page_for_prepared_document() {
+	public function test_persister_publishes_page_for_prepared_document() {
 		$session  = ImportSession::start_for_source( '/tmp/book/chapter.md' );
 		$document = $this->document( $session, 'local:chapter', 'Chapter', 'hash-a' );
 
@@ -84,11 +84,37 @@ final class ImportPostPersisterTest extends TestCase {
 		);
 		$this->assertSame( 1, $this->posts->count_posts() );
 		$this->assertSame( 'Chapter', $this->posts->get_post( 1 )['post_title'] );
+		$this->assertSame( 'publish', $this->posts->get_post( 1 )['post_status'] );
 		$this->assertNotNull( $record );
 		$this->assertSame( 'post', $record->get_resource_type() );
 		$this->assertSame( '1', $record->get_resource_id() );
 		$this->assertSame( 'hash-a', $record->get_payload_hash() );
 		$this->assertSame( 'post.created', $events[0]->get_type() );
+	}
+
+	/**
+	 * A resolved import post status decision can keep imported pages as drafts.
+	 *
+	 * @return void
+	 */
+	public function test_persister_can_create_draft_page_from_post_status_decision() {
+		$session  = ImportSession::start_for_source( '/tmp/book/chapter.md' );
+		$document = $this->document( $session, 'local:chapter', 'Chapter', 'hash-a' );
+
+		$this->store->save( $session );
+		$this->store->save_prepared_document( $document );
+		$this->store->save_decision(
+			$session->get_id(),
+			ImportDecision::pending(
+				ImportPostPersister::POST_STATUS_DECISION_KEY,
+				'Choose whether imported pages should be published or saved as drafts.',
+				array()
+			)->resolve( array( 'post_status' => 'draft' ) )
+		);
+
+		( new ImportPostPersister( $this->store, $this->posts ) )->advance( $session );
+
+		$this->assertSame( 'draft', $this->posts->get_post( 1 )['post_status'] );
 	}
 
 	/**

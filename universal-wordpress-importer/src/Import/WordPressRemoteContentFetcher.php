@@ -99,6 +99,13 @@ final class WordPressRemoteContentFetcher implements ImportRemoteContentFetcherI
 		if ( 200 > $status_code || 300 <= $status_code ) {
 			$retry_after = isset( $response_headers['retry-after'] ) ? trim( (string) $response_headers['retry-after'] ) : '';
 
+			if ( 403 === $status_code && $this->is_github_api_url( $url ) && $this->is_github_rate_limit_response( $response_headers ) ) {
+				$retry_after = $this->github_rate_limit_retry_after( $response_headers );
+
+				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are not rendered directly.
+				throw new ImportRemoteRateLimitException( $url, $status_code, $retry_after, $this->parse_retry_after_seconds( $retry_after ) );
+			}
+
 			if ( 429 === $status_code || ( 503 === $status_code && '' !== $retry_after ) ) {
 				// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are not rendered directly.
 				throw new ImportRemoteRateLimitException( $url, $status_code, $retry_after, $this->parse_retry_after_seconds( $retry_after ) );
@@ -160,6 +167,39 @@ final class WordPressRemoteContentFetcher implements ImportRemoteContentFetcherI
 		}
 
 		return max( 1, min( 86400, $timestamp - time() ) );
+	}
+
+	/**
+	 * Returns whether a GitHub API response exhausted the current rate limit.
+	 *
+	 * @param array<string,string> $headers Response headers.
+	 * @return bool
+	 */
+	private function is_github_rate_limit_response( array $headers ) {
+		return isset( $headers['x-ratelimit-remaining'] ) && '0' === trim( (string) $headers['x-ratelimit-remaining'] );
+	}
+
+	/**
+	 * Builds a Retry-After compatible value from GitHub rate-limit headers.
+	 *
+	 * @param array<string,string> $headers Response headers.
+	 * @return string
+	 */
+	private function github_rate_limit_retry_after( array $headers ) {
+		if ( isset( $headers['retry-after'] ) && '' !== trim( (string) $headers['retry-after'] ) ) {
+			return trim( (string) $headers['retry-after'] );
+		}
+
+		if ( empty( $headers['x-ratelimit-reset'] ) ) {
+			return '60';
+		}
+
+		$reset = trim( (string) $headers['x-ratelimit-reset'] );
+		if ( ! ctype_digit( $reset ) ) {
+			return '60';
+		}
+
+		return gmdate( 'D, d M Y H:i:s', max( time() + 1, (int) $reset ) ) . ' GMT';
 	}
 
 	/**

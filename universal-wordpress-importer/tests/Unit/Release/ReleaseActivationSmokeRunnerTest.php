@@ -238,10 +238,10 @@ class ReleaseActivationSmokeRunnerTest extends TestCase {
 		$this->assertCount( ReleaseActivationSmokeRunner::IMPORT_SMOKE_MAX_TICKS * 4, $tick_steps );
 		$this->assertCount( 1, $unbounded_tick_steps );
 		$this->assertSame( 'runPHP', $last_step['step'] );
-		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected draft Markdown page with rewritten local media', $encoded );
-		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected draft page from the HTML fixture', $encoded );
+		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected imported Markdown page with rewritten local media', $encoded );
+		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected imported page from the HTML fixture', $encoded );
 		$this->assertStringContainsString( 'WP-CLI smoke import did not preserve the expected legacy widget Classic fallback page from the HTML widget fixture', $encoded );
-		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected draft Markdown page from the GitHub repository subtree', $encoded );
+		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected imported Markdown page from the GitHub repository subtree', $encoded );
 		$this->assertStringContainsString( 'wp-element-caption', $encoded );
 		$this->assertStringContainsString( 'HTML figure caption.', $encoded );
 		$this->assertStringContainsString( 'HTML linked image caption.', $encoded );
@@ -291,9 +291,9 @@ class ReleaseActivationSmokeRunnerTest extends TestCase {
 		$this->assertStringContainsString( 'Inline HTML media intro', $encoded );
 		$this->assertStringContainsString( 'Inline HTML media outro', $encoded );
 		$this->assertStringContainsString( 'HTML inline action', $encoded );
-		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected draft Markdown page from the zip archive', $encoded );
-		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected draft page from the WXR export', $encoded );
-		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected draft pages from the EPUB spine', $encoded );
+		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected imported Markdown page from the zip archive', $encoded );
+		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected imported page from the WXR export', $encoded );
+		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected imported pages from the EPUB spine', $encoded );
 		$this->assertStringContainsString( 'WP-CLI smoke import did not resolve the EPUB internal chapter link', $encoded );
 		$this->assertStringContainsString( 'embedded image attachment rewrite, and PDF media extraction metadata', $encoded );
 		$this->assertStringContainsString( 'WP-CLI smoke import did not import the embedded PDF image attachment', $encoded );
@@ -305,7 +305,7 @@ class ReleaseActivationSmokeRunnerTest extends TestCase {
 		$this->assertStringContainsString( 'corrupt PDF structure diagnostics', $encoded );
 		$this->assertStringContainsString( 'document.pdf_structure_warning', $encoded );
 		$this->assertStringContainsString( 'failed external PDF helper diagnostics', $encoded );
-		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected draft page from the WordPress REST traversal', $encoded );
+		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected imported page from the WordPress REST traversal', $encoded );
 		$this->assertStringContainsString( 'WP-CLI smoke import did not import the REST featured image attachment', $encoded );
 		$this->assertStringContainsString( 'WP-CLI smoke import did not persist the expected REST comments', $encoded );
 		$this->assertStringContainsString( 'pending REST relationship mapping decision', $encoded );
@@ -315,7 +315,7 @@ class ReleaseActivationSmokeRunnerTest extends TestCase {
 		$this->assertStringContainsString( 'relationship-mapping', $encoded );
 		$this->assertStringContainsString( 'GitHub repository subtree', $encoded );
 		$this->assertStringContainsString( 'archive.expanded', $encoded );
-		$this->assertStringContainsString( 'Admin browser-upload smoke did not persist the expected draft Markdown page', $last_step['code'] );
+		$this->assertStringContainsString( 'Admin browser-upload smoke did not persist the expected imported Markdown page', $last_step['code'] );
 		$this->assertStringContainsString( 'session.created', $last_step['code'] );
 	}
 
@@ -417,7 +417,7 @@ class ReleaseActivationSmokeRunnerTest extends TestCase {
 	/**
 	 * The local clean-site smoke includes a focused REST traversal assertion.
 	 */
-	public function test_local_rest_smoke_assertion_checks_rest_draft_output() {
+	public function test_local_rest_smoke_assertion_checks_rest_output() {
 		$runner = new ReleaseActivationSmokeRunner( dirname( __DIR__, 3 ) );
 
 		$assertion = $this->invoke_private_method( $runner, 'rest_import_assertion_php' );

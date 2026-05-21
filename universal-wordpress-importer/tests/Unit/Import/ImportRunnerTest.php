@@ -519,19 +519,12 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
-	 * GitHub repository URLs are downloaded as zip archives and handed to the existing tree pipeline.
+	 * GitHub repository URLs never fall back to zipball downloads.
 	 *
 	 * @return void
 	 */
-	public function test_runner_downloads_github_repository_archives() {
-		$archive = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/README.md'    => "# GitHub Readme\n\nImported from a repository archive.",
-				'example-main/docs/page.md' => "# Repo Page\n\nNested documentation.",
-			)
-		);
-		$fetcher = new FakeRemoteArchiveFetcher( $archive );
+	public function test_runner_does_not_download_github_repository_zipballs() {
+		$fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main' );
 		$posts   = new FakePostGateway();
 		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
@@ -543,42 +536,31 @@ final class ImportRunnerTest extends TestCase {
 		$runner->run( $session->get_id() );
 
 		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
-		$items     = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED, ImportSourceItem::STATUS_SKIPPED ), 10 );
+		$failed    = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_FAILED ), 10 );
 		$events    = array_map(
 			function ( $event ) {
 				return $event->get_type();
 			},
 			$this->store->list_events( $session->get_id(), 20 )
 		);
-		$skipped   = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_SKIPPED ), 10 );
 
-		$this->assertCount( 2, $documents );
-		$this->assertSame( 2, $posts->count_posts() );
-		$this->assertSame( 'https://api.github.com/repos/example/repository/zipball/main', $fetcher->get_requested_url() );
-		$this->assertContains( 'github.archive_downloaded', $events );
-		$this->assertContains( 'archive.expanded', $events );
-		$this->assertSame( 1, $this->count_github_archive_items( $skipped ) );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'github' ) );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'archives' ) );
+		$this->assertCount( 0, $documents );
+		$this->assertSame( 0, $posts->count_posts() );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertCount( 1, $failed );
+		$this->assertSame( false, $failed[0]->get_metadata()['github_zipball'] );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_downloaded', $events );
+		$this->assertNotContains( 'archive.expanded', $events );
 	}
 
 	/**
-	 * GitHub tree URLs fall back to subtree imports when the slash-ref candidate is not found.
+	 * GitHub tree URLs do not download zipballs when sparse Git is unavailable.
 	 *
 	 * @return void
 	 */
-	public function test_runner_imports_github_tree_subpath_without_importing_siblings() {
-		$archive = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/README.md'            => "# GitHub Readme\n\nRoot file.",
-				'example-main/docs/page.md'         => "# Repo Page\n\nNested documentation.",
-				'example-main/docs/guide.md'        => "# Guide\n\nSubtree documentation.",
-				'example-main/src/internal.md'      => "# Internal\n\nImplementation notes.",
-				'example-main/docs/deeper/note.txt' => 'Plain subtree note.',
-			)
-		);
-		$fetcher = new FakeRemoteArchiveFetcher( $archive, array( 'GitHub archive download returned HTTP 404.', '' ) );
+	public function test_runner_does_not_download_github_tree_subpath_zipballs() {
+		$fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main/docs' );
 		$posts   = new FakePostGateway();
 		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
@@ -607,564 +589,22 @@ final class ImportRunnerTest extends TestCase {
 		);
 		$archive = $this->find_github_archive_item( $items );
 
-		$this->assertSame( array( 'Guide', 'Repo Page', 'note' ), $titles );
-		$this->assertSame( 3, $posts->count_posts() );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository/zipball/main/docs',
-				'https://api.github.com/repos/example/repository/zipball/main',
-			),
-			$fetcher->get_requested_urls()
-		);
-		$this->assertCount( 0, $failed );
-		$this->assertNotNull( $archive );
-		$this->assertSame( 'main', $archive->get_metadata()['github_ref'] );
-		$this->assertSame( 'main/docs', $archive->get_metadata()['github_requested_ref'] );
-		$this->assertSame( 'docs', $archive->get_metadata()['github_source_path'] );
-		$this->assertSame( 'docs', $archive->get_metadata()['archive_entry_prefix'] );
-		$this->assertContains( 'github.archive_downloaded', $events );
-		$this->assertContains( 'archive.expanded', $events );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'github' ) );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'archives' ) );
-	}
-
-	/**
-	 * GitHub tree URLs can import a subtree through the GitHub tree API without downloading a zipball.
-	 *
-	 * @return void
-	 */
-	public function test_runner_imports_github_tree_subpath_without_archive_download() {
-		$archive_fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
-		$fetcher         = new FakeRemoteContentFetcher();
-		$fetcher->add_json_error(
-			'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1',
-			'GitHub tree ref was not found.'
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-			array(
-				'tree'      => array(
-					array(
-						'path' => 'README.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/root',
-						'size' => 29,
-					),
-					array(
-						'path' => 'docs/page.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/page',
-						'size' => 36,
-					),
-					array(
-						'path' => 'docs/z-guide.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/guide',
-						'size' => 35,
-					),
-					array(
-						'path' => 'src/internal.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/internal',
-						'size' => 35,
-					),
-					array(
-						'path' => 'docs/deeper/note.txt',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/note',
-						'size' => 19,
-					),
-				),
-				'truncated' => false,
-			)
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/blobs/page',
-			$this->github_blob_response( "# Repo Page\n\nNested documentation." )
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/blobs/guide',
-			$this->github_blob_response( "# Guide\n\nSubtree documentation." )
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/blobs/note',
-			$this->github_blob_response( 'Plain subtree note.' )
-		);
-		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main/docs' );
-		$posts   = new FakePostGateway();
-		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
-		$this->store->save( $session );
-
-		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
-		$runner->run( $session->get_id() );
-		$runner->run( $session->get_id() );
-
-		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
-		$titles    = array_map(
-			function ( $document ) {
-				return $document->get_title();
-			},
-			$documents
-		);
-		sort( $titles );
-		$items  = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED, ImportSourceItem::STATUS_SKIPPED ), 20 );
-		$events = array_map(
-			function ( $event ) {
-				return $event->get_type();
-			},
-			$this->store->list_events( $session->get_id(), 20 )
-		);
-
-		$this->assertSame( array( 'Guide', 'Repo Page', 'note' ), $titles );
-		$this->assertSame( 3, $posts->count_posts() );
-		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
-		$this->assertNotContains( 'https://api.github.com/repos/example/repository/git/blobs/root', $fetcher->get_requested_urls() );
-		$this->assertNotContains( 'https://api.github.com/repos/example/repository/git/blobs/internal', $fetcher->get_requested_urls() );
-		$this->assertContains( 'github.tree_queued', $events );
+		$this->assertSame( array(), $titles );
+		$this->assertSame( 0, $posts->count_posts() );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertCount( 1, $failed );
+		$this->assertNull( $archive );
+		$this->assertContains( 'github.traversal_failed', $events );
 		$this->assertNotContains( 'github.archive_downloaded', $events );
-		$this->assertSame( 0, $this->count_github_archive_items( $items ) );
-		$this->assertTrue( $this->source_items_include_managed_cache_namespace( $items, 'github' ) );
+		$this->assertNotContains( 'archive.expanded', $events );
 	}
 
 	/**
-	 * Large GitHub tree/blob traversals store a cursor and resume on later ticks.
+	 * Missing GitHub traversal support is durable and actionable.
 	 *
 	 * @return void
 	 */
-	public function test_runner_resumes_github_tree_blob_traversal_across_ticks() {
-		$archive_fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
-		$fetcher         = new FakeRemoteContentFetcher();
-		$tree_entries    = array();
-
-		$fetcher->add_json_error(
-			'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1',
-			'GitHub tree ref was not found.'
-		);
-
-		for ( $index = 1; $index <= 101; ++$index ) {
-			$suffix         = str_pad( (string) $index, 3, '0', STR_PAD_LEFT );
-			$path           = 'docs/page-' . $suffix . '.md';
-			$url            = 'https://api.github.com/repos/example/repository/git/blobs/page-' . $suffix;
-			$tree_entries[] = array(
-				'path' => $path,
-				'type' => 'blob',
-				'url'  => $url,
-				'size' => 32,
-			);
-			$fetcher->add_json( $url, $this->github_blob_response( '# Page ' . $suffix . "\n\nBody " . $suffix . '.' ) );
-		}
-
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-			array(
-				'tree'      => $tree_entries,
-				'truncated' => false,
-			)
-		);
-		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main/docs' );
-		$posts   = new FakePostGateway();
-		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
-		$this->store->save( $session );
-
-		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
-		$runner->run( $session->get_id() );
-
-		$processing           = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_PROCESSING ), 10 );
-		$events_after_first   = array_map(
-			function ( $event ) {
-				return $event->get_type();
-			},
-			$this->store->list_events( $session->get_id(), 500 )
-		);
-		$requests_after_first = $fetcher->get_requested_urls();
-		$metadata             = $processing[0]->get_metadata();
-
-		$this->assertCount( 1, $processing );
-		$this->assertSame( 100, $this->store->count_prepared_documents( $session->get_id() ) );
-		$this->assertSame( 100, $posts->count_posts() );
-		$this->assertSame( 'partial', $metadata['github_tree_status'] );
-		$this->assertSame( 'docs/page-100.md', $metadata['github_tree_cursor'] );
-		$this->assertSame( 101, $metadata['github_tree_total_files'] );
-		$this->assertSame( 100, $metadata['github_tree_queued_files'] );
-		$this->assertContains( 'github.tree_progress', $events_after_first );
-		$this->assertNotContains( 'github.tree_queued', $events_after_first );
-		$this->assertContains( 'https://api.github.com/repos/example/repository/git/blobs/page-100', $requests_after_first );
-		$this->assertNotContains( 'https://api.github.com/repos/example/repository/git/blobs/page-101', $requests_after_first );
-
-		$runner->run( $session->get_id() );
-
-		$completed_state = $this->store->find_source_item( $session->get_id(), $processing[0]->get_key() );
-		$events          = array_map(
-			function ( $event ) {
-				return $event->get_type();
-			},
-			$this->store->list_events( $session->get_id(), 40 )
-		);
-		$metadata        = $completed_state->get_metadata();
-
-		$this->assertSame( ImportSourceItem::STATUS_SKIPPED, $completed_state->get_status() );
-		$this->assertSame( 101, $this->store->count_prepared_documents( $session->get_id() ) );
-		$this->assertSame( 101, $posts->count_posts() );
-		$this->assertSame( 'complete', $metadata['github_tree_status'] );
-		$this->assertSame( 'docs/page-101.md', $metadata['github_tree_cursor'] );
-		$this->assertSame( 101, $metadata['github_tree_queued_files'] );
-		$this->assertContains( 'github.tree_queued', $events );
-		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
-		$this->assertContains( 'https://api.github.com/repos/example/repository/git/blobs/page-101', $fetcher->get_requested_urls() );
-	}
-
-	/**
-	 * Truncated GitHub tree API responses fall back to zipball traversal.
-	 *
-	 * @return void
-	 */
-	public function test_runner_falls_back_to_github_archive_when_tree_response_is_truncated() {
-		$archive         = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/README.md'     => "# GitHub Readme\n\nRoot file.",
-				'example-main/docs/page.md'  => "# Repo Page\n\nNested documentation.",
-				'example-main/docs/guide.md' => "# Guide\n\nSubtree documentation.",
-			)
-		);
-		$archive_fetcher = new FakeRemoteArchiveFetcher( $archive, array( 'GitHub archive download returned HTTP 404.', '' ) );
-		$fetcher         = new FakeRemoteContentFetcher();
-		$fetcher->add_json_error(
-			'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1',
-			'GitHub tree ref was not found.'
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-			array(
-				'tree'      => array(
-					array(
-						'path' => 'docs/page.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/page',
-						'size' => 36,
-					),
-				),
-				'truncated' => true,
-			)
-		);
-		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main/docs' );
-		$posts   = new FakePostGateway();
-		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
-		$this->store->save( $session );
-
-		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
-		$runner->run( $session->get_id() );
-		$runner->run( $session->get_id() );
-
-		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
-		$titles    = array_map(
-			function ( $document ) {
-				return $document->get_title();
-			},
-			$documents
-		);
-		sort( $titles );
-		$items  = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED, ImportSourceItem::STATUS_SKIPPED ), 20 );
-		$events = array_map(
-			function ( $event ) {
-				return $event->get_type();
-			},
-			$this->store->list_events( $session->get_id(), 20 )
-		);
-
-		$this->assertSame( array( 'Guide', 'Repo Page' ), $titles );
-		$this->assertSame( 2, $posts->count_posts() );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository/zipball/main/docs',
-				'https://api.github.com/repos/example/repository/zipball/main',
-			),
-			$archive_fetcher->get_requested_urls()
-		);
-		$this->assertContains( 'github.archive_downloaded', $events );
-		$this->assertNotContains( 'github.tree_queued', $events );
-		$this->assertSame( 1, $this->count_github_archive_items( $items ) );
-	}
-
-	/**
-	 * GitHub tree API rate limits are stored as retryable backoff instead of falling through to archives.
-	 *
-	 * @return void
-	 */
-	public function test_runner_defers_github_tree_rate_limits_with_backoff_metadata() {
-		$archive_fetcher  = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
-		$fetcher          = new FakeRemoteContentFetcher();
-		$rate_limited_url = 'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1';
-		$fetcher->add_json_rate_limit( $rate_limited_url, 429, '90', 90 );
-		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main/docs' );
-		$this->store->save( $session );
-
-		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, null, null, null, $archive_fetcher, $fetcher );
-		$runner->run( $session->get_id() );
-		$runner->run( $session->get_id() );
-
-		$processing = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_PROCESSING ), 10 );
-		$documents  = $this->store->list_prepared_documents( $session->get_id(), 10 );
-		$events     = $this->store->list_events( $session->get_id(), 20 );
-		$event_map  = array();
-		foreach ( $events as $event ) {
-			$event_map[ $event->get_type() ] = $event;
-		}
-		$metadata = $processing[0]->get_metadata();
-
-		$this->assertCount( 1, $processing );
-		$this->assertCount( 0, $documents );
-		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
-		$this->assertSame( array( $rate_limited_url ), $fetcher->get_requested_urls() );
-		$this->assertSame( 'rate-limited', $metadata['github_tree_status'] );
-		$this->assertSame( $rate_limited_url, $metadata['github_rate_limit']['url'] );
-		$this->assertSame( 429, $metadata['github_rate_limit']['status_code'] );
-		$this->assertSame( '90', $metadata['github_rate_limit']['retry_after_header'] );
-		$this->assertSame( 90, $metadata['github_rate_limit']['retry_after_seconds'] );
-		$this->assertArrayHasKey( 'next_retry_at', $metadata['github_rate_limit'] );
-		$this->assertArrayHasKey( 'github.tree_rate_limited', $event_map );
-		$this->assertSame( ImportProgressEvent::LEVEL_WARNING, $event_map['github.tree_rate_limited']->get_level() );
-		$this->assertArrayNotHasKey( 'github.archive_downloaded', $event_map );
-
-		$metadata['github_rate_limit']['next_retry_unix'] = time() - 1;
-		$metadata['github_rate_limit']['next_retry_at']   = gmdate( 'c', time() - 1 );
-		$this->store->save_source_item( $processing[0]->with_replaced_metadata( $metadata ) );
-
-		$retry_fetcher = new FakeRemoteContentFetcher();
-		$retry_fetcher->add_json(
-			$rate_limited_url,
-			array(
-				'tree'      => array(
-					array(
-						'path' => 'docs/page.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/page',
-						'size' => 36,
-					),
-				),
-				'truncated' => false,
-			)
-		);
-		$retry_fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/blobs/page',
-			$this->github_blob_response( "# Repo Page\n\nRecovered after rate limit." )
-		);
-		$retry_runner = new ImportRunner( $this->store, 'unit-test', 60, null, new FakePostGateway(), null, null, $archive_fetcher, $retry_fetcher );
-		$retry_runner->run( $session->get_id() );
-		$retry_runner->run( $session->get_id() );
-
-		$completed_state = $this->store->find_source_item( $session->get_id(), $processing[0]->get_key() );
-		$documents       = $this->store->list_prepared_documents( $session->get_id(), 10 );
-
-		$this->assertSame( array( $rate_limited_url, 'https://api.github.com/repos/example/repository/git/blobs/page' ), $retry_fetcher->get_requested_urls() );
-		$this->assertSame( ImportSourceItem::STATUS_SKIPPED, $completed_state->get_status() );
-		$this->assertSame( 'complete', $completed_state->get_metadata()['github_tree_status'] );
-		$this->assertArrayNotHasKey( 'github_rate_limit', $completed_state->get_metadata() );
-		$this->assertCount( 1, $documents );
-		$this->assertSame( 'Repo Page', $documents[0]->get_title() );
-	}
-
-	/**
-	 * Tree blob failures do not persist a partial tree before archive fallback.
-	 *
-	 * @return void
-	 */
-	public function test_runner_falls_back_to_github_archive_without_partial_tree_items_when_blob_fetch_fails() {
-		$archive         = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/docs/page.md'  => "# Repo Page\n\nArchive documentation.",
-				'example-main/docs/guide.md' => "# Guide\n\nArchive guide.",
-			)
-		);
-		$archive_fetcher = new FakeRemoteArchiveFetcher( $archive, array( 'GitHub archive download returned HTTP 404.', '' ) );
-		$fetcher         = new FakeRemoteContentFetcher();
-		$fetcher->add_json_error(
-			'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1',
-			'GitHub tree ref was not found.'
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-			array(
-				'tree'      => array(
-					array(
-						'path' => 'docs/page.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/page',
-						'size' => 36,
-					),
-					array(
-						'path' => 'docs/z-guide.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/guide',
-						'size' => 35,
-					),
-				),
-				'truncated' => false,
-			)
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/blobs/page',
-			$this->github_blob_response( "# Repo Page\n\nTree documentation." )
-		);
-		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/main/docs' );
-		$posts   = new FakePostGateway();
-		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
-		$this->store->save( $session );
-
-		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
-		$runner->run( $session->get_id() );
-		$runner->run( $session->get_id() );
-
-		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
-		$titles    = array_map(
-			function ( $document ) {
-				return $document->get_title();
-			},
-			$documents
-		);
-		sort( $titles );
-		$items  = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED, ImportSourceItem::STATUS_SKIPPED ), 20 );
-		$events = array_map(
-			function ( $event ) {
-				return $event->get_type();
-			},
-			$this->store->list_events( $session->get_id(), 20 )
-		);
-
-		$this->assertSame( array( 'Guide', 'Repo Page' ), $titles );
-		$this->assertSame( 2, $posts->count_posts() );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository/zipball/main/docs',
-				'https://api.github.com/repos/example/repository/zipball/main',
-			),
-			$archive_fetcher->get_requested_urls()
-		);
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository/git/trees/main/docs?recursive=1',
-				'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-				'https://api.github.com/repos/example/repository/git/blobs/page',
-				'https://api.github.com/repos/example/repository/git/blobs/guide',
-			),
-			$fetcher->get_requested_urls()
-		);
-		$this->assertContains( 'github.archive_downloaded', $events );
-		$this->assertNotContains( 'github.tree_queued', $events );
-		$this->assertSame( 0, $this->count_github_tree_items( $items ) );
-		$this->assertSame( 1, $this->count_github_archive_items( $items ) );
-	}
-
-	/**
-	 * GitHub tree URLs keep slash-containing refs when the first archive candidate succeeds.
-	 *
-	 * @return void
-	 */
-	public function test_runner_preserves_successful_github_tree_slash_refs() {
-		$archive = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-release/README.md' => "# Release Branch\n\nImported from a slash ref.",
-			)
-		);
-		$fetcher = new FakeRemoteArchiveFetcher( $archive );
-		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/release/1.0' );
-		$posts   = new FakePostGateway();
-		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
-
-		$this->store->save( $session );
-
-		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $fetcher, null, null, $cache );
-		$runner->run( $session->get_id() );
-		$runner->run( $session->get_id() );
-
-		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
-		$items     = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED, ImportSourceItem::STATUS_SKIPPED ), 10 );
-		$archive   = $this->find_github_archive_item( $items );
-
-		$this->assertCount( 1, $documents );
-		$this->assertSame( 'Release Branch', $documents[0]->get_title() );
-		$this->assertSame( array( 'https://api.github.com/repos/example/repository/zipball/release/1.0' ), $fetcher->get_requested_urls() );
-		$this->assertNotNull( $archive );
-		$this->assertSame( 'release/1.0', $archive->get_metadata()['github_ref'] );
-		$this->assertSame( '', $archive->get_metadata()['github_source_path'] );
-	}
-
-	/**
-	 * GitHub tree URLs try middle slash-ref splits before shorter fallback refs.
-	 *
-	 * @return void
-	 */
-	public function test_runner_imports_github_subpath_from_middle_slash_ref_candidate() {
-		$archive_fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
-		$fetcher         = new FakeRemoteContentFetcher();
-		$fetcher->add_json_error(
-			'https://api.github.com/repos/example/repository/git/trees/feature/foo/docs?recursive=1',
-			'Full slash ref was not found.'
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/trees/feature/foo?recursive=1',
-			array(
-				'tree'      => array(
-					array(
-						'path' => 'docs/page.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/branch-page',
-						'size' => 34,
-					),
-					array(
-						'path' => 'src/internal.md',
-						'type' => 'blob',
-						'url'  => 'https://api.github.com/repos/example/repository/git/blobs/internal',
-						'size' => 20,
-					),
-				),
-				'truncated' => false,
-			)
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/blobs/branch-page',
-			$this->github_blob_response( "# Branch Page\n\nMiddle ref subtree." )
-		);
-		$session = ImportSession::start_for_source( 'https://github.com/example/repository/tree/feature/foo/docs' );
-		$posts   = new FakePostGateway();
-		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
-		$this->store->save( $session );
-
-		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $archive_fetcher, $fetcher, null, $cache );
-		$runner->run( $session->get_id() );
-		$runner->run( $session->get_id() );
-
-		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
-		$items     = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_IMPORTED ), 10 );
-		$metadata  = $items[0]->get_metadata();
-
-		$this->assertCount( 1, $documents );
-		$this->assertSame( 'Branch Page', $documents[0]->get_title() );
-		$this->assertSame( 1, $posts->count_posts() );
-		$this->assertSame( array(), $archive_fetcher->get_requested_urls() );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository/git/trees/feature/foo/docs?recursive=1',
-				'https://api.github.com/repos/example/repository/git/trees/feature/foo?recursive=1',
-				'https://api.github.com/repos/example/repository/git/blobs/branch-page',
-			),
-			$fetcher->get_requested_urls()
-		);
-		$this->assertNotContains( 'https://api.github.com/repos/example/repository/git/blobs/internal', $fetcher->get_requested_urls() );
-		$this->assertSame( 'feature/foo', $metadata['github_ref'] );
-		$this->assertSame( 'feature/foo/docs', $metadata['github_requested_ref'] );
-		$this->assertSame( 'docs', $metadata['github_source_path'] );
-		$this->assertSame( 'page.md', $documents[0]->get_metadata()['relative_path'] );
-	}
-
-	/**
-	 * GitHub archive download failures are durable and actionable.
-	 *
-	 * @return void
-	 */
-	public function test_runner_records_github_archive_download_failures() {
+	public function test_runner_records_github_traversal_failures_without_zipballs() {
 		$fetcher = new FakeRemoteArchiveFetcher( null, 'GitHub archive download returned HTTP 404.' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/missing?ref=release/1.0' );
 		$this->store->save( $session );
@@ -1180,23 +620,19 @@ final class ImportRunnerTest extends TestCase {
 		);
 
 		$this->assertCount( 1, $failed );
-		$this->assertSame( 'GitHub archive download returned HTTP 404.', $failed[0]->get_metadata()['error'] );
+		$this->assertStringContainsString( 'do not use tree/blob', $failed[0]->get_metadata()['error'] );
 		$this->assertSame( 'release/1.0', $failed[0]->get_metadata()['github_ref'] );
-		$this->assertContains( 'github.archive_failed', $events );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_failed', $events );
 	}
 
 	/**
-	 * Previously failed GitHub archive downloads are retried on a later continuation.
+	 * Previously failed GitHub traversal does not retry zipball downloads.
 	 *
 	 * @return void
 	 */
-	public function test_runner_retries_failed_github_archive_downloads() {
-		$archive = $this->temporary_zip(
-			'repository.zip',
-			array(
-				'example-main/README.md' => "# GitHub Retry\n\nRecovered after a transient download failure.",
-			)
-		);
+	public function test_runner_does_not_retry_failed_github_traversal_as_zipball_download() {
 		$cache   = new ImportCacheDirectory( $this->temporary_directory() . '/managed-cache' );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository?ref=main' );
 		$this->store->save( $session );
@@ -1206,10 +642,10 @@ final class ImportRunnerTest extends TestCase {
 
 		$failed = $this->store->list_source_items_by_statuses( $session->get_id(), array( ImportSourceItem::STATUS_FAILED ), 10 );
 		$this->assertCount( 1, $failed );
-		$this->assertSame( 'Temporary GitHub archive outage.', $failed[0]->get_metadata()['error'] );
+		$this->assertStringContainsString( 'do not use tree/blob', $failed[0]->get_metadata()['error'] );
 
 		$posts           = new FakePostGateway();
-		$success_fetcher = new FakeRemoteArchiveFetcher( $archive );
+		$success_fetcher = new FakeRemoteArchiveFetcher( null, 'Archive fetcher should not be called.' );
 		$runner          = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, $success_fetcher, null, null, $cache );
 		$runner->run( $session->get_id() );
 		$runner->run( $session->get_id() );
@@ -1225,24 +661,23 @@ final class ImportRunnerTest extends TestCase {
 			$this->store->list_events( $session->get_id(), 20 )
 		);
 
-		$this->assertCount( 0, $remaining_failed );
-		$this->assertCount( 1, $documents );
-		$this->assertSame( 'GitHub Retry', $documents[0]->get_title() );
-		$this->assertSame( 1, $posts->count_posts() );
-		$this->assertSame( array( 'https://api.github.com/repos/example/repository/zipball/main' ), $success_fetcher->get_requested_urls() );
-		$this->assertNotNull( $github_archive );
-		$this->assertSame( 1, $github_archive->get_metadata()['github_retry_count'] );
-		$this->assertContains( 'github.archive_retrying', $events );
-		$this->assertContains( 'github.archive_downloaded', $events );
-		$this->assertContains( 'archive.expanded', $events );
+		$this->assertCount( 1, $remaining_failed );
+		$this->assertCount( 0, $documents );
+		$this->assertSame( 0, $posts->count_posts() );
+		$this->assertSame( array(), $success_fetcher->get_requested_urls() );
+		$this->assertNull( $github_archive );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_retrying', $events );
+		$this->assertNotContains( 'github.archive_downloaded', $events );
+		$this->assertNotContains( 'archive.expanded', $events );
 	}
 
 	/**
-	 * WordPress upload cache failures are recorded on GitHub source items.
+	 * GitHub traversal failures do not call the archive fetcher even with an unavailable cache.
 	 *
 	 * @return void
 	 */
-	public function test_runner_records_github_cache_directory_failures() {
+	public function test_runner_does_not_download_zipball_when_cache_directory_is_unavailable() {
 		$cache   = ImportCacheDirectory::from_wordpress_upload_dir( array( 'error' => 'Upload path is not writable.' ) );
 		$fetcher = new FakeRemoteArchiveFetcher( null );
 		$session = ImportSession::start_for_source( 'https://github.com/example/repository' );
@@ -1260,9 +695,10 @@ final class ImportRunnerTest extends TestCase {
 
 		$this->assertSame( 1, $summary['processed'] );
 		$this->assertCount( 1, $failed );
-		$this->assertSame( 'WordPress upload directory is unavailable for importer cache: Upload path is not writable.', $failed[0]->get_metadata()['error'] );
-		$this->assertNull( $fetcher->get_requested_url() );
-		$this->assertContains( 'github.archive_failed', $events );
+		$this->assertStringContainsString( 'do not use tree/blob', $failed[0]->get_metadata()['error'] );
+		$this->assertSame( array(), $fetcher->get_requested_urls() );
+		$this->assertContains( 'github.traversal_failed', $events );
+		$this->assertNotContains( 'github.archive_failed', $events );
 	}
 
 	/**
@@ -2603,6 +2039,66 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertSame( 'rss', $root->get_metadata()['remote_mode'] );
 		$this->assertSame( 2, $posts->count_posts() );
 		$this->assertContains( 'remote.feed_prepared', $events );
+	}
+
+	/**
+	 * OPML feed lists import items from the feeds they reference.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_remote_opml_feed_lists() {
+		$fetcher = new FakeRemoteContentFetcher();
+		$fetcher->add_text(
+			'https://notes.example.test/subscriptions.opml',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<opml version="2.0"><head><title>Reading List</title></head><body>'
+			. '<outline text="Notes" type="rss" xmlUrl="/feeds/notes.xml"/>'
+			. '<outline text="Ideas" type="rss" xmlUrl="https://ideas.example.test/feed.xml"/>'
+			. '</body></opml>'
+		);
+		$fetcher->add_text(
+			'https://notes.example.test/feeds/notes.xml',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<rss version="2.0"><channel><title>Notes</title>'
+			. '<item><guid>note-1</guid><title>Notebook Entry</title><link>https://notes.example.test/notebook/</link><description><![CDATA[<p>Notebook body.</p>]]></description></item>'
+			. '</channel></rss>'
+		);
+		$fetcher->add_text(
+			'https://ideas.example.test/feed.xml',
+			'<?xml version="1.0" encoding="UTF-8"?>'
+			. '<feed xmlns="http://www.w3.org/2005/Atom"><title>Ideas</title>'
+			. '<entry><id>tag:ideas.example.test,2026:1</id><title>Idea Entry</title><link href="https://ideas.example.test/idea/"/><content type="html">&lt;p&gt;Idea body.&lt;/p&gt;</content></entry>'
+			. '</feed>'
+		);
+		$session = ImportSession::start_for_source( 'https://notes.example.test/subscriptions.opml' );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		( new ImportRunner( $this->store, 'unit-test', 60, null, $posts, null, null, null, $fetcher ) )->run( $session->get_id() );
+
+		$documents = $this->store->list_prepared_documents( $session->get_id(), 10 );
+		$titles    = array_map(
+			function ( $document ) {
+				return $document->get_title();
+			},
+			$documents
+		);
+		sort( $titles );
+		$root   = $this->store->find_source_item( $session->get_id(), 'remote:' . hash( 'sha256', 'https://notes.example.test/subscriptions.opml' ) );
+		$events = array_map(
+			function ( $event ) {
+				return $event->get_type();
+			},
+			$this->store->list_events( $session->get_id(), 20 )
+		);
+
+		$this->assertSame( array( 'Idea Entry', 'Notebook Entry' ), $titles );
+		$this->assertSame( 'opml', $root->get_metadata()['remote_mode'] );
+		$this->assertSame( 2, $root->get_metadata()['remote_opml_feed_count'] );
+		$this->assertSame( 2, $root->get_metadata()['remote_opml_feeds_fetched'] );
+		$this->assertSame( 2, $posts->count_posts() );
+		$this->assertContains( 'https://notes.example.test/feeds/notes.xml', $fetcher->get_requested_urls() );
+		$this->assertContains( 'remote.opml_prepared', $events );
 	}
 
 	/**
@@ -7194,6 +6690,39 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertSame( 1, $summary['locked'] );
 		$this->assertSame( 'session.locked', $events[0]->get_type() );
 		$this->assertSame( ImportSession::STATUS_PENDING, $this->store->find( $session->get_id() )->get_status() );
+	}
+
+	/**
+	 * Repeated lock collisions do not flood the activity log.
+	 *
+	 * @return void
+	 */
+	public function test_runner_deduplicates_consecutive_locked_session_events() {
+		$session = ImportSession::start_for_source( 'local://book.md' );
+		$this->store->save( $session );
+		$this->store->acquire_lock( $session->get_id(), 'other-worker', 60 );
+
+		( new ImportRunner( $this->store, 'unit-test', 60 ) )->run( $session->get_id() );
+		( new ImportRunner( $this->store, 'unit-test', 60 ) )->run( $session->get_id() );
+
+		$event_types = array_map(
+			function ( ImportProgressEvent $event ) {
+				return $event->get_type();
+			},
+			$this->store->list_events( $session->get_id(), 10 )
+		);
+
+		$this->assertSame(
+			array( 'session.locked' ),
+			array_values(
+				array_filter(
+					$event_types,
+					function ( $type ) {
+						return 'session.locked' === $type;
+					}
+				)
+			)
+		);
 	}
 
 	/**

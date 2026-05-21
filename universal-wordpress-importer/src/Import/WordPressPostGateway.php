@@ -99,20 +99,22 @@ final class WordPressPostGateway implements ImportPostGatewayInterface {
 	 *
 	 * @param ImportPreparedDocument $document Prepared document.
 	 * @param int|null               $post_id  Existing post id to update.
+	 * @param string                 $post_status Post status to assign.
 	 * @return int Persisted post id.
 	 * @throws RuntimeException When WordPress rejects the post.
 	 */
-	public function insert_or_update( ImportPreparedDocument $document, $post_id = null ) {
+	public function insert_or_update( ImportPreparedDocument $document, $post_id = null, $post_status = 'publish' ) {
 		if ( ! $this->is_available() ) {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are not rendered directly.
 			throw new RuntimeException( $this->get_unavailable_reason() );
 		}
 
 		$this->last_relationship_diagnostics = array();
+		$post_status                         = 'draft' === (string) $post_status ? 'draft' : 'publish';
 
 		$post = array(
 			'post_type'    => 'page',
-			'post_status'  => 'draft',
+			'post_status'  => $post_status,
 			'post_title'   => $document->get_title(),
 			'post_content' => $document->get_block_markup(),
 			'post_name'    => $this->slug_for_document( $document ),

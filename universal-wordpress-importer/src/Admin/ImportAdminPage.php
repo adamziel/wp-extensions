@@ -9,16 +9,20 @@ namespace UniversalImporter\Admin;
 
 use InvalidArgumentException;
 use RuntimeException;
+use UniversalImporter\Import\GitHubRepositorySourceUrl;
 use UniversalImporter\Import\ImportCacheDirectory;
 use UniversalImporter\Import\ImportDecision;
 use UniversalImporter\Import\ImportMediaReference;
 use UniversalImporter\Import\ImportPreparedDocument;
+use UniversalImporter\Import\ImportPostPersister;
 use UniversalImporter\Import\ImportProgressEvent;
+use UniversalImporter\Import\ImportRemoteContentFetcherInterface;
 use UniversalImporter\Import\ImportRelationshipMappingDecision;
 use UniversalImporter\Import\ImportRunner;
 use UniversalImporter\Import\ImportSession;
 use UniversalImporter\Import\ImportSessionId;
 use UniversalImporter\Import\ImportSourceItem;
+use UniversalImporter\Import\WordPressRemoteContentFetcher;
 use UniversalImporter\Import\WordPressImportSessionStore;
 use UniversalImporter\Plugin;
 
@@ -33,6 +37,7 @@ final class ImportAdminPage {
 	const AJAX_KEEPALIVE        = 'universal_importer_keepalive';
 	const AJAX_ABORT            = 'universal_importer_abort_session';
 	const AJAX_DECIDE           = 'universal_importer_resolve_decision';
+	const AJAX_GITHUB_DIRS      = 'universal_importer_github_directories';
 	const CAPABILITY            = 'manage_options';
 	const RECENT_SESSIONS       = 10;
 	const MAX_UPLOAD_FILES      = 500;
@@ -68,18 +73,27 @@ final class ImportAdminPage {
 	private $cache_directory;
 
 	/**
+	 * Optional remote content fetcher override.
+	 *
+	 * @var ImportRemoteContentFetcherInterface|null
+	 */
+	private $content_fetcher;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param WordPressImportSessionStore|null $store          Optional session store.
-	 * @param callable|null                    $scheduler      Optional continuation scheduler.
-	 * @param callable|null                    $runner_factory Optional runner factory.
-	 * @param ImportCacheDirectory|null        $cache_directory Optional upload cache directory.
+	 * @param WordPressImportSessionStore|null         $store          Optional session store.
+	 * @param callable|null                            $scheduler      Optional continuation scheduler.
+	 * @param callable|null                            $runner_factory Optional runner factory.
+	 * @param ImportCacheDirectory|null                $cache_directory Optional upload cache directory.
+	 * @param ImportRemoteContentFetcherInterface|null $content_fetcher Optional GitHub directory fetcher.
 	 */
-	public function __construct( WordPressImportSessionStore $store = null, callable $scheduler = null, callable $runner_factory = null, ImportCacheDirectory $cache_directory = null ) {
+	public function __construct( WordPressImportSessionStore $store = null, callable $scheduler = null, callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, ImportRemoteContentFetcherInterface $content_fetcher = null ) {
 		$this->store           = $store;
 		$this->scheduler       = $scheduler;
 		$this->runner_factory  = $runner_factory;
 		$this->cache_directory = $cache_directory;
+		$this->content_fetcher = $content_fetcher;
 	}
 
 	/**
@@ -98,11 +112,13 @@ final class ImportAdminPage {
 	 */
 	public function register() {
 		add_action( 'admin_menu', array( $this, 'register_menu' ) );
+		add_action( 'pre_get_posts', array( $this, 'filter_imported_content_query' ) );
 		add_action( 'wp_ajax_' . self::AJAX_CREATE, array( $this, 'ajax_create_session' ) );
 		add_action( 'wp_ajax_' . self::AJAX_UPLOAD, array( $this, 'ajax_upload_session' ) );
 		add_action( 'wp_ajax_' . self::AJAX_KEEPALIVE, array( $this, 'ajax_keepalive' ) );
 		add_action( 'wp_ajax_' . self::AJAX_ABORT, array( $this, 'ajax_abort_session' ) );
 		add_action( 'wp_ajax_' . self::AJAX_DECIDE, array( $this, 'ajax_resolve_decision' ) );
+		add_action( 'wp_ajax_' . self::AJAX_GITHUB_DIRS, array( $this, 'ajax_github_directories' ) );
 	}
 
 	/**
@@ -121,16 +137,62 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Filters the Pages list to content imported by one session.
+	 *
+	 * @param mixed $query WordPress query object.
+	 * @return void
+	 */
+	public function filter_imported_content_query( $query ) {
+		if ( ! function_exists( 'is_admin' ) || ! is_admin() || ! is_object( $query ) || ! method_exists( $query, 'is_main_query' ) || ! $query->is_main_query() ) {
+			return;
+		}
+
+		$raw = filter_input( INPUT_GET, 'universal_importer_session_id', FILTER_UNSAFE_RAW );
+		if ( ! is_string( $raw ) || '' === trim( $raw ) ) {
+			return;
+		}
+
+		if ( method_exists( $query, 'get' ) && 'page' !== (string) $query->get( 'post_type' ) ) {
+			return;
+		}
+
+		$raw = function_exists( 'wp_unslash' ) ? wp_unslash( $raw ) : $raw;
+		$raw = function_exists( 'sanitize_text_field' ) ? sanitize_text_field( $raw ) : trim( (string) $raw );
+
+		try {
+			$session_id = ImportSessionId::from_string( $raw );
+		} catch ( InvalidArgumentException $exception ) {
+			return;
+		}
+
+		$meta_query = method_exists( $query, 'get' ) ? $query->get( 'meta_query' ) : array();
+		if ( ! is_array( $meta_query ) ) {
+			$meta_query = array();
+		}
+
+		$meta_query[] = array(
+			'key'   => '_universal_importer_session_id',
+			'value' => $session_id->to_string(),
+		);
+
+		if ( method_exists( $query, 'set' ) ) {
+			$query->set( 'post_type', 'page' );
+			$query->set( 'meta_query', $meta_query );
+		}
+	}
+
+	/**
 	 * Creates and queues an import session from admin input.
 	 *
 	 * @param string            $source            Source path or URL.
 	 * @param array<int,string> $confirmed_domains Confirmed first-party domains.
 	 * @param bool              $dry_run           Whether this is a dry run.
 	 * @param string            $url_rewrite_mode  URL rewrite mode: ask, rewrite, or preserve.
+	 * @param bool              $import_as_drafts  Whether imported posts should remain drafts.
 	 * @return array<string,mixed>
 	 * @throws InvalidArgumentException When source input is invalid.
 	 */
-	public function create_import_session( $source, array $confirmed_domains = array(), $dry_run = false, $url_rewrite_mode = 'ask' ) {
+	public function create_import_session( $source, array $confirmed_domains = array(), $dry_run = false, $url_rewrite_mode = 'ask', $import_as_drafts = false ) {
 		$source = trim( (string) $source );
 
 		if ( '' === $source ) {
@@ -156,6 +218,7 @@ final class ImportAdminPage {
 		);
 
 		$this->save_initial_url_rewrite_preference( $session->get_id(), $confirmed_domains, $url_rewrite_mode );
+		$this->save_initial_post_status_preference( $session->get_id(), (bool) $import_as_drafts );
 
 		$this->schedule_continuation( $session->get_id() );
 
@@ -170,10 +233,11 @@ final class ImportAdminPage {
 	 * @param array<int,string>              $confirmed_domains Confirmed first-party domains.
 	 * @param bool                           $dry_run           Whether this is a dry run.
 	 * @param string                         $url_rewrite_mode  URL rewrite mode: ask, rewrite, or preserve.
+	 * @param bool                           $import_as_drafts  Whether imported posts should remain drafts.
 	 * @return array<string,mixed>
 	 * @throws InvalidArgumentException When upload input is invalid or staging fails.
 	 */
-	public function create_import_session_from_uploaded_files( array $files, array $relative_paths = array(), array $confirmed_domains = array(), $dry_run = false, $url_rewrite_mode = 'ask' ) {
+	public function create_import_session_from_uploaded_files( array $files, array $relative_paths = array(), array $confirmed_domains = array(), $dry_run = false, $url_rewrite_mode = 'ask', $import_as_drafts = false ) {
 		if ( empty( $files ) ) {
 			throw new InvalidArgumentException( 'At least one uploaded file is required.' );
 		}
@@ -240,10 +304,54 @@ final class ImportAdminPage {
 		);
 
 		$this->save_initial_url_rewrite_preference( $session->get_id(), $confirmed_domains, $url_rewrite_mode );
+		$this->save_initial_post_status_preference( $session->get_id(), (bool) $import_as_drafts );
 
 		$this->schedule_continuation( $session->get_id() );
 
 		return $this->get_status_snapshot( $session->get_id() );
+	}
+
+	/**
+	 * Lists repository directories available for optional GitHub subtree selection.
+	 *
+	 * @param string $source GitHub repository URL.
+	 * @return array<string,mixed>
+	 * @throws InvalidArgumentException When the URL is not a supported GitHub repository URL.
+	 * @throws RuntimeException When GitHub directory loading fails.
+	 */
+	public function list_github_directories( $source ) {
+		$repo = GitHubRepositorySourceUrl::parse( $source );
+
+		if ( null === $repo ) {
+			throw new InvalidArgumentException( 'Enter a GitHub repository URL to browse directories.' );
+		}
+
+		$fetcher = $this->get_content_fetcher();
+
+		if ( 'HEAD' === strtoupper( $repo['ref'] ) ) {
+			$repo['ref'] = $this->fetch_github_default_branch( $fetcher, $repo );
+		}
+
+		$last_exception = null;
+
+		foreach ( GitHubRepositorySourceUrl::candidates( $repo ) as $candidate ) {
+			try {
+				$tree = $fetcher->fetch_json( GitHubRepositorySourceUrl::tree_api_url( $candidate ) );
+
+				if ( ! is_array( $tree ) || ! isset( $tree['tree'] ) || ! is_array( $tree['tree'] ) ) {
+					throw new RuntimeException( 'GitHub tree response was malformed.' );
+				}
+
+				return $this->github_directory_snapshot( $candidate, $tree );
+			} catch ( RuntimeException $exception ) {
+				$last_exception = $exception;
+			}
+		}
+
+		$message = null === $last_exception ? 'GitHub directory tree could not be loaded.' : $last_exception->getMessage();
+
+		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are returned through escaped AJAX JSON.
+		throw new RuntimeException( 'GitHub directory tree could not be loaded: ' . $message );
 	}
 
 	/**
@@ -440,11 +548,13 @@ final class ImportAdminPage {
 		$posts              = array(
 			'persisted' => $store->count_idempotency_records_by_resource_type( $source_id, 'post' ),
 		);
+		$post_status        = $this->post_status_for_snapshot( $source_id );
 		$comments           = array(
 			'persisted' => $store->count_idempotency_records_by_resource_type( $source_id, 'comment' ),
 		);
 		$media              = $this->get_media_reference_snapshot( $source_id );
 		$remote_backoff     = $this->get_remote_rate_limit_snapshot( $source_id );
+		$github_git         = $this->get_github_git_snapshot( $source_id );
 		$pdf_documents      = $this->get_pdf_document_snapshot( $source_id );
 		$epub_tocs          = $this->get_epub_toc_snapshot( $source_id );
 		$warnings           = $this->get_relationship_warning_snapshot( $source_id );
@@ -466,9 +576,11 @@ final class ImportAdminPage {
 			'source_items'          => $source_items,
 			'prepared_documents'    => $prepared_documents,
 			'posts'                 => $posts,
+			'post_status'           => $post_status,
 			'comments'              => $comments,
 			'media'                 => $media,
 			'remote_backoff'        => $remote_backoff,
+			'github_git'            => $github_git,
 			'pdf_documents'         => $pdf_documents,
 			'epub_tocs'             => $epub_tocs,
 			'relationship_warnings' => $warnings,
@@ -476,9 +588,52 @@ final class ImportAdminPage {
 			'recent_events'         => $recent_events,
 		);
 
-		$snapshot['dashboard'] = $this->build_dashboard_snapshot( $snapshot );
+		$snapshot['dashboard']                         = $this->build_dashboard_snapshot( $snapshot );
+		$snapshot['dashboard']['imported_content_url'] = $this->imported_content_url( $source_id, $posts );
 
 		return $snapshot;
+	}
+
+	/**
+	 * Returns the selected post status for admin display.
+	 *
+	 * @param ImportSessionId $session_id Session id.
+	 * @return string
+	 */
+	private function post_status_for_snapshot( ImportSessionId $session_id ) {
+		$decision = $this->get_store()->find_decision( $session_id, ImportPostPersister::POST_STATUS_DECISION_KEY );
+
+		if ( null === $decision || ImportDecision::STATUS_RESOLVED !== $decision->get_status() ) {
+			return 'publish';
+		}
+
+		$answer = $decision->get_answer();
+
+		return isset( $answer['post_status'] ) && 'draft' === (string) $answer['post_status'] ? 'draft' : 'publish';
+	}
+
+	/**
+	 * Builds the admin URL for viewing imported pages from one session.
+	 *
+	 * @param ImportSessionId     $session_id Session id.
+	 * @param array<string,mixed> $posts      Post snapshot.
+	 * @return string
+	 */
+	private function imported_content_url( ImportSessionId $session_id, array $posts ) {
+		if ( empty( $posts['persisted'] ) || ! function_exists( 'admin_url' ) ) {
+			return '';
+		}
+
+		$query = array(
+			'post_type'                     => 'page',
+			'universal_importer_session_id' => $session_id->to_string(),
+		);
+
+		if ( function_exists( 'add_query_arg' ) ) {
+			return (string) add_query_arg( $query, admin_url( 'edit.php' ) );
+		}
+
+		return admin_url( 'edit.php?post_type=page&universal_importer_session_id=' . rawurlencode( $session_id->to_string() ) );
 	}
 
 	/**
@@ -572,6 +727,39 @@ final class ImportAdminPage {
 			.universal-importer-field {
 				margin: 0 0 18px;
 			}
+			.universal-importer-source-shortcuts {
+				display: grid;
+				gap: 10px;
+				grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+				margin: 0 0 18px;
+			}
+			.universal-importer-source-shortcut {
+				background: #fff;
+				border: 1px solid var(--ui-border);
+				border-radius: 6px;
+				color: #1d2327;
+				cursor: pointer;
+				min-height: 74px;
+				padding: 11px 12px;
+				text-align: left;
+				width: 100%;
+			}
+			.universal-importer-source-shortcut:hover,
+			.universal-importer-source-shortcut:focus {
+				border-color: var(--ui-accent);
+				box-shadow: 0 0 0 1px var(--ui-accent);
+				outline: none;
+			}
+			.universal-importer-source-shortcut strong,
+			.universal-importer-source-shortcut span {
+				display: block;
+			}
+			.universal-importer-source-shortcut span {
+				color: var(--ui-muted);
+				font-size: 12px;
+				line-height: 1.4;
+				margin-top: 4px;
+			}
 			.universal-importer-field label,
 			.universal-importer-field legend {
 				color: #1d2327;
@@ -638,12 +826,215 @@ final class ImportAdminPage {
 			.universal-importer-file-preview {
 				color: var(--ui-muted);
 				font-size: 12px;
-				margin: 6px 0 0 18px;
-				max-height: 88px;
+				list-style: none;
+				margin: 8px 0 0;
+				max-height: 150px;
 				overflow: auto;
+				padding: 0;
 			}
-			.universal-importer-file-preview li {
-				margin: 0 0 3px;
+			.universal-importer-file-preview ul {
+				list-style: none;
+				margin: 0;
+				padding-left: 18px;
+			}
+			.universal-importer-file-preview [role="treeitem"] {
+				margin: 0;
+				outline: none;
+				overflow-wrap: anywhere;
+			}
+			.universal-importer-file-preview [role="treeitem"][aria-expanded="false"] > [role="group"] {
+				display: none;
+			}
+			.universal-importer-file-preview-item {
+				align-items: start;
+				border-radius: 4px;
+				display: grid;
+				gap: 4px;
+				grid-template-columns: 14px minmax(0, 1fr);
+				line-height: 1.35;
+				min-height: 22px;
+				padding: 2px 4px;
+			}
+			.universal-importer-file-preview [role="treeitem"]:focus > .universal-importer-file-preview-item {
+				box-shadow: inset 0 0 0 2px var(--ui-accent);
+			}
+			.universal-importer-file-preview-marker {
+				color: #50575e;
+				font-family: monospace;
+				text-align: center;
+			}
+			.universal-importer-file-preview-name {
+				min-width: 0;
+			}
+			.universal-importer-github-picker {
+				background: #fbfbfc;
+				border: 1px solid var(--ui-border);
+				border-radius: 8px;
+				margin: -6px 0 18px;
+				padding: 12px;
+			}
+			.universal-importer-github-picker[hidden] {
+				display: none;
+			}
+			.universal-importer-github-picker-header {
+				align-items: center;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				justify-content: space-between;
+				margin-bottom: 8px;
+			}
+			.universal-importer-github-selection {
+				color: var(--ui-muted);
+				font-size: 12px;
+				margin: 0;
+			}
+			.universal-importer-modal[hidden] {
+				display: none;
+			}
+			.universal-importer-modal {
+				align-items: center;
+				background: rgba(30, 30, 30, .55);
+				bottom: 0;
+				display: flex;
+				justify-content: center;
+				left: 0;
+				padding: 24px;
+				position: fixed;
+				right: 0;
+				top: 0;
+				z-index: 100000;
+			}
+			.universal-importer-modal-dialog {
+				background: #fff;
+				border-radius: 8px;
+				box-shadow: 0 22px 70px rgba(0,0,0,.28);
+				display: grid;
+				grid-template-rows: auto minmax(0, 1fr) auto;
+				max-height: min(760px, calc(100vh - 48px));
+				max-width: 760px;
+				min-height: 420px;
+				outline: none;
+				overflow: hidden;
+				width: min(760px, calc(100vw - 48px));
+			}
+			.universal-importer-modal-header,
+			.universal-importer-modal-footer {
+				align-items: center;
+				display: flex;
+				gap: 12px;
+				justify-content: space-between;
+				padding: 16px 18px;
+			}
+			.universal-importer-modal-header {
+				border-bottom: 1px solid var(--ui-border);
+			}
+			.universal-importer-modal-header h2 {
+				font-size: 18px;
+				line-height: 1.3;
+				margin: 0;
+			}
+			.universal-importer-modal-close {
+				align-items: center;
+				background: transparent;
+				border: 0;
+				border-radius: 4px;
+				color: #50575e;
+				cursor: pointer;
+				display: inline-flex;
+				font-size: 24px;
+				height: 32px;
+				justify-content: center;
+				line-height: 1;
+				padding: 0;
+				width: 32px;
+			}
+			.universal-importer-modal-close:hover,
+			.universal-importer-modal-close:focus {
+				box-shadow: inset 0 0 0 2px var(--ui-accent);
+				outline: none;
+			}
+			.universal-importer-modal-body {
+				display: grid;
+				grid-template-rows: auto auto minmax(0, 1fr);
+				min-height: 0;
+				padding: 16px 18px;
+			}
+			.universal-importer-github-filter {
+				margin: 0 0 12px;
+			}
+			.universal-importer-github-filter label {
+				color: #1d2327;
+				display: block;
+				font-size: 13px;
+				font-weight: 600;
+				margin: 0 0 7px;
+			}
+			.universal-importer-github-filter input[type="search"] {
+				border-radius: 6px;
+				min-height: 38px;
+				width: 100%;
+			}
+			.universal-importer-github-picker-status {
+				color: var(--ui-muted);
+				font-size: 12px;
+				margin: 0 0 10px;
+			}
+			.universal-importer-github-tree {
+				border: 1px solid var(--ui-border);
+				border-radius: 6px;
+				list-style: none;
+				margin: 0;
+				min-height: 180px;
+				overflow: auto;
+				padding: 6px;
+			}
+			.universal-importer-github-tree li {
+				margin: 0;
+			}
+			.universal-importer-github-directory {
+				background: transparent;
+				border: 0;
+				border-radius: 4px;
+				color: #1d2327;
+				cursor: pointer;
+				display: block;
+				line-height: 1.4;
+				min-height: 28px;
+				overflow-wrap: anywhere;
+				padding-bottom: 5px;
+				padding-top: 5px;
+				text-align: left;
+				width: 100%;
+			}
+			.universal-importer-github-directory:hover,
+			.universal-importer-github-directory:focus {
+				background: #f0f6fc;
+				box-shadow: inset 0 0 0 2px var(--ui-accent);
+				outline: none;
+			}
+			.universal-importer-github-directory.is-selected {
+				background: #f0f6e8;
+				box-shadow: inset 3px 0 0 #008a20;
+				font-weight: 600;
+			}
+			.universal-importer-github-empty {
+				color: var(--ui-muted);
+				margin: 12px;
+			}
+			.universal-importer-modal-footer {
+				border-top: 1px solid var(--ui-border);
+			}
+			.universal-importer-modal-actions {
+				display: flex;
+				flex: 0 0 auto;
+				gap: 8px;
+			}
+			.universal-importer-modal-selection {
+				color: var(--ui-muted);
+				font-size: 12px;
+				margin: 0;
+				min-width: 0;
 				overflow-wrap: anywhere;
 			}
 			.universal-importer-url-options {
@@ -763,6 +1154,19 @@ final class ImportAdminPage {
 				display: block;
 				height: 100%;
 				min-width: 4px;
+			}
+			.universal-importer-progressbar.is-indeterminate span {
+				animation: universal-importer-progress-indeterminate 1.2s ease-in-out infinite;
+				min-width: 35%;
+				width: 35%;
+			}
+			@keyframes universal-importer-progress-indeterminate {
+				0% {
+					transform: translateX(-120%);
+				}
+				100% {
+					transform: translateX(300%);
+				}
 			}
 			.universal-importer-current-action {
 				font-size: 14px;
@@ -992,7 +1396,7 @@ final class ImportAdminPage {
 		</style>
 		<div class="wrap universal-importer-admin">
 			<h1><?php esc_html_e( 'Universal Importer', 'universal-wordpress-importer' ); ?></h1>
-			<p class="universal-importer-lede"><?php esc_html_e( 'Import files, folders, archives, or reachable URLs into WordPress drafts.', 'universal-wordpress-importer' ); ?></p>
+			<p class="universal-importer-lede"><?php esc_html_e( 'Import files, folders, archives, or reachable URLs into WordPress pages.', 'universal-wordpress-importer' ); ?></p>
 			<?php if ( '' !== $error ) : ?>
 				<div class="notice notice-error"><p><?php echo esc_html( $error ); ?></p></div>
 			<?php endif; ?>
@@ -1001,17 +1405,46 @@ final class ImportAdminPage {
 				<h2 class="universal-importer-section-heading"><?php esc_html_e( 'Select content', 'universal-wordpress-importer' ); ?></h2>
 				<div class="universal-importer-start-grid">
 					<div>
+						<div class="universal-importer-source-shortcuts" aria-label="<?php echo esc_attr__( 'Import source shortcuts', 'universal-wordpress-importer' ); ?>">
+							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://github.com/owner/repository/tree/main/docs">
+								<strong><?php esc_html_e( 'GitHub repo', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'Branch or subdirectory URL.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/">
+								<strong><?php esc_html_e( 'WordPress site', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'REST API, pages, posts, and comments.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/feed.xml">
+								<strong><?php esc_html_e( 'Feed or OPML', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'RSS, Atom, RDF, or a feed list.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="/path/to/export">
+								<strong><?php esc_html_e( 'Server path', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'Local folder, file, or archive.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+							<button type="button" class="universal-importer-source-shortcut" data-file-trigger="folder">
+								<strong><?php esc_html_e( 'Browser folder', 'universal-wordpress-importer' ); ?></strong>
+								<span><?php esc_html_e( 'Choose a folder from this device.', 'universal-wordpress-importer' ); ?></span>
+							</button>
+						</div>
 						<p class="universal-importer-field">
 							<label for="universal-importer-source"><?php esc_html_e( 'URL or server path', 'universal-wordpress-importer' ); ?></label>
-							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/, https://example.com/feed/, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
-							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, WordPress site URL, REST root, RSS/Atom feed, remote page, or GitHub repo.', 'universal-wordpress-importer' ); ?></span>
+							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/, https://example.com/feed.xml, https://example.com/feeds.opml, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
+							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, WordPress site URL, REST root, RSS/Atom/OPML feed, remote page, or GitHub repo.', 'universal-wordpress-importer' ); ?></span>
 						</p>
+						<div id="universal-importer-github-picker" class="universal-importer-github-picker" hidden>
+							<div class="universal-importer-github-picker-header">
+								<strong><?php esc_html_e( 'GitHub directory', 'universal-wordpress-importer' ); ?></strong>
+								<button type="button" class="button" id="universal-importer-github-browse"><?php esc_html_e( 'Choose directory', 'universal-wordpress-importer' ); ?></button>
+							</div>
+							<p id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"></p>
+						</div>
 						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
 							<div class="universal-importer-upload-copy">
 								<strong><?php esc_html_e( 'Upload files or a folder', 'universal-wordpress-importer' ); ?></strong>
 								<p class="universal-importer-hint"><?php esc_html_e( 'PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP, or a folder.', 'universal-wordpress-importer' ); ?></p>
 								<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
-								<ul id="universal-importer-file-preview" class="universal-importer-file-preview" aria-live="polite"></ul>
+								<ul id="universal-importer-file-preview" class="universal-importer-file-preview" role="tree" aria-label="<?php echo esc_attr__( 'Selected file tree', 'universal-wordpress-importer' ); ?>" aria-live="polite"></ul>
 							</div>
 							<div class="universal-importer-upload-actions">
 								<label class="button" for="universal-importer-file-picker"><?php esc_html_e( 'Choose files', 'universal-wordpress-importer' ); ?></label>
@@ -1045,6 +1478,10 @@ final class ImportAdminPage {
 							</label>
 						</fieldset>
 						<label class="universal-importer-option">
+							<input type="checkbox" name="import_as_drafts" value="1">
+							<span><strong><?php esc_html_e( 'Import as drafts', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Leave unchecked to publish imported pages immediately.', 'universal-wordpress-importer' ); ?></span></span>
+						</label>
+						<label class="universal-importer-option">
 							<input type="checkbox" name="dry_run" value="1">
 							<span><strong><?php esc_html_e( 'Dry run', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Traverse and prepare the import without writing WordPress posts.', 'universal-wordpress-importer' ); ?></span></span>
 						</label>
@@ -1059,6 +1496,29 @@ final class ImportAdminPage {
 			<div id="universal-importer-sessions" class="universal-importer-sessions<?php echo null === $primary_session ? ' is-empty' : ''; ?>">
 				<?php $this->render_session_list( null === $primary_session ? array() : array( $primary_session ) ); ?>
 			</div>
+			<div id="universal-importer-github-modal" class="universal-importer-modal" role="dialog" aria-modal="true" aria-labelledby="universal-importer-github-modal-title" hidden>
+				<div class="universal-importer-modal-dialog" tabindex="-1">
+					<div class="universal-importer-modal-header">
+						<h2 id="universal-importer-github-modal-title"><?php esc_html_e( 'Choose GitHub directory', 'universal-wordpress-importer' ); ?></h2>
+						<button type="button" class="universal-importer-modal-close" id="universal-importer-github-close" aria-label="<?php echo esc_attr__( 'Close', 'universal-wordpress-importer' ); ?>">×</button>
+					</div>
+					<div class="universal-importer-modal-body">
+						<p class="universal-importer-github-filter">
+							<label for="universal-importer-github-search"><?php esc_html_e( 'Filter directories', 'universal-wordpress-importer' ); ?></label>
+							<input type="search" id="universal-importer-github-search" autocomplete="off">
+						</p>
+						<p id="universal-importer-github-picker-status" class="universal-importer-github-picker-status" aria-live="polite"></p>
+						<ul id="universal-importer-github-tree" class="universal-importer-github-tree" role="tree" aria-label="<?php echo esc_attr__( 'GitHub repository directories', 'universal-wordpress-importer' ); ?>"></ul>
+					</div>
+					<div class="universal-importer-modal-footer">
+						<p id="universal-importer-github-modal-selection" class="universal-importer-modal-selection" aria-live="polite"></p>
+						<span class="universal-importer-modal-actions">
+							<button type="button" class="button" id="universal-importer-github-cancel"><?php esc_html_e( 'Cancel', 'universal-wordpress-importer' ); ?></button>
+							<button type="button" class="button button-primary" id="universal-importer-github-use"><?php esc_html_e( 'Use directory', 'universal-wordpress-importer' ); ?></button>
+						</span>
+					</div>
+				</div>
+			</div>
 		</div>
 		<script>
 		(function() {
@@ -1071,12 +1531,32 @@ final class ImportAdminPage {
 			var dropzone = document.getElementById('universal-importer-dropzone');
 			var fileSummary = document.getElementById('universal-importer-file-summary');
 			var filePreview = document.getElementById('universal-importer-file-preview');
+			var githubPicker = document.getElementById('universal-importer-github-picker');
+			var githubBrowseButton = document.getElementById('universal-importer-github-browse');
+			var githubModal = document.getElementById('universal-importer-github-modal');
+			var githubModalDialog = githubModal && githubModal.querySelector ? githubModal.querySelector('.universal-importer-modal-dialog') : null;
+			var githubCloseButton = document.getElementById('universal-importer-github-close');
+			var githubCancelButton = document.getElementById('universal-importer-github-cancel');
+			var githubUseButton = document.getElementById('universal-importer-github-use');
+			var githubSearch = document.getElementById('universal-importer-github-search');
+			var githubPickerStatus = document.getElementById('universal-importer-github-picker-status');
+			var githubSelection = document.getElementById('universal-importer-github-selection');
+			var githubModalSelection = document.getElementById('universal-importer-github-modal-selection');
+			var githubTree = document.getElementById('universal-importer-github-tree');
 			var sessions = document.getElementById('universal-importer-sessions');
 			var emptyProgress = document.getElementById('universal-importer-empty-progress');
 			var notice = document.getElementById('universal-importer-notice');
+			var sourceShortcuts = form && form.querySelectorAll ? Array.prototype.slice.call(form.querySelectorAll('.universal-importer-source-shortcut')) : [];
 			var activeSessionId = config.primary_session_id || null;
 			var timer = null;
+			var keepaliveInFlight = false;
 			var browserFiles = [];
+			var fileTreeSearch = '';
+			var fileTreeSearchTimer = null;
+			var githubDirectories = [];
+			var githubSelectedPath = '';
+			var githubSelectedSourceUrl = '';
+			var githubPreviousFocus = null;
 
 			function showNotice(message, type) {
 				notice.className = 'notice notice-' + type;
@@ -1106,13 +1586,311 @@ final class ImportAdminPage {
 					headers: headers,
 					body: window.FormData && body instanceof FormData ? body : body.toString()
 				}).then(function(response) {
-					return response.json();
+					return response.text().then(function(text) {
+						var payload;
+						try {
+							payload = text ? JSON.parse(text) : null;
+						} catch (error) {
+							throw new Error(nonJsonResponseMessage(response, text));
+						}
+						if (!response.ok && payload && payload.data && payload.data.message) {
+							throw new Error(payload.data.message);
+						}
+						return payload;
+					});
 				}).then(function(payload) {
 					if (!payload || !payload.success) {
 						throw new Error(payload && payload.data && payload.data.message ? payload.data.message : 'Importer request failed.');
 					}
 					return payload.data;
 				});
+			}
+
+			function nonJsonResponseMessage(response, text) {
+				var status = response && response.status ? 'HTTP ' + response.status + ': ' : '';
+				var excerpt = String(text || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+				if (excerpt.length > 180) {
+					excerpt = excerpt.slice(0, 177) + '...';
+				}
+				return status + '<?php echo esc_js( __( 'Importer request returned a non-JSON response.', 'universal-wordpress-importer' ) ); ?>' + (excerpt ? ' ' + excerpt : '');
+			}
+
+			function isGitHubRepositoryInput(value) {
+				return /^https?:\/\/github\.com\/[^\/\s]+\/[^\/\s]+/i.test(String(value || '').trim());
+			}
+
+			function syncGithubPickerVisibility() {
+				if (!githubPicker) {
+					return;
+				}
+				var visible = browserFiles.length < 1 && isGitHubRepositoryInput(sourceInput.value || '');
+				if (visible) {
+					githubPicker.removeAttribute('hidden');
+					if (githubSelection && !githubSelection.textContent) {
+						githubSelection.textContent = '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
+					}
+				} else {
+					githubPicker.setAttribute('hidden', 'hidden');
+					closeGithubDirectoryModal(false);
+					if (githubPickerStatus) {
+						githubPickerStatus.textContent = '';
+					}
+					if (githubSelection) {
+						githubSelection.textContent = '';
+					}
+					if (githubTree) {
+						githubTree.innerHTML = '';
+					}
+					githubDirectories = [];
+				}
+			}
+
+			function isGithubModalOpen() {
+				return githubModal && !githubModal.hasAttribute('hidden');
+			}
+
+			function openGithubDirectoryModal() {
+				if (!githubModal) {
+					return;
+				}
+				githubPreviousFocus = document.activeElement || githubBrowseButton || sourceInput;
+				githubModal.removeAttribute('hidden');
+				if (githubSearch) {
+					githubSearch.value = '';
+				}
+				if (githubModalDialog && githubModalDialog.focus) {
+					githubModalDialog.focus();
+				}
+				if (githubSearch && githubSearch.focus) {
+					githubSearch.focus();
+				}
+			}
+
+			function closeGithubDirectoryModal(restoreFocus) {
+				if (!githubModal || !isGithubModalOpen()) {
+					return;
+				}
+				githubModal.setAttribute('hidden', 'hidden');
+				if (restoreFocus !== false && githubPreviousFocus && githubPreviousFocus.focus) {
+					githubPreviousFocus.focus();
+				}
+			}
+
+			function loadGithubDirectories() {
+				var source = String(sourceInput.value || '').trim();
+				if (!isGitHubRepositoryInput(source)) {
+					showNotice('<?php echo esc_js( __( 'Enter a GitHub repository URL before browsing directories.', 'universal-wordpress-importer' ) ); ?>', 'error');
+					return;
+				}
+
+				openGithubDirectoryModal();
+				if (githubBrowseButton) {
+					githubBrowseButton.disabled = true;
+				}
+				if (githubPickerStatus) {
+					githubPickerStatus.textContent = '<?php echo esc_js( __( 'Loading directories...', 'universal-wordpress-importer' ) ); ?>';
+				}
+				updateGithubSelectedSummary('', '');
+				if (githubTree) {
+					githubTree.innerHTML = '';
+				}
+
+				request('<?php echo esc_js( self::AJAX_GITHUB_DIRS ); ?>', { source: source }).then(function(data) {
+					renderGithubDirectories(data);
+				}).catch(function(error) {
+					if (githubPickerStatus) {
+						githubPickerStatus.textContent = error.message;
+					}
+					showNotice(error.message, 'error');
+				}).then(function() {
+					if (githubBrowseButton) {
+						githubBrowseButton.disabled = false;
+					}
+				});
+			}
+
+			function renderGithubDirectories(data) {
+				githubDirectories = data && data.directories ? data.directories : [];
+				githubSelectedPath = data && typeof data.selected_path === 'string' ? data.selected_path : '';
+				githubSelectedSourceUrl = data && data.selected_source_url ? data.selected_source_url : '';
+				renderGithubDirectoryRows();
+			}
+
+			function filteredGithubDirectories() {
+				var query = githubSearch ? String(githubSearch.value || '').toLowerCase().trim() : '';
+
+				if (!query) {
+					return githubDirectories;
+				}
+
+				return githubDirectories.filter(function(directory) {
+					return String(directory.path || '').toLowerCase().indexOf(query) !== -1 || String(directory.name || '').toLowerCase().indexOf(query) !== -1;
+				});
+			}
+
+			function renderGithubDirectoryRows() {
+				var directories = filteredGithubDirectories();
+
+				if (githubPickerStatus) {
+					githubPickerStatus.textContent = directories.length + ' <?php echo esc_js( __( 'directories shown.', 'universal-wordpress-importer' ) ); ?>';
+				}
+				updateGithubSelectedSummary(githubSelectedPath, githubSelectedSourceUrl);
+				if (!githubTree) {
+					return;
+				}
+
+				if (!directories.length) {
+					githubTree.innerHTML = '<li class="universal-importer-github-empty"><?php echo esc_js( __( 'No directories match this filter.', 'universal-wordpress-importer' ) ); ?></li>';
+					return;
+				}
+
+				githubTree.innerHTML = directories.map(function(directory) {
+					var path = directory.path || '';
+					var name = path ? directory.name || path : '<?php echo esc_js( __( 'Repository root', 'universal-wordpress-importer' ) ); ?>';
+					var depth = Math.max(0, Number(directory.depth || 0));
+					var selected = path === githubSelectedPath ? ' is-selected' : '';
+					var padding = 10 + depth * 18;
+					var tabIndex = path === githubSelectedPath || (!githubSelectedPath && directories.indexOf(directory) === 0) ? '0' : '-1';
+					return '<li role="none"><button type="button" role="treeitem" tabindex="' + tabIndex + '" class="universal-importer-github-directory' + selected + '" data-source-url="' + escapeHtml(directory.source_url || '') + '" data-path="' + escapeHtml(path) + '" style="padding-left:' + padding + 'px">' + escapeHtml(name) + '</button></li>';
+				}).join('');
+			}
+
+			function chooseGithubDirectory(button) {
+				var sourceUrl = button.getAttribute('data-source-url') || '';
+				var path = button.getAttribute('data-path') || '';
+
+				if (!sourceUrl) {
+					return;
+				}
+
+				githubSelectedPath = path;
+				githubSelectedSourceUrl = sourceUrl;
+				updateGithubSelectedSummary(path, sourceUrl);
+				if (githubTree && githubTree.querySelectorAll) {
+					Array.prototype.slice.call(githubTree.querySelectorAll('.universal-importer-github-directory')).forEach(function(item) {
+						if (item.classList && item.classList.remove) {
+							item.classList.remove('is-selected');
+						}
+					});
+				}
+				if (button.classList && button.classList.add) {
+					button.classList.add('is-selected');
+				}
+				focusGithubDirectory(button);
+			}
+
+			function updateGithubSelectedSummary(path, sourceUrl) {
+				var label = path ? '<?php echo esc_js( __( 'Selected:', 'universal-wordpress-importer' ) ); ?> ' + path : '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
+				if (githubSelection) {
+					githubSelection.textContent = label;
+				}
+				if (githubModalSelection) {
+					githubModalSelection.textContent = sourceUrl ? label + ' · ' + sourceUrl : label;
+				}
+				if (githubUseButton) {
+					githubUseButton.disabled = !sourceUrl;
+				}
+			}
+
+			function applyGithubDirectorySelection() {
+				if (!githubSelectedSourceUrl) {
+					return;
+				}
+				sourceInput.value = githubSelectedSourceUrl;
+				closeGithubDirectoryModal(true);
+				syncGithubPickerVisibility();
+			}
+
+			function githubDirectoryButtons() {
+				if (!githubTree || !githubTree.querySelectorAll) {
+					return [];
+				}
+				return Array.prototype.slice.call(githubTree.querySelectorAll('.universal-importer-github-directory'));
+			}
+
+			function focusGithubDirectory(button) {
+				githubDirectoryButtons().forEach(function(item) {
+					item.tabIndex = -1;
+					if (item.setAttribute) {
+						item.setAttribute('tabindex', '-1');
+					}
+				});
+				button.tabIndex = 0;
+				if (button.setAttribute) {
+					button.setAttribute('tabindex', '0');
+				}
+				if (button.focus) {
+					button.focus();
+				}
+			}
+
+			function moveGithubDirectoryFocus(current, offset) {
+				var buttons = githubDirectoryButtons();
+				var index = buttons.indexOf(current);
+				if (-1 === index || !buttons.length) {
+					return;
+				}
+				index = Math.max(0, Math.min(buttons.length - 1, index + offset));
+				focusGithubDirectory(buttons[index]);
+			}
+
+			function focusFirstGithubDirectory() {
+				var buttons = githubDirectoryButtons();
+				if (buttons.length) {
+					focusGithubDirectory(buttons[0]);
+				}
+			}
+
+			function focusLastGithubDirectory() {
+				var buttons = githubDirectoryButtons();
+				if (buttons.length) {
+					focusGithubDirectory(buttons[buttons.length - 1]);
+				}
+			}
+
+			function githubModalFocusableElements() {
+				if (!githubModal || !githubModal.querySelectorAll) {
+					return [];
+				}
+				return Array.prototype.slice.call(githubModal.querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])')).filter(function(element) {
+					return !element.disabled && !(element.hasAttribute && element.hasAttribute('hidden'));
+				});
+			}
+
+			function trapGithubModalFocus(event) {
+				var focusable = githubModalFocusableElements();
+				var currentIndex = focusable.indexOf(document.activeElement);
+
+				if (!focusable.length) {
+					event.preventDefault();
+					if (githubModalDialog && githubModalDialog.focus) {
+						githubModalDialog.focus();
+					}
+					return;
+				}
+
+				if (event.shiftKey && currentIndex <= 0) {
+					event.preventDefault();
+					focusable[focusable.length - 1].focus();
+					return;
+				}
+
+				if (!event.shiftKey && (currentIndex === -1 || currentIndex === focusable.length - 1)) {
+					event.preventDefault();
+					focusable[0].focus();
+				}
+			}
+
+			function handleGithubModalKeydown(event) {
+				if (event.key === 'Escape') {
+					event.preventDefault();
+					closeGithubDirectoryModal(true);
+					return;
+				}
+
+				if (event.key === 'Tab') {
+					trapGithubModalFocus(event);
+				}
 			}
 
 			function filePath(file) {
@@ -1125,25 +1903,198 @@ final class ImportAdminPage {
 				}).length;
 			}
 
+			function buildFileTree(files) {
+				var root = {
+					name: '',
+					path: '',
+					type: 'directory',
+					children: {}
+				};
+				files.forEach(function(file) {
+					var parts = filePath(file).split('/').filter(Boolean);
+					var node = root;
+					parts.forEach(function(part, index) {
+						var type = index === parts.length - 1 ? 'file' : 'directory';
+						var path = node.path ? node.path + '/' + part : part;
+						if (!node.children[part]) {
+							node.children[part] = {
+								name: part,
+								path: path,
+								type: type,
+								children: {}
+							};
+						}
+						node = node.children[part];
+					});
+				});
+				return root;
+			}
+
+			function sortedTreeChildren(node) {
+				return Object.keys(node.children || {}).map(function(key) {
+					return node.children[key];
+				}).sort(function(a, b) {
+					if (a.type !== b.type) {
+						return a.type === 'directory' ? -1 : 1;
+					}
+					return a.name.localeCompare(b.name);
+				});
+			}
+
+			function setAttribute(element, name, value) {
+				if (element.setAttribute) {
+					element.setAttribute(name, value);
+				}
+				element[name] = value;
+			}
+
+			function appendTreeNode(parent, node, index) {
+				var item = document.createElement('li');
+				var row = document.createElement('span');
+				var marker = document.createElement('span');
+				var label = document.createElement('span');
+				var children = sortedTreeChildren(node);
+
+				setAttribute(item, 'role', 'treeitem');
+				setAttribute(item, 'tabindex', index === 0 ? '0' : '-1');
+				setAttribute(item, 'data-tree-path', node.path);
+				setAttribute(item, 'data-tree-label', node.name.toLowerCase());
+				setAttribute(item, 'data-tree-kind', node.type);
+				if (node.type === 'directory') {
+					setAttribute(item, 'aria-expanded', 'true');
+				}
+				row.className = 'universal-importer-file-preview-item';
+				marker.className = 'universal-importer-file-preview-marker';
+				marker.textContent = node.type === 'directory' ? '-' : '';
+				label.className = 'universal-importer-file-preview-name';
+				label.textContent = node.name;
+				row.appendChild(marker);
+				row.appendChild(label);
+				item.appendChild(row);
+
+				if (children.length) {
+					var group = document.createElement('ul');
+					setAttribute(group, 'role', 'group');
+					children.forEach(function(child, childIndex) {
+						appendTreeNode(group, child, index + childIndex + 1);
+					});
+					item.appendChild(group);
+				}
+
+				parent.appendChild(item);
+			}
+
 			function renderFilePreview(files) {
-				var previewFiles = files.slice(0, 5);
+				var previewFiles = files.slice(0, 120);
+				var root = buildFileTree(previewFiles);
+				var children = sortedTreeChildren(root);
 				filePreview.innerHTML = '';
-				previewFiles.forEach(function(file) {
-					var item = document.createElement('li');
-					item.textContent = filePath(file);
-					filePreview.appendChild(item);
+				children.forEach(function(child, index) {
+					appendTreeNode(filePreview, child, index);
 				});
 				if (files.length > previewFiles.length) {
 					var remaining = document.createElement('li');
+					setAttribute(remaining, 'role', 'treeitem');
+					setAttribute(remaining, 'tabindex', children.length ? '-1' : '0');
+					setAttribute(remaining, 'data-tree-label', 'more');
+					setAttribute(remaining, 'data-tree-kind', 'summary');
 					remaining.textContent = '+' + (files.length - previewFiles.length) + ' more';
 					filePreview.appendChild(remaining);
 				}
+			}
+
+			function previewTreeItems() {
+				if (!filePreview.querySelectorAll) {
+					return [];
+				}
+				return Array.prototype.slice.call(filePreview.querySelectorAll('[role="treeitem"]')).filter(function(item) {
+					return isPreviewTreeItemVisible(item);
+				});
+			}
+
+			function isPreviewTreeItemVisible(item) {
+				var node = item.parentElement;
+				while (node && node !== filePreview) {
+					if (node.getAttribute && node.getAttribute('role') === 'treeitem' && node.getAttribute('aria-expanded') === 'false') {
+						return false;
+					}
+					node = node.parentElement;
+				}
+				return true;
+			}
+
+			function focusPreviewTreeItem(item) {
+				previewTreeItems().forEach(function(treeItem) {
+					treeItem.tabIndex = -1;
+					if (treeItem.setAttribute) {
+						treeItem.setAttribute('tabindex', '-1');
+					}
+				});
+				item.tabIndex = 0;
+				if (item.setAttribute) {
+					item.setAttribute('tabindex', '0');
+				}
+				if (item.focus) {
+					item.focus();
+				}
+			}
+
+			function setTreeItemExpanded(item, expanded) {
+				if (!item || item.getAttribute('data-tree-kind') !== 'directory') {
+					return;
+				}
+				item.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+				var marker = item.querySelector ? item.querySelector('.universal-importer-file-preview-marker') : null;
+				if (marker) {
+					marker.textContent = expanded ? '-' : '+';
+				}
+			}
+
+			function parentTreeItem(item) {
+				var node = item ? item.parentElement : null;
+				while (node && node !== filePreview) {
+					if (node.getAttribute && node.getAttribute('role') === 'treeitem') {
+						return node;
+					}
+					node = node.parentElement;
+				}
+				return null;
+			}
+
+			function movePreviewFocus(item, offset) {
+				var items = previewTreeItems();
+				var index = items.indexOf(item);
+				if (-1 === index) {
+					return;
+				}
+				index = Math.max(0, Math.min(items.length - 1, index + offset));
+				focusPreviewTreeItem(items[index]);
+			}
+
+			function firstChildTreeItem(item) {
+				if (!item || !item.querySelector) {
+					return null;
+				}
+				return item.querySelector('[role="group"] > [role="treeitem"]');
+			}
+
+			function findPreviewTreeItemByPrefix(current, prefix) {
+				var items = previewTreeItems();
+				var start = Math.max(0, items.indexOf(current));
+				var ordered = items.slice(start + 1).concat(items.slice(0, start + 1));
+				for (var index = 0; index < ordered.length; index++) {
+					if ((ordered[index].getAttribute('data-tree-label') || '').indexOf(prefix) === 0) {
+						return ordered[index];
+					}
+				}
+				return null;
 			}
 
 			function setBrowserFiles(files, sourceLabel) {
 				browserFiles = files || [];
 				sourceInput.required = browserFiles.length < 1;
 				clearFilesButton.disabled = browserFiles.length < 1;
+				syncGithubPickerVisibility();
 				if (!browserFiles.length) {
 					fileSummary.textContent = '';
 					filePreview.innerHTML = '';
@@ -1160,6 +2111,198 @@ final class ImportAdminPage {
 				fileSummary.textContent = summary + '.';
 				renderFilePreview(browserFiles);
 			}
+
+			sourceShortcuts.forEach(function(button) {
+				button.addEventListener('click', function() {
+					var trigger = button.getAttribute('data-file-trigger') || '';
+					var placeholder = button.getAttribute('data-source-placeholder') || '';
+					if (trigger === 'folder' && folderPicker && folderPicker.click) {
+						folderPicker.click();
+						return;
+					}
+					if (placeholder) {
+						sourceInput.placeholder = placeholder;
+					}
+					if (sourceInput.focus) {
+						sourceInput.focus();
+					}
+				});
+			});
+
+			sourceInput.addEventListener('input', syncGithubPickerVisibility);
+			sourceInput.addEventListener('change', syncGithubPickerVisibility);
+
+			if (githubBrowseButton) {
+				githubBrowseButton.addEventListener('click', loadGithubDirectories);
+			}
+
+			if (githubTree) {
+				githubTree.addEventListener('click', function(event) {
+					var button = event.target.closest ? event.target.closest('.universal-importer-github-directory') : null;
+					if (button) {
+						chooseGithubDirectory(button);
+					}
+				});
+				githubTree.addEventListener('keydown', function(event) {
+					var button = event.target.closest ? event.target.closest('.universal-importer-github-directory') : null;
+					if (!button) {
+						return;
+					}
+
+					if (event.key === 'ArrowDown') {
+						event.preventDefault();
+						moveGithubDirectoryFocus(button, 1);
+						return;
+					}
+					if (event.key === 'ArrowUp') {
+						event.preventDefault();
+						moveGithubDirectoryFocus(button, -1);
+						return;
+					}
+					if (event.key === 'Home') {
+						event.preventDefault();
+						focusFirstGithubDirectory();
+						return;
+					}
+					if (event.key === 'End') {
+						event.preventDefault();
+						focusLastGithubDirectory();
+						return;
+					}
+					if (event.key === ' ' || event.key === 'Enter') {
+						event.preventDefault();
+						chooseGithubDirectory(button);
+					}
+				});
+			}
+
+			if (githubSearch) {
+				githubSearch.addEventListener('input', renderGithubDirectoryRows);
+				githubSearch.addEventListener('keydown', function(event) {
+					if (event.key === 'ArrowDown') {
+						event.preventDefault();
+						focusFirstGithubDirectory();
+					}
+				});
+			}
+
+			if (githubCloseButton) {
+				githubCloseButton.addEventListener('click', function() {
+					closeGithubDirectoryModal(true);
+				});
+			}
+
+			if (githubCancelButton) {
+				githubCancelButton.addEventListener('click', function() {
+					closeGithubDirectoryModal(true);
+				});
+			}
+
+			if (githubUseButton) {
+				githubUseButton.addEventListener('click', applyGithubDirectorySelection);
+			}
+
+			if (githubModal) {
+				githubModal.addEventListener('click', function(event) {
+					if (event.target === githubModal) {
+						closeGithubDirectoryModal(true);
+					}
+				});
+				githubModal.addEventListener('keydown', handleGithubModalKeydown);
+			}
+
+			filePreview.addEventListener('click', function(event) {
+				var item = event.target.closest ? event.target.closest('[role="treeitem"]') : null;
+				if (!item || item.getAttribute('data-tree-kind') !== 'directory') {
+					return;
+				}
+				var expanded = item.getAttribute('aria-expanded') !== 'false';
+				setTreeItemExpanded(item, !expanded);
+				focusPreviewTreeItem(item);
+			});
+
+			filePreview.addEventListener('keydown', function(event) {
+				var item = event.target.closest ? event.target.closest('[role="treeitem"]') : null;
+				if (!item) {
+					return;
+				}
+
+				if (event.key === 'ArrowDown') {
+					event.preventDefault();
+					movePreviewFocus(item, 1);
+					return;
+				}
+				if (event.key === 'ArrowUp') {
+					event.preventDefault();
+					movePreviewFocus(item, -1);
+					return;
+				}
+				if (event.key === 'Home') {
+					event.preventDefault();
+					var first = previewTreeItems()[0];
+					if (first) {
+						focusPreviewTreeItem(first);
+					}
+					return;
+				}
+				if (event.key === 'End') {
+					event.preventDefault();
+					var items = previewTreeItems();
+					if (items.length) {
+						focusPreviewTreeItem(items[items.length - 1]);
+					}
+					return;
+				}
+				if (event.key === 'ArrowLeft') {
+					event.preventDefault();
+					if (item.getAttribute('data-tree-kind') === 'directory' && item.getAttribute('aria-expanded') !== 'false') {
+						setTreeItemExpanded(item, false);
+						return;
+					}
+					var parent = parentTreeItem(item);
+					if (parent) {
+						focusPreviewTreeItem(parent);
+					}
+					return;
+				}
+				if (event.key === 'ArrowRight') {
+					event.preventDefault();
+					if (item.getAttribute('data-tree-kind') !== 'directory') {
+						return;
+					}
+					if (item.getAttribute('aria-expanded') === 'false') {
+						setTreeItemExpanded(item, true);
+						return;
+					}
+					var child = firstChildTreeItem(item);
+					if (child) {
+						focusPreviewTreeItem(child);
+					}
+					return;
+				}
+				if (event.key === ' ' || event.key === 'Enter') {
+					if (item.getAttribute('data-tree-kind') === 'directory') {
+						event.preventDefault();
+						setTreeItemExpanded(item, item.getAttribute('aria-expanded') === 'false');
+					}
+					return;
+				}
+				if (event.key && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+					fileTreeSearch += event.key.toLowerCase();
+					if (fileTreeSearchTimer && window.clearTimeout) {
+						window.clearTimeout(fileTreeSearchTimer);
+					}
+					if (window.setTimeout) {
+						fileTreeSearchTimer = window.setTimeout(function() {
+							fileTreeSearch = '';
+						}, 800);
+					}
+					var match = findPreviewTreeItemByPrefix(item, fileTreeSearch);
+					if (match) {
+						focusPreviewTreeItem(match);
+					}
+				}
+			});
 
 			function readDirectoryEntries(reader) {
 				return new Promise(function(resolve, reject) {
@@ -1224,8 +2367,9 @@ final class ImportAdminPage {
 				var summary = dashboard.summary || { total: 0, completed: 0, errors: 0 };
 				var percent = Math.max(0, Math.min(100, Number(dashboard.percentage || 0)));
 				var total = summary.total || '?';
+				var progressClass = dashboard.indeterminate ? ' is-indeterminate' : '';
 				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : session.status;
-				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>';
+				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : (session.post_status === 'draft' ? '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Publishes pages', 'universal-wordpress-importer' ) ); ?>');
 				var importingClass = isImportLocked(session) ? ' is-importing' : '';
 				var html = '<section class="universal-importer-card' + importingClass + '" data-session-id="' + escapeHtml(session.id) + '">';
 				html += '<div class="universal-importer-card-header">';
@@ -1234,7 +2378,7 @@ final class ImportAdminPage {
 				html += '<span class="universal-importer-status-pill">' + escapeHtml(displayStatus) + '</span>';
 				html += '</div><div class="universal-importer-card-body">';
 				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
-				html += '<div class="universal-importer-progressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
+				html += '<div class="universal-importer-progressbar' + progressClass + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
 				html += '<p class="universal-importer-meta">' + percent + '% · ' + summary.completed + ' / ' + total + ' <?php echo esc_js( __( 'items complete', 'universal-wordpress-importer' ) ); ?>';
 				if (summary.errors) {
 					html += ' · ' + summary.errors + ' <?php echo esc_js( __( 'errors', 'universal-wordpress-importer' ) ); ?>';
@@ -1256,6 +2400,9 @@ final class ImportAdminPage {
 				}
 				html += renderActivityLog(dashboard.activity_log || session.recent_events || []);
 				html += renderPipeline(session);
+				if (session.status === 'done' && dashboard.imported_content_url) {
+					html += '<p><a class="button button-primary" href="' + escapeHtml(dashboard.imported_content_url) + '"><?php echo esc_js( __( 'View imported content', 'universal-wordpress-importer' ) ); ?></a></p>';
+				}
 				if (session.status !== 'done' && session.status !== 'aborted') {
 					html += '<p><button type="button" class="button universal-importer-abort" data-session-id="' + escapeHtml(session.id) + '"><?php echo esc_js( __( 'Abort', 'universal-wordpress-importer' ) ); ?></button></p>';
 				}
@@ -1591,9 +2738,10 @@ final class ImportAdminPage {
 			}
 
 			function tick() {
-				if (!activeSessionId) {
+				if (!activeSessionId || keepaliveInFlight) {
 					return;
 				}
+				keepaliveInFlight = true;
 				request('<?php echo esc_js( self::AJAX_KEEPALIVE ); ?>', { session_id: activeSessionId }).then(function(data) {
 					if (data.session) {
 						upsertSession(data.session);
@@ -1606,6 +2754,8 @@ final class ImportAdminPage {
 					}
 				}).catch(function(error) {
 					showNotice(error.message, 'error');
+				}).then(function() {
+					keepaliveInFlight = false;
 				});
 			}
 
@@ -1617,6 +2767,7 @@ final class ImportAdminPage {
 					source: data.get('source') || '',
 					confirmed_domains: data.get('confirmed_domains') || '',
 					url_rewrite_mode: data.get('url_rewrite_mode') || 'ask',
+					import_as_drafts: data.get('import_as_drafts') ? '1' : '',
 					dry_run: data.get('dry_run') ? '1' : ''
 				};
 
@@ -1625,6 +2776,7 @@ final class ImportAdminPage {
 					payload = new FormData();
 					payload.set('confirmed_domains', data.get('confirmed_domains') || '');
 					payload.set('url_rewrite_mode', data.get('url_rewrite_mode') || 'ask');
+					payload.set('import_as_drafts', data.get('import_as_drafts') ? '1' : '');
 					payload.set('dry_run', data.get('dry_run') ? '1' : '');
 					browserFiles.forEach(function(file) {
 						payload.append('files[]', file, file.name);
@@ -1734,6 +2886,7 @@ final class ImportAdminPage {
 				});
 			});
 
+			syncGithubPickerVisibility();
 			reattachActiveSession();
 		}());
 		</script>
@@ -1753,8 +2906,9 @@ final class ImportAdminPage {
 			$confirmed_domains = $this->parse_domain_list( $this->read_post_string( 'confirmed_domains' ) );
 			$dry_run           = $this->read_post_bool( 'dry_run' );
 			$url_rewrite_mode  = $this->read_post_string( 'url_rewrite_mode' );
+			$import_as_drafts  = $this->read_post_bool( 'import_as_drafts' );
 
-			wp_send_json_success( $this->create_import_session( $source, $confirmed_domains, $dry_run, $url_rewrite_mode ) );
+			wp_send_json_success( $this->create_import_session( $source, $confirmed_domains, $dry_run, $url_rewrite_mode, $import_as_drafts ) );
 		} catch ( InvalidArgumentException $exception ) {
 			wp_send_json_error( array( 'message' => $exception->getMessage() ), 400 );
 		} catch ( RuntimeException $exception ) {
@@ -1776,8 +2930,9 @@ final class ImportAdminPage {
 			$confirmed_domains = $this->parse_domain_list( $this->read_post_string( 'confirmed_domains' ) );
 			$dry_run           = $this->read_post_bool( 'dry_run' );
 			$url_rewrite_mode  = $this->read_post_string( 'url_rewrite_mode' );
+			$import_as_drafts  = $this->read_post_bool( 'import_as_drafts' );
 
-			wp_send_json_success( $this->create_import_session_from_uploaded_files( $files, $paths, $confirmed_domains, $dry_run, $url_rewrite_mode ) );
+			wp_send_json_success( $this->create_import_session_from_uploaded_files( $files, $paths, $confirmed_domains, $dry_run, $url_rewrite_mode, $import_as_drafts ) );
 		} catch ( InvalidArgumentException $exception ) {
 			wp_send_json_error( array( 'message' => $exception->getMessage() ), 400 );
 		} catch ( RuntimeException $exception ) {
@@ -1850,6 +3005,25 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Handles GitHub directory picker AJAX requests.
+	 *
+	 * @return void
+	 */
+	public function ajax_github_directories() {
+		$this->assert_ajax_permission();
+
+		try {
+			$source = $this->read_post_string( 'source' );
+
+			wp_send_json_success( $this->list_github_directories( $source ) );
+		} catch ( InvalidArgumentException $exception ) {
+			wp_send_json_error( array( 'message' => $exception->getMessage() ), 400 );
+		} catch ( RuntimeException $exception ) {
+			wp_send_json_error( array( 'message' => $exception->getMessage() ), 500 );
+		}
+	}
+
+	/**
 	 * Returns the one session the admin page should focus on.
 	 *
 	 * @param array<int,array<string,mixed>> $sessions Recent session snapshots.
@@ -1910,26 +3084,28 @@ final class ImportAdminPage {
 			$dashboard      = isset( $session['dashboard'] ) && is_array( $session['dashboard'] ) ? $session['dashboard'] : array();
 			$summary        = isset( $dashboard['summary'] ) && is_array( $dashboard['summary'] ) ? $dashboard['summary'] : array();
 			$percentage     = isset( $dashboard['percentage'] ) ? max( 0, min( 100, (int) $dashboard['percentage'] ) ) : 0;
+			$progress_class = ! empty( $dashboard['indeterminate'] ) ? ' universal-importer-progressbar is-indeterminate' : ' universal-importer-progressbar';
 			$total          = empty( $summary['total'] ) ? '?' : (string) $summary['total'];
 			$completed      = isset( $summary['completed'] ) ? (int) $summary['completed'] : 0;
 			$errors         = isset( $summary['errors'] ) ? (int) $summary['errors'] : 0;
 			$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking import state.', 'universal-wordpress-importer' );
 			$display_status = empty( $dashboard['attention_message'] ) ? (string) $session['status'] : __( 'Needs attention', 'universal-wordpress-importer' );
 			$card_class     = $this->is_active_admin_session( $session ) ? 'universal-importer-card is-importing' : 'universal-importer-card';
+			$mode_label     = ! empty( $session['dry_run'] ) ? __( 'Dry run', 'universal-wordpress-importer' ) : ( isset( $session['post_status'] ) && 'draft' === $session['post_status'] ? __( 'Creates drafts', 'universal-wordpress-importer' ) : __( 'Publishes pages', 'universal-wordpress-importer' ) );
 			?>
 			<section class="<?php echo esc_attr( $card_class ); ?>" data-session-id="<?php echo esc_attr( $session['id'] ); ?>">
 				<div class="universal-importer-card-header">
 					<div>
 						<h3 class="universal-importer-source-title"><?php echo esc_html( $session['source'] ); ?></h3>
 						<p class="universal-importer-meta">
-							<?php echo esc_html( $session['dry_run'] ? __( 'Dry run', 'universal-wordpress-importer' ) : __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>
+							<?php echo esc_html( $mode_label ); ?>
 						</p>
 					</div>
 					<span class="universal-importer-status-pill"><?php echo esc_html( $display_status ); ?></span>
 				</div>
 				<div class="universal-importer-card-body">
 					<p class="universal-importer-current-action"><?php echo esc_html( $current_action ); ?></p>
-					<div class="universal-importer-progressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( (string) $percentage ); ?>">
+					<div class="<?php echo esc_attr( trim( $progress_class ) ); ?>" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( (string) $percentage ); ?>">
 						<span style="width:<?php echo esc_attr( (string) $percentage ); ?>%"></span>
 					</div>
 					<p class="universal-importer-meta">
@@ -1961,6 +3137,9 @@ final class ImportAdminPage {
 					<?php $this->render_pending_decisions( $session, true ); ?>
 					<?php $this->render_activity_log( isset( $dashboard['activity_log'] ) && is_array( $dashboard['activity_log'] ) ? $dashboard['activity_log'] : $session['recent_events'] ); ?>
 					<?php $this->render_pipeline_details( $session ); ?>
+					<?php if ( ImportSession::STATUS_DONE === $session['status'] && ! empty( $dashboard['imported_content_url'] ) ) : ?>
+						<p><a class="button button-primary" href="<?php echo esc_url( $dashboard['imported_content_url'] ); ?>"><?php esc_html_e( 'View imported content', 'universal-wordpress-importer' ); ?></a></p>
+					<?php endif; ?>
 					<?php if ( ImportSession::STATUS_DONE !== $session['status'] && ImportSession::STATUS_ABORTED !== $session['status'] ) : ?>
 						<p><button type="button" class="button universal-importer-abort" data-session-id="<?php echo esc_attr( $session['id'] ); ?>"><?php esc_html_e( 'Abort', 'universal-wordpress-importer' ); ?></button></p>
 					<?php endif; ?>
@@ -2494,6 +3673,102 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Loads the remote content fetcher.
+	 *
+	 * @return ImportRemoteContentFetcherInterface
+	 */
+	private function get_content_fetcher() {
+		if ( null === $this->content_fetcher ) {
+			$this->content_fetcher = new WordPressRemoteContentFetcher();
+		}
+
+		return $this->content_fetcher;
+	}
+
+	/**
+	 * Fetches the default branch for a GitHub repository.
+	 *
+	 * @param ImportRemoteContentFetcherInterface $fetcher Remote JSON fetcher.
+	 * @param array{owner:string,name:string}     $repo    Repository data.
+	 * @return string
+	 * @throws RuntimeException When the repository response is malformed.
+	 */
+	private function fetch_github_default_branch( ImportRemoteContentFetcherInterface $fetcher, array $repo ) {
+		$metadata = $fetcher->fetch_json( GitHubRepositorySourceUrl::repository_api_url( $repo ) );
+		$branch   = isset( $metadata['default_branch'] ) ? GitHubRepositorySourceUrl::normalize_ref( (string) $metadata['default_branch'] ) : '';
+
+		if ( '' === $branch || 'HEAD' === strtoupper( $branch ) ) {
+			throw new RuntimeException( 'GitHub repository response did not include a default branch.' );
+		}
+
+		return $branch;
+	}
+
+	/**
+	 * Builds an admin directory picker snapshot from a GitHub tree response.
+	 *
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo Repository data.
+	 * @param array<string,mixed>                                                                                   $tree GitHub tree response.
+	 * @return array<string,mixed>
+	 */
+	private function github_directory_snapshot( array $repo, array $tree ) {
+		$paths = array( '' => true );
+
+		foreach ( isset( $tree['tree'] ) && is_array( $tree['tree'] ) ? $tree['tree'] : array() as $entry ) {
+			if ( ! is_array( $entry ) || ! isset( $entry['type'], $entry['path'] ) || 'tree' !== (string) $entry['type'] ) {
+				continue;
+			}
+
+			$path = GitHubRepositorySourceUrl::normalize_source_path( (string) $entry['path'] );
+			if ( '' !== $path ) {
+				$paths[ $path ] = true;
+			}
+		}
+
+		$path_list = array_keys( $paths );
+		usort(
+			$path_list,
+			function ( $a, $b ) {
+				if ( '' === $a ) {
+					return -1;
+				}
+				if ( '' === $b ) {
+					return 1;
+				}
+
+				return strcmp( $a, $b );
+			}
+		);
+
+		$selected_path = GitHubRepositorySourceUrl::normalize_source_path( $repo['source_path'] );
+		if ( ! isset( $paths[ $selected_path ] ) ) {
+			$selected_path = '';
+		}
+
+		$directories = array();
+		foreach ( $path_list as $path ) {
+			$directories[] = array(
+				'path'       => $path,
+				'name'       => '' === $path ? $repo['name'] : basename( $path ),
+				'depth'      => '' === $path ? 0 : substr_count( $path, '/' ) + 1,
+				'source_url' => GitHubRepositorySourceUrl::source_url( $repo, $path ),
+			);
+		}
+
+		return array(
+			'owner'               => $repo['owner'],
+			'repository'          => $repo['name'],
+			'ref'                 => $repo['ref'],
+			'requested_ref'       => isset( $repo['requested_ref'] ) ? $repo['requested_ref'] : $repo['ref'],
+			'selected_path'       => $selected_path,
+			'selected_source_url' => GitHubRepositorySourceUrl::source_url( $repo, $selected_path ),
+			'source_url'          => GitHubRepositorySourceUrl::source_url( $repo, '' ),
+			'truncated'           => ! empty( $tree['truncated'] ),
+			'directories'         => $directories,
+		);
+	}
+
+	/**
 	 * Normalizes a browser-provided relative file path into safe path segments.
 	 *
 	 * @param string $path Browser relative path.
@@ -2561,6 +3836,24 @@ final class ImportAdminPage {
 				'Choose whether imported absolute URLs should be rewritten to this site.',
 				array( 'domains' => $confirmed_domains )
 			)->resolve( array( 'confirmed_domains' => 'preserve' === $mode ? array() : $confirmed_domains ) )
+		);
+	}
+
+	/**
+	 * Stores the initial imported post status preference.
+	 *
+	 * @param ImportSessionId $session_id        Session id.
+	 * @param bool            $import_as_drafts Whether imported posts should remain drafts.
+	 * @return void
+	 */
+	private function save_initial_post_status_preference( ImportSessionId $session_id, $import_as_drafts ) {
+		$this->get_store()->save_decision(
+			$session_id,
+			ImportDecision::pending(
+				ImportPostPersister::POST_STATUS_DECISION_KEY,
+				'Choose whether imported pages should be published or saved as drafts.',
+				array()
+			)->resolve( array( 'post_status' => $import_as_drafts ? 'draft' : 'publish' ) )
 		);
 	}
 
@@ -2739,6 +4032,7 @@ final class ImportAdminPage {
 
 		return array(
 			'percentage'        => $percentage,
+			'indeterminate'     => $this->dashboard_progress_is_indeterminate( $session ),
 			'current_action'    => $this->dashboard_current_action( $session ),
 			'attention_message' => $this->dashboard_attention_message( $session ),
 			'needs_keepalive'   => $this->dashboard_needs_keepalive( $session ),
@@ -2750,6 +4044,26 @@ final class ImportAdminPage {
 			'checklist'         => $this->dashboard_checklist( $session, $source_counts ),
 			'activity_log'      => $this->dashboard_activity_log( $session ),
 		);
+	}
+
+	/**
+	 * Returns whether progress is active without a known item total yet.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return bool
+	 */
+	private function dashboard_progress_is_indeterminate( array $session ) {
+		if ( ImportSession::STATUS_RUNNING !== $session['status'] ) {
+			return false;
+		}
+
+		if ( ! empty( $session['github_git']['active'] ) ) {
+			return true;
+		}
+
+		$source_total = isset( $session['source_items']['total'] ) ? (int) $session['source_items']['total'] : 0;
+
+		return 0 === $source_total;
 	}
 
 	/**
@@ -2800,6 +4114,10 @@ final class ImportAdminPage {
 			return $this->admin_text( 'Waiting for the remote source.' );
 		}
 
+		if ( ! empty( $session['github_git']['active'] ) ) {
+			return $this->admin_text( 'Fetching repository files with sparse Git.' );
+		}
+
 		$source_statuses = isset( $session['source_items']['statuses'] ) && is_array( $session['source_items']['statuses'] ) ? $session['source_items']['statuses'] : array();
 		$media_statuses  = isset( $session['media']['statuses'] ) && is_array( $session['media']['statuses'] ) ? $session['media']['statuses'] : array();
 		$source_total    = isset( $session['source_items']['total'] ) ? (int) $session['source_items']['total'] : 0;
@@ -2843,7 +4161,7 @@ final class ImportAdminPage {
 		}
 
 		if ( 0 < $document_total && $post_total < $document_total ) {
-			return $this->admin_text( 'Writing drafts.' );
+			return $this->admin_text( 'Writing pages.' );
 		}
 
 		if ( ! empty( $session['relationship_warnings'] ) ) {
@@ -2984,6 +4302,7 @@ final class ImportAdminPage {
 		$media_failed         = (int) ( isset( $media_statuses['failed'] ) ? $media_statuses['failed'] : 0 );
 		$has_decision         = ! empty( $session['pending_decisions'] );
 		$is_done              = ImportSession::STATUS_DONE === $session['status'];
+		$github_git_active    = ! empty( $session['github_git']['active'] );
 
 		$stages = array(
 			array(
@@ -3016,8 +4335,8 @@ final class ImportAdminPage {
 			),
 			array(
 				'index'  => '5',
-				'key'    => 'write_drafts',
-				'label'  => $this->admin_text( 'Write drafts' ),
+				'key'    => 'write_pages',
+				'label'  => $this->admin_text( 'Write pages' ),
 				'detail' => $this->admin_text( 'Not started.' ),
 				'state'  => 'pending',
 			),
@@ -3039,7 +4358,7 @@ final class ImportAdminPage {
 
 		if ( 0 === $source_total ) {
 			if ( ! $is_done ) {
-				$stages[0]['detail'] = $this->admin_text( 'Queued.' );
+				$stages[0]['detail'] = $github_git_active ? $this->admin_text( 'Fetching repository files with sparse Git.' ) : $this->admin_text( 'Queued.' );
 				$stages[0]['state']  = 'active';
 				return $stages;
 			}
@@ -3097,14 +4416,14 @@ final class ImportAdminPage {
 		$stages[3]['state']  = 'done';
 
 		if ( $is_dry_run ) {
-			$stages[4]['detail'] = $this->admin_text( 'Dry run: no drafts written.' );
+			$stages[4]['detail'] = $this->admin_text( 'Dry run: no pages written.' );
 			$stages[4]['state']  = 'done';
 		} elseif ( 0 < $document_total && $post_total < $document_total ) {
-			$stages[4]['detail'] = sprintf( $this->admin_text( '%1$d of %2$d drafts written.' ), $post_total, $document_total );
+			$stages[4]['detail'] = sprintf( $this->admin_text( '%1$d of %2$d pages written.' ), $post_total, $document_total );
 			$stages[4]['state']  = 'active';
 			return $stages;
 		} else {
-			$stages[4]['detail'] = 0 < $document_total ? sprintf( $this->admin_text( '%1$d of %2$d drafts written.' ), $post_total, $document_total ) : $this->admin_text( 'No drafts to write.' );
+			$stages[4]['detail'] = 0 < $document_total ? sprintf( $this->admin_text( '%1$d of %2$d pages written.' ), $post_total, $document_total ) : $this->admin_text( 'No pages to write.' );
 			$stages[4]['state']  = 'done';
 		}
 
@@ -3158,20 +4477,89 @@ final class ImportAdminPage {
 			ImportSourceItem::STATUS_SKIPPED,
 			ImportSourceItem::STATUS_FAILED,
 		);
-		$counts   = array();
+		$counts   = array_fill_keys( $statuses, 0 );
+		$recent   = array();
+		$items    = $store->list_source_items_by_statuses( $id, $statuses, 1500 );
 
-		foreach ( $statuses as $status ) {
-			$counts[ $status ] = $store->count_source_items_by_statuses( $id, array( $status ) );
+		foreach ( $items as $item ) {
+			if ( $this->is_internal_source_item( $item ) ) {
+				continue;
+			}
+
+			$status = $item->get_status();
+			if ( isset( $counts[ $status ] ) ) {
+				++$counts[ $status ];
+			}
+
+			if ( count( $recent ) < 8 ) {
+				$recent[] = $this->source_item_to_snapshot( $item );
+			}
 		}
 
 		return array(
 			'total'    => array_sum( $counts ),
 			'statuses' => $counts,
-			'recent'   => array_map(
-				array( $this, 'source_item_to_snapshot' ),
-				$store->list_recent_source_items( $id, 8 )
-			),
+			'recent'   => $recent,
 		);
+	}
+
+	/**
+	 * Returns whether a source item is internal traversal bookkeeping.
+	 *
+	 * @param ImportSourceItem $item Source item.
+	 * @return bool
+	 */
+	private function is_internal_source_item( ImportSourceItem $item ) {
+		return 0 === strpos( $item->get_key(), 'github-git:' );
+	}
+
+	/**
+	 * Builds active GitHub sparse Git traversal details for the dashboard.
+	 *
+	 * @param ImportSessionId $id Session id.
+	 * @return array<string,mixed>
+	 */
+	private function get_github_git_snapshot( ImportSessionId $id ) {
+		$items = $this->get_store()->list_source_items_by_statuses(
+			$id,
+			array(
+				ImportSourceItem::STATUS_PROCESSING,
+				ImportSourceItem::STATUS_SKIPPED,
+				ImportSourceItem::STATUS_FAILED,
+			),
+			50
+		);
+
+		$snapshot = array(
+			'active' => false,
+			'recent' => array(),
+		);
+
+		foreach ( $items as $item ) {
+			$metadata = $item->get_metadata();
+			if ( empty( $metadata['github_git_status'] ) ) {
+				continue;
+			}
+
+			$entry = array(
+				'status'      => (string) $metadata['github_git_status'],
+				'ref'         => isset( $metadata['github_ref'] ) ? (string) $metadata['github_ref'] : '',
+				'source_path' => isset( $metadata['github_source_path'] ) ? (string) $metadata['github_source_path'] : '',
+				'detail'      => isset( $metadata['github_git_status_detail'] ) ? (string) $metadata['github_git_status_detail'] : '',
+				'started_at'  => isset( $metadata['github_git_started_at'] ) ? (string) $metadata['github_git_started_at'] : '',
+			);
+
+			if ( ImportSourceItem::STATUS_PROCESSING === $item->get_status() && 'pulling' === $entry['status'] ) {
+				$snapshot['active']  = true;
+				$snapshot['current'] = $entry;
+			}
+
+			if ( count( $snapshot['recent'] ) < 5 ) {
+				$snapshot['recent'][] = $entry;
+			}
+		}
+
+		return $snapshot;
 	}
 
 	/**

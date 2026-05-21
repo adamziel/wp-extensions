@@ -299,7 +299,13 @@ final class ImportMarkdownInternalLinkResolver {
 	 */
 	private function target_document_key( ImportPreparedDocument $document, array $link ) {
 		$metadata = $document->get_metadata();
-		$source   = isset( $metadata['source_uri'] ) ? (string) $metadata['source_uri'] : '';
+		$github   = $this->github_target_document_key( $document, $link, $metadata );
+
+		if ( null !== $github ) {
+			return $github;
+		}
+
+		$source = isset( $metadata['source_uri'] ) ? (string) $metadata['source_uri'] : '';
 
 		if ( '' === $source || preg_match( '#^[a-z][a-z0-9+.-]*://#i', $source ) ) {
 			return null;
@@ -319,6 +325,69 @@ final class ImportMarkdownInternalLinkResolver {
 		$item_key = 'local:' . hash( 'sha256', $this->normalize_local_path( $real ) );
 
 		return null === $this->store->find_source_item( $document->get_session_id(), $item_key ) ? null : $item_key;
+	}
+
+	/**
+	 * Builds a prepared document key for a target GitHub Markdown file.
+	 *
+	 * @param ImportPreparedDocument                         $document Source document.
+	 * @param array{href:string,path:string,fragment:string} $link Link metadata.
+	 * @param array<string,mixed>                            $metadata Prepared document metadata.
+	 * @return string|null
+	 */
+	private function github_target_document_key( ImportPreparedDocument $document, array $link, array $metadata ) {
+		foreach ( array( 'github_owner', 'github_repository', 'github_ref', 'github_tree_path' ) as $required ) {
+			if ( empty( $metadata[ $required ] ) ) {
+				return null;
+			}
+		}
+
+		$current_path = $this->normalize_repository_path( (string) $metadata['github_tree_path'] );
+		$link_path    = (string) $link['path'];
+		$target_path  = '/' === substr( $link_path, 0, 1 )
+			? $this->normalize_repository_path( ltrim( $link_path, '/' ) )
+			: $this->normalize_repository_path( dirname( $current_path ) . '/' . $link_path );
+
+		if ( '' === $target_path ) {
+			return null;
+		}
+
+		$hash = hash(
+			'sha256',
+			strtolower( (string) $metadata['github_owner'] ) . '/' . strtolower( (string) $metadata['github_repository'] )
+				. "\n" . (string) $metadata['github_ref']
+				. "\n" . $target_path
+		);
+
+		foreach ( array( 'github-blob:' . $hash, 'github-git-blob:' . $hash ) as $item_key ) {
+			if ( null !== $this->store->find_source_item( $document->get_session_id(), $item_key ) ) {
+				return $item_key;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Normalizes a repository-relative path.
+	 *
+	 * @param string $path Path.
+	 * @return string
+	 */
+	private function normalize_repository_path( $path ) {
+		$segments = array();
+		foreach ( explode( '/', str_replace( '\\', '/', (string) $path ) ) as $segment ) {
+			if ( '' === $segment || '.' === $segment ) {
+				continue;
+			}
+			if ( '..' === $segment ) {
+				array_pop( $segments );
+				continue;
+			}
+			$segments[] = $segment;
+		}
+
+		return implode( '/', $segments );
 	}
 
 	/**
@@ -414,7 +483,7 @@ final class ImportMarkdownInternalLinkResolver {
 			new ImportProgressEvent(
 				ImportProgressEvent::LEVEL_WARNING,
 				'markdown.internal_links_deferred',
-				'Markdown document links are waiting for target draft pages or permalinks.',
+				'Markdown document links are waiting for target pages or permalinks.',
 				array(
 					'source_item_key' => $document->get_source_item_key(),
 					'deferred'        => count( $deferred_links ),

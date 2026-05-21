@@ -47,9 +47,10 @@ interface ImportPostGatewayInterface {
 	 *
 	 * @param ImportPreparedDocument $document Prepared document.
 	 * @param int|null               $post_id  Existing post id to update.
+	 * @param string                 $post_status Post status to assign.
 	 * @return int Persisted post id.
 	 */
-	public function insert_or_update( ImportPreparedDocument $document, $post_id = null );
+	public function insert_or_update( ImportPreparedDocument $document, $post_id = null, $post_status = 'publish' );
 
 	/**
 	 * Applies staged postmeta from a prepared document to an imported post.

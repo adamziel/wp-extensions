@@ -27,7 +27,8 @@ composer build:release
 
 ## Start An Import With WP-CLI
 
-Start with a local path, archive, URL, WordPress site, or GitHub repository URL:
+Start with a local path, archive, URL, WordPress site, feed, OPML list, or
+GitHub repository URL:
 
 ```bash
 wp universal-importer import ./content-export.zip
@@ -91,9 +92,10 @@ domains and lookalike hosts are left unchanged.
 
 ## Use The Admin Page
 
-Open Tools > Universal Importer. Enter a source path or URL, choose files or a
-folder from the browser, or drop files/folders onto the upload area. Optionally
-enter confirmed first-party domains, and start the import.
+Open Tools > Universal Importer. Use a source shortcut for GitHub repositories,
+WordPress sites, feeds/OPML, server paths, or browser folders; or enter a
+source path or URL directly. Optionally enter confirmed first-party domains,
+and start the import.
 
 In the bundled Playground demo, try this sample source path:
 
@@ -104,6 +106,8 @@ In the bundled Playground demo, try this sample source path:
 Browser-selected and dropped files are staged into the importer cache as a
 managed local directory import, so they continue through the same resumable
 runner as server-side paths, archives, and URLs.
+The selected-file preview is rendered as a keyboard-navigable tree so large
+folder uploads can be checked before starting the import.
 
 The page polls a keepalive endpoint for the active session. Each keepalive runs
 one shared runner tick and refreshes status snapshots for source items,
@@ -168,12 +172,20 @@ when these warnings appear.
 
 ## GitHub Repository Sources
 
-GitHub repository URLs first try the GitHub tree/blob APIs so `/tree/<ref>/<path>`
-subtree URLs can queue only the requested files without downloading the entire
-repository archive. If the tree API is unavailable, truncated, or cannot resolve
-the ambiguous ref/path split, the importer falls back to the GitHub zipball API
-and hands the downloaded package to the archive walker. Public repositories work
-without credentials. Set `UNIVERSAL_IMPORTER_GITHUB_TOKEN` as a PHP constant or
+GitHub repository URLs with an explicit branch first use php-toolkit Git
+plumbing to sparse-pull the requested subtree. For example,
+`/tree/main/docs` queues files under `docs/` without downloading siblings.
+If the branch/path split is ambiguous, the importer tries the slash-ref
+candidate first and then falls back to shorter refs with the remaining
+segments treated as the subtree path.
+
+If Git plumbing is unavailable or cannot resolve the candidate, the importer
+falls back to GitHub tree/blob APIs so `/tree/<ref>/<path>` subtree URLs can
+still queue only the requested files without downloading the entire repository
+archive. If the tree API is unavailable, truncated, or cannot resolve the
+candidate, the importer falls back to the GitHub zipball API and hands the
+downloaded package to the archive walker. Public repositories work without
+credentials. Set `UNIVERSAL_IMPORTER_GITHUB_TOKEN` as a PHP constant or
 environment variable when private repositories or higher API limits are needed;
 the token is sent only to `api.github.com` for GitHub tree/blob and zipball API
 requests.
@@ -181,10 +193,25 @@ GitHub tree/blob API rate limits are stored with retry metadata and retried
 after the reported backoff window instead of falling through to an archive
 download during the same tick.
 
+Git plumbing currently handles branch refs. Commit SHA-only sources and default
+`HEAD` repository URLs continue through the API/archive fallback paths.
+
 If a transient GitHub download or cache error leaves the session blocked with
 `github.archive_failed`, fix the network, token, or storage problem and run
 `wp universal-importer resume <session-id>`. The next continuation tick retries
 the failed GitHub archive download instead of requiring a new import session.
+
+## Remote Feed Sources
+
+Direct RSS, Atom, and RDF feed URLs are staged as one prepared document per
+importable feed item. Ordinary site URLs that do not expose WordPress REST can
+also fall back to an advertised feed link before the importer treats the page
+itself as a single remote document.
+
+OPML subscription files are treated as feed lists. The importer reads the
+`xmlUrl` entries, fetches up to 20 listed feeds, and stages importable feed
+items from those feeds. Relative `xmlUrl` values are resolved against the OPML
+URL.
 
 ## Authenticated Remote Sources
 

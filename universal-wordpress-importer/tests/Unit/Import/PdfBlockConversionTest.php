@@ -69,7 +69,7 @@ final class PdfBlockConversionTest extends TestCase {
 	}
 
 	/**
-	 * Tricky PDF fixtures convert to WordPress draft pages with meaningful block markup.
+	 * Tricky PDF fixtures convert to WordPress imported pages with meaningful block markup.
 	 *
 	 * @dataProvider tricky_pdf_block_cases
 	 *
@@ -105,7 +105,7 @@ final class PdfBlockConversionTest extends TestCase {
 		$post_content = $this->combined_post_content( $posts );
 
 		$this->assertSame( ImportSession::STATUS_DONE, $restored->get_status(), 'PDF fixture did not complete: ' . $fixture['basename'] );
-		$this->assertGreaterThanOrEqual( 1, $posts->count_posts(), 'PDF fixture did not create a WordPress draft page: ' . $fixture['basename'] );
+		$this->assertGreaterThanOrEqual( 1, $posts->count_posts(), 'PDF fixture did not create a WordPress imported page: ' . $fixture['basename'] );
 		$this->assertStringContainsString( '<!-- wp:', $post_content, 'PDF fixture did not create block markup: ' . $fixture['basename'] );
 
 		foreach ( $fixture['contains'] as $expected ) {

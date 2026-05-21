@@ -9,6 +9,7 @@ namespace UniversalImporter\Import;
 
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 
 /**
  * Coordinates one resumable import worker tick.
@@ -207,11 +208,7 @@ final class ImportRunner {
 		$lock = $this->store->acquire_lock( $session->get_id(), $this->owner, $this->lock_ttl_seconds );
 
 		if ( null === $lock ) {
-			$this->record_skipped_event(
-				$session,
-				'session.locked',
-				'Another importer worker owns this session lock.'
-			);
+			$this->record_locked_event_once( $session );
 			$this->schedule_locked_retry( $session );
 			return 'locked';
 		}
@@ -241,22 +238,22 @@ final class ImportRunner {
 				return 'skipped';
 			}
 
-			$local                  = ( new LocalFilesystemSourceWalker( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
-			$github_content_fetcher = null === $this->remote_content_fetcher && null === $this->remote_archive_fetcher ? new WordPressRemoteContentFetcher() : $this->remote_content_fetcher;
-			$github                 = ( new GitHubRepositorySourceWalker( $this->store, $this->remote_archive_fetcher, $this->cache_directory, $github_content_fetcher, $this->controls ) )->advance( $current );
-			$lock                   = $this->refresh_lock( $lock );
-			$remote                 = ( new RemoteUrlSourceWalker( $this->store, $this->remote_content_fetcher, $this->controls ) )->advance( $current );
-			$lock                   = $this->refresh_lock( $lock );
-			$traversal              = $this->combine_traversal_summaries( $local, $github, $remote );
-			$archives               = ( new ZipArchiveSourceWalker( $this->store, $this->cache_directory, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
-			$documents              = ( new SourceItemDocumentProcessor( $this->store, $this->cache_directory, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
-			$urls                   = ( new ImportUrlInference( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
-			$media                  = $urls['blocked'] ? $this->blocked_media_summary() : ( new ImportMediaReferenceDetector( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
-			$lock                   = $this->refresh_lock( $lock );
+			$local              = ( new LocalFilesystemSourceWalker( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
+			$github_git_fetcher = null === $this->remote_content_fetcher && null === $this->remote_archive_fetcher ? new PhpToolkitGitRepositoryFetcher() : null;
+			$github             = ( new GitHubRepositorySourceWalker( $this->store, $this->remote_archive_fetcher, $this->cache_directory, null, $this->controls, $github_git_fetcher ) )->advance( $current );
+			$lock               = $this->refresh_lock( $lock );
+			$remote             = ( new RemoteUrlSourceWalker( $this->store, $this->remote_content_fetcher, $this->controls ) )->advance( $current );
+			$lock               = $this->refresh_lock( $lock );
+			$traversal          = $this->combine_traversal_summaries( $local, $github, $remote );
+			$archives           = ( new ZipArchiveSourceWalker( $this->store, $this->cache_directory, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
+			$documents          = ( new SourceItemDocumentProcessor( $this->store, $this->cache_directory, $this->controls ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
+			$urls               = ( new ImportUrlInference( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
+			$media              = $urls['blocked'] ? $this->blocked_media_summary() : ( new ImportMediaReferenceDetector( $this->store ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
+			$lock               = $this->refresh_lock( $lock );
 			if ( $current->is_dry_run() ) {
 				$rewrites       = $urls['blocked'] ? $this->blocked_rewrite_summary() : ( new ImportUrlRewriter( $this->store, $this->local_site_url, true ) )->advance( $current, self::DEFAULT_SOURCE_ITEM_LIMIT );
 				$lock           = $this->refresh_lock( $lock );
@@ -432,7 +429,7 @@ final class ImportRunner {
 			$this->schedule_next_tick_if_needed( $current );
 
 			return 'processed';
-		} catch ( RuntimeException $exception ) {
+		} catch ( Throwable $exception ) {
 			$this->store->record_event(
 				$session->get_id(),
 				new ImportProgressEvent(
@@ -591,6 +588,26 @@ final class ImportRunner {
 					'status' => $session->get_status(),
 				)
 			)
+		);
+	}
+
+	/**
+	 * Records one lock collision event without flooding the activity log.
+	 *
+	 * @param ImportSession $session Session being skipped.
+	 * @return void
+	 */
+	private function record_locked_event_once( ImportSession $session ) {
+		$events = $this->store->list_events( $session->get_id(), 1 );
+
+		if ( ! empty( $events ) && 'session.locked' === $events[0]->get_type() ) {
+			return;
+		}
+
+		$this->record_skipped_event(
+			$session,
+			'session.locked',
+			'Another importer worker owns this session lock.'
 		);
 	}
 

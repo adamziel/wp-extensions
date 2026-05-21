@@ -252,4 +252,34 @@ final class WordPressRemoteContentFetcherTest extends TestCase {
 			$this->assertStringContainsString( 'HTTP 429 rate limit', $exception->getMessage() );
 		}
 	}
+
+	/**
+	 * GitHub API limit exhaustion is retryable instead of a generic auth failure.
+	 *
+	 * @return void
+	 */
+	public function test_github_rate_limit_headers_throw_retryable_diagnostic() {
+		$reset = time() + 300;
+		WordPressRemoteContentFetcherWpStub::queue_response(
+			array(
+				'response' => array( 'code' => 403 ),
+				'body'     => '{"message":"API rate limit exceeded"}',
+				'headers'  => array(
+					'X-RateLimit-Remaining' => '0',
+					'X-RateLimit-Reset'     => (string) $reset,
+				),
+			)
+		);
+
+		try {
+			( new WordPressRemoteContentFetcher() )->fetch_json( 'https://api.github.com/repos/example/repository/git/trees/main?recursive=1' );
+			$this->fail( 'Expected a GitHub rate-limit exception.' );
+		} catch ( ImportRemoteRateLimitException $exception ) {
+			$this->assertSame( 'https://api.github.com/repos/example/repository/git/trees/main?recursive=1', $exception->get_url() );
+			$this->assertSame( 403, $exception->get_status_code() );
+			$this->assertGreaterThanOrEqual( 1, $exception->get_retry_after_seconds() );
+			$this->assertLessThanOrEqual( 300, $exception->get_retry_after_seconds() );
+			$this->assertStringContainsString( 'HTTP 403 rate limit', $exception->getMessage() );
+		}
+	}
 }
