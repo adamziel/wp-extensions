@@ -484,3 +484,13 @@ The selected resolver panel has one high-confidence design-only defect in the su
 Path wrapping does not need a new resolver workflow. The existing `.path-value` wrapping handles the missing and replacement file paths, and the panel already shows the evidence chain: affected draft, missing source file, replacement file, and changed import consequence. The only necessary UI change is to give resolver labels enough column width so label/value separation stays intact.
 
 Recommendation: keep the resolver content and workflow stable. Make the scoped CSS fix by widening the resolver label column; do not add upload progress, file validation, bulk replacement, or another issue-resolution state for this PR.
+
+## Pass 45 Critique
+
+The 768px tablet result journey holds up after the recent table and resolver fixes. The dry-run table stays dense, but it does not collapse into the earlier failure mode: outcome pills fit, item paths wrap without forcing a horizontal scroll, evidence remains readable, owners are short enough for the fixed column, and the action column preserves full labels like "Review match," "Replace media," and "Add title or skip." The table therefore keeps enough hierarchy for a reviewer to understand what happened and what can be acted on.
+
+The resolver panel also reads correctly at this width. Its labels no longer collide with values, the 124px label column is not wasting enough space to starve the replacement path, and the two resolver actions retain a clear primary/secondary relationship. The long GitHub source path in setup is crowded but still contained with the Browse button intact, so it is an acceptable mid-width compromise rather than a regression.
+
+The warning summary below the resolver feels connected enough because it immediately follows the result panel, carries the "Dry run complete" state, and lists the same remaining duplicate, media, title, and old-site-link consequences surfaced in the table and resolver. It is long, but it is not detached from the result journey.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No concrete tablet-only design defect in the provided 768px evidence justifies another CSS or copy edit.
