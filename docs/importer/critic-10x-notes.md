@@ -1682,3 +1682,11 @@ The 320px grouped-control focus evidence does not show a narrow-screen target-si
 The tightest source-tab targets are still usable: both sampled source cards are about 89.33px wide by 49.5px tall, including the long "Archive or document" label. The draft setting card is 266x80.17, and the URL decision card is 232x74.17. Forced colors removes the decorative box shadows but exposes a 2px system outline on the surrounding card, so keyboard position stays visible without depending on color glow.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 163. The 320px evidence reinforces the Pass 162 decision: the internal radio/checkbox glyph size is not the target-size contract; the label/card surface is.
+
+## Pass 164 Critique
+
+The 320px and 360px large-text first-screen evidence does not show a true first-viewport, large-text, or overflow defect. The 320px large-text layout remains horizontally contained with `scrollWidth=320`, `bodyScrollWidth=320`, and `overflowCount=0`; `Start dry run` is fully visible as a 248x44.09 control near the bottom of the viewport, and the guarantee starts at 741.64px. At 360px large text, the action remains 288x44.09 and the guarantee starts at 715.55px.
+
+The guarantee moving partly below the fold is acceptable enlarged-text behavior. It is not clipped, overlapped, or hidden; it follows immediately after the primary action and remains above the optional upload fallback. Compressing source labels, shortening the safety copy, or moving the guarantee above the action would trade away clarity without fixing a measured failure.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 164. Keep watching the 320px large-text setup, but preserve the current action-first order unless future evidence shows the primary action itself is pushed out of reach or the guarantee is clipped.
