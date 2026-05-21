@@ -1,0 +1,1022 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Universal Importer Journey Exploration</title>
+	<style>
+		:root {
+			--bg: #f6f7f7;
+			--panel: #fff;
+			--ink: #1d2327;
+			--muted: #646970;
+			--line: #dcdcde;
+			--line-strong: #c3c4c7;
+			--blue: #2271b1;
+			--blue-dark: #135e96;
+			--green: #008a20;
+			--amber: #996800;
+			--red: #b32d2e;
+			--focus: #72aee6;
+			--soft-blue: #eef6fc;
+			--soft-green: #edf8ef;
+			--soft-amber: #fcf9e8;
+			--soft-red: #fcf0f1;
+			--shadow: 0 1px 1px rgba(0, 0, 0, .04);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			background: var(--bg);
+			color: var(--ink);
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			font-size: 14px;
+			line-height: 1.45;
+			margin: 0;
+		}
+
+		button,
+		input,
+		select {
+			font: inherit;
+		}
+
+		.prototype-shell {
+			display: grid;
+			grid-template-columns: 240px minmax(0, 1fr);
+			min-height: 100vh;
+		}
+
+		.sidebar {
+			background: #1d2327;
+			color: #f0f0f1;
+			padding: 24px 20px;
+		}
+
+		.sidebar h1 {
+			font-size: 20px;
+			line-height: 1.2;
+			margin: 0 0 6px;
+		}
+
+		.sidebar p {
+			color: #c3c4c7;
+			margin: 0 0 22px;
+		}
+
+		.sidebar-nav {
+			display: grid;
+			gap: 4px;
+		}
+
+		.sidebar-nav a {
+			border-radius: 4px;
+			color: #f0f0f1;
+			padding: 9px 10px;
+			text-decoration: none;
+		}
+
+		.sidebar-nav a.is-current {
+			background: #2c3338;
+			box-shadow: inset 3px 0 0 var(--focus);
+			font-weight: 600;
+		}
+
+		.main {
+			min-width: 0;
+			padding: 26px 28px 36px;
+		}
+
+		.page-header {
+			align-items: flex-start;
+			display: flex;
+			gap: 16px;
+			justify-content: space-between;
+			margin: 0 auto 18px;
+			max-width: 1180px;
+		}
+
+		.page-header h2 {
+			font-size: 24px;
+			line-height: 1.25;
+			margin: 0;
+		}
+
+		.page-header p {
+			color: var(--muted);
+			margin: 4px 0 0;
+			max-width: 760px;
+		}
+
+		.status-pill {
+			align-items: center;
+			background: var(--soft-blue);
+			border: 1px solid #b8d7f0;
+			border-radius: 999px;
+			color: var(--blue-dark);
+			display: inline-flex;
+			font-weight: 600;
+			gap: 8px;
+			justify-self: start;
+			padding: 6px 10px;
+			white-space: nowrap;
+		}
+
+		.status-pill::before {
+			background: currentColor;
+			border-radius: 999px;
+			content: "";
+			height: 8px;
+			width: 8px;
+		}
+
+		.layout {
+			display: grid;
+			gap: 18px;
+			grid-template-columns: minmax(0, 1fr) 360px;
+			margin: 0 auto;
+			max-width: 1180px;
+		}
+
+		.layout > * {
+			min-width: 0;
+		}
+
+		.surface {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			box-shadow: var(--shadow);
+		}
+
+		.start-card {
+			display: grid;
+			gap: 0;
+		}
+
+		.guidance {
+			background: var(--soft-blue);
+			border-bottom: 1px solid #b8d7f0;
+			display: grid;
+			gap: 12px;
+			grid-template-columns: minmax(0, 1fr) auto;
+			padding: 18px 20px;
+		}
+
+		.guidance h3,
+		.section h3,
+		.progress-panel h3 {
+			font-size: 16px;
+			line-height: 1.3;
+			margin: 0;
+		}
+
+		.guidance p,
+		.section-lede {
+			color: var(--muted);
+			margin: 4px 0 0;
+		}
+
+		.guidance-steps {
+			align-items: center;
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			justify-content: flex-end;
+		}
+
+		.guidance-step {
+			background: #fff;
+			border: 1px solid #b8d7f0;
+			border-radius: 999px;
+			color: var(--blue-dark);
+			font-size: 12px;
+			font-weight: 600;
+			padding: 5px 9px;
+			white-space: nowrap;
+		}
+
+		.section {
+			border-bottom: 1px solid var(--line);
+			padding: 20px;
+		}
+
+		.section:last-child {
+			border-bottom: 0;
+		}
+
+		.section-header {
+			display: grid;
+			gap: 6px;
+			grid-template-columns: 34px minmax(0, 1fr);
+			margin-bottom: 16px;
+		}
+
+		.step-number {
+			align-items: center;
+			background: var(--ink);
+			border-radius: 999px;
+			color: #fff;
+			display: inline-flex;
+			font-size: 13px;
+			font-weight: 700;
+			height: 26px;
+			justify-content: center;
+			margin-top: 1px;
+			width: 26px;
+		}
+
+		.source-grid {
+			display: grid;
+			gap: 10px;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+
+		.source-option {
+			background: #fff;
+			border: 1px solid var(--line-strong);
+			border-radius: 4px;
+			color: var(--ink);
+			cursor: pointer;
+			display: grid;
+			gap: 6px;
+			min-height: 104px;
+			padding: 13px;
+			text-align: left;
+		}
+
+		.source-option strong {
+			font-size: 14px;
+		}
+
+		.source-option span {
+			color: var(--muted);
+			font-size: 12px;
+		}
+
+		.source-option.is-selected {
+			background: var(--soft-blue);
+			border-color: var(--blue);
+			box-shadow: inset 0 0 0 1px var(--blue);
+		}
+
+		.source-option[aria-pressed="true"] {
+			background: var(--soft-blue);
+			border-color: var(--blue);
+			box-shadow: inset 0 0 0 1px var(--blue);
+		}
+
+		.source-option small {
+			color: var(--blue-dark);
+			font-size: 11px;
+			font-weight: 700;
+			text-transform: uppercase;
+		}
+
+		.input-area {
+			display: grid;
+			gap: 14px;
+		}
+
+		.field-row {
+			display: grid;
+			gap: 8px;
+		}
+
+		.field-row label,
+		.option-label {
+			font-weight: 600;
+		}
+
+		.input-action {
+			display: grid;
+			gap: 10px;
+			grid-template-columns: minmax(0, 1fr) auto;
+		}
+
+		input[type="text"],
+		select {
+			background: #fff;
+			border: 1px solid var(--line-strong);
+			border-radius: 4px;
+			min-width: 0;
+			min-height: 40px;
+			padding: 8px 10px;
+			width: 100%;
+		}
+
+		input[type="text"]:focus,
+		button:focus,
+		select:focus {
+			box-shadow: 0 0 0 2px var(--focus);
+			outline: 2px solid transparent;
+		}
+
+		.button-primary,
+		.button-secondary {
+			align-items: center;
+			border-radius: 4px;
+			cursor: pointer;
+			display: inline-flex;
+			font-weight: 600;
+			gap: 8px;
+			justify-content: center;
+			min-height: 40px;
+			padding: 8px 14px;
+			text-decoration: none;
+			white-space: nowrap;
+		}
+
+		.button-primary {
+			background: var(--blue);
+			border: 1px solid var(--blue);
+			color: #fff;
+		}
+
+		.button-primary:hover {
+			background: var(--blue-dark);
+		}
+
+		.button-secondary {
+			background: #fff;
+			border: 1px solid var(--line-strong);
+			color: var(--ink);
+		}
+
+		.help-row {
+			color: var(--muted);
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin: 0;
+		}
+
+		.help-row code {
+			background: #f0f0f1;
+			border-radius: 3px;
+			color: var(--ink);
+			font-size: 12px;
+			padding: 2px 5px;
+		}
+
+		.upload-panel {
+			align-items: center;
+			background: #fafafa;
+			border: 1px dashed var(--line-strong);
+			border-radius: 4px;
+			display: grid;
+			gap: 14px;
+			grid-template-columns: minmax(0, 1fr) auto;
+			padding: 14px;
+		}
+
+		.upload-panel p {
+			color: var(--muted);
+			margin: 2px 0 0;
+		}
+
+		.settings-grid {
+			display: grid;
+			gap: 14px;
+			grid-template-columns: minmax(0, 1fr) 230px;
+		}
+
+		.option-grid {
+			display: grid;
+			gap: 10px;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+
+		.radio-card {
+			background: #fff;
+			border: 1px solid var(--line);
+			border-radius: 4px;
+			cursor: pointer;
+			display: grid;
+			gap: 7px;
+			grid-template-columns: auto minmax(0, 1fr);
+			padding: 12px;
+		}
+
+		.radio-card.is-selected {
+			background: var(--soft-green);
+			border-color: var(--green);
+			box-shadow: inset 3px 0 0 var(--green);
+		}
+
+		.radio-card input {
+			margin: 2px 0 0;
+		}
+
+		.radio-card span {
+			display: block;
+		}
+
+		.radio-card > span > span:last-child {
+			color: var(--muted);
+			font-size: 12px;
+		}
+
+		.run-options {
+			background: #fafafa;
+			border: 1px solid var(--line);
+			border-radius: 4px;
+			display: grid;
+			gap: 11px;
+			padding: 12px;
+		}
+
+		.check-row {
+			align-items: flex-start;
+			display: flex;
+			gap: 9px;
+		}
+
+		.check-row input {
+			margin-top: 3px;
+		}
+
+		.check-row span {
+			display: block;
+		}
+
+		.check-row small {
+			color: var(--muted);
+			display: block;
+			font-size: 12px;
+			margin-top: 2px;
+		}
+
+		.review {
+			align-items: center;
+			display: grid;
+			gap: 14px;
+			grid-template-columns: minmax(0, 1fr) auto;
+		}
+
+		.summary-list {
+			display: grid;
+			gap: 7px;
+			margin: 0;
+			padding: 0;
+		}
+
+		.summary-list li {
+			display: grid;
+			gap: 8px;
+			grid-template-columns: 112px minmax(0, 1fr);
+			list-style: none;
+		}
+
+		.summary-list span:first-child {
+			color: var(--muted);
+		}
+
+		.progress-panel {
+			align-self: start;
+			display: grid;
+			gap: 16px;
+			min-width: 0;
+			padding: 18px;
+			position: sticky;
+			top: 18px;
+		}
+
+		.rail-kicker {
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 700;
+			letter-spacing: .02em;
+			text-transform: uppercase;
+		}
+
+		.import-card {
+			background: #fafafa;
+			border: 1px solid var(--line);
+			border-radius: 4px;
+			padding: 13px;
+		}
+
+		.import-card strong {
+			display: block;
+			overflow-wrap: anywhere;
+		}
+
+		.import-meta {
+			color: var(--muted);
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin-top: 7px;
+		}
+
+		.meter {
+			appearance: none;
+			background: #e5e5e5;
+			border: 0;
+			border-radius: 999px;
+			display: block;
+			height: 8px;
+			overflow: hidden;
+			width: 100%;
+		}
+
+		.meter::-webkit-progress-bar {
+			background: #e5e5e5;
+			border-radius: 999px;
+		}
+
+		.meter::-webkit-progress-value {
+			background: var(--green);
+			border-radius: 999px;
+		}
+
+		.meter::-moz-progress-bar {
+			background: var(--green);
+			border-radius: 999px;
+		}
+
+		.progress-copy {
+			color: var(--muted);
+			margin: 7px 0 0;
+		}
+
+		.stage-list {
+			display: grid;
+			gap: 8px;
+			margin: 0;
+			padding: 0;
+		}
+
+		.stage {
+			align-items: start;
+			border: 1px solid var(--line);
+			border-radius: 4px;
+			display: grid;
+			gap: 10px;
+			grid-template-columns: 22px minmax(0, 1fr) minmax(0, auto);
+			list-style: none;
+			padding: 10px;
+		}
+
+		.stage-dot {
+			align-items: center;
+			border-radius: 999px;
+			color: #fff;
+			display: inline-flex;
+			font-size: 12px;
+			font-weight: 700;
+			height: 22px;
+			justify-content: center;
+			width: 22px;
+		}
+
+		.stage.is-done .stage-dot {
+			background: var(--green);
+		}
+
+		.stage.is-current {
+			background: var(--soft-amber);
+			border-color: #e6d67a;
+		}
+
+		.stage.is-current .stage-dot {
+			background: var(--amber);
+		}
+
+		.stage.is-next .stage-dot {
+			background: var(--muted);
+		}
+
+		.stage strong {
+			display: block;
+		}
+
+		.stage span {
+			color: var(--muted);
+			font-size: 12px;
+		}
+
+		.stage-status {
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 600;
+			text-align: right;
+		}
+
+		.decision {
+			background: var(--soft-amber);
+			border: 1px solid #e6d67a;
+			border-radius: 4px;
+			display: grid;
+			gap: 12px;
+			padding: 14px;
+		}
+
+		.decision h4,
+		.activity h4 {
+			font-size: 14px;
+			margin: 0;
+		}
+
+		.decision p {
+			color: var(--muted);
+			margin: -6px 0 0;
+		}
+
+		.domain-choice {
+			align-items: flex-start;
+			background: #fff;
+			border: 1px solid #e6d67a;
+			border-radius: 4px;
+			display: flex;
+			gap: 8px;
+			padding: 9px;
+		}
+
+		.domain-choice span {
+			overflow-wrap: anywhere;
+		}
+
+		.decision-actions {
+			display: grid;
+			gap: 8px;
+			grid-template-columns: 1fr 1fr;
+		}
+
+		.decision-actions .button-primary,
+		.decision-actions .button-secondary {
+			white-space: normal;
+		}
+
+		.activity {
+			border-top: 1px solid var(--line);
+			padding-top: 14px;
+		}
+
+		.activity ul {
+			display: grid;
+			gap: 8px;
+			margin: 8px 0 0;
+			padding-left: 18px;
+		}
+
+		.activity li {
+			color: var(--muted);
+		}
+
+		@media (max-width: 1120px) {
+			.prototype-shell,
+			.layout {
+				grid-template-columns: 1fr;
+			}
+
+			.sidebar {
+				align-items: center;
+				display: grid;
+				gap: 10px;
+				grid-template-columns: auto minmax(0, 1fr);
+				padding: 12px 16px;
+			}
+
+			.sidebar h1 {
+				font-size: 18px;
+				margin: 0;
+			}
+
+			.sidebar p {
+				display: none;
+			}
+
+			.sidebar-nav {
+				display: flex;
+				gap: 6px;
+				overflow-x: auto;
+				padding-bottom: 2px;
+			}
+
+			.sidebar-nav a {
+				flex: 0 0 auto;
+				padding: 7px 9px;
+			}
+
+			.sidebar-nav a.is-current {
+				box-shadow: inset 0 -3px 0 var(--focus);
+			}
+
+			.progress-panel {
+				position: static;
+			}
+		}
+
+		@media (max-width: 820px) {
+			.main {
+				padding: 12px;
+			}
+
+			.sidebar {
+				align-items: start;
+				grid-template-columns: 1fr;
+			}
+
+			.page-header h2 {
+				font-size: 22px;
+			}
+
+			.page-header p,
+			.guidance p,
+			.section-lede {
+				font-size: 13px;
+			}
+
+			.page-header,
+			.guidance,
+			.review,
+			.upload-panel {
+				align-items: stretch;
+				grid-template-columns: 1fr;
+			}
+
+			.page-header {
+				display: grid;
+			}
+
+			.guidance-steps {
+				justify-content: flex-start;
+			}
+
+			.guidance {
+				gap: 8px;
+				padding: 12px 14px;
+			}
+
+			.section {
+				padding: 16px 14px;
+			}
+
+			.source-grid,
+			.settings-grid,
+			.option-grid,
+			.input-action,
+			.decision-actions {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="prototype-shell">
+		<aside class="sidebar">
+			<h1>Universal Importer</h1>
+			<p>Import content from sites, files, feeds, and repositories.</p>
+			<nav class="sidebar-nav" aria-label="Import sections">
+				<a class="is-current" href="#start" aria-current="page">Start import</a>
+				<a href="#source">Source</a>
+				<a href="#settings">Settings</a>
+				<a href="#scan-preview">After scan</a>
+			</nav>
+		</aside>
+
+		<main class="main">
+			<header class="page-header">
+				<div>
+					<h2>Import content into WordPress</h2>
+					<p>Choose a source, run a dry run, then review what WordPress would create before anything is written.</p>
+				</div>
+				<span class="status-pill">Ready</span>
+			</header>
+
+			<div class="layout">
+				<section class="surface start-card" id="start" aria-label="Start an import">
+					<div class="guidance">
+						<div>
+							<h3>First run recommendation</h3>
+							<p>Use a dry run first. It reads the source, previews pages and media, and pauses only for decisions such as URL rewriting.</p>
+						</div>
+						<div class="guidance-steps" aria-label="Import steps">
+							<span class="guidance-step">1. Choose source</span>
+							<span class="guidance-step">2. Review settings</span>
+							<span class="guidance-step">3. Start dry run</span>
+						</div>
+					</div>
+
+					<div class="section" id="source">
+						<div class="section-header">
+							<span class="step-number">1</span>
+							<div>
+								<h3>What are you importing?</h3>
+								<p class="section-lede">Choose the source type that best matches your content.</p>
+							</div>
+						</div>
+
+						<div class="source-grid" role="group" aria-label="Source types">
+							<button class="source-option is-selected" type="button" aria-pressed="true">
+								<small>Selected</small>
+								<strong>GitHub repository</strong>
+								<span>Import Markdown docs, folders, branches, releases, and linked assets.</span>
+							</button>
+							<button class="source-option" type="button" aria-pressed="false">
+								<strong>WordPress site</strong>
+								<span>Pull posts, pages, media, authors, comments, and REST API content.</span>
+							</button>
+							<button class="source-option" type="button" aria-pressed="false">
+								<strong>Feed or OPML</strong>
+								<span>Bring in RSS, Atom, JSON Feed, podcast feeds, or grouped feed lists.</span>
+							</button>
+							<button class="source-option" type="button" aria-pressed="false">
+								<strong>Server path</strong>
+								<span>Read from a mounted folder, local export directory, or absolute path.</span>
+							</button>
+							<button class="source-option" type="button" aria-pressed="false">
+								<strong>Browser upload</strong>
+								<span>Choose files from this device without needing server access.</span>
+							</button>
+							<button class="source-option" type="button" aria-pressed="false">
+								<strong>Archive or document</strong>
+								<span>Use ZIP, WXR, Markdown, HTML, PDF, EPUB, XML, SQL, or text files.</span>
+							</button>
+						</div>
+					</div>
+
+					<div class="section">
+						<div class="section-header">
+							<span class="step-number">2</span>
+							<div>
+								<h3>Add the source</h3>
+								<p class="section-lede">Paste the repository location. You can narrow the import to a branch, folder, or file.</p>
+							</div>
+						</div>
+
+						<div class="input-area">
+							<div class="field-row">
+								<label for="source-input">GitHub repository, branch, folder, or file URL</label>
+								<div class="input-action">
+									<input id="source-input" type="text" value="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture">
+									<button class="button-secondary" type="button">Browse repositories</button>
+								</div>
+								<p class="help-row">
+									<span>You can also paste a site URL, feed URL, server path, OPML file, or archive path.</span>
+									<code>https://example.com/feed.xml</code>
+									<code>/var/imports/site-export.wxr</code>
+									<code>uploads/docs.zip</code>
+								</p>
+							</div>
+
+							<div class="upload-panel" aria-label="Upload files">
+								<div>
+									<strong>Or upload from this browser</strong>
+									<p>Drop folders, ZIP archives, WXR exports, Markdown, HTML, PDF, EPUB, OPML, XML, SQL, or text files.</p>
+								</div>
+								<button class="button-secondary" type="button">Choose files</button>
+							</div>
+						</div>
+					</div>
+
+					<div class="section" id="settings">
+						<div class="section-header">
+							<span class="step-number">3</span>
+							<div>
+								<h3>Set import behavior</h3>
+								<p class="section-lede">Keep the default until the dry run shows the old domains and links it found.</p>
+							</div>
+						</div>
+
+						<div class="settings-grid">
+							<div>
+								<div class="option-grid" aria-label="URL handling">
+									<label class="radio-card is-selected">
+										<input type="radio" name="url-handling" checked>
+										<span>
+											<span class="option-label">Review link changes after scan</span>
+											<span>Recommended. Decide after WordPress shows the affected domains.</span>
+										</span>
+									</label>
+									<label class="radio-card">
+										<input type="radio" name="url-handling">
+										<span>
+											<span class="option-label">Keep as external links</span>
+											<span>Leave source links exactly as imported.</span>
+										</span>
+									</label>
+									<label class="radio-card">
+										<input type="radio" name="url-handling">
+										<span>
+											<span class="option-label">Rewrite selected URLs to this site</span>
+											<span>Move selected source domains to this WordPress site.</span>
+										</span>
+									</label>
+								</div>
+							</div>
+
+							<div class="run-options" aria-label="Run options">
+								<label class="check-row">
+									<input type="checkbox" checked>
+									<span>
+										<strong>Dry run first</strong>
+										<small>Preview pages, media, redirects, and warnings before writing.</small>
+									</span>
+								</label>
+								<label class="check-row">
+									<input type="checkbox">
+									<span>
+										<strong>Save pages as drafts</strong>
+										<small>Create draft content instead of publishing immediately.</small>
+									</span>
+								</label>
+							</div>
+						</div>
+					</div>
+
+					<div class="section">
+						<div class="section-header">
+							<span class="step-number">4</span>
+							<div>
+								<h3>Review and start</h3>
+								<p class="section-lede">WordPress will scan the source and show findings before any content is created.</p>
+							</div>
+						</div>
+
+						<div class="review">
+							<ul class="summary-list" aria-label="Import summary">
+								<li><span>Source</span><strong>GitHub repository: Gutenberg architecture docs</strong></li>
+								<li><span>Handling</span><strong>Review link changes after scan</strong></li>
+								<li><span>Run mode</span><strong>Dry run, no pages written</strong></li>
+							</ul>
+							<button class="button-primary" type="button">Start dry run</button>
+						</div>
+					</div>
+				</section>
+
+				<aside class="surface progress-panel" id="scan-preview" aria-label="What happens after scanning">
+					<div class="rail-kicker">After scan preview</div>
+					<h3>What WordPress shows next</h3>
+					<div class="import-card">
+						<strong>Gutenberg architecture docs</strong>
+						<div class="import-meta">
+							<span>Dry run</span>
+							<span>Selected GitHub folder</span>
+							<span>13 source items</span>
+						</div>
+					</div>
+					<div>
+						<progress class="meter" value="9" max="17" aria-label="Example scan progress"></progress>
+						<p class="progress-copy">Example after scan: 9 of 17 checks complete, with one link decision to review.</p>
+					</div>
+
+					<ul class="stage-list">
+						<li class="stage is-done">
+							<span class="stage-dot">✓</span>
+							<div><strong>Read source</strong><span>13 repository files found.</span></div>
+							<span class="stage-status">Done</span>
+						</li>
+						<li class="stage is-done">
+							<span class="stage-dot">✓</span>
+							<div><strong>Prepare content</strong><span>9 Markdown documents converted to blocks.</span></div>
+							<span class="stage-status">Done</span>
+						</li>
+						<li class="stage is-current" id="decisions">
+							<span class="stage-dot">!</span>
+							<div><strong>URL handling</strong><span>One GitHub issue URL may be an old-site link.</span></div>
+							<span class="stage-status">Needs input</span>
+						</li>
+						<li class="stage is-next">
+							<span class="stage-dot">4</span>
+							<div><strong>Import media</strong><span>Starts after link handling is confirmed.</span></div>
+							<span class="stage-status">Next</span>
+						</li>
+						<li class="stage is-next">
+							<span class="stage-dot">5</span>
+							<div><strong>Write pages</strong><span>Dry run reports what would be written.</span></div>
+							<span class="stage-status">Queued</span>
+						</li>
+					</ul>
+
+					<div class="decision">
+						<h4>Review link handling</h4>
+						<p>Shown only after scanning. Keep this external unless it should become a local WordPress URL.</p>
+						<label class="domain-choice">
+							<input type="checkbox">
+							<span>github.com/WordPress/gutenberg/issues/33255</span>
+						</label>
+						<div class="decision-actions">
+							<button class="button-primary" type="button">Keep as external links</button>
+							<button class="button-secondary" type="button">Rewrite selected URLs</button>
+						</div>
+					</div>
+
+					<div class="activity" id="history">
+						<h4>Scan activity</h4>
+						<ul>
+							<li>GitHub folder read from the selected branch.</li>
+							<li>Markdown documents converted into initial blocks.</li>
+							<li>Absolute URL domains found and queued for confirmation.</li>
+						</ul>
+					</div>
+				</aside>
+			</div>
+		</main>
+	</div>
+</body>
+</html>
