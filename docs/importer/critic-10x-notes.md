@@ -1246,3 +1246,13 @@ The remaining risk is archive/feed/document specificity, not folder or export di
 The metrics support keeping the trim. Mobile and narrow mobile still have no overflow, the helper is only about `40.6px` high, and the details region is stable at about `160px`; desktop keeps the helper to about `20.3px` with a `139.9px` details region. That is a clearer opened state with less echo, not a hidden capability or added bloat.
 
 Recommendation: keep the trimmed helper. Do not edit the HTML, plugin code, or runtime for Pass 115. The label now carries files, folders, and exports clearly enough, while the helper preserves archives, documents, feed lists, and the local-source rule without reopening the upload disclosure as a source catalog.
+
+## Pass 116 Critique
+
+The new upload label and helper are the right level of specific. "Choose files, folders, or exports" makes the fallback's broader capability visible in the closed state, while "Use this when archives, documents, or feed lists are local instead of available at a URL" avoids repeating the same three nouns and keeps the URL-first journey intact. The supplied mobile, desktop, combined-open, and narrow-mobile captures all have no horizontal overflow, so the copy is not creating a layout regression.
+
+The remaining inconsistency was the opened source-support Browser upload card. Its old copy, "Files selected from this device when the source is not reachable from the server," was slightly narrower than the upload control because it only said "Files" and did not hint at folders or exports. The updated card now says "Files, folders, or exports selected from this device when the source is not reachable from the server," which aligns the support proof with the visible fallback control without adding another source row or workflow.
+
+The support-card update is acceptable repetition because it appears inside an explicitly opened coverage disclosure, not in the primary path. It makes the feature surface consistent across the upload fallback label and the source-support proof while keeping the "not reachable from the server" reason. The Archive or document card still carries ZIP, WXR, Markdown, HTML, PDF, EPUB, XML, SQL, OPML, and plain text coverage, so the Browser upload card does not need to become another format list.
+
+Recommendation: keep the tiny Browser upload support-card copy update. No plugin or runtime edit is needed. The source-support disclosure now matches the upload fallback promise without adding controls, examples, or a new upload workflow.
