@@ -358,3 +358,11 @@ There is some mobile density, but not actionable bloat. The header, source field
 The 430px crop should be treated like the earlier headless crop concern, not as a confirmed responsive defect. The 430px bitmap cuts the right edge of long values and controls, but the 500px capture of the same artifact shows normal containment and the same hierarchy without a broken layout. Without a DOM measurement or manual browser check showing real `scrollWidth > clientWidth` at an actual narrow viewport, a CSS change would be churn against the static artifact rather than a fix.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny CSS or copy adjustment is justified for this pass.
+
+## Pass 31 Critique
+
+The opened "What each source supports" disclosure has the right coverage-to-bloat balance. It appears after the source field, dry-run action, fixed guarantee, upload fallback, source type, and editable settings, so opening it adds proof without displacing the primary journey. The six cards are source-family summaries rather than a source matrix: they cover GitHub repositories and files, WordPress REST/WXR content, feeds and OPML, server paths, browser-selected files, archives, documents, SQL, XML, Markdown, HTML, PDF, EPUB, plain text, linked assets, and staging paths without adding alternate result states or source-specific flows.
+
+No coverage gap in the opened disclosure justifies expanding the HTML. The card labels match the source selector families, and the format examples are broad enough for reviewer confidence while staying compact. Adding per-format rows, examples, compatibility rules, or separate WordPress/feed/archive journeys would reintroduce the matrix problem this pass is trying to avoid.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy adjustment is justified in this pass.
