@@ -1626,3 +1626,11 @@ The 320px large-text setup with both optional disclosures opened does not show a
 The setup is very tall because both disclosure bodies are intentionally expanded under an 18px body-text override. That pushes the scan decision to about `3287.73px`, but the expanded content is optional reference material rather than required forward progress, and the disclosure panels stay readable and contained at `248px` and `266px` widths. The no-write guarantee is taller at `248px` by `146.75px`, but this is acceptable large-text wrapping for safety copy, not a clipping or hierarchy failure.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 156. Keep the optional disclosures as-is; collapsing, trimming, or reworking them would reduce useful setup context without fixing a demonstrated overflow, target-size, or large-text defect.
+
+## Pass 157 Critique
+
+The RTL direction emulation does not show a true localization handoff, hierarchy, target-size, or overflow defect. At 500px, 320px with large text, and 1440px, `clientWidth`, `scrollWidth`, and `bodyScrollWidth` all match with `overflowCount=0`; the source switcher remains contained, and `Start dry run` stays target-safe at both mobile widths.
+
+The 320px large-text state is very tall, but that is expected for the full static journey under enlarged text rather than evidence of a broken RTL flow. The setup order, source selection, dry-run guarantee, scan decision, result review, and final import gate remain contained and understandable, and the desktop RTL capture keeps the setup hierarchy intact.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 157. Treat this as a passing directional smoke test for handoff, while leaving full localization QA for production with real translated strings, longer labels, locale terminology, and bidi handling for URLs, paths, filenames, and code-like evidence.
