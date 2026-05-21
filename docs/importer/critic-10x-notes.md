@@ -790,3 +790,13 @@ The warning panel is still useful on desktop, but it is the densest part of the 
 The resolver remains appropriately scoped. It shows the selected missing-media issue, affected item, missing path, replacement path, result, and two actions. It proves how one warning changes the import consequence without adding upload progress, validation, conflict handling, or a separate issue-management surface. That keeps the interface easier rather than broader.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched. The desktop result layout did not regress from the mobile count-grid refinement; summary counts, result table, warning panel, and resolver remain understandable at 1440px. Carry only a production responsive/content QA caveat for longer item names, warning copy, and localized labels.
+
+## Pass 74 Critique
+
+The 500px mobile result top is now clearer after the count-grid change. The Dry-run result heading, purpose sentence, four compact count cards, and immediate Result details stack give the user a understandable review entry: first see the totals, then inspect representative create/update/warning rows. The count cards no longer feel like a tall interruption, and the result details begin soon enough that the numbers are not stranded as a decorative dashboard.
+
+I would not add another compact consequence/status line near the counts in this pass. The page already carries status repeatedly just above the result: the scan decision explains the URL handling choice, the progress stack says the dry run is active and shows the paused/completed checks, and the Dry-run result purpose sentence says the real import would create, update, skip, and leave warnings. Adding "Dry run complete," "URL decision applied," or "warnings remain" between the sentence and counts would likely repeat information that the visible details already begin to prove, while pushing item evidence lower on a small phone.
+
+The only caveat is that this judgment depends on the result details staying immediately visible after the counts. In the screenshot, the first create row starts within the same result segment, so the user can connect "9 would create" to a concrete item without another explanatory strip. If a later mobile edit adds more controls above Result details, then a small status line may become useful. With the current artifact, the leaner top is better: heading, purpose sentence, counts, and details are enough.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` untouched. Do not add a consequence/status line near the mobile result counts for Pass 74, and do not change the plugin or runtime. Preserve the compact count grid and the immediate handoff into Result details.
