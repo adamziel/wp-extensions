@@ -35,6 +35,7 @@
 - Pass 12 did not add "WordPress exports" or "WXR" to the inline help. Those terms would improve reviewer specificity only slightly, while making the primary hint read more like another accepted-format list. The disclosure is the better place for exact WordPress-reviewer coverage; the inline helper should stay broad and fast to scan.
 - Pass 13 reviewed the fresh mobile and tall desktop screenshots and kept the HTML unchanged. The first mobile viewport still shows the source field, Browse, Start dry run, dry-run guarantee, upload fallback, and source-type order without crowding; the desktop journey keeps action, evidence, warning resolution, and the consequence-first real import readable. Minor desktop source-tab wrapping is acceptable because it avoids adding width, controls, or another source matrix.
 - Pass 14 ran a narrow source-coverage audit against the required PR #28 surface. The lean first screen still covers source types, fixed dry-run safety, draft-versus-publish behavior, URL decisions, evidence, warnings, duplicate matches, affected examples, and reports without adding visible setup weight; only the collapsed support disclosure was tightened to name ZIP/archive paths and plain text files explicitly.
+- Pass 15 reviewed the opened "What each source supports" disclosure and kept the HTML unchanged. Expanded, it proves source coverage with six compact cards, but it stays visually secondary to the dry-run path and does not become a table, matrix, or extra source journey.
 
 ## Remaining Concerns
 

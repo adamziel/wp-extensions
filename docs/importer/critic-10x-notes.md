@@ -222,3 +222,11 @@ Source adaptation and alternate-source examples are correctly deferred. The PR p
 No missing coverage justifies an HTML edit before review. The artifact is not under-proving the importer surface; the remaining caveats are implementation caveats: static sample data, no live source-specific adaptation, no real validation, no keyboard/focus or live-region behavior, and no large-result responsive testing. Those should stay short in the PR framing and should not become more UI in this design-only PR.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. Do not add a visible matrix, alternate source journey, extra state, or pre-review copy tweak unless reviewer feedback identifies a concrete misunderstanding.
+
+## Pass 15 Critique
+
+The opened source-support disclosure provides enough feature proof without becoming a capability matrix. It stays below the required source field, dry-run action, guarantee, and editable settings, so the primary setup task still leads. The six compact cards are broad enough to reassure reviewers that the importer covers GitHub, WordPress sites, feeds, server paths, uploads, archives, documents, WXR, OPML, linked assets, and common file formats, but they do not introduce separate journeys, states, examples, or implementation rules.
+
+The added "ZIP/archive paths" and "plain text files" wording improves coverage with minimal cost. "ZIP/archive paths" closes the gap between local/server paths and archive inputs, and "plain text files" makes the document bucket feel less artificially narrow. Neither phrase adds meaningful bloat because both appear inside already-scannable cards, not in the primary helper line or the first action path.
+
+Recommendation: keep the HTML stable. The expanded disclosure is doing the right job: feature proof on demand, not a visible source matrix. A disclosure-only copy or layout edit is not justified unless a reviewer still misses archive paths or plain text support after opening it.
