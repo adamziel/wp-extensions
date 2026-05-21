@@ -1316,3 +1316,13 @@ The supplied metrics do not show side effects. Desktop, mobile, and narrow mobil
 The row-level actions still sit at the right priority. "Review match," "Replace media," and "Add title or skip" remain inline, task-specific secondary actions for individual rows, while "Download report" is a contained secondary export action for the result state. With the desktop stretch gone, none of these controls visually overtake the import-ready status or the result content.
 
 Recommendation: keep the CSS-only layout fix and make no further HTML, plugin, or runtime edits for Pass 122. The fix resolves the visual regression, preserves the clearer result journey, and avoids adding bloat or copy churn.
+
+## Pass 123 Critique
+
+The final import gate remains clear after the shared `align-content: start` layout fix. The real-import action no longer inherits the earlier stretched report-button behavior: desktop shows normal `40px` controls for both "Run real import as drafts" and "Back to dry-run result," while mobile and narrow mobile keep the same actions as full-width `40px` controls. That preserves the intended hierarchy: the green import button is prominent because of consequence and color, not because a layout bug made an action oversized.
+
+The surrounding import-ready content is also unaffected in the supplied evidence. The gate still answers the right final questions before writing: warnings are allowed but non-blocking, drafts are created rather than published, unresolved items will be skipped or reported, old-site URL handling is carried forward, and the user can return to the dry-run result. The "Before running" and "After running" panels remain readable on desktop, mobile, and narrow mobile without horizontal overflow.
+
+This is the right endpoint for the shared report-button fix. It reduces visual noise without changing the journey, adding controls, changing copy, or touching plugin/runtime behavior. The final gate still feels like a deliberate confirmation step rather than a new feature surface, and the report-button layout correction did not regress the real-import handoff.
+
+Recommendation: keep the shared `align-content: start` fix and make no further HTML, plugin, or runtime edits for Pass 123. The final gate is layout-stable, consequence-clear, and still aligned with the clearer journey goal.
