@@ -1256,3 +1256,13 @@ The remaining inconsistency was the opened source-support Browser upload card. I
 The support-card update is acceptable repetition because it appears inside an explicitly opened coverage disclosure, not in the primary path. It makes the feature surface consistent across the upload fallback label and the source-support proof while keeping the "not reachable from the server" reason. The Archive or document card still carries ZIP, WXR, Markdown, HTML, PDF, EPUB, XML, SQL, OPML, and plain text coverage, so the Browser upload card does not need to become another format list.
 
 Recommendation: keep the tiny Browser upload support-card copy update. No plugin or runtime edit is needed. The source-support disclosure now matches the upload fallback promise without adding controls, examples, or a new upload workflow.
+
+## Pass 117 Critique
+
+The updated Browser upload support-card wording is worth its added height. The card now says "Files, folders, or exports selected from this device when the source is not reachable from the server," which closes the mismatch between the upload fallback label and the support proof. That matters because browser upload is not just a single-file escape hatch; it is the path for local folders and export bundles when the server cannot reach the source directly.
+
+The height increase is acceptable in the supplied evidence. Mobile remains overflow-free with the Browser upload card at about `93px`, desktop remains overflow-free at about `127px`, and narrow mobile remains overflow-free at about `113px`. The support disclosure is taller overall, especially on narrow mobile, but the extra height is concentrated inside an opened secondary disclosure after the main setup action. It does not push the source field, dry-run action, or upload fallback into a worse first-task position.
+
+The disclosure still reads as secondary proof rather than bloat. It is not adding a new upload workflow, example journey, format matrix, or runtime promise. The Browser upload card now confirms the same capability the user already saw in the fallback control, while the Archive or document card continues to carry the detailed ZIP/WXR/Markdown/HTML/PDF/EPUB/XML/SQL/OPML/plain-text coverage. That division keeps the Browser upload card from becoming another long format list.
+
+Recommendation: keep the updated Browser upload card copy. Do not edit the HTML, plugin code, or runtime for Pass 117. The added vertical cost is justified because it makes folder and export support consistent across the interface, and the opened support disclosure remains an on-demand coverage check rather than primary-path bloat.
