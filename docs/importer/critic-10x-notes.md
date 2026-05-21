@@ -1738,3 +1738,11 @@ The visible text-fit audit does not show a real clipping, wrapping, large-text, 
 The only text-overflow findings are intentional accessibility-hidden content: `.screen-reader-text` spans that say `selected` and the hidden table caption `Dry-run item outcomes and required fixes`. Those are expected to be clipped to a 1px visual box, so they should not drive visible layout changes. The audit did not find a visible control label, card, table row, or after-running link that needs another size or wrap adjustment.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 170. Treat visible text fit as passing after the recent target and nav-label changes.
+
+## Pass 171 Critique
+
+The contrast audit exposed a real visual bug in the scan progress stage dots. `.stage-dot` intended white glyphs, but the later `.stage-list span` rule overrode that color to muted gray, producing very low contrast on green, amber, and muted circular backgrounds. The dots are marked `aria-hidden`, but they are still visible state cues, so leaving them low contrast would make the scan stage harder to read.
+
+The scoped fix is correct: `.stage-list .stage-dot { color: #fff; }` restores the intended glyph color without changing stage copy, order, layout, or semantics. Recheck measured contrast ratios of 4.51 for the completed green checks, 4.84 for the amber current marker, and 5.53 for the muted queued marker; the 500px page remains width-contained with `overflowCount=0`, and the broader contrast audit reports no remaining findings.
+
+Recommendation: keep the Pass 171 CSS specificity fix and make no plugin or runtime change.
