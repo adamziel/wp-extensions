@@ -942,3 +942,13 @@ Removing too much detail would weaken the review-to-real-import handoff. The dup
 The best trim remains the old-site-links copy, because that decision was made during scan and is repeated more appropriately at the real-import boundary. Shorten it sharply or remove that one bullet if the final gate already carries the external-link consequence. Do not remove the warning panel, the selected issue result, the warning ownership/fixability detail, or the final real-import consequence copy.
 
 Recommendation: make at most a tiny copy-only warning-panel trim on mobile, focused on the old-site-links bullet. Keep the rest of the result-review detail because it supports confidence before the real import; cutting deeper would make the handoff less clear rather than easier.
+
+## Pass 88 Critique
+
+The 1440px desktop result-review screenshot confirms that the Pass 87 warning-copy trim did not weaken the result journey. The dry-run result still starts at `resultTop=261`, the real-import gate starts at `realImportTop=1157`, and there is no horizontal overflow. The user can still read the review in a useful order: counts, consequence line, item-level evidence, selected issue resolution, warning summary, report download, then the write boundary.
+
+The shortened media and title warning bullets preserve the three things they need to preserve on desktop. Ownership is still explicit: the media warning belongs to the content owner, and the title warning belongs to an editor. The fix is still explicit: replace the missing file, or add a title / confirm the skip. Confidence is still supported by the surrounding evidence: the table shows the warning and skip rows, the selected issue panel names the affected item and paths, and the result copy explains that resolving the media issue reduces the remaining warning count. The bullets are shorter, but they still connect remaining work to a person, an action, and an import consequence.
+
+The warning rail is now close to the right density for desktop. It is not empty summary copy, because it still explains duplicate reporting, media ownership, title ownership, and the already-applied old-site-link decision. It is also no longer asking to be read as a second policy document before the real-import gate. The final gate below still owns the heavier write consequence, which is where that repetition belongs.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched. Do not trim the media or title warning bullets further; a follow-up trim would now be over-optimization and would risk removing the owner/fix/confidence cues that make the result review actionable. If any later copy edit is considered, it should require fresh evidence of reader confusion, not just a desire to make the rail shorter.
