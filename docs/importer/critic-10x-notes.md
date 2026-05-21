@@ -448,3 +448,15 @@ The 900px tablet journey is long but still coherent from setup through scan deci
 The one high-confidence hierarchy issue is in the final gate. In the supplied tablet screenshot, the green "Run real import as drafts" button appears before the "Before running" remediation list, so the final chances to publish immediately, import the skipped appendix, or clear media warnings sit after the action they are meant to inform. That hides risk at the only write boundary.
 
 Recommendation: tighten the opening gate copy around the highest-risk promise, then move the existing "Before running" bullets into the amber real-import gate above the action row. This preserves every feature and every consequence, removes the separate sidecar block at tablet width, and makes the final run decision read in the right order: draft-only safety, allowed-with-warnings reason, write consequences, last pre-run choices, then the green action.
+
+## Pass 41 Critique
+
+The 500px mobile journey improves after the Pass 40 final-gate reorder. The final write boundary now reads in the right order: allowed-with-warnings state, draft-only promise, exact write consequences, "Before running" remediation choices, then the green "Run real import as drafts" action. That fixes the high-confidence tablet issue without adding a new state or expanding the feature surface.
+
+The repeated warnings are still dense, but not heavy enough to justify another HTML edit. The warning language appears at different decision points: result evidence, unresolved warning summary, final allowed-with-warnings gate, and post-run report expectation. On mobile that creates a long read, but each repetition protects a specific risk before content is written. Removing one now would likely hide why the import is allowed, what is skipped, or what remains in the report.
+
+The green action is not pushed too far down in the supplied screenshot. It sits below the "Before running" bullets, which is the correct hierarchy for a destructive write boundary, and the button remains visible within the final gate before the short "After running" note. "Before running" also does not read like a blocker because the section gives optional consequence-changing routes rather than validation errors, while the surrounding copy and enabled green action clearly say the run is allowed with non-blocking warnings.
+
+Publish risk is visible enough: the gate says drafts only, the consequence list says "Publish 0 items," the "Before running" list says changing the draft setting is required to publish immediately, and the button label repeats "as drafts." The final report promise also stays appropriately small because "After running" promises draft/update links, skipped-item status, and the remaining media warning report without becoming a post-import dashboard.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No mobile-specific regression in the provided 500px evidence justifies a design edit. If later reviewers still find the final gate heavy, the smallest future trim would be notes or PR-copy framing around why warnings repeat at write boundaries, not another pre-review UI change.
