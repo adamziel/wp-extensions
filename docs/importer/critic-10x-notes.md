@@ -1386,3 +1386,11 @@ The vertical cost is acceptable. Large-text mobile still has no horizontal overf
 Keyboard focus also looks stable. The focused WordPress site radio has a clear inset `2px` focus ring, no horizontal overflow, and a usable label box around `167px` by `42px`. The selected GitHub radio remains visually distinct through the blue selected treatment while focus sits on the neighboring option, so the user can tell both the current selected value and the current keyboard position. I do not see focus clipping, bloat, horizontal scroll, or a confusing source-entry hierarchy in the supplied evidence.
 
 Recommendation: make no HTML change for Pass 129 and do not touch plugin or runtime code. Keep the one-line mobile/narrow CSS reorder as-is; it improves source-entry comprehension without losing the first-viewport dry-run action under large text or keyboard focus.
+
+## Pass 130 Critique
+
+The 42px mobile source-type targets are a small real ergonomics issue, not a blocking journey problem. On 390px mobile, four tabs measure `167px` by `42px`, while "Browser upload" and "Archive or document" are already about `59.59px` tall because they wrap. The short tabs are wide, visible, and above the smallest practical target threshold, so they are not broken. They are still slightly tight for an adjacent two-column radio grid that invites touch selection before the source field.
+
+The bloat risk from changing only `.source-tab` to `min-height: 44px` is low. Narrow 320px already has every tab at about `59.59px`, and desktop already equalizes the row at about `58.59px`, so the change should not affect those layouts. On 390px mobile it would add roughly `2px` to each of the first two source-tab rows, or about `4px` total before the source input. That is not enough to materially push "Start dry run" too low, and the supplied no-overflow evidence should remain intact.
+
+Recommendation: make no HTML change and do not touch plugin or runtime code. A tiny artifact-only CSS refinement is reasonable: raise `.source-tab { min-height: 44px; }` and leave padding, labels, order, and all other controls unchanged. Do not generalize this into a broader button-height pass; the measured issue is limited to the compact source-type radio targets.
