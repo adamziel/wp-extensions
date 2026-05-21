@@ -394,3 +394,13 @@ The current length is justified by the job it is proving. The setup summary, sca
 The only visible density is in the result and real-import sections, but it is useful density rather than bloat. The result table keeps create, update, warning, and skip evidence in one review surface, and the final amber gate is explicit that the real import creates and updates drafts, publishes zero items, keeps old-site URLs external, skips the untitled document, and carries one media warning into the report. That is the right level of consequence before a destructive action.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass. Future changes should wait for reviewer feedback on a concrete misunderstanding, not another pre-review trim.
+
+## Pass 35 Critique
+
+The 500px mobile dry-run result cards are readable enough to keep. The stacked transformation makes each table row self-contained: outcome, item, evidence, owner, and next action stay in a predictable order, and the count cards above give the user the overall shape before the detail list. The section is long, but it is useful length rather than bloat because the result area is the first place where the user needs item-level proof before writing content.
+
+The warning replacement path has the right amount of evidence. The warning card names `Block rendering`, shows the missing `images/block-rendering.svg` source path, explains that linked media is absent from the checkout, assigns ownership to the content owner, and keeps `Replace media` next to the item. The selected resolution panel then shows affected draft, missing file, replacement file, and changed import consequence. That is enough to support action without adding a full media-management flow.
+
+The skipped-title path is also sufficiently supported. The skipped card names `Untitled appendix`, keeps `appendix/no-title.md`, gives the reason as "No readable title found," assigns the editor, and offers `Add title or skip`. The open-warnings summary and real-import gate continue the consequence by saying the title warning can be fixed or confirmed as a skip, and unresolved skipped content will not be imported. That chain is compact and clear.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass; reducing the stacked cards would save pixels at the cost of the evidence needed to act.
