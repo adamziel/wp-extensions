@@ -572,3 +572,15 @@ The source field is tight but acceptable at this width. The long GitHub path is 
 The disclosure hierarchy is still clear. "Upload files instead" remains a secondary disclosure inside the source card, and "What each source supports" stays collapsed after editable settings, so the setup does not become a source-support catalog. The desktop-only rule therefore appears scoped correctly: it improves wide desktop settings alignment without causing tablet crowding or unintended overflow.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No concrete 768px design-only issue in the supplied setup evidence justifies a CSS or copy edit; the mild settings raggedness is an acceptable tablet tradeoff.
+
+## Pass 54 Critique
+
+The 1440px desktop result-to-final-import journey remains clear enough to preserve. The settings row is visible in the upper setup area, but it no longer dominates the page: the blue dry-run action, green safety guarantee, scan decision, result evidence, and final green import action all carry stronger hierarchy. The row reads as safety defaults rather than a competing configuration step.
+
+The dry-run result is dense, but the density is doing useful work. Counts, item evidence, owner, next action, selected resolver, and remaining warnings are all visible without table overflow or clipped controls. The resolver placement directly below the table is still the right tradeoff because it connects the selected warning to a concrete fix before the user reaches the final gate.
+
+Warning repetition is present across the dry-run side panel and final gate, but it does not read as accidental duplication in this desktop view. The right panel explains what remains open after preview; the final gate reframes those same facts as write consequences before "Run real import as drafts." The final hierarchy is appropriate: allowed-with-warnings state, draft-only promise, consequence list, before-running guidance, primary import action, and then after-running links.
+
+No layout artifact from the recent CSS changes is visible in the supplied screenshot. The result grid, resolver box, warning side panel, and amber final gate align cleanly, and the lower gate content remains readable even though the screenshot crops before the full after-running area.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. Do not edit the HTML or CSS for this pass; the remaining cost is intentional review density, not a concrete design-only regression.
