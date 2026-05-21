@@ -962,3 +962,13 @@ The trimmed warning copy is now doing the right amount of work. It no longer rea
 Further trimming would be harmful unless new evidence shows confusion. Removing the duplicate, media, or title bullets would make the result panel less actionable and force the final gate to carry too much explanation by itself. Removing the old-site-link line is now less attractive than it was before the trim because the line is short and reinforces that an earlier scan decision still affects the import. The mobile page is long, but the length is carrying review evidence, not bloat.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched. Do not trim the warning panel further for Pass 89; the current copy is the minimum useful bridge from dry-run result evidence to the real-import gate.
+
+## Pass 90 Critique
+
+The 768px tablet result-to-final-gate screenshot confirms that the warning-copy trim holds at tablet width. The capture has no horizontal overflow (`innerWidth=768`, `clientWidth=768`, `scrollWidth=768`, `bodyScrollWidth=768`), and the result state starts at `resultTop=441`, so the dry-run outcome appears in a stable tablet layout without clipped controls, table overflow, or cramped action text. The real-import gate sits much lower at `realImportTop=1677`, but the path between result and gate remains coherent: counts, consequence line, item evidence, selected warning resolution, warning summary, report download, then the final write boundary.
+
+The trimmed warning panel is still doing useful bridge work on tablet. It is shorter than the earlier policy-heavy version, but it preserves the evidence a user needs before committing to the real import: duplicate reporting remains on, media and title issues still have owners and fixes, and the old-site-link decision remains acknowledged as already applied. That copy supports the long scroll to the gate without adding a new feature surface or repeating the full final-import policy.
+
+No additional tablet-specific trim or spacing change is justified by this evidence. The result card is dense, but the density is functional review content rather than decorative bloat, and the metrics show the layout is contained. Tightening spacing specifically for tablet would mostly compress already-readable evidence and could make the result table, resolver, and warning summary feel more crowded without shortening the journey enough to matter.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched. Do not make another warning-copy trim for tablet, and do not add tablet-specific spacing changes unless a fresh browser reproduction shows actual overflow, clipped controls, or reader confusion in the warning-to-final-gate handoff.
