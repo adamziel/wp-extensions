@@ -1454,3 +1454,13 @@ Forced-colors behavior is acceptable for this static artifact. The focused rewri
 Large text does not introduce a target-size or hidden-action regression. The decision choices remain roomy at about `302px` by `74.171875px`, the primary stays `302px` by `40px`, and the action still appears at the same vertical position around `637.171875px`. The scan-decision card is compact enough: it shows the blocking reason, both choices, one affected-link example, the review action, the primary commit action, and pause without adding a new surface.
 
 Recommendation: make no HTML change for Pass 136 and do not touch plugin or runtime code. The scan-decision focus, forced-colors fallback, and large-text layout are stable; I do not see focus clipping, forced-colors failure, target-size regression, hidden primary action, or bloat.
+
+## Pass 137 Critique
+
+The mobile result-card height is a real vertical cost, but not a journey blocker in the supplied evidence. The cards are tall because they preserve the full review contract on a narrow screen: outcome, item path, reason/evidence, owner, and next action all remain visible, and the 40px row actions stay usable. Mobile rows at `215.765625-253.453125px` and narrow rows at `253.453125-326.515625px` do push the resolver below the first viewport (`top=1398.078125` mobile, `top=1645.65625` narrow), but that is acceptable for the dry-run result step because the user should inspect the item evidence before resolving or approving warnings. There is still no horizontal overflow on desktop, mobile, or narrow.
+
+The repeated labels are doing useful work here. Removing "Evidence," "Owner," or "Next" would make the narrow cards shorter only by making the table-card mapping less auditable, especially for the warning and skip rows where ownership and remediation matter. The labels are not the main bloat source; the wrapping paths, evidence text, and target-safe next-action controls account for most of the height.
+
+There is one tiny CSS-only refinement worth considering: compact the mobile/narrow card chrome by reclaiming width from redundant row labels, ideally by letting the outcome pill and item title share the first row while keeping "Evidence," "Owner," and "Next" labels visible. That preserves every feature and evidence field, keeps owners and next actions explicit, and gives long paths and evidence text a little more room without changing copy or the desktop table.
+
+Recommendation: no markup or runtime change for Pass 137. If the designer takes one artifact-only follow-up, make only the scoped mobile/narrow CSS compaction and re-run the same desktop, mobile, and narrow overflow checks; otherwise the current result cards are acceptable evidence density rather than a failed journey.
