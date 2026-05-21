@@ -514,3 +514,13 @@ The support cards preserve the needed source coverage without visible wrapping f
 The only mobile cost is vertical length: the opened disclosure delays the "Ready to preview" summary by roughly one screen. That is acceptable because the disclosure is explicitly user-opened and answers a legitimate "does my source work?" question. Collapsing or combining the cards would save space, but it would either hide missing source coverage or make the support proof harder to scan.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No concrete 500px design-only issue justifies an HTML or CSS edit for this pass; the best constraint is to avoid adding more cards, examples, or source-specific journeys inside the disclosure.
+
+## Pass 48 Critique
+
+The 1440px desktop full journey is holding its shape after the recent breakpoint and table fixes. The page still has several panels, but they are now doing distinct jobs instead of stacking redundant explanations: setup captures the source and safety defaults, the summary explains the current preview state, the scan decision pauses on one URL policy choice, the result table provides item-level evidence, and the final gate states exactly what WordPress will write. The first action is also strong enough because the URL field and blue "Start dry run" button appear before optional upload, settings, and support disclosure.
+
+The result and final gate are better balanced than in earlier passes. The dry-run section remains dense, but the four-row table, selected resolver, and warning summary make the review work visible without forcing horizontal scrolling or clipped action labels in the supplied screenshot. The final amber gate is full-width, consequence-first, and ordered correctly: allowed-with-warnings state, draft-only promise, write consequences, pre-run choices, green action, then after-running links. Warning repetition is present, but it is attached to different risk boundaries rather than duplicated in the same panel.
+
+No layout artifact from the breakpoint changes is high-confidence enough to justify a CSS edit. The left rail, setup/sidebar split, scan progress stack, result two-column layout, and final single-column gate all align cleanly at 1440px. The main remaining cost is page length, but compressing the result or final gate now would remove evidence that makes the write decision safer.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. Do not add more panels, warning callouts, or source-proof copy; the best next step is preserving the current feature surface and letting review focus on whether the journey model itself is right.
