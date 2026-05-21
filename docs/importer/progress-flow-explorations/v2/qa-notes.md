@@ -2,36 +2,24 @@
 
 Date: 2026-05-21
 
-Scope: QA follow-up only. Implementation was not edited. I served `docs/importer/progress-flow-explorations/v2` locally and exercised `index.html` in headless Chromium through the Chrome DevTools Protocol.
+Scope: focused QA rerun only. Implementation was not edited. This note recreates the result from the latest `qa2.raw` evidence for the v2 importer prototype.
 
-## Environment and evidence
+## Evidence source
 
-- Local server: `python3 -m http.server 8787 --bind 127.0.0.1`
-- Browser: `/run/current-system/sw/bin/chromium --headless=new --remote-debugging-port=9223`
-- Page: `http://127.0.0.1:8787/index.html`
-- Initial load: title `Universal Importer - WordPress Admin Prototype`, `h1` `Universal Importer`, visible primary button `Review import`, status `Idle`, progress `aria-valuenow="0"`, review state `Not run`.
-- Served assets observed: `index.html`, `styles.css`, `scenarios.js`, and `app.js` loaded with `200 OK`; `favicon.ico` returned `404`, which did not affect the prototype checks.
+- Served `docs/importer/progress-flow-explorations/v2` locally.
+- Exercised `index.html` in headless Chromium through the Chrome DevTools Protocol.
+- Page under test: `http://127.0.0.1:8787/index.html`.
+- Initial state: visible primary button `Review import`, status `Idle`, progress value `0`, and review result `Not run`.
 
-## Follow-up checks
+## Rerun result
 
-All requested follow-up checks passed.
+The focused rerun passed.
 
-1. Clicking `Review import` no longer POSTs or navigates.
+- Clicking the visible `Review import` primary button did not POST and did not navigate. The page stayed on `http://127.0.0.1:8787/index.html`, and captured browser events showed no `POST` requests, document requests, frame navigations, or same-document navigations from that click.
+- The same visible primary button advanced the importer progress to complete. The status reached `complete`, and the progress meter reached `aria-valuenow="100"` with `width: 100%;`.
+- The review result updated to `Complete`, with the summary showing `12 pages, 18 media, 0 warnings.`
+- Feature tabs revealed their matching panels. `Detect`, `Map fields`, `Media`, `Conflicts`, and `Review` each selected the clicked tab and exposed the corresponding panel while hiding the others.
 
-   Evidence: after setting `#source-input` to a GitHub docs source and clicking the visible `#import-button`, `location.href` remained `http://127.0.0.1:8787/index.html`, the page title and `h1` remained unchanged, and the status moved to `queued`. The captured browser network events for the click contained no `POST` requests, no document requests, no frame navigations, and no same-document navigations.
+## Remaining limitation
 
-2. Feature tab clicks reveal the matching panels.
-
-   Evidence: clicking `Detect`, `Map fields`, `Media`, `Conflicts`, and `Review` set the clicked tab to `aria-selected="true"` and revealed only the matching panel: `feature-panel-detect`, `feature-panel-map`, `feature-panel-media`, `feature-panel-conflicts`, and `feature-panel-review`. Each matching panel had `hidden === false`, `aria-hidden="false"`, and `is-active`.
-
-3. Progress reaches complete from the visible primary button.
-
-   Evidence: the same visible `Review import` click advanced status from `queued` through the progress sequence to `complete`. At completion, `#progress-meter` had `aria-valuenow="100"` and inline style `width: 100%;`; the activity log ended with `importing media`, `writing pages`, and `complete`.
-
-4. Review result updates.
-
-   Evidence: after completion, `#review-result-state` changed to `Complete` and `#review-result-summary` changed to `12 pages, 18 media, 0 warnings.`
-
-## Summary
-
-The previous blockers for the requested path are resolved in this follow-up run: the primary button no longer submits the form, feature tabs now switch visible content, the visible primary path completes progress, and the review result updates after completion.
+URL decision controls were not part of this focused rerun.
