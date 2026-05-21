@@ -736,6 +736,42 @@
 			color: var(--muted);
 		}
 
+		.resolve-panel {
+			background: #f6f7f7;
+			border: 1px solid var(--line-strong);
+			border-radius: 4px;
+			display: grid;
+			gap: 12px;
+			padding: 12px;
+		}
+
+		.resolve-panel h5 {
+			font-size: 14px;
+			margin: 0;
+		}
+
+		.resolve-detail {
+			display: grid;
+			gap: 8px;
+			margin: 0;
+		}
+
+		.resolve-detail div {
+			display: grid;
+			gap: 6px;
+			grid-template-columns: 86px minmax(0, 1fr);
+		}
+
+		.resolve-detail dt {
+			color: var(--muted);
+			font-weight: 600;
+		}
+
+		.resolve-detail dd {
+			margin: 0;
+			min-width: 0;
+		}
+
 		.import-ready {
 			background: var(--soft-green);
 			border-color: #b8e6bf;
@@ -966,6 +1002,7 @@
 			.safety-list,
 			.source-cards,
 			.result-grid,
+			.resolve-detail div,
 			.report-row {
 				grid-template-columns: 1fr;
 			}
@@ -1367,6 +1404,34 @@
 										</tr>
 									</tbody>
 								</table>
+							</div>
+							<div class="resolve-panel" aria-labelledby="resolve-title">
+								<div>
+									<h5 id="resolve-title">Resolve selected issue</h5>
+									<p class="result-note">Selected warning: missing media for <strong>Block rendering</strong>.</p>
+								</div>
+								<dl class="resolve-detail">
+									<div>
+										<dt>Affected</dt>
+										<dd>Architecture overview draft</dd>
+									</div>
+									<div>
+										<dt>Missing</dt>
+										<dd><span class="path-value">images/block-rendering.svg</span></dd>
+									</div>
+									<div>
+										<dt>Replacement</dt>
+										<dd><span class="path-value">uploads/importer/block-rendering.svg</span></dd>
+									</div>
+									<div>
+										<dt>Result</dt>
+										<dd>Warning clears; the real import carries 1 media warning instead of 2.</dd>
+									</div>
+								</dl>
+								<div class="action-row">
+									<button class="button-primary" type="button">Use replacement file</button>
+									<button class="button-secondary" type="button">Keep warning</button>
+								</div>
 							</div>
 						</div>
 					</div>

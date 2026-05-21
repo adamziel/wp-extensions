@@ -18,6 +18,8 @@
 - Pass 3 changed the real-import state to consequence-first copy: the primary action says it will run as drafts, the panel explicitly says publishing count is zero, unresolved warnings are allowed but non-blocking, and skipped/unresolved items remain visible before the green action.
 - Pass 3 tightened static semantics by connecting help text with `aria-describedby`, removing redundant radio-group labeling around the native source fieldset, and exposing result counts as list items plus detailed outcomes as a table.
 - Pass 4 kept the dry-run result inspectable as a full table on desktop, but converts the same semantic rows into labeled card-style rows on mobile. This removes the narrow-screen horizontal-scroll dependency while preserving outcome, item, evidence, owner, and next-action visibility.
+- Pass 5 added one compact, non-modal resolver inside the dry-run result. It uses the selected missing-media warning to show the missing path, chosen replacement, consequence, and two local actions without adding another top-level state or turning the static artifact into a full remediation app.
+- Pass 5 kept the real-import state consequence-first and unchanged in structure: unresolved warnings remain explicitly allowed but carried forward, skipped content remains visible, and the primary action still says it runs as drafts.
 
 ## Remaining Concerns
 
@@ -27,3 +29,4 @@
 - Counts and report details are illustrative. Real copy should come from actual scan result data and should handle localization, very long source names, and larger browser text.
 - The mobile result cards now reduce density, but production should still test larger result sets and localized labels for scan speed, pagination, and repeated-action ergonomics.
 - "Allowed with warnings" is shown as a static condition. Production should compute this from warning severity and disable the real import when blocking warnings remain.
+- The new resolver demonstrates only one warning path. Production still needs the actual state model for replacement upload errors, duplicate-match changes, title confirmation, accepted warnings, and how resolved warnings update counts.
