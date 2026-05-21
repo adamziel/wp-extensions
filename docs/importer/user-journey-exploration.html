@@ -234,6 +234,23 @@
 			grid-template-columns: repeat(3, minmax(0, 1fr));
 		}
 
+		.source-current {
+			align-items: center;
+			background: var(--soft-blue);
+			border: 1px solid #b8d7f0;
+			border-radius: 4px;
+			display: grid;
+			gap: 12px;
+			grid-template-columns: minmax(0, 1fr) auto;
+			margin-bottom: 14px;
+			padding: 13px;
+		}
+
+		.source-current p {
+			color: var(--muted);
+			margin: 2px 0 0;
+		}
+
 		.source-option {
 			background: #fff;
 			border: 1px solid var(--line-strong);
@@ -600,6 +617,65 @@
 			position: static;
 		}
 
+		.result-panel {
+			border-color: #b8e6bf;
+			margin-top: 18px;
+		}
+
+		.result-panel .state-header {
+			background: var(--soft-green);
+			border: 0;
+			margin: -18px -18px 0;
+			padding: 18px;
+		}
+
+		.result-summary {
+			display: grid;
+			gap: 18px;
+			grid-template-columns: minmax(0, 1fr) 280px;
+			padding-top: 18px;
+		}
+
+		.result-counts {
+			display: grid;
+			gap: 10px;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+		}
+
+		.result-count {
+			background: #fff;
+			border: 1px solid var(--line);
+			border-radius: 4px;
+			display: grid;
+			gap: 5px;
+			padding: 13px;
+		}
+
+		.result-count strong {
+			font-size: 24px;
+			line-height: 1;
+		}
+
+		.result-count span {
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 600;
+		}
+
+		.result-next {
+			background: #fff;
+			border: 1px solid #b8e6bf;
+			border-radius: 4px;
+			display: grid;
+			gap: 12px;
+			padding: 14px;
+		}
+
+		.result-next p {
+			color: var(--muted);
+			margin: 0;
+		}
+
 		.import-card {
 			background: #fafafa;
 			border: 1px solid var(--line);
@@ -825,6 +901,10 @@
 			.state-layout {
 				grid-template-columns: 1fr;
 			}
+
+			.result-summary {
+				grid-template-columns: 1fr;
+			}
 		}
 
 		@media (max-width: 820px) {
@@ -877,12 +957,27 @@
 			.option-grid,
 			.input-action,
 			.quick-start,
-			.decision-actions {
+			.decision-actions,
+			.source-current,
+			.result-counts {
 				grid-template-columns: 1fr;
+			}
+
+			.source-current {
+				margin-bottom: 10px;
+			}
+
+			.source-option {
+				min-height: 0;
+				padding: 10px 12px;
+			}
+
+			.source-option span {
+				display: none;
 			}
 		}
 
-		@media (min-width: 430px) and (max-width: 820px) {
+		@media (min-width: 560px) and (max-width: 820px) {
 			.source-grid {
 				grid-template-columns: repeat(2, minmax(0, 1fr));
 			}
@@ -933,11 +1028,44 @@
 						<div class="section-header">
 							<span class="step-number">1</span>
 							<div>
-								<h3>What are you importing?</h3>
-								<p class="section-lede">Choose the source type that best matches your content.</p>
+								<h3>Selected source</h3>
+								<p class="section-lede">GitHub is selected. Paste the source now, or switch to another import type below.</p>
 							</div>
 						</div>
 
+						<div class="source-current" aria-label="Selected source">
+							<div>
+								<strong>GitHub repository</strong>
+								<p>Import Markdown docs, folders, branches, releases, and linked assets.</p>
+							</div>
+							<span class="status-pill">Selected</span>
+						</div>
+
+						<div class="input-area">
+							<div class="field-row">
+								<label for="source-input">GitHub repository, branch, folder, or file URL</label>
+								<div class="input-action">
+									<input id="source-input" type="text" value="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture">
+									<button class="button-secondary" type="button">Browse repositories</button>
+								</div>
+								<p class="help-row">
+									<span>You can also paste a site URL, feed URL, server path, OPML file, or archive path.</span>
+									<code>https://example.com/feed.xml</code>
+									<code>/var/imports/site-export.wxr</code>
+									<code>uploads/docs.zip</code>
+								</p>
+							</div>
+
+							<div class="quick-start">
+								<div>
+									<strong>Ready to preview: dry run only</strong>
+									<p>WordPress will scan the source, show pages and media it found, and pause before writing content.</p>
+								</div>
+								<button class="button-primary" type="button">Start dry run</button>
+							</div>
+						</div>
+
+						<p class="section-lede">Other source types</p>
 						<div class="source-grid" role="group" aria-label="Source types">
 							<button class="source-option is-selected" type="button" aria-pressed="true">
 								<small>Selected</small>
@@ -971,34 +1099,12 @@
 						<div class="section-header">
 							<span class="step-number">2</span>
 							<div>
-								<h3>Add the source</h3>
-								<p class="section-lede">Paste the repository location. You can narrow the import to a branch, folder, or file.</p>
+								<h3>Optional browser upload</h3>
+								<p class="section-lede">Use this when the source is on this device instead of at a URL or server path.</p>
 							</div>
 						</div>
 
 						<div class="input-area">
-							<div class="field-row">
-								<label for="source-input">GitHub repository, branch, folder, or file URL</label>
-								<div class="input-action">
-									<input id="source-input" type="text" value="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture">
-									<button class="button-secondary" type="button">Browse repositories</button>
-								</div>
-								<p class="help-row">
-									<span>You can also paste a site URL, feed URL, server path, OPML file, or archive path.</span>
-									<code>https://example.com/feed.xml</code>
-									<code>/var/imports/site-export.wxr</code>
-									<code>uploads/docs.zip</code>
-								</p>
-							</div>
-
-							<div class="quick-start">
-								<div>
-									<strong>Ready to preview: dry run only</strong>
-									<p>WordPress will scan the source, show pages and media it found, and pause before writing content.</p>
-								</div>
-								<button class="button-primary" type="button">Start dry run</button>
-							</div>
-
 							<div class="upload-panel" aria-label="Upload files">
 								<div>
 									<strong>Or upload from this browser</strong>
@@ -1159,6 +1265,54 @@
 								<li>Absolute URL domains found and queued for confirmation.</li>
 							</ul>
 						</div>
+					</div>
+				</div>
+			</section>
+
+			<section class="surface state-panel result-panel" aria-label="Dry run result">
+				<div class="state-header">
+					<div class="rail-kicker">Third state example</div>
+					<h3>Dry run result</h3>
+					<p>Shown after scan decisions are resolved. It summarizes what the real import would change before writing content.</p>
+				</div>
+
+				<div class="result-summary">
+					<div>
+						<div class="result-counts" aria-label="Dry run result counts">
+							<div class="result-count">
+								<strong>9</strong>
+								<span>Would create</span>
+							</div>
+							<div class="result-count">
+								<strong>3</strong>
+								<span>Would update</span>
+							</div>
+							<div class="result-count">
+								<strong>1</strong>
+								<span>Skipped</span>
+							</div>
+							<div class="result-count">
+								<strong>2</strong>
+								<span>Warnings</span>
+							</div>
+						</div>
+
+						<div class="activity">
+							<h4>Result notes</h4>
+							<ul>
+								<li>9 Markdown documents would become draft pages.</li>
+								<li>3 existing pages match by slug and would receive block updates.</li>
+								<li>1 file is skipped because it has no readable title.</li>
+								<li>2 media references need replacement files before the real import.</li>
+							</ul>
+						</div>
+					</div>
+
+					<div class="result-next">
+						<strong>Ready for the real import</strong>
+						<p>Dry run is complete. Running the import will create drafts, update matched pages, and keep skipped items unchanged.</p>
+						<button class="button-primary" type="button">Run real import</button>
+						<button class="button-secondary" type="button">Download dry-run report</button>
 					</div>
 				</div>
 			</section>

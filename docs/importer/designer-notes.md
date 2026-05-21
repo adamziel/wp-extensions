@@ -22,3 +22,12 @@
 - Simplified first-run settings into safety defaults and deferred detailed URL rewrite choices until the after-scan decision state has affected counts.
 - Preserved pass 2 accessibility improvements: selected source state remains exposed with `aria-pressed`, the active nav keeps `aria-current`, the progress example uses native `<progress>`, and stage symbols are hidden from assistive tech while status text remains visible.
 - Remaining concern: this is still a static single-page artifact, so a production flow should route setup and after-scan states as separate screens or replace the lower example with an actual state transition.
+
+## Pass 4
+
+- Reworked the mobile source path so the selected GitHub source summary and URL input appear before the full source chooser, while the alternate source types remain available as compact cards.
+- Renamed the former source-input step to optional browser upload because the primary paste field now belongs with the selected source.
+- Added a separate dry-run result state after the scan decision example with would-create, would-update, skipped, and warning counts plus a primary action to run the real import.
+- Kept setup, scan decision, and dry-run result states visually distinct through separate panels, different state labels, and a green result header.
+- Preserved docs-only scope and static accessibility semantics; no JavaScript or external dependencies were added.
+- Remaining concern: the selected source is duplicated in the compact alternate-source chooser so users can still see the full source set; an implementation should make this an actual segmented or searchable chooser.
