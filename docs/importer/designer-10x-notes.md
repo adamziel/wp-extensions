@@ -29,6 +29,8 @@
 - Pass 8 added programmatic selected text to the static selected source and URL-handling options while keeping the visible product surface unchanged. Native checked radio inputs still provide the main non-color selected state.
 - Pass 8 labeled the setup badge as the current state and kept warning, complete, active, and allowed-with-warnings meanings in visible text rather than relying on color, dot shape, or icon shape.
 - Pass 10 bloat audit removed copy that read like implementation notes rather than product direction, including visible "First screen" and numbered state labels. It also shortened the source help text, renamed "Inspectable result rows" to "Result details", removed the secondary "Save setup for later" control from the first action row, and dropped the duplicate after-running reminder from the final side panel.
+- Pass 11 reviewed the bloat trim and kept the HTML unchanged. Removing "Save setup for later" improves the first action row because the draft journey is about immediate dry-run preview, not setup persistence. Removing visible state-number labels also reads cleaner without losing structure because the sidebar, anchors, state headings, progress rows, and setup mini-steps still explain sequence.
+- Pass 11 confirmed the shorter source help keeps feature coverage when paired with the collapsed support disclosure: the field help preserves broad categories, while the disclosure still names GitHub, WordPress site, feed/OPML, server path, browser upload, archive/document inputs, and their key supported formats.
 
 ## Remaining Concerns
 
