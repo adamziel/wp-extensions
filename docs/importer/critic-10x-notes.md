@@ -1634,3 +1634,11 @@ The RTL direction emulation does not show a true localization handoff, hierarchy
 The 320px large-text state is very tall, but that is expected for the full static journey under enlarged text rather than evidence of a broken RTL flow. The setup order, source selection, dry-run guarantee, scan decision, result review, and final import gate remain contained and understandable, and the desktop RTL capture keeps the setup hierarchy intact.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 157. Treat this as a passing directional smoke test for handoff, while leaving full localization QA for production with real translated strings, longer labels, locale terminology, and bidi handling for URLs, paths, filenames, and code-like evidence.
+
+## Pass 158 Critique
+
+The form/control DOM evidence does not show a true form semantics, labeling, static-handoff, or accessibility defect. The 26 controls are native controls; no inputs are unlabeled; source type and URL handling are exclusive radio groups with expected duplicate group names; and the fieldsets, legends, and visible labels cover Source type, Editable settings, and URL handling.
+
+The lack of a `<form>`, submit buttons, and required controls is appropriate for a static design artifact because these controls model the importer journey rather than posting a working form. The editable-settings checkboxes lacking `name` attributes is not a labeling issue and has no browser-submission consequence without a form; it is only a production handoff note if those settings later become serialized component state or submitted fields.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 158. Keep the artifact as-is, and add stable checkbox names/values only when this design is implemented as a working form or component.
