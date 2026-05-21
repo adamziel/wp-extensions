@@ -684,3 +684,13 @@ This is not a content or feature-surface problem. The journey is still understan
 A CSS-only breakpoint adjustment is justified. The safest direction is to keep this 1081px range in the tablet/medium layout longer: remove or stack the right current-setup rail under setup, let the main setup card use the available width, and avoid the two-column scan-decision/progress split until there is enough room for both columns to breathe. The left rail is less urgent than the content columns, but if keeping it forces cramped controls around this width, the rail should also wait for a wider breakpoint or collapse into the compact top journey treatment.
 
 Recommendation: make a CSS-only responsive pass that raises the desktop breakpoint for the multi-column shell and scan-decision split. Do not edit the HTML, add copy, remove controls, or change feature coverage. The goal is only to delay the wide-desktop arrangement until source labels, the source input, current setup summary, and scan-decision status all read comfortably.
+
+## Pass 65 Critique
+
+The 1366px first-viewport evidence shows the narrow-desktop breakpoint fix moved the layout in the right direction. The main setup column now has enough room for the source-type controls, source input, Browse button, dry-run action, and guarantee to read as one clear task. The journey remains lean: setup is primary, the current setup rail confirms state and next steps, and scan decision remains the next named step without adding new copy or controls.
+
+The remaining weakness is the "Current setup" rail width. It is not broken, but the two-column summary row makes the GitHub path wrap awkwardly: `github.com/WordPress/gu` splits from `tenberg/tree/trunk/docs/`, then continues into the rest of the path. That wrap is still readable and does not create horizontal overflow, but it makes the summary feel more cramped than the rest of the first viewport at exactly the desktop size this pass is trying to preserve.
+
+A CSS-only refinement is justified if it stays local to summary-row layout. The lowest-risk fix would be to let long values in the current setup rail take a full row, or stack label/value pairs at this rail width, so paths can wrap naturally without starving the main setup card. Avoid widening the rail globally, lowering the desktop breakpoint back, adding explanatory copy, or changing the HTML; those would trade away the clearer setup column gained in Pass 65.
+
+Recommendation: make a small CSS-only adjustment to the current setup summary rail for long values at 1366px-class desktop widths. The target is cleaner path wrapping only, with the same feature surface, same HTML, and no plugin/runtime edits.
