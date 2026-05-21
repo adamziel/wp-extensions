@@ -1730,3 +1730,11 @@ The DOM integrity regression after the nav-label change passes. Chromium reports
 The nav evidence is acceptable. The raw text content still includes both full and short spans because both are present in the markup, but the `aria-label` values now define stable accessible names: `Setup`, `Scan decision`, `Dry-run result`, and `Real import`. That is the intended result of Pass 168, not a duplicate-name regression.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 169. Keep the nav-label fix as-is.
+
+## Pass 170 Critique
+
+The visible text-fit audit does not show a real clipping, wrapping, large-text, or overflow defect. At 320px, 320px with an 18px body-text override, 500px, and 1440px, the document remains horizontally contained with `scrollWidth` matching `clientWidth` and `overflowCount=0`.
+
+The only text-overflow findings are intentional accessibility-hidden content: `.screen-reader-text` spans that say `selected` and the hidden table caption `Dry-run item outcomes and required fixes`. Those are expected to be clipped to a 1px visual box, so they should not drive visible layout changes. The audit did not find a visible control label, card, table row, or after-running link that needs another size or wrap adjustment.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 170. Treat visible text fit as passing after the recent target and nav-label changes.
