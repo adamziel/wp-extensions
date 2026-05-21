@@ -13,3 +13,12 @@
 - Specialized the selected GitHub source field with a repository/folder/file URL label and "Browse repositories" action while keeping universal paste support as secondary help text.
 - Added static accessibility semantics for selected source state, real radio inputs inside URL-handling cards, `aria-current` on the active nav item, and a native progress element with values.
 - Remaining concern: the static artifact still shows setup and a future scan example on one page; the labels now separate the states, but an implementation should route these as distinct screens or steps.
+
+## Pass 3
+
+- Replaced the initial right rail with a setup summary: selected source, scope, dry-run safety, old-link pause behavior, and a short "what happens next" sequence.
+- Moved the progress meter, stage list, link decision, activity log, and affected-link example into a clearly separated lower "After dry run starts" state panel.
+- Moved the primary "Start dry run" action directly under the source input, before optional browser upload and safety defaults, so it appears earlier on desktop and is reached sooner on mobile.
+- Simplified first-run settings into safety defaults and deferred detailed URL rewrite choices until the after-scan decision state has affected counts.
+- Preserved pass 2 accessibility improvements: selected source state remains exposed with `aria-pressed`, the active nav keeps `aria-current`, the progress example uses native `<progress>`, and stage symbols are hidden from assistive tech while status text remains visible.
+- Remaining concern: this is still a static single-page artifact, so a production flow should route setup and after-scan states as separate screens or replace the lower example with an actual state transition.

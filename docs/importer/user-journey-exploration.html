@@ -380,7 +380,7 @@
 		.settings-grid {
 			display: grid;
 			gap: 14px;
-			grid-template-columns: minmax(0, 1fr) 230px;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 
 		.option-grid {
@@ -426,6 +426,22 @@
 			display: grid;
 			gap: 11px;
 			padding: 12px;
+		}
+
+		.quick-start {
+			align-items: center;
+			background: var(--soft-green);
+			border: 1px solid #b8e6bf;
+			border-radius: 4px;
+			display: grid;
+			gap: 12px;
+			grid-template-columns: minmax(0, 1fr) auto;
+			padding: 14px;
+		}
+
+		.quick-start p {
+			color: var(--muted);
+			margin: 3px 0 0;
 		}
 
 		.check-row {
@@ -484,12 +500,104 @@
 			top: 18px;
 		}
 
+		.setup-summary {
+			align-self: start;
+			display: grid;
+			gap: 16px;
+			min-width: 0;
+			padding: 18px;
+			position: sticky;
+			top: 18px;
+		}
+
 		.rail-kicker {
 			color: var(--muted);
 			font-size: 12px;
 			font-weight: 700;
 			letter-spacing: .02em;
 			text-transform: uppercase;
+		}
+
+		.summary-block {
+			border: 1px solid var(--line);
+			border-radius: 4px;
+			display: grid;
+			gap: 10px;
+			padding: 13px;
+		}
+
+		.summary-block h4 {
+			font-size: 14px;
+			margin: 0;
+		}
+
+		.summary-block p {
+			color: var(--muted);
+			margin: 0;
+		}
+
+		.setup-steps {
+			display: grid;
+			gap: 8px;
+			margin: 0;
+			padding: 0;
+		}
+
+		.setup-steps li {
+			display: grid;
+			gap: 8px;
+			grid-template-columns: 22px minmax(0, 1fr);
+			list-style: none;
+		}
+
+		.setup-steps span:first-child {
+			align-items: center;
+			background: var(--soft-blue);
+			border: 1px solid #b8d7f0;
+			border-radius: 999px;
+			color: var(--blue-dark);
+			display: inline-flex;
+			font-size: 12px;
+			font-weight: 700;
+			height: 22px;
+			justify-content: center;
+			width: 22px;
+		}
+
+		.state-panel {
+			margin: 18px auto 0;
+			max-width: 1180px;
+			padding: 18px;
+		}
+
+		.state-header {
+			border-bottom: 1px solid var(--line);
+			display: grid;
+			gap: 4px;
+			padding-bottom: 16px;
+		}
+
+		.state-header h3 {
+			font-size: 18px;
+			margin: 0;
+		}
+
+		.state-header p {
+			color: var(--muted);
+			margin: 0;
+			max-width: 760px;
+		}
+
+		.state-layout {
+			display: grid;
+			gap: 18px;
+			grid-template-columns: minmax(0, 1fr) 340px;
+			padding-top: 18px;
+		}
+
+		.state-panel .progress-panel {
+			padding: 0;
+			position: static;
 		}
 
 		.import-card {
@@ -709,6 +817,14 @@
 			.progress-panel {
 				position: static;
 			}
+
+			.setup-summary {
+				position: static;
+			}
+
+			.state-layout {
+				grid-template-columns: 1fr;
+			}
 		}
 
 		@media (max-width: 820px) {
@@ -760,8 +876,19 @@
 			.settings-grid,
 			.option-grid,
 			.input-action,
+			.quick-start,
 			.decision-actions {
 				grid-template-columns: 1fr;
+			}
+		}
+
+		@media (min-width: 430px) and (max-width: 820px) {
+			.source-grid {
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+			}
+
+			.source-option {
+				min-height: 96px;
 			}
 		}
 	</style>
@@ -864,6 +991,14 @@
 								</p>
 							</div>
 
+							<div class="quick-start">
+								<div>
+									<strong>Ready to preview: dry run only</strong>
+									<p>WordPress will scan the source, show pages and media it found, and pause before writing content.</p>
+								</div>
+								<button class="button-primary" type="button">Start dry run</button>
+							</div>
+
 							<div class="upload-panel" aria-label="Upload files">
 								<div>
 									<strong>Or upload from this browser</strong>
@@ -878,38 +1013,12 @@
 						<div class="section-header">
 							<span class="step-number">3</span>
 							<div>
-								<h3>Set import behavior</h3>
-								<p class="section-lede">Keep the default until the dry run shows the old domains and links it found.</p>
+								<h3>Safety defaults</h3>
+								<p class="section-lede">These defaults keep the first run reversible and move detailed link decisions after scanning.</p>
 							</div>
 						</div>
 
 						<div class="settings-grid">
-							<div>
-								<div class="option-grid" aria-label="URL handling">
-									<label class="radio-card is-selected">
-										<input type="radio" name="url-handling" checked>
-										<span>
-											<span class="option-label">Review link changes after scan</span>
-											<span>Recommended. Decide after WordPress shows the affected domains.</span>
-										</span>
-									</label>
-									<label class="radio-card">
-										<input type="radio" name="url-handling">
-										<span>
-											<span class="option-label">Keep as external links</span>
-											<span>Leave source links exactly as imported.</span>
-										</span>
-									</label>
-									<label class="radio-card">
-										<input type="radio" name="url-handling">
-										<span>
-											<span class="option-label">Rewrite selected URLs to this site</span>
-											<span>Move selected source domains to this WordPress site.</span>
-										</span>
-									</label>
-								</div>
-							</div>
-
 							<div class="run-options" aria-label="Run options">
 								<label class="check-row">
 									<input type="checkbox" checked>
@@ -926,96 +1035,133 @@
 									</span>
 								</label>
 							</div>
-						</div>
-					</div>
-
-					<div class="section">
-						<div class="section-header">
-							<span class="step-number">4</span>
-							<div>
-								<h3>Review and start</h3>
-								<p class="section-lede">WordPress will scan the source and show findings before any content is created.</p>
+							<div class="run-options" aria-label="Decision defaults">
+								<label class="check-row">
+									<input type="checkbox" checked>
+									<span>
+										<strong>Pause for detected old-site links</strong>
+										<small>Show affected domains, counts, and examples before rewriting anything.</small>
+									</span>
+								</label>
+								<label class="check-row">
+									<input type="checkbox" checked>
+									<span>
+										<strong>Report duplicates before writing</strong>
+										<small>Flag matching titles, slugs, and media files in the dry-run result.</small>
+									</span>
+								</label>
 							</div>
-						</div>
-
-						<div class="review">
-							<ul class="summary-list" aria-label="Import summary">
-								<li><span>Source</span><strong>GitHub repository: Gutenberg architecture docs</strong></li>
-								<li><span>Handling</span><strong>Review link changes after scan</strong></li>
-								<li><span>Run mode</span><strong>Dry run, no pages written</strong></li>
-							</ul>
-							<button class="button-primary" type="button">Start dry run</button>
 						</div>
 					</div>
 				</section>
 
-				<aside class="surface progress-panel" id="scan-preview" aria-label="What happens after scanning">
-					<div class="rail-kicker">After scan preview</div>
-					<h3>What WordPress shows next</h3>
+				<aside class="surface setup-summary" aria-label="Setup summary">
+					<div class="rail-kicker">Setup summary</div>
+					<h3>Ready for a dry run</h3>
 					<div class="import-card">
 						<strong>Gutenberg architecture docs</strong>
 						<div class="import-meta">
-							<span>Dry run</span>
 							<span>Selected GitHub folder</span>
 							<span>13 source items</span>
+							<span>Dry run first</span>
 						</div>
 					</div>
-					<div>
-						<progress class="meter" value="9" max="17" aria-label="Example scan progress"></progress>
-						<p class="progress-copy">Example after scan: 9 of 17 checks complete, with one link decision to review.</p>
-					</div>
-
-					<ul class="stage-list">
-						<li class="stage is-done">
-							<span class="stage-dot">✓</span>
-							<div><strong>Read source</strong><span>13 repository files found.</span></div>
-							<span class="stage-status">Done</span>
-						</li>
-						<li class="stage is-done">
-							<span class="stage-dot">✓</span>
-							<div><strong>Prepare content</strong><span>9 Markdown documents converted to blocks.</span></div>
-							<span class="stage-status">Done</span>
-						</li>
-						<li class="stage is-current" id="decisions">
-							<span class="stage-dot">!</span>
-							<div><strong>URL handling</strong><span>One GitHub issue URL may be an old-site link.</span></div>
-							<span class="stage-status">Needs input</span>
-						</li>
-						<li class="stage is-next">
-							<span class="stage-dot">4</span>
-							<div><strong>Import media</strong><span>Starts after link handling is confirmed.</span></div>
-							<span class="stage-status">Next</span>
-						</li>
-						<li class="stage is-next">
-							<span class="stage-dot">5</span>
-							<div><strong>Write pages</strong><span>Dry run reports what would be written.</span></div>
-							<span class="stage-status">Queued</span>
-						</li>
+					<ul class="summary-list" aria-label="Current setup">
+						<li><span>Source</span><strong>GitHub repository</strong></li>
+						<li><span>Scope</span><strong>Architecture docs folder</strong></li>
+						<li><span>Safety</span><strong>No pages written during dry run</strong></li>
+						<li><span>Links</span><strong>Pause when old-site links are found</strong></li>
 					</ul>
-
-					<div class="decision">
-						<h4>Review link handling</h4>
-						<p>Shown only after scanning. Keep this external unless it should become a local WordPress URL.</p>
-						<label class="domain-choice">
-							<input type="checkbox">
-							<span>github.com/WordPress/gutenberg/issues/33255</span>
-						</label>
-						<div class="decision-actions">
-							<button class="button-primary" type="button">Keep as external links</button>
-							<button class="button-secondary" type="button">Rewrite selected URLs</button>
-						</div>
+					<div class="summary-block">
+						<h4>What happens next</h4>
+						<ol class="setup-steps">
+							<li><span>1</span><strong>Read the selected source.</strong></li>
+							<li><span>2</span><strong>Preview pages, media, warnings, and duplicate matches.</strong></li>
+							<li><span>3</span><strong>Ask for decisions only when the scan has evidence.</strong></li>
+						</ol>
 					</div>
-
-					<div class="activity" id="history">
-						<h4>Scan activity</h4>
-						<ul>
-							<li>GitHub folder read from the selected branch.</li>
-							<li>Markdown documents converted into initial blocks.</li>
-							<li>Absolute URL domains found and queued for confirmation.</li>
-						</ul>
-					</div>
+					<a class="button-primary" href="#source">Review source</a>
 				</aside>
 			</div>
+
+			<section class="surface state-panel" id="scan-preview" aria-label="After dry run starts">
+				<div class="state-header">
+					<div class="rail-kicker">Second state example</div>
+					<h3>After dry run starts</h3>
+					<p>This lower panel shows the progress and decision pattern after WordPress has scanned the source. It is not part of the initial setup rail.</p>
+				</div>
+
+				<div class="state-layout">
+					<div class="progress-panel" aria-label="Dry run progress example">
+						<h3>Dry run progress</h3>
+						<div class="import-card">
+							<strong>Gutenberg architecture docs</strong>
+							<div class="import-meta">
+								<span>Dry run</span>
+								<span>Selected GitHub folder</span>
+								<span>13 source items</span>
+							</div>
+						</div>
+						<div>
+							<progress class="meter" value="9" max="17" aria-label="Example scan progress"></progress>
+							<p class="progress-copy">Example after scan: 9 of 17 checks complete, with one link decision to review.</p>
+						</div>
+
+						<ul class="stage-list">
+							<li class="stage is-done">
+								<span class="stage-dot" aria-hidden="true">✓</span>
+								<div><strong>Read source</strong><span>13 repository files found.</span></div>
+								<span class="stage-status">Done</span>
+							</li>
+							<li class="stage is-done">
+								<span class="stage-dot" aria-hidden="true">✓</span>
+								<div><strong>Prepare content</strong><span>9 Markdown documents converted to blocks.</span></div>
+								<span class="stage-status">Done</span>
+							</li>
+							<li class="stage is-current" id="decisions">
+								<span class="stage-dot" aria-hidden="true">!</span>
+								<div><strong>URL handling</strong><span>One GitHub issue URL may be an old-site link.</span></div>
+								<span class="stage-status">Needs input</span>
+							</li>
+							<li class="stage is-next">
+								<span class="stage-dot" aria-hidden="true">4</span>
+								<div><strong>Import media</strong><span>Starts after link handling is confirmed.</span></div>
+								<span class="stage-status">Next</span>
+							</li>
+							<li class="stage is-next">
+								<span class="stage-dot" aria-hidden="true">5</span>
+								<div><strong>Write pages</strong><span>Dry run reports what would be written.</span></div>
+								<span class="stage-status">Queued</span>
+							</li>
+						</ul>
+					</div>
+
+					<div>
+						<div class="decision">
+							<h4>Review link handling</h4>
+							<p>Shown only after scanning. Found in 3 pages and 7 links. Keep this external unless it should become a local WordPress URL.</p>
+							<label class="domain-choice">
+								<input type="checkbox">
+								<span>github.com/WordPress/gutenberg/issues/33255 affects 3 pages and 7 links</span>
+							</label>
+							<div class="decision-actions">
+								<button class="button-primary" type="button">Keep as external links</button>
+								<button class="button-secondary" type="button">Rewrite selected URLs</button>
+							</div>
+							<button class="button-secondary" type="button">View affected content</button>
+						</div>
+
+						<div class="activity" id="history">
+							<h4>Scan activity</h4>
+							<ul>
+								<li>GitHub folder read from the selected branch.</li>
+								<li>Markdown documents converted into initial blocks.</li>
+								<li>Absolute URL domains found and queued for confirmation.</li>
+							</ul>
+						</div>
+					</div>
+				</div>
+			</section>
 		</main>
 	</div>
 </body>
