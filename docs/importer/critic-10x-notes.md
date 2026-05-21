@@ -800,3 +800,15 @@ I would not add another compact consequence/status line near the counts in this 
 The only caveat is that this judgment depends on the result details staying immediately visible after the counts. In the screenshot, the first create row starts within the same result segment, so the user can connect "9 would create" to a concrete item without another explanatory strip. If a later mobile edit adds more controls above Result details, then a small status line may become useful. With the current artifact, the leaner top is better: heading, purpose sentence, counts, and details are enough.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` untouched. Do not add a consequence/status line near the mobile result counts for Pass 74, and do not change the plugin or runtime. Preserve the compact count grid and the immediate handoff into Result details.
+
+## Pass 75 Critique
+
+The 768px tablet full-flow screenshot shows the new result consequence line helping more than it hurts. It sits directly under the four result counts and before the table, so the user gets a compact interpretation of the metrics: the import is allowed to proceed as drafts after review, while skipped and warning items remain visible in the report. That is useful tablet context because the counts alone say "9, 3, 1, 2," but not what those numbers mean for the next decision.
+
+The line does not add meaningful bloat in this evidence. It is a single quiet sentence, does not introduce another badge or panel, and does not compete with the count cards. The result table still begins immediately below it, with Create, Update, Warning, and Skip rows visible enough to prove the summary. The table remains the main evidence surface, and the consequence line works as a bridge rather than a new step.
+
+The resolver also benefits from the extra framing. By the time the user reaches "Resolve selected issue," the page has already clarified that warnings do not block the review path but do stay in the report. The missing-media replacement panel can then focus on the selected item, paths, consequence, and two actions without needing to explain the whole import status again.
+
+The warning panel remains acceptable on tablet. It appears below the resolver after "Dry run complete," and the bullets continue to explain what stays open without fighting the table for horizontal space. The cost is vertical length: tablet review is already a long single-column journey from setup through scan decision, progress, result counts, table, resolver, and warnings. The consequence line is small enough to earn its place, but future additions above Result details would make the review feel delayed.
+
+Recommendation: keep the consequence line in the tablet result review. Do not add another status strip, icon row, or explanatory block, and do not edit plugin/runtime code. The current line improves the meaning of the counts while preserving the same feature surface and keeping the result table, resolver, and warning panel in a coherent review order.
