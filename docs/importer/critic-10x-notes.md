@@ -1226,3 +1226,13 @@ The tradeoff is duplication in the opened help text. With the label now naming f
 If the designer takes another copy pass, the only worthwhile change would be to trim repeated nouns from the help text while preserving the fallback rule. For example, the help could emphasize "Use this when the source is local or not available at a URL; archives, documents, feed lists, and WordPress exports are supported." That would reduce immediate echo without hiding folder/export capability in the closed label. This is optional polish, not a blocker.
 
 Recommendation: keep the broader label. Do not edit the HTML, plugin code, or runtime for Pass 113. The label is clearer and layout-safe; at most, carry a future copy note to de-duplicate the opened help text if the upload disclosure starts to feel repetitive in review.
+
+## Pass 114 Critique
+
+The opened upload helper is still acceptable with the broader label. "Choose files, folders, or exports" gives the disclosure enough closed-state meaning that users do not have to open it just to discover folder and export support, and the latest evidence shows that clarity does not create layout cost: mobile, narrow mobile, and desktop all report no overflow.
+
+The repetition in the opened state is noticeable but not harmful. The help text repeats "folders" and "exports" from the label, but it also adds coverage the label cannot carry cleanly: local archives, documents, feed lists, and the priority rule that this path is for sources not available at a URL. That extra coverage matters because browser upload is a fallback surface for several source families, not just a file picker. Removing too much from the helper would make the open state less useful and could make archive/feed/document support feel hidden again.
+
+The vertical measurements support keeping the copy stable for now. The helper text remains compact at roughly one line on desktop, two lines on mobile, and three lines on narrow mobile, while the details region stays contained at about `140px` to `180px`. That is not bloat for an explicitly opened fallback control. The main journey still leads with the source field, "Browse repo," and dry-run action; upload detail appears only when the user asks for it.
+
+Recommendation: keep the label and help text as-is. The echo is an acceptable tradeoff because it preserves source coverage and the URL-vs-local distinction without adding controls, states, or runtime behavior. Do not edit the HTML, plugin code, or runtime for Pass 114; if reviewers later call the repetition out, make a copy-only helper trim that keeps archives, documents, feed lists, exports, and the "not available at a URL" rule visible.
