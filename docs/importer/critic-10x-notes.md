@@ -1548,3 +1548,11 @@ The post-import links are acceptable as inline proof links rather than primary a
 The body focus after "Open final report" does not point to a needed artifact change. In this static single-page artifact, the browser reaching `body` after the last focusable element and then wrapping to the top nav on the next Tab is normal end-of-document behavior, not a keyboard trap, missing action, or journey-clarity failure. A production importer can manage focus after an actual import result, but this static artifact should not add a dummy end target or extra completion surface.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 146. The traversal has visible focus, no overflow, reasonable target sizing for the action controls, acceptable inline-link wrapping, and a coherent end-of-page wrap back into navigation.
+
+## Pass 147 Critique
+
+The 320px full-journey evidence does not show a page-level horizontal overflow problem. The measured overflow cases are limited to screen-reader-only text and the source input's internal scroll value, while the visible artifact stays contained at `320px`. The source chooser is dense and a few labels wrap awkwardly, but all six choices remain visible, selectable, and target-safe; widening or reflowing them would likely push the first dry-run safety cue lower again.
+
+The height is expected for this static artifact, not a user-facing defect. At 320px the page stacks the whole importer contract: setup, scan decision, dry-run evidence, selected remediation, final gate, and post-run proof. The important safety cues are still present in order: `Start dry run` is a `248px` by `40px` target, the no-write guarantee begins inside the first viewport at about `663px`, the scan/report/import actions remain `40px` tall, and the final gate clearly says drafts only, nothing publishes, skipped items stay skipped, and unresolved warnings carry into the report before the green real-import action.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 147. Treat the roughly `6931px` height and the late final-report link as normal consequences of showing the complete journey at the narrowest width; I do not see a real defect in safety visibility, target sizing, source density, result density, final-gate clarity, or horizontal containment.
