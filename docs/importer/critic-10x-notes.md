@@ -694,3 +694,15 @@ The remaining weakness is the "Current setup" rail width. It is not broken, but 
 A CSS-only refinement is justified if it stays local to summary-row layout. The lowest-risk fix would be to let long values in the current setup rail take a full row, or stack label/value pairs at this rail width, so paths can wrap naturally without starving the main setup card. Avoid widening the rail globally, lowering the desktop breakpoint back, adding explanatory copy, or changing the HTML; those would trade away the clearer setup column gained in Pass 65.
 
 Recommendation: make a small CSS-only adjustment to the current setup summary rail for long values at 1366px-class desktop widths. The target is cleaner path wrapping only, with the same feature surface, same HTML, and no plugin/runtime edits.
+
+## Pass 66 Critique
+
+The 500px mobile setup-to-summary evidence does not show a regression from the Pass 65 current-setup row stacking. The first action remains reachable in the intended order: "Add source," the source field, Browse fallback, "Start dry run," and the fixed no-write guarantee all appear before upload, source type, editable settings, source support, and the summary. The primary task still reads as paste or pick a source, then preview safely.
+
+Source support visibility is also acceptable. The collapsed "What each source supports" disclosure remains visible after editable settings, so the feature surface is discoverable without opening a large support catalog above the current task. It is not competing with the source field or dry-run action, and it does not push the current setup summary so far down that the journey becomes unclear.
+
+The current setup summary is more readable on mobile with stacked label/value rows. The long GitHub path wraps inside the card as a normal value instead of being squeezed into a two-column row, and the mode, draft, and URL settings remain easy to scan. The summary now feels like confirmation of the setup rather than a cramped side rail carried over from desktop.
+
+The transition into Scan decision remains clear enough. The summary ends with the three numbered next steps, and the next card begins with "Scan decision" plus the old-site URL decision. The handoff is visible in the supplied screenshot without needing a new connector, banner, or copy. The only cost is vertical length, but that is expected on mobile and does not add feature bloat.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for this pass. The Pass 65 summary-row refinement did not cause a mobile regression in first action reachability, source support visibility, current setup readability, or the scan-decision transition. Do not edit HTML, add copy, or change feature coverage from the Pass 66 evidence.

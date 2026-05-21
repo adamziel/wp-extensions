@@ -79,6 +79,7 @@
 - Pass 63 reviewed the 1440px desktop setup with the optional browser-upload disclosure opened and kept the HTML unchanged. The upload fallback remains secondary because it appears after the Start dry run action and dry-run guarantee inside the source box, while the editable settings, current setup summary, and start of the scan decision still remain visible without crowding or a new upload workflow.
 - Pass 64 adjusted only the narrow desktop breakpoint band from 1081px to 1320px: the left sidebar remains desktop-style, but setup and scan-decision bodies stack to give the source tabs, input row, editable settings, setup summary, and URL decision enough width. This avoids changing content or source coverage while delaying the cramped two-column content layout until the viewport can support it.
 - Pass 65 made one CSS-only rail refinement after the 1366px evidence: the Current setup Path row now stacks its label above the long URL value, giving the path the full rail width while leaving the other summary rows, content, breakpoints, and feature surface unchanged.
+- Pass 66 reviewed the 500px mobile setup-to-summary evidence after the Path row stacking and kept the HTML unchanged. The summary has no mobile regression: the long GitHub path wraps as a readable full-width block, the label remains attached above it, and the shorter Source, Mode, Drafts, and URLs rows still preserve the compact scan pattern before the three next-step bullets.
 
 ## Remaining Concerns
 
