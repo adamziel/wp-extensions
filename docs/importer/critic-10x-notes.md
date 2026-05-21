@@ -562,3 +562,13 @@ The right "Current setup" summary is useful, but it is visually close to becomin
 The scan decision starts a little abruptly because it appears as a full new surface immediately after the setup card, with only the right summary's step list previewing the handoff. The decision itself is clear once reached: it names the seven old-site links, shows the selected URL handling choice, gives an affected-content route, and pairs the pause with progress status. The weak point is the transition, not the decision content. A future design pass could add a small "After preview starts" handoff line or visually connect the setup summary's "Resolve duplicate and URL decisions" step to the scan panel, but that is polish rather than a blocker.
 
 Recommendation: do not edit `docs/importer/user-journey-10x-clarity.html` for this pass. There is no high-confidence design-only defect in the supplied desktop evidence; the current setup keeps the primary action reachable and the scan decision understandable. Preserve the feature surface, and only consider a future quieting of the current-setup summary if reviewers say it competes with source entry.
+
+## Pass 53 Critique
+
+The 768px tablet setup state holds after the desktop-only settings-row change. The editable settings no longer try to force three cards into a narrow row; they settle into a two-column grid with the third card alone on the next row. That creates a small visual imbalance, but it is preferable to cramped labels or tiny setting cards, and it does not delay the source task because the source field, Browse fallback, "Start dry run," and fixed dry-run guarantee all remain above settings.
+
+The source field is tight but acceptable at this width. The long GitHub path is clipped inside the text input, which is normal input behavior rather than page overflow, and the Browse button remains visible without stealing hierarchy from the dry-run action. The current setup summary below also handles the long path correctly: the path wraps within the summary list instead of spilling out of the surface.
+
+The disclosure hierarchy is still clear. "Upload files instead" remains a secondary disclosure inside the source card, and "What each source supports" stays collapsed after editable settings, so the setup does not become a source-support catalog. The desktop-only rule therefore appears scoped correctly: it improves wide desktop settings alignment without causing tablet crowding or unintended overflow.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No concrete 768px design-only issue in the supplied setup evidence justifies a CSS or copy edit; the mild settings raggedness is an acceptable tablet tradeoff.
