@@ -1122,3 +1122,15 @@ The tablet layout supports that distinction without adding friction. The result 
 No tablet-specific follow-up is needed from this evidence. The affected-item fix removes the ambiguity seen before, and the tablet result state remains clear without another panel, extra remediation UI, or changed feature surface. The distance to the real-import gate is expected because this state is doing useful review work before the write boundary, not because of decorative bloat.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 103. The resolver is now clearer on tablet, there is no horizontal overflow, and further tablet edits would be more likely to expand the artifact than improve the journey.
+
+## Pass 104 Critique
+
+The 500px mobile large-text setup-summary screenshot shows a contained but tall handoff. The capture metrics confirm there is no horizontal overflow (`innerWidth=500`, `clientWidth=500`, `scrollWidth=500`, `bodyScrollWidth=500`), and the visible summary wraps long path text, labels, and the numbered next steps without clipping. The scan decision starts later at `scanTop=1618`, while the summary begins at `summaryTop=1131`, so the summary is a meaningful vertical cost under larger text rather than a negligible footer.
+
+That cost is still justified in this pass. The setup state has several user-controlled choices before the scan decision: source type, draft behavior, URL rewriting, duplicate reporting, and upload/source fallback. The "Ready to preview" block is the one place that converts those choices into a clear pre-scan contract: source is a GitHub folder, mode is preview only, new pages stay drafts, URL rewriting will ask first, and the next three steps are scan, resolve decisions, and review the dry-run result. Under larger text, that confirmation helps prevent the scan action from feeling disconnected from the settings the user just passed.
+
+The mini-step labels are compact and readable enough: `1 Scan source without writing`, `2 Resolve duplicate and URL decisions`, and `3 Review the dry-run result`. They repeat the journey, but they do so as a handoff from setup to scan rather than as extra feature marketing. Removing them would save height, but it would also weaken the clearest confirmation that the importer is still in preview mode and that decisions happen before real import.
+
+The only tightening worth considering later is copy compression inside the summary, not removing the summary itself. If large-text mobile distance becomes the next target, shorten the guarantee sentence or collapse the source/mode/drafts/URL rows into fewer consequence lines. Do not remove the pre-scan confirmation, source summary, or three-step handoff unless a future screenshot shows users can still understand the scan decision without that bridge.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 104. The setup summary is tall under larger text, but it is necessary handoff confirmation before the scan decision and is not bloat in the current artifact.
