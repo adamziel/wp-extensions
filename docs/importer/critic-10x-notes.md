@@ -1444,3 +1444,13 @@ Primary and secondary actions are not confused in the supplied evidence. "View a
 Targets and wrapping are acceptable. Desktop, mobile, and narrow have no horizontal overflow; the primary and secondary buttons are all `40px` tall, and the radio choices are comfortably taller than the minimum target baseline. The only visible rough edge is the narrow URL wrapping, where `old.example.com/docs/getting-started` can break inside the word. That is not worth an HTML change for this pass because the evidence remains readable and the current wrapping prevents overflow on the tightest viewport.
 
 Recommendation: make no HTML change for Pass 135 and do not touch plugin or runtime code. Keep the scan-decision state as-is; it is consequence-clear, evidence-backed, target-safe, and compact enough for the importer journey.
+
+## Pass 136 Critique
+
+The scan-decision regression evidence holds up. Mobile primary focus has no horizontal overflow, and the focused "Apply decision and continue" control remains a full-width `302px` by `40px` target with a visible `rgb(114, 174, 230) 0 0 0 2px` focus shadow. The focus treatment is not clipped by the decision card, it does not create extra page width, and the primary action remains visible directly below the affected-link evidence and secondary review action.
+
+Forced-colors behavior is acceptable for this static artifact. The focused rewrite choice measures about `232px` by `108.953125px`, stays contained, and exposes a `2px solid black` outline after decorative shadows collapse. The native radio indicators and text labels still carry the selected/focused meaning, so the decision does not rely only on color. The outline is heavier than the normal treatment, but it improves focus visibility without causing overlap or horizontal scroll.
+
+Large text does not introduce a target-size or hidden-action regression. The decision choices remain roomy at about `302px` by `74.171875px`, the primary stays `302px` by `40px`, and the action still appears at the same vertical position around `637.171875px`. The scan-decision card is compact enough: it shows the blocking reason, both choices, one affected-link example, the review action, the primary commit action, and pause without adding a new surface.
+
+Recommendation: make no HTML change for Pass 136 and do not touch plugin or runtime code. The scan-decision focus, forced-colors fallback, and large-text layout are stable; I do not see focus clipping, forced-colors failure, target-size regression, hidden primary action, or bloat.
