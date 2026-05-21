@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>25 Import Storyboard</title>
+<style>
+:root{--dark:#2b1d35;--accent:#db2777;--soft:#fdf2f8;--bg:#f0f0f1;--panel:#fff;--line:#dcdcde;--ink:#1d2327;--muted:#646970}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select{font:inherit}button{cursor:pointer}h1,h2,h3,p{margin-top:0}h1{font-size:24px}h2{font-size:16px}input,select{border:1px solid var(--line);border-radius:4px;min-height:36px;padding:7px 9px;width:100%}.bar{height:10px;background:#dcdcde;border-radius:999px;overflow:hidden}.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),#008a20);transition:width .25s}.btn{border:1px solid var(--accent);border-radius:4px;background:#fff;color:var(--accent);min-height:34px;padding:7px 11px}.primary{background:var(--accent);color:#fff;font-weight:700}.top{background:var(--dark);color:#fff;display:flex;gap:16px;align-items:center;min-height:38px;padding:0 16px}.top span{opacity:.75}.wrap{padding:20px}.tag{display:inline-flex;border:1px solid color-mix(in srgb,var(--accent),#fff 55%);background:var(--soft);color:var(--dark);border-radius:999px;padding:5px 9px;font-weight:700}.source{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px;box-shadow:0 1px 2px rgba(0,0,0,.05)}.source h1{margin-bottom:6px}.source p,.muted{color:var(--muted)}.source-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin:12px 0}.features{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}.feature.active{background:var(--dark);border-color:var(--dark);color:#fff}.run{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px}.run-head{display:flex;justify-content:space-between;gap:12px}.log{color:var(--muted);max-height:112px;overflow:auto;padding-left:18px}.result{border-left:4px solid var(--accent);background:var(--soft);padding:10px;margin-top:10px}.hero-title{display:flex;justify-content:space-between;gap:12px;align-items:end;margin-bottom:14px}.hero-title h1{margin:0}.hero-title p{margin:4px 0 0;color:var(--muted)}
+.storyboard{display:grid;gap:12px}.frames{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.frame{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px;min-height:180px}.frame b{display:block;font-size:28px;color:var(--accent)}
+@media(max-width:900px){.wrap{padding:14px}.layout,.split,.grid,.wide,.three,.matrix,.cockpit,.ledger,.assistant,.tree-layout,.calendar,.compare,.contact,.court,.sitemap,.package,.policy,.heatmap,.storyboard,.checklist{grid-template-columns:1fr!important}.radial-map{min-height:auto}.radial-node{position:static;margin:8px}.top{overflow:auto}}
+</style>
+</head>
+<body>
+<div class="top"><strong>WordPress</strong><span>Tools</span><span>Universal Importer</span><span>Import Storyboard</span></div>
+<main class="wrap">
+<header class="hero-title"><div><h1>25 Import Storyboard</h1><p>A narrative sequence of source, transformation, decision, and result frames.</p></div><span class="tag">new v3 proposal</span></header>
+<div class="storyboard"><section class="source">
+		<div class="tag">First screen</div>
+		<h1>Import Storyboard</h1>
+		<p>Choose a source, inspect what WordPress will create, then run with visible checkpoints.</p>
+		<div class="source-row"><input value="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture"><button class="btn">Browse</button></div>
+		<div class="features"><button class="btn feature active" data-copy="Source view changes the preview and available decisions.">Source</button><button class="btn feature " data-copy="Transform view changes the preview and available decisions.">Transform</button><button class="btn feature " data-copy="Decide view changes the preview and available decisions.">Decide</button><button class="btn feature " data-copy="Finish view changes the preview and available decisions.">Finish</button></div>
+		<button class="btn primary start">Review import</button>
+	</section><section class="frames"><div class="frame"><b>1</b>Source</div><div class="frame"><b>2</b>Transform</div><div class="frame"><b>3</b>Decide</div><div class="frame"><b>4</b>Review</div></section><section class="run"><div class="run-head"><strong class="status">Ready</strong><span class="count">0 / 64</span></div><div class="bar"><span></span></div><ol class="log"><li>Waiting for source review.</li></ol><div class="result">Run result appears here.</div></section></div>
+</main>
+<script>
+const phases=["queued","reading source","preparing content","URL treatment","importing media","writing pages","complete"];
+function qs(sel){return document.querySelector(sel)}
+document.querySelectorAll(".feature").forEach((button)=>button.addEventListener("click",()=>{document.querySelectorAll(".feature").forEach((item)=>item.classList.remove("active"));button.classList.add("active");const target=qs(".feature-output");if(target)target.textContent=button.dataset.copy||button.textContent+" is now previewed.";const panel=qs("[data-dynamic-panel]");if(panel)panel.dataset.mode=button.textContent.toLowerCase().replace(/\\s+/g,"-");}));
+document.querySelectorAll(".start").forEach((button)=>button.addEventListener("click",(event)=>{event.preventDefault();let i=0;button.disabled=true;const status=qs(".status");const count=qs(".count");const fill=qs(".bar span");const log=qs(".log");const result=qs(".result");if(log)log.innerHTML="";const timer=setInterval(()=>{const phase=phases[i];const pct=Math.round((i/(phases.length-1))*100);if(status)status.textContent=phase;if(count)count.textContent=Math.min(64,Math.round(pct*.64))+" / 64";if(fill)fill.style.width=pct+"%";if(log){const li=document.createElement("li");li.textContent=phase;log.appendChild(li)}if(phase==="complete"){clearInterval(timer);button.disabled=false;if(result)result.textContent="Complete: 38 draft pages, 22 media items, 4 URL decisions, 2 conflicts resolved."; }i++;},560);}));
+</script>
+</body>
+</html>
