@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>14 Timeline Setup · Universal Importer setup wizard</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fff7ed;color:#172033;font:14px/1.45 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer}header{padding:24px 28px 14px;border-bottom:1px solid rgba(20,30,45,.12);display:flex;justify-content:space-between;gap:20px;align-items:end}h1{margin:0;font-size:28px;letter-spacing:0}header p{margin:6px 0 0;color:#5d6778;max-width:66ch}.badge,.pill{border:1px solid color-mix(in srgb,#7c2d12,#fff 65%);background:color-mix(in srgb,#7c2d12,#fff 88%);color:#7c2d12;border-radius:999px;padding:5px 10px;font-weight:700}.workspace{padding:22px;display:grid;grid-template-columns:minmax(360px,.85fr) minmax(480px,1.15fr);gap:18px;max-width:1440px;margin:0 auto}.split-layout{grid-template-columns:390px 1fr}.panel{background:rgba(255,255,255,.9);border:1px solid rgba(15,23,42,.12);box-shadow:0 16px 45px rgba(15,23,42,.08);border-radius:14px;padding:18px;margin-bottom:16px}.panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.panel h2{margin:0 0 12px;font-size:17px}.source-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.source-card{text-align:left;min-height:78px;border:1px solid rgba(15,23,42,.16);background:#fff;border-radius:12px;padding:12px}.source-card span{display:block;font-weight:800}.source-card small{display:block;color:#64748b;margin-top:4px}.source-card.active{border-color:#7c2d12;box-shadow:0 0 0 3px color-mix(in srgb,#7c2d12,transparent 82%)}.field{display:block;margin:14px 0 12px;font-weight:700}.field input,.special input,.domains{width:100%;margin-top:6px;border:1px solid rgba(15,23,42,.22);border-radius:8px;padding:10px;background:#fff}.choices{border:1px solid rgba(15,23,42,.12);border-radius:12px;padding:12px;margin:0 0 12px}.choices legend{font-weight:800}.choices label,.switches label,.decision label{display:block;margin:8px 0}.switches{display:flex;gap:12px;flex-wrap:wrap}.primary{background:#7c2d12;color:#fff;border:0;border-radius:9px;padding:10px 14px;font-weight:800}.run-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.abort{border:1px solid rgba(15,23,42,.2);background:#fff;border-radius:9px;padding:9px 13px}.view{color:#7c2d12;font-weight:800}.bar{height:12px;background:rgba(15,23,42,.1);border-radius:999px;overflow:hidden}.bar span{display:block;height:100%;width:0;background:#7c2d12;transition:width .35s}.current-action,.counts{color:#526071}.stages{display:grid;gap:8px;margin:14px 0;padding:0}.stage{list-style:none;display:grid;grid-template-columns:32px 1fr;gap:10px;align-items:center;padding:10px;border:1px solid rgba(15,23,42,.1);border-radius:10px;background:#fff}.stage-index{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:color-mix(in srgb,#7c2d12,#fff 88%);color:#7c2d12;font-weight:900}.stage small{display:block;color:#64748b}.stage.done{border-color:color-mix(in srgb,#7c2d12,#fff 40%);background:color-mix(in srgb,#7c2d12,#fff 94%)}.stage.active{box-shadow:inset 3px 0 0 #7c2d12}.decision{border:1px solid color-mix(in srgb,#7c2d12,#fff 45%);background:color-mix(in srgb,#7c2d12,#fff 93%);border-radius:12px;padding:14px}.decision h3{margin:0 0 6px}.decision-actions{display:flex;gap:8px;flex-wrap:wrap}.decision-actions button,.browse,.special button{border:1px solid rgba(15,23,42,.18);background:#fff;border-radius:8px;padding:8px 10px}.technical{margin-top:12px}.special dl{display:grid;grid-template-columns:140px 1fr;gap:8px}.special dt{font-weight:800}.special dd{margin:0;color:#475569}.tree,.dropzone{margin-top:10px;padding:12px;border:1px dashed #7c2d12;border-radius:12px;background:color-mix(in srgb,#7c2d12,#fff 93%)}.tree button{display:block;margin:6px 0;width:100%;text-align:left}.metric{display:inline-grid;place-items:center;margin:6px 8px 6px 0;width:120px;height:90px;border-radius:14px;background:color-mix(in srgb,#7c2d12,#fff 88%);font-size:30px;font-weight:900}.metric small{font-size:12px;font-weight:700;color:#475569}.mobile-shell{display:block}.phone{max-width:min(430px,100%);margin:auto;border:10px solid #111827;border-radius:34px;overflow:hidden;background:#fff7ed}.phone .panel{border-radius:0;margin:0;border-width:0 0 1px}.modal-bg{display:block;position:relative}.admin-ghost{height:120px;border-radius:8px;background:repeating-linear-gradient(0deg,#e5e7eb,#e5e7eb 18px,#f8fafc 18px,#f8fafc 36px);opacity:.7}.modal-card{max-width:980px;margin:-80px auto 0}.admin .panel{box-shadow:none}.minimal .panel, body:has(.minimal){box-shadow:none}.operator .panel{background:#06202b;color:#ecfeff}.operator .panel input,.operator .source-card,.operator .stage{background:#082f3f;color:#ecfeff}.operator .source-card small,.operator .stage small,.operator .current-action,.operator .counts{color:#a5f3fc}@media(max-width:900px){header{display:block}.badge{display:inline-block;margin-top:12px;max-width:100%;white-space:normal}.workspace,.split-layout{grid-template-columns:1fr;padding:14px}.source-grid{grid-template-columns:1fr}.special dl{grid-template-columns:1fr}}
+</style>
+</head>
+<body class="timeline">
+<header><div><h1>Universal Importer · Timeline Setup</h1><p>Setup and import progress as a clear sequence. Supports GitHub, WordPress REST/WXR, feeds, URLs, server paths, files, folders, archives, URL treatment, drafts, and dry runs.</p></div><span class="badge">Setup wizard 14 / 20</span></header>
+<main class="workspace"><section class="panel setup"><div class="panel-head"><h2>Select content</h2><span class="pill">14</span></div><div class="source-grid timeline">
+    <button type="button" class="source-card active" data-source="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture" data-kind="GitHub repo" data-note="Branch or subdirectory URL">
+      <span>GitHub repo</span><small>Branch or subdirectory URL</small>
+    </button><button type="button" class="source-card" data-source="https://example.com/wp-json/" data-kind="WordPress site" data-note="REST root, pages, posts, comments">
+      <span>WordPress site</span><small>REST root, pages, posts, comments</small>
+    </button><button type="button" class="source-card" data-source="https://example.com/feeds.opml" data-kind="Feed or OPML" data-note="RSS, Atom, RDF, or feed list">
+      <span>Feed or OPML</span><small>RSS, Atom, RDF, or feed list</small>
+    </button><button type="button" class="source-card" data-source="Selected folder: handbook-export/" data-kind="Upload folder" data-note="PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP">
+      <span>Upload folder</span><small>PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP</small>
+    </button><button type="button" class="source-card" data-source="/srv/imports/site-export.zip" data-kind="Server path" data-note="Local file, folder, or archive">
+      <span>Server path</span><small>Local file, folder, or archive</small>
+    </button><button type="button" class="source-card" data-source="https://example.com/about/" data-kind="Reachable URL" data-note="Remote page or URL">
+      <span>Reachable URL</span><small>Remote page or URL</small>
+    </button>
+  </div><label class="field">URL or server path<input class="source-input" value="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture"></label><fieldset class="choices">
+    <legend>URL treatment</legend>
+    <label><input type="radio" name="urlmode" value="Ask when old URLs are found" checked> Ask when old URLs are found</label>
+    <label><input type="radio" name="urlmode" value="Keep URLs unchanged"> Keep URLs unchanged</label>
+    <label><input type="radio" name="urlmode" value="Rewrite listed domains"> Rewrite listed domains</label>
+    <input class="domains" value="example.com, www.example.com" aria-label="Old site domains">
+  </fieldset>
+  <div class="switches">
+    <label><input type="checkbox" class="drafts"> Import as drafts</label>
+    <label><input type="checkbox" class="dryrun"> Dry run</label>
+  </div><button class="primary run top-run">Import this content</button></section><section class="panel special"><h2>Setup summary</h2><dl><dt>Selected source</dt><dd class="summary-source">https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture</dd><dt>URL treatment</dt><dd class="summary-url">Ask when old URLs are found</dd><dt>Output</dt><dd class="summary-output">Publishes pages</dd></dl></section><section class="panel progress-panel">
+    <div class="panel-head"><h2>Timeline Setup run</h2><span class="pill status">Ready</span></div>
+    <p class="current-action">Choose a source and confirm setup.</p>
+    <div class="bar"><span></span></div>
+    <p class="counts"><b>0%</b> · 0 / ? items complete</p>
+    <ol class="stages"><li class="stage" data-step="0">
+    <span class="stage-index">1</span><span><b>Read source</b><small>Queued.</small></span>
+  </li><li class="stage" data-step="1">
+    <span class="stage-index">2</span><span><b>Prepare content</b><small>Not started.</small></span>
+  </li><li class="stage" data-step="2">
+    <span class="stage-index">3</span><span><b>URL treatment</b><small>Not started.</small></span>
+  </li><li class="stage" data-step="3">
+    <span class="stage-index">4</span><span><b>Import media</b><small>Not started.</small></span>
+  </li><li class="stage" data-step="4">
+    <span class="stage-index">5</span><span><b>Write pages</b><small>Not started.</small></span>
+  </li><li class="stage" data-step="5">
+    <span class="stage-index">6</span><span><b>Finish</b><small>Not started.</small></span>
+  </li></ol>
+    <div class="decision" hidden>
+      <h3>Rewrite old-site URLs to this site?</h3>
+      <p>Selected hosts move to this site and keep the same paths. Unselected hosts stay unchanged.</p>
+      <label><input type="checkbox" checked> example.com <small>/docs/importer-guide</small></label>
+      <label><input type="checkbox" checked> www.example.com <small>/media/header.jpg</small></label>
+      <div class="decision-actions"><button>Rewrite selected domains</button><button>Yes, rewrite all</button><button>No, keep all URLs</button></div>
+    </div>
+    <details class="technical"><summary>Technical details</summary>
+      <p><b>Source items:</b> 38 total <span>(8 queued, 12 processing, 18 imported)</span></p>
+      <p><b>Prepared:</b> 24 documents <b>Drafts:</b> 0 <b>Comments:</b> 6</p>
+      <p><b>Media:</b> 22 total <span>(9 queued, 10 imported, 3 skipped, 0 failed)</span></p>
+      <ul><li>Fetching GitHub repository files through sparse Git checkout.</li><li>Prepared Markdown document: Architecture overview, 14 blocks.</li></ul>
+    </details>
+    <div class="run-actions"><button class="primary run">Import this content</button><button class="abort" disabled>Abort</button><a class="view" hidden href="#">View imported content</a></div>
+  </section></main>
+<script>
+const phases=["Read source","Prepare content","URL treatment","Import media","Write pages","Finish"];
+const actions=['Queued.','Reading source files and repository paths.','Preparing Markdown, HTML, WXR, PDF, EPUB, and text documents.','Checking old-site domains for URL treatment.','Importing or skipping referenced media.','Writing WordPress pages, comments, and relationships.','Import complete.'];
+let sourceKind='GitHub repo'; let sourceValue="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture";
+function qs(s,r=document){return r.querySelector(s)} function qsa(s,r=document){return [...r.querySelectorAll(s)]}
+function refreshSummary(){qsa('.summary-source').forEach(n=>n.textContent=sourceValue); qsa('.summary-url').forEach(n=>n.textContent=qs('input[name=urlmode]:checked')?.value||'Ask when old URLs are found'); qsa('.summary-output').forEach(n=>n.textContent=(qs('.dryrun')?.checked?'Dry run':(qs('.drafts')?.checked?'Creates drafts':'Publishes pages')))}
+qsa('.source-card').forEach(card=>card.addEventListener('click',()=>{qsa('.source-card').forEach(c=>c.classList.remove('active'));card.classList.add('active');sourceKind=card.dataset.kind;sourceValue=card.dataset.source;qs('.source-input').value=sourceValue;refreshSummary()}));
+qsa('input').forEach(input=>input.addEventListener('change',refreshSummary)); qs('.source-input')?.addEventListener('input',e=>{sourceValue=e.target.value;refreshSummary()});
+qsa('.browse').forEach(btn=>btn.addEventListener('click',()=>{const tree=qs('.tree'); if(tree) tree.hidden=!tree.hidden}));
+qsa('.tree button').forEach(btn=>btn.addEventListener('click',()=>{qsa('.tree button').forEach(b=>b.classList.remove('selected'));btn.classList.add('selected'); if(btn.textContent.includes('docs')){sourceValue='https://github.com/WordPress/gutenberg/tree/trunk/'+btn.textContent; qs('.source-input').value=sourceValue; refreshSummary();}}));
+function runImport(){const status=qs('.status'), bar=qs('.bar span'), counts=qs('.counts'), current=qs('.current-action'), decision=qs('.decision'), abort=qs('.abort'), view=qs('.view'); qsa('.run').forEach(b=>b.disabled=true); abort.disabled=false; view.hidden=true; decision.hidden=true; let i=0; status.textContent='running'; const tick=()=>{const pct=Math.min(100,Math.round((i/(phases.length))*100)); bar.style.width=pct+'%'; current.textContent=actions[i]||actions.at(-1); counts.innerHTML='<b>'+pct+'%</b> · '+Math.min(38,i*7)+' / 38 items complete'; qsa('.stage').forEach((s,idx)=>{s.classList.toggle('done',idx<i);s.classList.toggle('active',idx===i);s.querySelector('small').textContent=idx<i?'Done.':idx===i?actions[i]:'Not started.'}); if(i===2){decision.hidden=false;status.textContent='Needs attention'} if(i<phases.length){i++; setTimeout(tick,i===3?1300:650)} else {status.textContent='done'; current.textContent='Import complete. 38 pages, 22 media references, and 6 comments processed.'; counts.innerHTML='<b>100%</b> · 38 / 38 items complete'; abort.disabled=true; view.hidden=false; qsa('.run').forEach(b=>b.disabled=false)}}; tick()}
+qsa('.run').forEach(btn=>btn.addEventListener('click',runImport)); qsa('.abort').forEach(btn=>btn.addEventListener('click',()=>{qs('.status').textContent='aborted';qs('.current-action').textContent='Import aborted by user.';btn.disabled=true;qsa('.run').forEach(b=>b.disabled=false)}));
+qsa('.decision-actions button').forEach(btn=>btn.addEventListener('click',()=>{qs('.decision').hidden=true;qs('.status').textContent='running';qs('.current-action').textContent=btn.textContent+' saved. Continuing import.'}));
+refreshSummary();
+</script>
+</body>
+</html>
