@@ -614,3 +614,13 @@ The support disclosure remains secondary on mobile. It appears only after editab
 The main cost is still vertical length. Opening the disclosure pushes later setup summary or scan content farther down by roughly a screen, and the last "Archive or document" card is cropped at the bottom of the supplied evidence. That is acceptable for an optional expanded reference, especially because the disclosure answers a legitimate "does this source work?" question without adding new examples or controls.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for this pass. The Pass 56 desktop-only hierarchy concern has not reproduced as a mobile defect in the 500px evidence, and no HTML/CSS edit is justified. Preserve the current mobile order and avoid adding more support copy, source-specific journeys, or extra cards inside the disclosure.
+
+## Pass 58 Critique
+
+The 768px tablet opened-source-support screenshot is acceptable. The support cards are visually substantial, but they do not delay the dry-run journey because the source type, source field, Browse fallback, "Start dry run" action, fixed dry-run guarantee, upload fallback, and editable settings all appear before the opened reference. The user can still complete the required setup task without reading the six cards.
+
+The cards do compete mildly with the "Current setup" summary because they sit immediately above it and use the same bordered-card language. That matters less on this tablet view than it did in the desktop scan-decision evidence: the page is still in setup, the support reference was explicitly opened, and the summary remains visible directly below with a strong "Ready to preview" heading and numbered next steps. The support grid answers "does my source type work?" while the summary answers "what happens next?", and both remain distinguishable enough.
+
+The tablet layout is also more efficient than the mobile opened state. The six cards form two compact rows, text wraps cleanly, and the card grid does not create horizontal overflow or push the summary several screens away. Compressing the cards further would save some vertical space but would likely make source coverage harder to scan, which is not a worthwhile tradeoff for an optional disclosure.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tablet-specific edit is justified from this evidence; the opened support proof has some visual weight, but it does not block the dry-run action or bury the current setup summary enough to warrant another layout pass. Continue to avoid adding source examples, extra cards, or new controls inside the disclosure.
