@@ -504,3 +504,13 @@ The six support cards are large, but their content is not feature-proof bloat. E
 The tablet wrapping is acceptable. Source type tabs wrap to two or three lines in a few labels, but the selected GitHub tab remains clear, the tab row height stays stable, and the support cards below use readable short lines rather than clipped text. The current setup panel immediately after the disclosure restores hierarchy by summarizing the chosen source, path, mode, draft behavior, URL policy, and next steps before the scan decision.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No concrete design-only issue in the supplied 768px open-disclosure evidence justifies an HTML or CSS edit; the best change for this pass is to avoid adding more supported-format proof.
+
+## Pass 47 Critique
+
+The 500px opened source-support disclosure is long, but it does not make source selection feel like a second workflow. The mobile order still protects the current setup task: source field, Browse, "Start dry run," fixed dry-run guarantee, upload fallback, source type grid, editable settings, and only then the support disclosure. Opening "What each source supports" therefore reads as optional coverage proof after the setup choices, not a required branch before preview.
+
+The support cards preserve the needed source coverage without visible wrapping failures. The six cards map cleanly to the six source types and cover GitHub repositories/docs/assets, WordPress posts/media/authors/comments/REST/WXR, feeds and OPML, server folders/archive paths/local exports, browser-selected files, and archive/document formats including ZIP, Markdown, HTML, PDF, EPUB, XML, SQL, OPML, and plain text. The card text wraps into short readable lines, and the long GitHub source path in the setup summary below wraps instead of overflowing.
+
+The only mobile cost is vertical length: the opened disclosure delays the "Ready to preview" summary by roughly one screen. That is acceptable because the disclosure is explicitly user-opened and answers a legitimate "does my source work?" question. Collapsing or combining the cards would save space, but it would either hide missing source coverage or make the support proof harder to scan.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No concrete 500px design-only issue justifies an HTML or CSS edit for this pass; the best constraint is to avoid adding more cards, examples, or source-specific journeys inside the disclosure.
