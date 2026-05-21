@@ -298,3 +298,11 @@ The tablet-width screenshot remains stable after the helper edit. The setup hier
 The narrow-mobile screenshot shows one concrete breakpoint issue. The setup panel appears clipped at the right edge: the intro helper line, long source value, setting helper text, and the "Archive or document" source option lose visible content instead of wrapping or being fully contained. That is hierarchy damage at the narrowest breakpoint because it makes the first-screen setup feel mechanically cropped, even though the dry-run CTA and guarantee still remain legible.
 
 Recommendation: do not add more source coverage, states, or explanatory UI. A tiny follow-up is justified only for narrow mobile containment: make the source-type choices and long setup helper/value text wrap or stack cleanly at the narrow breakpoint, with no copy expansion and no new journey content. Tablet can remain unchanged.
+
+## Pass 24 Critique
+
+The Pass 23 clipping concern is not actionable with the new DOM measurement. The narrow screenshot still looks cropped on the right edge, but the instrumented run reports `inner=500 client=485 scroll=485 body=485` while the screenshot was captured at 390px. That means Chromium laid out a 485px-wide document inside an effective 500px viewport, then the screenshot crop cut into that wider layout. It does not show committed CSS producing document-level horizontal overflow at the measured layout width.
+
+The tablet screenshot remains stable, and the measured document width matching the scroll width clears the specific concern that the setup panel, helper text, source value, or source-type grid is forcing page-level overflow. The visible 390px crop is still useful as evidence that the capture setup can make the first screen look clipped, but it is not enough to justify changing the design artifact.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny follow-up is justified unless a manual browser check or a DOM measurement at an actual 390px layout viewport reproduces `scrollWidth > clientWidth` or identifies a specific overflowing element.

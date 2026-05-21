@@ -44,6 +44,7 @@
 - Pass 21 reviewed the full desktop and mobile screenshots after the helper edit and kept the HTML unchanged. The artifact still reads as one sequence across setup, scan decision, dry-run result, issue resolution, and real import; no source matrix, extra state, new control, or runtime/plugin change is needed.
 - Pass 22 reviewed the opened support disclosure after the helper edit and kept the HTML unchanged. "WordPress exports" works as a short first-screen acceptance hint, while the disclosure's "WordPress site" and WXR details act as optional proof below the setup path rather than a capability matrix.
 - Pass 23 reviewed the narrow mobile and tablet screenshots after the helper edit and kept the HTML unchanged. The first-screen action path, two-column mobile source selector, setup summary, and scan decision remain readable without a new source-catalog feel; the long URL/path content is bounded or wrapped instead of forcing a visible horizontal layout regression.
+- Pass 24 kept the HTML unchanged. The narrow mobile crop matches the capture setup rather than an artifact-level overflow: the temp DOM measurement laid Chromium out at `inner=500`, `client=485`, `scroll=485`, and `body=485`, then the 390px screenshot cropped that wider layout. Since document scroll width did not exceed client width, no containment CSS change is justified.
 
 ## Remaining Concerns
 
