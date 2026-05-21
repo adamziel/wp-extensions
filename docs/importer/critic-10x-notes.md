@@ -1618,3 +1618,11 @@ The measured size does not show a true artifact-bloat defect. The HTML is large 
 The palette also does not show color-token drift or forbidden visual style. The color scan is dominated by WordPress admin neutrals and semantic status/action tokens, led by `var(--line)`, `var(--muted)`, `#fff`, `var(--focus)`, and `var(--blue)`, with amber and green following as state colors. The HTML has no matches for `purple`, `violet`, `gradient`, `orb`, `bokeh`, `hero`, `marketing`, or `landing`; the note-file matches are contextual review language, not visible UI artifacts.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 155. Keep the artifact and notes as-is unless a separate documentation-maintenance pass explicitly asks to archive old critique history.
+
+## Pass 156 Critique
+
+The 320px large-text setup with both optional disclosures opened does not show a true optional-disclosure, height, target-size, large-text, or overflow defect. The page remains horizontally contained at `320px` across `innerWidth`, `clientWidth`, `scrollWidth`, and `bodyScrollWidth`, with `overflowCount=0`; the source switcher stays contained at `270px` by `101px`, and the primary setup action remains target-safe at `248px` by `44.09px`.
+
+The setup is very tall because both disclosure bodies are intentionally expanded under an 18px body-text override. That pushes the scan decision to about `3287.73px`, but the expanded content is optional reference material rather than required forward progress, and the disclosure panels stay readable and contained at `248px` and `266px` widths. The no-write guarantee is taller at `248px` by `146.75px`, but this is acceptable large-text wrapping for safety copy, not a clipping or hierarchy failure.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 156. Keep the optional disclosures as-is; collapsing, trimming, or reworking them would reduce useful setup context without fixing a demonstrated overflow, target-size, or large-text defect.
