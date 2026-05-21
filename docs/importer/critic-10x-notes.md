@@ -1414,3 +1414,13 @@ The supplied mobile, narrow, and desktop evidence shows no horizontal overflow, 
 The labels are specific enough. "Save new content as drafts," "Ask before URL rewriting," and "Report duplicate matches" each name the setting and the helper text explains the consequence without turning the section into another safety catalog. I do not see ambiguity worth fixing; replacing these with longer labels would likely make the compact cards heavier, especially on the `266px` narrow layout.
 
 Recommendation: make no HTML change for Pass 132 and do not touch plugin or runtime code. Keep the editable-settings section as-is; it is clear, contained, target-safe, and properly subordinate to the source and dry-run path.
+
+## Pass 133 Critique
+
+The editable-settings focus behavior holds up. On mobile, the focused URL rewriting card stays inside the `336px` column, has no horizontal overflow, and the inset `2px` blue focus treatment is fully visible without clipping against the card border or section edge. Because the focus lands on the whole labeled card, not just the small native checkbox, the target remains clear and large enough for keyboard and touch use.
+
+The narrow forced-colors evidence is also acceptable. The focused duplicate reporting card measures about `266px` by `80px`, drops the decorative shadow, and exposes a solid `2px` black outline. That preserves focus visibility without relying on color, and it does not collapse the card grouping or hide the checked state. The outline is stronger than the normal treatment, but in forced colors that is a useful accessibility signal rather than visual bloat.
+
+Large text does not reveal a regression. Each mobile settings card remains about `336px` by `80px`, the labels and helper text still fit, and there is no horizontal overflow. The meaning is not hidden: drafts, URL rewriting, and duplicate reporting each name the editable setting and state the consequence in one short helper line. The section is still secondary to the dry-run path and does not compete with the primary action.
+
+Recommendation: make no HTML change for Pass 133 and do not touch plugin or runtime code. The editable-settings cards are target-safe, focus-visible, forced-colors compatible, and stable under large text; further refinement here would mostly add weight without improving the journey.
