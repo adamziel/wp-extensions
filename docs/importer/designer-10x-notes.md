@@ -25,6 +25,9 @@
 - Pass 6 intentionally did not add recovery, retry, publish, or bulk-fix flows. Those would make the static artifact heavier than the current PR needs.
 - Pass 7 tested a compact source-adaptation table inside the collapsed source-support disclosure, then removed it after critic review because it risked pulling the artifact back toward a capability matrix. The principle remains in notes: source type should adapt labels, examples, scan evidence, and warning copy without changing the four-step journey.
 - Pass 7 intentionally kept the first screen unchanged: the visible setup still leads with source type, source input, Start dry run, and the dry-run guarantee before optional source details.
+- Pass 8 did a narrow accessibility/clarity polish only. Generated badge dots remain decorative because adjacent badge text carries the status; stage symbols remain `aria-hidden` because each row now has explicit visible status text: Complete, Needs decision, or Not started.
+- Pass 8 added programmatic selected text to the static selected source and URL-handling options while keeping the visible product surface unchanged. Native checked radio inputs still provide the main non-color selected state.
+- Pass 8 labeled the setup badge as the current state and kept warning, complete, active, and allowed-with-warnings meanings in visible text rather than relying on color, dot shape, or icon shape.
 
 ## Remaining Concerns
 
@@ -36,3 +39,4 @@
 - "Allowed with warnings" is shown as a static condition. Production should compute this from warning severity and disable the real import when blocking warnings remain.
 - The new resolver demonstrates only one warning path. Production still needs the actual state model for replacement upload errors, duplicate-match changes, title confirmation, accepted warnings, and how resolved warnings update counts.
 - The post-import block is deliberately tiny. Production still needs real edit/report URLs, write failure handling, permissions checks, and focus/live-region behavior after the import completes.
+- This pass did not add live regions, focus management, interactive state changes, or high-contrast QA. Those remain implementation concerns beyond the static artifact.

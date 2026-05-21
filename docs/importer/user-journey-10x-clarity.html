@@ -1107,7 +1107,7 @@
 					<h2>Import content</h2>
 					<p>Add one source, preview the import, then run the real import only after WordPress shows the evidence.</p>
 				</div>
-				<span class="badge">Setup</span>
+				<span class="badge" aria-label="Current state: Setup">Setup</span>
 			</header>
 
 			<div class="setup-grid" id="setup">
@@ -1124,7 +1124,7 @@
 							<div class="source-switcher">
 								<label class="source-tab is-selected">
 									<input type="radio" name="source-type" checked>
-									<span>GitHub</span>
+									<span>GitHub<span class="screen-reader-text"> selected</span></span>
 								</label>
 								<label class="source-tab">
 									<input type="radio" name="source-type">
@@ -1279,7 +1279,7 @@
 							<label class="radio-card is-selected">
 								<input type="radio" name="url-handling" checked>
 								<span>
-									<strong>Keep as external links</strong>
+									<strong>Keep as external links<span class="screen-reader-text"> selected</span></strong>
 									<span>Leaves the 7 links unchanged in the import preview.</span>
 								</span>
 							</label>
@@ -1311,22 +1311,22 @@
 							<li class="is-done">
 								<span class="stage-dot" aria-hidden="true">✓</span>
 								<div><strong>Read source</strong><span>13 repository files found.</span></div>
-								<span class="stage-status">Done</span>
+								<span class="stage-status">Complete</span>
 							</li>
 							<li class="is-done">
 								<span class="stage-dot" aria-hidden="true">✓</span>
 								<div><strong>Detect duplicates</strong><span>3 matching page slugs found.</span></div>
-								<span class="stage-status">Done</span>
+								<span class="stage-status">Complete</span>
 							</li>
 							<li class="is-current">
 								<span class="stage-dot" aria-hidden="true">!</span>
 								<div><strong>URL handling</strong><span>Decision required for one old domain.</span></div>
-								<span class="stage-status">Needs input</span>
+								<span class="stage-status">Needs decision</span>
 							</li>
 							<li>
 								<span class="stage-dot" aria-hidden="true">4</span>
 								<div><strong>Media check</strong><span>Queued after URL decision.</span></div>
-								<span class="stage-status">Next</span>
+								<span class="stage-status">Not started</span>
 							</li>
 						</ul>
 					</aside>
