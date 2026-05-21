@@ -230,3 +230,13 @@ The opened source-support disclosure provides enough feature proof without becom
 The added "ZIP/archive paths" and "plain text files" wording improves coverage with minimal cost. "ZIP/archive paths" closes the gap between local/server paths and archive inputs, and "plain text files" makes the document bucket feel less artificially narrow. Neither phrase adds meaningful bloat because both appear inside already-scannable cards, not in the primary helper line or the first action path.
 
 Recommendation: keep the HTML stable. The expanded disclosure is doing the right job: feature proof on demand, not a visible source matrix. A disclosure-only copy or layout edit is not justified unless a reviewer still misses archive paths or plain text support after opening it.
+
+## Pass 16 Critique
+
+This is now clear enough for human product/design review. The artifact shows a complete, reviewable direction: add one source, run a guaranteed dry run, resolve the one blocking scan decision, inspect evidence, and run the real import only after the consequences are explicit. The mobile and desktop screenshots both support that story, including the opened source-support disclosure, without making reviewers assemble the journey from internal annotations.
+
+Visible copy no longer feels like scaffolding. The removed state labels and saved-setup affordance were the main artifact-like pieces; what remains reads like product UI. The source-support cards, dry-run guarantee, result evidence, warning resolution example, and "allowed with warnings" handoff are explanatory, but they explain user consequences rather than internal implementation mechanics.
+
+Caveats are properly contained outside the UI. Static sample data, non-functional source adaptation, validation, accessibility behavior, live progress announcements, high-contrast QA, and large-result responsive testing should stay in notes or the PR body. Adding those caveats to the visible artifact would make the UI over-explain itself and weaken the current handoff.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for review. The only tiny copy edit previously identified, changing "uploads, exports, and documents" to mention WordPress exports, is not justified now because the opened disclosure already exposes WXR and WordPress REST coverage. Do not edit the artifact unless a human reviewer identifies a concrete misunderstanding in the visible UI.
