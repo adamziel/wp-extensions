@@ -1092,3 +1092,13 @@ The button does not look too easy to trigger in this state. It is a strong green
 The remaining risk is implementation QA rather than design bloat: production should preserve this tab position, visible focus style, and consequence order so keyboard users encounter the final action only after the warning summary and before-running copy. Do not add another confirmation layer or extra warning panel; the current gate already has enough friction and adding more would make the journey feel heavier without changing the feature surface.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 100. The focused final import action is visible, adequately preceded by consequence copy, and strong without looking casual or unsafe to trigger.
+
+## Pass 101 Critique
+
+The 500px mobile dry-run result screenshot with keyboard focus on "Use replacement file" supports the warning-resolution model. The focused control is fully visible and contained (`activeRect={left:55, top:1297, right:445, bottom:1337}`), with no horizontal overflow (`innerWidth=500`, `clientWidth=500`, `scrollWidth=500`, `bodyScrollWidth=500`). The focused element is the expected semantic target: `activeTag=BUTTON` and `activeText="Use replacement file"`.
+
+The action is framed as resolving a warning, not writing content. The panel heading says "Resolve selected issue," the subcopy names the selected warning as missing media for "Block rendering," and the fields show affected item, missing path, replacement path, and result before the focused button. That surrounding evidence makes the blue focused button read as "apply this replacement decision to clear one warning" rather than "commit the import." The nearby alternative, "Keep warning," also reinforces that this is a resolver choice inside dry-run review, not the final write boundary.
+
+The focus state is visible enough in this capture. The focused button has a strong filled treatment plus an outline/shadow that stands out inside the resolver panel, and it is not clipped by the viewport even though the result section begins above the screenshot (`resultTop=-297`). The surrounding result rows and the "Dry run complete" state below keep the user oriented within review rather than implying that content will be written immediately.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 101. The resolver focus state is visible, correctly framed as a warning-resolution action, and safely distinct from the later real-import write action. In production QA, preserve this distinction through tab order, focus styling, and action labels so resolver buttons cannot be mistaken for commit buttons.
