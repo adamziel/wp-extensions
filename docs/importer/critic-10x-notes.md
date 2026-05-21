@@ -1528,3 +1528,13 @@ The compact 3-column source chooser remains usable at this width. All six source
 The later states also hold up. The scan-decision primary and secondary actions remain `40px` tall and labeled by consequence, the stacked result table stays within the `276px` content width with row actions still target-safe, and the final real-import action plus after-running proof remain readable. Status dots, badge fills, and green/amber emphasis are no longer the main signal, but adjacent status text, headings, labels, and button copy carry the journey.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 144. I do not see a forced-colors-specific artifact refinement that fixes a real clarity problem without mostly adding redundant visual treatment.
+
+## Pass 145 Critique
+
+The 360px keyboard traversal preserves the same setup clarity as the visual first-run path. After the four section-nav links, focus lands on the source-type radio group before the source field, then moves through the source input, Browse repo, and the full-width `288px` by `40px` Start dry run action. That order matches the intended mental model: confirm the source kind, enter or browse the source, then preview safely.
+
+The secondary material stays proportionate in keyboard order. Upload files appears after the primary dry-run action and is still visible at the bottom edge after slight scroll; editable settings, the source-support disclosure, scan decision controls, and result-row actions follow in a sensible sequence. The supplied evidence shows no horizontal overflow, visible focus targets, and `40px` action heights where the user needs to act.
+
+The only residual cost is the four initial nav tab stops before the task, but that mirrors the visible journey navigation and is not enough to justify another artifact change. Adding skip-link behavior or reworking navigation would be production-accessibility work, not a necessary refinement for this static pass.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 145. The keyboard traversal is clear, proportionate, and preserves the source-type-before-input and dry-run-before-secondary-settings hierarchy.
