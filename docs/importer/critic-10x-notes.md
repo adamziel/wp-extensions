@@ -384,3 +384,13 @@ The two radio choices are enough because each names the behavior and the consequ
 The action pair is clear in context. "Apply decision and continue" advances the paused dry run with the selected handling, and "Pause dry run" gives a safe exit without adding another explanation block. The progress stack below reinforces that this is an active dry run waiting on URL handling, not a new setup step.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass; adding more policy text would make this mobile state heavier without improving the decision.
+
+## Pass 34 Critique
+
+The desktop full-journey screenshot still tells one coherent importer story. It starts with a focused source setup, makes the first write boundary safe through the fixed dry-run guarantee, pauses only for a specific old-site URL decision, resumes into item-level dry-run evidence, shows one remediation example for missing media, and ends with a consequence-explicit real-import gate. The page reads as one guided path rather than a catalog of importer capabilities.
+
+The current length is justified by the job it is proving. The setup summary, scan progress, result counts, evidence table, warning notes, remediation card, and final consequence list each answer a different user question: what source is being previewed, why the dry run paused, what would change, which issues remain, how one issue can be resolved, and what WordPress will write if the real import runs. Removing any of those would save space but weaken the source-to-dry-run-to-import narrative.
+
+The only visible density is in the result and real-import sections, but it is useful density rather than bloat. The result table keeps create, update, warning, and skip evidence in one review surface, and the final amber gate is explicit that the real import creates and updates drafts, publishes zero items, keeps old-site URLs external, skips the untitled document, and carries one media warning into the report. That is the right level of consequence before a destructive action.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass. Future changes should wait for reviewer feedback on a concrete misunderstanding, not another pre-review trim.
