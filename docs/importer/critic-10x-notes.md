@@ -1518,3 +1518,13 @@ The setup section is proportionate at this width. There is no horizontal overflo
 The scan decision, result review, and real-import sections are dense but not bloated. The result section is the tallest piece at about `2304px`, yet it is doing real work: the stacked table preserves outcome, item, evidence, owner, and next action; the resolver panel closes one warning loop; and the final warning summary explains why the real import can proceed. The real-import state stays bounded, with the action row and after-running proof contained and readable rather than expanding into a completion dashboard.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 143. I do not see one remaining artifact-only refinement that would fix a real clarity problem without mostly trimming evidence that the static review artifact still needs.
+
+## Pass 144 Critique
+
+The forced-colors 360px journey preserves the importer semantics without depending on colored badges or cards. The colors collapse to system text, background, and border treatments, but the meaning still comes from visible words and native controls: the checked source radio identifies the selected source type, the setup guarantee says the dry run writes no content, the scan state says "Needs decision," the result table uses text outcomes like Create, Update, Warning, and Skip, and the final gate says "Allowed with warnings" before the draft-only import action.
+
+The compact 3-column source chooser remains usable at this width. All six source tabs stay visible, each tab is a usable roughly `102.66px` by `49.5px` target, and the `288px` by `40px` Start dry run action appears before the guarantee at about `630.797px`. The forced-colors treatment makes borders more prominent, but that helps grouping rather than creating a false state or hiding the selected radio.
+
+The later states also hold up. The scan-decision primary and secondary actions remain `40px` tall and labeled by consequence, the stacked result table stays within the `276px` content width with row actions still target-safe, and the final real-import action plus after-running proof remain readable. Status dots, badge fills, and green/amber emphasis are no longer the main signal, but adjacent status text, headings, labels, and button copy carry the journey.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 144. I do not see a forced-colors-specific artifact refinement that fixes a real clarity problem without mostly adding redundant visual treatment.
