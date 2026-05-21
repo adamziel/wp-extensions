@@ -216,6 +216,7 @@ final class ImportAdminPage {
 				)
 			)
 		);
+		$this->record_initial_github_queue_event( $session );
 
 		$this->save_initial_url_rewrite_preference( $session->get_id(), $confirmed_domains, $url_rewrite_mode );
 		$this->save_initial_post_status_preference( $session->get_id(), (bool) $import_as_drafts );
@@ -2368,7 +2369,8 @@ final class ImportAdminPage {
 				var percent = Math.max(0, Math.min(100, Number(dashboard.percentage || 0)));
 				var total = summary.total || '?';
 				var progressClass = dashboard.indeterminate ? ' is-indeterminate' : '';
-				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : session.status;
+				var progressNote = dashboard.progress_note || '';
+				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : (dashboard.status_label || session.status);
 				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : (session.post_status === 'draft' ? '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Publishes pages', 'universal-wordpress-importer' ) ); ?>');
 				var importingClass = isImportLocked(session) ? ' is-importing' : '';
 				var html = '<section class="universal-importer-card' + importingClass + '" data-session-id="' + escapeHtml(session.id) + '">';
@@ -2379,7 +2381,12 @@ final class ImportAdminPage {
 				html += '</div><div class="universal-importer-card-body">';
 				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
 				html += '<div class="universal-importer-progressbar' + progressClass + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
-				html += '<p class="universal-importer-meta">' + percent + '% · ' + summary.completed + ' / ' + total + ' <?php echo esc_js( __( 'items complete', 'universal-wordpress-importer' ) ); ?>';
+				html += '<p class="universal-importer-meta">';
+				if (progressNote) {
+					html += escapeHtml(progressNote);
+				} else {
+					html += percent + '% · ' + summary.completed + ' / ' + total + ' <?php echo esc_js( __( 'items complete', 'universal-wordpress-importer' ) ); ?>';
+				}
 				if (summary.errors) {
 					html += ' · ' + summary.errors + ' <?php echo esc_js( __( 'errors', 'universal-wordpress-importer' ) ); ?>';
 				}
@@ -3088,8 +3095,9 @@ final class ImportAdminPage {
 			$total          = empty( $summary['total'] ) ? '?' : (string) $summary['total'];
 			$completed      = isset( $summary['completed'] ) ? (int) $summary['completed'] : 0;
 			$errors         = isset( $summary['errors'] ) ? (int) $summary['errors'] : 0;
+			$progress_note  = isset( $dashboard['progress_note'] ) ? (string) $dashboard['progress_note'] : '';
 			$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking import state.', 'universal-wordpress-importer' );
-			$display_status = empty( $dashboard['attention_message'] ) ? (string) $session['status'] : __( 'Needs attention', 'universal-wordpress-importer' );
+			$display_status = empty( $dashboard['attention_message'] ) ? ( isset( $dashboard['status_label'] ) && '' !== (string) $dashboard['status_label'] ? (string) $dashboard['status_label'] : (string) $session['status'] ) : __( 'Needs attention', 'universal-wordpress-importer' );
 			$card_class     = $this->is_active_admin_session( $session ) ? 'universal-importer-card is-importing' : 'universal-importer-card';
 			$mode_label     = ! empty( $session['dry_run'] ) ? __( 'Dry run', 'universal-wordpress-importer' ) : ( isset( $session['post_status'] ) && 'draft' === $session['post_status'] ? __( 'Creates drafts', 'universal-wordpress-importer' ) : __( 'Publishes pages', 'universal-wordpress-importer' ) );
 			?>
@@ -3110,15 +3118,19 @@ final class ImportAdminPage {
 					</div>
 					<p class="universal-importer-meta">
 						<?php
-						echo esc_html(
-							sprintf(
-								/* translators: 1: percentage complete, 2: completed items, 3: total items. */
-								__( '%1$d%% - %2$d / %3$s items complete', 'universal-wordpress-importer' ),
-								$percentage,
-								$completed,
-								$total
-							)
-						);
+						if ( '' !== $progress_note ) {
+							echo esc_html( $progress_note );
+						} else {
+							echo esc_html(
+								sprintf(
+									/* translators: 1: percentage complete, 2: completed items, 3: total items. */
+									__( '%1$d%% - %2$d / %3$s items complete', 'universal-wordpress-importer' ),
+									$percentage,
+									$completed,
+									$total
+								)
+							);
+						}
 						if ( 0 < $errors ) {
 							echo esc_html( sprintf( /* translators: %d: error count. */ __( ' - %d errors', 'universal-wordpress-importer' ), $errors ) );
 						}
@@ -3809,6 +3821,36 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Records an initial GitHub queue event with enough context for the dashboard activity log.
+	 *
+	 * @param ImportSession $session New import session.
+	 * @return void
+	 */
+	private function record_initial_github_queue_event( ImportSession $session ) {
+		$repo = GitHubRepositorySourceUrl::parse( $session->get_source() );
+
+		if ( null === $repo ) {
+			return;
+		}
+
+		$this->get_store()->record_event(
+			$session->get_id(),
+			new ImportProgressEvent(
+				ImportProgressEvent::LEVEL_INFO,
+				'github.fetch_queued',
+				'GitHub repository fetch queued; file count will appear after discovery.',
+				array(
+					'github_owner'         => $repo['owner'],
+					'github_repository'    => $repo['name'],
+					'github_ref'           => $repo['ref'],
+					'github_requested_ref' => $repo['ref'],
+					'github_source_path'   => $repo['source_path'],
+				)
+			)
+		);
+	}
+
+	/**
 	 * Stores an initial URL rewrite decision when the operator chooses one.
 	 *
 	 * @param ImportSessionId   $session_id        Session id.
@@ -4033,6 +4075,8 @@ final class ImportAdminPage {
 		return array(
 			'percentage'        => $percentage,
 			'indeterminate'     => $this->dashboard_progress_is_indeterminate( $session ),
+			'status_label'      => $this->dashboard_status_label( $session ),
+			'progress_note'     => $this->dashboard_progress_note( $session ),
 			'current_action'    => $this->dashboard_current_action( $session ),
 			'attention_message' => $this->dashboard_attention_message( $session ),
 			'needs_keepalive'   => $this->dashboard_needs_keepalive( $session ),
@@ -4053,7 +4097,7 @@ final class ImportAdminPage {
 	 * @return bool
 	 */
 	private function dashboard_progress_is_indeterminate( array $session ) {
-		if ( ImportSession::STATUS_RUNNING !== $session['status'] ) {
+		if ( ImportSession::STATUS_RUNNING !== $session['status'] && ! $this->is_pending_github_discovery( $session ) ) {
 			return false;
 		}
 
@@ -4064,6 +4108,42 @@ final class ImportAdminPage {
 		$source_total = isset( $session['source_items']['total'] ) ? (int) $session['source_items']['total'] : 0;
 
 		return 0 === $source_total;
+	}
+
+	/**
+	 * Builds the status pill label for the progress card.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return string
+	 */
+	private function dashboard_status_label( array $session ) {
+		if ( $this->is_pending_github_discovery( $session ) ) {
+			return $this->admin_text( 'Starting' );
+		}
+
+		if ( ! empty( $session['github_git']['active'] ) ) {
+			return $this->admin_text( 'Fetching' );
+		}
+
+		return isset( $session['status'] ) ? (string) $session['status'] : '';
+	}
+
+	/**
+	 * Builds concise progress text for phases without a known item total.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return string
+	 */
+	private function dashboard_progress_note( array $session ) {
+		if ( $this->is_pending_github_discovery( $session ) ) {
+			return $this->admin_text( 'File count appears after GitHub repository discovery.' );
+		}
+
+		if ( ! empty( $session['github_git']['active'] ) ) {
+			return $this->admin_text( 'Fetching repository files; file count appears after discovery.' );
+		}
+
+		return '';
 	}
 
 	/**
@@ -4138,6 +4218,10 @@ final class ImportAdminPage {
 				$this->admin_text( '%d media item needs attention.' ),
 				(int) $media_statuses['failed']
 			);
+		}
+
+		if ( $this->is_pending_github_discovery( $session ) ) {
+			return $this->admin_text( 'Queued to fetch GitHub repository files.' );
 		}
 
 		if ( ImportSession::STATUS_PENDING === $session['status'] && 0 === $source_total ) {
@@ -4358,8 +4442,14 @@ final class ImportAdminPage {
 
 		if ( 0 === $source_total ) {
 			if ( ! $is_done ) {
-				$stages[0]['detail'] = $github_git_active ? $this->admin_text( 'Fetching repository files with sparse Git.' ) : $this->admin_text( 'Queued.' );
-				$stages[0]['state']  = 'active';
+				if ( $github_git_active ) {
+					$stages[0]['detail'] = $this->admin_text( 'Fetching repository files with sparse Git.' );
+				} elseif ( $this->is_pending_github_discovery( $session ) ) {
+					$stages[0]['detail'] = $this->admin_text( 'Waiting to fetch repository files from GitHub.' );
+				} else {
+					$stages[0]['detail'] = $this->admin_text( 'Queued.' );
+				}
+				$stages[0]['state'] = 'active';
 				return $stages;
 			}
 
@@ -4431,6 +4521,22 @@ final class ImportAdminPage {
 		$stages[5]['state']  = $is_done ? 'done' : 'active';
 
 		return $stages;
+	}
+
+	/**
+	 * Returns whether this snapshot is waiting for first GitHub repository discovery.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return bool
+	 */
+	private function is_pending_github_discovery( array $session ) {
+		if ( ImportSession::STATUS_PENDING !== ( isset( $session['status'] ) ? (string) $session['status'] : '' ) ) {
+			return false;
+		}
+
+		$source_total = isset( $session['source_items']['total'] ) ? (int) $session['source_items']['total'] : 0;
+
+		return 0 === $source_total && isset( $session['source'] ) && null !== GitHubRepositorySourceUrl::parse( (string) $session['source'] );
 	}
 
 	/**

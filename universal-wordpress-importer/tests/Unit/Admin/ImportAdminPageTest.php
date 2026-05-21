@@ -1052,6 +1052,31 @@ final class ImportAdminPageTest extends TestCase {
 	}
 
 	/**
+	 * Pending GitHub imports explain repository discovery before the first worker response returns.
+	 *
+	 * @return void
+	 */
+	public function test_status_snapshot_explains_pending_github_repository_discovery() {
+		$page     = $this->create_page();
+		$snapshot = $page->create_import_session( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
+
+		$this->assertSame( ImportSession::STATUS_PENDING, $snapshot['status'] );
+		$this->assertSame( 0, $snapshot['source_items']['total'] );
+		$this->assertSame( 0, $snapshot['dashboard']['summary']['total'] );
+		$this->assertTrue( $snapshot['dashboard']['indeterminate'] );
+		$this->assertSame( 'Starting', $snapshot['dashboard']['status_label'] );
+		$this->assertSame( 'Queued to fetch GitHub repository files.', $snapshot['dashboard']['current_action'] );
+		$this->assertSame( 'File count appears after GitHub repository discovery.', $snapshot['dashboard']['progress_note'] );
+		$this->assertTrue( $snapshot['dashboard']['needs_keepalive'] );
+		$this->assertSame( 'active', $snapshot['dashboard']['checklist'][0]['state'] );
+		$this->assertSame( 'Waiting to fetch repository files from GitHub.', $snapshot['dashboard']['checklist'][0]['detail'] );
+		$this->assertSame( 'github.fetch_queued', $snapshot['recent_events'][0]['type'] );
+		$this->assertSame( 'trunk/docs', $snapshot['recent_events'][0]['context']['github_ref'] );
+		$this->assertSame( '', $snapshot['recent_events'][0]['context']['github_source_path'] );
+		$this->assertStringNotContainsString( 'Queued.', $snapshot['dashboard']['current_action'] );
+	}
+
+	/**
 	 * GitHub sparse checkout progress is shown without counting internal state as a source file.
 	 *
 	 * @return void
@@ -1086,6 +1111,8 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( 0, $details['source_items']['statuses'][ ImportSourceItem::STATUS_PROCESSING ] );
 		$this->assertTrue( $details['github_git']['active'] );
 		$this->assertTrue( $details['dashboard']['indeterminate'] );
+		$this->assertSame( 'Fetching', $details['dashboard']['status_label'] );
+		$this->assertSame( 'Fetching repository files; file count appears after discovery.', $details['dashboard']['progress_note'] );
 		$this->assertSame( 'Fetching repository files with sparse Git.', $details['dashboard']['current_action'] );
 		$this->assertSame( 'Fetching repository files with sparse Git.', $details['dashboard']['checklist'][0]['detail'] );
 	}

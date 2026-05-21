@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Existing Universal Importer Flow Map</title>
+	<style>
+		:root {
+			--bg: #f6f7f7;
+			--ink: #1d2327;
+			--muted: #646970;
+			--line: #dcdcde;
+			--panel: #fff;
+			--blue: #3858e9;
+			--green: #008a20;
+			--amber: #996800;
+			--red: #b32d2e;
+			--soft-blue: #eef6fc;
+			--soft-green: #edf8ef;
+			--soft-amber: #fcf9e8;
+			--soft-red: #fcf0f1;
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			background: var(--bg);
+			color: var(--ink);
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			font-size: 14px;
+			line-height: 1.45;
+			margin: 0;
+		}
+
+		main {
+			margin: 0 auto;
+			max-width: 1240px;
+			padding: 28px;
+		}
+
+		header {
+			align-items: end;
+			display: grid;
+			gap: 16px;
+			grid-template-columns: minmax(0, 1fr) auto;
+			margin-bottom: 18px;
+		}
+
+		h1 {
+			font-size: 28px;
+			line-height: 1.2;
+			margin: 0 0 4px;
+		}
+
+		h2 {
+			font-size: 17px;
+			line-height: 1.25;
+			margin: 0 0 10px;
+		}
+
+		h3 {
+			font-size: 14px;
+			line-height: 1.3;
+			margin: 0 0 6px;
+		}
+
+		p {
+			margin: 0;
+		}
+
+		code {
+			overflow-wrap: anywhere;
+		}
+
+		.muted {
+			color: var(--muted);
+		}
+
+		.pill {
+			background: #fff;
+			border: 1px solid var(--line);
+			border-radius: 999px;
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 700;
+			padding: 6px 10px;
+			white-space: nowrap;
+		}
+
+		.grid {
+			display: grid;
+			gap: 14px;
+		}
+
+		.grid.columns {
+			grid-template-columns: repeat(4, minmax(210px, 1fr));
+		}
+
+		.grid.two {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.panel {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			min-width: 0;
+			padding: 14px;
+		}
+
+		.card {
+			border: 1px solid var(--line);
+			border-left: 4px solid var(--blue);
+			border-radius: 6px;
+			margin-top: 10px;
+			padding: 10px;
+		}
+
+		.card.green {
+			background: var(--soft-green);
+			border-left-color: var(--green);
+		}
+
+		.card.amber {
+			background: var(--soft-amber);
+			border-left-color: var(--amber);
+		}
+
+		.card.red {
+			background: var(--soft-red);
+			border-left-color: var(--red);
+		}
+
+		.card.blue {
+			background: var(--soft-blue);
+		}
+
+		ul,
+		ol {
+			margin: 8px 0 0;
+			padding-left: 18px;
+		}
+
+		li {
+			margin: 4px 0;
+		}
+
+		.stages {
+			display: grid;
+			gap: 8px;
+			grid-template-columns: repeat(6, minmax(0, 1fr));
+			margin-top: 10px;
+		}
+
+		.stage {
+			background: #fbfbfc;
+			border: 1px solid var(--line);
+			border-radius: 6px;
+			padding: 10px;
+		}
+
+		.stage strong {
+			display: block;
+			font-size: 12px;
+			text-transform: uppercase;
+		}
+
+		.section {
+			margin-top: 16px;
+		}
+
+		.refs {
+			color: var(--muted);
+			font-size: 12px;
+			margin-top: 6px;
+		}
+
+		@media (max-width: 1100px) {
+			.grid.columns,
+			.grid.two {
+				grid-template-columns: 1fr;
+			}
+
+			.stages {
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+			}
+		}
+
+		@media (max-width: 640px) {
+			header {
+				display: block;
+			}
+
+			main {
+				padding: 18px;
+			}
+
+			.stages {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<header>
+			<div>
+				<h1>Existing Universal Importer Flow Map</h1>
+				<p class="muted">Current wp-admin behavior mapped from admin PHP, inline browser code, runner code, tests, and docs. No runtime plugin files were edited.</p>
+			</div>
+			<span class="pill">Docs-only</span>
+		</header>
+
+		<section class="panel">
+			<h2>Runtime Surface</h2>
+			<p><code>wp-admin/tools.php?page=universal-wordpress-importer</code></p>
+			<p class="refs">Admin page and AJAX actions: <code>ImportAdminPage.php:33-45</code>, <code>:113-121</code>, <code>:129-136</code>, <code>:2908-3030</code>. Browser requests use <code>admin-ajax.php</code>, nonce <code>universal_importer_admin</code>, and <code>manage_options</code>.</p>
+		</section>
+
+		<section class="grid columns section" aria-label="Start flows">
+			<div class="panel">
+				<h2>URL Or Server Path</h2>
+				<div class="card blue">
+					<h3>Start</h3>
+					<p>User enters one source value: server path, file/archive path, site/REST URL, feed/OPML, remote page, or GitHub URL.</p>
+					<p class="refs"><code>ImportAdminPage.php:1409-1488</code></p>
+				</div>
+				<div class="card">
+					<h3>Submit</h3>
+					<p><code>universal_importer_create_session</code> creates a pending session, stores initial URL and post-status decisions, schedules continuation, and returns a snapshot.</p>
+					<p class="refs"><code>ImportAdminPage.php:195-226</code>, <code>:2769-2802</code></p>
+				</div>
+				<div class="card green">
+					<h3>Runner</h3>
+					<p>Local, GitHub, remote URL, and archive walkers feed the same durable source queue.</p>
+					<p class="refs"><code>ImportRunner.php:241-251</code></p>
+				</div>
+			</div>
+
+			<div class="panel">
+				<h2>Browser Upload</h2>
+				<div class="card blue">
+					<h3>Select</h3>
+					<p>Choose files, choose a folder, click Browser folder, or drop files/folders.</p>
+					<p class="refs"><code>ImportAdminPage.php:1426-1457</code>, <code>:2308-2364</code></p>
+				</div>
+				<div class="card amber">
+					<h3>Override</h3>
+					<p>Selected browser files make the source input optional, hide the GitHub picker, and switch submit to upload mode.</p>
+					<p class="refs"><code>ImportAdminPage.php:1623-1647</code>, <code>:2094-2114</code>, <code>:2781-2792</code></p>
+				</div>
+				<div class="card green">
+					<h3>Stage</h3>
+					<p>Files are validated, copied into <code>browser-uploads/&lt;session-id&gt;/tree</code>, and imported as a local directory source.</p>
+					<p class="refs"><code>ImportAdminPage.php:241-312</code>, <code>:3790-3820</code></p>
+				</div>
+			</div>
+
+			<div class="panel">
+				<h2>GitHub Browse</h2>
+				<div class="card blue">
+					<h3>Picker</h3>
+					<p>Shown only for GitHub-looking input and no browser files. It loads repository directories through GitHub REST tree APIs.</p>
+					<p class="refs"><code>ImportAdminPage.php:1619-1647</code>, <code>:323-346</code></p>
+				</div>
+				<div class="card">
+					<h3>Choose</h3>
+					<p>The modal filters directory paths and applies a canonical <code>/tree/&lt;ref&gt;/&lt;path&gt;</code> URL only after Use directory.</p>
+					<p class="refs"><code>ImportAdminPage.php:1713-1803</code>, <code>:2140-2204</code></p>
+				</div>
+				<div class="card red">
+					<h3>Current Import</h3>
+					<p>Importer execution now uses sparse Git only. If sparse Git cannot queue files, code records failure; tree/blob and zipball fallback docs are stale.</p>
+					<p class="refs"><code>GitHubRepositorySourceWalker.php:71-117</code>, <code>:128-223</code></p>
+				</div>
+			</div>
+
+			<div class="panel">
+				<h2>Dry Run</h2>
+				<div class="card blue">
+					<h3>Plan</h3>
+					<p>Dry run still discovers sources, expands archives, prepares documents, infers URL decisions, detects media references, and records progress.</p>
+					<p class="refs"><code>ImportRunner.php:241-258</code></p>
+				</div>
+				<div class="card amber">
+					<h3>Can Pause</h3>
+					<p>URL treatment can still block a dry run because inference happens before write skips.</p>
+					<p class="refs"><code>ImportUrlInference.php:39-94</code></p>
+				</div>
+				<div class="card green">
+					<h3>No WP Writes</h3>
+					<p>Media, posts, postmeta, comments, relationships, attachment metadata, parents, and nav menus return no-op summaries.</p>
+					<p class="refs"><code>ImportRunner.php:257-270</code>, <code>:1130-1296</code></p>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel section">
+			<h2>Progress And Keepalive</h2>
+			<div class="stages" aria-label="Dashboard stages">
+				<div class="stage"><strong>1</strong>Read source</div>
+				<div class="stage"><strong>2</strong>Prepare content</div>
+				<div class="stage"><strong>3</strong>URL treatment</div>
+				<div class="stage"><strong>4</strong>Import media</div>
+				<div class="stage"><strong>5</strong>Write pages</div>
+				<div class="stage"><strong>6</strong>Finish</div>
+			</div>
+			<div class="grid two section">
+				<div class="card">
+					<h3>Browser loop</h3>
+					<p>One primary session is rendered into JS. If runnable, the browser calls keepalive immediately and every 5 seconds.</p>
+					<p class="refs"><code>ImportAdminPage.php:646-681</code>, <code>:2676-2767</code></p>
+				</div>
+				<div class="card">
+					<h3>Worker tick</h3>
+					<p>Each keepalive runs the shared runner and may burst up to four bounded ticks in one AJAX request.</p>
+					<p class="refs"><code>ImportAdminPage.php:366-414</code>; <code>ImportRunner.php:167-180</code></p>
+				</div>
+				<div class="card amber">
+					<h3>Stops</h3>
+					<p>Keepalive stops for done, aborted, failed, pending decisions, attention states, or no remaining dashboard work.</p>
+					<p class="refs"><code>ImportAdminPage.php:2721-2729</code>, <code>:4297-4332</code></p>
+				</div>
+				<div class="card green">
+					<h3>Snapshot</h3>
+					<p>The snapshot drives status, progress, stages, decisions, relationship warnings, technical details, abort, and review links.</p>
+					<p class="refs"><code>ImportAdminPage.php:530-595</code>, <code>:4058-4332</code></p>
+				</div>
+			</div>
+		</section>
+
+		<section class="grid two section" aria-label="Decision and finish flows">
+			<div class="panel">
+				<h2>URL Decisions</h2>
+				<div class="card">
+					<h3>Start modes</h3>
+					<p>Ask with no domains waits. Ask with domains resolves immediately. Preserve resolves with an empty domain list. Rewrite requires domains.</p>
+					<p class="refs"><code>ImportAdminPage.php:3862-3881</code></p>
+				</div>
+				<div class="card amber">
+					<h3>Blocking decision</h3>
+					<p>Inference scans prepared documents, queued candidate media, and WXR nav menus, then blocks writes until domains are confirmed.</p>
+					<p class="refs"><code>ImportUrlInference.php:103-222</code>, <code>:39-94</code></p>
+				</div>
+				<div class="card green">
+					<h3>Rewrite</h3>
+					<p>Confirmed exact hosts are rewritten to the local site URL while preserving path, query, and fragment.</p>
+					<p class="refs"><code>ImportUrlRewriter.php:181-249</code></p>
+				</div>
+			</div>
+
+			<div class="panel">
+				<h2>Warnings And Decisions</h2>
+				<div class="card amber">
+					<h3>Relationship warnings</h3>
+					<p>After a page is written, unmapped REST author or taxonomy diagnostics create a pending <code>map-rest-relationships:&lt;hash&gt;</code> decision.</p>
+					<p class="refs"><code>ImportPostPersister.php:219-235</code>, <code>:344-360</code>; <code>ImportRelationshipMappingDecision.php:59-88</code></p>
+				</div>
+				<div class="card">
+					<h3>Resolve</h3>
+					<p>URL decisions use domain buttons. Generic decisions use JSON. Resolution records an event, schedules continuation, and restarts keepalive.</p>
+					<p class="refs"><code>ImportAdminPage.php:480-520</code>, <code>:2596-2636</code>, <code>:3506-3569</code></p>
+				</div>
+				<div class="card red">
+					<h3>Failures</h3>
+					<p>Source/media failures become attention states; the admin UI has no in-place repair or retry path.</p>
+					<p class="refs"><code>ImportAdminPage.php:4264-4288</code>, <code>:4436-4440</code>, <code>:4493-4497</code></p>
+				</div>
+			</div>
+
+			<div class="panel">
+				<h2>Abort</h2>
+				<div class="card red">
+					<h3>Terminal stop</h3>
+					<p>Abort is available for sessions that are not done or aborted. It marks the session aborted and records <code>session.aborted</code>.</p>
+					<p class="refs"><code>ImportAdminPage.php:439-468</code>, <code>:2413-2415</code>, <code>:3155-3157</code></p>
+				</div>
+				<div class="card amber">
+					<h3>No rollback</h3>
+					<p>The abort handler does not delete created posts, attachments, importer rows, or staged cache files.</p>
+				</div>
+			</div>
+
+			<div class="panel">
+				<h2>Final And Review</h2>
+				<div class="card green">
+					<h3>Done</h3>
+					<p>Non-dry-run completion waits for traversal, decisions, media, posts, internal links, comments, menus, attachment work, and relationship mappings.</p>
+					<p class="refs"><code>ImportRunner.php:674-720</code></p>
+				</div>
+				<div class="card">
+					<h3>View Imported Content</h3>
+					<p>Completed sessions with persisted posts link to the Pages list filtered by <code>_universal_importer_session_id</code>.</p>
+					<p class="refs"><code>ImportAdminPage.php:145-181</code>, <code>:623-637</code>, <code>:2410-2412</code></p>
+				</div>
+			</div>
+		</section>
+
+		<section class="panel section">
+			<h2>Key Confusing Points</h2>
+			<ul>
+				<li>Source shortcuts mostly change placeholders; Browser folder is the only immediate picker action.</li>
+				<li>Browser uploads silently override the typed source flow and omit <code>source</code> from upload submit.</li>
+				<li>Keepalive runs real importer work, not just status polling.</li>
+				<li>Current GitHub import code has sparse-Git-only behavior while some docs still mention tree/blob or zipball fallback.</li>
+				<li>Dry run can still pause for URL treatment.</li>
+				<li>The admin default publishes pages unless Import as drafts is checked, while docs often frame imports as draft/review flows.</li>
+				<li>Generic relationship decisions require hand-edited JSON after the page already exists.</li>
+				<li>Any decision resolution currently shows "URL choice saved.", even for non-URL decisions.</li>
+				<li>Abort is not rollback.</li>
+				<li>View imported content appears only for completed sessions with persisted page records.</li>
+			</ul>
+		</section>
+	</main>
+</body>
+</html>
