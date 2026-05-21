@@ -28,6 +28,7 @@
 - Pass 8 did a narrow accessibility/clarity polish only. Generated badge dots remain decorative because adjacent badge text carries the status; stage symbols remain `aria-hidden` because each row now has explicit visible status text: Complete, Needs decision, or Not started.
 - Pass 8 added programmatic selected text to the static selected source and URL-handling options while keeping the visible product surface unchanged. Native checked radio inputs still provide the main non-color selected state.
 - Pass 8 labeled the setup badge as the current state and kept warning, complete, active, and allowed-with-warnings meanings in visible text rather than relying on color, dot shape, or icon shape.
+- Pass 10 bloat audit removed copy that read like implementation notes rather than product direction, including visible "First screen" and numbered state labels. It also shortened the source help text, renamed "Inspectable result rows" to "Result details", removed the secondary "Save setup for later" control from the first action row, and dropped the duplicate after-running reminder from the final side panel.
 
 ## Remaining Concerns
 
@@ -40,3 +41,4 @@
 - The new resolver demonstrates only one warning path. Production still needs the actual state model for replacement upload errors, duplicate-match changes, title confirmation, accepted warnings, and how resolved warnings update counts.
 - The post-import block is deliberately tiny. Production still needs real edit/report URLs, write failure handling, permissions checks, and focus/live-region behavior after the import completes.
 - This pass did not add live regions, focus management, interactive state changes, or high-contrast QA. Those remain implementation concerns beyond the static artifact.
+- The source-support disclosure still contains a compact capability list. It remains collapsed so it does not compete with the action-first path, but production should keep watching that it does not grow back into a matrix.

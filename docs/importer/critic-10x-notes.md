@@ -166,3 +166,17 @@ The PR description is now stale in emphasis, not in intent. It still says the ar
 The PR body should add those points so reviewers judge the current artifact rather than an earlier setup-focused pass. It should also make the caveats prominent: this is static HTML only; source-type selection does not actually adapt labels or scan evidence yet; counts, warnings, duplicate evidence, and report links are illustrative; production still needs computed warning severity, real validation, keyboard and focus behavior, live progress/status announcements, file-upload error handling, high-contrast QA, and larger-result responsive testing.
 
 Recommendation: no more artifact changes are needed before review unless the author wants a tiny copy-only polish. The main blocker is a better PR description that frames the artifact as a draft product-direction artifact with known implementation and accessibility gaps, not as a complete importer UI or functional spec.
+
+## Pass 10 Critique
+
+The artifact is now lean enough for a draft PR. It is not small in raw HTML size, but its product surface has stopped expanding: one source setup, one scan decision, one dry-run result with item-level evidence, one compact missing-media resolution example, and one real-import readiness boundary. That is the right amount of proof for a static product-direction artifact because it demonstrates the safety/evidence model without pretending to implement the whole importer.
+
+The top remaining bloat risks are:
+
+- Turning the supported-source disclosure into visible source-specific journeys. The artifact already proves the GitHub-folder path and states that other source types adapt labels, evidence, and warnings. More examples would pull the page back toward a capability catalog.
+- Expanding the missing-media resolution example into a full remediation system. The current example is useful because it shows one issue, evidence, a replacement choice, and the changed consequence. Adding upload progress, validation, conflicts, bulk repair, or retry handling would cross into production design.
+- Adding a completed-import state. The tiny post-import note is enough for this draft. A success dashboard, retry queue, rollback story, detailed report schema, or created-content navigation table would create a fifth product surface and distract from the pre-write decision journey.
+
+Do not remove the pieces that protect feature coverage: the source-type selector and supported-source disclosure, the broad accepted-format help, the fixed dry-run guarantee, URL decision handling, item-level result evidence, duplicate and warning rows, the missing-media resolution example, the "allowed with warnings" import consequence, draft-vs-publish wording, report download, and the small post-import boundary note. Those elements are what keep the artifact from becoming a pretty but under-specified setup screen.
+
+Recommendation: keep the artifact and only document boundaries. The next useful change is not another UI simplification pass; it is PR-description clarity that says this is a static draft, source adaptation is illustrative, counts and evidence are sample data, and production still needs validation, accessibility behavior, responsive result testing, and real importer state transitions.

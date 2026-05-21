@@ -1114,9 +1114,8 @@
 				<section class="surface setup-primary" aria-labelledby="setup-title">
 					<div class="action-first">
 						<div>
-							<div class="kicker">First screen</div>
 							<h3 id="setup-title">Add source</h3>
-							<p>Paste a URL or path. The importer can recognize many sources, and the source type can be changed without leaving this step.</p>
+							<p>Paste a URL or path, then preview what WordPress would import.</p>
 						</div>
 
 						<fieldset class="source-type-panel">
@@ -1156,12 +1155,11 @@
 									<input id="source-input" type="text" value="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture" aria-describedby="source-help source-guarantee">
 									<button class="button-secondary" type="button">Browse</button>
 								</div>
-								<p class="field-help" id="source-help">Accepts GitHub repositories, WordPress sites, feeds, OPML, server paths, uploaded archives, WXR, Markdown, HTML, PDF, EPUB, XML, SQL, and text files.</p>
+								<p class="field-help" id="source-help">Accepts URLs, repositories, feeds, server paths, uploads, exports, and documents.</p>
 							</div>
 
 							<div class="action-row">
 								<button class="button-primary" type="button">Start dry run</button>
-								<button class="button-link" type="button">Save setup for later</button>
 							</div>
 
 							<div class="guarantee-note" id="source-guarantee">
@@ -1263,9 +1261,8 @@
 
 			<section class="surface state" id="scan-decision" aria-labelledby="scan-title">
 				<div class="state-header">
-					<div class="kicker">State 2</div>
 					<h3 id="scan-title">Scan decision</h3>
-					<p>Shown only when the dry run has evidence and needs input. The blocking decision appears before progress history on mobile.</p>
+					<p>Review the affected links before the dry run continues.</p>
 				</div>
 				<div class="state-body">
 					<div class="decision-card" role="group" aria-labelledby="url-decision-title">
@@ -1335,9 +1332,8 @@
 
 			<section class="surface state" id="dry-run-result" aria-labelledby="result-title">
 				<div class="state-header">
-					<div class="kicker">State 3</div>
 					<h3 id="result-title">Dry-run result</h3>
-					<p>The importer has enough information to explain exactly what the real import would create, update, skip, and warn about.</p>
+					<p>Review what the real import would create, update, skip, and leave as warnings.</p>
 				</div>
 				<div class="state-body">
 					<div class="progress-stack">
@@ -1360,7 +1356,7 @@
 							</li>
 						</ul>
 						<div class="result-list">
-							<h4>Inspectable result rows</h4>
+							<h4>Result details</h4>
 							<div class="result-table-wrap">
 								<table class="result-table">
 									<caption class="screen-reader-text">Dry-run item outcomes and required fixes</caption>
@@ -1452,9 +1448,8 @@
 
 			<section class="surface state" id="real-import" aria-labelledby="real-import-title">
 				<div class="state-header">
-					<div class="kicker">State 4</div>
 					<h3 id="real-import-title">Ready for real import</h3>
-					<p>The final state makes the write action explicit and repeats the safety contract before anything changes in WordPress.</p>
+					<p>Confirm exactly what WordPress will write before running the import.</p>
 				</div>
 				<div class="state-body">
 					<div class="import-ready import-caution">
@@ -1493,7 +1488,6 @@
 							<li>To publish immediately, change the draft setting before running.</li>
 							<li>To import the skipped appendix, add a title in the dry-run result.</li>
 							<li>To remove media warnings, replace the missing files before running.</li>
-							<li>After running, each created draft links to its WordPress edit screen.</li>
 						</ul>
 					</aside>
 				</div>
