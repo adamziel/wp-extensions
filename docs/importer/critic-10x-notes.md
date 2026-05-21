@@ -1778,3 +1778,11 @@ The full-flow visual regression after recent target, nav, and contrast refinemen
 The full-page heights are still high, about 5803.81px on 500px and 3168.63px on 1440px, but that is expected because the artifact shows the full journey in one static handoff. The recent link target, nav label, and stage-dot contrast fixes do not introduce a new visual section, competing dashboard, or horizontal layout regression.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 175. Keep the artifact stable unless future screenshots show a concrete readability failure.
+
+## Pass 176 Critique
+
+The current control semantics audit passes after the recent nav and target refinements. Chromium reports 26 controls and no unlabeled inputs, buttons, selects, or textareas. The radio groups remain expected: `source-type` has six choices and `url-handling` has two choices.
+
+The named controls still match the intended user journey. The navigation exposes `Setup`, `Scan decision`, `Dry-run result`, and `Real import`; buttons remain clear from `Browse repo` and `Start dry run` through the result actions, warning resolver, report download, and final draft import/back actions. No visible label was lost during the accessibility-name or target-size refinements.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 176. Treat control semantics as stable.
