@@ -1306,3 +1306,13 @@ The desktop "Download report" sizing is a layout bug and should be fixed in the 
 This is worth a layout-only follow-up, not a copy or runtime change. The target behavior should be the same `40px` button height seen on mobile, with desktop alignment adjusted so the action sizes to its content or to the intended control height instead of filling the row. Fixing that would reduce visual noise without adding controls, changing labels, or touching plugin/runtime code.
 
 Recommendation: fix the desktop "Download report" stretch as a layout bug in the HTML artifact when the designer next edits it. Keep the result-row action labels unchanged; they are specific, contained, and do not need copy churn for Pass 121.
+
+## Pass 122 Critique
+
+The CSS-only report action fix removes the visual bug without changing the journey or feature surface. The desktop "Download report" action is back to a normal control shape at `300px` by `40px`, matching the `40px` height already seen on mobile and narrow mobile. That corrects the earlier stretched `126.48px` desktop button, so the export action no longer reads like a large tile or competing primary panel.
+
+The supplied metrics do not show side effects. Desktop, mobile, and narrow mobile still have no horizontal overflow, and both `resultListAlignContent` and `importReadyAlignContent` remain `start`, so the fix appears scoped to control sizing rather than reflowing the result list into a different alignment model. The mobile report action remains `416px` by `40px`, and narrow mobile remains `306px` by `40px`, which is consistent with the desired full-width mobile button behavior.
+
+The row-level actions still sit at the right priority. "Review match," "Replace media," and "Add title or skip" remain inline, task-specific secondary actions for individual rows, while "Download report" is a contained secondary export action for the result state. With the desktop stretch gone, none of these controls visually overtake the import-ready status or the result content.
+
+Recommendation: keep the CSS-only layout fix and make no further HTML, plugin, or runtime edits for Pass 122. The fix resolves the visual regression, preserves the clearer result journey, and avoids adding bloat or copy churn.
