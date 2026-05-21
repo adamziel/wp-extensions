@@ -49,6 +49,7 @@
 - Pass 26 reviewed the mobile dry-run result after the Pass 25 evidence trim and kept the HTML unchanged. The skipped card still shows outcome, item path, concise evidence, editor ownership, and the "Add title or skip" action, so it remains actionable without reintroducing front matter, heading, filename, or other parser-specific detail.
 - Pass 27 reviewed the real-import handoff and kept the HTML unchanged. The tiny "After running" block improves consequence clarity because it acts as proof of what the selected run will produce, stays inside the pre-run gate, and remains much smaller than the dry-run result instead of becoming an early post-import dashboard.
 - Pass 28 reviewed the mobile real-import handoff and made one copy trim in the final gate: "Running is allowed because..." became "Allowed because..." The buttons, after-running mini-outcome, and before-running advice remain scannable without adding sections, controls, workflows, or a larger post-import surface.
+- Pass 29 regression-reviewed the shortened final-gate sentence on desktop and mobile and kept the HTML unchanged. In context, the "Allowed with warnings" badge, "Run real import: creates drafts, skips unresolved items" heading, consequence list, draft-run button, "After running" mini-outcome, and "Before running" advice still answer why the import can run: unresolved warnings are non-blocking, skipped or missing items remain visible, and no content publishes immediately.
 
 ## Remaining Concerns
 

@@ -338,3 +338,11 @@ The mobile full-height screenshot confirms that the "Ready for real import" hand
 The mobile section is dense, but it is not overloaded because each block answers a distinct last-mile question. The primary gate answers "can I run?", the list answers "what will WordPress write?", the button row gives both the forward action and "Back to dry-run result," "After running" sets a small expectation for draft links, update review, skipped content, and the report, and "Before running" gives pre-run remediation advice without adding new controls. The tiny post-run promise remains appropriately small; it does not expand into a completed-import journey.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or structure trim is justified for this pass. The only future trim worth considering, if reviewers still feel the mobile handoff is heavy, would be shortening the "After running" list to one compact sentence about draft/update links and the final report; based on this screenshot, that change is optional rather than needed.
+
+## Pass 29 Critique
+
+The gate-copy trim does not regress clarity. "Allowed because unresolved warnings are non-blocking." remains grammatical in context: the preceding badge establishes the allowed-with-warnings state, the heading names the real import action, and the following sentence explains that content will not publish, the untitled document will be skipped, and missing media references remain reported for follow-up.
+
+Desktop and mobile both keep the sentence readable and sufficiently explicit. On desktop, it anchors the caution panel before the consequence list and green action. On mobile, the same sentence still appears before the detailed bullets and button, so the user does not have to infer whether warnings block the import.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No copy adjustment or revert is justified for this pass.
