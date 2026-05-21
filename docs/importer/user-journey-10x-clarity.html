@@ -542,6 +542,10 @@
 			padding: 20px;
 		}
 
+		#real-import .state-body {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
 		.decision-card {
 			background: var(--soft-amber);
 			border: 1px solid #e6d67a;
@@ -855,6 +859,26 @@
 			display: grid;
 			gap: 8px;
 			padding: 12px;
+		}
+
+		@media (min-width: 1081px) {
+			.final-import-ready {
+				align-items: start;
+				grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+			}
+
+			.final-import-ready > .badge,
+			.final-import-ready > h4,
+			.final-import-ready > .import-intent,
+			.final-import-ready > .action-row,
+			.final-import-ready > .after-import-gate {
+				grid-column: 1 / -1;
+			}
+
+			.final-import-ready > .before-import-gate,
+			.final-import-ready > .import-summary-list {
+				align-self: stretch;
+			}
 		}
 
 		.report-row {
@@ -1452,14 +1476,14 @@
 					<p>Confirm exactly what WordPress will write before running the import.</p>
 				</div>
 				<div class="state-body">
-					<div class="import-ready import-caution">
+					<div class="import-ready import-caution final-import-ready">
 						<span class="badge is-amber">Allowed with warnings</span>
 						<h4>Run real import: creates drafts, skips unresolved items</h4>
-						<div class="import-gate">
+						<div class="import-gate import-intent">
 							<strong>Drafts only; nothing publishes from this run.</strong>
 							<span class="result-note">Allowed with warnings because remaining issues are non-blocking. WordPress skips the untitled document and reports the missing media for follow-up.</span>
 						</div>
-						<ul>
+						<ul class="import-summary-list">
 							<li>Create 9 new draft pages.</li>
 							<li>Update 3 existing draft pages that matched by slug.</li>
 							<li>Publish 0 items.</li>
@@ -1467,7 +1491,7 @@
 							<li>Skip 1 untitled document because no title was confirmed.</li>
 							<li>Carry 1 unresolved media warning into the final report.</li>
 						</ul>
-						<div class="import-gate">
+						<div class="import-gate before-import-gate">
 							<strong>Before running</strong>
 							<ul>
 								<li>To publish immediately, change the draft setting before running.</li>
@@ -1479,7 +1503,7 @@
 							<button class="button-primary is-green" type="button">Run real import as drafts</button>
 							<button class="button-secondary" type="button">Back to dry-run result</button>
 						</div>
-						<div class="import-gate">
+						<div class="import-gate after-import-gate">
 							<strong>After running</strong>
 							<ul>
 								<li>9 draft pages created. <a href="#">Edit drafts</a></li>

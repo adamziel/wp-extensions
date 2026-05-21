@@ -460,3 +460,11 @@ The green action is not pushed too far down in the supplied screenshot. It sits 
 Publish risk is visible enough: the gate says drafts only, the consequence list says "Publish 0 items," the "Before running" list says changing the draft setting is required to publish immediately, and the button label repeats "as drafts." The final report promise also stays appropriately small because "After running" promises draft/update links, skipped-item status, and the remaining media warning report without becoming a post-import dashboard.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No mobile-specific regression in the provided 500px evidence justifies a design edit. If later reviewers still find the final gate heavy, the smallest future trim would be notes or PR-copy framing around why warnings repeat at write boundaries, not another pre-review UI change.
+
+## Pass 42 Critique
+
+The desktop/tall screenshot confirms the Pass 40 hierarchy fix: "Before running" now appears inside the amber gate before the green "Run real import as drafts" action, so the final write boundary preserves the mobile-safe order and does not hide the last publish, skipped-appendix, or media-warning choices after the action.
+
+The concrete regression is layout-only. Removing the sidecar left the real-import section using the shared two-column `.state-body` grid, so the final amber gate remains in the old narrow left column while a large empty white column sits to its right. That makes the final gate look weaker than the earlier result and scan sections even though it is the highest-risk decision.
+
+Recommendation: keep the content stable and make only the scoped layout fix: let `#real-import .state-body` use one column, then use the recovered desktop width to pair the consequence list with "Before running" inside the same amber gate. Do not add another panel, summary, or explanatory copy to fill the empty space; the issue is stale layout, not missing information.
