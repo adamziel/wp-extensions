@@ -888,6 +888,22 @@
 				grid-template-columns: repeat(3, minmax(0, 1fr));
 			}
 
+			.source-cards {
+				column-gap: 18px;
+				row-gap: 0;
+			}
+
+			.source-card {
+				border: 0;
+				border-bottom: 1px solid var(--line);
+				border-radius: 0;
+				padding: 10px 0;
+			}
+
+			.source-card:nth-last-child(-n+3) {
+				border-bottom: 0;
+			}
+
 			.final-import-ready {
 				align-items: start;
 				grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
