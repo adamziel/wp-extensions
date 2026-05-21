@@ -404,3 +404,11 @@ The warning replacement path has the right amount of evidence. The warning card 
 The skipped-title path is also sufficiently supported. The skipped card names `Untitled appendix`, keeps `appendix/no-title.md`, gives the reason as "No readable title found," assigns the editor, and offers `Add title or skip`. The open-warnings summary and real-import gate continue the consequence by saying the title warning can be fixed or confirmed as a skip, and unresolved skipped content will not be imported. That chain is compact and clear.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass; reducing the stacked cards would save pixels at the cost of the evidence needed to act.
+
+## Pass 36 Critique
+
+The final mobile handoff remains consequence-explicit even after the long dry-run result section. The "Ready for real import" heading, amber "Allowed with warnings" badge, non-blocking warning sentence, draft-only button label, and exact consequence list all re-establish the write boundary before the user can run the real import. The user does not have to remember details from the result cards: the handoff repeats that 9 drafts are created, 3 drafts are updated, 0 items publish, 7 old-site URLs stay external, 1 untitled document is skipped, and 1 media warning carries into the final report.
+
+The tiny "After running" block is still useful rather than bloat. It is short, stays inside the pre-run gate, and answers the natural last question: where the user lands after pressing the real-import button. Because it only promises draft links, update review, the skipped item, and the final report, it does not become a success dashboard, retry queue, rollback story, or expanded completion state.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass. The only future edit worth considering would be a one-sentence "After running" trim if reviewers specifically say the final mobile gate feels heavy, but the current 500px evidence does not justify that change.
