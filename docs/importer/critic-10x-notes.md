@@ -1538,3 +1538,13 @@ The secondary material stays proportionate in keyboard order. Upload files appea
 The only residual cost is the four initial nav tab stops before the task, but that mirrors the visible journey navigation and is not enough to justify another artifact change. Adding skip-link behavior or reworking navigation would be production-accessibility work, not a necessary refinement for this static pass.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 145. The keyboard traversal is clear, proportionate, and preserves the source-type-before-input and dry-run-before-secondary-settings hierarchy.
+
+## Pass 146 Critique
+
+The 360px traversal continues cleanly through the late-result controls. Focus moves from the result-row actions into the resolver controls, then to the report action, real-import gate, and post-import links in the same order the journey reads visually. The measured controls stay visible and target-safe: row actions are `167px` by `40px`, resolver actions are `250px` by `40px`, and both "Download report" and "Run real import as drafts" are contained at `276px` by `40px` with no horizontal overflow.
+
+The post-import links are acceptable as inline proof links rather than primary actions. "Edit drafts" wrapping to about `187px` by `36.3px` is not ideal as a button target, but it remains visible, readable, and scoped inside a short after-running list. Turning those links into full-width buttons would overstate the completion proof and add weight to a deliberately small post-run block.
+
+The body focus after "Open final report" does not point to a needed artifact change. In this static single-page artifact, the browser reaching `body` after the last focusable element and then wrapping to the top nav on the next Tab is normal end-of-document behavior, not a keyboard trap, missing action, or journey-clarity failure. A production importer can manage focus after an actual import result, but this static artifact should not add a dummy end target or extra completion surface.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 146. The traversal has visible focus, no overflow, reasonable target sizing for the action controls, acceptable inline-link wrapping, and a coherent end-of-page wrap back into navigation.
