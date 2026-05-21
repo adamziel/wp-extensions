@@ -430,3 +430,13 @@ The editable settings and current setup summary still help more than they distra
 The collapsed source-support disclosure remains secondary. It is available after the required action, guarantee, optional upload fallback, and settings, so it preserves feature proof without reintroducing a visible source matrix. On desktop, the right rail plus this disclosure do make the setup section informationally dense, but the density is aligned with review confidence and does not obscure what the user should do first.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy or layout adjustment is justified for this pass.
+
+## Pass 39 Critique
+
+The tablet setup-to-scan transition reads as one continuous flow rather than bloat. The source action stays clear at the top: selected source type, source field, Browse, "Start dry run," and the fixed dry-run guarantee are grouped tightly enough that the user can see the required action before optional upload, settings, or support details.
+
+The setup summary earns its own block at tablet width. It repeats the GitHub folder, long path, preview-only mode, draft behavior, and URL policy, then turns those choices into the next three steps. That makes the handoff into the scan decision feel intentional instead of like a separate demo panel.
+
+The URL handling decision, progress stack, and result counts also connect cleanly. The scan decision names the 7 links in 3 draft pages, the selected URL handling option explains the consequence, the progress stack shows URL handling as the current pause, and the dry-run result counts appear immediately below with create/update/skip/warning totals. The page is long, but the visible sequence answers "what source, what decision, what is paused, what result follows" without adding another explanatory layer.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No copy or layout adjustment is justified for this pass; trimming the setup summary or progress stack would save space but weaken the tablet handoff.

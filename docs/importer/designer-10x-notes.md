@@ -59,6 +59,7 @@
 - Pass 36 reviewed the final 500px mobile handoff from the long dry-run result into "Ready for real import" and kept the HTML unchanged. The final gate still leads cleanly through allowed-with-warnings, exact draft/update/skip/warning consequences, "Run real import as drafts," "Back to dry-run result," the tiny after-running promise, and before-running advice without adding sections, controls, examples, workflows, or plugin/runtime edits.
 - Pass 37 reviewed the opened optional browser-upload disclosure on 500px mobile evidence and kept the HTML unchanged. The control remains secondary to the URL/path dry-run path because it appears after the primary action and first-run guarantee, while the help copy explicitly covers local archives, folders, documents, feed lists, and exports without adding an upload workflow, validation state, source examples, or runtime work.
 - Pass 38 reviewed the desktop setup with upload and source-support disclosures closed and kept the HTML unchanged. The hierarchy still prioritizes one first action: choose or confirm source type, paste or browse a source, then start the dry run; the guarantee, upload fallback, editable settings, and setup summary support that path without adding a source matrix or workflow.
+- Pass 39 reviewed the tablet setup-to-scan transition and kept the HTML unchanged. The stacked setup panel, ready-to-preview summary, scan-decision card, progress stack, and first dry-run counts remain clear at the middle breakpoint, so no copy or layout change is justified.
 
 ## Remaining Concerns
 
