@@ -1690,3 +1690,11 @@ The 320px and 360px large-text first-screen evidence does not show a true first-
 The guarantee moving partly below the fold is acceptable enlarged-text behavior. It is not clipped, overlapped, or hidden; it follows immediately after the primary action and remains above the optional upload fallback. Compressing source labels, shortening the safety copy, or moving the guarantee above the action would trade away clarity without fixing a measured failure.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 164. Keep watching the 320px large-text setup, but preserve the current action-first order unless future evidence shows the primary action itself is pushed out of reach or the guarantee is clipped.
+
+## Pass 165 Critique
+
+The after-running proof list exposes one small target-size inconsistency. The links are intentionally inline and low-emphasis, but the focused bounds were only 16px high for `Edit drafts` and `Review updates` at 500px, 16px high for `Review updates` at 320px, and about 36.3px for `Open final report`. Focus was visible and no overflow appeared, so this was not a journey blocker, but it was the only remaining post-import focus target below a practical 24px floor.
+
+The scoped `.after-import-gate a` fix is proportionate. It changes only the final proof-list links to `inline-flex` with `min-height: 24px`, avoiding a button treatment, avoiding new copy, and preserving the tiny post-import boundary. Recheck shows `Edit drafts`, `Review updates`, and `Open final report` all measure 24px high at 500px, 320px, and 320px forced colors; forced colors keeps a visible 2px outline and all runs remain width-contained with `overflowCount=0`.
+
+Recommendation: keep the Pass 165 CSS change and make no plugin or runtime change. Do not expand the after-running proof into a larger completion dashboard unless future evidence shows users need a richer post-import workflow.
