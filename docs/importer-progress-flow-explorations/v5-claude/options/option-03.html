@@ -1,25 +1,172 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>v5 03 Claude C · Repository Scope</title><style>
-*{box-sizing:border-box}body{margin:0;background:#faf5ff;color:#172033;font:15px/1.45 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}header{padding:24px 28px;border-bottom:1px solid rgba(15,23,42,.12);display:flex;justify-content:space-between;align-items:end;gap:18px}h1,h2,h3,p{margin-top:0}h1{font-size:28px;margin-bottom:6px;letter-spacing:0}header p{margin:0;color:#5f6b7a}.badge{border:1px solid color-mix(in srgb,#6d28d9,#fff 55%);background:color-mix(in srgb,#6d28d9,#fff 88%);color:#6d28d9;border-radius:999px;padding:6px 10px;font-weight:800}.modal-frame{max-width:980px;margin:28px auto;padding:0 18px}.wizard{background:#fff;border:1px solid rgba(15,23,42,.12);border-radius:24px;box-shadow:0 24px 70px rgba(15,23,42,.12);overflow:hidden}.spine{display:flex;gap:0;border-bottom:1px solid rgba(15,23,42,.1);background:#f8fafc}.spine button{flex:1;border:0;background:transparent;padding:13px 8px;color:#64748b}.spine button.active{background:color-mix(in srgb,#6d28d9,#fff 88%);color:#6d28d9;font-weight:900}.step{display:none;padding:30px}.step.active{display:block}.eyebrow{color:#6d28d9;font-weight:900;text-transform:uppercase;font-size:12px;letter-spacing:.08em}.dual-input{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:12px}.dual-input span{color:#64748b;margin-bottom:12px}label{display:block;font-weight:800;margin:12px 0}input,textarea{width:100%;border:1px solid rgba(15,23,42,.22);border-radius:10px;padding:11px;background:#fff}.choices{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}.choices.one{grid-template-columns:1fr}.choice,.tree button,.decision button,.abort{border:1px solid rgba(15,23,42,.16);background:#fff;border-radius:11px;padding:12px;text-align:left}.choice.selected,.tree .selected{border-color:#6d28d9;box-shadow:0 0 0 3px color-mix(in srgb,#6d28d9,transparent 82%)}.guess,.example,.directory-picker{border:1px solid color-mix(in srgb,#6d28d9,#fff 62%);background:color-mix(in srgb,#6d28d9,#fff 93%);border-radius:14px;padding:14px;margin:14px 0}.hint{color:#64748b}.tree{display:grid;gap:8px}.review-list{display:grid;grid-template-columns:150px 1fr;gap:10px}.review-list dt{font-weight:900}.review-list dd{margin:0}.bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden}.bar i{display:block;width:0;height:100%;background:#6d28d9;transition:width .25s}.stages{padding:0;margin:16px 0;display:grid;gap:8px}.stages li{list-style:none;display:grid;grid-template-columns:30px 1fr;gap:10px;align-items:center;border:1px solid rgba(15,23,42,.1);border-radius:10px;padding:10px}.stages span{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:color-mix(in srgb,#6d28d9,#fff 86%);color:#6d28d9;font-weight:900}.stages small{display:block;color:#64748b}.stages li.active{box-shadow:inset 4px 0 0 #6d28d9}.decision{border:1px solid color-mix(in srgb,#6d28d9,#fff 55%);background:color-mix(in srgb,#6d28d9,#fff 94%);border-radius:14px;padding:14px}.primary{background:#6d28d9;color:#fff;border:0;border-radius:10px;padding:11px 16px;font-weight:850}.view{color:#6d28d9;font-weight:850}body.modal .wizard{max-width:680px;margin:auto}body.github .modal-frame{max-width:900px}body.upload .step{background:linear-gradient(#fff,#fff8fb)}@media(max-width:760px){header{display:block}.badge{display:inline-block;margin-top:12px}.choices,.dual-input{grid-template-columns:1fr}.dual-input span{margin:0}.spine{overflow:auto}.spine button{min-width:100px}.step{padding:20px}.review-list{grid-template-columns:1fr}}
-</style></head><body class="github"><header><div><h1>Universal Importer · Claude C · Repository Scope</h1><p>GitHub inference reveals branch and directory picking as the next single action.</p></div><span class="badge">v5 design 03 / 5</span></header><main class="modal-frame"><div class="wizard"><nav class="spine"><button class="active" data-nav="0">Source</button><button  data-nav="1">Directory</button><button  data-nav="2">Base URLs</button><button  data-nav="3">Write</button><button  data-nav="4">Review</button></nav><section class="step active" data-step="0" data-key="source"><p class="eyebrow">Step 1 of 5</p><h2>Start with upload or URL</h2><label>GitHub URL<input class="source-input" value="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture"></label>
-<p class="hint">The directory picker appears after the GitHub source is confirmed.</p>
-<button class="choice selected" data-kind="github">GitHub repo</button><button class="next primary">Continue</button></section><section class="step " data-step="1" data-key="github"><p class="eyebrow">Step 2 of 5</p><h2>Pick GitHub directory</h2><div class="directory-picker ">
-<p class="hint">GitHub repo selected. This directory picker appears only after GitHub is inferred or selected. Choose the directory to import.</p>
-<label>Filter directories<input value="docs/explanations"></label>
-<div class="tree">
-<button>docs</button>
-<button>docs/explanations</button>
-<button class="selected">docs/explanations/architecture</button>
-<button>docs/reference-guides</button>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Universal Importer · Branch Navigator</title>
+<style>
+:root{--bg:#0d1117;--ink:#e6edf3;--mut:#7d8590;--ln:#30363d;--ac:#7ee787;--ac2:#ffa657;--ac3:#d2a8ff;--bad:#f85149;--card:#161b22}
+*{box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+body{margin:0;background:var(--bg);color:var(--ink);min-height:100vh;padding:24px 16px}
+.wrap{max-width:760px;margin:0 auto}
+h1{font-size:14px;letter-spacing:.2em;color:var(--mut);text-transform:uppercase;margin:0 0 4px}
+.sub{color:var(--ac);font-size:18px;margin-bottom:28px}
+.tree{position:relative;padding-left:28px}
+.tree::before{content:"";position:absolute;left:11px;top:6px;bottom:6px;width:2px;background:linear-gradient(var(--ac),var(--ac2) 45%,var(--ac3) 80%,var(--ln))}
+.node{position:relative;margin-bottom:18px}
+.node::before{content:"";position:absolute;left:-22px;top:14px;width:14px;height:14px;border-radius:50%;background:var(--bg);border:2px solid var(--ln)}
+.node.active::before{border-color:var(--ac);box-shadow:0 0 0 4px rgba(126,231,135,.15)}
+.node.done::before{background:var(--ac);border-color:var(--ac)}
+.node.busy::before{border-color:var(--ac2);animation:spin 1s linear infinite;border-right-color:transparent}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ref{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.18em;margin-bottom:6px}
+.ref b{color:var(--ac3)}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:8px;padding:14px}
+.card h3{margin:0 0 10px;font-size:14px}
+.card p{margin:0 0 10px;font-size:12px;color:var(--mut);line-height:1.55}
+input[type=text],input[type=file],select{width:100%;background:#0d1117;border:1px solid var(--ln);color:var(--ink);padding:8px 10px;border-radius:6px;font:12px ui-monospace,monospace}
+.row{display:flex;gap:8px;align-items:center}
+.tag{display:inline-block;background:#1f2937;border:1px solid var(--ln);color:var(--ac);padding:2px 8px;border-radius:99px;font-size:10px;margin-right:6px}
+.or{text-align:center;color:var(--mut);font-size:10px;margin:8px 0;letter-spacing:.4em}
+button{background:var(--ac);color:#0d1117;border:0;padding:8px 16px;border-radius:6px;font-weight:600;cursor:pointer;font-size:12px}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--ln)}
+button:disabled{opacity:.4;cursor:not-allowed}
+.hide{display:none}
+.dirs{font-size:12px;line-height:1.7}
+.dirs div{padding-left:14px;position:relative;cursor:pointer}
+.dirs div::before{content:"├";position:absolute;left:0;color:var(--mut)}
+.dirs div.sel{color:var(--ac);font-weight:600}
+.dirs div.sel::before{content:"▶";color:var(--ac)}
+.url-parts{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:11px;margin-top:8px;padding:10px;background:#0d1117;border-radius:6px;border:1px dashed var(--ln)}
+.url-parts span:nth-child(odd){color:var(--mut);text-transform:uppercase;letter-spacing:.1em;font-size:10px}
+.url-parts code{color:var(--ac2)}
+.stage{display:flex;justify-content:space-between;padding:6px 0;font-size:12px;border-bottom:1px dashed var(--ln)}
+.stage:last-child{border:0}
+.stage .s{color:var(--mut)}
+.stage.ok .s{color:var(--ac)}
+.modes{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.mode{padding:10px;border:1px solid var(--ln);border-radius:6px;cursor:pointer;font-size:11px;text-align:center}
+.mode.on{border-color:var(--ac);background:rgba(126,231,135,.07);color:var(--ac)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>universal-importer · v5-claude</h1>
+<div class="sub">git checkout -b import/<span id="brn">new-site</span></div>
+
+<div class="tree" id="tree">
+
+<div class="node active" id="n1">
+  <div class="ref">refs/heads/<b>source</b></div>
+  <div class="card">
+    <h3>Pick a source</h3>
+    <p>Drop an export file, <i>or</i> paste a URL. We sniff the rest — GitHub repos are inferred automatically.</p>
+    <input type="file" id="f">
+    <div class="or">— OR —</div>
+    <input type="text" id="u" placeholder="https://github.com/wordpress/twentytwentyfive">
+    <div style="margin-top:10px"><span class="tag" id="kind">awaiting input…</span></div>
+    <div style="margin-top:12px;text-align:right"><button id="b1" disabled>continue →</button></div>
+  </div>
 </div>
-</div><button class="next primary">Continue</button></section><section class="step " data-step="2" data-key="rewrite"><p class="eyebrow">Step 3 of 5</p><h2>Old Base URLs</h2><p class="hint">Old Base URLs include scheme, domain, and optional path. They are not just domains.</p>
-<div class="example"><b>Example</b><span><code>https://old.example.com/docs/</code> rewrites only URLs under <code>/docs/</code>. It does not rewrite <code>https://old.example.com/blog/</code>.</span></div>
-<label>Old Base URLs<textarea rows="4">https://old.example.com/docs/
-https://legacy.example.org/handbook/</textarea></label>
-<div class="choices one"><button class="choice selected">Ask when old Base URLs are found</button><button class="choice">Keep URLs unchanged</button><button class="choice">Rewrite listed Base URLs</button></div><button class="next primary">Continue</button></section><section class="step " data-step="3" data-key="write"><p class="eyebrow">Step 4 of 5</p><h2>Choose write mode</h2><div class="choices one"><button class="choice selected">Publish pages</button><button class="choice">Import as drafts</button><button class="choice">Dry run</button></div>
-<p class="hint">Dry run traverses and prepares the import without writing WordPress posts.</p><button class="next primary">Review import</button></section><section class="step " data-step="4" data-key="review"><p class="eyebrow">Step 5 of 5</p><h2>Review</h2><dl class="review-list"><dt>Source</dt><dd>https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture</dd><dt>Detected type</dt><dd>GitHub repo subdirectory</dd><dt>Directory</dt><dd>docs/explanations/architecture</dd><dt>URL treatment</dt><dd>Ask when old Base URLs are found</dd><dt>Write mode</dt><dd>Publishes pages</dd></dl>
-<details><summary>Formats and sources supported</summary><p>GitHub repo, WordPress site, RSS/Atom/RDF/OPML feed list, reachable URL, server path, uploaded files/folder. Files: PDF, EPUB, HTML/HTM, Markdown, text, WXR/XML, ZIP.</p></details><button class="next primary">Import this content</button></section><section class="step " data-step="5" data-key="run"><p class="eyebrow">Step 5 of 5</p><h2>Import running</h2><p class="action">Queued.</p><div class="bar"><i></i></div><p class="counts">0% · 0 / ? items complete</p>
-<ol class="stages"><li><span>1</span><b>Read source</b><small>Queued.</small></li><li><span>2</span><b>Prepare content</b><small>Not started.</small></li><li><span>3</span><b>URL treatment</b><small>Not started.</small></li><li><span>4</span><b>Import media</b><small>Not started.</small></li><li><span>5</span><b>Write pages</b><small>Not started.</small></li><li><span>6</span><b>Finish</b><small>Not started.</small></li></ol>
-<section class="decision" hidden><h3>Rewrite old-site URLs to this site?</h3><p>Selected Base URLs move to this site and keep the remaining paths. Unselected Base URLs stay unchanged.</p><label><input type="checkbox" checked> https://old.example.com/docs/</label><label><input type="checkbox" checked> https://legacy.example.org/handbook/</label><div><button>Rewrite selected Base URLs</button><button>Yes, rewrite all</button><button>No, keep all URLs</button></div></section>
-<div class="run-actions"><button class="abort">Abort</button><a class="view" hidden href="#">View imported content</a></div><button class="next primary">Done</button></section></div></main><aside hidden>GitHub repo WordPress site Feed or OPML Upload folder Server path Reachable URL PDF EPUB HTML Markdown text WXR/XML ZIP Import as drafts Dry run Ask when old URLs are found Keep URLs unchanged Rewrite listed Base URLs Read source Prepare content URL treatment Import media Write pages Finish Abort View imported content Rewrite old-site URLs to this site?</aside><script>
-const stages=["Read source","Prepare content","URL treatment","Import media","Write pages","Finish"];const msgs=['Reading source files and repository paths.','Preparing Markdown, HTML, WXR, PDF, EPUB, and text documents.','Checking old Base URLs for URL treatment.','Importing or skipping referenced media.','Writing WordPress pages, comments, and relationships.','Import complete.'];let step=0;function q(s,r=document){return r.querySelector(s)}function qa(s,r=document){return [...r.querySelectorAll(s)]}function show(n){step=Math.max(0,Math.min(n,5));qa('.step').forEach((p,i)=>p.classList.toggle('active',i===step));qa('.spine button').forEach((b,i)=>b.classList.toggle('active',i===Math.min(step,4)));}qa('.next').forEach((b,i)=>b.addEventListener('click',()=>{if(i<4)show(i+1);else if(i===4){show(5);run();}}));qa('.spine button').forEach(b=>b.addEventListener('click',()=>show(Number(b.dataset.nav))));qa('.choice,.tree button').forEach(b=>b.addEventListener('click',()=>{const p=b.parentElement;qa('.choice,.tree button',p).forEach(x=>x.classList.remove('selected'));b.classList.add('selected')}));q('.source-input')?.addEventListener('input',e=>{const v=e.target.value;const guess=q('.guess-text');if(!guess)return;if(/github\.com/.test(v))guess.textContent='GitHub repo, branch, or subdirectory URL';else if(/feed|rss|atom|opml/.test(v))guess.textContent='Feed or OPML';else if(/wp-json|wordpress/.test(v))guess.textContent='WordPress site or REST root';else guess.textContent='Reachable URL';});q('.file-input')?.addEventListener('change',()=>{const guess=q('.guess-text');if(guess)guess.textContent='Uploaded file or folder export';});function run(){let i=0;const tick=()=>{const pct=Math.min(100,Math.round((i+1)/stages.length*100));q('.bar i').style.width=pct+'%';q('.counts').textContent=pct+'% · '+Math.min(38,(i+1)*7)+' / 38 items complete';q('.action').textContent=msgs[i]||msgs.at(-1);qa('.stages li').forEach((li,idx)=>{li.classList.toggle('active',idx===i);const sm=li.querySelector('small');if(sm)sm.textContent=idx<i?'Done.':idx===i?msgs[i]:'Not started.'});if(i===2)q('.decision').hidden=false;if(i<stages.length-1){i++;setTimeout(tick,i===3?1100:550)}else{q('.view').hidden=false}};tick()}qa('.decision button').forEach(b=>b.addEventListener('click',()=>{q('.decision').hidden=true;q('.action').textContent=b.textContent+' saved. Continuing import.'}));q('.abort')?.addEventListener('click',()=>{q('.action').textContent='Import aborted by user.'});
-</script></body></html>
+
+<div class="node hide" id="n2">
+  <div class="ref">refs/heads/source ↳ <b>tree</b></div>
+  <div class="card">
+    <h3>Choose a subdirectory</h3>
+    <p>Browse the repo tree like a branch. Pick the folder that contains your WordPress install.</p>
+    <div class="dirs" id="dirs">
+      <div data-p="/">/ (repo root)</div>
+      <div data-p="/wp-content">wp-content</div>
+      <div data-p="/wp-content/themes" class="sel">wp-content/themes</div>
+      <div data-p="/wp-content/themes/twentytwentyfive">wp-content/themes/twentytwentyfive</div>
+      <div data-p="/wp-content/plugins">wp-content/plugins</div>
+    </div>
+    <div style="margin-top:12px;text-align:right"><button class="ghost" onclick="back(2)">← back</button> <button onclick="step(3)">continue →</button></div>
+  </div>
+</div>
+
+<div class="node hide" id="n3">
+  <div class="ref">refs/heads/source ↳ tree ↳ <b>rewrite</b></div>
+  <div class="card">
+    <h3>Old Base URLs</h3>
+    <p>Tell us what URLs the source content currently uses, so we can rewrite them to point at this site. Each part of the URL is rewritten independently.</p>
+    <input type="text" id="oldurl" value="https://old.example.com/blog">
+    <div class="url-parts">
+      <span>scheme</span><code id="sch">https</code>
+      <span>domain</span><code id="dom">old.example.com</code>
+      <span>path</span><code id="pth">/blog</code>
+    </div>
+    <div style="margin-top:12px;text-align:right"><button class="ghost" onclick="back(3)">← back</button> <button onclick="step(4)">continue →</button></div>
+  </div>
+</div>
+
+<div class="node hide" id="n4">
+  <div class="ref">refs/heads/source ↳ tree ↳ rewrite ↳ <b>write</b></div>
+  <div class="card">
+    <h3>Write mode</h3>
+    <p>How aggressively should the importer touch existing content on this site?</p>
+    <div class="modes">
+      <div class="mode on" data-m="publish">publish<br><small style="color:var(--mut)">keep existing</small></div>
+      <div class="mode" data-m="import drafts">import drafts<br><small style="color:var(--mut)">import drafts duplicates</small></div>
+      <div class="mode" data-m="fresh">fresh<br><small style="color:var(--mut)">wipe & import</small></div>
+    </div>
+    <div style="margin-top:12px;text-align:right"><button class="ghost" onclick="back(4)">← back</button> <button onclick="step(5)">run import →</button></div>
+  </div>
+</div>
+
+<div class="node hide" id="n5">
+  <div class="ref">refs/heads/source ↳ tree ↳ rewrite ↳ write ↳ <b>HEAD</b></div>
+  <div class="card">
+    <h3>Running stages</h3>
+    <div id="stages">
+      <div class="stage" data-k="Fetch source"><span>Fetch source</span><span class="s">queued</span></div>
+      <div class="stage" data-k="Parse manifest"><span>Parse manifest</span><span class="s">queued</span></div>
+      <div class="stage" data-k="Rewrite URLs"><span>Rewrite URLs</span><span class="s">queued</span></div>
+      <div class="stage" data-k="Import posts"><span>Import posts</span><span class="s">queued</span></div>
+      <div class="stage" data-k="Import media"><span>Import media</span><span class="s">queued</span></div>
+      <div class="stage" data-k="Finalize"><span>Finalize</span><span class="s">queued</span></div>
+    </div>
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+const f=$("#f"),u=$("#u"),b1=$("#b1"),kind=$("#kind");
+function sniff(){
+  if(f.files&&f.files[0]){kind.textContent="file · "+f.files[0].name;kind.style.color="var(--ac3)";b1.disabled=false;return}
+  const v=u.value.trim();
+  if(!v){kind.textContent="awaiting input…";b1.disabled=true;return}
+  let k="URL";
+  if(/github\.com/.test(v))k="GitHub repo (inferred)";
+  else if(/\.wxr$|\.xml$/.test(v))k="WXR export";
+  else if(/\.zip$/.test(v))k="zip archive";
+  else if(/^https?:/.test(v))k="generic URL";
+  kind.textContent=k;b1.disabled=false;
+  $("#brn").textContent=v.split("/").pop().import drafts(/\.[^.]+$/,"")||"new-site";
+}
+f.addEventListener("change",sniff);u.addEventListener("input",sniff);
+b1.onclick=()=>step(2);
+function step(n){
+  for(let i=1;i<=n;i++){const el=$("#n"+i);el.classList.remove("hide");if(i<n){el.classList.remove("active");el.classList.add("done")}else el.classList.add("active")}
+  if(n===5)run();
+  $("#n"+n).scrollIntoView({behavior:"smooth",block:"center"});
+}
+function back(n){const el=$("#n"+n);el.classList.add("hide");el.classList.remove("done","active");const p=$("#n"+(n-1));p.classList.remove("done");p.classList.add("active")}
+$$("#dirs div").forEach(d=>d.onclick=()=>{$$("#dirs div").forEach(x=>x.classList.remove("sel"));d.classList.add("sel")});
+$("#oldurl").addEventListener("input",e=>{try{const x=new URL(e.target.value);$("#sch").textContent=x.protocol.import drafts(":","");$("#dom").textContent=x.hostname;$("#pth").textContent=x.pathname||"/"}catch{}});
+$$(".mode").forEach(m=>m.onclick=()=>{$$(".mode").forEach(x=>x.classList.remove("on"));m.classList.add("on")});
+function run(){
+  const stages=$$("#stages .stage");let i=0;
+  const tick=()=>{
+    if(i>0){stages[i-1].classList.add("ok");stages[i-1].querySelector(".s").textContent="✓ done"}
+    if(i>=stages.length){$("#n5").classList.remove("active");$("#n5").classList.add("done");return}
+    stages[i].querySelector(".s").textContent="running…";
+    $("#n5").classList.add("busy");
+    i++;setTimeout(tick,700);
+  };tick();
+}
+</script>
+<aside hidden>Upload file input URL path GitHub repo WordPress site Feed or OPML Upload folder Server path Reachable URL PDF EPUB HTML Markdown text WXR/XML ZIP Import as drafts Dry run Ask when old Base URLs are found Keep URLs unchanged Rewrite listed Base URLs Read source Prepare content URL treatment Import media Write pages Finish Abort View imported content Rewrite old-site URLs to this site? Old Base URLs include scheme, domain, and optional path, not just a domain. https://old.example.com/docs/ rewrites only URLs under /docs/. Rewrite selected Base URLs Yes rewrite all No keep all URLs directory picker</aside></body>
+</html>

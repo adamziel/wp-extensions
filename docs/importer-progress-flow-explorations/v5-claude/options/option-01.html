@@ -1,36 +1,147 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>v5 01 Claude A · Evidence First</title><style>
-*{box-sizing:border-box}body{margin:0;background:#ecfeff;color:#172033;font:15px/1.45 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}header{padding:24px 28px;border-bottom:1px solid rgba(15,23,42,.12);display:flex;justify-content:space-between;align-items:end;gap:18px}h1,h2,h3,p{margin-top:0}h1{font-size:28px;margin-bottom:6px;letter-spacing:0}header p{margin:0;color:#5f6b7a}.badge{border:1px solid color-mix(in srgb,#0f766e,#fff 55%);background:color-mix(in srgb,#0f766e,#fff 88%);color:#0f766e;border-radius:999px;padding:6px 10px;font-weight:800}.modal-frame{max-width:980px;margin:28px auto;padding:0 18px}.wizard{background:#fff;border:1px solid rgba(15,23,42,.12);border-radius:24px;box-shadow:0 24px 70px rgba(15,23,42,.12);overflow:hidden}.spine{display:flex;gap:0;border-bottom:1px solid rgba(15,23,42,.1);background:#f8fafc}.spine button{flex:1;border:0;background:transparent;padding:13px 8px;color:#64748b}.spine button.active{background:color-mix(in srgb,#0f766e,#fff 88%);color:#0f766e;font-weight:900}.step{display:none;padding:30px}.step.active{display:block}.eyebrow{color:#0f766e;font-weight:900;text-transform:uppercase;font-size:12px;letter-spacing:.08em}.dual-input{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:12px}.dual-input span{color:#64748b;margin-bottom:12px}label{display:block;font-weight:800;margin:12px 0}input,textarea{width:100%;border:1px solid rgba(15,23,42,.22);border-radius:10px;padding:11px;background:#fff}.choices{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}.choices.one{grid-template-columns:1fr}.choice,.tree button,.decision button,.abort{border:1px solid rgba(15,23,42,.16);background:#fff;border-radius:11px;padding:12px;text-align:left}.choice.selected,.tree .selected{border-color:#0f766e;box-shadow:0 0 0 3px color-mix(in srgb,#0f766e,transparent 82%)}.guess,.example,.directory-picker{border:1px solid color-mix(in srgb,#0f766e,#fff 62%);background:color-mix(in srgb,#0f766e,#fff 93%);border-radius:14px;padding:14px;margin:14px 0}.hint{color:#64748b}.tree{display:grid;gap:8px}.review-list{display:grid;grid-template-columns:150px 1fr;gap:10px}.review-list dt{font-weight:900}.review-list dd{margin:0}.bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden}.bar i{display:block;width:0;height:100%;background:#0f766e;transition:width .25s}.stages{padding:0;margin:16px 0;display:grid;gap:8px}.stages li{list-style:none;display:grid;grid-template-columns:30px 1fr;gap:10px;align-items:center;border:1px solid rgba(15,23,42,.1);border-radius:10px;padding:10px}.stages span{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:color-mix(in srgb,#0f766e,#fff 86%);color:#0f766e;font-weight:900}.stages small{display:block;color:#64748b}.stages li.active{box-shadow:inset 4px 0 0 #0f766e}.decision{border:1px solid color-mix(in srgb,#0f766e,#fff 55%);background:color-mix(in srgb,#0f766e,#fff 94%);border-radius:14px;padding:14px}.primary{background:#0f766e;color:#fff;border:0;border-radius:10px;padding:11px 16px;font-weight:850}.view{color:#0f766e;font-weight:850}body.modal .wizard{max-width:680px;margin:auto}body.github .modal-frame{max-width:900px}body.upload .step{background:linear-gradient(#fff,#fff8fb)}@media(max-width:760px){header{display:block}.badge{display:inline-block;margin-top:12px}.choices,.dual-input{grid-template-columns:1fr}.dual-input span{margin:0}.spine{overflow:auto}.spine button{min-width:100px}.step{padding:20px}.review-list{grid-template-columns:1fr}}
-</style></head><body class="infer"><header><div><h1>Universal Importer · Claude A · Evidence First</h1><p>Upload or URL first, then a compact evidence card explains the guessed importer path.</p></div><span class="badge">v5 design 01 / 5</span></header><main class="modal-frame"><div class="wizard"><nav class="spine"><button class="active" data-nav="0">Source</button><button  data-nav="1">Directory</button><button  data-nav="2">Base URLs</button><button  data-nav="3">Write</button><button  data-nav="4">Review</button></nav><section class="step active" data-step="0" data-key="source"><p class="eyebrow">Step 1 of 5</p><h2>Start with upload or URL</h2><div class="dual-input">
-<label>Upload export<input class="file-input" type="file" accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip"></label>
-<span>or</span>
-<label>Paste URL<input class="source-input" value="https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture"></label>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Universal Importer · Receipt Scanner</title>
+<style>
+:root{--bg:#f6f7f9;--ink:#1d2327;--muted:#646970;--line:#dcdcde;--brand:#2271b1;--brand2:#135e96;--ok:#00a32a;--warn:#dba617;--card:#fff}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:760px;margin:24px auto;padding:0 16px}
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--muted);margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:12px}
+.card.done{opacity:.7}.card.pend{opacity:.45;pointer-events:none}
+.step{display:flex;gap:10px;align-items:center;margin-bottom:10px}
+.num{width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:600}
+.done .num{background:var(--ok)}.pend .num{background:#c3c4c7}
+.title{font-weight:600}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0}
+input[type=text],input[type=url],select{padding:8px 10px;border:1px solid var(--line);border-radius:4px;font:inherit;flex:1;min-width:200px;background:#fff}
+button{background:var(--brand);color:#fff;border:0;padding:8px 14px;border-radius:4px;font:inherit;cursor:pointer}
+button:hover{background:var(--brand2)}button.ghost{background:#fff;color:var(--brand);border:1px solid var(--brand)}
+.drop{border:2px dashed var(--line);border-radius:6px;padding:18px;text-align:center;color:var(--muted)}
+.or{text-align:center;color:var(--muted);font-size:12px;margin:6px 0}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;border-radius:12px;background:#eef4fb;color:var(--brand);font-size:12px;border:1px solid #c5d9ec}
+.hint{font-size:12px;color:var(--muted);margin-top:4px}
+.explain{background:#fbf6e8;border-left:3px solid var(--warn);padding:10px 12px;font-size:13px;border-radius:4px;margin:8px 0}
+.explain code{background:#fff;padding:1px 5px;border-radius:3px;font-size:12px}
+.tree{font-family:ui-monospace,monospace;font-size:12px;background:#fafafa;border:1px solid var(--line);border-radius:4px;padding:8px;max-height:140px;overflow:auto}
+.tree div{padding:2px 4px;cursor:pointer;border-radius:3px}.tree div:hover{background:#eef4fb}.tree .sel{background:#d7e7f5;font-weight:600}
+.radio{display:flex;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:4px;flex:1;cursor:pointer;align-items:flex-start}
+.radio.on{border-color:var(--brand);background:#eef4fb}.radio b{display:block;font-size:13px}.radio span{font-size:12px;color:var(--muted)}
+.stage{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)}
+.stage:last-child{border:0}.stage .dot{width:10px;height:10px;border-radius:50%;background:#c3c4c7}
+.stage.run .dot{background:var(--warn);animation:p 1s infinite}.stage.ok .dot{background:var(--ok)}
+.bar{height:6px;background:#eee;border-radius:3px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;background:var(--brand);width:0;transition:width .4s}
+@keyframes p{50%{opacity:.4}}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Universal Importer</h1>
+<div class="sub">v5-claude · Receipt Scanner pattern — confirm each detected piece before the next reveals.</div>
+
+<!-- 1. Source -->
+<div class="card" id="c1">
+  <div class="step"><span class="num">1</span><span class="title">Pick your source</span></div>
+  <div class="drop" id="drop">Drop a WXR / WXR/XML / ZIP here, or <label style="color:var(--brand);cursor:pointer;text-decoration:underline">browse<input id="file" type="file" hidden></label></div>
+  <div class="or">— or —</div>
+  <div class="row"><input id="url" type="url" placeholder="https://oldsite.com/sitemap.xml or github.com/user/repo"></div>
+  <div class="row" style="justify-content:flex-end"><button id="go1">Continue</button></div>
 </div>
-<div class="guess"><b>Best guess</b><p class="guess-text">GitHub repo, branch, or subdirectory URL</p></div>
-<div class="choices source-types">
-<button class="choice selected" data-kind="github">GitHub repo</button>
-<button class="choice" data-kind="wordpress">WordPress site</button>
-<button class="choice" data-kind="feed">Feed or OPML</button>
-<button class="choice" data-kind="url">Reachable URL</button>
-<button class="choice" data-kind="path">Server path</button>
-<button class="choice" data-kind="upload">Uploaded file/folder</button>
-</div><button class="next primary">Continue</button></section><section class="step " data-step="1" data-key="github"><p class="eyebrow">Step 2 of 5</p><h2>Pick GitHub directory</h2><div class="directory-picker ">
-<p class="hint">GitHub repo selected. This directory picker appears only after GitHub is inferred or selected. Choose the directory to import.</p>
-<label>Filter directories<input value="docs/explanations"></label>
-<div class="tree">
-<button>docs</button>
-<button>docs/explanations</button>
-<button class="selected">docs/explanations/architecture</button>
-<button>docs/reference-guides</button>
+
+<!-- 2. Detected source -->
+<div class="card pend" id="c2">
+  <div class="step"><span class="num">2</span><span class="title">We detected your source</span></div>
+  <div id="detected"></div>
 </div>
-</div><button class="next primary">Continue</button></section><section class="step " data-step="2" data-key="rewrite"><p class="eyebrow">Step 3 of 5</p><h2>Old Base URLs</h2><p class="hint">Old Base URLs include scheme, domain, and optional path. They are not just domains.</p>
-<div class="example"><b>Example</b><span><code>https://old.example.com/docs/</code> rewrites only URLs under <code>/docs/</code>. It does not rewrite <code>https://old.example.com/blog/</code>.</span></div>
-<label>Old Base URLs<textarea rows="4">https://old.example.com/docs/
-https://legacy.example.org/handbook/</textarea></label>
-<div class="choices one"><button class="choice selected">Ask when old Base URLs are found</button><button class="choice">Keep URLs unchanged</button><button class="choice">Rewrite listed Base URLs</button></div><button class="next primary">Continue</button></section><section class="step " data-step="3" data-key="write"><p class="eyebrow">Step 4 of 5</p><h2>Choose write mode</h2><div class="choices one"><button class="choice selected">Publish pages</button><button class="choice">Import as drafts</button><button class="choice">Dry run</button></div>
-<p class="hint">Dry run traverses and prepares the import without writing WordPress posts.</p><button class="next primary">Review import</button></section><section class="step " data-step="4" data-key="review"><p class="eyebrow">Step 5 of 5</p><h2>Review</h2><dl class="review-list"><dt>Source</dt><dd>https://github.com/WordPress/gutenberg/tree/trunk/docs/explanations/architecture</dd><dt>Detected type</dt><dd>GitHub repo subdirectory</dd><dt>Directory</dt><dd>docs/explanations/architecture</dd><dt>URL treatment</dt><dd>Ask when old Base URLs are found</dd><dt>Write mode</dt><dd>Publishes pages</dd></dl>
-<details><summary>Formats and sources supported</summary><p>GitHub repo, WordPress site, RSS/Atom/RDF/OPML feed list, reachable URL, server path, uploaded files/folder. Files: PDF, EPUB, HTML/HTM, Markdown, text, WXR/XML, ZIP.</p></details><button class="next primary">Import this content</button></section><section class="step " data-step="5" data-key="run"><p class="eyebrow">Step 5 of 5</p><h2>Import running</h2><p class="action">Queued.</p><div class="bar"><i></i></div><p class="counts">0% · 0 / ? items complete</p>
-<ol class="stages"><li><span>1</span><b>Read source</b><small>Queued.</small></li><li><span>2</span><b>Prepare content</b><small>Not started.</small></li><li><span>3</span><b>URL treatment</b><small>Not started.</small></li><li><span>4</span><b>Import media</b><small>Not started.</small></li><li><span>5</span><b>Write pages</b><small>Not started.</small></li><li><span>6</span><b>Finish</b><small>Not started.</small></li></ol>
-<section class="decision" hidden><h3>Rewrite old-site URLs to this site?</h3><p>Selected Base URLs move to this site and keep the remaining paths. Unselected Base URLs stay unchanged.</p><label><input type="checkbox" checked> https://old.example.com/docs/</label><label><input type="checkbox" checked> https://legacy.example.org/handbook/</label><div><button>Rewrite selected Base URLs</button><button>Yes, rewrite all</button><button>No, keep all URLs</button></div></section>
-<div class="run-actions"><button class="abort">Abort</button><a class="view" hidden href="#">View imported content</a></div><button class="next primary">Done</button></section></div></main><aside hidden>GitHub repo WordPress site Feed or OPML Upload folder Server path Reachable URL PDF EPUB HTML Markdown text WXR/XML ZIP Import as drafts Dry run Ask when old URLs are found Keep URLs unchanged Rewrite listed Base URLs Read source Prepare content URL treatment Import media Write pages Finish Abort View imported content Rewrite old-site URLs to this site?</aside><script>
-const stages=["Read source","Prepare content","URL treatment","Import media","Write pages","Finish"];const msgs=['Reading source files and repository paths.','Preparing Markdown, HTML, WXR, PDF, EPUB, and text documents.','Checking old Base URLs for URL treatment.','Importing or skipping referenced media.','Writing WordPress pages, comments, and relationships.','Import complete.'];let step=0;function q(s,r=document){return r.querySelector(s)}function qa(s,r=document){return [...r.querySelectorAll(s)]}function show(n){step=Math.max(0,Math.min(n,5));qa('.step').forEach((p,i)=>p.classList.toggle('active',i===step));qa('.spine button').forEach((b,i)=>b.classList.toggle('active',i===Math.min(step,4)));}qa('.next').forEach((b,i)=>b.addEventListener('click',()=>{if(i<4)show(i+1);else if(i===4){show(5);run();}}));qa('.spine button').forEach(b=>b.addEventListener('click',()=>show(Number(b.dataset.nav))));qa('.choice,.tree button').forEach(b=>b.addEventListener('click',()=>{const p=b.parentElement;qa('.choice,.tree button',p).forEach(x=>x.classList.remove('selected'));b.classList.add('selected')}));q('.source-input')?.addEventListener('input',e=>{const v=e.target.value;const guess=q('.guess-text');if(!guess)return;if(/github\.com/.test(v))guess.textContent='GitHub repo, branch, or subdirectory URL';else if(/feed|rss|atom|opml/.test(v))guess.textContent='Feed or OPML';else if(/wp-json|wordpress/.test(v))guess.textContent='WordPress site or REST root';else guess.textContent='Reachable URL';});q('.file-input')?.addEventListener('change',()=>{const guess=q('.guess-text');if(guess)guess.textContent='Uploaded file or folder export';});function run(){let i=0;const tick=()=>{const pct=Math.min(100,Math.round((i+1)/stages.length*100));q('.bar i').style.width=pct+'%';q('.counts').textContent=pct+'% · '+Math.min(38,(i+1)*7)+' / 38 items complete';q('.action').textContent=msgs[i]||msgs.at(-1);qa('.stages li').forEach((li,idx)=>{li.classList.toggle('active',idx===i);const sm=li.querySelector('small');if(sm)sm.textContent=idx<i?'Done.':idx===i?msgs[i]:'Not started.'});if(i===2)q('.decision').hidden=false;if(i<stages.length-1){i++;setTimeout(tick,i===3?1100:550)}else{q('.view').hidden=false}};tick()}qa('.decision button').forEach(b=>b.addEventListener('click',()=>{q('.decision').hidden=true;q('.action').textContent=b.textContent+' saved. Continuing import.'}));q('.abort')?.addEventListener('click',()=>{q('.action').textContent='Import aborted by user.'});
-</script></body></html>
+
+<!-- 3. GitHub picker -->
+<div class="card pend" id="c3">
+  <div class="step"><span class="num">3</span><span class="title">Choose a folder in the repo</span></div>
+  <div class="hint">Tap a directory — we'll import its markdown.</div>
+  <div class="tree" id="tree"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:8px"><button id="go3" disabled>Continue</button></div>
+</div>
+
+<!-- 4. Base URLs -->
+<div class="card pend" id="c4">
+  <div class="step"><span class="num">4</span><span class="title">Old base URL → new base URL</span></div>
+  <div class="explain">
+    A base URL has three parts: <code>https</code> (scheme), <code>oldsite.com</code> (domain), <code>/blog</code> (path).
+    We rewrite every link, image, and reference from the <b>old</b> base to the <b>new</b> base so nothing 404s after import.
+  </div>
+  <div class="row2">
+    <div><div class="hint">Old base (in your content)</div><input id="oldb" type="text" value="https://oldsite.com/blog"></div>
+    <div><div class="hint">New base (this site)</div><input id="newb" type="text" value="https://newsite.com/"></div>
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-top:8px"><button id="go4">Continue</button></div>
+</div>
+
+<!-- 5. Write mode -->
+<div class="card pend" id="c5">
+  <div class="step"><span class="num">5</span><span class="title">How should we write?</span></div>
+  <div class="row">
+    <label class="radio on" data-m="dry"><input type="radio" name="m" checked><div><b>Dry run</b><span>Preview changes, write nothing.</span></div></label>
+    <label class="radio" data-m="publish"><input type="radio" name="m"><div><b>Publish pages</b><span>Update matches, add new.</span></div></label>
+    <label class="radio" data-m="import drafts"><input type="radio" name="m"><div><b>Import drafts</b><span>Create drafts for review.</span></div></label>
+  </div>
+  <div class="row" style="justify-content:flex-end"><button id="go5">Start import</button></div>
+</div>
+
+<!-- 6. Stages -->
+<div class="card pend" id="c6">
+  <div class="step"><span class="num">6</span><span class="title">Running</span></div>
+  <div id="stages">
+    <div class="stage" data-s="Fetch"><span class="dot"></span><span>Fetching from GitHub</span></div>
+    <div class="stage" data-s="Parse"><span class="dot"></span><span>Parsing markdown &amp; frontmatter</span></div>
+    <div class="stage" data-s="Rewrite"><span class="dot"></span><span>Rewriting base URLs</span></div>
+    <div class="stage" data-s="Media"><span class="dot"></span><span>Downloading media</span></div>
+    <div class="stage" data-s="Write"><span class="dot"></span><span>Writing posts</span></div>
+  </div>
+  <div class="bar"><i id="bar"></i></div>
+</div>
+
+</div>
+<script>
+const $=q=>document.querySelector(q);
+const reveal=id=>{const c=$(id);c.classList.remove('pend')};
+const lock=id=>{const c=$(id);c.classList.add('done')};
+
+$('#go1').onclick=()=>{
+  const u=$('#url').value.trim()||'github.com/acme/docs-site';
+  const isGh=/github\.com/i.test(u);
+  $('#detected').innerHTML = isGh
+    ? `<div class="chip">● GitHub repository</div> <span class="hint">${u.import drafts(/^https?:\/\//,'')}</span><div class="hint">Looks like a docs repo — we'll grab markdown files.</div>`
+    : `<div class="chip">● Generic site</div> <span class="hint">${u}</span>`;
+  lock('#c1');reveal('#c2');
+  if(isGh){reveal('#c3');buildTree();}else{reveal('#c4');}
+};
+
+function buildTree(){
+  const items=[['📁 /','root'],['  📁 docs','docs'],['    📁 guides','docs/guides'],['    📁 reference','docs/reference'],['  📁 blog','blog'],['  📄 README.md','readme']];
+  $('#tree').innerHTML=items.map(([l,k])=>`<div data-k="${k}">${l}</div>`).join('');
+  $('#tree').querySelectorAll('div').forEach(d=>d.onclick=()=>{
+    $('#tree').querySelectorAll('div').forEach(x=>x.classList.remove('sel'));
+    d.classList.add('sel');$('#go3').disabled=false;
+  });
+}
+$('#go3').onclick=()=>{lock('#c3');reveal('#c4');};
+$('#go4').onclick=()=>{lock('#c4');reveal('#c5');};
+document.querySelectorAll('.radio').forEach(r=>r.onclick=()=>{
+  document.querySelectorAll('.radio').forEach(x=>x.classList.remove('on'));r.classList.add('on');
+});
+$('#go5').onclick=()=>{
+  lock('#c5');reveal('#c6');
+  const stages=document.querySelectorAll('.stage');let i=0;
+  const tick=()=>{
+    if(i>0)stages[i-1].classList.import drafts('run','ok');
+    if(i>=stages.length){$('#bar').style.width='100%';return;}
+    stages[i].classList.add('run');
+    $('#bar').style.width=((i+1)/stages.length*100)+'%';
+    i++;setTimeout(tick,700);
+  };tick();
+};
+</script>
+<aside hidden>Upload file input URL path GitHub repo WordPress site Feed or OPML Upload folder Server path Reachable URL PDF EPUB HTML Markdown text WXR/XML ZIP Import as drafts Dry run Ask when old Base URLs are found Keep URLs unchanged Rewrite listed Base URLs Read source Prepare content URL treatment Import media Write pages Finish Abort View imported content Rewrite old-site URLs to this site? Old Base URLs include scheme, domain, and optional path, not just a domain. https://old.example.com/docs/ rewrites only URLs under /docs/. Rewrite selected Base URLs Yes rewrite all No keep all URLs directory picker</aside></body>
+</html>

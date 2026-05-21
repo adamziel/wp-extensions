@@ -1,24 +1,146 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>v5 04 Claude D · Base URL Coach</title><style>
-*{box-sizing:border-box}body{margin:0;background:#fdf2f8;color:#172033;font:15px/1.45 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer}header{padding:24px 28px;border-bottom:1px solid rgba(15,23,42,.12);display:flex;justify-content:space-between;align-items:end;gap:18px}h1,h2,h3,p{margin-top:0}h1{font-size:28px;margin-bottom:6px;letter-spacing:0}header p{margin:0;color:#5f6b7a}.badge{border:1px solid color-mix(in srgb,#be185d,#fff 55%);background:color-mix(in srgb,#be185d,#fff 88%);color:#be185d;border-radius:999px;padding:6px 10px;font-weight:800}.modal-frame{max-width:980px;margin:28px auto;padding:0 18px}.wizard{background:#fff;border:1px solid rgba(15,23,42,.12);border-radius:24px;box-shadow:0 24px 70px rgba(15,23,42,.12);overflow:hidden}.spine{display:flex;gap:0;border-bottom:1px solid rgba(15,23,42,.1);background:#f8fafc}.spine button{flex:1;border:0;background:transparent;padding:13px 8px;color:#64748b}.spine button.active{background:color-mix(in srgb,#be185d,#fff 88%);color:#be185d;font-weight:900}.step{display:none;padding:30px}.step.active{display:block}.eyebrow{color:#be185d;font-weight:900;text-transform:uppercase;font-size:12px;letter-spacing:.08em}.dual-input{display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:12px}.dual-input span{color:#64748b;margin-bottom:12px}label{display:block;font-weight:800;margin:12px 0}input,textarea{width:100%;border:1px solid rgba(15,23,42,.22);border-radius:10px;padding:11px;background:#fff}.choices{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}.choices.one{grid-template-columns:1fr}.choice,.tree button,.decision button,.abort{border:1px solid rgba(15,23,42,.16);background:#fff;border-radius:11px;padding:12px;text-align:left}.choice.selected,.tree .selected{border-color:#be185d;box-shadow:0 0 0 3px color-mix(in srgb,#be185d,transparent 82%)}.guess,.example,.directory-picker{border:1px solid color-mix(in srgb,#be185d,#fff 62%);background:color-mix(in srgb,#be185d,#fff 93%);border-radius:14px;padding:14px;margin:14px 0}.hint{color:#64748b}.tree{display:grid;gap:8px}.review-list{display:grid;grid-template-columns:150px 1fr;gap:10px}.review-list dt{font-weight:900}.review-list dd{margin:0}.bar{height:12px;background:#e5e7eb;border-radius:999px;overflow:hidden}.bar i{display:block;width:0;height:100%;background:#be185d;transition:width .25s}.stages{padding:0;margin:16px 0;display:grid;gap:8px}.stages li{list-style:none;display:grid;grid-template-columns:30px 1fr;gap:10px;align-items:center;border:1px solid rgba(15,23,42,.1);border-radius:10px;padding:10px}.stages span{display:grid;place-items:center;width:26px;height:26px;border-radius:50%;background:color-mix(in srgb,#be185d,#fff 86%);color:#be185d;font-weight:900}.stages small{display:block;color:#64748b}.stages li.active{box-shadow:inset 4px 0 0 #be185d}.decision{border:1px solid color-mix(in srgb,#be185d,#fff 55%);background:color-mix(in srgb,#be185d,#fff 94%);border-radius:14px;padding:14px}.primary{background:#be185d;color:#fff;border:0;border-radius:10px;padding:11px 16px;font-weight:850}.view{color:#be185d;font-weight:850}body.modal .wizard{max-width:680px;margin:auto}body.github .modal-frame{max-width:900px}body.upload .step{background:linear-gradient(#fff,#fff8fb)}@media(max-width:760px){header{display:block}.badge{display:inline-block;margin-top:12px}.choices,.dual-input{grid-template-columns:1fr}.dual-input span{margin:0}.spine{overflow:auto}.spine button{min-width:100px}.step{padding:20px}.review-list{grid-template-columns:1fr}}
-</style></head><body class="baseurl"><header><div><h1>Universal Importer · Claude D · Base URL Coach</h1><p>Old Base URL rewrite is taught with examples before the user enters values.</p></div><span class="badge">v5 design 04 / 5</span></header><main class="modal-frame"><div class="wizard"><nav class="spine"><button class="active" data-nav="0">Source</button><button  data-nav="1">Directory</button><button  data-nav="2">Base URLs</button><button  data-nav="3">Write</button><button  data-nav="4">Review</button></nav><section class="step active" data-step="0" data-key="source"><p class="eyebrow">Step 1 of 5</p><h2>Start with upload or URL</h2><label>URL or server path<input class="source-input" value="https://example.com/wp-json/"></label>
-<div class="choices source-types"><button class="choice selected">WordPress site</button><button class="choice">Feed or OPML</button><button class="choice">Reachable URL</button><button class="choice">Server path</button><button class="choice">GitHub repo</button><button class="choice">Uploaded file/folder</button></div><button class="next primary">Continue</button></section><section class="step " data-step="1" data-key="github"><p class="eyebrow">Step 2 of 5</p><h2>Pick GitHub directory</h2><div class="directory-picker soft">
-<p class="hint">GitHub repo selected. This directory picker appears only after GitHub is inferred or selected. Choose the directory to import.</p>
-<label>Filter directories<input value="docs/explanations"></label>
-<div class="tree">
-<button>docs</button>
-<button>docs/explanations</button>
-<button class="selected">docs/explanations/architecture</button>
-<button>docs/reference-guides</button>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Universal Importer · v5-claude · Base URL Notebook</title>
+<style>
+  :root{--ink:#1a1f2c;--paper:#fdfaf2;--rule:#e8dfc7;--mark:#e9b949;--accent:#2d6a4f;--muted:#6b6452;--warn:#a8530c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:repeating-linear-gradient(135deg,#efe7d2 0 2px,#f4ecd6 2px 14px);font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;color:var(--ink);min-height:100vh;display:flex;justify-content:center;padding:32px 12px}
+  .notebook{width:min(560px,100%);background:var(--paper);border:1px solid var(--rule);border-radius:4px;box-shadow:0 30px 60px -20px rgba(40,30,10,.35),0 1px 0 #fff inset;position:relative;overflow:hidden}
+  .notebook::before{content:"";position:absolute;left:48px;top:0;bottom:0;width:1px;background:#d97a7a;opacity:.4}
+  .spine{position:absolute;left:0;top:0;bottom:0;width:48px;background:linear-gradient(90deg,#e3d6b0,#efe2bb);border-right:1px dashed #cbb98a}
+  .spine ol{margin:0;padding:14px 0;list-style:none;font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--muted);text-align:center}
+  .spine li{padding:6px 0;border-bottom:1px dotted #cbb98a}
+  .spine li.on{color:var(--ink);background:var(--mark);font-weight:700}
+  .pages{margin-left:48px;padding:26px 28px 24px 36px}
+  .tab{display:inline-block;background:var(--mark);color:#3a2a05;font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.14em;padding:3px 9px;border-radius:2px;text-transform:uppercase}
+  h1{font-size:22px;margin:10px 0 4px;font-weight:600;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:13px;font-style:italic;margin-bottom:18px}
+  .page{display:none}
+  .page.on{display:block;animation:flip .3s ease}
+  @keyframes flip{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  label.field{display:block;margin:12px 0}
+  label.field span{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:4px}
+  input[type=text],input[type=url]{width:100%;background:transparent;border:none;border-bottom:1.5px solid var(--ink);padding:6px 2px;font:inherit;font-size:15px;color:var(--ink);outline:none}
+  input[type=text]:focus,input[type=url]:focus{border-bottom-color:var(--accent)}
+  .or{display:flex;align-items:center;gap:8px;margin:18px 0 6px;color:var(--muted);font-size:12px;font-style:italic}
+  .or::before,.or::after{content:"";flex:1;height:1px;background:repeating-linear-gradient(90deg,#c9bf9f 0 4px,transparent 4px 8px)}
+  .drop{border:1.5px dashed #b9aa78;padding:18px;text-align:center;border-radius:3px;color:var(--muted);font-size:13px;cursor:pointer;background:#fbf6e6}
+  .drop:hover{background:#f7eecb;color:var(--ink)}
+  .infer{margin-top:14px;font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted);background:#fbf3d6;border-left:3px solid var(--mark);padding:6px 10px;min-height:28px}
+  .infer b{color:var(--accent);font-family:inherit;font-weight:700}
+  .note{margin-top:14px;border-left:3px solid var(--warn);background:#fbeedb;padding:10px 12px;font-size:13.5px}
+  .note h3{margin:0 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:var(--warn)}
+  .essay p{font-size:14.5px;line-height:1.55;margin:0 0 10px}
+  .essay code,.kbd{font-family:ui-monospace,Menlo,monospace;background:#fbf3d6;padding:1px 5px;border-radius:2px;font-size:12.5px}
+  mark.scheme{background:#cde7d8}mark.domain{background:#f3d3a8}mark.path{background:#f7c7c0}
+  .legend{display:flex;gap:8px;font-size:11px;color:var(--muted);margin:6px 0 12px;flex-wrap:wrap}
+  .legend span{padding:1px 6px;border-radius:2px}
+  .stamp{transform:rotate(-4deg);border:2px solid var(--warn);color:var(--warn);display:inline-block;padding:3px 8px;font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.16em;opacity:.85}
+  .modes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+  .mode{border:1px solid var(--rule);padding:10px 12px;border-radius:3px;cursor:pointer;background:#fcf7e3}
+  .mode.on{border-color:var(--accent);background:#e6efe5;box-shadow:inset 0 0 0 1px var(--accent)}
+  .mode b{display:block;font-size:13px;margin-bottom:2px}
+  .mode small{color:var(--muted);font-size:11.5px}
+  .stages{margin:6px 0 0;padding:0;list-style:none;font-size:13.5px;border-top:1px dashed var(--rule)}
+  .stages li{padding:8px 4px;border-bottom:1px dashed var(--rule);display:flex;gap:10px;align-items:center}
+  .stages .dot{width:14px;height:14px;border-radius:50%;border:1.5px solid #c2b58a;background:#fff;flex:none}
+  .stages li.done .dot{background:var(--accent);border-color:var(--accent)}
+  .stages li.cur .dot{background:var(--mark);border-color:var(--warn);box-shadow:0 0 0 3px #fbeaa6}
+  .stages li.cur{font-weight:600}
+  .stages small{display:block;color:var(--muted);font-weight:400;font-size:11.5px;font-style:italic}
+  .bar{margin-top:14px;height:6px;background:#efe4c2;border-radius:3px;overflow:hidden}
+  .bar i{display:block;height:100%;width:62%;background:linear-gradient(90deg,var(--mark),var(--accent));animation:pulse 1.6s linear infinite}
+  @keyframes pulse{0%{width:18%}100%{width:78%}}
+  .nav{margin-top:22px;display:flex;justify-content:space-between;align-items:center;border-top:1px dotted #c9bf9f;padding-top:14px}
+  button{font:inherit;font-size:13px;border:1px solid var(--ink);background:var(--ink);color:var(--paper);padding:7px 16px;cursor:pointer;border-radius:2px}
+  button.ghost{background:transparent;color:var(--ink)}
+  button:disabled{opacity:.35;cursor:not-allowed}
+  .pagenum{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="notebook">
+  <aside class="spine"><ol id="spine">
+    <li>01</li><li>02</li><li>03</li><li>04</li><li>05</li>
+  </ol></aside>
+  <main class="pages">
+    <div class="tab">Universal Importer · v5-claude</div>
+    <h1 id="title">Where is your content?</h1>
+    <div class="sub" id="subtitle">Drop a file, paste a URL — we'll figure out the rest.</div>
+
+    <section class="page on" data-p="1">
+      <label class="field"><span>Paste a URL</span><input id="url" type="url" placeholder="https://example.com/docs/ · or · github.com/org/repo/tree/main/docs"></label>
+      <div class="or">or</div>
+      <div class="drop" onclick="document.getElementById('file').click()">⬇ drop a <b>.zip</b>, <b>.wxr</b>, <b>.md</b>, or <b>.html</b> bundle here<input id="file" type="file" hidden></div>
+      <div class="infer" id="infer">Awaiting input…</div>
+    </section>
+
+    <section class="page" data-p="2">
+      <div class="note" id="ghnote" style="display:none">
+        <h3>GitHub directory detected</h3>
+        We'll fetch <code id="ghpath">/docs/</code> from the <b>main</b> branch as a Markdown source. Sub-folders are included; binaries are skipped. <span class="stamp">read-only</span>
+      </div>
+      <div class="essay">
+        <h1 style="margin-top:4px">A note on Base URLs</h1>
+        <div class="sub">Why we ask for more than just a domain.</div>
+        <p>Older importers asked only for a <em>domain</em> — <code>example.com</code>. That worked when every site lived at its root. Today, your content might live under a subpath, behind a CDN, or be mirrored across schemes.</p>
+        <p>The new Base URL is the full <b>scheme + domain + path</b> of where the content was originally served. We rewrite every internal link relative to it.</p>
+        <p class="legend"><span><mark class="scheme">scheme</mark> https</span><span><mark class="domain">domain</mark> example.com</span><span><mark class="path">path</mark> /docs/</span></p>
+        <p style="font-size:18px;text-align:center;background:#fff8e0;padding:12px;border:1px dashed #cbb98a;border-radius:3px">
+          <mark class="scheme">https://</mark><mark class="domain">example.com</mark><mark class="path">/docs/</mark>
+        </p>
+        <p>Drop the <code>/docs/</code> and a link to <code>/docs/guide</code> would become an external URL after import. Keep it, and the importer knows that page now lives inside your WordPress.</p>
+      </div>
+      <label class="field" style="margin-top:14px"><span>Base URL (full)</span><input id="base" type="text" value="https://example.com/docs/"></label>
+    </section>
+
+    <section class="page" data-p="3">
+      <h1 style="margin-top:4px">How should we write?</h1>
+      <div class="sub">Choose a write mode — you can switch on the next run.</div>
+      <div class="modes">
+        <div class="mode on" data-mode="publish"><b>Publish pages</b><small>Update matching slugs, keep the rest. Recommended for re-imports.</small></div>
+        <div class="mode" data-mode="fresh"><b>Fresh</b><small>Create new posts. Existing content untouched.</small></div>
+        <div class="mode" data-mode="mirror"><b>Mirror</b><small>Make WP match source exactly. Deletes orphans. Destructive.</small></div>
+        <div class="mode" data-mode="dry"><b>Dry run</b><small>Walk the source, report a plan, write nothing.</small></div>
+      </div>
+    </section>
+
+    <section class="page" data-p="4">
+      <h1 style="margin-top:4px">Running…</h1>
+      <div class="sub">Three stages. You can close this — we'll keep going.</div>
+      <ul class="stages">
+        <li class="done"><span class="dot"></span><div><b>Fetch</b><small>Walked 184 URLs, 4.2 MB</small></div></li>
+        <li class="cur"><span class="dot"></span><div><b>Normalize &amp; rewrite</b><small>Resolving <code>/docs/*</code> against base URL · 112 / 184</small></div></li>
+        <li><span class="dot"></span><div><b>Write to WordPress</b><small>Queued in publish mode</small></div></li>
+      </ul>
+      <div class="bar"><i></i></div>
+    </section>
+
+    <section class="page" data-p="5">
+      <h1 style="margin-top:4px">Done.</h1>
+      <div class="sub">184 items imported · 0 errors · 12 link rewrites.</div>
+      <div class="note" style="border-left-color:var(--accent);background:#e9f1e7"><h3 style="color:var(--accent)">Run summary saved</h3>The base URL <code>https://example.com/docs/</code> is stored as the canonical source — next sync will reuse it.</div>
+    </section>
+
+    <nav class="nav">
+      <button class="ghost" id="back">← Back</button>
+      <span class="pagenum"><span id="pn">1</span> / 5</span>
+      <button id="next">Continue →</button>
+    </nav>
+  </main>
 </div>
-</div><button class="next primary">Continue</button></section><section class="step " data-step="2" data-key="rewrite"><p class="eyebrow">Step 3 of 5</p><h2>Old Base URLs</h2><p class="hint">Old Base URLs include scheme, domain, and optional path. They are not just domains.</p>
-<div class="example"><b>Example</b><span><code>https://old.example.com/docs/</code> rewrites only URLs under <code>/docs/</code>. It does not rewrite <code>https://old.example.com/blog/</code>.</span></div>
-<label>Old Base URLs<textarea rows="4">https://old.example.com/docs/
-https://legacy.example.org/handbook/</textarea></label>
-<div class="choices one"><button class="choice selected">Ask when old Base URLs are found</button><button class="choice">Keep URLs unchanged</button><button class="choice">Rewrite listed Base URLs</button></div><button class="next primary">Continue</button></section><section class="step " data-step="3" data-key="write"><p class="eyebrow">Step 4 of 5</p><h2>Choose write mode</h2><div class="choices one"><button class="choice selected">Publish pages</button><button class="choice">Import as drafts</button><button class="choice">Dry run</button></div>
-<p class="hint">Dry run traverses and prepares the import without writing WordPress posts.</p><button class="next primary">Review import</button></section><section class="step " data-step="4" data-key="review"><p class="eyebrow">Step 5 of 5</p><h2>Review</h2><dl class="review-list"><dt>Source</dt><dd>https://example.com/wp-json/</dd><dt>Detected type</dt><dd>WordPress REST root</dd><dt>Directory</dt><dd>Not needed</dd><dt>URL treatment</dt><dd>Ask when old Base URLs are found</dd><dt>Write mode</dt><dd>Publishes pages</dd></dl>
-<details><summary>Formats and sources supported</summary><p>GitHub repo, WordPress site, RSS/Atom/RDF/OPML feed list, reachable URL, server path, uploaded files/folder. Files: PDF, EPUB, HTML/HTM, Markdown, text, WXR/XML, ZIP.</p></details><button class="next primary">Import this content</button></section><section class="step " data-step="5" data-key="run"><p class="eyebrow">Step 5 of 5</p><h2>Import running</h2><p class="action">Queued.</p><div class="bar"><i></i></div><p class="counts">0% · 0 / ? items complete</p>
-<ol class="stages"><li><span>1</span><b>Read source</b><small>Queued.</small></li><li><span>2</span><b>Prepare content</b><small>Not started.</small></li><li><span>3</span><b>URL treatment</b><small>Not started.</small></li><li><span>4</span><b>Import media</b><small>Not started.</small></li><li><span>5</span><b>Write pages</b><small>Not started.</small></li><li><span>6</span><b>Finish</b><small>Not started.</small></li></ol>
-<section class="decision" hidden><h3>Rewrite old-site URLs to this site?</h3><p>Selected Base URLs move to this site and keep the remaining paths. Unselected Base URLs stay unchanged.</p><label><input type="checkbox" checked> https://old.example.com/docs/</label><label><input type="checkbox" checked> https://legacy.example.org/handbook/</label><div><button>Rewrite selected Base URLs</button><button>Yes, rewrite all</button><button>No, keep all URLs</button></div></section>
-<div class="run-actions"><button class="abort">Abort</button><a class="view" hidden href="#">View imported content</a></div><button class="next primary">Done</button></section></div></main><aside hidden>GitHub repo WordPress site Feed or OPML Upload folder Server path Reachable URL PDF EPUB HTML Markdown text WXR/XML ZIP Import as drafts Dry run Ask when old URLs are found Keep URLs unchanged Rewrite listed Base URLs Read source Prepare content URL treatment Import media Write pages Finish Abort View imported content Rewrite old-site URLs to this site?</aside><script>
-const stages=["Read source","Prepare content","URL treatment","Import media","Write pages","Finish"];const msgs=['Reading source files and repository paths.','Preparing Markdown, HTML, WXR, PDF, EPUB, and text documents.','Checking old Base URLs for URL treatment.','Importing or skipping referenced media.','Writing WordPress pages, comments, and relationships.','Import complete.'];let step=0;function q(s,r=document){return r.querySelector(s)}function qa(s,r=document){return [...r.querySelectorAll(s)]}function show(n){step=Math.max(0,Math.min(n,5));qa('.step').forEach((p,i)=>p.classList.toggle('active',i===step));qa('.spine button').forEach((b,i)=>b.classList.toggle('active',i===Math.min(step,4)));}qa('.next').forEach((b,i)=>b.addEventListener('click',()=>{if(i<4)show(i+1);else if(i===4){show(5);run();}}));qa('.spine button').forEach(b=>b.addEventListener('click',()=>show(Number(b.dataset.nav))));qa('.choice,.tree button').forEach(b=>b.addEventListener('click',()=>{const p=b.parentElement;qa('.choice,.tree button',p).forEach(x=>x.classList.remove('selected'));b.classList.add('selected')}));q('.source-input')?.addEventListener('input',e=>{const v=e.target.value;const guess=q('.guess-text');if(!guess)return;if(/github\.com/.test(v))guess.textContent='GitHub repo, branch, or subdirectory URL';else if(/feed|rss|atom|opml/.test(v))guess.textContent='Feed or OPML';else if(/wp-json|wordpress/.test(v))guess.textContent='WordPress site or REST root';else guess.textContent='Reachable URL';});q('.file-input')?.addEventListener('change',()=>{const guess=q('.guess-text');if(guess)guess.textContent='Uploaded file or folder export';});function run(){let i=0;const tick=()=>{const pct=Math.min(100,Math.round((i+1)/stages.length*100));q('.bar i').style.width=pct+'%';q('.counts').textContent=pct+'% · '+Math.min(38,(i+1)*7)+' / 38 items complete';q('.action').textContent=msgs[i]||msgs.at(-1);qa('.stages li').forEach((li,idx)=>{li.classList.toggle('active',idx===i);const sm=li.querySelector('small');if(sm)sm.textContent=idx<i?'Done.':idx===i?msgs[i]:'Not started.'});if(i===2)q('.decision').hidden=false;if(i<stages.length-1){i++;setTimeout(tick,i===3?1100:550)}else{q('.view').hidden=false}};tick()}qa('.decision button').forEach(b=>b.addEventListener('click',()=>{q('.decision').hidden=true;q('.action').textContent=b.textContent+' saved. Continuing import.'}));q('.abort')?.addEventListener('click',()=>{q('.action').textContent='Import aborted by user.'});
-</script></body></html>
+<script>
+  const titles=[["Where is your content?","Drop a file, paste a URL — we'll figure out the rest."],["A note on Base URLs","scheme + domain + path — all three matter."],["How should we write?","Pick a strategy for this run."],["Running…","Three stages. Live."],["Done.","Run summary saved."]];
+  let p=1;const url=document.getElementById('url'),infer=document.getElementById('infer'),file=document.getElementById('file'),ghnote=document.getElementById('ghnote'),ghpath=document.getElementById('ghpath'),base=document.getElementById('base'),next=document.getElementById('next'),back=document.getElementById('back');
+  function detect(v){if(!v)return{label:"Awaiting input…",isGh:false};try{const u=new URL(v);if(/github\.com$/.test(u.hostname)){const m=u.pathname.match(/^\/([^/]+)\/([^/]+)\/tree\/[^/]+(\/.*)?$/);return{label:`<b>GitHub directory</b> — ${m?m[3]||'/':''} of ${m?m[1]+'/'+m[2]:u.pathname}`,isGh:true,gpath:m?m[3]||'/':'/',base:`https://raw.githubusercontent.com${m?'/'+m[1]+'/'+m[2]:''}/main${m?m[3]||'':''}`}}if(u.pathname.endsWith('.xml')||u.pathname.endsWith('.wxr'))return{label:"<b>WXR feed</b> — WordPress export",isGh:false,base:u.origin+u.pathname.import drafts(/[^/]*$/,'')};return{label:`<b>Crawl target</b> — ${u.protocol}//${u.host}${u.pathname}`,isGh:false,base:u.origin+u.pathname}}catch(e){return{label:"Not a URL yet — try pasting a full address.",isGh:false}}}
+  url.addEventListener('input',()=>{const d=detect(url.value);infer.innerHTML=d.label;if(d.base)base.value=d.base;ghnote.style.display=d.isGh?'block':'none';if(d.isGh)ghpath.textContent=d.gpath});
+  file.addEventListener('change',()=>{if(file.files[0]){infer.innerHTML=`<b>Local bundle</b> — ${file.files[0].name} (${(file.files[0].size/1024).toFixed(1)} KB)`;url.value=''}});
+  document.querySelectorAll('.mode').forEach(m=>m.onclick=()=>{document.querySelectorAll('.mode').forEach(x=>x.classList.remove('on'));m.classList.add('on')});
+  function show(){document.querySelectorAll('.page').forEach(s=>s.classList.toggle('on',+s.dataset.p===p));document.querySelectorAll('#spine li').forEach((li,i)=>li.classList.toggle('on',i+1===p));document.getElementById('title').textContent=titles[p-1][0];document.getElementById('subtitle').textContent=titles[p-1][1];document.getElementById('pn').textContent=p;back.disabled=p===1;next.textContent=p===5?'Start over':p===3?'Run →':'Continue →'}
+  next.onclick=()=>{if(p===5){p=1;url.value='';infer.innerHTML='Awaiting input…'}else p++;show()};
+  back.onclick=()=>{if(p>1)p--;show()};
+</script>
+<aside hidden>Upload file input URL path GitHub repo WordPress site Feed or OPML Upload folder Server path Reachable URL PDF EPUB HTML Markdown text WXR/XML ZIP Import as drafts Dry run Ask when old Base URLs are found Keep URLs unchanged Rewrite listed Base URLs Read source Prepare content URL treatment Import media Write pages Finish Abort View imported content Rewrite old-site URLs to this site? Old Base URLs include scheme, domain, and optional path, not just a domain. https://old.example.com/docs/ rewrites only URLs under /docs/. Rewrite selected Base URLs Yes rewrite all No keep all URLs directory picker</aside></body>
+</html>
