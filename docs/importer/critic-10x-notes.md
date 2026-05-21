@@ -1508,3 +1508,13 @@ The 361px jump back to the regular two-column mobile layout is visible in side-b
 The 390px evidence confirms that the regular mobile layout should remain the default. Broadening the compact special case would trade away the more legible two-column source choices on widths where they already fit and where no overflow or first-task failure is shown. The one-pixel discontinuity is a breakpoint artifact reviewers can notice when comparing screenshots, not a user-facing product ambiguity within a single viewport.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 142. Keep the `max-width: 360px` special case narrowly scoped to the proven edge, and revisit it only if future evidence shows clipping, overflow, or a missing guarantee on widths above 360px.
+
+## Pass 143 Critique
+
+The full 360px journey remains clear enough as a static artifact. The page is long, but the length comes from showing the complete importer contract: source setup, a blocking URL decision, item-level dry-run evidence, one selected remediation example, the final write gate, and a tiny post-run proof. That is appropriate for review because production would route or replace most of these states dynamically; the static artifact only needs to prove that each state is understandable when viewed in sequence.
+
+The setup section is proportionate at this width. There is no horizontal overflow, the source type comes before the source field, `Start dry run` remains a full-width `288px` by `40px` target, and the no-write guarantee is visible at about `630.797px`, before the upload fallback and secondary settings take over. The setup support disclosure and "Ready to preview" summary add vertical length, but they are not obscuring the first action or creating a source catalog above it.
+
+The scan decision, result review, and real-import sections are dense but not bloated. The result section is the tallest piece at about `2304px`, yet it is doing real work: the stacked table preserves outcome, item, evidence, owner, and next action; the resolver panel closes one warning loop; and the final warning summary explains why the real import can proceed. The real-import state stays bounded, with the action row and after-running proof contained and readable rather than expanding into a completion dashboard.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 143. I do not see one remaining artifact-only refinement that would fix a real clarity problem without mostly trimming evidence that the static review artifact still needs.
