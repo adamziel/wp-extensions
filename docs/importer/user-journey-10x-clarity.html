@@ -792,8 +792,24 @@
 
 		.result-table {
 			border-collapse: collapse;
-			min-width: 640px;
+			table-layout: fixed;
 			width: 100%;
+		}
+
+		.result-col-outcome {
+			width: 78px;
+		}
+
+		.result-col-item {
+			width: 26%;
+		}
+
+		.result-col-owner {
+			width: 90px;
+		}
+
+		.result-col-action {
+			width: 110px;
 		}
 
 		.result-table th,
@@ -812,6 +828,12 @@
 
 		.result-table td {
 			font-size: 13px;
+		}
+
+		.result-table .button-link {
+			justify-content: flex-start;
+			text-align: left;
+			white-space: normal;
 		}
 
 		.result-table tr:last-child th,
@@ -1384,6 +1406,13 @@
 							<div class="result-table-wrap">
 								<table class="result-table">
 									<caption class="screen-reader-text">Dry-run item outcomes and required fixes</caption>
+									<colgroup>
+										<col class="result-col-outcome">
+										<col class="result-col-item">
+										<col>
+										<col class="result-col-owner">
+										<col class="result-col-action">
+									</colgroup>
 									<thead>
 										<tr>
 											<th scope="col">Outcome</th>

@@ -468,3 +468,11 @@ The desktop/tall screenshot confirms the Pass 40 hierarchy fix: "Before running"
 The concrete regression is layout-only. Removing the sidecar left the real-import section using the shared two-column `.state-body` grid, so the final amber gate remains in the old narrow left column while a large empty white column sits to its right. That makes the final gate look weaker than the earlier result and scan sections even though it is the highest-risk decision.
 
 Recommendation: keep the content stable and make only the scoped layout fix: let `#real-import .state-body` use one column, then use the recovered desktop width to pair the consequence list with "Before running" inside the same amber gate. Do not add another panel, summary, or explanatory copy to fill the empty space; the issue is stale layout, not missing information.
+
+## Pass 43 Critique
+
+The desktop dry-run result area has one high-confidence review-friction issue in the supplied screenshot: the `Next action` column is clipped and the result table shows a horizontal scrollbar even though the visible data is only four compact rows. That makes the key actions read as "Review", "Replace", and "Add titl" instead of the actual review choices, so the user has to scroll sideways before acting on the warning or skip.
+
+The warning ownership and resolver placement are otherwise strong enough to keep. The warning row names the content owner, the open-warnings panel repeats that media belongs to the content owner and title belongs to the editor, and the resolver panel sits directly under the table with the selected `Block rendering` warning still visible nearby. The count cards remain acceptable as a summary because the table immediately below samples each outcome type and the final gate repeats the exact consequences.
+
+Recommendation: keep the content stable and make only the scoped table-layout fix. Use fixed table layout, explicit column widths, and wrapping link-style actions so the existing action text is visible without horizontal scrolling. Do not add another warning panel or expand the counts; the concrete problem is clipped action affordance, not missing feature surface.
