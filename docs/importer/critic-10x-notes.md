@@ -1786,3 +1786,11 @@ The current control semantics audit passes after the recent nav and target refin
 The named controls still match the intended user journey. The navigation exposes `Setup`, `Scan decision`, `Dry-run result`, and `Real import`; buttons remain clear from `Browse repo` and `Start dry run` through the result actions, warning resolver, report download, and final draft import/back actions. No visible label was lost during the accessibility-name or target-size refinements.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 176. Treat control semantics as stable.
+
+## Pass 177 Critique
+
+The 320px large-text full-flow regression passes. With an 18px body-text override, the document remains horizontally contained at `clientWidth=320`, `scrollWidth=320`, `bodyScrollWidth=320`, and `overflowCount=0`. Setup, scan decision, dry-run result, and real import each remain 296px wide.
+
+The body height is large at about 8536.16px, but that is expected for a static artifact that shows the complete journey under enlarged text. The important point is that the recent target-size, nav-label, and contrast changes did not reintroduce narrow large-text overflow or clipped late-state controls.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 177. Keep large-text concerns focused on containment and action clarity rather than height alone.
