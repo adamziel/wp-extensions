@@ -1112,3 +1112,13 @@ The surrounding desktop layout supports that correction. The result state starts
 No desktop follow-up is needed from this evidence. The resolver now says what is affected, what path is missing, what replacement path will be used, and what consequence follows: "Warning clears; the real import carries 1 media warning instead of 2." That is the right amount of specificity for a static design artifact. Adding more desktop UI around this fix would risk expanding the remediation model rather than clarifying the journey.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 102. The affected-item fix resolves the main clarity problem in the media resolver, and the desktop screenshot shows a contained, readable result-to-import handoff with no new layout or bloat issue.
+
+## Pass 103 Critique
+
+The tablet result screenshot confirms that the corrected affected item also improves resolver clarity at 768px. The selected warning still originates from the content row "Block rendering," but the resolver now names the affected item as "Block rendering media file." That makes the decision model clearer: the user is resolving a missing linked media file associated with the content item, not replacing or altering the page itself.
+
+The tablet layout supports that distinction without adding friction. The result section starts at `resultTop=241`, the real-import gate begins much later at `realImportTop=1477`, and the capture remains horizontally contained (`innerWidth=768`, `clientWidth=768`, `scrollWidth=768`, `bodyScrollWidth=768`). The result details, resolver panel, warning bridge, and report action all fit in one readable tablet column, and the corrected affected-item label sits close to the missing path, replacement path, and consequence copy.
+
+No tablet-specific follow-up is needed from this evidence. The affected-item fix removes the ambiguity seen before, and the tablet result state remains clear without another panel, extra remediation UI, or changed feature surface. The distance to the real-import gate is expected because this state is doing useful review work before the write boundary, not because of decorative bloat.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 103. The resolver is now clearer on tablet, there is no horizontal overflow, and further tablet edits would be more likely to expand the artifact than improve the journey.
