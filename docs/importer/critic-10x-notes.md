@@ -1794,3 +1794,11 @@ The 320px large-text full-flow regression passes. With an 18px body-text overrid
 The body height is large at about 8536.16px, but that is expected for a static artifact that shows the complete journey under enlarged text. The important point is that the recent target-size, nav-label, and contrast changes did not reintroduce narrow large-text overflow or clipped late-state controls.
 
 Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 177. Keep large-text concerns focused on containment and action clarity rather than height alone.
+
+## Pass 178 Critique
+
+The 320px forced-colors full-flow regression passes. Forced colors is active, every main state remains 296px wide, and the page stays horizontally contained with `clientWidth=320`, `scrollWidth=320`, `bodyScrollWidth=320`, and `overflowCount=0`.
+
+The scan stage dots also survive system-color mapping. Their custom backgrounds collapse to white and the glyphs map to black, so the check, alert, and number symbols remain legible without a bespoke forced-colors rule. The state labels and status text continue to carry meaning if color distinctions are unavailable.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 178. Keep forced-colors behavior delegated to system colors.
