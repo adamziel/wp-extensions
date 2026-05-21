@@ -80,6 +80,7 @@
 - Pass 64 adjusted only the narrow desktop breakpoint band from 1081px to 1320px: the left sidebar remains desktop-style, but setup and scan-decision bodies stack to give the source tabs, input row, editable settings, setup summary, and URL decision enough width. This avoids changing content or source coverage while delaying the cramped two-column content layout until the viewport can support it.
 - Pass 65 made one CSS-only rail refinement after the 1366px evidence: the Current setup Path row now stacks its label above the long URL value, giving the path the full rail width while leaving the other summary rows, content, breakpoints, and feature surface unchanged.
 - Pass 66 reviewed the 500px mobile setup-to-summary evidence after the Path row stacking and kept the HTML unchanged. The summary has no mobile regression: the long GitHub path wraps as a readable full-width block, the label remains attached above it, and the shorter Source, Mode, Drafts, and URLs rows still preserve the compact scan pattern before the three next-step bullets.
+- Pass 67 reviewed the 768px tablet setup-to-summary evidence after the Path row stacking and kept the HTML unchanged. The tablet stack remains clear: the setup card still leads through source type, source input, dry-run action, guarantee, editable settings, and optional source details, while the Current setup rail keeps the Path label directly above the full-width GitHub value without weakening the shorter Source, Mode, Drafts, and URLs rows.
 
 ## Remaining Concerns
 

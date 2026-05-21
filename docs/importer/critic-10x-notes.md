@@ -706,3 +706,15 @@ The current setup summary is more readable on mobile with stacked label/value ro
 The transition into Scan decision remains clear enough. The summary ends with the three numbered next steps, and the next card begins with "Scan decision" plus the old-site URL decision. The handoff is visible in the supplied screenshot without needing a new connector, banner, or copy. The only cost is vertical length, but that is expected on mobile and does not add feature bloat.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for this pass. The Pass 65 summary-row refinement did not cause a mobile regression in first action reachability, source support visibility, current setup readability, or the scan-decision transition. Do not edit HTML, add copy, or change feature coverage from the Pass 66 evidence.
+
+## Pass 67 Critique
+
+The 768px tablet setup-to-summary evidence holds after the current-setup path-row refinement. The setup task remains readable in order: page title, "Add source," source type tabs, source field with Browse fallback, "Start dry run," fixed dry-run guarantee, optional upload disclosure, editable settings, collapsed source-support proof, and then the current setup summary. The interface still points the user toward one safe preview action instead of reopening a capability catalog.
+
+The source tabs are dense but acceptable at this width. All six source types are visible, the selected GitHub tab is clear through both the native radio and visual treatment, and labels wrap inside their tab cells without creating horizontal overflow. The tab row is not elegant, but it preserves the full source surface while keeping the primary source field directly underneath.
+
+Editable settings remain easy to scan. The two-column settings grid fits the tablet width, the checked states are visible, and the setting text is short enough not to compete with the dry-run action above. The third setting sitting alone on the second row is a small layout asymmetry, not a clarity problem.
+
+The current setup summary is improved by the path-row behavior. The GitHub path now wraps as a full-width value inside the summary instead of being squeezed beside the label, and the mode, drafts, and URL rows stay compact. The first numbered next steps are visible at the bottom of the screenshot, so the handoff from setup confirmation to dry-run journey remains understandable even though the full three-step list is below the crop.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable for this pass. No tablet regression is visible in setup readability, source tabs, editable settings, current setup path wrapping, or the first numbered next steps. Do not edit the HTML, add copy, remove controls, or change the feature surface from the Pass 67 evidence.
