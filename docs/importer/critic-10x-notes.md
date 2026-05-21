@@ -1722,3 +1722,11 @@ The mobile journey navigation had a small accessible-name consistency issue. The
 Adding `aria-label` to the four nav links is a narrow markup-only fix. The visual labels stay unchanged, the mobile nav still fits, and the accessible link names are now consistent across 500px, 800px, and 1440px: `Setup`, `Scan decision`, `Dry-run result`, and `Real import`. The recheck also reports no horizontal overflow at any tested width.
 
 Recommendation: keep the Pass 168 nav-label fix and make no plugin or runtime change. Do not add visible nav copy or longer mobile labels unless future visual evidence shows the compact labels are unclear for sighted users.
+
+## Pass 169 Critique
+
+The DOM integrity regression after the nav-label change passes. Chromium reports no duplicate IDs, no missing hash targets, no broken `aria-labelledby`, `aria-describedby`, or `aria-controls` references, no unnamed buttons, no heading-level jumps, and no 1440px horizontal overflow.
+
+The nav evidence is acceptable. The raw text content still includes both full and short spans because both are present in the markup, but the `aria-label` values now define stable accessible names: `Setup`, `Scan decision`, `Dry-run result`, and `Real import`. That is the intended result of Pass 168, not a duplicate-name regression.
+
+Recommendation: make no HTML, CSS, copy, plugin, or runtime change for Pass 169. Keep the nav-label fix as-is.
