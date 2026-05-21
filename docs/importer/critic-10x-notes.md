@@ -346,3 +346,15 @@ The gate-copy trim does not regress clarity. "Allowed because unresolved warning
 Desktop and mobile both keep the sentence readable and sufficiently explicit. On desktop, it anchors the caution panel before the consequence list and green action. On mobile, the same sentence still appears before the detailed bullets and button, so the user does not have to infer whether warnings block the import.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No copy adjustment or revert is justified for this pass.
+
+## Pass 30 Critique
+
+The first mobile viewport is still clear enough for source entry. It opens with "Import content," "Add source," a specific source label, the pasted GitHub path, the full-width "Start dry run" action, and the fixed dry-run guarantee before optional upload, source type, and settings. That keeps the minimum task visible: provide a source, preview safely, then review evidence before writing content.
+
+Source-type coverage is visible without becoming a catalog. The helper line now names URLs, repositories, feeds, server paths, uploads, WordPress exports, and documents, while the two-column source-type grid exposes GitHub, WordPress site, Feed or OPML, Server path, Browser upload, and Archive or document. The collapsed "What each source supports" disclosure remains available below the settings for detailed proof, so no extra source examples or visible matrix are justified.
+
+There is some mobile density, but not actionable bloat. The header, source field, browse/upload fallback, source grid, three editable settings, and preview summary all fit into the first capture sequence, and each block has a distinct job. Removing the source grid or settings would weaken coverage and consequence clarity more than it would improve the first-screen task.
+
+The 430px crop should be treated like the earlier headless crop concern, not as a confirmed responsive defect. The 430px bitmap cuts the right edge of long values and controls, but the 500px capture of the same artifact shows normal containment and the same hierarchy without a broken layout. Without a DOM measurement or manual browser check showing real `scrollWidth > clientWidth` at an actual narrow viewport, a CSS change would be churn against the static artifact rather than a fix.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny CSS or copy adjustment is justified for this pass.
