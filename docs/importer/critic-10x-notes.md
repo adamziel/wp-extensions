@@ -270,3 +270,13 @@ The updated mobile first-screen screenshot does not show a regression from addin
 The wording also does not imply that only WordPress exports are supported. The same line still leads with URLs, repositories, feeds, server paths, and uploads, and the visible source-type grid immediately reinforces GitHub, WordPress site, Feed or OPML, Server path, Browser upload, and Archive or document as parallel options. "WordPress exports" reads as one concrete supported input inside a broader importer, which is exactly the clarification the first screen needed.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No follow-up HTML edit is justified for this pass.
+
+## Pass 21 Critique
+
+The full desktop and mobile screenshots after the helper edit show no regression in the journey. The first screen still leads with one source field, one "Start dry run" action, and the fixed dry-run guarantee; the added "WordPress exports" wording clarifies coverage without turning setup back into a format catalog. On mobile, the helper wraps cleanly and the source type grid, editable settings, and setup summary remain secondary to the paste-preview path.
+
+Sequence clarity holds across the whole page. Setup, scan decision, dry-run result, and real-import readiness are distinct enough to review as a single guided importer journey, and the later states still explain why the dry run pauses, what evidence was found, which warnings remain, and what the real import will actually write. The real-import gate remains consequence-first: drafts are created or updated, zero items publish, the untitled document is skipped, and one unresolved media warning carries into the report.
+
+Source coverage is also stable. The first-screen helper now names WordPress exports while the disclosure continues to carry the broader proof for GitHub, WordPress sites and WXR, feeds and OPML, server paths, browser uploads, archives, documents, SQL, XML, Markdown, HTML, PDF, EPUB, and plain text files. That is enough for this design-only artifact; adding a visible source matrix or alternate-source journey would be bloat.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny follow-up is justified in this pass. Remaining concerns are production handoff caveats only: real validation, source-specific adaptation, keyboard and focus behavior, live progress announcements, high-contrast QA, and large-result responsive testing.

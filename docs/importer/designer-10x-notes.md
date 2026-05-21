@@ -41,6 +41,7 @@
 - Pass 18 reviewed the artifact as an implementation handoff and kept the HTML unchanged. The visible UI gives a production team concrete direction for the core journey: source selection, guaranteed dry run, blocking scan decision, result evidence, in-place issue resolution, exact real-import consequences, and post-import proof are all represented without adding screens, states, matrices, setup fields, or runtime code.
 - Pass 19 changed the first-screen helper phrase to "uploads, WordPress exports, and documents." The mobile screenshot shows the helper is already a compact two-line secondary hint between Browse and Start dry run, so naming WordPress exports resolves the repeated ambiguity without adding another source card, format list, or setup step.
 - Pass 20 reviewed the updated mobile first-screen screenshot after the WordPress export helper edit and kept the HTML unchanged. The longer phrase still reads as secondary helper copy, the dry-run action remains the dominant next step, and the guarantee, upload fallback, source type selector, and editable settings keep their previous hierarchy without needing new UI or copy.
+- Pass 21 reviewed the full desktop and mobile screenshots after the helper edit and kept the HTML unchanged. The artifact still reads as one sequence across setup, scan decision, dry-run result, issue resolution, and real import; no source matrix, extra state, new control, or runtime/plugin change is needed.
 
 ## Remaining Concerns
 
