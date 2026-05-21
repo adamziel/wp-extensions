@@ -1394,3 +1394,13 @@ The 42px mobile source-type targets are a small real ergonomics issue, not a blo
 The bloat risk from changing only `.source-tab` to `min-height: 44px` is low. Narrow 320px already has every tab at about `59.59px`, and desktop already equalizes the row at about `58.59px`, so the change should not affect those layouts. On 390px mobile it would add roughly `2px` to each of the first two source-tab rows, or about `4px` total before the source input. That is not enough to materially push "Start dry run" too low, and the supplied no-overflow evidence should remain intact.
 
 Recommendation: make no HTML change and do not touch plugin or runtime code. A tiny artifact-only CSS refinement is reasonable: raise `.source-tab { min-height: 44px; }` and leave padding, labels, order, and all other controls unchanged. Do not generalize this into a broader button-height pass; the measured issue is limited to the compact source-type radio targets.
+
+## Pass 131 Critique
+
+The 44px source-type target fix does not create visible bloat in the supplied evidence. On mobile, the focused WordPress site tab is exactly `167px` by `44px`; in mobile large text, short tabs remain `167px` by `44px` while wrapped labels naturally grow to `167px` by `59.59375px`. That is the intended minimum-target behavior: compact labels get the extra touch depth, and longer labels only use the height they already need.
+
+Focus and forced-colors behavior also hold. Normal mobile keeps a clear full-card inset focus ring with `rgb(114, 174, 230) 0 0 0 2px inset` and no horizontal overflow. Narrow forced colors drops the decorative shadow as expected, keeps a `2px solid black` outline, and still contains the focused card at `132px` by `59.59375px`. The selected GitHub state and focused WordPress site state remain distinguishable enough for this static artifact.
+
+The first viewport survives the extra target height. "Start dry run" stays visible at about `643.390625px` on mobile and mobile large text, and at about `674.578125px` in narrow forced colors. Those positions are still consistent with the intended setup order: source type, source field, primary dry-run action, then safety guarantee and upload fallback. I do not see horizontal scroll, clipped focus, forced-colors failure, or a meaningful vertical regression.
+
+Recommendation: make no HTML change for Pass 131 and do not touch plugin or runtime code. Keep the scoped `.source-tab { min-height: 44px; }` artifact fix as-is; it resolves the compact target issue without expanding the journey or weakening first-viewport clarity.
