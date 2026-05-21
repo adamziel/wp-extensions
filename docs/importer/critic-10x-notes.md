@@ -494,3 +494,13 @@ The resolver panel also reads correctly at this width. Its labels no longer coll
 The warning summary below the resolver feels connected enough because it immediately follows the result panel, carries the "Dry run complete" state, and lists the same remaining duplicate, media, title, and old-site-link consequences surfaced in the table and resolver. It is long, but it is not detached from the result journey.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No concrete tablet-only design defect in the provided 768px evidence justifies another CSS or copy edit.
+
+## Pass 46 Critique
+
+The opened source-support disclosure at 768px is informative without taking over the setup task. The primary action path still appears first: source type tabs, source URL field, Browse, "Start dry run," the fixed dry-run guarantee, optional upload disclosure, and editable settings all precede the support cards. That ordering keeps the cards as proof of coverage rather than a competing chooser.
+
+The six support cards are large, but their content is not feature-proof bloat. Each card maps to one source type tab and gives compact examples: GitHub repositories and docs, WordPress posts/media/WXR, feeds and OPML, server folders/archives/local exports, browser-selected files, and archive/document formats including ZIP, WXR, Markdown, HTML, PDF, EPUB, XML, SQL, OPML, and plain text. The visible format coverage is broad enough for the setup promise, and adding more examples would make this disclosure heavier without improving the next action.
+
+The tablet wrapping is acceptable. Source type tabs wrap to two or three lines in a few labels, but the selected GitHub tab remains clear, the tab row height stays stable, and the support cards below use readable short lines rather than clipped text. The current setup panel immediately after the disclosure restores hierarchy by summarizing the chosen source, path, mode, draft behavior, URL policy, and next steps before the scan decision.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No concrete design-only issue in the supplied 768px open-disclosure evidence justifies an HTML or CSS edit; the best change for this pass is to avoid adding more supported-format proof.
