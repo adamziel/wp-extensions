@@ -314,3 +314,11 @@ Reviewer readiness is strong enough without another HTML edit. The artifact does
 The most explanatory visible pieces are still justified. "What each source supports" is on-demand feature proof, not a spec matrix; "First run is always a dry run" and "Allowed with warnings" explain user consequences at decision points; and the result table evidence is needed for reviewer confidence. Moving any of those out of the artifact would weaken the journey rather than reduce bloat.
 
 Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny visible-copy trim is justified in this pass. Production caveats such as static sample data, source-specific adaptation, validation, keyboard/focus behavior, live progress announcements, contrast QA, and large-result testing should stay in notes or the PR body, not in the visible design artifact.
+
+## Pass 26 Critique
+
+The skipped-title evidence trim did not remove necessary evidence. In the mobile result section, the skipped item still shows the consequence path clearly enough: `Skipped`, `Untitled appendix`, `appendix/no-title.md`, `No readable title found`, `Editor`, and `Add title or skip`. That is the right level for the result review because it explains what happened and who needs to act without exposing parser mechanics or title-detection implementation details.
+
+The surrounding copy also preserves the next action and import consequence. "Warnings still open" says the title warning can be fixed by adding a title or confirming the skip, the real-import gate says unresolved items will be skipped, and the "Before running" panel repeats that importing the appendix requires adding a title in the dry-run result. That layering is useful rather than bloated because each placement answers a different user question: item evidence, remaining issue, final write consequence, and pre-run remediation.
+
+Recommendation: keep `docs/importer/user-journey-10x-clarity.html` stable. No tiny copy adjustment is justified for this pass.

@@ -46,6 +46,7 @@
 - Pass 23 reviewed the narrow mobile and tablet screenshots after the helper edit and kept the HTML unchanged. The first-screen action path, two-column mobile source selector, setup summary, and scan decision remain readable without a new source-catalog feel; the long URL/path content is bounded or wrapped instead of forcing a visible horizontal layout regression.
 - Pass 24 kept the HTML unchanged. The narrow mobile crop matches the capture setup rather than an artifact-level overflow: the temp DOM measurement laid Chromium out at `inner=500`, `client=485`, `scroll=485`, and `body=485`, then the 390px screenshot cropped that wider layout. Since document scroll width did not exceed client width, no containment CSS change is justified.
 - Pass 25 trimmed one result-table reason from "No readable title found in front matter, first heading, or filename" to "No readable title found." The shorter copy keeps the user-facing consequence clear without exposing parser/source-format details or adding any new UI.
+- Pass 26 reviewed the mobile dry-run result after the Pass 25 evidence trim and kept the HTML unchanged. The skipped card still shows outcome, item path, concise evidence, editor ownership, and the "Add title or skip" action, so it remains actionable without reintroducing front matter, heading, filename, or other parser-specific detail.
 
 ## Remaining Concerns
 
