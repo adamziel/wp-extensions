@@ -994,3 +994,15 @@ The setup section is still the heaviest part of the tablet journey, mostly becau
 The result-to-final path also survives the trim. From the dry-run result to the real-import gate, the user still gets counts, consequence copy, item evidence, the selected warning resolution, the shorter warning summary, report download, and then the final write boundary. The shorter warning copy makes this section easier to scan without creating a missing transition; the final gate still owns the heavier import consequence, which is the right place for it.
 
 Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 92. Do not add a transition panel, spacer, status strip, or extra explanatory copy. The full tablet journey is long but coherent, and adding another bridge would create bloat rather than solve a visible gap.
+
+## Pass 93 Critique
+
+The 1440px desktop default full-flow evidence remains coherent after the warning-copy trim. The capture metrics show no horizontal overflow (`innerWidth=1440`, `clientWidth=1440`, `scrollWidth=1440`, `bodyScrollWidth=1440`), and the major landmarks still read in the intended order: setup at `setupTop=115`, scan decision at `scanTop=882`, dry-run result at `resultTop=1449`, and real import at `realImportTop=2345`. On desktop, that spacing feels like a guided review path rather than a stretched storyboard.
+
+The shorter warning rail fits the broader desktop flow better than the earlier policy-heavy version. It still explains what remains open after the dry run, but it no longer competes with the item table, selected issue resolver, or final real-import gate. The result section now has a cleaner division of labor: counts summarize scope, the table proves the counts, the resolver shows one fix path, the warning rail names unresolved follow-up, and the final gate owns the write consequence.
+
+The default desktop setup remains heavier than a minimal importer would be, but it is not bloated for this feature surface. The source-type row, URL/path field, fixed dry-run guarantee, editable settings, collapsed support disclosure, and current setup summary all support the same first decision: preview this source before writing. The collapsed source support remains important; exposing that proof by default would make the setup state feel like a catalog again.
+
+No new desktop regression is visible from the warning-copy trim. The scan decision still has enough context to pause the dry run, the result still bridges clearly into the final gate, and the real-import section still repeats the consequences where commitment happens. Further copy removal in the warning rail would risk making unresolved work feel decorative instead of actionable.
+
+Recommendation: keep the HTML, plugin code, and runtime untouched for Pass 93. Do not add a new transition, expand source coverage, or trim the warning rail further. The default desktop journey is long but coherent, and the shorter warning rail now sits at the right weight inside the full flow.
