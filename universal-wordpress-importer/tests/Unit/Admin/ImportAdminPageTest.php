@@ -1402,6 +1402,77 @@ final class ImportAdminPageTest extends TestCase {
 	}
 
 	/**
+	 * Five identical "document.prepared" events collapse to one row that
+	 * displays the count against progress.total when available.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_collapses_boilerplate_into_count_with_total() {
+		$page = $this->create_page();
+
+		$events = array();
+		for ( $i = 0; $i < 5; $i++ ) {
+			$events[] = array(
+				'type'    => 'document.prepared',
+				'message' => 'Source item was converted into initial block markup.',
+			);
+		}
+
+		$rows = $page->dedup_events( $events, array( 'total' => 117 ) );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( '5 / 117 documents converted to block markup', $rows[0]['text'] );
+		$this->assertSame( 5, $rows[0]['count'] );
+	}
+
+	/**
+	 * Distinct messages on a non-boilerplate type stay as separate rows so
+	 * the user still sees each path. Only repeats of the exact message
+	 * collapse, with a multiplier prefix.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_keeps_distinct_paths_and_multiplies_exact_repeats() {
+		$page = $this->create_page();
+
+		$events = array(
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/a' ),
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/b' ),
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/b' ),
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/c' ),
+		);
+
+		$rows = $page->dedup_events( $events );
+
+		$this->assertCount( 3, $rows );
+		$this->assertSame( 'Read /2024/a', $rows[0]['text'] );
+		$this->assertSame( '2 × Read /2024/b', $rows[1]['text'] );
+		$this->assertSame( 'Read /2024/c', $rows[2]['text'] );
+	}
+
+	/**
+	 * Non-document boilerplate types (media, URLs) collapse to a count but
+	 * do NOT show the progress.total ceiling, since "117 documents" is not
+	 * a meaningful upper bound for media imports.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_omits_total_for_non_document_templates() {
+		$page = $this->create_page();
+
+		$events = array();
+		for ( $i = 0; $i < 3; $i++ ) {
+			$events[] = array( 'type' => 'media.attachment_created', 'message' => 'Imported image-' . $i );
+		}
+
+		$rows = $page->dedup_events( $events, array( 'total' => 117 ) );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( '3 media items imported', $rows[0]['text'] );
+		$this->assertSame( 3, $rows[0]['count'] );
+	}
+
+	/**
 	 * Creates an admin page with fake dependencies.
 	 *
 	 * @param callable|null                 $runner_factory  Optional runner factory.

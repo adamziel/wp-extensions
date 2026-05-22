@@ -82,6 +82,21 @@ use UniversalImporter\Import\InMemoryImportSessionStore;
 // in-flight UI without spinning up a real worker.
 $inject_running = in_array( '--running', $argv ?? array(), true );
 
+// --scenario=<name> picks a specific running-state shape so we can
+// review different focus moments in one tool. Recognized names:
+//   stage-2-mid       Source done, mid Prepare content with repeated events.
+//   stage-3-decision  Prepare done, URL-treatment decision pending.
+//   stage-3-resolved  Decision resolved, chips visible, mid Import media.
+$scenario = 'default';
+foreach ( $argv ?? array() as $arg ) {
+	if ( 0 === strpos( (string) $arg, '--scenario=' ) ) {
+		$scenario = substr( (string) $arg, strlen( '--scenario=' ) );
+	}
+}
+if ( 'default' !== $scenario ) {
+	$inject_running = true;
+}
+
 // Anonymous class that satisfies just what render_admin_page() needs.
 $store = new class {
 	public function list_recent_sessions( $limit = 10 ) { return array(); }
@@ -159,6 +174,132 @@ if ( $inject_running ) {
 			),
 		),
 	);
+
+	if ( 'stage-2-mid' === $scenario ) {
+		// Read source done. Prepare content in progress with 5 identical
+		// "documents converted" events (dedup target) plus distinct paths.
+		$activity = array();
+		for ( $i = 1; $i <= 5; $i++ ) {
+			$activity[] = array(
+				'type'       => 'document.prepared',
+				'message'    => 'Source item was converted into initial block markup.',
+				'created_at' => '2026-05-22 10:01:0' . $i,
+			);
+		}
+		$activity[] = array( 'type' => 'document.epub_progress', 'message' => 'Working on /docs/chapter-3.html', 'created_at' => '2026-05-22 10:01:09' );
+		$fake_session['progress']                    = array( 'total' => 117, 'completed' => 12, 'errors' => 0 );
+		$fake_session['prepared_documents']['total'] = 5;
+		$fake_session['source_items']                = array(
+			'total'    => 117,
+			'statuses' => array( 'queued' => 0, 'processing' => 0, 'discovered' => 112, 'imported' => 117, 'skipped' => 0, 'failed' => 0 ),
+			'recent'   => array(),
+		);
+		$fake_session['dashboard']['percentage']     = 14;
+		$fake_session['dashboard']['current_action'] = 'Preparing imported content.';
+		$fake_session['dashboard']['progress_summary'] = 'Stage 2 of 6 · Prepare content · 5 of 117 documents converted (14%)';
+		$fake_session['dashboard']['checklist']      = array(
+			array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '117 source items found.', 'state' => 'done' ),
+			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => 'Preparing 112 items.',    'state' => 'active' ),
+			array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => '',                        'state' => 'pending' ),
+			array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '',                        'state' => 'pending' ),
+			array( 'index' => '5', 'key' => 'write_pages',     'label' => 'Write pages',     'detail' => '',                        'state' => 'pending' ),
+			array( 'index' => '6', 'key' => 'finish',          'label' => 'Finish',          'detail' => '',                        'state' => 'pending' ),
+		);
+		$fake_session['dashboard']['activity_log']   = $activity;
+		$fake_session['recent_events']               = $activity;
+	}
+
+	if ( 'stage-3-decision' === $scenario ) {
+		// URL-treatment decision is pending; show the new per-host UI with
+		// a realistic mix of GitHub-flavored domains.
+		$fake_session['pending_decisions'] = array(
+			array(
+				'key'     => 'confirm-first-party-domains',
+				'prompt'  => 'Rewrite old-site URLs to this site?',
+				'options' => array(
+					'domains'  => array( 'cli.github.com', 'docs.github.com', 'gist.github.com', 'github.com', 'help.github.com' ),
+					'counts'   => array(
+						'cli.github.com'  => 4,
+						'docs.github.com' => 91,
+						'gist.github.com' => 2,
+						'github.com'      => 38,
+						'help.github.com' => 11,
+					),
+					'examples' => array(
+						'cli.github.com'  => array( 'https://cli.github.com/manual/gh_repo_clone' ),
+						'docs.github.com' => array( 'https://docs.github.com/en/get-started/quickstart' ),
+						'gist.github.com' => array( 'https://gist.github.com/octocat/abc123' ),
+						'github.com'      => array( 'https://github.com/WordPress/gutenberg/blob/trunk/docs/contributors/README.md' ),
+						'help.github.com' => array( 'https://help.github.com/articles/two-factor-authentication/' ),
+					),
+					'defaults' => array(
+						'cli.github.com'  => true,
+						'docs.github.com' => true,
+						'gist.github.com' => false,
+						'github.com'      => true,
+						'help.github.com' => false,
+					),
+				),
+			),
+		);
+		$fake_session['progress']                    = array( 'total' => 117, 'completed' => 117, 'errors' => 0 );
+		$fake_session['prepared_documents']['total'] = 117;
+		$fake_session['source_items']                = array(
+			'total'    => 117,
+			'statuses' => array( 'queued' => 0, 'processing' => 0, 'discovered' => 0, 'imported' => 117, 'skipped' => 0, 'failed' => 0 ),
+			'recent'   => array(),
+		);
+		$fake_session['dashboard']['percentage']     = 50;
+		$fake_session['dashboard']['current_action'] = 'Choose how old URLs should be handled.';
+		$fake_session['dashboard']['progress_summary'] = 'Stage 3 of 6 · URL treatment · waiting for your choice';
+		$fake_session['dashboard']['checklist']      = array(
+			array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '117 source items found.',     'state' => 'done' ),
+			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => '117 documents ready.',        'state' => 'done' ),
+			array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => 'Choose how old URLs should be handled.', 'state' => 'blocked' ),
+			array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '',                            'state' => 'pending' ),
+			array( 'index' => '5', 'key' => 'write_pages',     'label' => 'Write pages',     'detail' => '',                            'state' => 'pending' ),
+			array( 'index' => '6', 'key' => 'finish',          'label' => 'Finish',          'detail' => '',                            'state' => 'pending' ),
+		);
+		$fake_session['dashboard']['activity_log']   = array();
+		$fake_session['recent_events']               = array();
+	}
+
+	if ( 'stage-3-resolved' === $scenario ) {
+		// User chose to rewrite three hosts. Media stage is mid-flight.
+		$fake_session['confirmed_first_party_domains'] = array( 'cli.github.com', 'docs.github.com', 'github.com' );
+		$activity = array();
+		for ( $i = 0; $i < 3; $i++ ) {
+			$activity[] = array(
+				'type'    => 'media.attachment_created',
+				'message' => 'Imported attachment image-' . ( $i + 1 ) . '.png',
+				'created_at' => '2026-05-22 10:02:0' . $i,
+			);
+		}
+		$activity[] = array( 'type' => 'url.rewritten', 'message' => 'https://cli.github.com/manual → /manual', 'created_at' => '2026-05-22 10:02:04' );
+		$activity[] = array( 'type' => 'url.rewritten', 'message' => 'https://docs.github.com/quickstart → /quickstart', 'created_at' => '2026-05-22 10:02:05' );
+		$activity[] = array( 'type' => 'url.rewritten', 'message' => 'https://github.com/foo/bar → /foo/bar', 'created_at' => '2026-05-22 10:02:06' );
+		$fake_session['progress']                    = array( 'total' => 117, 'completed' => 117, 'errors' => 0 );
+		$fake_session['prepared_documents']['total'] = 117;
+		$fake_session['media']                       = array( 'total' => 12, 'statuses' => array( 'queued' => 4, 'imported' => 3, 'skipped' => 0, 'failed' => 0 ) );
+		$fake_session['source_items']                = array(
+			'total'    => 117,
+			'statuses' => array( 'queued' => 0, 'processing' => 0, 'discovered' => 0, 'imported' => 117, 'skipped' => 0, 'failed' => 0 ),
+			'recent'   => array(),
+		);
+		$fake_session['dashboard']['percentage']     = 62;
+		$fake_session['dashboard']['current_action'] = 'Importing media.';
+		$fake_session['dashboard']['progress_summary'] = 'Stage 4 of 6 · Import media · 3 of 12 media items imported';
+		$fake_session['dashboard']['checklist']      = array(
+			array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '117 source items found.',  'state' => 'done' ),
+			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => '117 documents ready.',     'state' => 'done' ),
+			array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => 'URL choice is set.',       'state' => 'done' ),
+			array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '4 media items queued.',    'state' => 'active' ),
+			array( 'index' => '5', 'key' => 'write_pages',     'label' => 'Write pages',     'detail' => '',                         'state' => 'pending' ),
+			array( 'index' => '6', 'key' => 'finish',          'label' => 'Finish',          'detail' => '',                         'state' => 'pending' ),
+		);
+		$fake_session['dashboard']['activity_log']   = $activity;
+		$fake_session['recent_events']               = $activity;
+	}
 
 	$render_method = $reflection->getMethod( 'render_session_list' );
 	$render_method->setAccessible( true );
