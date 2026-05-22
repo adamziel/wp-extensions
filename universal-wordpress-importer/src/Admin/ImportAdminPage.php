@@ -1992,6 +1992,9 @@ final class ImportAdminPage {
 				color: var(--ui-muted);
 				padding: 4px 0 4px 0;
 			}
+			.universal-importer-step.is-active-row + .universal-importer-step.is-next-row {
+				margin-top: 12px;
+			}
 			.universal-importer-step.is-next-row .universal-importer-stage-index {
 				background: transparent;
 				border: 1px dashed #c0b48f;
@@ -2143,10 +2146,6 @@ final class ImportAdminPage {
 			}
 			.universal-importer-stage-decision {
 				margin-top: 8px;
-			}
-			.universal-importer-stage-decision h4 {
-				font-size: 13px;
-				margin: 0 0 6px;
 			}
 			.universal-importer-stage-decision .universal-importer-decision {
 				background: transparent;
@@ -3879,10 +3878,10 @@ final class ImportAdminPage {
 				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
 				html += '<div class="universal-importer-progressbar' + progressClass + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
 				html += '<p class="universal-importer-meta universal-importer-progress-line">';
-				if (progressNote) {
-					html += escapeHtml(progressNote);
-				} else if (progressSummary) {
+				if (progressSummary) {
 					html += escapeHtml(progressSummary);
+				} else if (progressNote) {
+					html += escapeHtml(progressNote);
 				} else {
 					html += percent + '% <?php echo esc_js( __( 'complete', 'universal-wordpress-importer' ) ); ?>';
 				}
@@ -4086,21 +4085,94 @@ final class ImportAdminPage {
 				'document.wxr_post_prepared': 1
 			};
 
+			// Distinct types with the same semantic meaning collapse to a
+			// single row in the user log. Keep in sync with PHP
+			// semantic_group_for_event_type().
+			var SEMANTIC_GROUP_FOR_TYPE = {
+				'source.queued': 'source.fetching',
+				'source.fetching': 'source.fetching',
+				'source.discovery': 'source.fetching',
+				'source.discovery_progress': 'source.fetching',
+				'source.discovery_complete': 'source.fetching',
+				'github.git_queued': 'source.fetching',
+				'github.git_fetching': 'source.fetching',
+				'remote.fetching': 'source.fetching'
+			};
+
+			// Recovered-failure diagnostics that should not leak into the
+			// user-facing log. Keep in sync with PHP is_diagnostic_noise_event().
+			var DIAGNOSTIC_NOISE_TYPES = {
+				'github.git_unavailable': 1,
+				'github.traversal_failed': 1,
+				'remote.failed': 1,
+				'remote.rate_limited': 1,
+				'remote.feed_unavailable': 1,
+				'remote.wp_rest_page_unavailable': 1,
+				'remote.wp_rest_comments_unavailable': 1,
+				'remote.featured_media_unavailable': 1
+			};
+			var DIAGNOSTIC_NOISE_SUBSTRINGS = [
+				'Invalid Git ref',
+				'will try the next',
+				'fell back to',
+				'php-toolkit',
+				'Throwable:',
+				'WordPress\\'
+			];
+
+			// Pre-discovery status types that restate the current-action line.
+			var STATUS_PLACEHOLDER_TYPES = {
+				'source.queued': 1,
+				'source.fetching': 1,
+				'github.git_queued': 1,
+				'github.git_fetching': 1
+			};
+
+			function isDiagnosticNoise(event) {
+				var type = String(event && event.type || '');
+				var message = String(event && event.message || '');
+				if (type && (DIAGNOSTIC_NOISE_TYPES[type] || type.indexOf('.warning.recovered') !== -1)) {
+					return true;
+				}
+				for (var i = 0; i < DIAGNOSTIC_NOISE_SUBSTRINGS.length; i++) {
+					if (message.indexOf(DIAGNOSTIC_NOISE_SUBSTRINGS[i]) !== -1) {
+						return true;
+					}
+				}
+				return false;
+			}
+
+			function isStatusPlaceholder(event) {
+				return !!STATUS_PLACEHOLDER_TYPES[String(event && event.type || '')];
+			}
+
 			function dedupEvents(events, progress) {
 				events = events || [];
 				progress = progress || {};
 				var order = [];
 				var groups = {};
 				events.forEach(function(event) {
+					if (isDiagnosticNoise(event) || isStatusPlaceholder(event)) {
+						return;
+					}
 					var type = String(event.type || '');
 					var message = String(event.message || '');
+					var semantic = SEMANTIC_GROUP_FOR_TYPE[type] || '';
 					var isBoilerplate = !!BOILERPLATE_TYPES[type];
-					var key = isBoilerplate ? ('t:' + type) : ('m:' + type + '|' + message);
+					var key;
+					if (semantic) {
+						key = 's:' + semantic;
+					} else if (isBoilerplate) {
+						key = 't:' + type;
+					} else {
+						key = 'm:' + type + '|' + message;
+					}
 					if (!groups[key]) {
 						groups[key] = {
 							type: type,
 							message: message,
 							isBoilerplate: isBoilerplate,
+							isSemantic: !!semantic,
 							count: 0,
 							latest: ''
 						};
@@ -4108,9 +4180,13 @@ final class ImportAdminPage {
 					}
 					groups[key].count++;
 					groups[key].latest = message;
+					groups[key].type = type;
 				});
 				var rows = order.map(function(key) {
 					var g = groups[key];
+					if (g.isSemantic) {
+						return { text: g.latest, count: g.count };
+					}
 					if (g.isBoilerplate) {
 						var template = templateForType(g.type);
 						if (template) {
@@ -4161,7 +4237,7 @@ final class ImportAdminPage {
 					return '';
 				}
 
-				return '<div class="universal-importer-stage-decision">' + renderDecisions(session, decisions) + '</div>';
+				return '<div class="universal-importer-stage-decision">' + renderDecisions(session, decisions, true) + '</div>';
 			}
 
 			function checklistStateLabel(state) {
@@ -4345,13 +4421,15 @@ final class ImportAdminPage {
 				return html;
 			}
 
-			function renderDecisions(session, decisions) {
+			function renderDecisions(session, decisions, insideStage) {
 				decisions = decisions || session.pending_decisions || [];
 				var allUrlDecisions = decisions.length && decisions.every(function(decision) {
 					return decision.key === 'confirm-first-party-domains';
 				});
 				var title = allUrlDecisions ? '<?php echo esc_js( __( 'URL treatment', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Import decision', 'universal-wordpress-importer' ) ); ?>';
-				var html = '<div class="universal-importer-decisions"><h4>' + title + '</h4>';
+				// When rendered inside the active stage row, omit the heading
+				// to avoid restating the stage label.
+				var html = '<div class="universal-importer-decisions">' + (insideStage ? '' : ('<h4>' + title + '</h4>'));
 				decisions.forEach(function(decision) {
 					html += '<div class="universal-importer-decision" data-decision-key="' + escapeHtml(decision.key) + '">';
 					if (decision.key === 'confirm-first-party-domains') {
@@ -5284,10 +5362,15 @@ final class ImportAdminPage {
 					</div>
 					<p class="universal-importer-meta universal-importer-progress-line">
 						<?php
-						if ( '' !== $progress_note ) {
-							echo esc_html( $progress_note );
-						} elseif ( '' !== $progress_summary ) {
+						// progress_summary names the stage structurally
+						// ("Stage 1 of 6 · Read source") — that never echoes
+						// the current_action fact. progress_note is a sentence
+						// that often re-states current_action, so we only fall
+						// back to it when no structural summary is available.
+						if ( '' !== $progress_summary ) {
 							echo esc_html( $progress_summary );
+						} elseif ( '' !== $progress_note ) {
+							echo esc_html( $progress_note );
 						} else {
 							echo esc_html(
 								sprintf(
@@ -5581,10 +5664,120 @@ final class ImportAdminPage {
 	}
 
 	/**
-	 * Collapses repeated events into count rows. For boilerplate types the
-	 * group key is the type itself, so distinct messages still collapse into
-	 * a single "N documents converted to block markup" row. For other types we
-	 * group on the (type, message) pair, so distinct paths stay separate.
+	 * Returns the semantic group key for an event type so that distinct types
+	 * with the same meaning (e.g. source.queued / github.git_fetching /
+	 * source.discovery_progress all mean "fetching from the source") collapse
+	 * into one row. Returns '' for types without a semantic alias — those keep
+	 * using the (type, message) pair as their dedup key.
+	 *
+	 * @param string $type Event type.
+	 * @return string
+	 */
+	private function semantic_group_for_event_type( $type ) {
+		$type = (string) $type;
+		$source_fetching_types = array(
+			'source.queued',
+			'source.fetching',
+			'source.discovery',
+			'source.discovery_progress',
+			'source.discovery_complete',
+			'github.git_queued',
+			'github.git_fetching',
+			'remote.fetching',
+		);
+		if ( in_array( $type, $source_fetching_types, true ) ) {
+			return 'source.fetching';
+		}
+		return '';
+	}
+
+	/**
+	 * Returns whether an event is a recovered-failure / diagnostic-noise entry
+	 * that should be hidden from the user-facing activity log. Such events
+	 * remain available in Technical details but should not surface as
+	 * progress-looking rows in the active stage panel.
+	 *
+	 * Substrings checked are taken from real importer recovery messages, e.g.
+	 * "The importer will try the next GitHub path candidate." after a sparse
+	 * Git ref failure.
+	 *
+	 * @param array<string,mixed> $event Event entry.
+	 * @return bool
+	 */
+	public function is_diagnostic_noise_event( array $event ) {
+		$type    = isset( $event['type'] ) ? (string) $event['type'] : '';
+		$message = isset( $event['message'] ) ? (string) $event['message'] : '';
+
+		if ( '' !== $type ) {
+			if ( false !== strpos( $type, '.warning.recovered' ) ) {
+				return true;
+			}
+			// Types that are by design recovered-failure diagnostics — the
+			// importer caught the failure and rolled past it. Keep them in
+			// Technical details, hide from the user log.
+			$recovered_types = array(
+				'github.git_unavailable',
+				'github.traversal_failed',
+				'remote.failed',
+				'remote.rate_limited',
+				'remote.feed_unavailable',
+				'remote.wp_rest_page_unavailable',
+				'remote.wp_rest_comments_unavailable',
+				'remote.featured_media_unavailable',
+			);
+			if ( in_array( $type, $recovered_types, true ) ) {
+				return true;
+			}
+		}
+
+		if ( '' !== $message ) {
+			$noise_substrings = array(
+				'Invalid Git ref',
+				'will try the next',
+				'fell back to',
+				'php-toolkit',
+				'Throwable:',
+				'WordPress\\',
+			);
+			foreach ( $noise_substrings as $needle ) {
+				if ( false !== strpos( $message, $needle ) ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Returns whether an event is purely a "status" / placeholder entry that
+	 * restates what the current-action line already says (e.g. "queued",
+	 * "starting"). Such rows should not stack inside "This stage so far"
+	 * since they are not real progress.
+	 *
+	 * @param array<string,mixed> $event Event entry.
+	 * @return bool
+	 */
+	public function is_status_placeholder_event( array $event ) {
+		$type = isset( $event['type'] ) ? (string) $event['type'] : '';
+		// Pre-discovery status events restate the top current-action line.
+		$status_types = array(
+			'source.queued',
+			'source.fetching',
+			'github.git_queued',
+			'github.git_fetching',
+		);
+		return in_array( $type, $status_types, true );
+	}
+
+	/**
+	 * Collapses repeated events into count rows. Distinct types with the same
+	 * semantic meaning (source.queued / github.git_fetching / ...) collapse to
+	 * ONE row keyed by `semantic_group_for_event_type`. Boilerplate types
+	 * group on the type so 50 distinct messages collapse to a count. Other
+	 * types still group on the (type, message) pair so distinct paths stay
+	 * separate. Recovered-failure diagnostics and pure-status placeholders are
+	 * filtered out entirely.
 	 *
 	 * @param array<int,array<string,mixed>> $events   Stage events.
 	 * @param array<string,mixed>            $progress Session progress block.
@@ -5595,15 +5788,29 @@ final class ImportAdminPage {
 		$order             = array();
 		$groups            = array();
 		foreach ( $events as $event ) {
-			$type    = isset( $event['type'] ) ? (string) $event['type'] : '';
-			$message = isset( $event['message'] ) ? (string) $event['message'] : '';
-			$is_boil = ! empty( $boilerplate_types[ $type ] );
-			$key     = $is_boil ? ( 't:' . $type ) : ( 'm:' . $type . '|' . $message );
+			if ( $this->is_diagnostic_noise_event( $event ) ) {
+				continue;
+			}
+			if ( $this->is_status_placeholder_event( $event ) ) {
+				continue;
+			}
+			$type     = isset( $event['type'] ) ? (string) $event['type'] : '';
+			$message  = isset( $event['message'] ) ? (string) $event['message'] : '';
+			$semantic = $this->semantic_group_for_event_type( $type );
+			$is_boil  = ! empty( $boilerplate_types[ $type ] );
+			if ( '' !== $semantic ) {
+				$key = 's:' . $semantic;
+			} elseif ( $is_boil ) {
+				$key = 't:' . $type;
+			} else {
+				$key = 'm:' . $type . '|' . $message;
+			}
 			if ( ! isset( $groups[ $key ] ) ) {
 				$groups[ $key ] = array(
 					'type'           => $type,
 					'message'        => $message,
 					'is_boilerplate' => $is_boil,
+					'is_semantic'    => '' !== $semantic,
 					'count'          => 0,
 					'latest'         => '',
 				);
@@ -5611,6 +5818,7 @@ final class ImportAdminPage {
 			}
 			$groups[ $key ]['count']++;
 			$groups[ $key ]['latest'] = $message;
+			$groups[ $key ]['type']   = $type;
 		}
 		$rows = array();
 		$document_types = array(
@@ -5624,7 +5832,13 @@ final class ImportAdminPage {
 			'document.wxr_post_prepared',
 		);
 		foreach ( $order as $key ) {
-			$g        = $groups[ $key ];
+			$g = $groups[ $key ];
+			if ( ! empty( $g['is_semantic'] ) ) {
+				// Latest phrasing wins; never multiply (semantic groups speak
+				// in a single voice).
+				$rows[] = array( 'text' => $g['latest'], 'count' => $g['count'] );
+				continue;
+			}
 			$template = $g['is_boilerplate'] ? $this->template_for_event_type( $g['type'] ) : '';
 			if ( '' !== $template ) {
 				$uses_total = in_array( $g['type'], $document_types, true );
@@ -5720,7 +5934,7 @@ final class ImportAdminPage {
 
 		?>
 		<div class="universal-importer-stage-decision">
-			<?php $this->render_pending_decisions( $session, false, $url_decisions ); ?>
+			<?php $this->render_pending_decisions( $session, false, $url_decisions, true ); ?>
 		</div>
 		<?php
 	}
@@ -5919,6 +6133,23 @@ final class ImportAdminPage {
 					<?php endforeach; ?>
 				</ul>
 			<?php endif; ?>
+			<?php
+			$pipeline_events = isset( $session['recent_events'] ) && is_array( $session['recent_events'] ) ? $session['recent_events'] : array();
+			if ( ! empty( $pipeline_events ) ) : ?>
+				<h4><?php esc_html_e( 'Recent events', 'universal-wordpress-importer' ); ?></h4>
+				<ul class="universal-importer-pipeline-events">
+					<?php foreach ( $pipeline_events as $event ) : ?>
+						<?php $is_noise = $this->is_diagnostic_noise_event( $event ); ?>
+						<li>
+							<code><?php echo esc_html( isset( $event['type'] ) ? (string) $event['type'] : '' ); ?></code>
+							<?php if ( $is_noise ) : ?>
+								<span class="universal-importer-pipeline-noise-tag"><?php esc_html_e( 'recovered', 'universal-wordpress-importer' ); ?></span>
+							<?php endif; ?>
+							<?php echo esc_html( isset( $event['message'] ) ? (string) $event['message'] : '' ); ?>
+						</li>
+					<?php endforeach; ?>
+				</ul>
+			<?php endif; ?>
 		</details>
 		<?php
 	}
@@ -5952,9 +6183,12 @@ final class ImportAdminPage {
 	 * @param array<string,mixed>            $session               Session snapshot.
 	 * @param bool                           $exclude_url_decisions Whether to omit URL treatment decisions.
 	 * @param array<int,array<string,mixed>> $decisions             Decision subset to render.
+	 * @param bool                           $inside_stage          When true the surrounding active-stage row already
+	 *                                                              labels the decision (e.g. "URL treatment"), so the
+	 *                                                              decision card omits its own redundant heading.
 	 * @return void
 	 */
-	private function render_pending_decisions( array $session, $exclude_url_decisions = false, array $decisions = null ) {
+	private function render_pending_decisions( array $session, $exclude_url_decisions = false, array $decisions = null, $inside_stage = false ) {
 		$decisions = null === $decisions ? (array) $session['pending_decisions'] : $decisions;
 
 		if ( $exclude_url_decisions ) {
@@ -5982,7 +6216,9 @@ final class ImportAdminPage {
 
 		?>
 		<div class="universal-importer-decisions">
-			<h4><?php echo esc_html( $all_url_decisions ? __( 'URL treatment', 'universal-wordpress-importer' ) : __( 'Import decision', 'universal-wordpress-importer' ) ); ?></h4>
+			<?php if ( ! $inside_stage ) : ?>
+				<h4><?php echo esc_html( $all_url_decisions ? __( 'URL treatment', 'universal-wordpress-importer' ) : __( 'Import decision', 'universal-wordpress-importer' ) ); ?></h4>
+			<?php endif; ?>
 			<?php foreach ( $decisions as $decision ) : ?>
 				<div class="universal-importer-decision" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>">
 					<?php if ( 'confirm-first-party-domains' === $decision['key'] ) : ?>
@@ -7000,13 +7236,13 @@ final class ImportAdminPage {
 
 		if ( 0 === $source_total ) {
 			if ( ! $is_done ) {
-				if ( $github_git_active ) {
-					$stages[0]['detail'] = $this->admin_text( 'Fetching repository files with sparse Git.' );
-				} elseif ( $this->is_pending_github_discovery( $session ) ) {
-					$stages[0]['detail'] = $this->admin_text( 'Waiting to fetch repository files from GitHub.' );
-				} else {
-					$stages[0]['detail'] = $this->admin_text( 'Queued.' );
-				}
+				// Active-stage detail is a TERSE fragment that does not
+				// repeat the current-action line. The current-action line
+				// already speaks the verb ("Queued to fetch...", "Fetching
+				// repository files with sparse Git."), so the detail can
+				// stay empty until there is something the user-facing log
+				// would actually contribute.
+				$stages[0]['detail'] = '';
 				$stages[0]['state'] = 'active';
 				return $stages;
 			}

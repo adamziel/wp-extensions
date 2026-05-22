@@ -84,6 +84,8 @@ $inject_running = in_array( '--running', $argv ?? array(), true );
 
 // --scenario=<name> picks a specific running-state shape so we can
 // review different focus moments in one tool. Recognized names:
+//   stage-1-early     GitHub source just queued, no file count yet, with a
+//                     recovered sparse-Git ref failure in the event stream.
 //   stage-2-mid       Source done, mid Prepare content with repeated events.
 //   stage-3-decision  Prepare done, URL-treatment decision pending.
 //   stage-3-resolved  Decision resolved, chips visible, mid Import media.
@@ -144,7 +146,7 @@ if ( $inject_running ) {
 		'prepared_documents'    => array( 'total' => 0, 'recent' => array() ),
 		'posts'                 => array( 'persisted' => 0 ),
 		'comments'              => array( 'persisted' => 0 ),
-		'media'                 => array( 'total' => 0, 'statuses' => array() ),
+		'media'                 => array( 'total' => 0, 'statuses' => array( 'queued' => 0, 'imported' => 0, 'skipped' => 0, 'failed' => 0 ) ),
 		'progress'              => array( 'total' => 7, 'completed' => 6, 'errors' => 0 ),
 		'github_git'            => array( 'active' => false, 'recent' => array() ),
 		'remote_backoff'        => array( 'total' => 0, 'recent' => array() ),
@@ -160,7 +162,7 @@ if ( $inject_running ) {
 			'needs_keepalive'   => true,
 			'summary'           => array( 'total' => 7, 'completed' => 6, 'errors' => 0 ),
 			'checklist'         => array(
-				array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '6 of 7 source items read', 'state' => 'active' ),
+				array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '', 'state' => 'active' ),
 				array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => '',                          'state' => 'pending' ),
 				array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => '',                          'state' => 'pending' ),
 				array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '',                          'state' => 'pending' ),
@@ -174,6 +176,53 @@ if ( $inject_running ) {
 			),
 		),
 	);
+
+	if ( 'stage-1-early' === $scenario ) {
+		// GitHub URL was just queued. No source items discovered yet. The
+		// event stream contains a recovered sparse-Git ref failure that the
+		// importer rolled past — it must NOT leak into the user log.
+		$activity = array(
+			array(
+				'type'       => 'source.queued',
+				'message'    => 'Queued to fetch GitHub repository files.',
+				'created_at' => '2026-05-22 09:59:55',
+			),
+			array(
+				'type'       => 'github.git_unavailable',
+				'message'    => 'php-toolkit Git traversal failed for ref "trunk/docs" at path "/": Invalid Git ref: branch names cannot contain a slash. The importer will try the next GitHub path candidate.',
+				'created_at' => '2026-05-22 10:00:00',
+			),
+			array(
+				'type'       => 'github.git_fetching',
+				'message'    => 'Fetching repository files with sparse Git.',
+				'created_at' => '2026-05-22 10:00:02',
+			),
+		);
+		$fake_session['source']                    = 'https://github.com/WordPress/gutenberg/tree/trunk/docs';
+		$fake_session['github_git']                = array( 'active' => false, 'recent' => array() );
+		$fake_session['progress']                  = array( 'total' => 0, 'completed' => 0, 'errors' => 0 );
+		$fake_session['source_items']              = array(
+			'total'    => 0,
+			'statuses' => array( 'queued' => 0, 'processing' => 0, 'discovered' => 0, 'imported' => 0, 'skipped' => 0, 'failed' => 0 ),
+			'recent'   => array(),
+		);
+		$fake_session['recent_events']             = $activity;
+		$fake_session['dashboard']['percentage']     = 0;
+		$fake_session['dashboard']['indeterminate']  = true;
+		$fake_session['dashboard']['status_label']   = 'Starting';
+		$fake_session['dashboard']['current_action'] = 'Queued to fetch GitHub repository files.';
+		$fake_session['dashboard']['progress_note']  = 'File count appears after GitHub repository discovery.';
+		$fake_session['dashboard']['progress_summary'] = 'Stage 1 of 6 · Read source';
+		$fake_session['dashboard']['checklist']      = array(
+			array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '', 'state' => 'active' ),
+			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => '', 'state' => 'pending' ),
+			array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => '', 'state' => 'pending' ),
+			array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '', 'state' => 'pending' ),
+			array( 'index' => '5', 'key' => 'write_pages',     'label' => 'Write pages',     'detail' => '', 'state' => 'pending' ),
+			array( 'index' => '6', 'key' => 'finish',          'label' => 'Finish',          'detail' => '', 'state' => 'pending' ),
+		);
+		$fake_session['dashboard']['activity_log']   = $activity;
+	}
 
 	if ( 'stage-2-mid' === $scenario ) {
 		// Read source done. Prepare content in progress with 5 identical
@@ -199,7 +248,7 @@ if ( $inject_running ) {
 		$fake_session['dashboard']['progress_summary'] = 'Stage 2 of 6 · Prepare content · 5 of 117 documents converted (14%)';
 		$fake_session['dashboard']['checklist']      = array(
 			array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '117 source items found.', 'state' => 'done' ),
-			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => 'Preparing 112 items.',    'state' => 'active' ),
+			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => '',                        'state' => 'active' ),
 			array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => '',                        'state' => 'pending' ),
 			array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '',                        'state' => 'pending' ),
 			array( 'index' => '5', 'key' => 'write_pages',     'label' => 'Write pages',     'detail' => '',                        'state' => 'pending' ),
@@ -255,7 +304,7 @@ if ( $inject_running ) {
 		$fake_session['dashboard']['checklist']      = array(
 			array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '117 source items found.',     'state' => 'done' ),
 			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => '117 documents ready.',        'state' => 'done' ),
-			array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => 'Choose how old URLs should be handled.', 'state' => 'blocked' ),
+			array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => '',                            'state' => 'blocked' ),
 			array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '',                            'state' => 'pending' ),
 			array( 'index' => '5', 'key' => 'write_pages',     'label' => 'Write pages',     'detail' => '',                            'state' => 'pending' ),
 			array( 'index' => '6', 'key' => 'finish',          'label' => 'Finish',          'detail' => '',                            'state' => 'pending' ),

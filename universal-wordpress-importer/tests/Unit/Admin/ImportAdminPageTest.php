@@ -1201,7 +1201,10 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( 'File count appears after GitHub repository discovery.', $snapshot['dashboard']['progress_note'] );
 		$this->assertTrue( $snapshot['dashboard']['needs_keepalive'] );
 		$this->assertSame( 'active', $snapshot['dashboard']['checklist'][0]['state'] );
-		$this->assertSame( 'Waiting to fetch repository files from GitHub.', $snapshot['dashboard']['checklist'][0]['detail'] );
+		// Active-stage detail stays empty in the pre-discovery state so the
+		// current_action line is the single source of truth for what's
+		// happening right now.
+		$this->assertSame( '', $snapshot['dashboard']['checklist'][0]['detail'] );
 		$this->assertSame( 'github.fetch_queued', $snapshot['recent_events'][0]['type'] );
 		$this->assertSame( 'trunk/docs', $snapshot['recent_events'][0]['context']['github_ref'] );
 		$this->assertSame( '', $snapshot['recent_events'][0]['context']['github_source_path'] );
@@ -1246,7 +1249,9 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( 'Fetching', $details['dashboard']['status_label'] );
 		$this->assertSame( 'Fetching repository files; file count appears after discovery.', $details['dashboard']['progress_note'] );
 		$this->assertSame( 'Fetching repository files with sparse Git.', $details['dashboard']['current_action'] );
-		$this->assertSame( 'Fetching repository files with sparse Git.', $details['dashboard']['checklist'][0]['detail'] );
+		// Active-stage detail stays empty while fetching so the current_action
+		// line owns the description and the checklist row stays glanceable.
+		$this->assertSame( '', $details['dashboard']['checklist'][0]['detail'] );
 	}
 
 	/**
@@ -1470,6 +1475,84 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertCount( 1, $rows );
 		$this->assertSame( '3 media items imported', $rows[0]['text'] );
 		$this->assertSame( 3, $rows[0]['count'] );
+	}
+
+	/**
+	 * Distinct event types that all mean "fetching from the source" collapse
+	 * into a single user-log row, with the latest phrasing winning.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_collapses_semantic_source_fetching_into_one_row() {
+		$page = $this->create_page();
+
+		$events = array(
+			array( 'type' => 'source.queued',        'message' => 'Queued to fetch GitHub repository files.' ),
+			array( 'type' => 'github.git_fetching', 'message' => 'Fetching repository files with sparse Git.' ),
+			array( 'type' => 'source.fetching',     'message' => 'Fetching repository files; file count appears after discovery.' ),
+		);
+
+		$rows = $page->dedup_events( $events );
+
+		// All three pre-discovery status events are filtered as
+		// status-placeholders so they do not echo the current-action line.
+		// What survives is whatever real progress comes later — here, none.
+		$this->assertSame( array(), $rows );
+	}
+
+	/**
+	 * Recovered-failure diagnostics (sparse Git ref failure that the importer
+	 * rolled past) do not appear in the user log row stream produced by
+	 * dedup_events. They remain queryable via is_diagnostic_noise_event so the
+	 * Technical details section can still surface them.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_filters_recovered_failure_diagnostics() {
+		$page = $this->create_page();
+
+		$events = array(
+			array(
+				'type'    => 'github.git_unavailable',
+				'message' => 'php-toolkit Git traversal failed for ref "trunk/docs" at path "/": Invalid Git ref: branch names cannot contain a slash. The importer will try the next GitHub path candidate.',
+			),
+			array(
+				'type'    => 'source.imported',
+				'message' => 'Read /docs/intro.md',
+			),
+		);
+
+		$rows = $page->dedup_events( $events );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'Read /docs/intro.md', $rows[0]['text'] );
+
+		$this->assertTrue( $page->is_diagnostic_noise_event( $events[0] ) );
+		$this->assertFalse( $page->is_diagnostic_noise_event( $events[1] ) );
+	}
+
+	/**
+	 * Diagnostic noise is also detected by message substring, so unfamiliar
+	 * event types still get filtered out as long as the message carries one
+	 * of the recovery signatures.
+	 *
+	 * @return void
+	 */
+	public function test_is_diagnostic_noise_event_matches_recovery_substrings() {
+		$page = $this->create_page();
+
+		$this->assertTrue( $page->is_diagnostic_noise_event( array(
+			'type'    => 'custom.something',
+			'message' => 'Outer adapter fell back to next-best resolver.',
+		) ) );
+		$this->assertTrue( $page->is_diagnostic_noise_event( array(
+			'type'    => 'custom.something',
+			'message' => 'WordPress\\Importer\\X failed.',
+		) ) );
+		$this->assertFalse( $page->is_diagnostic_noise_event( array(
+			'type'    => 'source.imported',
+			'message' => 'Read /a',
+		) ) );
 	}
 
 	/**
