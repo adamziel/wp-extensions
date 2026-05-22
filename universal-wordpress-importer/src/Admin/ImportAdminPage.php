@@ -2635,10 +2635,11 @@ final class ImportAdminPage {
 				request('<?php echo esc_js( self::AJAX_GITHUB_DIRS ); ?>', { source: source }).then(function(data) {
 					renderGithubDirectories(data);
 				}).catch(function(error) {
+					var fallback = '<?php echo esc_js( __( "Couldn't list directories. You can close this and continue with the URL as-is — picking a directory is optional.", 'universal-wordpress-importer' ) ); ?>';
 					if (githubPickerStatus) {
-						githubPickerStatus.textContent = error.message;
+						githubPickerStatus.textContent = error.message + ' ' + fallback;
 					}
-					showNotice(error.message, 'error');
+					showNotice(error.message + ' ' + fallback, 'error');
 				}).then(function() {
 					if (githubBrowseButton) {
 						githubBrowseButton.disabled = false;
@@ -3761,8 +3762,12 @@ final class ImportAdminPage {
 			function submitImport() {
 				var data = new FormData(form);
 				var action = '<?php echo esc_js( self::AJAX_CREATE ); ?>';
+				// The URL input may have been detached from the form when the source
+				// turn collapsed into a locked summary, so read its value directly
+				// from the live JS reference rather than from FormData.
+				var sourceUrl = ((sourceInput && sourceInput.value) || '').trim();
 				var payload = {
-					source: data.get('source') || '',
+					source: sourceUrl,
 					confirmed_domains: data.get('confirmed_domains') || '',
 					url_rewrite_mode: data.get('url_rewrite_mode') || 'ask',
 					import_as_drafts: data.get('import_as_drafts') ? '1' : '',
