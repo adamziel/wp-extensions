@@ -1,0 +1,29 @@
+{
+	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
+	"meta": {
+		"title": "Universal WordPress Importer · option-30 admin preview",
+		"description": "Preview of the option-30 (Memo Column · Inline Link Picks) admin UI implementation for the Universal WordPress Importer.",
+		"author": "Adam Zielinski",
+		"categories": ["data-liberation", "import", "tools", "preview"]
+	},
+	"landingPage": "/wp-admin/tools.php?page=universal-wordpress-importer",
+	"login": true,
+	"preferredVersions": {
+		"wp": "latest",
+		"php": "8.3"
+	},
+	"extraLibraries": ["wp-cli"],
+	"steps": [
+		{
+			"step": "installPlugin",
+			"pluginData": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/refs/heads/importer-progress-flow-explorations/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=option-30-20260522"
+			},
+			"options": {
+				"activate": true,
+				"targetFolderName": "universal-wordpress-importer"
+			}
+		}
+	]
+}
