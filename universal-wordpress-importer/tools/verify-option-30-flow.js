@@ -71,6 +71,10 @@ function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
 
 		var classifyContinue = liveClassify.querySelector('[data-action="continue"]');
 		if (!classifyContinue) { return fail('classify continue button missing'); }
+		// Enter-to-advance: the Continue button should be auto-focused.
+		if (document.activeElement !== classifyContinue) {
+			return fail('Classify Continue not auto-focused. activeElement=' + (document.activeElement && document.activeElement.tagName) + ' / ' + (document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-action')));
+		}
 		classifyContinue.click();
 		await sleep(60);
 
@@ -80,6 +84,9 @@ function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
 
 		var configureContinue = liveConfigure.querySelector('[data-action="continue"]');
 		if (!configureContinue) { return fail('configure Review button missing'); }
+		if (document.activeElement !== configureContinue) {
+			return fail('Configure Review not auto-focused. activeElement=' + (document.activeElement && document.activeElement.tagName) + ' / ' + (document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-action')));
+		}
 		configureContinue.click();
 		await sleep(60);
 
@@ -87,8 +94,11 @@ function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
 			.find(function(node){ return node.parentNode && node.parentNode.id === 'universal-importer-turns'; });
 		if (!liveConfirm) { return fail('confirm turn was not rendered after configure Review'); }
 
-		var startBtn = liveConfirm.querySelector('[data-action="start"]');
-		if (!startBtn) { return fail('start import button missing'); }
+		// Enter-to-advance from Confirm: Start button should be auto-focused.
+		var startBtn = document.activeElement;
+		if (!startBtn || startBtn.getAttribute('data-action') !== 'start') {
+			return fail('after Configure, Start on Confirm did not auto-focus. Got: ' + (startBtn && startBtn.tagName) + ' / ' + (startBtn && startBtn.getAttribute && startBtn.getAttribute('data-action')));
+		}
 
 		// Diagnostic: at this point the source memo's <input> should be detached
 		// from the form. Capture its parent + value before submit.

@@ -508,9 +508,13 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'type="url" id="universal-importer-source"', $source );
 		// Hidden form state inputs carry the configure choices to submit.
 		$this->assertStringContainsString( 'id="universal-importer-state-url-mode"', $source );
-		$this->assertStringContainsString( 'id="universal-importer-state-dry"', $source );
 		$this->assertStringContainsString( 'id="universal-importer-state-drafts"', $source );
 		$this->assertStringContainsString( 'id="universal-importer-state-domains"', $source );
+		// Dry-run option has been intentionally removed from the admin UI.
+		$this->assertStringNotContainsString( 'id="universal-importer-state-dry"', $source );
+		$this->assertStringNotContainsString( 'data-toggle="dry"', $source );
+		// "Edit anything above" has been removed from the Confirm turn.
+		$this->assertStringNotContainsString( 'Edit anything above', $source );
 	}
 
 	/**

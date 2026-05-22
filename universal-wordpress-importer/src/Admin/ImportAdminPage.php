@@ -683,22 +683,20 @@ final class ImportAdminPage {
 		?>
 		<style>
 			.universal-importer-admin {
-				--ui-bg: #fbf8f1;
+				--ui-card: #fbf8f1;
 				--ui-ink: #1f2937;
 				--ui-rule: #eadfca;
 				--ui-rule2: #d9caa3;
 				--ui-accent: #a16207;
+				--ui-accent-deep: #854d08;
 				--ui-soft: #fef3c7;
 				--ui-muted: #7a6a52;
 				--ui-ok: #365314;
 				--ui-warn: #92400e;
 				--ui-warn-bg: #fff3df;
-				background: var(--ui-bg);
-				color: var(--ui-ink);
-				font: 14.5px/1.55 "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-				margin: 0 auto;
-				max-width: 720px;
-				padding: 24px 22px 80px;
+				/* Inherit body color from wp-admin so the page-head H1 reads native. */
+				color: #1d2327;
+				font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
 			}
 			.universal-importer-admin,
 			.universal-importer-admin * {
@@ -715,28 +713,23 @@ final class ImportAdminPage {
 				font: inherit;
 				color: inherit;
 			}
-			.universal-importer-top {
+			.universal-importer-page-head {
 				align-items: baseline;
 				display: flex;
-				gap: 12px;
+				gap: 16px;
 				justify-content: space-between;
-				margin-bottom: 18px;
+				margin: 0 auto 14px;
+				max-width: 720px;
 			}
-			.universal-importer-admin h1 {
-				font-size: 14px;
-				font-weight: 600;
-				letter-spacing: .02em;
-				line-height: 1.2;
-				margin: 0;
-			}
-			.universal-importer-admin h1 span {
-				color: var(--ui-muted);
+			.universal-importer-page-head .wp-heading-inline {
+				color: #1d2327;
+				font-size: 23px;
 				font-weight: 400;
+				line-height: 1.3;
+				margin: 9px 0 4px;
+				padding: 0;
 			}
-			.universal-importer-top-actions {
-				display: flex;
-				gap: 12px;
-			}
+			.universal-importer-top { display: none; }
 			.universal-importer-link-button {
 				background: none;
 				border: 0;
@@ -847,7 +840,20 @@ final class ImportAdminPage {
 				padding: 8px 0;
 			}
 			.universal-importer-convo {
+				background: var(--ui-card);
+				border: 1px solid var(--ui-rule);
+				border-radius: 8px;
+				box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+				color: var(--ui-ink);
 				display: block;
+				margin: 0 auto;
+				max-width: 720px;
+				padding: 22px 24px 26px;
+			}
+			.universal-importer-strip,
+			.universal-importer-past {
+				margin: 0 auto 12px;
+				max-width: 720px;
 			}
 			.universal-importer-turn {
 				animation: universal-importer-fade .18s ease-out;
@@ -896,27 +902,37 @@ final class ImportAdminPage {
 			.universal-importer-edit {
 				background: none;
 				border: 0;
-				border-radius: 3px;
 				color: var(--ui-accent);
 				cursor: pointer;
-				font-size: 11.5px;
-				font-weight: 600;
-				letter-spacing: 0;
-				margin-left: auto;
-				padding: 1px 4px;
-				text-transform: none;
-			}
-			.universal-importer-edit::before {
-				content: "\B7 ";
-			}
-			.universal-importer-edit:hover {
-				background: var(--ui-soft);
+				flex: none;
+				font: inherit;
+				font-size: 12px;
+				font-weight: 500;
+				margin-left: 12px;
+				padding: 0;
 				text-decoration: underline;
+				text-underline-offset: 3px;
+			}
+			.universal-importer-edit:hover { color: var(--ui-ink); }
+			.universal-importer-edit:focus { outline: 2px solid var(--ui-soft); outline-offset: 2px; border-radius: 2px; }
+			.universal-importer-turn.is-past {
+				padding: 8px 0;
 			}
 			.universal-importer-turn.is-past .universal-importer-body {
+				align-items: baseline;
 				color: var(--ui-muted);
-				font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+				display: flex;
 				font-size: 13px;
+				gap: 8px;
+			}
+			.universal-importer-past-summary {
+				color: var(--ui-ink);
+				flex: 1;
+				font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+				font-size: 12.5px;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
 			}
 			.universal-importer-turn.is-past .universal-importer-hint {
 				display: none;
@@ -2260,11 +2276,11 @@ final class ImportAdminPage {
 			}
 		</style>
 		<div class="wrap universal-importer-admin">
-			<div class="universal-importer-top">
-				<h1><?php esc_html_e( 'Universal Importer', 'universal-wordpress-importer' ); ?> <span>· <?php esc_html_e( 'transcript', 'universal-wordpress-importer' ); ?></span></h1>
-				<div class="universal-importer-top-actions">
-					<button type="button" class="universal-importer-link-button" id="universal-importer-past-toggle"><?php esc_html_e( 'Past imports', 'universal-wordpress-importer' ); ?></button>
-				</div>
+			<div class="universal-importer-page-head">
+				<h1 class="wp-heading-inline"><?php esc_html_e( 'Universal Importer', 'universal-wordpress-importer' ); ?></h1>
+				<button type="button" class="universal-importer-link-button" id="universal-importer-past-toggle"><?php esc_html_e( 'Past imports', 'universal-wordpress-importer' ); ?></button>
+			</div>
+			<div class="universal-importer-top" hidden>
 			</div>
 			<div class="universal-importer-strip" id="universal-importer-strip" aria-label="<?php echo esc_attr__( 'Run stages', 'universal-wordpress-importer' ); ?>">
 				<div class="universal-importer-strip-row">
@@ -2288,13 +2304,11 @@ final class ImportAdminPage {
 				<form id="universal-importer-start-form" class="universal-importer-start-form universal-importer-start<?php echo $has_active_import ? ' is-hidden' : ''; ?>">
 					<input type="hidden" name="url_rewrite_mode" id="universal-importer-state-url-mode" value="ask">
 					<input type="hidden" name="confirmed_domains" id="universal-importer-state-domains" value="">
-					<input type="hidden" name="dry_run" id="universal-importer-state-dry" value="">
 					<input type="hidden" name="import_as_drafts" id="universal-importer-state-drafts" value="">
 					<input type="hidden" name="source_type" id="universal-importer-state-source-type" value="">
 					<div id="universal-importer-turns" class="universal-importer-turns">
 					<section class="universal-importer-turn is-sys" id="universal-importer-turn-source" data-turn-key="source">
-						<div class="universal-importer-speaker"><?php esc_html_e( 'Importer', 'universal-wordpress-importer' ); ?></div>
-						<div class="universal-importer-body">
+							<div class="universal-importer-body">
 							<div><?php esc_html_e( 'What should I import?', 'universal-wordpress-importer' ); ?></div>
 							<div class="universal-importer-hint"><?php esc_html_e( 'Two ways in. Use one.', 'universal-wordpress-importer' ); ?></div>
 							<div class="universal-importer-stack">
@@ -2366,8 +2380,7 @@ final class ImportAdminPage {
 					</div>
 					<template id="universal-importer-template-classify">
 						<section class="universal-importer-turn is-sys" data-turn-key="classify">
-							<div class="universal-importer-speaker"><?php esc_html_e( 'Classify', 'universal-wordpress-importer' ); ?></div>
-							<div class="universal-importer-body">
+								<div class="universal-importer-body">
 								<div class="universal-importer-classify-line" data-classify-line></div>
 								<div class="universal-importer-btns">
 									<button type="button" class="universal-importer-btn is-primary" data-action="continue"><?php esc_html_e( 'Continue', 'universal-wordpress-importer' ); ?></button>
@@ -2392,8 +2405,7 @@ final class ImportAdminPage {
 					</template>
 					<template id="universal-importer-template-configure">
 						<section class="universal-importer-turn is-sys" data-turn-key="configure">
-							<div class="universal-importer-speaker"><?php esc_html_e( 'Configure', 'universal-wordpress-importer' ); ?></div>
-							<div class="universal-importer-body">
+								<div class="universal-importer-body">
 								<div><?php esc_html_e( 'Configure the run.', 'universal-wordpress-importer' ); ?></div>
 								<div class="universal-importer-hint"><?php esc_html_e( 'Defaults are sensible.', 'universal-wordpress-importer' ); ?></div>
 								<div class="universal-importer-group-label"><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></div>
@@ -2405,7 +2417,6 @@ final class ImportAdminPage {
 								<input type="text" data-domains class="universal-importer-domain-input" placeholder="<?php echo esc_attr__( 'example.com, www.example.com', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Old site domains', 'universal-wordpress-importer' ); ?>" hidden>
 								<p class="universal-importer-dom-err" data-domain-err hidden><?php esc_html_e( 'List at least one domain.', 'universal-wordpress-importer' ); ?></p>
 								<div class="universal-importer-group-label"><?php esc_html_e( 'Run mode', 'universal-wordpress-importer' ); ?></div>
-								<div class="universal-importer-line-toggle"><div><b><?php esc_html_e( 'Dry run', 'universal-wordpress-importer' ); ?></b><small><?php esc_html_e( 'Plan only — no pages written.', 'universal-wordpress-importer' ); ?></small></div><button type="button" class="universal-importer-switch" data-toggle="dry" aria-pressed="false" aria-label="<?php echo esc_attr__( 'Dry run', 'universal-wordpress-importer' ); ?>"></button></div>
 								<div class="universal-importer-line-toggle"><div><b><?php esc_html_e( 'Import as drafts', 'universal-wordpress-importer' ); ?></b><small><?php esc_html_e( 'Otherwise published immediately.', 'universal-wordpress-importer' ); ?></small></div><button type="button" class="universal-importer-switch" data-toggle="drafts" aria-pressed="false" aria-label="<?php echo esc_attr__( 'Import as drafts', 'universal-wordpress-importer' ); ?>"></button></div>
 								<div class="universal-importer-btns">
 									<button type="button" class="universal-importer-btn is-primary" data-action="continue"><?php esc_html_e( 'Review', 'universal-wordpress-importer' ); ?></button>
@@ -2416,13 +2427,10 @@ final class ImportAdminPage {
 					</template>
 					<template id="universal-importer-template-confirm">
 						<section class="universal-importer-turn is-sys" data-turn-key="confirm">
-							<div class="universal-importer-speaker"><?php esc_html_e( 'Confirm', 'universal-wordpress-importer' ); ?></div>
-							<div class="universal-importer-body">
+								<div class="universal-importer-body">
 								<div data-confirm-headline></div>
-								<div class="universal-importer-hint" data-confirm-detail></div>
 								<div class="universal-importer-btns">
 									<button type="submit" class="universal-importer-btn is-primary" data-action="start"><?php esc_html_e( 'Start import', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" class="universal-importer-btn is-ghost" data-action="back"><?php esc_html_e( 'Edit anything above', 'universal-wordpress-importer' ); ?></button>
 								</div>
 							</div>
 						</section>
@@ -3770,8 +3778,7 @@ final class ImportAdminPage {
 					source: sourceUrl,
 					confirmed_domains: data.get('confirmed_domains') || '',
 					url_rewrite_mode: data.get('url_rewrite_mode') || 'ask',
-					import_as_drafts: data.get('import_as_drafts') ? '1' : '',
-					dry_run: data.get('dry_run') ? '1' : ''
+					import_as_drafts: data.get('import_as_drafts') ? '1' : ''
 				};
 
 				if (browserFiles.length) {
@@ -3780,7 +3787,6 @@ final class ImportAdminPage {
 					payload.set('confirmed_domains', data.get('confirmed_domains') || '');
 					payload.set('url_rewrite_mode', data.get('url_rewrite_mode') || 'ask');
 					payload.set('import_as_drafts', data.get('import_as_drafts') ? '1' : '');
-					payload.set('dry_run', data.get('dry_run') ? '1' : '');
 					browserFiles.forEach(function(file) {
 						payload.append('files[]', file, file.name);
 						payload.append('paths[]', filePath(file));
@@ -3932,7 +3938,6 @@ final class ImportAdminPage {
 			var sourceClearButton = document.getElementById('universal-importer-source-clear');
 			var stateUrlMode = document.getElementById('universal-importer-state-url-mode');
 			var stateDomains = document.getElementById('universal-importer-state-domains');
-			var stateDry = document.getElementById('universal-importer-state-dry');
 			var stateDrafts = document.getElementById('universal-importer-state-drafts');
 			var stateSourceType = document.getElementById('universal-importer-state-source-type');
 
@@ -3943,7 +3948,6 @@ final class ImportAdminPage {
 				typeOverride: '',
 				urlMode: 'ask',
 				domains: '',
-				dry: false,
 				drafts: false
 			};
 			var pastTurns = []; // [{ key: 'source'|'classify'|'configure', summary: '' }]
@@ -3954,10 +3958,10 @@ final class ImportAdminPage {
 					for (var idx = 0; idx < browserFiles.length; idx++) {
 						bytes += Number(browserFiles[idx].size || 0);
 					}
-					return 'Upload · ' + browserFiles.length + ' file' + (browserFiles.length === 1 ? '' : 's') + ' (' + formatBytes(bytes) + ')';
+					return browserFiles.length + ' file' + (browserFiles.length === 1 ? '' : 's') + ' (' + formatBytes(bytes) + ')';
 				}
 				var url = (sourceInput.value || '').trim();
-				return url ? 'URL · ' + url : '';
+				return url || '';
 			}
 
 			function formatBytes(bytes) {
@@ -4014,23 +4018,22 @@ final class ImportAdminPage {
 				return { type: '', consequence: '' };
 			}
 
-			function buildSummaryBubble(key, speaker, summary) {
+			function buildSummaryBubble(key, summary) {
 				var section = document.createElement('section');
 				section.className = 'universal-importer-turn is-past';
 				section.setAttribute('data-turn-key', key);
-				var speakerRow = document.createElement('div');
-				speakerRow.className = 'universal-importer-speaker';
-				speakerRow.textContent = speaker;
+				var body = document.createElement('div');
+				body.className = 'universal-importer-body';
+				var summarySpan = document.createElement('span');
+				summarySpan.className = 'universal-importer-past-summary';
+				summarySpan.textContent = summary;
 				var editBtn = document.createElement('button');
 				editBtn.type = 'button';
 				editBtn.className = 'universal-importer-edit';
 				editBtn.setAttribute('data-edit-key', key);
 				editBtn.textContent = 'Edit';
-				speakerRow.appendChild(editBtn);
-				var body = document.createElement('div');
-				body.className = 'universal-importer-body';
-				body.textContent = summary;
-				section.appendChild(speakerRow);
+				body.appendChild(summarySpan);
+				body.appendChild(editBtn);
 				section.appendChild(body);
 				editBtn.addEventListener('click', function() { jumpBack(key); });
 				return section;
@@ -4038,32 +4041,31 @@ final class ImportAdminPage {
 
 			function configureSummary() {
 				var pieces = [];
-				if (flowState.urlMode === 'ask') { pieces.push('Ask'); }
-				else if (flowState.urlMode === 'preserve') { pieces.push('Keep unchanged'); }
-				else { pieces.push('Rewrite: ' + (flowState.domains || '(none)')); }
-				pieces.push(flowState.dry ? 'Dry run' : 'Real run');
+				if (flowState.urlMode === 'ask') { pieces.push('Ask on URLs'); }
+				else if (flowState.urlMode === 'preserve') { pieces.push('Keep URLs'); }
+				else { pieces.push('Rewrite ' + (flowState.domains || '(none)')); }
 				pieces.push(flowState.drafts ? 'Drafts' : 'Publish');
-				return 'Configure · ' + pieces.join(' · ');
+				return pieces.join(' · ');
 			}
 
 			function lockSourceTurn() {
 				var summary = currentSourceLabel();
 				if (!summary) { return false; }
-				var bubble = buildSummaryBubble('source', 'YOU', summary);
+				var bubble = buildSummaryBubble('source', summary);
 				turnsContainer.replaceChild(bubble, sourceTurn);
 				pastTurns.push({ key: 'source', node: bubble });
 				return true;
 			}
 
 			function lockClassifyTurn(node) {
-				var summary = 'Type · ' + (flowState.typeOverride || flowState.inferredType);
-				var bubble = buildSummaryBubble('classify', 'YOU', summary);
+				var summary = flowState.typeOverride || flowState.inferredType;
+				var bubble = buildSummaryBubble('classify', summary);
 				turnsContainer.replaceChild(bubble, node);
 				pastTurns.push({ key: 'classify', node: bubble });
 			}
 
 			function lockConfigureTurn(node) {
-				var bubble = buildSummaryBubble('configure', 'YOU', configureSummary());
+				var bubble = buildSummaryBubble('configure', configureSummary());
 				turnsContainer.replaceChild(bubble, node);
 				pastTurns.push({ key: 'configure', node: bubble });
 			}
@@ -4134,13 +4136,16 @@ final class ImportAdminPage {
 					if (overrideBox.hasAttribute('hidden')) { overrideBox.removeAttribute('hidden'); }
 					else { overrideBox.setAttribute('hidden', 'hidden'); }
 				});
-				node.querySelector('[data-action="continue"]').addEventListener('click', function() {
+				var classifyContinue = node.querySelector('[data-action="continue"]');
+				classifyContinue.addEventListener('click', function() {
 					stateSourceType.value = flowState.typeOverride || flowState.inferredType;
 					lockClassifyTurn(node);
 					flowState.turn = 'configure';
 					renderConfigureTurn();
 				});
 				turnsContainer.appendChild(node);
+				// Focus the Continue button so Enter advances.
+				if (classifyContinue && classifyContinue.focus) { classifyContinue.focus(); }
 			}
 
 			function renderConfigureTurn() {
@@ -4149,7 +4154,6 @@ final class ImportAdminPage {
 				var radios = node.querySelectorAll('input[name="cfg_url"]');
 				var domainsInput = node.querySelector('[data-domains]');
 				var domainsErr = node.querySelector('[data-domain-err]');
-				var dryToggle = node.querySelector('[data-toggle="dry"]');
 				var draftsToggle = node.querySelector('[data-toggle="drafts"]');
 
 				function syncRadioStyles() {
@@ -4173,13 +4177,7 @@ final class ImportAdminPage {
 				});
 				domainsInput.value = flowState.domains || '';
 				domainsInput.addEventListener('input', function() { flowState.domains = domainsInput.value; domainsErr.setAttribute('hidden', 'hidden'); });
-				if (flowState.dry) { dryToggle.classList.add('is-on'); dryToggle.setAttribute('aria-pressed', 'true'); }
 				if (flowState.drafts) { draftsToggle.classList.add('is-on'); draftsToggle.setAttribute('aria-pressed', 'true'); }
-				dryToggle.addEventListener('click', function() {
-					flowState.dry = !flowState.dry;
-					dryToggle.classList.toggle('is-on', flowState.dry);
-					dryToggle.setAttribute('aria-pressed', flowState.dry ? 'true' : 'false');
-				});
 				draftsToggle.addEventListener('click', function() {
 					flowState.drafts = !flowState.drafts;
 					draftsToggle.classList.toggle('is-on', flowState.drafts);
@@ -4195,25 +4193,31 @@ final class ImportAdminPage {
 					}
 					stateUrlMode.value = flowState.urlMode;
 					stateDomains.value = flowState.domains || '';
-					stateDry.value = flowState.dry ? '1' : '';
 					stateDrafts.value = flowState.drafts ? '1' : '';
 					lockConfigureTurn(node);
 					flowState.turn = 'confirm';
 					renderConfirmTurn();
 				});
 				turnsContainer.appendChild(node);
+				// Focus the Review button so Enter fires it; also catch Enter in the domains field.
+				var configureContinue = node.querySelector('[data-action="continue"]');
+				if (configureContinue && configureContinue.focus) { configureContinue.focus(); }
+				if (domainsInput) {
+					domainsInput.addEventListener('keydown', function(event) {
+						if (event.key === 'Enter') { event.preventDefault(); if (configureContinue) { configureContinue.click(); } }
+					});
+				}
 			}
 
 			function renderConfirmTurn() {
 				var tpl = document.getElementById('universal-importer-template-confirm');
 				var node = tpl.content.firstElementChild.cloneNode(true);
 				var headline = node.querySelector('[data-confirm-headline]');
-				var detail = node.querySelector('[data-confirm-detail]');
-				var typeLabel = flowState.typeOverride || flowState.inferredType || 'this source';
-				headline.textContent = flowState.dry ? 'Ready to plan.' : 'Ready to import.';
-				detail.textContent = currentSourceLabel() + ' · ' + typeLabel + ' · ' + (flowState.urlMode === 'ask' ? 'Ask on URLs' : flowState.urlMode === 'preserve' ? 'Keep URLs' : 'Rewrite ' + (flowState.domains || '')) + ' · ' + (flowState.dry ? 'Dry run' : 'Real run') + ' · ' + (flowState.drafts ? 'Drafts' : 'Publish');
-				node.querySelector('[data-action="back"]').addEventListener('click', function() { jumpBack('configure'); });
+				headline.textContent = 'Ready to import.';
 				turnsContainer.appendChild(node);
+				// Focus the Start button so Enter fires the submit.
+				var startBtn = node.querySelector('[data-action="start"]');
+				if (startBtn && startBtn.focus) { startBtn.focus(); }
 			}
 
 			if (sourceContinueButton) {
