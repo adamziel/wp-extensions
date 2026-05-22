@@ -1005,28 +1005,11 @@ final class ImportAdminPage {
 				background: #fffaeb;
 				border-color: var(--ui-accent);
 			}
-			.universal-importer-memo-num {
-				background: var(--ui-accent);
-				border-radius: 6px 0 6px 0;
-				color: #fff;
-				font-size: 10px;
-				font-weight: 700;
-				left: -1px;
-				letter-spacing: .08em;
-				padding: 2px 7px;
-				position: absolute;
-				top: -1px;
-			}
 			.universal-importer-memo h3 {
 				font-size: 13.5px;
 				font-weight: 600;
 				letter-spacing: .01em;
-				margin: 0 0 2px 28px;
-			}
-			.universal-importer-memo-desc {
-				color: var(--ui-muted);
-				font-size: 12px;
-				margin: 0 0 8px 28px;
+				margin: 0 0 4px;
 			}
 			.universal-importer-memo .universal-importer-field {
 				margin-top: 6px;
@@ -1043,43 +1026,6 @@ final class ImportAdminPage {
 				border-color: var(--ui-accent);
 				outline: 2px solid var(--ui-soft);
 				outline-offset: 1px;
-			}
-			.universal-importer-divider {
-				align-items: center;
-				color: var(--ui-muted);
-				display: flex;
-				font-size: 11px;
-				font-weight: 700;
-				gap: 10px;
-				letter-spacing: .1em;
-				margin: 2px 0;
-				text-transform: uppercase;
-			}
-			.universal-importer-divider::before,
-			.universal-importer-divider::after {
-				background: var(--ui-rule);
-				content: "";
-				flex: 1;
-				height: 1px;
-			}
-			.universal-importer-shortcuts {
-				display: flex;
-				flex-wrap: wrap;
-				gap: 6px;
-				margin-top: 10px;
-			}
-			.universal-importer-chip {
-				background: transparent;
-				border: 1px solid var(--ui-rule);
-				border-radius: 999px;
-				color: var(--ui-muted);
-				cursor: pointer;
-				font-size: 11.5px;
-				padding: 3px 9px;
-			}
-			.universal-importer-chip:hover {
-				border-color: var(--ui-accent);
-				color: var(--ui-ink);
 			}
 			.universal-importer-group-label {
 				color: var(--ui-muted);
@@ -1243,40 +1189,11 @@ final class ImportAdminPage {
 			.universal-importer-start-form.is-hidden {
 				display: none;
 			}
-			.universal-importer-source-shortcuts {
-				display: flex;
-				flex-wrap: wrap;
-				gap: 6px;
-				margin-top: 10px;
-			}
-			.universal-importer-source-shortcut {
-				background: transparent;
-				border: 1px solid var(--ui-rule);
-				border-radius: 999px;
-				color: var(--ui-muted);
-				cursor: pointer;
-				font-size: 11.5px;
-				padding: 3px 9px;
-			}
-			.universal-importer-source-shortcut:hover,
-			.universal-importer-source-shortcut:focus {
-				border-color: var(--ui-accent);
-				color: var(--ui-ink);
-				outline: none;
-			}
-			.universal-importer-source-shortcut strong,
-			.universal-importer-source-shortcut span {
-				display: inline;
-				font: inherit;
-			}
-			.universal-importer-source-shortcut span {
-				display: none;
-			}
 			.universal-importer-dropzone {
 				background: #fff;
 				border: 1px solid var(--ui-rule);
 				border-radius: 6px;
-				padding: 12px 13px;
+				padding: 14px 16px;
 				position: relative;
 				transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
 			}
@@ -1285,52 +1202,96 @@ final class ImportAdminPage {
 				border-color: var(--ui-accent);
 				box-shadow: inset 0 0 0 2px rgba(161, 98, 7, .18), 0 0 0 4px rgba(161, 98, 7, .12);
 			}
-			.universal-importer-drop-stmt {
-				margin: 10px 0 4px;
-				padding: 8px 4px 2px;
-				text-align: center;
-			}
-			.universal-importer-drop-stmt-big {
+			.universal-importer-memo-prompt {
 				color: var(--ui-ink);
-				font-size: 17px;
+				font-size: 14px;
 				font-weight: 600;
 				letter-spacing: .005em;
-				line-height: 1.25;
+				margin: 0 0 8px;
 			}
-			.universal-importer-drop-stmt-sub {
+			.universal-importer-accepts {
 				color: var(--ui-muted);
+				font-size: 11.5px;
+				line-height: 1.5;
+				margin: 10px 0 0;
+			}
+			.universal-importer-pick-row {
+				align-items: center;
+				color: var(--ui-muted);
+				display: flex;
+				flex-wrap: wrap;
 				font-size: 12.5px;
+				gap: 6px;
 				margin-top: 6px;
 			}
-			.universal-importer-drop-sep {
-				color: #bda66f;
-				margin: 0 4px;
-			}
-			.universal-importer-file-pick {
-				background: none;
-				border: 0;
-				color: var(--ui-accent);
-				cursor: pointer;
-				font: inherit;
-				font-size: inherit;
-				font-weight: 600;
-				padding: 0;
-				text-decoration: underline;
-				text-decoration-color: rgba(161, 98, 7, .35);
-				text-underline-offset: 2px;
-			}
-			.universal-importer-file-pick:hover {
-				text-decoration-color: var(--ui-accent);
+			.universal-importer-pick-sep {
+				color: var(--ui-rule);
 			}
 			.universal-importer-upload-copy {
 				min-width: 0;
 			}
 			.universal-importer-upload-actions {
 				align-items: center;
+				display: inline-flex;
+				gap: 6px;
+			}
+			.universal-importer-upload-actions[hidden] {
+				display: none;
+			}
+			.universal-importer-inferred {
+				align-items: center;
 				display: flex;
+				flex-wrap: wrap;
 				gap: 8px;
-				justify-content: center;
-				margin-top: 10px;
+				margin-top: 8px;
+				position: relative;
+			}
+			.universal-importer-inferred[hidden] {
+				display: none;
+			}
+			.universal-importer-inferred-chip {
+				background: var(--ui-soft);
+				border: 1px solid var(--ui-rule);
+				border-radius: 999px;
+				color: var(--ui-ink);
+				font-size: 12px;
+				font-weight: 600;
+				padding: 2px 10px;
+			}
+			.universal-importer-inferred-change {
+				font-size: 12px;
+			}
+			.universal-importer-inferred-popover {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				box-shadow: 0 12px 28px rgba(0, 0, 0, .14);
+				display: flex;
+				flex-direction: column;
+				left: 0;
+				min-width: 200px;
+				padding: 4px;
+				position: absolute;
+				top: calc(100% + 4px);
+				z-index: 20;
+			}
+			.universal-importer-inferred-popover[hidden] {
+				display: none;
+			}
+			.universal-importer-inferred-popover button {
+				background: transparent;
+				border: 0;
+				border-radius: 4px;
+				color: var(--ui-ink);
+				cursor: pointer;
+				font-size: 12.5px;
+				padding: 6px 10px;
+				text-align: left;
+			}
+			.universal-importer-inferred-popover button:hover,
+			.universal-importer-inferred-popover button:focus {
+				background: var(--ui-soft);
+				outline: none;
 			}
 			.universal-importer-file-input {
 				clip: rect(1px, 1px, 1px, 1px);
@@ -1344,10 +1305,8 @@ final class ImportAdminPage {
 			.universal-importer-file-summary {
 				color: var(--ui-muted);
 				font-size: 12.5px;
-				margin-top: 10px;
+				margin: 8px 0 0;
 				overflow: hidden;
-				padding: 0 6px;
-				text-align: center;
 				text-overflow: ellipsis;
 				white-space: nowrap;
 			}
@@ -1355,11 +1314,8 @@ final class ImportAdminPage {
 				color: var(--ui-ok);
 				font-weight: 600;
 			}
-			.universal-importer-upload-hint {
-				color: var(--ui-muted);
-				font-size: 11.5px;
-				margin-top: 10px;
-				text-align: center;
+			.universal-importer-file-summary:empty {
+				display: none;
 			}
 			.universal-importer-file-preview {
 				color: var(--ui-muted);
@@ -1405,27 +1361,25 @@ final class ImportAdminPage {
 				min-width: 0;
 			}
 			.universal-importer-github-picker {
-				background: #fbfbfc;
-				border: 1px solid var(--ui-border);
-				border-radius: 8px;
-				margin: -6px 0 18px;
-				padding: 12px;
+				align-items: center;
+				color: var(--ui-muted);
+				display: flex;
+				flex-wrap: wrap;
+				font-size: 12px;
+				gap: 6px;
+				margin: 8px 0 0;
 			}
 			.universal-importer-github-picker[hidden] {
 				display: none;
 			}
-			.universal-importer-github-picker-header {
-				align-items: center;
-				display: flex;
-				flex-wrap: wrap;
-				gap: 8px;
-				justify-content: space-between;
-				margin-bottom: 8px;
+			.universal-importer-github-picker-label {
+				color: var(--ui-muted);
+				font-weight: 600;
 			}
 			.universal-importer-github-selection {
-				color: var(--ui-muted);
-				font-size: 12px;
-				margin: 0;
+				color: var(--ui-ink);
+				font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+				overflow-wrap: anywhere;
 			}
 			.universal-importer-modal[hidden] {
 				display: none;
@@ -1493,10 +1447,13 @@ final class ImportAdminPage {
 				outline: none;
 			}
 			.universal-importer-modal-body {
-				display: grid;
-				grid-template-rows: auto auto minmax(0, 1fr);
+				display: flex;
+				flex-direction: column;
 				min-height: 0;
 				padding: 16px 18px;
+			}
+			.universal-importer-modal-body > .universal-importer-github-tree {
+				flex: 1 1 auto;
 			}
 			.universal-importer-github-filter {
 				margin: 0 0 12px;
@@ -1518,6 +1475,39 @@ final class ImportAdminPage {
 				font-size: 12px;
 				margin: 0 0 10px;
 			}
+			.universal-importer-github-skeleton {
+				display: flex;
+				flex: 1 1 auto;
+				flex-direction: column;
+				gap: 8px;
+				padding: 6px;
+			}
+			.universal-importer-github-skeleton[hidden] {
+				display: none;
+			}
+			.universal-importer-github-skeleton-row {
+				background: linear-gradient(90deg, #ececec 0%, #f6f6f6 40%, #ececec 80%);
+				background-size: 200% 100%;
+				border-radius: 4px;
+				display: block;
+				height: 14px;
+				width: 100%;
+				animation: universal-importer-shimmer 1.2s ease-in-out infinite;
+			}
+			.universal-importer-github-skeleton-row:nth-child(1) { width: 38%; }
+			.universal-importer-github-skeleton-row:nth-child(2) { width: 62%; }
+			.universal-importer-github-skeleton-row:nth-child(3) { width: 48%; }
+			.universal-importer-github-skeleton-row:nth-child(4) { width: 76%; }
+			.universal-importer-github-skeleton-row:nth-child(5) { width: 54%; }
+			.universal-importer-github-skeleton-row:nth-child(6) { width: 68%; }
+			.universal-importer-github-skeleton-row:nth-child(7) { width: 42%; }
+			@keyframes universal-importer-shimmer {
+				0% { background-position: 100% 0; }
+				100% { background-position: -100% 0; }
+			}
+			@media (prefers-reduced-motion: reduce) {
+				.universal-importer-github-skeleton-row { animation: none; }
+			}
 			.universal-importer-github-tree {
 				border: 1px solid var(--ui-border);
 				border-radius: 6px;
@@ -1526,6 +1516,9 @@ final class ImportAdminPage {
 				min-height: 180px;
 				overflow: auto;
 				padding: 6px;
+			}
+			.universal-importer-github-tree[hidden] {
+				display: none;
 			}
 			.universal-importer-github-tree li {
 				margin: 0;
@@ -2046,39 +2039,25 @@ final class ImportAdminPage {
 				margin: 0;
 			}
 			.universal-importer-github-picker {
-				border: 1px solid var(--ui-rule);
-				border-radius: 6px;
+				align-items: center;
+				color: var(--ui-muted);
+				display: flex;
+				flex-wrap: wrap;
+				font-size: 12px;
+				gap: 6px;
 				margin: 8px 0 0;
-				padding: 8px 10px;
 			}
 			.universal-importer-github-picker[hidden] {
 				display: none;
 			}
-			.universal-importer-github-picker-header {
-				align-items: center;
-				display: flex;
-				flex-wrap: wrap;
-				gap: 8px;
-				justify-content: space-between;
-				margin-bottom: 4px;
-			}
-			.universal-importer-github-picker-header strong {
-				font-size: 12px;
-			}
-			.universal-importer-github-picker .button {
-				background: #fff;
-				border: 1px solid var(--ui-rule);
-				border-radius: 6px;
-				color: var(--ui-ink);
-				cursor: pointer;
-				font-size: 12px;
+			.universal-importer-github-picker-label {
+				color: var(--ui-muted);
 				font-weight: 600;
-				padding: 4px 10px;
 			}
 			.universal-importer-github-selection {
-				color: var(--ui-muted);
-				font-size: 11.5px;
-				margin: 0;
+				color: var(--ui-ink);
+				font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+				overflow-wrap: anywhere;
 			}
 			.universal-importer-modal[hidden] {
 				display: none;
@@ -2141,10 +2120,13 @@ final class ImportAdminPage {
 				color: var(--ui-ink);
 			}
 			.universal-importer-modal-body {
-				display: grid;
-				grid-template-rows: auto auto minmax(0, 1fr);
+				display: flex;
+				flex-direction: column;
 				min-height: 0;
 				padding: 12px 16px;
+			}
+			.universal-importer-modal-body > .universal-importer-github-tree {
+				flex: 1 1 auto;
 			}
 			.universal-importer-github-filter label {
 				color: var(--ui-muted);
@@ -2287,8 +2269,8 @@ final class ImportAdminPage {
 				.universal-importer-admin {
 					padding: 18px 16px 80px;
 				}
-				.universal-importer-drop-stmt-big {
-					font-size: 16px;
+				.universal-importer-memo-prompt {
+					font-size: 13.5px;
 				}
 			}
 		</style>
@@ -2326,67 +2308,43 @@ final class ImportAdminPage {
 					<div id="universal-importer-turns" class="universal-importer-turns">
 					<section class="universal-importer-turn is-sys" id="universal-importer-turn-source" data-turn-key="source">
 							<div class="universal-importer-body">
-							<div><?php esc_html_e( 'What should I import?', 'universal-wordpress-importer' ); ?></div>
-							<div class="universal-importer-hint"><?php esc_html_e( 'Two ways in. Use one.', 'universal-wordpress-importer' ); ?></div>
-							<div class="universal-importer-stack">
-								<div class="universal-importer-memo is-focus" id="universal-importer-memo-url">
-									<span class="universal-importer-memo-num">1</span>
-									<h3><?php esc_html_e( 'Paste a URL', 'universal-wordpress-importer' ); ?></h3>
-									<p class="universal-importer-memo-desc"><?php esc_html_e( 'A site, a feed, a repo, a sitemap — anything reachable on the web.', 'universal-wordpress-importer' ); ?></p>
-									<div class="universal-importer-field">
-										<label for="universal-importer-source" class="screen-reader-text"><?php esc_html_e( 'Source URL', 'universal-wordpress-importer' ); ?></label>
-										<input type="url" id="universal-importer-source" name="source" placeholder="<?php echo esc_attr__( 'https://…', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Source URL', 'universal-wordpress-importer' ); ?>" autofocus>
-									</div>
-									<div class="universal-importer-source-shortcuts" aria-label="<?php echo esc_attr__( 'Import source shortcuts', 'universal-wordpress-importer' ); ?>">
-										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://github.com/owner/repository/tree/main/docs">
-											<strong><?php esc_html_e( 'GitHub repo', 'universal-wordpress-importer' ); ?></strong>
-											<span><?php esc_html_e( 'Branch or subdirectory URL.', 'universal-wordpress-importer' ); ?></span>
-										</button>
-										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/">
-											<strong><?php esc_html_e( 'WordPress site', 'universal-wordpress-importer' ); ?></strong>
-											<span><?php esc_html_e( 'REST API, pages, posts, and comments.', 'universal-wordpress-importer' ); ?></span>
-										</button>
-										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/feed.xml">
-											<strong><?php esc_html_e( 'Feed or OPML', 'universal-wordpress-importer' ); ?></strong>
-											<span><?php esc_html_e( 'RSS, Atom, RDF, or a feed list.', 'universal-wordpress-importer' ); ?></span>
-										</button>
-										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/sitemap.xml">
-											<strong><?php esc_html_e( 'Sitemap', 'universal-wordpress-importer' ); ?></strong>
-											<span><?php esc_html_e( 'sitemap.xml or index.', 'universal-wordpress-importer' ); ?></span>
-										</button>
-										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/wp-content/export.xml">
-											<strong><?php esc_html_e( 'WXR export', 'universal-wordpress-importer' ); ?></strong>
-											<span><?php esc_html_e( 'WordPress export XML URL.', 'universal-wordpress-importer' ); ?></span>
-										</button>
-									</div>
-									<div id="universal-importer-github-picker" class="universal-importer-github-picker" hidden>
-										<div class="universal-importer-github-picker-header">
-											<strong><?php esc_html_e( 'GitHub directory', 'universal-wordpress-importer' ); ?></strong>
-											<button type="button" class="button" id="universal-importer-github-browse"><?php esc_html_e( 'Choose directory', 'universal-wordpress-importer' ); ?></button>
-										</div>
-										<p id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"></p>
+							<div id="universal-importer-dropzone" class="universal-importer-memo universal-importer-dropzone is-focus" aria-label="<?php echo esc_attr__( 'Paste a URL or drop a file', 'universal-wordpress-importer' ); ?>">
+								<h3 class="universal-importer-memo-prompt"><?php esc_html_e( 'Paste a URL or drop a file', 'universal-wordpress-importer' ); ?></h3>
+								<div class="universal-importer-field">
+									<label for="universal-importer-source" class="screen-reader-text"><?php esc_html_e( 'Source URL', 'universal-wordpress-importer' ); ?></label>
+									<input type="url" id="universal-importer-source" name="source" placeholder="<?php echo esc_attr__( 'https://…', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Source URL', 'universal-wordpress-importer' ); ?>" autofocus>
+								</div>
+								<div id="universal-importer-inferred" class="universal-importer-inferred" hidden>
+									<span class="universal-importer-inferred-chip" id="universal-importer-inferred-chip"></span>
+									<button type="button" class="universal-importer-link-button universal-importer-inferred-change" id="universal-importer-inferred-change" aria-haspopup="listbox" aria-expanded="false"><?php esc_html_e( 'Change', 'universal-wordpress-importer' ); ?></button>
+									<div id="universal-importer-inferred-popover" class="universal-importer-inferred-popover" role="listbox" aria-label="<?php echo esc_attr__( 'Override source type', 'universal-wordpress-importer' ); ?>" hidden>
+										<button type="button" role="option" data-type="GitHub repository"><?php esc_html_e( 'GitHub repository', 'universal-wordpress-importer' ); ?></button>
+										<button type="button" role="option" data-type="WordPress site URL"><?php esc_html_e( 'WordPress site', 'universal-wordpress-importer' ); ?></button>
+										<button type="button" role="option" data-type="RSS / Atom / RDF feed"><?php esc_html_e( 'RSS / Atom feed', 'universal-wordpress-importer' ); ?></button>
+										<button type="button" role="option" data-type="Sitemap.xml"><?php esc_html_e( 'Sitemap', 'universal-wordpress-importer' ); ?></button>
+										<button type="button" role="option" data-type="WP export XML (WXR)"><?php esc_html_e( 'WXR XML export', 'universal-wordpress-importer' ); ?></button>
+										<button type="button" role="option" data-type="Remote HTML page"><?php esc_html_e( 'Remote HTML page', 'universal-wordpress-importer' ); ?></button>
+										<button type="button" role="option" data-type="OPML feed list"><?php esc_html_e( 'OPML feed list', 'universal-wordpress-importer' ); ?></button>
 									</div>
 								</div>
-								<div class="universal-importer-divider" aria-hidden="true"><?php esc_html_e( 'or', 'universal-wordpress-importer' ); ?></div>
-								<div id="universal-importer-dropzone" class="universal-importer-memo universal-importer-dropzone" aria-label="<?php echo esc_attr__( 'Drop a file or folder on this card', 'universal-wordpress-importer' ); ?>">
-									<span class="universal-importer-memo-num">2</span>
-									<h3><?php esc_html_e( 'Upload a file or folder', 'universal-wordpress-importer' ); ?></h3>
-									<p class="universal-importer-memo-desc"><?php esc_html_e( 'From this computer. .zip, .epub, .pdf, WXR .xml, or a whole folder.', 'universal-wordpress-importer' ); ?></p>
-									<div class="universal-importer-drop-stmt">
-										<div class="universal-importer-drop-stmt-big" id="universal-importer-drop-line"><?php esc_html_e( 'Drop a file or folder anywhere on this card', 'universal-wordpress-importer' ); ?></div>
-										<div class="universal-importer-drop-stmt-sub"><?php esc_html_e( 'or', 'universal-wordpress-importer' ); ?> <label class="universal-importer-file-pick" for="universal-importer-file-picker"><?php esc_html_e( 'Choose files', 'universal-wordpress-importer' ); ?></label><span class="universal-importer-drop-sep">·</span><label class="universal-importer-file-pick" for="universal-importer-folder-picker"><?php esc_html_e( 'Choose folder', 'universal-wordpress-importer' ); ?></label></div>
-									</div>
-									<div class="universal-importer-upload-copy">
-										<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
-										<ul id="universal-importer-file-preview" class="universal-importer-file-preview" role="tree" aria-label="<?php echo esc_attr__( 'Selected file tree', 'universal-wordpress-importer' ); ?>" aria-live="polite"></ul>
-									</div>
-									<p class="universal-importer-upload-hint"><?php esc_html_e( 'PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP, or a folder. Stays in this browser session.', 'universal-wordpress-importer' ); ?></p>
-									<div class="universal-importer-upload-actions" id="universal-importer-upload-actions" hidden>
-										<button type="button" class="universal-importer-link-button" id="universal-importer-clear-files"><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button>
-									</div>
-									<input type="file" id="universal-importer-file-picker" class="universal-importer-file-input" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
-									<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
+								<div id="universal-importer-github-picker" class="universal-importer-github-picker" hidden>
+									<span class="universal-importer-github-picker-label"><?php esc_html_e( 'Path:', 'universal-wordpress-importer' ); ?></span>
+									<span id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"><?php esc_html_e( 'repository root', 'universal-wordpress-importer' ); ?></span>
+									<button type="button" class="universal-importer-link-button" id="universal-importer-github-browse"><?php esc_html_e( 'change', 'universal-wordpress-importer' ); ?></button>
 								</div>
+								<div class="universal-importer-upload-copy">
+									<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
+									<ul id="universal-importer-file-preview" class="universal-importer-file-preview" role="tree" aria-label="<?php echo esc_attr__( 'Selected file tree', 'universal-wordpress-importer' ); ?>" aria-live="polite"></ul>
+								</div>
+								<p class="universal-importer-accepts"><?php esc_html_e( 'URLs · GitHub repos · feeds · sitemaps · ZIP · folders · PDF · EPUB · Markdown · HTML · WXR XML', 'universal-wordpress-importer' ); ?></p>
+								<div class="universal-importer-pick-row">
+									<label class="universal-importer-link-button" for="universal-importer-file-picker"><?php esc_html_e( 'Choose file', 'universal-wordpress-importer' ); ?></label>
+									<span class="universal-importer-pick-sep" aria-hidden="true">·</span>
+									<label class="universal-importer-link-button" for="universal-importer-folder-picker"><?php esc_html_e( 'Choose folder', 'universal-wordpress-importer' ); ?></label>
+									<span class="universal-importer-upload-actions" id="universal-importer-upload-actions" hidden><span class="universal-importer-pick-sep" aria-hidden="true">·</span><button type="button" class="universal-importer-link-button" id="universal-importer-clear-files"><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button></span>
+								</div>
+								<input type="file" id="universal-importer-file-picker" class="universal-importer-file-input" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
+								<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
 							</div>
 							<div class="universal-importer-btns">
 								<button type="button" class="universal-importer-btn is-primary is-prominent" id="universal-importer-source-continue"><?php esc_html_e( 'Next', 'universal-wordpress-importer' ); ?></button>
@@ -2397,8 +2355,6 @@ final class ImportAdminPage {
 					<template id="universal-importer-template-configure">
 						<section class="universal-importer-turn is-sys" data-turn-key="configure">
 								<div class="universal-importer-body">
-								<div><?php esc_html_e( 'Configure the run.', 'universal-wordpress-importer' ); ?></div>
-								<div class="universal-importer-hint"><?php esc_html_e( 'Defaults are sensible.', 'universal-wordpress-importer' ); ?></div>
 								<div class="universal-importer-group-label"><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></div>
 								<div class="universal-importer-opts" data-url-options>
 									<label class="universal-importer-option" data-url-option><input type="radio" name="cfg_url" value="ask"><span><strong><?php esc_html_e( 'Ask when old URLs are found', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Recommended — confirm domains mid-run.', 'universal-wordpress-importer' ); ?></span></span></label>
@@ -2445,6 +2401,15 @@ final class ImportAdminPage {
 							<input type="search" id="universal-importer-github-search" autocomplete="off">
 						</p>
 						<p id="universal-importer-github-picker-status" class="universal-importer-github-picker-status" aria-live="polite"></p>
+						<div id="universal-importer-github-skeleton" class="universal-importer-github-skeleton" aria-hidden="true" hidden>
+							<span class="universal-importer-github-skeleton-row"></span>
+							<span class="universal-importer-github-skeleton-row"></span>
+							<span class="universal-importer-github-skeleton-row"></span>
+							<span class="universal-importer-github-skeleton-row"></span>
+							<span class="universal-importer-github-skeleton-row"></span>
+							<span class="universal-importer-github-skeleton-row"></span>
+							<span class="universal-importer-github-skeleton-row"></span>
+						</div>
 						<ul id="universal-importer-github-tree" class="universal-importer-github-tree" role="tree" aria-label="<?php echo esc_attr__( 'GitHub repository directories', 'universal-wordpress-importer' ); ?>"></ul>
 					</div>
 					<div class="universal-importer-modal-footer">
@@ -2470,6 +2435,12 @@ final class ImportAdminPage {
 			var filePreview = document.getElementById('universal-importer-file-preview');
 			var githubPicker = document.getElementById('universal-importer-github-picker');
 			var githubBrowseButton = document.getElementById('universal-importer-github-browse');
+			var githubSkeleton = document.getElementById('universal-importer-github-skeleton');
+			var githubTreeEl = document.getElementById('universal-importer-github-tree');
+			var inferredWrap = document.getElementById('universal-importer-inferred');
+			var inferredChip = document.getElementById('universal-importer-inferred-chip');
+			var inferredChangeBtn = document.getElementById('universal-importer-inferred-change');
+			var inferredPopover = document.getElementById('universal-importer-inferred-popover');
 			var githubModal = document.getElementById('universal-importer-github-modal');
 			var githubModalDialog = githubModal && githubModal.querySelector ? githubModal.querySelector('.universal-importer-modal-dialog') : null;
 			var githubCloseButton = document.getElementById('universal-importer-github-close');
@@ -2483,7 +2454,6 @@ final class ImportAdminPage {
 			var sessions = document.getElementById('universal-importer-sessions');
 			var emptyProgress = document.getElementById('universal-importer-empty-progress');
 			var notice = document.getElementById('universal-importer-notice');
-			var sourceShortcuts = form && form.querySelectorAll ? Array.prototype.slice.call(form.querySelectorAll('.universal-importer-source-shortcut')) : [];
 			var activeSessionId = config.primary_session_id || null;
 			var timer = null;
 			var keepaliveInFlight = false;
@@ -2564,7 +2534,7 @@ final class ImportAdminPage {
 				if (visible) {
 					githubPicker.removeAttribute('hidden');
 					if (githubSelection && !githubSelection.textContent) {
-						githubSelection.textContent = '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
+						githubSelection.textContent = '<?php echo esc_js( __( 'repository root', 'universal-wordpress-importer' ) ); ?>';
 					}
 				} else {
 					githubPicker.setAttribute('hidden', 'hidden');
@@ -2573,13 +2543,46 @@ final class ImportAdminPage {
 						githubPickerStatus.textContent = '';
 					}
 					if (githubSelection) {
-						githubSelection.textContent = '';
+						githubSelection.textContent = '<?php echo esc_js( __( 'repository root', 'universal-wordpress-importer' ) ); ?>';
 					}
 					if (githubTree) {
 						githubTree.innerHTML = '';
 					}
 					githubDirectories = [];
 				}
+			}
+
+			function refreshInferredType() {
+				if (!inferredWrap || !inferredChip) {
+					return;
+				}
+				// Honour any user override; otherwise compute from current input.
+				if (flowState && flowState.typeOverride) {
+					inferredChip.textContent = flowState.typeOverride;
+					inferredWrap.removeAttribute('hidden');
+					return;
+				}
+				var inferred = inferSourceType();
+				if (!inferred || !inferred.type) {
+					inferredWrap.setAttribute('hidden', 'hidden');
+					inferredChip.textContent = '';
+					closeInferredPopover();
+					return;
+				}
+				inferredChip.textContent = inferred.type;
+				inferredWrap.removeAttribute('hidden');
+			}
+
+			function openInferredPopover() {
+				if (!inferredPopover) { return; }
+				inferredPopover.removeAttribute('hidden');
+				if (inferredChangeBtn) { inferredChangeBtn.setAttribute('aria-expanded', 'true'); }
+			}
+
+			function closeInferredPopover() {
+				if (!inferredPopover) { return; }
+				inferredPopover.setAttribute('hidden', 'hidden');
+				if (inferredChangeBtn) { inferredChangeBtn.setAttribute('aria-expanded', 'false'); }
 			}
 
 			function isGithubModalOpen() {
@@ -2625,16 +2628,19 @@ final class ImportAdminPage {
 					githubBrowseButton.disabled = true;
 				}
 				if (githubPickerStatus) {
-					githubPickerStatus.textContent = '<?php echo esc_js( __( 'Loading directories...', 'universal-wordpress-importer' ) ); ?>';
+					githubPickerStatus.textContent = '<?php echo esc_js( __( 'Loading directories…', 'universal-wordpress-importer' ) ); ?>';
 				}
 				updateGithubSelectedSummary('', '');
 				if (githubTree) {
 					githubTree.innerHTML = '';
 				}
+				setGithubSkeletonVisible(true);
 
 				request('<?php echo esc_js( self::AJAX_GITHUB_DIRS ); ?>', { source: source }).then(function(data) {
+					setGithubSkeletonVisible(false);
 					renderGithubDirectories(data);
 				}).catch(function(error) {
+					setGithubSkeletonVisible(false);
 					var fallback = '<?php echo esc_js( __( "Couldn't list directories. You can close this and continue with the URL as-is — picking a directory is optional.", 'universal-wordpress-importer' ) ); ?>';
 					if (githubPickerStatus) {
 						githubPickerStatus.textContent = error.message + ' ' + fallback;
@@ -2645,6 +2651,23 @@ final class ImportAdminPage {
 						githubBrowseButton.disabled = false;
 					}
 				});
+			}
+
+			function setGithubSkeletonVisible(visible) {
+				if (githubSkeleton) {
+					if (visible) {
+						githubSkeleton.removeAttribute('hidden');
+					} else {
+						githubSkeleton.setAttribute('hidden', 'hidden');
+					}
+				}
+				if (githubTreeEl) {
+					if (visible) {
+						githubTreeEl.setAttribute('hidden', 'hidden');
+					} else {
+						githubTreeEl.removeAttribute('hidden');
+					}
+				}
 			}
 
 			function renderGithubDirectories(data) {
@@ -2718,12 +2741,13 @@ final class ImportAdminPage {
 			}
 
 			function updateGithubSelectedSummary(path, sourceUrl) {
-				var label = path ? '<?php echo esc_js( __( 'Selected:', 'universal-wordpress-importer' ) ); ?> ' + path : '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
+				var inlineLabel = path ? path : '<?php echo esc_js( __( 'repository root', 'universal-wordpress-importer' ) ); ?>';
+				var modalLabel = path ? '<?php echo esc_js( __( 'Selected:', 'universal-wordpress-importer' ) ); ?> ' + path : '<?php echo esc_js( __( 'Selected: repository root', 'universal-wordpress-importer' ) ); ?>';
 				if (githubSelection) {
-					githubSelection.textContent = label;
+					githubSelection.textContent = inlineLabel;
 				}
 				if (githubModalSelection) {
-					githubModalSelection.textContent = sourceUrl ? label + ' · ' + sourceUrl : label;
+					githubModalSelection.textContent = sourceUrl ? modalLabel + ' · ' + sourceUrl : modalLabel;
 				}
 				if (githubUseButton) {
 					githubUseButton.disabled = !sourceUrl;
@@ -2737,6 +2761,9 @@ final class ImportAdminPage {
 				sourceInput.value = githubSelectedSourceUrl;
 				closeGithubDirectoryModal(true);
 				syncGithubPickerVisibility();
+				// Re-render the chip so the override-aware label stays in sync.
+				refreshInferredType();
+				// The directory choice is already reflected in githubSelection by updateGithubSelectedSummary.
 			}
 
 			function githubDirectoryButtons() {
@@ -3039,7 +3066,12 @@ final class ImportAdminPage {
 						clearActions.setAttribute('hidden', 'hidden');
 					}
 				}
+				// When files arrive, the URL field is no longer the source — clear any URL-derived override so the chip reflects the files.
+				if (browserFiles.length && flowState) {
+					flowState.typeOverride = '';
+				}
 				syncGithubPickerVisibility();
+				refreshInferredType();
 				if (!browserFiles.length) {
 					fileSummary.textContent = '';
 					if (fileSummary.classList && fileSummary.classList.remove) {
@@ -3066,55 +3098,62 @@ final class ImportAdminPage {
 				}
 			}
 
-			var memoUrl = document.getElementById('universal-importer-memo-url');
-			var memoUpload = dropzone;
-			var dropLine = document.getElementById('universal-importer-drop-line');
-			var originalDropText = dropLine ? dropLine.textContent : '';
 			var pastToggle = document.getElementById('universal-importer-past-toggle');
 			var pastPanel = document.getElementById('universal-importer-past');
 
-			function focusMemo(which) {
-				if (memoUrl && memoUrl.classList) {
-					if (which === 'url') {
-						memoUrl.classList.add('is-focus');
-					} else {
-						memoUrl.classList.remove('is-focus');
-					}
-				}
-				if (memoUpload && memoUpload.classList) {
-					if (which === 'upload') {
-						memoUpload.classList.add('is-focus');
-					} else {
-						memoUpload.classList.remove('is-focus');
-					}
-				}
-			}
+			// Single combined card — keep focusMemo as a no-op so legacy callers (drag/drop, setBrowserFiles) stay safe.
+			function focusMemo(which) { /* no-op: single combined card */ }
 
-			sourceShortcuts.forEach(function(button) {
-				button.addEventListener('click', function() {
-					var placeholder = button.getAttribute('data-source-placeholder') || '';
-					if (placeholder) {
-						sourceInput.value = placeholder;
-					}
-					if (sourceInput.focus) {
-						sourceInput.focus();
-					}
-					setBrowserFiles([], '');
-					focusMemo('url');
-					syncGithubPickerVisibility();
-				});
-			});
-
-			sourceInput.addEventListener('focus', function() { focusMemo('url'); });
 			sourceInput.addEventListener('input', function() {
-				focusMemo('url');
 				syncGithubPickerVisibility();
+				refreshInferredType();
 			});
-			sourceInput.addEventListener('change', syncGithubPickerVisibility);
+			sourceInput.addEventListener('change', function() {
+				syncGithubPickerVisibility();
+				refreshInferredType();
+			});
 
 			if (pastToggle && pastPanel) {
 				pastToggle.addEventListener('click', function() {
 					pastPanel.classList.toggle('is-visible');
+				});
+			}
+
+			if (inferredChangeBtn) {
+				inferredChangeBtn.addEventListener('click', function(event) {
+					event.stopPropagation();
+					if (inferredPopover && inferredPopover.hasAttribute('hidden')) {
+						openInferredPopover();
+					} else {
+						closeInferredPopover();
+					}
+				});
+			}
+			if (inferredPopover) {
+				inferredPopover.addEventListener('click', function(event) {
+					var btn = event.target.closest ? event.target.closest('button[data-type]') : null;
+					if (!btn) { return; }
+					var chosen = btn.getAttribute('data-type') || '';
+					if (flowState) {
+						flowState.typeOverride = chosen;
+					}
+					if (inferredChip) {
+						inferredChip.textContent = chosen;
+					}
+					closeInferredPopover();
+				});
+			}
+			if (document && document.addEventListener) {
+				document.addEventListener('click', function(event) {
+					if (!inferredPopover || inferredPopover.hasAttribute('hidden')) { return; }
+					if (inferredWrap && inferredWrap.contains && inferredWrap.contains(event.target)) { return; }
+					closeInferredPopover();
+				});
+				document.addEventListener('keydown', function(event) {
+					if (event.key === 'Escape' && inferredPopover && !inferredPopover.hasAttribute('hidden')) {
+						closeInferredPopover();
+						if (inferredChangeBtn && inferredChangeBtn.focus) { inferredChangeBtn.focus(); }
+					}
 				});
 			}
 
@@ -3824,9 +3863,6 @@ final class ImportAdminPage {
 						dropzone.classList.remove('is-dragging');
 					}
 				}
-				if (dropLine) {
-					dropLine.textContent = on ? '<?php echo esc_js( __( 'Release to upload', 'universal-wordpress-importer' ) ); ?>' : originalDropText;
-				}
 			}
 
 			var dragDepth = 0;
@@ -3996,7 +4032,7 @@ final class ImportAdminPage {
 				if (/sitemap.*\.xml(\?|$)/i.test(url)) {
 					return { type: 'Sitemap.xml', consequence: 'Listed URLs will be crawled.' };
 				}
-				if (/\.(rss|atom)(\?|$)/i.test(url) || /\/feed\/?$/i.test(url)) {
+				if (/\.(rss|atom)(\?|$)/i.test(url) || /\/feed\/?$/i.test(url) || /\/(feed|rss|atom)\.xml(\?|$)/i.test(url)) {
 					return { type: 'RSS / Atom / RDF feed', consequence: 'Feed entries will be ingested.' };
 				}
 				if (/\.xml(\?|$)/i.test(url)) {
@@ -4164,10 +4200,11 @@ final class ImportAdminPage {
 						return;
 					}
 					if (!lockSourceTurn()) { return; }
-					// Classify silently — inference still drives the backend, but we skip the visible step.
+					// Honour an explicit override; otherwise infer silently. Inference drives the backend.
 					var inferred = inferSourceType();
-					flowState.inferredType = inferred.type;
-					stateSourceType.value = inferred.type;
+					var chosenType = flowState.typeOverride || inferred.type;
+					flowState.inferredType = chosenType;
+					stateSourceType.value = chosenType;
 					flowState.turn = 'configure';
 					renderConfigureTurn();
 				});
@@ -4180,6 +4217,7 @@ final class ImportAdminPage {
 			});
 
 			syncGithubPickerVisibility();
+			refreshInferredType();
 			reattachActiveSession();
 		}());
 		</script>

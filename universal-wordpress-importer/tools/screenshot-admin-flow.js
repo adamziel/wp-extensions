@@ -1,7 +1,7 @@
 // Screenshot the importer admin page at each transcript state.
 //
-// For each state in [empty, source-typed, source-locked, classify, configure, confirm],
-// spawns headless Chromium, has the driver advance to that state, then captures a PNG.
+// For each state, spawns headless Chromium with a hook + driver script appended
+// to snapshot.html, advances the UI to the target state, then captures a PNG.
 //
 // Usage: node tools/screenshot-admin-flow.js <chromium> <out-dir> [viewport-width]
 
@@ -30,21 +30,36 @@ fs.mkdirSync(outDir, { recursive: true });
 
 const baseHtml = fs.readFileSync(snapshotPath, 'utf8');
 
-// Hooks for each shot. STATE controls how far the driver advances.
+// Each state has:
+//   name            output filename prefix
+//   advance         which point in the driver to stop at
+//   url             value typed into the source URL field (if any)
+//   stallPicker     whether to leave the github_directories fetch pending
 const STATES = [
-	{ name: 'a-empty',         advance: 'empty' },
-	{ name: 'b-source-typed',  advance: 'source-typed' },
-	{ name: 'c-configure',     advance: 'configure' },
-	{ name: 'd-confirm',       advance: 'confirm' }
+	{ name: 'a-empty',             advance: 'empty' },
+	{ name: 'b-url-typed-github',  advance: 'source-typed', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs' },
+	{ name: 'b2-url-typed-wp',     advance: 'source-typed', url: 'https://example.com/wp-json/' },
+	{ name: 'b3-url-typed-feed',   advance: 'source-typed', url: 'https://example.com/feed.xml' },
+	{ name: 'c-picker-loading',    advance: 'picker-loading', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs', stallPicker: true },
+	{ name: 'd-configure',         advance: 'configure', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs' },
+	{ name: 'e-confirm',           advance: 'confirm', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs' }
 ];
 
-function buildHtml(advance) {
+function buildHtml(state) {
+	const stallPicker = !!state.stallPicker;
 	const xhrAndFetchHook = `
 <script>
 window.ajaxurl = 'admin-ajax.php';
 window.__fetchCalls = [];
+window.__stallPicker = ${stallPicker ? 'true' : 'false'};
 window.fetch = function(url, options) {
-	window.__fetchCalls.push({ url: String(url || ''), method: (options && options.method) || 'GET' });
+	var bodyStr = '';
+	try { bodyStr = String((options && options.body) || ''); } catch(e) {}
+	window.__fetchCalls.push({ url: String(url || ''), method: (options && options.method) || 'GET', body: bodyStr });
+	if (window.__stallPicker && /github_directories/.test(bodyStr)) {
+		// Leave the picker fetch pending so the loading skeleton stays on screen.
+		return new Promise(function(){ /* never resolves */ });
+	}
 	return Promise.resolve({ ok: true, status: 200, text: function() {
 		return Promise.resolve(JSON.stringify({ success: true, data: { id: 'session', source: '', status: 'queued', dry_run: false, progress: { total: 0, completed: 0, errors: 0 }, recent_events: [], pending_decisions: [] } }));
 	} });
@@ -56,14 +71,38 @@ function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
 (async function drive() {
 	try {
 		await sleep(200);
-		var advance = ${JSON.stringify(advance)};
+		var advance = ${JSON.stringify(state.advance)};
+		var url = ${JSON.stringify(state.url || '')};
 		var source = document.getElementById('universal-importer-source');
-		if (advance === 'empty') { return; }
+
+		if (advance === 'empty') {
+			if (source && typeof source.focus === 'function') {
+				try { source.focus(); } catch(e) {}
+			}
+			return;
+		}
 		if (!source) { return; }
 
-		source.value = 'https://github.com/WordPress/gutenberg/tree/trunk/docs';
+		// Type the URL and fire both input + change so debounced handlers run.
+		source.value = url;
 		source.dispatchEvent(new Event('input', { bubbles: true }));
+		source.dispatchEvent(new Event('change', { bubbles: true }));
+		await sleep(120);
+
 		if (advance === 'source-typed') { return; }
+
+		if (advance === 'picker-loading') {
+			// Try the new stable selector first, fall back to the legacy button id.
+			var pickerTrigger =
+				document.querySelector('[data-action="open-directory-picker"]') ||
+				document.getElementById('universal-importer-github-browse');
+			if (pickerTrigger) {
+				pickerTrigger.click();
+			}
+			// Let the modal render + skeleton paint while the fetch stays pending.
+			await sleep(600);
+			return;
+		}
 
 		document.getElementById('universal-importer-source-continue').click();
 		await sleep(80);
@@ -71,7 +110,9 @@ function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
 
 		var liveConfigure = Array.prototype.slice.call(document.querySelectorAll('[data-turn-key="configure"]'))
 			.find(function(node){ return node.parentNode && node.parentNode.id === 'universal-importer-turns'; });
-		liveConfigure.querySelector('[data-action="continue"]').click();
+		if (liveConfigure) {
+			liveConfigure.querySelector('[data-action="continue"]').click();
+		}
 		await sleep(80);
 		// confirm state target — leave us here
 	} catch(e) {
@@ -91,7 +132,7 @@ function shot(state) {
 	const htmlPath = path.join(tempDir, 'page.html');
 	const profileDir = path.join(tempDir, 'profile');
 	fs.mkdirSync(profileDir, { mode: 0o700 });
-	fs.writeFileSync(htmlPath, buildHtml(state.advance));
+	fs.writeFileSync(htmlPath, buildHtml(state));
 
 	const outPath = path.join(outDir, state.name + '-' + viewportWidth + '.png');
 

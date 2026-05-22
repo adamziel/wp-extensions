@@ -395,20 +395,35 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'id="universal-importer-folder-picker"', $source );
 		$this->assertStringContainsString( 'accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip', $source );
 		$this->assertStringContainsString( 'id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory', $source );
-		$this->assertStringContainsString( 'Choose files', $source );
+		// One combined affordance now: a single Source card with text-link "Choose file" / "Choose folder".
+		$this->assertStringContainsString( 'Choose file', $source );
 		$this->assertStringContainsString( 'Choose folder', $source );
 		$this->assertStringContainsString( 'universal-importer-file-preview', $source );
 		$this->assertStringContainsString( "dropzone.addEventListener('drop'", $source );
 		$this->assertStringContainsString( 'readDirectoryEntries', $source );
 		$this->assertStringContainsString( 'webkitGetAsEntry', $source );
-		$this->assertStringContainsString( 'Upload a file or folder', $source );
+		// The dual-card layout, numbered badges, OR divider, shortcut chips, and verbose dropzone copy are all gone.
+		$this->assertStringNotContainsString( 'Upload a file or folder', $source );
+		$this->assertStringNotContainsString( 'Drop a file or folder anywhere on this card', $source );
+		$this->assertStringNotContainsString( 'What should I import?', $source );
+		$this->assertStringNotContainsString( 'Two ways in. Use one.', $source );
+		$this->assertStringNotContainsString( 'universal-importer-memo-num', $source );
+		$this->assertStringNotContainsString( 'universal-importer-source-shortcut', $source );
+		$this->assertStringNotContainsString( 'universal-importer-divider', $source );
+		$this->assertStringNotContainsString( 'data-source-placeholder', $source );
+		// Shortcut chip labels are gone (the chips themselves have been removed).
+		$this->assertStringNotContainsString( '>GitHub repo<', $source );
+		$this->assertStringNotContainsString( 'Feed or OPML', $source );
+		$this->assertStringNotContainsString( 'WXR export', $source );
+		// Clear selection is still rendered, but lives inside a hidden wrapper until files are selected.
 		$this->assertStringContainsString( 'id="universal-importer-clear-files"', $source );
 		$this->assertStringContainsString( 'Clear selection', $source );
+		$this->assertStringContainsString( 'id="universal-importer-upload-actions" hidden', $source );
 		$this->assertStringContainsString( 'countFilesByExtension(browserFiles, \'.pdf\')', $source );
-		$this->assertStringContainsString( 'Drop a file or folder anywhere on this card', $source );
 		$this->assertStringContainsString( 'type="url"', $source );
-		$this->assertStringContainsString( 'GitHub repo', $source );
-		$this->assertStringContainsString( 'Feed or OPML', $source );
+		// The terse "accepts" line replaces the old shortcut/explainer chrome.
+		$this->assertStringContainsString( 'universal-importer-accepts', $source );
+		$this->assertStringContainsString( 'GitHub repos · feeds · sitemaps', $source );
 		$this->assertStringContainsString( 'Selected file tree', $source );
 		$this->assertStringContainsString( 'role="tree"', $source );
 		$this->assertStringContainsString( "filePreview.addEventListener('keydown'", $source );
@@ -448,7 +463,9 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'function reattachActiveSession()', $source );
 		$this->assertStringContainsString( 'reattachActiveSession();', $source );
 		$this->assertStringContainsString( 'universal-importer-github-picker', $source );
-		$this->assertStringContainsString( 'Choose directory', $source );
+		// Inline GitHub path picker on the Source card: "Path: ... [change]".
+		$this->assertStringContainsString( 'universal-importer-github-picker-label', $source );
+		$this->assertStringContainsString( 'id="universal-importer-github-browse"', $source );
 		$this->assertStringContainsString( 'universal-importer-github-modal', $source );
 		$this->assertStringContainsString( 'Choose GitHub directory', $source );
 		$this->assertStringContainsString( 'Filter directories', $source );
@@ -473,9 +490,23 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'universal-importer-convo', $source );
 		$this->assertStringContainsString( 'universal-importer-turn', $source );
 		$this->assertStringContainsString( 'universal-importer-memo', $source );
-		$this->assertStringContainsString( 'universal-importer-memo-num', $source );
-		$this->assertStringContainsString( 'Paste a URL', $source );
+		// Single combined source affordance — one terse prompt instead of dual cards with explainers.
+		$this->assertStringContainsString( 'Paste a URL or drop a file', $source );
 		$this->assertStringContainsString( 'Past imports', $source );
+		// Inline inferred-type chip with a Change override popover lives on the Source card itself.
+		$this->assertStringContainsString( 'id="universal-importer-inferred"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-inferred-chip"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-inferred-change"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-inferred-popover"', $source );
+		$this->assertStringContainsString( 'function refreshInferredType()', $source );
+		// Picker modal renders a shimmer skeleton while directories are being fetched.
+		$this->assertStringContainsString( 'universal-importer-github-skeleton', $source );
+		$this->assertStringContainsString( 'universal-importer-github-skeleton-row', $source );
+		$this->assertStringContainsString( '@keyframes universal-importer-shimmer', $source );
+		$this->assertStringContainsString( 'function setGithubSkeletonVisible(visible)', $source );
+		// Configure step no longer carries the "Configure the run." headline + "Defaults are sensible." lede.
+		$this->assertStringNotContainsString( 'Configure the run.', $source );
+		$this->assertStringNotContainsString( 'Defaults are sensible.', $source );
 		// Source capture is URL or upload only — no typed server paths in the UI.
 		$this->assertStringNotContainsString( 'Server path', $source );
 		$this->assertStringNotContainsString( '/path/to/export', $source );
@@ -502,8 +533,10 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'function renderConfigureTurn()', $source );
 		$this->assertStringContainsString( 'function renderConfirmTurn()', $source );
 		$this->assertStringContainsString( 'function inferSourceType()', $source );
-		// Classify step (and its override picker) has been removed entirely from the UI.
-		$this->assertStringNotContainsString( 'data-type="GitHub repository"', $source );
+		// Classify step is gone, but the inferred-type chip ships with an inline override popover.
+		// `Server path` was never a valid public source and stays excluded.
+		$this->assertStringContainsString( 'data-type="GitHub repository"', $source );
+		$this->assertStringContainsString( 'data-type="WordPress site URL"', $source );
 		$this->assertStringNotContainsString( 'data-type="Server path"', $source );
 		// URL input is a real type="url" field (no typed-path UI).
 		$this->assertStringContainsString( 'type="url" id="universal-importer-source"', $source );
