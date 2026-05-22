@@ -484,25 +484,26 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( "types.indexOf('Files')", $source );
 		// Progressive turn flow: only the source turn lives in the initial DOM.
 		$this->assertStringContainsString( 'id="universal-importer-turn-source" data-turn-key="source"', $source );
-		// Classify, Configure, and Confirm are JS templates, not rendered upfront.
-		$this->assertStringContainsString( '<template id="universal-importer-template-classify">', $source );
+		// Configure and Confirm are JS templates, not rendered upfront. Classify step has been removed.
+		$this->assertStringNotContainsString( '<template id="universal-importer-template-classify">', $source );
 		$this->assertStringContainsString( '<template id="universal-importer-template-configure">', $source );
 		$this->assertStringContainsString( '<template id="universal-importer-template-confirm">', $source );
-		// Continue button on the source memo plus Clear; no inline Configure submit at first render.
+		// Next button on the source memo; the initial Clear button has been removed.
 		$this->assertStringContainsString( 'id="universal-importer-source-continue"', $source );
-		$this->assertStringContainsString( 'id="universal-importer-source-clear"', $source );
-		// State-machine hooks: locked summary bubbles render Edit links and use the past-row pattern.
+		$this->assertStringNotContainsString( 'id="universal-importer-source-clear"', $source );
+		// State-machine hooks: locked summary bubbles render without Edit links — Back buttons are now the way back.
 		$this->assertStringContainsString( 'universal-importer-turn.is-past', $source );
-		$this->assertStringContainsString( 'data-edit-key', $source );
+		$this->assertStringNotContainsString( 'data-edit-key', $source );
 		$this->assertStringContainsString( 'function jumpBack(key)', $source );
 		$this->assertStringContainsString( 'function dropTurnsAfter(key)', $source );
-		$this->assertStringContainsString( 'function renderClassifyTurn()', $source );
+		$this->assertStringNotContainsString( 'function renderClassifyTurn()', $source );
+		// Every non-Source step carries a Back button.
+		$this->assertStringContainsString( 'data-action="back"', $source );
 		$this->assertStringContainsString( 'function renderConfigureTurn()', $source );
 		$this->assertStringContainsString( 'function renderConfirmTurn()', $source );
 		$this->assertStringContainsString( 'function inferSourceType()', $source );
-		// Override picker must not list a Server path option.
-		$this->assertStringContainsString( 'data-type="GitHub repository"', $source );
-		$this->assertStringContainsString( 'data-type="Local folder (uploaded)"', $source );
+		// Classify step (and its override picker) has been removed entirely from the UI.
+		$this->assertStringNotContainsString( 'data-type="GitHub repository"', $source );
 		$this->assertStringNotContainsString( 'data-type="Server path"', $source );
 		// URL input is a real type="url" field (no typed-path UI).
 		$this->assertStringContainsString( 'type="url" id="universal-importer-source"', $source );

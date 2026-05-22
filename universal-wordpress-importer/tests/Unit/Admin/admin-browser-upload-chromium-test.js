@@ -37,7 +37,9 @@ const html = `<!doctype html>
 		<div id="universal-importer-dropzone">
 			<input type="file" id="universal-importer-file-picker" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
 			<input type="file" id="universal-importer-folder-picker" multiple webkitdirectory directory>
-			<button type="button" id="universal-importer-clear-files" disabled>Clear selection</button>
+			<div class="universal-importer-upload-actions" id="universal-importer-upload-actions" hidden>
+				<button type="button" id="universal-importer-clear-files">Clear selection</button>
+			</div>
 			<p id="universal-importer-file-summary"></p>
 			<ul id="universal-importer-file-preview"></ul>
 		</div>
@@ -157,8 +159,9 @@ const html = `<!doctype html>
 				return;
 			}
 
-			if (clearFilesButton.disabled) {
-				fail('Clear selection button should be enabled after browser files are selected.');
+			var clearActions = document.getElementById('universal-importer-upload-actions');
+			if (clearActions && clearActions.hasAttribute('hidden')) {
+				fail('Clear selection should be visible after browser files are selected.');
 				return;
 			}
 

@@ -58,29 +58,13 @@ function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
 		srcContinue.click();
 		await sleep(60);
 
-		// After Continue, source memo should be replaced by a locked summary,
-		// and Classify turn should appear with its own Continue.
-		var sourceTurn = document.getElementById('universal-importer-turn-source');
-		var sourceStillInForm = sourceTurn && sourceTurn.parentNode && sourceTurn.parentNode.id === 'universal-importer-turns';
-
-		var classifyTurn = document.querySelector('[data-turn-key="classify"]:not([hidden])');
-		// templates are inside <template>; rendered live nodes have parents in #universal-importer-turns
-		var liveClassify = Array.prototype.slice.call(document.querySelectorAll('[data-turn-key="classify"]'))
-			.find(function(node){ return node.parentNode && node.parentNode.id === 'universal-importer-turns'; });
-		if (!liveClassify) { return fail('classify turn was not rendered after source Continue'); }
-
-		var classifyContinue = liveClassify.querySelector('[data-action="continue"]');
-		if (!classifyContinue) { return fail('classify continue button missing'); }
-		// Enter-to-advance: the Continue button should be auto-focused.
-		if (document.activeElement !== classifyContinue) {
-			return fail('Classify Continue not auto-focused. activeElement=' + (document.activeElement && document.activeElement.tagName) + ' / ' + (document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-action')));
-		}
-		classifyContinue.click();
-		await sleep(60);
-
+		// Source Next now goes straight to Configure (Classify step removed).
 		var liveConfigure = Array.prototype.slice.call(document.querySelectorAll('[data-turn-key="configure"]'))
 			.find(function(node){ return node.parentNode && node.parentNode.id === 'universal-importer-turns'; });
-		if (!liveConfigure) { return fail('configure turn was not rendered after classify Continue'); }
+		if (!liveConfigure) { return fail('configure turn was not rendered after Source Next'); }
+		var strayClassify = Array.prototype.slice.call(document.querySelectorAll('[data-turn-key="classify"]'))
+			.find(function(node){ return node.parentNode && node.parentNode.id === 'universal-importer-turns'; });
+		if (strayClassify) { return fail('classify turn should not appear in the new flow'); }
 
 		var configureContinue = liveConfigure.querySelector('[data-action="continue"]');
 		if (!configureContinue) { return fail('configure Review button missing'); }

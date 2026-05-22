@@ -1204,6 +1204,23 @@ final class ImportAdminPage {
 			.universal-importer-btn.is-primary:hover:not(:disabled) {
 				background: #8a5306;
 			}
+			.universal-importer-btn.is-prominent {
+				border-radius: 8px;
+				box-shadow: 0 1px 0 rgba(0, 0, 0, .04), 0 2px 6px rgba(161, 98, 7, .25);
+				font-size: 14px;
+				font-weight: 700;
+				letter-spacing: .01em;
+				padding: 11px 26px;
+			}
+			.universal-importer-btn.is-prominent:hover:not(:disabled) {
+				box-shadow: 0 1px 0 rgba(0, 0, 0, .04), 0 3px 10px rgba(133, 77, 8, .35);
+				transform: translateY(-1px);
+				transition: transform .12s, box-shadow .12s, background .12s;
+			}
+			.universal-importer-btn.is-prominent:focus-visible {
+				outline: 2px solid var(--ui-accent-deep);
+				outline-offset: 2px;
+			}
 			.universal-importer-btn.is-ghost {
 				background: transparent;
 				border-color: transparent;
@@ -2318,7 +2335,7 @@ final class ImportAdminPage {
 									<p class="universal-importer-memo-desc"><?php esc_html_e( 'A site, a feed, a repo, a sitemap — anything reachable on the web.', 'universal-wordpress-importer' ); ?></p>
 									<div class="universal-importer-field">
 										<label for="universal-importer-source" class="screen-reader-text"><?php esc_html_e( 'Source URL', 'universal-wordpress-importer' ); ?></label>
-										<input type="url" id="universal-importer-source" name="source" placeholder="<?php echo esc_attr__( 'https://…', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Source URL', 'universal-wordpress-importer' ); ?>">
+										<input type="url" id="universal-importer-source" name="source" placeholder="<?php echo esc_attr__( 'https://…', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Source URL', 'universal-wordpress-importer' ); ?>" autofocus>
 									</div>
 									<div class="universal-importer-source-shortcuts" aria-label="<?php echo esc_attr__( 'Import source shortcuts', 'universal-wordpress-importer' ); ?>">
 										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://github.com/owner/repository/tree/main/docs">
@@ -2364,45 +2381,19 @@ final class ImportAdminPage {
 										<ul id="universal-importer-file-preview" class="universal-importer-file-preview" role="tree" aria-label="<?php echo esc_attr__( 'Selected file tree', 'universal-wordpress-importer' ); ?>" aria-live="polite"></ul>
 									</div>
 									<p class="universal-importer-upload-hint"><?php esc_html_e( 'PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP, or a folder. Stays in this browser session.', 'universal-wordpress-importer' ); ?></p>
-									<div class="universal-importer-upload-actions" hidden>
-										<button type="button" class="universal-importer-btn" id="universal-importer-clear-files" disabled><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button>
+									<div class="universal-importer-upload-actions" id="universal-importer-upload-actions" hidden>
+										<button type="button" class="universal-importer-link-button" id="universal-importer-clear-files"><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button>
 									</div>
 									<input type="file" id="universal-importer-file-picker" class="universal-importer-file-input" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
 									<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
 								</div>
 							</div>
 							<div class="universal-importer-btns">
-								<button type="button" class="universal-importer-btn is-primary" id="universal-importer-source-continue"><?php esc_html_e( 'Continue', 'universal-wordpress-importer' ); ?></button>
-								<button type="button" class="universal-importer-btn is-ghost" id="universal-importer-source-clear"><?php esc_html_e( 'Clear', 'universal-wordpress-importer' ); ?></button>
+								<button type="button" class="universal-importer-btn is-primary is-prominent" id="universal-importer-source-continue"><?php esc_html_e( 'Next', 'universal-wordpress-importer' ); ?></button>
 							</div>
 						</div>
 					</section>
 					</div>
-					<template id="universal-importer-template-classify">
-						<section class="universal-importer-turn is-sys" data-turn-key="classify">
-								<div class="universal-importer-body">
-								<div class="universal-importer-classify-line" data-classify-line></div>
-								<div class="universal-importer-btns">
-									<button type="button" class="universal-importer-btn is-primary" data-action="continue"><?php esc_html_e( 'Continue', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" class="universal-importer-btn is-ghost" data-action="toggle-override"><?php esc_html_e( 'Not this? Change…', 'universal-wordpress-importer' ); ?></button>
-								</div>
-								<div class="universal-importer-override" data-override hidden role="listbox" aria-label="<?php echo esc_attr__( 'Override detected type', 'universal-wordpress-importer' ); ?>">
-									<button type="button" data-type="GitHub repository"><?php esc_html_e( 'GitHub repository', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="WordPress site URL"><?php esc_html_e( 'WordPress site URL', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="RSS / Atom / RDF feed"><?php esc_html_e( 'RSS / Atom / RDF feed', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="OPML feed list"><?php esc_html_e( 'OPML feed list', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="Sitemap.xml"><?php esc_html_e( 'Sitemap.xml', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="WP export XML (WXR)"><?php esc_html_e( 'WP export XML (WXR)', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="Remote HTML page"><?php esc_html_e( 'Remote HTML page', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="Local folder (uploaded)"><?php esc_html_e( 'Local folder (uploaded)', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="Local file (uploaded)"><?php esc_html_e( 'Local file (uploaded)', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="Zip archive (uploaded)"><?php esc_html_e( 'Zip archive (uploaded)', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="EPUB (uploaded)"><?php esc_html_e( 'EPUB (uploaded)', 'universal-wordpress-importer' ); ?></button>
-									<button type="button" data-type="PDF (uploaded)"><?php esc_html_e( 'PDF (uploaded)', 'universal-wordpress-importer' ); ?></button>
-								</div>
-							</div>
-						</section>
-					</template>
 					<template id="universal-importer-template-configure">
 						<section class="universal-importer-turn is-sys" data-turn-key="configure">
 								<div class="universal-importer-body">
@@ -2419,7 +2410,7 @@ final class ImportAdminPage {
 								<div class="universal-importer-group-label"><?php esc_html_e( 'Run mode', 'universal-wordpress-importer' ); ?></div>
 								<div class="universal-importer-line-toggle"><div><b><?php esc_html_e( 'Import as drafts', 'universal-wordpress-importer' ); ?></b><small><?php esc_html_e( 'Otherwise published immediately.', 'universal-wordpress-importer' ); ?></small></div><button type="button" class="universal-importer-switch" data-toggle="drafts" aria-pressed="false" aria-label="<?php echo esc_attr__( 'Import as drafts', 'universal-wordpress-importer' ); ?>"></button></div>
 								<div class="universal-importer-btns">
-									<button type="button" class="universal-importer-btn is-primary" data-action="continue"><?php esc_html_e( 'Review', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" class="universal-importer-btn is-primary is-prominent" data-action="continue"><?php esc_html_e( 'Next', 'universal-wordpress-importer' ); ?></button>
 									<button type="button" class="universal-importer-btn is-ghost" data-action="back"><?php esc_html_e( 'Back', 'universal-wordpress-importer' ); ?></button>
 								</div>
 							</div>
@@ -2430,7 +2421,8 @@ final class ImportAdminPage {
 								<div class="universal-importer-body">
 								<div data-confirm-headline></div>
 								<div class="universal-importer-btns">
-									<button type="submit" class="universal-importer-btn is-primary" data-action="start"><?php esc_html_e( 'Start import', 'universal-wordpress-importer' ); ?></button>
+									<button type="submit" class="universal-importer-btn is-primary is-prominent" data-action="start"><?php esc_html_e( 'Start import', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" class="universal-importer-btn is-ghost" data-action="back"><?php esc_html_e( 'Back', 'universal-wordpress-importer' ); ?></button>
 								</div>
 							</div>
 						</section>
@@ -3039,7 +3031,6 @@ final class ImportAdminPage {
 			function setBrowserFiles(files, sourceLabel) {
 				browserFiles = files || [];
 				sourceInput.required = browserFiles.length < 1;
-				clearFilesButton.disabled = browserFiles.length < 1;
 				var clearActions = document.querySelector ? document.querySelector('.universal-importer-upload-actions') : null;
 				if (clearActions) {
 					if (browserFiles.length) {
@@ -3935,7 +3926,6 @@ final class ImportAdminPage {
 			var turnsContainer = document.getElementById('universal-importer-turns');
 			var sourceTurn = document.getElementById('universal-importer-turn-source');
 			var sourceContinueButton = document.getElementById('universal-importer-source-continue');
-			var sourceClearButton = document.getElementById('universal-importer-source-clear');
 			var stateUrlMode = document.getElementById('universal-importer-state-url-mode');
 			var stateDomains = document.getElementById('universal-importer-state-domains');
 			var stateDrafts = document.getElementById('universal-importer-state-drafts');
@@ -4027,15 +4017,8 @@ final class ImportAdminPage {
 				var summarySpan = document.createElement('span');
 				summarySpan.className = 'universal-importer-past-summary';
 				summarySpan.textContent = summary;
-				var editBtn = document.createElement('button');
-				editBtn.type = 'button';
-				editBtn.className = 'universal-importer-edit';
-				editBtn.setAttribute('data-edit-key', key);
-				editBtn.textContent = 'Edit';
 				body.appendChild(summarySpan);
-				body.appendChild(editBtn);
 				section.appendChild(body);
-				editBtn.addEventListener('click', function() { jumpBack(key); });
 				return section;
 			}
 
@@ -4057,13 +4040,6 @@ final class ImportAdminPage {
 				return true;
 			}
 
-			function lockClassifyTurn(node) {
-				var summary = flowState.typeOverride || flowState.inferredType;
-				var bubble = buildSummaryBubble('classify', summary);
-				turnsContainer.replaceChild(bubble, node);
-				pastTurns.push({ key: 'classify', node: bubble });
-			}
-
 			function lockConfigureTurn(node) {
 				var bubble = buildSummaryBubble('configure', configureSummary());
 				turnsContainer.replaceChild(bubble, node);
@@ -4071,7 +4047,7 @@ final class ImportAdminPage {
 			}
 
 			function dropTurnsAfter(key) {
-				var keys = ['source', 'classify', 'configure', 'confirm'];
+				var keys = ['source', 'configure', 'confirm'];
 				var idx = keys.indexOf(key);
 				// Remove live (non-past) turns after the given key.
 				var nodes = Array.prototype.slice.call(turnsContainer.children);
@@ -4102,50 +4078,9 @@ final class ImportAdminPage {
 				if (key === 'source') {
 					turnsContainer.appendChild(sourceTurn);
 					if (sourceInput.focus) { sourceInput.focus(); }
-				} else if (key === 'classify') {
-					renderClassifyTurn();
 				} else if (key === 'configure') {
 					renderConfigureTurn();
 				}
-			}
-
-			function renderClassifyTurn() {
-				var tpl = document.getElementById('universal-importer-template-classify');
-				var node = tpl.content.firstElementChild.cloneNode(true);
-				var line = node.querySelector('[data-classify-line]');
-				var inferred = inferSourceType();
-				if (!flowState.typeOverride) {
-					flowState.inferredType = inferred.type;
-					flowState.inferredConsequence = inferred.consequence;
-				}
-				var activeType = flowState.typeOverride || flowState.inferredType;
-				var sentence = "I'll treat this as a " + activeType + ".";
-				if (flowState.inferredConsequence) { sentence += ' ' + flowState.inferredConsequence; }
-				line.textContent = sentence;
-				var overrideBox = node.querySelector('[data-override]');
-				overrideBox.querySelectorAll('button').forEach(function(btn) {
-					if (btn.getAttribute('data-type') === activeType) { btn.classList.add('is-on'); }
-					btn.addEventListener('click', function() {
-						overrideBox.querySelectorAll('button').forEach(function(x) { x.classList.remove('is-on'); });
-						btn.classList.add('is-on');
-						flowState.typeOverride = btn.getAttribute('data-type') || '';
-						line.textContent = "I'll treat this as a " + flowState.typeOverride + ".";
-					});
-				});
-				node.querySelector('[data-action="toggle-override"]').addEventListener('click', function() {
-					if (overrideBox.hasAttribute('hidden')) { overrideBox.removeAttribute('hidden'); }
-					else { overrideBox.setAttribute('hidden', 'hidden'); }
-				});
-				var classifyContinue = node.querySelector('[data-action="continue"]');
-				classifyContinue.addEventListener('click', function() {
-					stateSourceType.value = flowState.typeOverride || flowState.inferredType;
-					lockClassifyTurn(node);
-					flowState.turn = 'configure';
-					renderConfigureTurn();
-				});
-				turnsContainer.appendChild(node);
-				// Focus the Continue button so Enter advances.
-				if (classifyContinue && classifyContinue.focus) { classifyContinue.focus(); }
 			}
 
 			function renderConfigureTurn() {
@@ -4184,7 +4119,7 @@ final class ImportAdminPage {
 					draftsToggle.setAttribute('aria-pressed', flowState.drafts ? 'true' : 'false');
 				});
 				syncRadioStyles();
-				node.querySelector('[data-action="back"]').addEventListener('click', function() { jumpBack('classify'); });
+				node.querySelector('[data-action="back"]').addEventListener('click', function() { jumpBack('source'); });
 				node.querySelector('[data-action="continue"]').addEventListener('click', function() {
 					if (flowState.urlMode === 'rewrite') {
 						var trimmed = (domainsInput.value || '').trim();
@@ -4214,6 +4149,8 @@ final class ImportAdminPage {
 				var node = tpl.content.firstElementChild.cloneNode(true);
 				var headline = node.querySelector('[data-confirm-headline]');
 				headline.textContent = 'Ready to import.';
+				var backBtn = node.querySelector('[data-action="back"]');
+				if (backBtn) { backBtn.addEventListener('click', function() { jumpBack('configure'); }); }
 				turnsContainer.appendChild(node);
 				// Focus the Start button so Enter fires the submit.
 				var startBtn = node.querySelector('[data-action="start"]');
@@ -4227,16 +4164,12 @@ final class ImportAdminPage {
 						return;
 					}
 					if (!lockSourceTurn()) { return; }
-					flowState.turn = 'classify';
-					renderClassifyTurn();
-				});
-			}
-			if (sourceClearButton) {
-				sourceClearButton.addEventListener('click', function() {
-					sourceInput.value = '';
-					setBrowserFiles([], '');
-					focusMemo('url');
-					if (sourceInput.focus) { sourceInput.focus(); }
+					// Classify silently — inference still drives the backend, but we skip the visible step.
+					var inferred = inferSourceType();
+					flowState.inferredType = inferred.type;
+					stateSourceType.value = inferred.type;
+					flowState.turn = 'configure';
+					renderConfigureTurn();
 				});
 			}
 			sourceInput.addEventListener('keydown', function(event) {

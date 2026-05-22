@@ -34,9 +34,8 @@ const baseHtml = fs.readFileSync(snapshotPath, 'utf8');
 const STATES = [
 	{ name: 'a-empty',         advance: 'empty' },
 	{ name: 'b-source-typed',  advance: 'source-typed' },
-	{ name: 'c-classify',      advance: 'classify' },
-	{ name: 'd-configure',     advance: 'configure' },
-	{ name: 'e-confirm',       advance: 'confirm' }
+	{ name: 'c-configure',     advance: 'configure' },
+	{ name: 'd-confirm',       advance: 'confirm' }
 ];
 
 function buildHtml(advance) {
@@ -67,12 +66,6 @@ function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
 		if (advance === 'source-typed') { return; }
 
 		document.getElementById('universal-importer-source-continue').click();
-		await sleep(80);
-		if (advance === 'classify') { return; }
-
-		var liveClassify = Array.prototype.slice.call(document.querySelectorAll('[data-turn-key="classify"]'))
-			.find(function(node){ return node.parentNode && node.parentNode.id === 'universal-importer-turns'; });
-		liveClassify.querySelector('[data-action="continue"]').click();
 		await sleep(80);
 		if (advance === 'configure') { return; }
 
