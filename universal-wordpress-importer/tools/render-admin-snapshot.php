@@ -60,6 +60,17 @@ if ( ! function_exists( 'wp_unslash' ) ) {
 if ( ! function_exists( 'absint' ) ) {
 	function absint( $value ) { return abs( (int) $value ); }
 }
+if ( ! function_exists( 'wp_json_encode' ) ) {
+	function wp_json_encode( $data, $options = 0, $depth = 512 ) { return json_encode( $data, $options, $depth ); }
+}
+if ( ! function_exists( 'submit_button' ) ) {
+	function submit_button( $text, $type = 'primary', $name = 'submit', $wrap = true ) {
+		echo '<button type="submit" class="button button-primary">' . htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' ) . '</button>';
+	}
+}
+if ( ! function_exists( 'current_time' ) ) {
+	function current_time( $type = 'mysql', $gmt = 0 ) { return date( 'Y-m-d H:i:s' ); }
+}
 if ( ! function_exists( 'sprintf_safe' ) ) {
 	// nothing to register
 }

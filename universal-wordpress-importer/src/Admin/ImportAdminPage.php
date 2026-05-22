@@ -913,6 +913,56 @@ final class ImportAdminPage {
 				background: var(--ui-soft);
 				text-decoration: underline;
 			}
+			.universal-importer-turn.is-past .universal-importer-body {
+				color: var(--ui-muted);
+				font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+				font-size: 13px;
+			}
+			.universal-importer-turn.is-past .universal-importer-hint {
+				display: none;
+			}
+			.universal-importer-classify-line {
+				font-size: 14.5px;
+				line-height: 1.55;
+			}
+			.universal-importer-override {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				display: grid;
+				gap: 2px;
+				grid-template-columns: 1fr 1fr;
+				margin-top: 8px;
+				padding: 6px;
+			}
+			.universal-importer-override[hidden] {
+				display: none;
+			}
+			.universal-importer-override button {
+				background: transparent;
+				border: 0;
+				border-radius: 4px;
+				cursor: pointer;
+				font-size: 12.5px;
+				padding: 6px 8px;
+				text-align: left;
+			}
+			.universal-importer-override button:hover {
+				background: var(--ui-soft);
+			}
+			.universal-importer-override button.is-on {
+				background: var(--ui-soft);
+				color: var(--ui-accent);
+				font-weight: 600;
+			}
+			.universal-importer-dom-err {
+				color: var(--ui-warn);
+				font-size: 11.5px;
+				margin: 6px 0 0;
+			}
+			.universal-importer-dom-err[hidden] {
+				display: none;
+			}
 			.universal-importer-body {
 				font-size: 14.5px;
 				line-height: 1.55;
@@ -2236,7 +2286,13 @@ final class ImportAdminPage {
 			<div id="universal-importer-notice" class="universal-importer-notice" style="display:none"><p></p></div>
 			<main class="universal-importer-convo" id="universal-importer-convo" aria-live="polite">
 				<form id="universal-importer-start-form" class="universal-importer-start-form universal-importer-start<?php echo $has_active_import ? ' is-hidden' : ''; ?>">
-					<section class="universal-importer-turn is-sys">
+					<input type="hidden" name="url_rewrite_mode" id="universal-importer-state-url-mode" value="ask">
+					<input type="hidden" name="confirmed_domains" id="universal-importer-state-domains" value="">
+					<input type="hidden" name="dry_run" id="universal-importer-state-dry" value="">
+					<input type="hidden" name="import_as_drafts" id="universal-importer-state-drafts" value="">
+					<input type="hidden" name="source_type" id="universal-importer-state-source-type" value="">
+					<div id="universal-importer-turns" class="universal-importer-turns">
+					<section class="universal-importer-turn is-sys" id="universal-importer-turn-source" data-turn-key="source">
 						<div class="universal-importer-speaker"><?php esc_html_e( 'Importer', 'universal-wordpress-importer' ); ?></div>
 						<div class="universal-importer-body">
 							<div><?php esc_html_e( 'What should I import?', 'universal-wordpress-importer' ); ?></div>
@@ -2248,7 +2304,7 @@ final class ImportAdminPage {
 									<p class="universal-importer-memo-desc"><?php esc_html_e( 'A site, a feed, a repo, a sitemap — anything reachable on the web.', 'universal-wordpress-importer' ); ?></p>
 									<div class="universal-importer-field">
 										<label for="universal-importer-source" class="screen-reader-text"><?php esc_html_e( 'Source URL', 'universal-wordpress-importer' ); ?></label>
-										<input type="url" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( 'https://…', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Source URL', 'universal-wordpress-importer' ); ?>">
+										<input type="url" id="universal-importer-source" name="source" placeholder="<?php echo esc_attr__( 'https://…', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Source URL', 'universal-wordpress-importer' ); ?>">
 									</div>
 									<div class="universal-importer-source-shortcuts" aria-label="<?php echo esc_attr__( 'Import source shortcuts', 'universal-wordpress-importer' ); ?>">
 										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://github.com/owner/repository/tree/main/docs">
@@ -2301,48 +2357,76 @@ final class ImportAdminPage {
 									<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
 								</div>
 							</div>
+							<div class="universal-importer-btns">
+								<button type="button" class="universal-importer-btn is-primary" id="universal-importer-source-continue"><?php esc_html_e( 'Continue', 'universal-wordpress-importer' ); ?></button>
+								<button type="button" class="universal-importer-btn is-ghost" id="universal-importer-source-clear"><?php esc_html_e( 'Clear', 'universal-wordpress-importer' ); ?></button>
+							</div>
 						</div>
 					</section>
-					<section class="universal-importer-turn is-sys">
-						<div class="universal-importer-speaker"><?php esc_html_e( 'Configure', 'universal-wordpress-importer' ); ?></div>
-						<div class="universal-importer-body">
-							<div><?php esc_html_e( 'Configure the run.', 'universal-wordpress-importer' ); ?></div>
-							<div class="universal-importer-hint"><?php esc_html_e( 'Defaults are sensible.', 'universal-wordpress-importer' ); ?></div>
-							<fieldset class="universal-importer-url-options">
-								<legend class="universal-importer-group-label"><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></legend>
-								<p class="universal-importer-hint universal-importer-url-intro"><?php esc_html_e( 'Choose what happens to old-site links inside imported content.', 'universal-wordpress-importer' ); ?></p>
-								<label class="universal-importer-option is-on">
-									<input type="radio" name="url_rewrite_mode" value="ask" checked>
-									<span><strong><?php esc_html_e( 'Ask when old URLs are found', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Recommended — confirm domains mid-run.', 'universal-wordpress-importer' ); ?></span></span>
-								</label>
-								<label class="universal-importer-option">
-									<input type="radio" name="url_rewrite_mode" value="preserve">
-									<span><strong><?php esc_html_e( 'Keep URLs unchanged', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Links keep pointing to their original site.', 'universal-wordpress-importer' ); ?></span></span>
-								</label>
-								<label class="universal-importer-option">
-									<input type="radio" name="url_rewrite_mode" value="rewrite">
-									<span><strong><?php esc_html_e( 'Rewrite listed domains', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Skip the mid-run prompt — list domains below.', 'universal-wordpress-importer' ); ?></span></span>
-								</label>
-								<label class="universal-importer-domain-entry" for="universal-importer-domains">
-									<span><?php esc_html_e( 'Old site domains', 'universal-wordpress-importer' ); ?></span>
-									<input type="text" id="universal-importer-domains" name="confirmed_domains" placeholder="<?php echo esc_attr__( 'example.com, www.example.com', 'universal-wordpress-importer' ); ?>">
-									<span class="universal-importer-hint"><?php esc_html_e( 'Optional unless you choose Rewrite listed domains.', 'universal-wordpress-importer' ); ?></span>
-								</label>
-							</fieldset>
-							<div class="universal-importer-group-label"><?php esc_html_e( 'Run mode', 'universal-wordpress-importer' ); ?></div>
-							<label class="universal-importer-option">
-								<input type="checkbox" name="dry_run" value="1">
-								<span><strong><?php esc_html_e( 'Dry run', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Plan only — no pages written.', 'universal-wordpress-importer' ); ?></span></span>
-							</label>
-							<label class="universal-importer-option">
-								<input type="checkbox" name="import_as_drafts" value="1">
-								<span><strong><?php esc_html_e( 'Import as drafts', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Otherwise published immediately.', 'universal-wordpress-importer' ); ?></span></span>
-							</label>
-							<p class="universal-importer-actions">
-								<?php submit_button( __( 'Import this content', 'universal-wordpress-importer' ), 'primary', 'submit', false ); ?>
-							</p>
-						</div>
-					</section>
+					</div>
+					<template id="universal-importer-template-classify">
+						<section class="universal-importer-turn is-sys" data-turn-key="classify">
+							<div class="universal-importer-speaker"><?php esc_html_e( 'Classify', 'universal-wordpress-importer' ); ?></div>
+							<div class="universal-importer-body">
+								<div class="universal-importer-classify-line" data-classify-line></div>
+								<div class="universal-importer-btns">
+									<button type="button" class="universal-importer-btn is-primary" data-action="continue"><?php esc_html_e( 'Continue', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" class="universal-importer-btn is-ghost" data-action="toggle-override"><?php esc_html_e( 'Not this? Change…', 'universal-wordpress-importer' ); ?></button>
+								</div>
+								<div class="universal-importer-override" data-override hidden role="listbox" aria-label="<?php echo esc_attr__( 'Override detected type', 'universal-wordpress-importer' ); ?>">
+									<button type="button" data-type="GitHub repository"><?php esc_html_e( 'GitHub repository', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="WordPress site URL"><?php esc_html_e( 'WordPress site URL', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="RSS / Atom / RDF feed"><?php esc_html_e( 'RSS / Atom / RDF feed', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="OPML feed list"><?php esc_html_e( 'OPML feed list', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="Sitemap.xml"><?php esc_html_e( 'Sitemap.xml', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="WP export XML (WXR)"><?php esc_html_e( 'WP export XML (WXR)', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="Remote HTML page"><?php esc_html_e( 'Remote HTML page', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="Local folder (uploaded)"><?php esc_html_e( 'Local folder (uploaded)', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="Local file (uploaded)"><?php esc_html_e( 'Local file (uploaded)', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="Zip archive (uploaded)"><?php esc_html_e( 'Zip archive (uploaded)', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="EPUB (uploaded)"><?php esc_html_e( 'EPUB (uploaded)', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" data-type="PDF (uploaded)"><?php esc_html_e( 'PDF (uploaded)', 'universal-wordpress-importer' ); ?></button>
+								</div>
+							</div>
+						</section>
+					</template>
+					<template id="universal-importer-template-configure">
+						<section class="universal-importer-turn is-sys" data-turn-key="configure">
+							<div class="universal-importer-speaker"><?php esc_html_e( 'Configure', 'universal-wordpress-importer' ); ?></div>
+							<div class="universal-importer-body">
+								<div><?php esc_html_e( 'Configure the run.', 'universal-wordpress-importer' ); ?></div>
+								<div class="universal-importer-hint"><?php esc_html_e( 'Defaults are sensible.', 'universal-wordpress-importer' ); ?></div>
+								<div class="universal-importer-group-label"><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></div>
+								<div class="universal-importer-opts" data-url-options>
+									<label class="universal-importer-option" data-url-option><input type="radio" name="cfg_url" value="ask"><span><strong><?php esc_html_e( 'Ask when old URLs are found', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Recommended — confirm domains mid-run.', 'universal-wordpress-importer' ); ?></span></span></label>
+									<label class="universal-importer-option" data-url-option><input type="radio" name="cfg_url" value="preserve"><span><strong><?php esc_html_e( 'Keep URLs unchanged', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Links keep pointing to their original site.', 'universal-wordpress-importer' ); ?></span></span></label>
+									<label class="universal-importer-option" data-url-option><input type="radio" name="cfg_url" value="rewrite"><span><strong><?php esc_html_e( 'Rewrite listed domains', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Skip the mid-run prompt — list domains below.', 'universal-wordpress-importer' ); ?></span></span></label>
+								</div>
+								<input type="text" data-domains class="universal-importer-domain-input" placeholder="<?php echo esc_attr__( 'example.com, www.example.com', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Old site domains', 'universal-wordpress-importer' ); ?>" hidden>
+								<p class="universal-importer-dom-err" data-domain-err hidden><?php esc_html_e( 'List at least one domain.', 'universal-wordpress-importer' ); ?></p>
+								<div class="universal-importer-group-label"><?php esc_html_e( 'Run mode', 'universal-wordpress-importer' ); ?></div>
+								<div class="universal-importer-line-toggle"><div><b><?php esc_html_e( 'Dry run', 'universal-wordpress-importer' ); ?></b><small><?php esc_html_e( 'Plan only — no pages written.', 'universal-wordpress-importer' ); ?></small></div><button type="button" class="universal-importer-switch" data-toggle="dry" aria-pressed="false" aria-label="<?php echo esc_attr__( 'Dry run', 'universal-wordpress-importer' ); ?>"></button></div>
+								<div class="universal-importer-line-toggle"><div><b><?php esc_html_e( 'Import as drafts', 'universal-wordpress-importer' ); ?></b><small><?php esc_html_e( 'Otherwise published immediately.', 'universal-wordpress-importer' ); ?></small></div><button type="button" class="universal-importer-switch" data-toggle="drafts" aria-pressed="false" aria-label="<?php echo esc_attr__( 'Import as drafts', 'universal-wordpress-importer' ); ?>"></button></div>
+								<div class="universal-importer-btns">
+									<button type="button" class="universal-importer-btn is-primary" data-action="continue"><?php esc_html_e( 'Review', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" class="universal-importer-btn is-ghost" data-action="back"><?php esc_html_e( 'Back', 'universal-wordpress-importer' ); ?></button>
+								</div>
+							</div>
+						</section>
+					</template>
+					<template id="universal-importer-template-confirm">
+						<section class="universal-importer-turn is-sys" data-turn-key="confirm">
+							<div class="universal-importer-speaker"><?php esc_html_e( 'Confirm', 'universal-wordpress-importer' ); ?></div>
+							<div class="universal-importer-body">
+								<div data-confirm-headline></div>
+								<div class="universal-importer-hint" data-confirm-detail></div>
+								<div class="universal-importer-btns">
+									<button type="submit" class="universal-importer-btn is-primary" data-action="start"><?php esc_html_e( 'Start import', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" class="universal-importer-btn is-ghost" data-action="back"><?php esc_html_e( 'Edit anything above', 'universal-wordpress-importer' ); ?></button>
+								</div>
+							</div>
+						</section>
+					</template>
 				</form>
 				<p id="universal-importer-empty-progress" class="universal-importer-empty-progress"<?php echo null === $primary_session ? '' : ' style="display:none"'; ?>><?php esc_html_e( 'Choose content above to start an import.', 'universal-wordpress-importer' ); ?></p>
 				<div id="universal-importer-sessions" class="universal-importer-sessions<?php echo null === $primary_session ? ' is-empty' : ''; ?>">
@@ -3034,21 +3118,7 @@ final class ImportAdminPage {
 				});
 			}
 
-			var urlRewriteRadios = form && form.querySelectorAll ? Array.prototype.slice.call(form.querySelectorAll('input[name="url_rewrite_mode"]')) : [];
-			urlRewriteRadios.forEach(function(radio) {
-				radio.addEventListener('change', function() {
-					urlRewriteRadios.forEach(function(r) {
-						var opt = r.closest ? r.closest('.universal-importer-option') : null;
-						if (opt && opt.classList) {
-							if (r.checked) {
-								opt.classList.add('is-on');
-							} else {
-								opt.classList.remove('is-on');
-							}
-						}
-					});
-				});
-			});
+			// URL rewrite radios live inside the Configure template; bindings happen when that turn is rendered.
 
 			if (githubBrowseButton) {
 				githubBrowseButton.addEventListener('click', loadGithubDirectories);
@@ -3685,6 +3755,10 @@ final class ImportAdminPage {
 
 			form.addEventListener('submit', function(event) {
 				event.preventDefault();
+				submitImport();
+			});
+
+			function submitImport() {
 				var data = new FormData(form);
 				var action = '<?php echo esc_js( self::AJAX_CREATE ); ?>';
 				var payload = {
@@ -3716,7 +3790,7 @@ final class ImportAdminPage {
 				}).catch(function(error) {
 					showNotice(error.message, 'error');
 				});
-			});
+			}
 
 			filePicker.addEventListener('change', function() {
 				setBrowserFiles(Array.prototype.slice.call(filePicker.files || []), '<?php echo esc_js( __( 'file selection', 'universal-wordpress-importer' ) ); ?>');
@@ -3844,6 +3918,323 @@ final class ImportAdminPage {
 				}).catch(function(error) {
 					showNotice(error.message, 'error');
 				});
+			});
+
+			// ----- Progressive turn flow (Source -> Classify -> Configure -> Confirm -> Start) -----
+			var turnsContainer = document.getElementById('universal-importer-turns');
+			var sourceTurn = document.getElementById('universal-importer-turn-source');
+			var sourceContinueButton = document.getElementById('universal-importer-source-continue');
+			var sourceClearButton = document.getElementById('universal-importer-source-clear');
+			var stateUrlMode = document.getElementById('universal-importer-state-url-mode');
+			var stateDomains = document.getElementById('universal-importer-state-domains');
+			var stateDry = document.getElementById('universal-importer-state-dry');
+			var stateDrafts = document.getElementById('universal-importer-state-drafts');
+			var stateSourceType = document.getElementById('universal-importer-state-source-type');
+
+			var flowState = {
+				turn: 'source',
+				inferredType: '',
+				inferredConsequence: '',
+				typeOverride: '',
+				urlMode: 'ask',
+				domains: '',
+				dry: false,
+				drafts: false
+			};
+			var pastTurns = []; // [{ key: 'source'|'classify'|'configure', summary: '' }]
+
+			function currentSourceLabel() {
+				if (browserFiles.length) {
+					var bytes = 0;
+					for (var idx = 0; idx < browserFiles.length; idx++) {
+						bytes += Number(browserFiles[idx].size || 0);
+					}
+					return 'Upload · ' + browserFiles.length + ' file' + (browserFiles.length === 1 ? '' : 's') + ' (' + formatBytes(bytes) + ')';
+				}
+				var url = (sourceInput.value || '').trim();
+				return url ? 'URL · ' + url : '';
+			}
+
+			function formatBytes(bytes) {
+				if (!bytes) { return '0 B'; }
+				var units = ['B', 'KB', 'MB', 'GB'];
+				var i = 0;
+				var n = bytes;
+				while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+				return (n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)) + ' ' + units[i];
+			}
+
+			function inferSourceType() {
+				if (browserFiles.length) {
+					if (browserFiles.length > 1) {
+						return { type: 'Local folder (uploaded)', consequence: browserFiles.length + ' files staged for local-folder import.' };
+					}
+					var name = filePath(browserFiles[0]).toLowerCase();
+					if (name.slice(-4) === '.zip') {
+						return { type: 'Zip archive (uploaded)', consequence: 'Archive will be unpacked and crawled.' };
+					}
+					if (name.slice(-5) === '.epub') {
+						return { type: 'EPUB (uploaded)', consequence: 'Chapters parsed from the EPUB spine.' };
+					}
+					if (name.slice(-4) === '.pdf') {
+						return { type: 'PDF (uploaded)', consequence: 'PDF text extracted page by page.' };
+					}
+					if (name.slice(-4) === '.xml' || name.slice(-4) === '.wxr') {
+						return { type: 'WP export XML (WXR)', consequence: 'WXR posts and attachments will be read.' };
+					}
+					return { type: 'Local file (uploaded)', consequence: 'Single uploaded file will be imported.' };
+				}
+				var url = String((sourceInput.value || '')).trim();
+				if (/^https?:\/\/github\.com\//i.test(url)) {
+					return { type: 'GitHub repository', consequence: 'Repository tree fetched via sparse Git.' };
+				}
+				if (/\/wp-json\/?$/i.test(url)) {
+					return { type: 'WordPress site URL', consequence: 'REST API used to pull pages and posts.' };
+				}
+				if (/\.opml(\?|$)/i.test(url)) {
+					return { type: 'OPML feed list', consequence: 'Each listed feed will be fetched.' };
+				}
+				if (/sitemap.*\.xml(\?|$)/i.test(url)) {
+					return { type: 'Sitemap.xml', consequence: 'Listed URLs will be crawled.' };
+				}
+				if (/\.(rss|atom)(\?|$)/i.test(url) || /\/feed\/?$/i.test(url)) {
+					return { type: 'RSS / Atom / RDF feed', consequence: 'Feed entries will be ingested.' };
+				}
+				if (/\.xml(\?|$)/i.test(url)) {
+					return { type: 'WP export XML (WXR)', consequence: 'WXR posts and attachments will be read.' };
+				}
+				if (url) {
+					return { type: 'Remote HTML page', consequence: 'Page will be fetched and converted.' };
+				}
+				return { type: '', consequence: '' };
+			}
+
+			function buildSummaryBubble(key, speaker, summary) {
+				var section = document.createElement('section');
+				section.className = 'universal-importer-turn is-past';
+				section.setAttribute('data-turn-key', key);
+				var speakerRow = document.createElement('div');
+				speakerRow.className = 'universal-importer-speaker';
+				speakerRow.textContent = speaker;
+				var editBtn = document.createElement('button');
+				editBtn.type = 'button';
+				editBtn.className = 'universal-importer-edit';
+				editBtn.setAttribute('data-edit-key', key);
+				editBtn.textContent = 'Edit';
+				speakerRow.appendChild(editBtn);
+				var body = document.createElement('div');
+				body.className = 'universal-importer-body';
+				body.textContent = summary;
+				section.appendChild(speakerRow);
+				section.appendChild(body);
+				editBtn.addEventListener('click', function() { jumpBack(key); });
+				return section;
+			}
+
+			function configureSummary() {
+				var pieces = [];
+				if (flowState.urlMode === 'ask') { pieces.push('Ask'); }
+				else if (flowState.urlMode === 'preserve') { pieces.push('Keep unchanged'); }
+				else { pieces.push('Rewrite: ' + (flowState.domains || '(none)')); }
+				pieces.push(flowState.dry ? 'Dry run' : 'Real run');
+				pieces.push(flowState.drafts ? 'Drafts' : 'Publish');
+				return 'Configure · ' + pieces.join(' · ');
+			}
+
+			function lockSourceTurn() {
+				var summary = currentSourceLabel();
+				if (!summary) { return false; }
+				var bubble = buildSummaryBubble('source', 'YOU', summary);
+				turnsContainer.replaceChild(bubble, sourceTurn);
+				pastTurns.push({ key: 'source', node: bubble });
+				return true;
+			}
+
+			function lockClassifyTurn(node) {
+				var summary = 'Type · ' + (flowState.typeOverride || flowState.inferredType);
+				var bubble = buildSummaryBubble('classify', 'YOU', summary);
+				turnsContainer.replaceChild(bubble, node);
+				pastTurns.push({ key: 'classify', node: bubble });
+			}
+
+			function lockConfigureTurn(node) {
+				var bubble = buildSummaryBubble('configure', 'YOU', configureSummary());
+				turnsContainer.replaceChild(bubble, node);
+				pastTurns.push({ key: 'configure', node: bubble });
+			}
+
+			function dropTurnsAfter(key) {
+				var keys = ['source', 'classify', 'configure', 'confirm'];
+				var idx = keys.indexOf(key);
+				// Remove live (non-past) turns after the given key.
+				var nodes = Array.prototype.slice.call(turnsContainer.children);
+				nodes.forEach(function(node) {
+					var nodeKey = node.getAttribute('data-turn-key');
+					if (!nodeKey) { return; }
+					if (keys.indexOf(nodeKey) > idx) { node.remove(); }
+				});
+				// Remove past turns after the given key.
+				pastTurns = pastTurns.filter(function(entry) {
+					if (keys.indexOf(entry.key) > idx) {
+						entry.node.remove();
+						return false;
+					}
+					return true;
+				});
+			}
+
+			function jumpBack(key) {
+				// Discard everything after the chosen key, then re-open that key's turn.
+				dropTurnsAfter(key);
+				// Remove the locked summary bubble for the chosen key (if any).
+				pastTurns = pastTurns.filter(function(entry) {
+					if (entry.key === key) { entry.node.remove(); return false; }
+					return true;
+				});
+				flowState.turn = key;
+				if (key === 'source') {
+					turnsContainer.appendChild(sourceTurn);
+					if (sourceInput.focus) { sourceInput.focus(); }
+				} else if (key === 'classify') {
+					renderClassifyTurn();
+				} else if (key === 'configure') {
+					renderConfigureTurn();
+				}
+			}
+
+			function renderClassifyTurn() {
+				var tpl = document.getElementById('universal-importer-template-classify');
+				var node = tpl.content.firstElementChild.cloneNode(true);
+				var line = node.querySelector('[data-classify-line]');
+				var inferred = inferSourceType();
+				if (!flowState.typeOverride) {
+					flowState.inferredType = inferred.type;
+					flowState.inferredConsequence = inferred.consequence;
+				}
+				var activeType = flowState.typeOverride || flowState.inferredType;
+				var sentence = "I'll treat this as a " + activeType + ".";
+				if (flowState.inferredConsequence) { sentence += ' ' + flowState.inferredConsequence; }
+				line.textContent = sentence;
+				var overrideBox = node.querySelector('[data-override]');
+				overrideBox.querySelectorAll('button').forEach(function(btn) {
+					if (btn.getAttribute('data-type') === activeType) { btn.classList.add('is-on'); }
+					btn.addEventListener('click', function() {
+						overrideBox.querySelectorAll('button').forEach(function(x) { x.classList.remove('is-on'); });
+						btn.classList.add('is-on');
+						flowState.typeOverride = btn.getAttribute('data-type') || '';
+						line.textContent = "I'll treat this as a " + flowState.typeOverride + ".";
+					});
+				});
+				node.querySelector('[data-action="toggle-override"]').addEventListener('click', function() {
+					if (overrideBox.hasAttribute('hidden')) { overrideBox.removeAttribute('hidden'); }
+					else { overrideBox.setAttribute('hidden', 'hidden'); }
+				});
+				node.querySelector('[data-action="continue"]').addEventListener('click', function() {
+					stateSourceType.value = flowState.typeOverride || flowState.inferredType;
+					lockClassifyTurn(node);
+					flowState.turn = 'configure';
+					renderConfigureTurn();
+				});
+				turnsContainer.appendChild(node);
+			}
+
+			function renderConfigureTurn() {
+				var tpl = document.getElementById('universal-importer-template-configure');
+				var node = tpl.content.firstElementChild.cloneNode(true);
+				var radios = node.querySelectorAll('input[name="cfg_url"]');
+				var domainsInput = node.querySelector('[data-domains]');
+				var domainsErr = node.querySelector('[data-domain-err]');
+				var dryToggle = node.querySelector('[data-toggle="dry"]');
+				var draftsToggle = node.querySelector('[data-toggle="drafts"]');
+
+				function syncRadioStyles() {
+					radios.forEach(function(r) {
+						var opt = r.closest('[data-url-option]');
+						if (r.checked) { opt.classList.add('is-on'); } else { opt.classList.remove('is-on'); }
+					});
+					if (flowState.urlMode === 'rewrite') {
+						domainsInput.removeAttribute('hidden');
+					} else {
+						domainsInput.setAttribute('hidden', 'hidden');
+						domainsErr.setAttribute('hidden', 'hidden');
+					}
+				}
+				radios.forEach(function(r) {
+					if (r.value === flowState.urlMode) { r.checked = true; }
+					r.addEventListener('change', function() {
+						flowState.urlMode = r.value;
+						syncRadioStyles();
+					});
+				});
+				domainsInput.value = flowState.domains || '';
+				domainsInput.addEventListener('input', function() { flowState.domains = domainsInput.value; domainsErr.setAttribute('hidden', 'hidden'); });
+				if (flowState.dry) { dryToggle.classList.add('is-on'); dryToggle.setAttribute('aria-pressed', 'true'); }
+				if (flowState.drafts) { draftsToggle.classList.add('is-on'); draftsToggle.setAttribute('aria-pressed', 'true'); }
+				dryToggle.addEventListener('click', function() {
+					flowState.dry = !flowState.dry;
+					dryToggle.classList.toggle('is-on', flowState.dry);
+					dryToggle.setAttribute('aria-pressed', flowState.dry ? 'true' : 'false');
+				});
+				draftsToggle.addEventListener('click', function() {
+					flowState.drafts = !flowState.drafts;
+					draftsToggle.classList.toggle('is-on', flowState.drafts);
+					draftsToggle.setAttribute('aria-pressed', flowState.drafts ? 'true' : 'false');
+				});
+				syncRadioStyles();
+				node.querySelector('[data-action="back"]').addEventListener('click', function() { jumpBack('classify'); });
+				node.querySelector('[data-action="continue"]').addEventListener('click', function() {
+					if (flowState.urlMode === 'rewrite') {
+						var trimmed = (domainsInput.value || '').trim();
+						if (!trimmed) { domainsErr.removeAttribute('hidden'); domainsInput.focus(); return; }
+						flowState.domains = trimmed;
+					}
+					stateUrlMode.value = flowState.urlMode;
+					stateDomains.value = flowState.domains || '';
+					stateDry.value = flowState.dry ? '1' : '';
+					stateDrafts.value = flowState.drafts ? '1' : '';
+					lockConfigureTurn(node);
+					flowState.turn = 'confirm';
+					renderConfirmTurn();
+				});
+				turnsContainer.appendChild(node);
+			}
+
+			function renderConfirmTurn() {
+				var tpl = document.getElementById('universal-importer-template-confirm');
+				var node = tpl.content.firstElementChild.cloneNode(true);
+				var headline = node.querySelector('[data-confirm-headline]');
+				var detail = node.querySelector('[data-confirm-detail]');
+				var typeLabel = flowState.typeOverride || flowState.inferredType || 'this source';
+				headline.textContent = flowState.dry ? 'Ready to plan.' : 'Ready to import.';
+				detail.textContent = currentSourceLabel() + ' · ' + typeLabel + ' · ' + (flowState.urlMode === 'ask' ? 'Ask on URLs' : flowState.urlMode === 'preserve' ? 'Keep URLs' : 'Rewrite ' + (flowState.domains || '')) + ' · ' + (flowState.dry ? 'Dry run' : 'Real run') + ' · ' + (flowState.drafts ? 'Drafts' : 'Publish');
+				node.querySelector('[data-action="back"]').addEventListener('click', function() { jumpBack('configure'); });
+				turnsContainer.appendChild(node);
+			}
+
+			if (sourceContinueButton) {
+				sourceContinueButton.addEventListener('click', function() {
+					if (!browserFiles.length && !((sourceInput.value || '').trim())) {
+						sourceInput.focus();
+						return;
+					}
+					if (!lockSourceTurn()) { return; }
+					flowState.turn = 'classify';
+					renderClassifyTurn();
+				});
+			}
+			if (sourceClearButton) {
+				sourceClearButton.addEventListener('click', function() {
+					sourceInput.value = '';
+					setBrowserFiles([], '');
+					focusMemo('url');
+					if (sourceInput.focus) { sourceInput.focus(); }
+				});
+			}
+			sourceInput.addEventListener('keydown', function(event) {
+				if (event.key === 'Enter') {
+					event.preventDefault();
+					if (sourceContinueButton) { sourceContinueButton.click(); }
+				}
 			});
 
 			syncGithubPickerVisibility();
