@@ -1,0 +1,704 @@
+<!doctype html>
+<!-- Theme 1 — Quiet Modal — Variation B: Spine (six-chip status bar replaces stage list; one progress device) -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Theme 1 · Quiet Modal · V2 — Spine</title>
+<style>
+:root{
+  --bg:#faf8f3;--ink:#16161a;--rule:#e6e1d6;--rule-soft:#efeae0;
+  --accent:#0f766e;--accent-deep:#115e59;--soft:#e0f2f1;--muted:#646970;
+  --ok:#3f6212;--warn:#92400e;--paper:#fffdf7;--paper-2:#f8f4ea;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 "Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+[inert]{opacity:.5;pointer-events:none}
+
+.stage{position:fixed;inset:0;background:#e8e6df;background-image:radial-gradient(900px 600px at 18% 20%,#fbf4e1 0,rgba(251,244,225,0) 60%),radial-gradient(700px 500px at 82% 78%,#e8ecef 0,rgba(232,236,239,0) 65%)}
+.stage::after{content:"";position:absolute;inset:0;background:rgba(232,228,217,.35);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
+
+.dim{position:fixed;inset:0;display:grid;place-items:center;padding:24px;overflow:auto;z-index:5}
+.modal{position:relative;width:min(760px,100%);background:var(--paper);border:1px solid var(--rule);border-radius:14px;display:grid;grid-template-rows:auto auto 1fr auto;max-height:88vh;overflow:hidden}
+
+/* Header — single line; no subtitle */
+.hd{display:grid;grid-template-columns:1fr auto;padding:14px 22px 10px;align-items:center;gap:12px}
+.hd h1{margin:0;font-size:14px;font-weight:600;letter-spacing:.005em}
+.hd .right{display:flex;gap:6px;align-items:center}
+.hd .past{background:none;border:0;color:var(--muted);font-size:12px;text-decoration:underline;text-underline-offset:3px;padding:4px 6px;border-radius:4px}
+.hd .past:hover{color:var(--ink)}
+.hd .x{background:transparent;border:1px solid var(--rule);width:26px;height:26px;border-radius:6px;color:var(--muted)}
+.hd .x:hover{color:var(--ink)}
+
+/* Spine — six-chip status row */
+.spine-wrap{padding:4px 22px 14px;border-bottom:1px solid var(--rule-soft)}
+.spine-lbl{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:#a39884;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.spine-lbl .lvchip{padding:1px 5px;border-radius:3px;background:var(--bg);color:var(--muted);font-weight:600;font-size:10px}
+.spine{display:grid;grid-template-columns:repeat(6,1fr);gap:4px;font-size:11.5px}
+.pchip{padding:7px 8px;border:1px solid var(--rule-soft);border-radius:6px;background:#fff;color:#b3a892;display:flex;align-items:center;gap:6px;min-width:0;transition:all .2s}
+.pchip .pip{width:5px;height:5px;border-radius:50%;background:#e2d9c2;flex:none}
+.pchip .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.spine.idle .pchip{background:transparent;border-color:transparent;color:#cdbfa6}
+.spine.idle .pchip .pip{background:#d6cfbf}
+.spine.live .pchip{background:#fff;border-color:var(--rule)}
+.pchip.on{background:var(--accent)!important;border-color:var(--accent)!important;color:#fff!important}
+.pchip.on .pip{background:#fff}
+.pchip.done{background:var(--soft)!important;border-color:var(--accent)!important;color:var(--accent-deep)!important}
+.pchip.done .pip{background:var(--accent)}
+.pchip.blocked{background:#fdf6e7!important;border-color:#d6a35a!important;color:var(--warn)!important}
+.pchip.blocked .pip{background:var(--warn)}
+
+/* Body */
+.bd{padding:16px 22px;overflow:auto;min-height:240px;position:relative}
+.panel{display:none}
+.panel.on{display:block;animation:fade .18s ease-out}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.panel h2{margin:0 0 14px;font-size:20px;letter-spacing:-.01em;font-weight:600}
+
+/* Source */
+.src-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin-bottom:8px}
+.src-row input{padding:11px 12px;border:1px solid var(--rule);border-radius:8px;background:#fff}
+.src-row input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--soft)}
+.browse{padding:0 14px;border:1px solid var(--rule);border-radius:8px;background:#fff;font-weight:600;font-size:13px;position:relative;overflow:hidden}
+.browse input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}
+.shortcuts{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 10px}
+.chip{padding:5px 10px;border:1px solid var(--rule);border-radius:999px;background:#fff;font-size:12px;color:var(--muted)}
+.chip:hover{color:var(--ink);border-color:#cdc6b6}
+.inferred{display:grid;grid-template-columns:1fr auto;gap:10px;padding:10px 12px;border-left:2px solid var(--accent);background:var(--soft);border-radius:0 6px 6px 0;font-size:13px;align-items:center}
+.inferred .lbl{font-weight:600;display:block}
+.inferred .why{color:var(--muted);font-size:12.5px;display:block;margin-top:1px}
+.inferred .change{background:none;border:0;color:var(--accent);font-size:12.5px;text-decoration:underline;text-underline-offset:3px;padding:2px 4px}
+.override{display:none;margin-top:8px;padding:10px;border:1px solid var(--rule);border-radius:8px;background:#fff;font-size:12.5px}
+.override.on{display:block}
+.override .types{display:grid;grid-template-columns:repeat(2,1fr);gap:4px;margin-top:6px}
+.override button{text-align:left;padding:7px 9px;background:#fff;border:1px solid var(--rule);border-radius:6px;font-size:12.5px}
+.override button:hover{background:var(--soft);border-color:var(--accent)}
+.override .warn-line{margin-top:8px;padding:6px 8px;color:var(--warn);background:#fdf6e7;border:1px solid #f0d8a8;border-radius:6px;font-size:12px;display:none}
+.override .warn-line.on{display:block}
+
+/* Configure — no per-group "title". Each group's heading is the radio fieldset legend. */
+.cfg{display:grid;gap:16px}
+.fld-legend{font-size:13px;font-weight:600;margin-bottom:2px;display:block}
+.fld-hint{color:var(--muted);font-size:12px;margin-bottom:8px}
+.radio-list{display:grid;gap:6px}
+.radio-list label{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:9px 11px;border:1px solid var(--rule);border-radius:8px;background:#fff;cursor:pointer;font-size:13px;align-items:start}
+.radio-list label.on{border-color:var(--accent);background:var(--soft)}
+.radio-list input[type=radio]{margin-top:3px;accent-color:var(--accent)}
+.radio-list small{display:block;color:var(--muted);font-size:12px;margin-top:1px}
+.dom-input{display:none;margin-top:8px}
+.dom-input.on{display:block}
+.dom-input input{width:100%;padding:9px 11px;border:1px solid var(--rule);border-radius:8px;background:#fff;font-size:13px}
+.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;border:1px solid var(--rule);border-radius:8px;background:#fff;gap:14px;cursor:pointer}
+.toggle-row b{font-size:13px;font-weight:600}
+.toggle-row small{display:block;color:var(--muted);font-size:12px;margin-top:1px}
+.switch{width:34px;height:20px;background:#d6cfbf;border-radius:999px;position:relative;flex:none;transition:background .15s;border:0;padding:0}
+.switch::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
+.toggle-row.on .switch{background:var(--accent)}
+.toggle-row.on .switch::after{transform:translateX(14px)}
+
+/* Confirm */
+.summary{border:1px solid var(--rule);border-radius:8px;background:#fff}
+.summary dl{margin:0;display:grid;grid-template-columns:140px 1fr;gap:0}
+.summary dt,.summary dd{margin:0;padding:9px 14px;font-size:13px;border-top:1px solid var(--rule-soft)}
+.summary dt{color:var(--muted)}
+.summary dt:first-of-type,.summary dd:first-of-type{border-top:0}
+.preview-note{margin-top:10px;font-size:12px;color:var(--muted)}
+
+/* Run */
+.cur{display:flex;align-items:center;gap:10px;font-size:14px;margin-bottom:8px}
+.cur .pulse{width:8px;height:8px;border-radius:50%;background:var(--accent);position:relative;flex:none}
+.cur .pulse::after{content:"";position:absolute;inset:-4px;border-radius:50%;border:2px solid var(--accent);opacity:.35;animation:pulse 1.4s infinite ease-out}
+.cur.blocked .pulse{background:var(--warn)}
+.cur.blocked .pulse::after{border-color:var(--warn)}
+@keyframes pulse{from{transform:scale(.6);opacity:.6}to{transform:scale(1.4);opacity:0}}
+.bar{height:6px;background:#ece7da;border-radius:999px;overflow:hidden;position:relative;margin-bottom:6px}
+.bar span{display:block;height:100%;width:0;background:var(--accent);transition:width .35s;border-radius:999px}
+.bar.ind span{width:30%;animation:slide 1.6s infinite ease-in-out}
+.bar.paused span{background:repeating-linear-gradient(90deg,#d6a35a 0 6px,#fdf6e7 6px 12px)}
+@keyframes slide{0%{transform:translateX(-100%)}100%{transform:translateX(330%)}}
+.meta{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:10px}
+
+/* Pause banner */
+.pause-banner{display:none;margin:6px 0 10px;padding:9px 12px;border:1px solid #d6a35a;background:#fdf6e7;border-radius:8px;color:var(--warn);font-size:12.5px;font-weight:600}
+.pause-banner.on{display:flex;align-items:center;gap:8px}
+.pause-banner::before{content:"";width:6px;height:6px;background:var(--warn);border-radius:50%;flex:none}
+
+/* Decision slot — always rendered, can be repopulated on resume */
+.decision{margin:8px 0 0;padding:14px;border:1px solid #f0d8a8;background:#fdf6e7;border-radius:8px;display:none}
+.decision.on{display:block}
+.decision h3{margin:0 0 4px;font-size:14px;font-weight:600}
+.decision p.lead{margin:0 0 10px;color:var(--muted);font-size:12.5px}
+.domain-list{display:grid;gap:6px;margin-bottom:10px}
+.domain-list label{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:8px 10px;border:1px solid var(--rule);background:#fff;border-radius:6px;font-size:12.5px;cursor:pointer}
+.domain-list input{margin-top:3px;accent-color:var(--accent)}
+.domain-list .ex{display:block;color:var(--muted);font-size:11.5px;margin-top:1px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.decision .acts{display:flex;flex-wrap:wrap;gap:6px}
+.decision .acts button{padding:7px 11px;border-radius:6px;border:1px solid var(--rule);background:#fff;font-size:12.5px;font-weight:600}
+.decision .acts .p{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+/* Inline abort confirm */
+.abort-confirm{display:none;margin-top:10px;padding:12px;border:1px solid #d6a35a;background:#fdf6e7;border-radius:8px;font-size:13px}
+.abort-confirm.on{display:block}
+.abort-confirm b{display:block;margin-bottom:4px}
+.abort-confirm small{display:block;color:var(--muted);margin-bottom:8px;font-size:12px}
+.abort-confirm .ac-row{display:flex;gap:6px}
+.abort-confirm button{padding:6px 11px;border-radius:6px;border:1px solid var(--rule);background:#fff;font-size:12.5px;font-weight:600}
+.abort-confirm .danger{background:var(--warn);color:#fff;border-color:var(--warn)}
+
+/* Two distinct disclosures: Activity (open during run) vs Technical (closed) */
+.activity{margin-top:10px;border:1px solid var(--rule);border-radius:8px;background:#fff;padding:10px 12px;font-size:12.5px}
+.activity-hd{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600;margin-bottom:6px}
+.log{margin:0;padding:0;list-style:none;font-size:12px;color:var(--muted);max-height:140px;overflow:auto}
+.log li{padding:3px 0;border-top:1px dashed var(--rule-soft)}
+.log li:first-child{border-top:0}
+.log li.warn-line{color:var(--warn)}
+
+details.tech{font-size:12px;color:var(--muted);margin-top:8px}
+details.tech summary{cursor:pointer;padding:4px 0;list-style:none;display:flex;gap:6px;font-weight:600;color:var(--muted)}
+details.tech summary::-webkit-details-marker{display:none}
+details.tech summary::before{content:"›";transition:transform .15s}
+details.tech[open] summary::before{transform:rotate(90deg)}
+.tech-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:4px}
+.tech-grid .cell{padding:6px 8px;background:var(--bg);border-radius:6px;font-size:11.5px}
+.tech-grid .cell b{display:block;color:var(--ink);font-weight:600;font-size:13px}
+.cli-hint{margin-top:6px;font-size:11.5px;color:var(--muted)}
+.cli-hint code{background:var(--bg);padding:1px 5px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* Completion */
+.done-head{font-size:22px;letter-spacing:-.01em;margin:4px 0 4px;font-weight:600}
+.done-sub{margin:0 0 12px;color:var(--muted);font-size:13px}
+.tallies{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.tally{padding:8px 12px;border:1px solid var(--rule);border-radius:8px;background:#fff;min-width:88px}
+.tally b{display:block;font-size:18px;font-weight:600}
+.tally span{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:1px}
+.done-footnote{margin-top:6px;font-size:12px;color:var(--muted)}
+
+/* Past sessions overlay */
+.past-panel{display:none;position:absolute;inset:0;background:var(--paper);z-index:6;padding:18px 22px;overflow:auto}
+.past-panel.on{display:block}
+.past-panel h2{margin:0 0 10px;font-size:18px;font-weight:600}
+.past-list{display:grid;gap:6px}
+.past-row{display:grid;grid-template-columns:1fr auto;gap:8px;padding:11px 12px;border:1px solid var(--rule);border-radius:8px;background:#fff;font-size:13px;align-items:center}
+.past-row .meta-line{font-size:12px;color:var(--muted);margin-top:2px}
+.past-row .pill{padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;background:#fef3c7;color:#92400e}
+.past-row .pill.fail{background:#fee2e2;color:#991b1b}
+.past-row .pill.done{background:#dcfce7;color:#166534}
+.past-row button.resume{padding:6px 10px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;font-size:12.5px}
+.past-close{position:absolute;top:14px;right:18px;background:transparent;border:1px solid var(--rule);width:28px;height:28px;border-radius:6px;color:var(--muted)}
+
+/* Footer */
+.ft{padding:11px 20px;border-top:1px solid var(--rule);display:flex;justify-content:space-between;gap:8px;background:var(--paper-2)}
+.ft button{padding:9px 16px;border-radius:8px;border:1px solid var(--rule);background:#fff;font-weight:600;font-size:13px}
+.ft button:hover:not(:disabled){border-color:#cdc6b6}
+.ft .primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.ft button:disabled{opacity:.4;cursor:not-allowed}
+.ft .right{display:flex;gap:8px}
+.ft .ghost-btn{background:transparent;border-color:transparent;color:var(--muted)}
+
+@media(max-width:720px){
+  .spine{grid-template-columns:repeat(3,1fr);row-gap:4px}
+  .pchip .nm{font-size:11px}
+  .summary dl{grid-template-columns:1fr}
+  .summary dt{padding-bottom:0}
+  .summary dd{padding-top:2px;font-weight:500}
+}
+@media(max-width:520px){
+  .spine{grid-template-columns:repeat(2,1fr)}
+  .tech-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="stage" aria-hidden="true"></div>
+
+<div class="dim">
+  <div class="modal" role="dialog" aria-labelledby="modalTitle" aria-modal="true">
+    <header class="hd">
+      <h1 id="modalTitle">Universal Importer</h1>
+      <div class="right">
+        <button class="past" id="openPast">Past imports</button>
+        <button class="x" id="closeBtn" aria-label="Close">×</button>
+      </div>
+    </header>
+
+    <div class="spine-wrap">
+      <div class="spine-lbl"><span id="spineLbl">Stages</span><span class="lvchip" id="spineLvChip">peek</span></div>
+      <nav class="spine idle" aria-label="Import stages" id="spine">
+        <div class="pchip" data-i="0"><span class="pip"></span><span class="nm">Read source</span></div>
+        <div class="pchip" data-i="1"><span class="pip"></span><span class="nm">Prepare content</span></div>
+        <div class="pchip" data-i="2"><span class="pip"></span><span class="nm">URL treatment</span></div>
+        <div class="pchip" data-i="3"><span class="pip"></span><span class="nm">Import media</span></div>
+        <div class="pchip" data-i="4"><span class="pip"></span><span class="nm">Write pages</span></div>
+        <div class="pchip" data-i="5"><span class="pip"></span><span class="nm">Finish</span></div>
+      </nav>
+    </div>
+
+    <div class="bd" id="body">
+      <!-- Panel 0: Source -->
+      <section class="panel on" data-panel="0">
+        <h2>Where is your content?</h2>
+        <div class="src-row">
+          <input id="srcInput" value="https://github.com/WordPress/gutenberg/tree/trunk/docs" aria-label="Source URL, file or folder">
+          <label class="browse">Choose file…<input type="file" id="fileInput" multiple></label>
+        </div>
+        <div class="shortcuts" aria-label="Source-type shortcuts">
+          <button class="chip">GitHub</button>
+          <button class="chip">WordPress site</button>
+          <button class="chip">Feed / OPML</button>
+          <button class="chip">Server path</button>
+          <button class="chip">Browser folder</button>
+        </div>
+        <div class="inferred" aria-live="polite">
+          <div>
+            <span class="lbl">GitHub repository</span>
+            <span class="why">We'll fetch the repo, parse Markdown docs as pages.</span>
+          </div>
+          <button class="change" id="changeType">Not this? Change…</button>
+        </div>
+        <div class="override" id="override">
+          <div style="font-weight:600">Pick a different type:</div>
+          <div class="types">
+            <button data-t="GitHub repository">GitHub repository</button>
+            <button data-t="WordPress site">WordPress site</button>
+            <button data-t="Feed (Atom/RSS/RDF)">Feed (Atom/RSS/RDF)</button>
+            <button data-t="OPML feed list">OPML feed list</button>
+            <button data-t="Server path">Server path</button>
+            <button data-t="Uploaded file/folder">Uploaded file/folder</button>
+            <button data-t="Reachable URL">Reachable URL</button>
+            <button data-t="Sitemap">Sitemap</button>
+            <button data-t="PDF">PDF</button>
+            <button data-t="EPUB">EPUB</button>
+          </div>
+          <div class="warn-line" id="overrideWarn">Type doesn't look right for this URL — proceed anyway?</div>
+        </div>
+      </section>
+
+      <!-- Panel 1: Configure -->
+      <section class="panel" data-panel="1">
+        <h2>Configure</h2>
+        <div class="cfg">
+          <fieldset style="border:0;padding:0;margin:0">
+            <legend class="fld-legend">URL treatment</legend>
+            <div class="fld-hint">What to do when source content references old-site URLs.</div>
+            <div class="radio-list" role="radiogroup" aria-label="URL treatment">
+              <label class="on"><input type="radio" name="urltreat" value="ask" checked><span><b>Ask when old URLs are found</b><small>Recommended — we'll pause and show the domains.</small></span></label>
+              <label><input type="radio" name="urltreat" value="keep"><span><b>Keep URLs unchanged</b><small>Pages will reference the original domains.</small></span></label>
+              <label><input type="radio" name="urltreat" value="rewrite"><span><b>Rewrite listed domains</b><small>Pre-confirm which domains map to this site.</small></span></label>
+            </div>
+            <div class="dom-input" id="domInput">
+              <input id="domField" placeholder="example.com, www.example.com" aria-label="Domains to rewrite (comma-separated)">
+            </div>
+          </fieldset>
+          <div style="display:grid;gap:8px">
+            <div class="toggle-row" data-toggle="dryRun" role="button" tabindex="0" aria-pressed="false"><div><b>Dry run</b><small>Traverse and prepare; no pages written.</small></div><button class="switch" aria-label="Dry run" tabindex="-1"></button></div>
+            <div class="toggle-row" data-toggle="drafts" role="button" tabindex="0" aria-pressed="false"><div><b>Import as drafts</b><small>Otherwise pages are published.</small></div><button class="switch" aria-label="Import as drafts" tabindex="-1"></button></div>
+          </div>
+          <details class="tech">
+            <summary>More options</summary>
+            <div style="padding:6px 0 0">Cache reuse, concurrency, sparse-checkout depth. Secrets like API tokens come from environment variables, not this UI.</div>
+          </details>
+        </div>
+      </section>
+
+      <!-- Panel 2: Confirm -->
+      <section class="panel" data-panel="2">
+        <h2>Confirm and start</h2>
+        <div class="summary">
+          <dl>
+            <dt>Source</dt><dd id="sumSource">github.com/WordPress/gutenberg/tree/trunk/docs</dd>
+            <dt>Type</dt><dd id="sumType">GitHub repository</dd>
+            <dt>Subpath</dt><dd>docs · discovered 38 Markdown files</dd>
+            <dt>URL treatment</dt><dd id="sumUrl">Ask when old URLs are found</dd>
+            <dt>Run mode</dt><dd id="sumMode">Real run</dd>
+            <dt>Post status</dt><dd id="sumPost">Publish</dd>
+            <dt>Detected</dt><dd>≈ 38 documents · ≈ 22 media references</dd>
+          </dl>
+        </div>
+        <p class="preview-note">We'll pause if first-party URLs are found, so you can decide what to do with them.</p>
+      </section>
+
+      <!-- Panel 3: Run — no separate stage list; spine carries that -->
+      <section class="panel" data-panel="3">
+        <div class="cur" id="curWrap" aria-live="polite">
+          <span class="pulse"></span>
+          <span id="curLine">Reading the source.</span>
+        </div>
+        <div class="bar" id="barWrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="bar"></span></div>
+        <div class="meta"><span id="cntLine">Discovering items…</span><span id="pctLine">0%</span></div>
+
+        <div class="pause-banner" id="pauseBanner">Run paused. Choose URL treatment below to continue.</div>
+        <div class="decision" id="decision">
+          <h3>Rewrite old-site URLs to this site?</h3>
+          <p class="lead">Selected hosts will be rewritten to point at this site. Unselected hosts stay as they are.</p>
+          <div class="domain-list">
+            <label><input type="checkbox" checked><span><b>developer.wordpress.org</b><span class="ex">https://developer.wordpress.org/block-editor/</span></span></label>
+            <label><input type="checkbox" checked><span><b>make.wordpress.org/core</b><span class="ex">https://make.wordpress.org/core/handbook/</span></span></label>
+          </div>
+          <div class="acts">
+            <button class="p" data-act="sel">Rewrite selected domains</button>
+            <button data-act="all">Yes, rewrite all</button>
+            <button data-act="none">No, keep all URLs</button>
+          </div>
+        </div>
+
+        <div class="abort-confirm" id="abortConfirm">
+          <b>Abort this import?</b>
+          <small>Pages written so far stay. Pending items will not be written.</small>
+          <div class="ac-row">
+            <button class="danger" id="abortYes">Abort import</button>
+            <button id="abortNo">Keep running</button>
+          </div>
+        </div>
+
+        <div class="activity">
+          <div class="activity-hd">Activity</div>
+          <ol class="log" id="logList" aria-live="polite"></ol>
+        </div>
+
+        <details class="tech">
+          <summary>Technical details</summary>
+          <div class="tech-grid">
+            <div class="cell"><b id="techItems">0 / 38</b>Source items</div>
+            <div class="cell"><b id="techPrep">0</b>Prepared documents</div>
+            <div class="cell"><b id="techMedia">0 / 22</b>Media (queued / done)</div>
+            <div class="cell"><b id="techBack">—</b>Remote backoff</div>
+          </div>
+          <div class="cli-hint" id="cliHint" hidden>Stuck? Run <code>wp universal-importer tick &lt;session&gt;</code> from the server.</div>
+        </details>
+      </section>
+
+      <!-- Panel 4: Complete -->
+      <section class="panel" data-panel="4">
+        <h2 class="done-head" id="doneHead">Import complete.</h2>
+        <p class="done-sub" id="doneSub">38 pages written. 22 media imported.</p>
+        <div class="tallies" id="tallies">
+          <div class="tally"><b id="tPages">38</b><span>Pages</span></div>
+          <div class="tally"><b id="tMedia">22</b><span>Media</span></div>
+          <div class="tally"><b>1m 12s</b><span>Elapsed</span></div>
+        </div>
+        <p class="done-footnote" id="doneFootnote">No errors. No skipped relationships.</p>
+        <details class="tech">
+          <summary>Report</summary>
+          <div style="padding:6px 0 0">No PDF fidelity notes. No OPML feeds failed. <a href="#" class="rep-dl">Download report (CSV)</a></div>
+        </details>
+      </section>
+    </div>
+
+    <footer class="ft">
+      <button id="backBtn" disabled>← Back</button>
+      <div class="right">
+        <button id="cancelBtn" class="ghost-btn">Cancel</button>
+        <button id="primaryBtn" class="primary">Continue →</button>
+      </div>
+    </footer>
+
+    <!-- Past sessions overlay -->
+    <div class="past-panel" id="pastPanel" role="dialog" aria-label="Past imports">
+      <button class="past-close" id="pastClose" aria-label="Close past imports">×</button>
+      <h2>Past imports</h2>
+      <p style="color:var(--muted);font-size:12.5px;margin:0 0 12px">Up to 10 recent sessions. Click a row to open it.</p>
+      <div class="past-list">
+        <div class="past-row">
+          <div>
+            <div>https://example.com/wp-json/</div>
+            <div class="meta-line">Paused · 7 of 24 pages written · Stopped during URL treatment · 2 hours ago</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span class="pill">paused</span>
+            <button class="resume" id="resumeBtn">Resume</button>
+          </div>
+        </div>
+        <div class="past-row">
+          <div>
+            <div>https://blog.failedhost.test/</div>
+            <div class="meta-line">Source failed · DNS lookup failed · 6 hours ago</div>
+          </div>
+          <span class="pill fail">failed</span>
+        </div>
+        <div class="past-row">
+          <div>
+            <div>github.com/automattic/wp-calypso/tree/trunk/docs</div>
+            <div class="meta-line">Done · 142 pages · 56 media · yesterday</div>
+          </div>
+          <span class="pill done">done</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>.rep-dl{color:var(--accent);text-decoration:underline}</style>
+
+<script>
+(function(){
+  const STAGES=["Read source","Prepare content","URL treatment","Import media","Write pages","Finish"];
+  const state={panel:0,dryRun:false,drafts:false,urlTreat:"ask",timer:null,paused:false,aborted:false};
+  const $=(s,r=document)=>r.querySelector(s);
+  const $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
+
+  function setSpine(activeIdx,blocked){
+    $$(".pchip").forEach((c,i)=>{
+      c.classList.remove("on","done","blocked");
+      if(blocked&&i===activeIdx)c.classList.add("blocked");
+      else if(i<activeIdx)c.classList.add("done");
+      else if(i===activeIdx)c.classList.add("on");
+    });
+  }
+  function spineMode(mode){
+    const sp=$("#spine");
+    sp.classList.toggle("idle",mode==="idle");
+    sp.classList.toggle("live",mode==="live");
+    $("#spineLbl").textContent=mode==="live"?"Live status":"Stages";
+    $("#spineLvChip").textContent=mode==="live"?"live":"peek";
+    $("#spineLvChip").style.color=mode==="live"?"var(--accent)":"var(--muted)";
+    $("#spineLvChip").style.background=mode==="live"?"var(--soft)":"var(--bg)";
+  }
+
+  function setPanel(n){
+    state.panel=n;
+    $$(".panel").forEach(p=>p.classList.toggle("on",+p.dataset.panel===n));
+    if(n<3){spineMode("idle");setSpine(-1)}
+    else if(n===3){spineMode("live");setSpine(0)}
+    else if(n===4){spineMode("live");$$(".pchip").forEach(c=>{c.classList.remove("on","blocked");c.classList.add("done")})}
+    const back=$("#backBtn"),prim=$("#primaryBtn"),cancel=$("#cancelBtn");
+    back.disabled=(n===0||n===3||n===4);
+    back.style.visibility=(n===4)?"hidden":"";
+    if(n===0)prim.textContent="Continue →";
+    else if(n===1)prim.textContent="Continue →";
+    else if(n===2)prim.textContent=state.dryRun?"Start dry run":"Import this content";
+    else if(n===3){prim.textContent=state.paused?"Resolve to continue":"Abort";prim.disabled=state.paused;cancel.style.display="none"}
+    else if(n===4){prim.textContent="View imported content";cancel.style.display="none"}
+    if(n!==3&&n!==4)cancel.style.display="";
+  }
+
+  // Override
+  $("#changeType").addEventListener("click",()=>$("#override").classList.toggle("on"));
+  $$("#override .types button").forEach(b=>b.addEventListener("click",()=>{
+    const t=b.dataset.t;
+    $(".inferred .lbl").textContent=t;
+    const expl={
+      "GitHub repository":"We'll fetch the repo, parse Markdown docs as pages.",
+      "WordPress site":"We'll try the REST API first, then feed, then HTML.",
+      "Feed (Atom/RSS/RDF)":"We'll import currently-advertised items.",
+      "OPML feed list":"Up to 20 feeds will be walked.",
+      "Server path":"Top-level files and folders will be imported.",
+      "Uploaded file/folder":"Files will be staged server-side then imported.",
+      "Reachable URL":"Will be imported as a single document.",
+      "Sitemap":"URLs will be walked and deduped.",
+      "PDF":"Native parser handles PDFs up to 16 MiB.",
+      "EPUB":"Container, OPF and spine will be unpacked."
+    }[t]||"";
+    $(".inferred .why").textContent=expl;
+    const isGh=/github\.com/.test($("#srcInput").value);
+    $("#overrideWarn").classList.toggle("on",t!=="GitHub repository"&&isGh);
+    $("#override").classList.remove("on");
+  }));
+
+  // File input
+  $("#fileInput").addEventListener("change",e=>{
+    const files=e.target.files;
+    if(!files||!files.length)return;
+    $("#srcInput").value=files.length===1?files[0].name:`(${files.length} files selected)`;
+    $(".inferred .lbl").textContent="Uploaded file/folder";
+    $(".inferred .why").textContent="Files will be staged server-side then imported.";
+  });
+
+  // Toggles
+  $$(".toggle-row").forEach(t=>{
+    function flip(){
+      t.classList.toggle("on");
+      state[t.dataset.toggle]=t.classList.contains("on");
+      t.setAttribute("aria-pressed",t.classList.contains("on"));
+    }
+    t.addEventListener("click",flip);
+    t.addEventListener("keydown",e=>{if(e.key===" "||e.key==="Enter"){e.preventDefault();flip()}});
+  });
+
+  // Radios
+  $$('input[name=urltreat]').forEach(r=>r.addEventListener("change",()=>{
+    state.urlTreat=r.value;
+    $$('.radio-list label').forEach(l=>{const inp=l.querySelector("input");l.classList.toggle("on",inp&&inp.checked)});
+    $("#domInput").classList.toggle("on",r.value==="rewrite");
+  }));
+
+  // Shortcut chips
+  $$(".shortcuts .chip").forEach(c=>c.addEventListener("click",()=>{
+    const map={"GitHub":"https://github.com/WordPress/gutenberg/tree/trunk/docs","WordPress site":"https://example.com/wp-json/","Feed / OPML":"https://example.com/feed/","Server path":"/var/www/uploads/blog","Browser folder":""};
+    const v=map[c.textContent];
+    if(v)$("#srcInput").value=v;
+    else $("#srcInput").placeholder="Drop a folder here…";
+  }));
+
+  // Footer nav
+  $("#backBtn").addEventListener("click",()=>{ if(state.panel>0)setPanel(state.panel-1); });
+  $("#primaryBtn").addEventListener("click",()=>{
+    if(state.panel===2){updateSummary();setPanel(3);startRun();return}
+    if(state.panel===3&&!state.paused){$("#abortConfirm").classList.add("on");return}
+    if(state.panel===4){alert("(Demo) Would open the imported pages list.");return}
+    if(state.panel===1)updateSummary();
+    setPanel(state.panel+1);
+  });
+  $("#cancelBtn").addEventListener("click",()=>{
+    if(state.panel===0){alert("(Demo) Cancelled.");return}
+    setPanel(0);
+  });
+  $("#closeBtn").addEventListener("click",()=>{
+    if(state.panel===3){$("#abortConfirm").classList.add("on");return}
+    alert("(Demo) Closed.");
+  });
+  $("#abortYes").addEventListener("click",()=>{
+    state.aborted=true;
+    if(state.timer){clearInterval(state.timer);state.timer=null}
+    $("#abortConfirm").classList.remove("on");
+    setPanel(4);
+    $("#doneHead").textContent="Import aborted.";
+    $("#doneSub").textContent="Aborted "+new Date().toLocaleTimeString()+". Work done so far is kept.";
+    $("#doneFootnote").textContent="";
+    $("#tallies").innerHTML='<div class="tally"><b>7</b><span>Pages</span></div><div class="tally"><b>12</b><span>Media</span></div><div class="tally"><b>—</b><span>Status</span></div>';
+    $("#primaryBtn").textContent="Start another import";
+  });
+  $("#abortNo").addEventListener("click",()=>$("#abortConfirm").classList.remove("on"));
+
+  // Past panel with focus trap via inert
+  $("#openPast").addEventListener("click",()=>{
+    $("#pastPanel").classList.add("on");
+    $$(".bd > .panel, .ft, .hd, .spine-wrap").forEach(el=>el.setAttribute("inert",""));
+    $("#pastClose").focus();
+  });
+  function closePast(){
+    $("#pastPanel").classList.remove("on");
+    $$(".bd > .panel, .ft, .hd, .spine-wrap").forEach(el=>el.removeAttribute("inert"));
+  }
+  $("#pastClose").addEventListener("click",closePast);
+  $("#resumeBtn").addEventListener("click",()=>{
+    closePast();
+    setPanel(3);
+    $("#curLine").textContent="Resumed. Waiting for the remote source.";
+    appendLog("Resumed previous session.");
+    startRun(true);
+  });
+
+  function updateSummary(){
+    $("#sumSource").textContent=$("#srcInput").value.replace(/^https?:\/\//,'');
+    $("#sumType").textContent=$(".inferred .lbl").textContent;
+    const lbls={ask:"Ask when old URLs are found",keep:"Keep URLs unchanged",rewrite:"Rewrite listed domains"};
+    $("#sumUrl").textContent=lbls[state.urlTreat];
+    $("#sumMode").textContent=state.dryRun?"Dry run":"Real run";
+    $("#sumPost").textContent=state.drafts?"Draft":"Publish";
+  }
+
+  function appendLog(msg,cls){
+    const li=document.createElement("li");
+    li.textContent=msg;
+    if(cls)li.className=cls;
+    const ol=$("#logList");
+    ol.insertBefore(li,ol.firstChild);
+    while(ol.childNodes.length>14)ol.removeChild(ol.lastChild);
+  }
+
+  function startRun(resumed){
+    state.paused=false;state.aborted=false;
+    const steps=[
+      {st:0,line:"Reading the source.",log:"GitHub repository fetch queued; file count will appear after discovery.",pct:5,bar:"ind",tech:{items:"… / 38"}},
+      {st:0,line:"Fetching repository files with sparse Git.",log:"Fetching repository files with sparse Git.",pct:14,bar:"ind"},
+      {st:0,line:"Waiting for the remote source. (HTTP 429 — retry in 87 s)",log:"Waiting for the remote source. (HTTP 429 — retry in 87 s)",pct:18,bar:"ind",warn:true,tech:{back:"87 s"}},
+      {st:0,line:"Reading the source.",log:"38 source items found.",pct:25,bar:"det",tech:{items:"38 / 38",back:"—"}},
+      {st:1,line:"Preparing content.",log:"Preparing 12 items.",pct:38,bar:"det",tech:{prep:"12"}},
+      {st:1,line:"Preparing content.",log:"Preparing 24 items.",pct:48,bar:"det",tech:{prep:"24"}},
+      {st:2,line:"Choose URL treatment to continue.",log:"Choose URL treatment to continue.",pct:55,bar:"det",block:true,tech:{prep:"38"}}
+    ];
+    const after=[
+      {st:3,line:"Importing media.",log:"Importing media.",pct:65,bar:"det",tech:{media:"6 / 22"}},
+      {st:3,line:"Importing media.",log:"18 of 22 media imported.",pct:76,bar:"det",tech:{media:"18 / 22"}},
+      {st:4,line:state.dryRun?"Dry run: no pages written.":"Writing pages.",log:state.dryRun?"Dry run: no pages written.":"Writing 38 of 38 pages.",pct:92,bar:"det",tech:{media:"22 / 22"}},
+      {st:5,line:state.dryRun?"Dry run complete.":"Import complete.",log:state.dryRun?"Dry run complete.":"Import complete.",pct:100,bar:"det",finish:true}
+    ];
+    let i=0;
+    if(state.timer)clearInterval(state.timer);
+    function apply(s){
+      setSpine(s.st,!!s.block);
+      $("#curLine").textContent=s.line;
+      $("#curWrap").classList.toggle("blocked",!!s.block);
+      const bw=$("#barWrap");
+      bw.classList.toggle("ind",s.bar==="ind");
+      bw.classList.toggle("paused",!!s.block);
+      $("#bar").style.width=(s.bar==="det"?s.pct:100)+"%";
+      bw.setAttribute("aria-valuenow",s.pct);
+      $("#pctLine").textContent=s.pct+"%";
+      $("#cntLine").textContent=s.bar==="ind"?"Discovering…":(s.st<3?STAGES[s.st]:(s.st===3?"22 media references":"38 of 38 pages"));
+      if(s.tech){
+        if(s.tech.items)$("#techItems").textContent=s.tech.items;
+        if(s.tech.prep)$("#techPrep").textContent=s.tech.prep;
+        if(s.tech.media)$("#techMedia").textContent=s.tech.media;
+        if(s.tech.back)$("#techBack").textContent=s.tech.back;
+      }
+      if(s.log)appendLog(s.log,s.warn?"warn-line":"");
+    }
+    state.timer=setInterval(()=>{
+      if(state.aborted){clearInterval(state.timer);state.timer=null;return}
+      if(i>=steps.length){clearInterval(state.timer);state.timer=null;pauseForDecision();return}
+      apply(steps[i]);i++;
+    },resumed?650:850);
+
+    function pauseForDecision(){
+      state.paused=true;
+      $("#pauseBanner").classList.add("on");
+      $("#decision").classList.add("on");
+      $("#cliHint").hidden=false;
+      $("#primaryBtn").textContent="Resolve to continue";
+      $("#primaryBtn").disabled=true;
+    }
+    function resolveDecision(){
+      state.paused=false;
+      $("#pauseBanner").classList.remove("on");
+      $("#decision").classList.remove("on");
+      $("#cliHint").hidden=true;
+      $("#primaryBtn").textContent="Abort";
+      $("#primaryBtn").disabled=false;
+      appendLog("Decision resolved. Resuming.");
+      let j=0;
+      state.timer=setInterval(()=>{
+        if(state.aborted){clearInterval(state.timer);state.timer=null;return}
+        if(j>=after.length){clearInterval(state.timer);state.timer=null;finishRun();return}
+        apply(after[j]);j++;
+      },700);
+    }
+    $$("#decision .acts button").forEach(b=>b.addEventListener("click",resolveDecision));
+  }
+
+  function finishRun(){
+    $$(".pchip").forEach(c=>{c.classList.remove("on","blocked");c.classList.add("done")});
+    setPanel(4);
+    if(state.dryRun){
+      $("#doneHead").textContent="Dry run complete.";
+      $("#doneSub").textContent="38 documents prepared. No pages written.";
+      $("#tPages").textContent="0";
+      const ft=$(".ft .right");
+      if(!$("#runReal")){
+        const btn=document.createElement("button");
+        btn.id="runReal";btn.textContent="Run for real with same choices";
+        btn.addEventListener("click",()=>alert("(Demo) Would start a real run."));
+        ft.insertBefore(btn,ft.firstChild);
+      }
+    }
+  }
+
+  // Keyboard
+  document.addEventListener("keydown",e=>{
+    if(e.key==="Escape"){
+      if($("#pastPanel").classList.contains("on")){closePast();return}
+      if($("#override").classList.contains("on")){$("#override").classList.remove("on");return}
+      if($("#abortConfirm").classList.contains("on")){$("#abortConfirm").classList.remove("on");return}
+    }
+    if(e.key==="Enter"&&!["INPUT","TEXTAREA","BUTTON"].includes(document.activeElement.tagName)){
+      if(!$("#primaryBtn").disabled)$("#primaryBtn").click();
+    }
+  });
+
+  setPanel(0);
+})();
+</script>
+</body>
+</html>

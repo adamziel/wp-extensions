@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Universal Importer · v6 · 24 designs</title>
+<style>
+  *,*::before,*::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  :root {
+    --bg: #1a1d24;
+    --bg-2: #20242c;
+    --bg-3: #262a33;
+    --line: #2f343f;
+    --line-2: #3a4150;
+    --ink: #e8eaf0;
+    --ink-mute: #a9aebc;
+    --ink-faint: #767c8c;
+    --accent: #c9a96a;
+    --accent-2: #d8bd87;
+    --chip-bg: #2a2f3a;
+    --t1: #7fb3d5;
+    --t2: #d9a86e;
+    --t3: #b59ad1;
+    --t4: #8cc69f;
+    --t5: #c4838a;
+    --t6: #87bcc7;
+    --radius: 10px;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--accent-2); text-decoration: underline; }
+
+  /* Header */
+  .page-head {
+    padding: 40px 32px 24px;
+    max-width: 1480px;
+    margin: 0 auto;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin: 0 0 10px;
+  }
+  .page-head h1 {
+    font-size: 28px;
+    line-height: 1.2;
+    margin: 0 0 12px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .page-head .lede {
+    margin: 0 0 8px;
+    color: var(--ink-mute);
+    max-width: 72ch;
+    font-size: 15px;
+  }
+  .page-head .meta {
+    margin: 6px 0 0;
+    color: var(--ink-faint);
+    font-size: 13px;
+  }
+
+  /* Themes legend */
+  .themes {
+    max-width: 1480px;
+    margin: 24px auto 0;
+    padding: 0 32px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    align-items: center;
+  }
+  .themes .label {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    margin-right: 4px;
+  }
+  .theme-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--ink-mute);
+  }
+  .theme-chip .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .theme-chip.t1 .dot { background: var(--t1); }
+  .theme-chip.t2 .dot { background: var(--t2); }
+  .theme-chip.t3 .dot { background: var(--t3); }
+  .theme-chip.t4 .dot { background: var(--t4); }
+  .theme-chip.t5 .dot { background: var(--t5); }
+  .theme-chip.t6 .dot { background: var(--t6); }
+
+  /* Sticky jump nav */
+  .jump-nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(26, 29, 36, 0.92);
+    backdrop-filter: saturate(140%) blur(8px);
+    -webkit-backdrop-filter: saturate(140%) blur(8px);
+    border-bottom: 1px solid var(--line);
+    margin-top: 24px;
+  }
+  .jump-nav-inner {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 10px 32px;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-2) transparent;
+    white-space: nowrap;
+  }
+  .jump-nav-inner::-webkit-scrollbar { height: 8px; }
+  .jump-nav-inner::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 4px; }
+  .jump-nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink-mute);
+    font-size: 12px;
+    flex-shrink: 0;
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+  }
+  .jump-nav a:hover {
+    color: var(--ink);
+    border-color: var(--accent);
+    background: var(--bg-3);
+    text-decoration: none;
+  }
+  .jump-nav a .n {
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+  }
+  .jump-nav a:hover .n { color: var(--accent); }
+
+  /* Main */
+  main {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 0 32px 80px;
+  }
+  .group-head {
+    padding: 32px 0 4px;
+    color: var(--ink-faint);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  .group-head .accent { color: var(--accent); }
+
+  /* Each design section */
+  .opt {
+    padding: 28px 0 36px;
+    border-bottom: 1px solid var(--line);
+  }
+  .opt:last-child { border-bottom: 0; }
+  .opt-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 14px;
+  }
+  .opt-title {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .opt-title .n {
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+    margin-right: 10px;
+  }
+  .opt-desc {
+    margin: 4px 0 0;
+    color: var(--ink-mute);
+    font-size: 14px;
+    max-width: 80ch;
+  }
+  .opt-tag {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--ink-mute);
+    white-space: nowrap;
+  }
+  .opt-tag .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .opt-tag.t1 .dot { background: var(--t1); }
+  .opt-tag.t2 .dot { background: var(--t2); }
+  .opt-tag.t3 .dot { background: var(--t3); }
+  .opt-tag.t4 .dot { background: var(--t4); }
+  .opt-tag.t5 .dot { background: var(--t5); }
+  .opt-tag.t6 .dot { background: var(--t6); }
+
+  .frame-wrap {
+    position: relative;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  iframe.preview {
+    width: 100%;
+    height: 80vh;
+    min-height: 560px;
+    border: 0;
+    display: block;
+    background: #fff;
+  }
+
+  .opt-foot {
+    margin-top: 10px;
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    color: var(--ink-faint);
+    font-size: 12px;
+  }
+  .opt-foot a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .opt-foot .sep {
+    width: 1px; height: 14px;
+    background: var(--line);
+    display: inline-block;
+  }
+  .opt-foot .path {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--ink-faint);
+  }
+
+  /* Footer */
+  .page-foot {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 32px;
+    color: var(--ink-faint);
+    font-size: 13px;
+    text-align: center;
+    border-top: 1px solid var(--line);
+  }
+  .page-foot a { color: var(--ink-mute); }
+
+  @media (max-width: 900px) {
+    .page-head { padding: 32px 20px 20px; }
+    .themes { padding: 0 20px; }
+    .jump-nav-inner { padding: 10px 20px; }
+    main { padding: 0 20px 60px; }
+    .page-head h1 { font-size: 22px; }
+    .opt-head { flex-direction: column; gap: 8px; }
+    iframe.preview { height: 70vh; }
+  }
+  @media (max-width: 720px) {
+    iframe.preview { min-height: 640px; height: 80vh; }
+  }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <p class="eyebrow">Universal WordPress Importer · v6</p>
+  <h1>Twenty-four design explorations for the Importer admin UI</h1>
+  <p class="lede">Six themes &times; four variations each. Every design demonstrates the same end-to-end import script (Source &rarr; Configure &rarr; Confirm &rarr; Run &rarr; Done) so you can compare chrome, density, and decision-point handling side by side. Open any prototype in its own tab via the footer link below the preview.</p>
+  <p class="meta">24 designs &middot; static HTML, no external resources &middot; updated 22 May 2026</p>
+</header>
+
+<section class="themes" aria-label="Theme legend">
+  <span class="label">Themes</span>
+  <span class="theme-chip t1"><span class="dot"></span>Quiet Modal</span>
+  <span class="theme-chip t2"><span class="dot"></span>Page Canvas</span>
+  <span class="theme-chip t3"><span class="dot"></span>Right Sheet</span>
+  <span class="theme-chip t4"><span class="dot"></span>Conversation</span>
+  <span class="theme-chip t5"><span class="dot"></span>Cockpit Mini</span>
+  <span class="theme-chip t6"><span class="dot"></span>Split View</span>
+</section>
+
+<nav class="jump-nav" aria-label="Jump to design">
+  <div class="jump-nav-inner">
+    <a href="#opt-01"><span class="n">01</span>Paper Tape</a>
+    <a href="#opt-02"><span class="n">02</span>Spine</a>
+    <a href="#opt-03"><span class="n">03</span>Corner Tool</a>
+    <a href="#opt-04"><span class="n">04</span>Ambient Room</a>
+    <a href="#opt-05"><span class="n">05</span>Magazine</a>
+    <a href="#opt-06"><span class="n">06</span>Pinned Strip</a>
+    <a href="#opt-07"><span class="n">07</span>Phase Grid</a>
+    <a href="#opt-08"><span class="n">08</span>Right Rail</a>
+    <a href="#opt-09"><span class="n">09</span>Narrow Sheet</a>
+    <a href="#opt-10"><span class="n">10</span>Wide Sheet</a>
+    <a href="#opt-11"><span class="n">11</span>Power Tabs</a>
+    <a href="#opt-12"><span class="n">12</span>Snap Wide</a>
+    <a href="#opt-13"><span class="n">13</span>Lanes</a>
+    <a href="#opt-14"><span class="n">14</span>Memo Column</a>
+    <a href="#opt-15"><span class="n">15</span>Margin Notes</a>
+    <a href="#opt-16"><span class="n">16</span>Stage Memos</a>
+    <a href="#opt-17"><span class="n">17</span>Light Console</a>
+    <a href="#opt-18"><span class="n">18</span>Dark TTY</a>
+    <a href="#opt-19"><span class="n">19</span>Phase Rail</a>
+    <a href="#opt-20"><span class="n">20</span>Split Pane</a>
+    <a href="#opt-21"><span class="n">21</span>Balanced Panes</a>
+    <a href="#opt-22"><span class="n">22</span>Rich Outcome</a>
+    <a href="#opt-23"><span class="n">23</span>Wired Pairs</a>
+    <a href="#opt-24"><span class="n">24</span>Run Collapse</a>
+  </div>
+</nav>
+
+<main>
+
+  <!-- Worker 1 — Quiet Modal -->
+  <p class="group-head"><span class="accent">Theme 1</span> &nbsp;&middot;&nbsp; Quiet Modal &nbsp;&middot;&nbsp; designs 01&ndash;04</p>
+
+  <section class="opt" id="opt-01">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">01</span>Paper Tape</h2>
+        <p class="opt-desc">Quiet teal modal with a slim text-tape stage indicator. The most restrained of the four; carries state in tape segments alone.</p>
+      </div>
+      <span class="opt-tag t1"><span class="dot"></span>Quiet Modal</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-01.html" loading="lazy" title="Paper Tape preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-01.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-01.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-01.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-02">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">02</span>Spine</h2>
+        <p class="opt-desc">Six-chip status spine doubles as wayfinder and live state, focus-trapped past the admin overlay.</p>
+      </div>
+      <span class="opt-tag t1"><span class="dot"></span>Quiet Modal</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-02.html" loading="lazy" title="Spine preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-02.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-02.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-02.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-03">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">03</span>Corner Tool</h2>
+        <p class="opt-desc">A 440 px bottom-right tool that floats over a faint admin backdrop — feels small, intentional, and out of the way.</p>
+      </div>
+      <span class="opt-tag t1"><span class="dot"></span>Quiet Modal</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-03.html" loading="lazy" title="Corner Tool preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-03.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-03.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-03.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-04">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">04</span>Ambient Room</h2>
+        <p class="opt-desc">Dark backdrop whose color follows run state (idle / run / paused / done / aborted). Color is reinforced by a mode chip.</p>
+      </div>
+      <span class="opt-tag t1"><span class="dot"></span>Quiet Modal</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-04.html" loading="lazy" title="Ambient Room preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-04.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-04.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-04.html</span>
+    </div>
+  </section>
+
+  <!-- Worker 2 — Page Canvas -->
+  <p class="group-head"><span class="accent">Theme 2</span> &nbsp;&middot;&nbsp; Page Canvas &nbsp;&middot;&nbsp; designs 05&ndash;08</p>
+
+  <section class="opt" id="opt-05">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">05</span>Magazine</h2>
+        <p class="opt-desc">Display H1 that morphs per state on a magazine-shaped canvas. Reads as published the moment you load it.</p>
+      </div>
+      <span class="opt-tag t2"><span class="dot"></span>Page Canvas</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-05.html" loading="lazy" title="Magazine preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-05.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-05.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-05.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-06">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">06</span>Pinned Strip</h2>
+        <p class="opt-desc">A 3 px sticky strip morphs from divider to progress bar; compressed two-line header keeps your place in view.</p>
+      </div>
+      <span class="opt-tag t2"><span class="dot"></span>Page Canvas</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-06.html" loading="lazy" title="Pinned Strip preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-06.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-06.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-06.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-07">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">07</span>Phase Grid</h2>
+        <p class="opt-desc">Persistent 2&times;3 grid of stage cards above the canvas. Cells expand as their phase becomes active.</p>
+      </div>
+      <span class="opt-tag t2"><span class="dot"></span>Page Canvas</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-07.html" loading="lazy" title="Phase Grid preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-07.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-07.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-07.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-08">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">08</span>Right Rail</h2>
+        <p class="opt-desc">Sticky right rail carries past-imports and WP-Cron meta on top; phase list appears when the run starts.</p>
+      </div>
+      <span class="opt-tag t2"><span class="dot"></span>Page Canvas</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-08.html" loading="lazy" title="Right Rail preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-08.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-08.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-08.html</span>
+    </div>
+  </section>
+
+  <!-- Worker 3 — Right Sheet -->
+  <p class="group-head"><span class="accent">Theme 3</span> &nbsp;&middot;&nbsp; Right Sheet &nbsp;&middot;&nbsp; designs 09&ndash;12</p>
+
+  <section class="opt" id="opt-09">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">09</span>Narrow Sheet</h2>
+        <p class="opt-desc">Dense 460 px sheet with a label-only stepper. Single amber surface for decisions; past-imports as a swap panel.</p>
+      </div>
+      <span class="opt-tag t3"><span class="dot"></span>Right Sheet</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-09.html" loading="lazy" title="Narrow Sheet preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-09.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-09.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-09.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-10">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">10</span>Wide Sheet</h2>
+        <p class="opt-desc">Roomy 620 px sheet with a true two-column configure layout — labels and inputs share equal weight.</p>
+      </div>
+      <span class="opt-tag t3"><span class="dot"></span>Right Sheet</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-10.html" loading="lazy" title="Wide Sheet preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-10.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-10.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-10.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-11">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">11</span>Power Tabs</h2>
+        <p class="opt-desc">Gated tab strip with decision-keys exposed via a disclosure. Console-tinted activity log for power users.</p>
+      </div>
+      <span class="opt-tag t3"><span class="dot"></span>Right Sheet</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-11.html" loading="lazy" title="Power Tabs preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-11.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-11.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-11.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-12">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">12</span>Snap Wide</h2>
+        <p class="opt-desc">Slim sheet that expands to 780 px when the run starts; the right column fades in to host the live activity log.</p>
+      </div>
+      <span class="opt-tag t3"><span class="dot"></span>Right Sheet</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-12.html" loading="lazy" title="Snap Wide preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-12.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-12.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-12.html</span>
+    </div>
+  </section>
+
+  <!-- Worker 4 — Conversation -->
+  <p class="group-head"><span class="accent">Theme 4</span> &nbsp;&middot;&nbsp; Conversation &nbsp;&middot;&nbsp; designs 13&ndash;16</p>
+
+  <section class="opt" id="opt-13">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">13</span>Lanes</h2>
+        <p class="opt-desc">Alternating system / user lanes with a soft drop shadow. The most chat-shaped of the four conversation variations.</p>
+      </div>
+      <span class="opt-tag t4"><span class="dot"></span>Conversation</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-13.html" loading="lazy" title="Lanes preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-13.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-13.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-13.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-14">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">14</span>Memo Column</h2>
+        <p class="opt-desc">Single-column transcript with dotted dividers and speaker tags. The most tasteful of the four.</p>
+      </div>
+      <span class="opt-tag t4"><span class="dot"></span>Conversation</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-14.html" loading="lazy" title="Memo Column preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-14.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-14.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-14.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-15">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">15</span>Margin Notes</h2>
+        <p class="opt-desc">Two-column transcript with a meta gutter (stage slug, decision key) — power-user transparency without dev-mode framing.</p>
+      </div>
+      <span class="opt-tag t4"><span class="dot"></span>Conversation</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-15.html" loading="lazy" title="Margin Notes preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-15.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-15.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-15.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-16">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">16</span>Stage Memos</h2>
+        <p class="opt-desc">One expandable memo per stage; the configure decision is nested inside the stage-3 memo as a natural beat.</p>
+      </div>
+      <span class="opt-tag t4"><span class="dot"></span>Conversation</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-16.html" loading="lazy" title="Stage Memos preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-16.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-16.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-16.html</span>
+    </div>
+  </section>
+
+  <!-- Worker 5 — Cockpit Mini -->
+  <p class="group-head"><span class="accent">Theme 5</span> &nbsp;&middot;&nbsp; Cockpit Mini &nbsp;&middot;&nbsp; designs 17&ndash;20</p>
+
+  <section class="opt" id="opt-17">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">17</span>Light Console</h2>
+        <p class="opt-desc">Three-column configure rows (key &middot; control &middot; hint) with a command-palette source field.</p>
+      </div>
+      <span class="opt-tag t5"><span class="dot"></span>Cockpit Mini</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-17.html" loading="lazy" title="Light Console preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-17.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-17.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-17.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-18">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">18</span>Dark TTY</h2>
+        <p class="opt-desc">Observability-style dark mono with a live <code>tail</code> column, tabular phase status, and WP-Cron meta.</p>
+      </div>
+      <span class="opt-tag t5"><span class="dot"></span>Cockpit Mini</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-18.html" loading="lazy" title="Dark TTY preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-18.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-18.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-18.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-19">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">19</span>Phase Rail</h2>
+        <p class="opt-desc">A vertical teal rail of phases on the left of a console card. Pre-run wizard morphs to the full phase list on start.</p>
+      </div>
+      <span class="opt-tag t5"><span class="dot"></span>Cockpit Mini</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-19.html" loading="lazy" title="Phase Rail preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-19.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-19.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-19.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-20">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">20</span>Split Pane</h2>
+        <p class="opt-desc">Control on the left, event stream on the right — split only during the live run, single-column otherwise.</p>
+      </div>
+      <span class="opt-tag t5"><span class="dot"></span>Cockpit Mini</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-20.html" loading="lazy" title="Split Pane preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-20.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-20.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-20.html</span>
+    </div>
+  </section>
+
+  <!-- Worker 6 — Split View -->
+  <p class="group-head"><span class="accent">Theme 6</span> &nbsp;&middot;&nbsp; Split View &nbsp;&middot;&nbsp; designs 21&ndash;24</p>
+
+  <section class="opt" id="opt-21">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">21</span>Balanced Panes</h2>
+        <p class="opt-desc">Equal-weight source / outcome panes with a slim 140 px center strip carrying the wizard tape.</p>
+      </div>
+      <span class="opt-tag t6"><span class="dot"></span>Split View</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-21.html" loading="lazy" title="Balanced Panes preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-21.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-21.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-21.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-22">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">22</span>Rich Outcome</h2>
+        <p class="opt-desc">Narrow source tree, wide outcome cards (metadata-only). Cards expand on demand &mdash; no 38-row wall on empty.</p>
+      </div>
+      <span class="opt-tag t6"><span class="dot"></span>Split View</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-22.html" loading="lazy" title="Rich Outcome preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-22.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-22.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-22.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-23">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">23</span>Wired Pairs</h2>
+        <p class="opt-desc">SVG bezier connectors pair source rows to outcome rows; only active and done connectors render during the run.</p>
+      </div>
+      <span class="opt-tag t6"><span class="dot"></span>Split View</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-23.html" loading="lazy" title="Wired Pairs preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-23.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-23.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-23.html</span>
+    </div>
+  </section>
+
+  <section class="opt" id="opt-24">
+    <div class="opt-head">
+      <div>
+        <h2 class="opt-title"><span class="n">24</span>Run Collapse</h2>
+        <p class="opt-desc">Two equal panes pre-run; source folds into a top strip on run so the outcome pane gets the full canvas.</p>
+      </div>
+      <span class="opt-tag t6"><span class="dot"></span>Split View</span>
+    </div>
+    <div class="frame-wrap"><iframe class="preview" src="options/option-24.html" loading="lazy" title="Run Collapse preview"></iframe></div>
+    <div class="opt-foot">
+      <a href="options/option-24.html" target="_blank" rel="noopener">Open full page &rarr;</a>
+      <span class="sep"></span>
+      <a href="options/option-24.html" target="_blank" rel="noopener">View source</a>
+      <span class="sep"></span>
+      <span class="path">options/option-24.html</span>
+    </div>
+  </section>
+
+</main>
+
+<footer class="page-foot">
+  Universal WordPress Importer &middot; v6 design gallery &middot; <a href="README.md">README</a> &middot; <a href="../../">parent docs</a>
+</footer>
+
+</body>
+</html>

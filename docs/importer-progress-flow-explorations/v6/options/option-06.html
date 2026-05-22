@@ -1,0 +1,550 @@
+<!doctype html>
+<!-- Theme 2 — Page Canvas — V2: Pinned Strip. Round 2: compressed 2-line strip, no shift checks, flat radios, decision pins position of later stages. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Theme 2 · Page Canvas · V2 — Pinned Strip</title>
+<style>
+:root{--bg:#fdfdfb;--ink:#111418;--rule:#e7e7e3;--accent:#7c1d6f;--soft:#f4e8f0;--muted:#6b7280;--ok:#176649;--warn:#b45309;--soft2:#fbf3da}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.55 "Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+button,input,select{font:inherit;color:inherit}
+a{color:var(--accent);text-decoration:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.adminbar{height:32px;background:#1d2327;color:#c3c4c7;font-size:13px;display:flex;align-items:center;padding:0 16px;gap:14px}
+.adminbar b{color:#fff;font-weight:600}
+/* The pinned strip — three jobs in one element. Two lines: 3px bar, then crumb+phases inline. */
+.strip{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--rule);z-index:10}
+.bar-thin{height:3px;background:#eeece5;position:relative;overflow:hidden}
+.bar-thin span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--ok));transition:width .35s}
+.bar-thin.indet span{width:30%;animation:slide 1.4s infinite linear;background:var(--accent)}
+.bar-thin.paused span{background:repeating-linear-gradient(45deg,var(--warn),var(--warn) 6px,#e0a056 6px,#e0a056 12px)}
+.bar-thin.done span{background:var(--ok)}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+.strip-inner{max-width:760px;margin:0 auto;padding:8px 28px;display:flex;align-items:center;gap:18px;font-size:12.5px;color:var(--muted);flex-wrap:wrap}
+.crumb{color:var(--muted);flex:none}
+.crumb a{color:var(--muted)}
+.phases{display:flex;gap:18px;align-items:center;font-size:12px;color:var(--muted);overflow-x:auto;white-space:nowrap;scrollbar-width:none;flex:1;min-width:0}
+.phases::-webkit-scrollbar{display:none}
+.phases .ph{padding:4px 0;display:flex;gap:6px;align-items:center;position:relative}
+.phases .ph .chk{display:inline-block;width:10px;text-align:center;color:var(--ok);font-weight:600;visibility:hidden;flex:none}
+.phases .ph.done .chk{visibility:visible}
+.phases .ph .n{font-variant-numeric:tabular-nums;font-weight:600;flex:none}
+.phases .ph .lbl{flex:none}
+.phases .ph::after{content:"";position:absolute;left:0;right:0;bottom:-9px;height:2px;background:transparent}
+.phases .ph.active{color:var(--ink)}
+.phases .ph.active::after{background:var(--accent)}
+.phases .ph.done{color:var(--ok)}
+.phases .ph.blocked{color:var(--warn)}
+.phases .ph.blocked::after{background:var(--warn)}
+.past{margin-left:auto;flex:none}
+.col{max-width:760px;margin:0 auto;padding:34px 28px 60px}
+h1{font-size:30px;line-height:1.15;letter-spacing:-.015em;margin:0 0 8px;font-weight:700}
+.lede{font-size:15px;color:var(--muted);margin:0 0 26px;max-width:580px}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 6px;font-weight:600}
+section{display:none}
+section.on{display:block}
+/* Inputs */
+.capture input{padding:14px 16px;border:1px solid var(--rule);border-radius:10px;width:100%;font-size:15px;background:#fff}
+.capture input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--soft)}
+.row-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
+.browse{padding:10px 14px;border:1px solid var(--rule);border-radius:8px;background:#fff;cursor:pointer;font-weight:600;font-size:13.5px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.chip{padding:6px 11px;border:1px solid var(--rule);border-radius:999px;background:#fff;font-size:12.5px;color:var(--muted);cursor:pointer}
+.chip:hover{border-color:var(--accent);color:var(--ink)}
+.hint{font-size:12.5px;color:var(--muted);margin-top:14px}
+.past-card{margin-top:30px;padding:14px 16px;border:1px solid var(--rule);border-radius:10px;background:#fff;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.past-card b{display:block;font-weight:600;font-size:13.5px;word-break:break-all}
+.past-card span{color:var(--muted);font-size:12.5px}
+.btn-link{background:none;border:0;color:var(--accent);font-weight:600;cursor:pointer;padding:0;font-size:13.5px}
+.tag{padding:2px 8px;border-radius:999px;font-size:11.5px;font-weight:600;background:var(--soft2);color:var(--warn)}
+.tag.failed{background:#fbeae5;color:#b91c1c}
+.src-block .val{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;background:#fff;border:1px solid var(--rule);border-radius:10px;padding:13px 15px;word-break:break-all}
+.inferred{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0 2px;font-size:13.5px}
+.pill{padding:5px 11px;background:var(--soft);color:var(--accent);border-radius:999px;font-weight:600;font-size:12.5px}
+.explain{color:var(--muted);font-size:13.5px;margin:2px 0 14px}
+.types{display:none;grid-template-columns:repeat(2,1fr);gap:6px;padding:10px;border:1px solid var(--rule);border-radius:10px;margin:10px 0;background:#fff}
+.types.on{display:grid}
+.types button{text-align:left;padding:8px 11px;background:#fff;border:1px solid transparent;border-radius:8px;cursor:pointer;font-size:13px}
+.types button:hover{background:#fafaf7}
+.types button.active{background:var(--soft);color:var(--accent)}
+@media(max-width:560px){.types{grid-template-columns:1fr}}
+.warn-text{font-size:12.5px;color:var(--warn);margin-top:8px;display:none}
+.warn-text.on{display:block}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px;align-items:center}
+.primary{padding:12px 20px;background:var(--ink);color:#fff;border:0;border-radius:10px;font-weight:600;cursor:pointer;font-size:14.5px}
+.primary:hover{background:#000}
+.ghost{padding:12px 18px;background:transparent;border:1px solid var(--rule);border-radius:10px;font-weight:600;cursor:pointer}
+.back{font-size:13px;color:var(--muted);background:none;border:0;cursor:pointer;padding:0;margin-bottom:14px}
+.back:hover{color:var(--ink)}
+/* Flat full-width radio list — no last-row border */
+.fields{display:grid;gap:24px}
+.field h3{margin:0 0 8px;font-size:14px;font-weight:600}
+.radios{display:grid;gap:0;border-top:1px solid var(--rule)}
+.radio{display:grid;grid-template-columns:auto 1fr;gap:12px;padding:13px 2px;border-bottom:1px solid var(--rule);cursor:pointer;align-items:flex-start}
+.radio:last-child{border-bottom:0}
+.radio input{margin-top:3px}
+.radio b{font-weight:600;display:block;font-size:14px}
+.radio small{display:block;color:var(--muted);font-size:12.5px;margin-top:1px}
+.domains{padding:6px 2px 6px 28px;display:none}
+.domains.on{display:block}
+.domains input{width:100%;max-width:420px;padding:9px 11px;border:1px solid var(--rule);border-radius:6px;background:#fff;font-size:13.5px}
+.toggles{display:grid;gap:0;border-top:1px solid var(--rule)}
+.tog{display:grid;grid-template-columns:1fr auto;gap:12px;padding:13px 2px;align-items:center;border-bottom:1px solid var(--rule);cursor:pointer}
+.tog:last-child{border-bottom:0}
+.tog b{display:block;font-size:14px;font-weight:600}
+.tog small{display:block;color:var(--muted);font-size:12.5px;margin-top:1px}
+.sw{width:36px;height:20px;background:#dad9d2;border-radius:999px;position:relative;flex:none}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .2s}
+.tog.on .sw{background:var(--accent)}
+.tog.on .sw::after{transform:translateX(16px)}
+details summary{cursor:pointer;color:var(--muted);font-size:13px;padding:6px 0}
+details summary:hover{color:var(--ink)}
+.tech{font-size:12.5px;color:var(--muted);display:grid;gap:4px;padding-bottom:4px}
+.kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;padding:1px 5px;border:1px solid var(--rule);border-radius:4px;background:#fff;color:var(--muted)}
+dl.summary{display:grid;grid-template-columns:auto 1fr;gap:10px 18px;font-size:14px;margin:0;border-top:1px solid var(--rule);padding-top:14px}
+dl.summary dt{color:var(--muted);font-weight:500}
+dl.summary dd{margin:0;font-weight:500}
+dl.summary .lead{font-size:15.5px;font-weight:600}
+dl.summary dd.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;word-break:break-all}
+/* Run state — strip IS the progress bar; no second bar in body */
+.runline{display:flex;align-items:center;gap:10px;margin:6px 0 14px;font-size:15px}
+.runline .pulse{width:8px;height:8px;background:var(--ok);border-radius:50%;flex:none;animation:pulse 1.4s infinite}
+.runline.paused .pulse{background:var(--warn);animation:none}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+.runtop{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin:0 0 18px}
+.stages{display:grid;gap:0;border-top:1px solid var(--rule)}
+.stage{padding:12px 2px;border-bottom:1px solid var(--rule);display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;font-size:14px}
+.stage:last-child{border-bottom:0}
+.stage .n{font-variant-numeric:tabular-nums;color:var(--muted);font-weight:600;width:18px}
+.stage .lbl{font-weight:500;color:var(--muted)}
+.stage.active .lbl,.stage.done .lbl,.stage.blocked .lbl{color:var(--ink)}
+.stage .st{font-size:12px;color:var(--muted);padding:3px 9px;border-radius:999px;background:#f3f1ea}
+.stage.active .st{background:var(--soft);color:var(--accent)}
+.stage.done .st{background:#dcf2e3;color:var(--ok)}
+.stage.blocked .st{background:var(--soft2);color:var(--warn)}
+.stage.idle .st{visibility:hidden}
+.stage .detail{grid-column:1/-1;margin-top:10px;padding:16px;background:#fff;border:1px solid var(--rule);border-radius:10px;display:none}
+.stage.expanded .detail{display:block}
+/* When stage 3 is expanded, collapse stages 4-6 to a compact note so they don't get pushed out of view */
+.stages.compact .stage.idle{padding:6px 2px;font-size:13px;opacity:.75}
+.stages.compact .stage.idle .st{display:none}
+.attn{padding:10px 14px;border-radius:8px;background:var(--soft2);color:var(--warn);font-size:13.5px;margin:0 0 14px;font-weight:600;display:flex;gap:8px;align-items:baseline}
+.abort-confirm{display:none;margin:8px 0 12px;padding:10px 14px;border:1px solid var(--rule);border-radius:8px;background:var(--soft2);font-size:13px;color:var(--warn);align-items:center;gap:10px}
+.abort-confirm.on{display:flex;flex-wrap:wrap}
+.abort-confirm b{font-weight:600}
+.abort-confirm .ac-acts{display:flex;gap:6px;margin-left:auto}
+.abort-confirm button{padding:6px 11px;border-radius:6px;border:1px solid var(--rule);background:#fff;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--ink)}
+.abort-confirm .danger{background:var(--warn);color:#fff;border-color:var(--warn)}
+.dec h4{margin:0 0 4px;font-size:15px;font-weight:600}
+.dec .desc{font-size:13.5px;color:var(--muted);margin:0 0 12px}
+.dec ul{list-style:none;margin:0 0 14px;padding:0;display:grid;gap:6px}
+.dec li{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:10px;border:1px solid var(--rule);border-radius:8px;background:#fff}
+.dec li b{display:block;font-size:13.5px}
+.dec li small{display:block;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;margin-top:2px;word-break:break-all}
+.dec .acts{display:flex;flex-wrap:wrap;gap:8px}
+.dec .acts button{padding:10px 14px;border-radius:8px;border:1px solid var(--rule);background:#fff;cursor:pointer;font-weight:600;font-size:13.5px}
+.dec .acts .primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+.log{margin:20px 0 0;font-size:13px;color:var(--muted)}
+.log h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.log ul{margin:0;padding:0;list-style:none;max-height:160px;overflow:auto}
+.log li{padding:3px 0;border-top:1px dotted var(--rule);display:grid;grid-template-columns:auto 1fr;gap:8px}
+.log li:first-child{border-top:0}
+.log li time{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;padding-top:1px}
+.tallies{display:flex;flex-wrap:wrap;gap:18px 30px;margin:18px 0 14px}
+.tally b{font-size:30px;display:block;font-weight:700;line-height:1;letter-spacing:-.01em}
+.tally span{font-size:12.5px;color:var(--muted)}
+.t-footer{font-size:12.5px;color:var(--muted)}
+.resumed{padding:10px 14px;border-radius:8px;background:var(--soft);color:var(--accent);font-size:13px;margin:0 0 14px;font-weight:600;display:none}
+.resumed.on{display:block}
+</style>
+</head>
+<body>
+<div class="adminbar"><b>WordPress</b> <span>My Site</span> <span style="margin-left:auto">howdy, admin</span></div>
+
+<!-- The signature element: 3px bar morphs from page divider to progress bar to complete-indicator. -->
+<div class="strip">
+  <div class="bar-thin" id="topBar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="topFill"></span></div>
+  <div class="strip-inner">
+    <span class="crumb"><a href="#">Tools</a> ›  Universal Importer</span>
+    <nav class="phases" id="phases" aria-label="Import steps"></nav>
+    <span class="past"><a href="#" id="pastLink">Past imports (10)</a></span>
+  </div>
+</div>
+
+<main class="col">
+<!-- Empty: H1 doubles as the eyebrow ("Where is the content?"), no Step X of 4 -->
+<section id="s-empty" class="on">
+  <h1>Where is the content?</h1>
+  <p class="lede">Paste a URL, drop a folder, or point at a server path. We'll figure out what it is.</p>
+  <div class="capture">
+    <input id="srcInput" type="text" placeholder="https://… or /path/to/folder" aria-label="Source URL, path, or file">
+  </div>
+  <div class="row-actions">
+    <button class="browse" id="browseBtn" type="button">Choose folder…</button>
+    <button class="browse" id="browseFileBtn" type="button">Choose file…</button>
+  </div>
+  <div class="chips" role="list" aria-label="Source shortcuts">
+    <button class="chip" data-chip="https://github.com/WordPress/gutenberg/tree/trunk/docs">GitHub</button>
+    <button class="chip" data-chip="https://example.com/wp-json/">WordPress</button>
+    <button class="chip" data-chip="https://example.com/feed/">Feed/OPML</button>
+    <button class="chip" data-chip="/srv/content/">Server path</button>
+    <button class="chip" data-chip="https://example.com/sitemap.xml">Sitemap</button>
+  </div>
+  <p class="hint">Accepts PDF, EPUB, HTML, Markdown, txt, WXR/XML, ZIP. Limits: 500 files / 128 MB total.</p>
+  <div class="past-card" id="resumeCard">
+    <div>
+      <b>https://example.com/wp-json/</b>
+      <span>Paused 2h ago · Stopped during URL treatment · 7 of 24 pages written</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span class="tag">paused</span>
+      <button class="btn-link" id="resumeBtn" type="button">Resume →</button>
+    </div>
+  </div>
+</section>
+
+<!-- Classified -->
+<section id="s-classified">
+  <button class="back" id="backToEmpty" type="button">← Start over</button>
+  <h1>Confirm the source.</h1>
+  <div class="src-block"><div class="val" id="srcDisplay">https://github.com/WordPress/gutenberg/tree/trunk/docs</div></div>
+  <div class="inferred">
+    <span class="pill" id="typePill">GitHub repository</span>
+    <span style="color:var(--muted);font-size:13px">· Preview discovery: trunk/docs · 38 documents · 22 media references</span>
+  </div>
+  <p class="explain">We'll fetch with sparse Git, parse Markdown as pages, bring images along.</p>
+  <p><button class="btn-link" id="overrideBtn" type="button">Not this? Change type</button></p>
+  <div class="types" id="typeList" role="listbox">
+    <button data-type="GitHub repository" class="active">GitHub repository</button>
+    <button data-type="WordPress site">WordPress site</button>
+    <button data-type="Feed (Atom/RSS/RDF)">Feed (Atom/RSS/RDF)</button>
+    <button data-type="OPML feed list">OPML feed list</button>
+    <button data-type="Server path">Server path</button>
+    <button data-type="Uploaded file/folder">Uploaded file/folder</button>
+    <button data-type="Reachable URL">Reachable URL</button>
+    <button data-type="Sitemap">Sitemap</button>
+    <button data-type="PDF">PDF</button>
+    <button data-type="EPUB">EPUB</button>
+  </div>
+  <p class="warn-text" id="warnText">Type doesn't look right for this URL — still proceed?</p>
+  <div class="actions">
+    <button class="primary" id="toConfigure" type="button">Continue</button>
+  </div>
+</section>
+
+<!-- Configure: eyebrow kept here since H1 just says "Configure" -->
+<section id="s-configure">
+  <button class="back" id="backToClassified" type="button">← Back</button>
+  <p class="eyebrow">Step 2 of 4 — Configure</p>
+  <h1>Configure.</h1>
+  <div class="fields">
+    <div class="field">
+      <h3>URL treatment</h3>
+      <div class="radios" role="radiogroup">
+        <label class="radio"><input type="radio" name="urlt" value="ask" checked><span><b>Ask when old URLs are found</b><small>Recommended. We'll pause once to confirm which domains to rewrite.</small></span></label>
+        <label class="radio"><input type="radio" name="urlt" value="keep"><span><b>Keep URLs unchanged</b><small>Useful when the source already points at this site.</small></span></label>
+        <label class="radio"><input type="radio" name="urlt" value="rewrite"><span><b>Rewrite listed domains</b><small>Skip the prompt by listing domains now.</small></span></label>
+      </div>
+      <div class="domains" id="domainBox"><input type="text" id="domainInput" placeholder="example.com, www.example.com" aria-label="Domains to rewrite"></div>
+    </div>
+    <div class="field">
+      <h3>Run options</h3>
+      <div class="toggles">
+        <button type="button" class="tog" id="togDry" aria-pressed="false"><div><b>Dry run</b><small>Traverse and prepare, but don't write pages.</small></div><span class="sw" aria-hidden="true"></span></button>
+        <button type="button" class="tog" id="togDraft" aria-pressed="false"><div><b>Import as drafts</b><small>Posts go in as drafts. Resolves the publish question up front.</small></div><span class="sw" aria-hidden="true"></span></button>
+      </div>
+    </div>
+    <details><summary>More options</summary>
+      <div class="tech">
+        <span>Cache reuse: on.</span>
+        <span>Secrets are env-only.</span>
+        <span>Power user: <span class="kbd">wp universal-importer import &lt;source&gt;</span></span>
+      </div>
+    </details>
+  </div>
+  <div class="actions"><button class="primary" id="toConfirm" type="button">Review →</button></div>
+</section>
+
+<!-- Confirm -->
+<section id="s-confirm">
+  <button class="back" id="backToConfigure" type="button">← Back</button>
+  <p class="eyebrow">Step 3 of 4 — Confirm</p>
+  <h1>Ready to import.</h1>
+  <dl class="summary">
+    <dt>Source</dt><dd class="mono lead">https://github.com/WordPress/gutenberg/tree/trunk/docs</dd>
+    <dt>Type</dt><dd class="lead" id="cType">GitHub repository</dd>
+    <dt>Items</dt><dd>≈ 38 documents · ≈ 22 media references · from trunk/docs</dd>
+    <dt>URL treatment</dt><dd id="cURL">Ask when old URLs are found</dd>
+    <dt>Post status</dt><dd id="cStat">Publish</dd>
+    <dt>Run mode</dt><dd id="cMode">Real run</dd>
+  </dl>
+  <div class="actions">
+    <button class="primary" id="startRun" type="button">Import this content</button>
+    <button class="ghost" id="cancelConfirm" type="button">Cancel</button>
+  </div>
+</section>
+
+<!-- Run -->
+<section id="s-run">
+  <div class="resumed" id="resumed">Resumed from URL treatment pause. Continue with the decision below.</div>
+  <p class="runline" id="runline"><span class="pulse" aria-hidden="true"></span><span id="actionLine" aria-live="polite">Reading the source.</span></p>
+  <div class="runtop">
+    <span id="pctText">0% · 0 / 38 items</span>
+    <button class="btn-link" id="abortBtn" type="button" style="color:var(--muted)">Abort</button>
+  </div>
+  <div class="abort-confirm" id="abortConfirm" role="alertdialog" aria-label="Confirm abort">
+    <b>Abort this import?</b>
+    <span style="color:var(--muted);font-size:12.5px">Items already written will stay.</span>
+    <span class="ac-acts"><button class="danger" id="abortYes" type="button">Yes, abort</button><button id="abortNo" type="button">Cancel</button></span>
+  </div>
+  <div class="stages" id="stagesList">
+    <div class="stage idle" data-stage="0"><span class="n">1</span><span class="lbl">Read source</span><span class="st">Not started</span></div>
+    <div class="stage idle" data-stage="1"><span class="n">2</span><span class="lbl">Prepare content</span><span class="st">Not started</span></div>
+    <div class="stage idle" data-stage="2"><span class="n">3</span><span class="lbl">URL treatment</span><span class="st">Not started</span>
+      <div class="detail">
+        <div class="attn"><span>Run paused.</span><span>Answer below to continue.</span></div>
+        <div class="dec">
+          <h4>Rewrite old-site URLs to this site?</h4>
+          <p class="desc">Selected hosts will be rewritten to this site's domain. Unselected hosts stay as-is.</p>
+          <ul>
+            <li><input type="checkbox" checked aria-label="developer.wordpress.org"><div><b>developer.wordpress.org</b><small>Example: https://developer.wordpress.org/block-editor/</small></div></li>
+            <li><input type="checkbox" checked aria-label="make.wordpress.org/core"><div><b>make.wordpress.org/core</b><small>Example: https://make.wordpress.org/core/handbook/</small></div></li>
+          </ul>
+          <div class="acts">
+            <button class="primary" data-dec="selected" type="button">Rewrite selected domains</button>
+            <button data-dec="all" type="button">Yes, rewrite all</button>
+            <button data-dec="none" type="button">No, keep all URLs</button>
+          </div>
+          <details style="margin-top:10px"><summary>Power user</summary>
+            <div class="tech"><span>Stuck? Force a tick: <span class="kbd">wp universal-importer tick &lt;session&gt;</span></span></div>
+          </details>
+        </div>
+      </div>
+    </div>
+    <div class="stage idle" data-stage="3"><span class="n">4</span><span class="lbl">Import media</span><span class="st">Not started</span></div>
+    <div class="stage idle" data-stage="4"><span class="n">5</span><span class="lbl">Write pages</span><span class="st">Not started</span></div>
+    <div class="stage idle" data-stage="5"><span class="n">6</span><span class="lbl">Finish</span><span class="st">Not started</span></div>
+  </div>
+  <details style="margin-top:14px"><summary>Technical details</summary>
+    <div class="tech">
+      <span>Source items: queued 38 · processing 0 · imported 0 · failed 0</span>
+      <span>Prepared documents: 0 of 38</span>
+      <span>Media: queued 22 · imported 0 · skipped 0 · failed 0</span>
+      <span>Run continues in the background via WP-Cron if you close this tab.</span>
+    </div>
+  </details>
+  <div class="log"><h3>Activity (latest first)</h3><ul id="logList" aria-live="polite"></ul></div>
+</section>
+
+<!-- Complete -->
+<section id="s-complete">
+  <h1>Import complete.</h1>
+  <p class="lede" id="completeLede">38 pages written from the Gutenberg docs.</p>
+  <div class="tallies">
+    <div class="tally"><b id="tPages">38</b><span>Pages written</span></div>
+    <div class="tally" id="tDraftWrap" style="display:none"><b id="tDrafts">0</b><span>Drafts</span></div>
+    <div class="tally"><b>22</b><span>Media imported</span></div>
+  </div>
+  <p class="t-footer" id="tFooter">0 errors · 0 warnings · elapsed 00:42</p>
+  <div class="actions">
+    <button class="primary" id="viewBtn" type="button">View imported content</button>
+    <button class="ghost" id="anotherBtn" type="button">Start another import</button>
+    <button class="btn-link" id="realRunBtn" type="button" style="display:none">Run for real with the same choices</button>
+  </div>
+</section>
+</main>
+
+<script>
+(function(){
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+let dry=false,draft=false,urlt="ask",timer=null,paused=false,startTs=0;
+
+// Tape morph: 4 wizard steps pre-run; 6 stages during/after run
+const WIZARD=[{n:"1",l:"Source"},{n:"2",l:"Configure"},{n:"3",l:"Confirm"},{n:"4",l:"Run"}];
+const STAGES=[{n:"1",l:"Read source"},{n:"2",l:"Prepare"},{n:"3",l:"URL treatment"},{n:"4",l:"Media"},{n:"5",l:"Write pages"},{n:"6",l:"Finish"}];
+function renderPhases(mode,active,done,blocked){
+  const ph=$("#phases");
+  const cells=mode==="run"?STAGES:WIZARD;
+  ph.innerHTML=cells.map((c,i)=>{
+    let cls="ph";
+    if(blocked===i)cls+=" blocked";
+    else if(i<done)cls+=" done";
+    else if(i===active)cls+=" active";
+    return `<span class="${cls}"><span class="chk">✓</span><span class="n">${c.n}</span><span class="lbl">${c.l}</span></span>`;
+  }).join("");
+}
+function show(id){$$("section").forEach(s=>s.classList.remove("on"));document.getElementById(id).classList.add("on");window.scrollTo({top:0,behavior:"smooth"})}
+function tstamp(){const d=new Date();return d.toTimeString().slice(0,8)}
+function logAdd(line){const li=document.createElement("li");li.innerHTML=`<time>${tstamp()}</time><span>${line}</span>`;$("#logList").insertBefore(li,$("#logList").firstChild)}
+function topBar(p,mode){
+  const b=$("#topBar"),f=$("#topFill");
+  b.classList.remove("indet","paused","done");
+  if(mode==="indet")b.classList.add("indet");
+  if(mode==="paused")b.classList.add("paused");
+  if(mode==="done")b.classList.add("done");
+  f.style.width=(p||0)+"%";
+  b.setAttribute("aria-valuenow",p||0);
+}
+function setStage(i,state){
+  const s=$("#stagesList .stage[data-stage='"+i+"']");if(!s)return;
+  s.classList.remove("active","done","blocked","idle");
+  if(state)s.classList.add(state);
+  const lbl=state==="done"?"Done":state==="active"?"In progress":state==="blocked"?"Needs attention":"Not started";
+  s.querySelector(".st").textContent=lbl;
+}
+function pct(p){$("#pctText").textContent=p+"% · "+Math.round(p*0.38)+" / 38 items"}
+
+renderPhases("wizard",0,0);
+
+// Past imports — wire to scroll the resume card into view; if not on empty page, switch first
+$("#pastLink").addEventListener("click",e=>{
+  e.preventDefault();
+  if(!$("#s-empty").classList.contains("on")){show("s-empty");renderPhases("wizard",0,0);topBar(0)}
+  setTimeout(()=>$("#resumeCard").scrollIntoView({behavior:"smooth",block:"center"}),80);
+});
+
+$$(".chip").forEach(c=>c.addEventListener("click",()=>{
+  const v=c.dataset.chip;$("#srcInput").value=v;goClassified();
+}));
+$("#browseBtn").addEventListener("click",()=>{$("#srcInput").value="(folder selection — 42 files)";goClassified()});
+$("#browseFileBtn").addEventListener("click",()=>{$("#srcInput").value="(file selection — export.wxr)";goClassified()});
+$("#srcInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&$("#srcInput").value)goClassified()});
+
+function goClassified(){
+  show("s-classified");
+  const v=$("#srcInput").value||"https://github.com/WordPress/gutenberg/tree/trunk/docs";
+  $("#srcDisplay").textContent=v;
+  renderPhases("wizard",0,1);
+  topBar(0);
+}
+
+$("#backToEmpty").addEventListener("click",()=>{show("s-empty");renderPhases("wizard",0,0);topBar(0)});
+$("#overrideBtn").addEventListener("click",()=>$("#typeList").classList.toggle("on"));
+$$("#typeList button").forEach(b=>b.addEventListener("click",()=>{
+  $$("#typeList button").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");$("#typePill").textContent=b.dataset.type;
+  $("#warnText").classList.toggle("on",b.dataset.type!=="GitHub repository");
+}));
+$("#toConfigure").addEventListener("click",()=>{show("s-configure");renderPhases("wizard",1,1);topBar(0)});
+$$("input[name=urlt]").forEach(r=>r.addEventListener("change",()=>{
+  urlt=r.value;$("#domainBox").classList.toggle("on",r.value==="rewrite");
+}));
+$("#togDry").addEventListener("click",()=>{dry=!dry;$("#togDry").classList.toggle("on",dry);$("#togDry").setAttribute("aria-pressed",dry)});
+$("#togDraft").addEventListener("click",()=>{draft=!draft;$("#togDraft").classList.toggle("on",draft);$("#togDraft").setAttribute("aria-pressed",draft)});
+$("#backToClassified").addEventListener("click",()=>{show("s-classified");renderPhases("wizard",0,1);topBar(0)});
+
+$("#toConfirm").addEventListener("click",()=>{
+  show("s-confirm");renderPhases("wizard",2,2);topBar(0);
+  $("#cURL").textContent=urlt==="ask"?"Ask when old URLs are found":urlt==="keep"?"Keep URLs unchanged":"Rewrite listed domains";
+  $("#cStat").textContent=draft?"Draft":"Publish";
+  $("#cMode").textContent=dry?"Dry run":"Real run";
+  $("#startRun").textContent=dry?"Start dry run":"Import this content";
+});
+$("#backToConfigure").addEventListener("click",()=>{show("s-configure");renderPhases("wizard",1,1);topBar(0)});
+$("#cancelConfirm").addEventListener("click",()=>{show("s-empty");renderPhases("wizard",0,0);topBar(0)});
+$("#startRun").addEventListener("click",()=>{show("s-run");runStart()});
+
+function runStart(){
+  $("#logList").innerHTML="";paused=false;startTs=Date.now();
+  $("#resumed").classList.remove("on");$("#runline").classList.remove("paused");
+  $("#stagesList").classList.remove("compact");
+  $$("#stagesList .stage").forEach((s,i)=>{
+    s.classList.remove("active","done","blocked","expanded");s.classList.add("idle");
+    s.querySelector(".st").textContent="Not started";
+  });
+  setStage(0,"active");renderPhases("run",0,0);topBar(5,"indet");pct(0);
+  $("#actionLine").textContent="Reading the source.";
+  logAdd("GitHub repository fetch queued; file count will appear after discovery.");
+  let t=0;
+  timer=setInterval(()=>{
+    t++;
+    if(t===1){logAdd("Fetching repository files with sparse Git.");$("#actionLine").textContent="Fetching repository files with sparse Git."}
+    if(t===2){topBar(18);logAdd("38 source items found.");pct(18)}
+    if(t===3){setStage(0,"done");setStage(1,"active");renderPhases("run",1,1);
+      $("#actionLine").textContent="Preparing 12 items.";topBar(30);pct(30);logAdd("Preparing 12 items.")}
+    if(t===4){setStage(1,"done");setStage(2,"blocked");renderPhases("run",-1,2,2);
+      $("#stagesList .stage[data-stage='2']").classList.add("expanded");
+      $("#stagesList").classList.add("compact");
+      $("#runline").classList.add("paused");
+      $("#actionLine").textContent="Choose URL treatment to continue.";
+      logAdd("Choose URL treatment to continue.");topBar(40,"paused");pct(40);
+      clearInterval(timer);timer=null;paused=true;
+      if(urlt!=="ask")setTimeout(()=>resolveDecision("auto"),250);
+    }
+  },900);
+}
+
+$$("[data-dec]").forEach(b=>b.addEventListener("click",()=>resolveDecision(b.dataset.dec)));
+function resolveDecision(kind){
+  if(!paused)return;paused=false;
+  $("#stagesList .stage[data-stage='2']").classList.remove("expanded");
+  $("#stagesList").classList.remove("compact");
+  setStage(2,"done");setStage(3,"active");renderPhases("run",3,3);
+  $("#runline").classList.remove("paused");topBar(55);
+  logAdd(kind==="none"?"Decision: keep all URLs.":kind==="all"?"Decision: rewrite all domains.":"Decision: rewrite selected domains.");
+  $("#actionLine").textContent="Importing media.";logAdd("Importing media.");pct(55);
+  let t=0;
+  timer=setInterval(()=>{
+    t++;
+    if(t===1){setStage(3,"done");setStage(4,"active");renderPhases("run",4,4);
+      $("#actionLine").textContent=dry?"Dry run: no pages written.":"Writing pages.";
+      logAdd(dry?"Dry run: no pages written.":"Writing pages.");topBar(75);pct(75)}
+    if(t===2){topBar(90);pct(90)}
+    if(t===3){setStage(4,"done");setStage(5,"active");renderPhases("run",5,5);$("#actionLine").textContent="Checking import state.";topBar(96);pct(96)}
+    if(t===4){setStage(5,"done");renderPhases("run",-1,6);
+      $("#actionLine").textContent="Import complete.";logAdd("Import complete.");
+      topBar(100,"done");pct(100);clearInterval(timer);timer=null;setTimeout(showComplete,420)}
+  },820);
+}
+
+function showComplete(){
+  show("s-complete");
+  $("#tPages").textContent=dry?"0":"38";
+  $("#tDrafts").textContent=draft?"38":"0";
+  $("#tDraftWrap").style.display=draft?"":"none";
+  $("#completeLede").textContent=dry?"Traversed and prepared 38 documents. No pages were written.":(draft?"38 drafts written from the Gutenberg docs.":"38 pages written from the Gutenberg docs.");
+  $("#tFooter").textContent=`0 errors · 0 warnings · elapsed ${Math.max(1,Math.round((Date.now()-startTs)/1000))}s`;
+  $("#realRunBtn").style.display=dry?"inline-block":"none";
+}
+
+$("#resumeBtn").addEventListener("click",()=>{
+  show("s-run");renderPhases("run",-1,2,2);topBar(40,"paused");paused=true;
+  $("#resumed").classList.add("on");
+  $("#actionLine").textContent="Choose URL treatment to continue.";
+  $("#runline").classList.add("paused");
+  $$("#stagesList .stage").forEach((s,i)=>{
+    s.classList.remove("active","done","blocked","expanded","idle");
+    s.querySelector(".st").textContent="";
+    if(i<2){s.classList.add("done");s.querySelector(".st").textContent="Done"}
+    else if(i===2){s.classList.add("blocked","expanded");s.querySelector(".st").textContent="Needs attention"}
+    else{s.classList.add("idle");s.querySelector(".st").textContent="Not started"}
+  });
+  $("#stagesList").classList.add("compact");
+  pct(40);$("#pctText").textContent="40% · 7 / 24 items";
+  $("#logList").innerHTML="";logAdd("Choose URL treatment to continue.");logAdd("Resumed: example.com session.");
+});
+
+$("#viewBtn").addEventListener("click",()=>alert("Would open: edit.php?post_type=page&universal_importer_session_id=…"));
+$("#anotherBtn").addEventListener("click",()=>{
+  dry=false;draft=false;urlt="ask";
+  document.querySelector("input[name=urlt][value=ask]").checked=true;
+  $("#togDry").classList.remove("on");$("#togDry").setAttribute("aria-pressed","false");
+  $("#togDraft").classList.remove("on");$("#togDraft").setAttribute("aria-pressed","false");
+  $("#domainBox").classList.remove("on");
+  show("s-empty");renderPhases("wizard",0,0);topBar(0);
+});
+$("#realRunBtn").addEventListener("click",()=>{dry=false;$("#startRun").click()});
+$("#abortBtn").addEventListener("click",()=>{$("#abortConfirm").classList.add("on")});
+$("#abortYes").addEventListener("click",()=>{
+  $("#abortConfirm").classList.remove("on");
+  clearInterval(timer);timer=null;
+  $("#actionLine").textContent="Import aborted.";logAdd("Import aborted.");topBar(40,"paused");
+});
+$("#abortNo").addEventListener("click",()=>$("#abortConfirm").classList.remove("on"));
+document.addEventListener("keydown",e=>{if(e.key==="Escape")$("#typeList").classList.remove("on")});
+})();
+</script>
+</body>
+</html>

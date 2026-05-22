@@ -1,0 +1,460 @@
+<!doctype html>
+<!-- Theme 3 — Right Sheet — V2: wide 620px, true two-column configure, trim spine -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Theme 3 · Right Sheet · V2 — Wide Two-Column</title>
+<style>
+:root{--bg:#fff;--ink:#0f172a;--rule:#e2e8f0;--rule2:#f1f5f9;--accent:#1e40af;--soft:#dbeafe;--muted:#64748b;--ok:#047857;--warn:#b45309;--sh:0 22px 56px rgba(15,23,42,.18),0 0 0 1px rgba(15,23,42,.05)}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;color:var(--ink);font:14px/1.55 "Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;background:#eef2f7}
+button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer}
+/* Quiet single-layer mock admin behind */
+.admin{position:fixed;inset:0;background:#f1f5f9;overflow:hidden}
+.admin .top{height:30px;background:#eef2f7;border-bottom:1px solid #e2e8f0}
+.admin .row{display:grid;grid-template-columns:170px 1fr;height:calc(100% - 30px);opacity:.55}
+.admin .side{background:#f8fafc;border-right:1px solid #eef2f7}
+.admin .side i{display:block;height:7px;margin:14px 18px;background:#e2e8f0;border-radius:3px;width:65%}
+.admin .main{padding:34px 56px}
+.gh{height:34px;background:#fff;border:1px solid #eef2f7;border-radius:5px;margin-bottom:14px;width:60%}
+.gh.t{width:30%;height:22px}.gh.b{height:70px;width:75%}
+.veil{position:fixed;inset:0;background:rgba(15,23,42,.32);backdrop-filter:blur(2px)}
+.sheet{position:fixed;top:0;right:0;height:100vh;width:620px;max-width:100vw;background:var(--bg);box-shadow:var(--sh);display:grid;grid-template-rows:auto auto 1fr auto;z-index:10}
+.hd{padding:14px 24px;border-bottom:1px solid var(--rule);display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center}
+.crumb{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.hd h1{margin:0;font-size:18px;font-weight:600;letter-spacing:-.008em}
+.ico{width:30px;height:30px;border-radius:7px;border:1px solid var(--rule);background:#fff;color:var(--muted);display:grid;place-items:center;font-size:15px;line-height:1}
+.ico:hover{color:var(--ink);border-color:#cbd5e1}
+/* Slim spine — label only, no sub-text */
+.spine{padding:0 24px;display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-bottom:1px solid var(--rule);background:#fafbfc}
+.sp{padding:9px 0 10px;text-align:left;background:none;border:none;color:var(--muted);font-size:12.5px;font-weight:600;border-top:2px solid var(--rule);position:relative}
+.sp.on{border-top-color:var(--accent);color:var(--accent)}
+.sp.dn{border-top-color:var(--ok);color:var(--ok)}
+.sp.dn::before{content:"✓ ";color:var(--ok)}
+
+.body{padding:22px 24px;overflow:auto}
+.p{display:none}.p.on{display:block}
+.p h2{margin:0 0 6px;font-size:20px;font-weight:600;letter-spacing:-.008em}
+.p .l{margin:0 0 18px;color:var(--muted);font-size:13.5px}
+
+/* Source */
+.fd{display:grid;gap:6px;margin-bottom:12px}
+.fd label{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.fd input{padding:10px 13px;border:1px solid var(--rule);border-radius:7px;background:#fff;width:100%;font-size:14px}
+.fd input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--soft)}
+.sc{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px}
+.ch{padding:5px 11px;border:1px solid var(--rule);border-radius:999px;background:#fff;font-size:12.5px;color:var(--muted)}
+.ch:hover{color:var(--ink);border-color:#cbd5e1}
+.inf{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:12px 14px;border:1px solid var(--rule);border-radius:9px;background:#f8fafc;margin-bottom:10px;position:relative}
+.ti{display:inline-flex;align-items:center;gap:7px;padding:3px 10px;border-radius:999px;background:var(--soft);color:var(--accent);font-size:12.5px;font-weight:600}
+.ti::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.why{color:var(--muted);font-size:12.5px}
+.cg{font-size:12.5px;color:var(--accent);background:none;border:none;text-decoration:underline;font-weight:600}
+.tm{display:none;position:absolute;top:100%;left:0;right:0;margin-top:6px;background:#fff;border:1px solid var(--rule);border-radius:9px;box-shadow:var(--sh);z-index:30;padding:6px;max-height:280px;overflow:auto}
+.tm.on{display:block}
+.tm button{display:block;width:100%;text-align:left;padding:8px 11px;background:none;border:none;border-radius:6px;font-size:13px}
+.tm button:hover{background:var(--soft)}
+.tm b{display:block}.tm i{display:block;color:var(--muted);font-size:11.5px;font-style:normal}
+.wn{margin-top:6px;padding:8px 11px;border-radius:6px;background:#fef3c7;color:#78350f;font-size:12.5px}
+.resume{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border:1px solid var(--rule);border-radius:7px;background:#f8fafc;margin-top:14px;font-size:12.5px;color:var(--muted)}
+.resume a{color:var(--accent);background:none;border:none;text-decoration:underline;font-weight:600;cursor:pointer;padding:0;font-size:12.5px}
+
+/* Configure two-column */
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:560px){.cols{grid-template-columns:1fr}}
+.g{border:1px solid var(--rule);border-radius:9px;padding:13px 15px;margin-bottom:12px;background:#fff}
+.g h3{margin:0 0 4px;font-size:13.5px;font-weight:600}
+.g p.h{margin:0 0 8px;color:var(--muted);font-size:12.5px}
+.rd{display:flex;align-items:flex-start;gap:10px;padding:7px 0;font-size:13px;cursor:pointer}
+.rd input{margin-top:3px;accent-color:var(--accent)}
+.rd b{display:block;font-weight:600}.rd i{display:block;color:var(--muted);font-size:12px;font-style:normal}
+.dw{margin-top:8px;display:none}.dw.on{display:block}
+.tr{display:flex;align-items:center;justify-content:space-between;padding:7px 0;font-size:13px;border-top:1px solid var(--rule2)}
+.tr:first-of-type{border-top:none}
+.tr b{display:block;font-weight:600}.tr i{display:block;color:var(--muted);font-size:12px;font-style:normal}
+.sw{width:34px;height:20px;background:#cbd5e1;border-radius:999px;position:relative;border:none;flex:none}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;background:#fff;border-radius:50%;transition:transform .15s;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.sw.on{background:var(--accent)}.sw.on::after{transform:translateX(14px)}
+
+/* Confirm */
+.sm{border:1px solid var(--rule);border-radius:9px;background:#f8fafc;padding:16px}
+.sm dl{margin:0;display:grid;grid-template-columns:110px 1fr;row-gap:9px;column-gap:14px;font-size:13.5px}
+.sm dt{color:var(--muted)}.sm dd{margin:0;font-weight:600;word-break:break-word}
+.peek{margin:8px 0 0;font-size:12px;color:var(--muted)}
+
+/* Run */
+.rh{padding:12px 14px;border:1px solid var(--rule);border-radius:9px;background:#f8fafc;margin-bottom:12px}
+.rh.bl{background:#fffbeb;border-color:#fcd34d}
+.rh .lr{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:flex-start}
+.ac{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:8px}
+.pu{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);animation:pu 1.4s infinite;flex:none}
+.rh.bl .pu{background:var(--warn);animation:none}
+@keyframes pu{0%,100%{opacity:1}50%{opacity:.4}}
+.mt{color:var(--muted);font-size:12px;margin-top:3px}
+.bar{height:7px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:10px}
+.bar>span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--ok));transition:width .4s;border-radius:999px}
+.bar.in>span{width:30%;animation:sl 1.4s ease-in-out infinite}
+.bar.bl>span{background:repeating-linear-gradient(45deg,var(--warn),var(--warn) 5px,#fef3c7 5px,#fef3c7 10px)}
+@keyframes sl{0%{transform:translateX(-100%);width:30%}50%{width:50%}100%{transform:translateX(360%);width:30%}}
+.sg{display:grid;gap:7px;margin-bottom:12px}
+.sr{display:grid;grid-template-columns:22px 1fr auto;gap:10px;padding:9px 12px;font-size:13px;border:1px solid var(--rule);border-radius:9px;background:#fff;align-items:center}
+.sr .mk{width:14px;height:14px;border-radius:50%;border:1.5px solid #cbd5e1;background:#fff}
+.sr.dn .mk{border-color:var(--ok);background:var(--ok)}
+.sr.ac .mk{border-color:var(--accent);background:var(--accent);box-shadow:0 0 0 3px var(--soft)}
+.sr.bl .mk{border-color:var(--warn);background:#fff;box-shadow:0 0 0 3px #fde68a}
+.sr.ac{border-color:var(--soft);background:#fafcff}
+.sr.bl{border-color:#fde68a;background:#fffbeb}
+.sr b{display:block;font-weight:600}.sr i{color:var(--muted);font-size:12px;display:block;font-style:normal}
+.sr.id i{display:none}
+.pl{font-size:11px;padding:2px 8px;border-radius:999px;background:#e2e8f0;color:var(--muted);font-weight:600;white-space:nowrap}
+.sr.dn .pl,.sr.id .pl{display:none}
+.sr.ac .pl{background:var(--soft);color:var(--accent)}.sr.bl .pl{background:#fef3c7;color:#92400e}
+
+.dc{margin:4px 0 10px;border:1px solid #fcd34d;background:#fffbeb;border-radius:9px;padding:13px 15px}
+.dc h3{margin:0 0 4px;font-size:13.5px;color:#78350f}
+.dc p{margin:0 0 8px;color:#78350f;font-size:12.5px}
+.dl{display:grid;gap:6px;margin:6px 0}
+.di{display:grid;grid-template-columns:18px 1fr;gap:10px;padding:8px 11px;border:1px solid #fcd34d;border-radius:7px;background:#fff;font-size:12.5px}
+.di input{margin-top:3px;accent-color:var(--accent)}
+.di i{display:block;color:var(--muted);font-size:11.5px;word-break:break-all;font-style:normal}
+.ax{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.btn{padding:7px 13px;border-radius:7px;border:1px solid var(--rule);background:#fff;font-size:13px;font-weight:600;color:var(--ink)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.pri:hover{background:#1d3a8a}
+.btn.gh{background:transparent;border-color:transparent;color:var(--muted)}
+.lg{margin-top:12px}
+.lg h4{margin:0 0 7px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;justify-content:space-between;align-items:center}
+.lg h4 span{font-weight:400;text-transform:none;letter-spacing:0}
+.lg ol{margin:0;padding:0;list-style:none;font-size:12.5px;color:var(--muted);max-height:150px;overflow:auto;border:1px solid var(--rule);border-radius:7px;background:#f8fafc}
+.lg li{padding:6px 11px;border-bottom:1px dashed var(--rule2)}
+.lg li:last-child{border:none}.lg li b{color:var(--ink);font-weight:600}
+details{margin-top:10px;border:1px solid var(--rule);border-radius:7px;background:#f8fafc}
+details summary{padding:8px 11px;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted)}
+details[open] summary{border-bottom:1px solid var(--rule);color:var(--ink)}
+.dt{padding:9px 11px;font-size:12px;color:var(--muted);display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.dt b{color:var(--ink)}
+.dt .kb{font:11px ui-monospace,SFMono-Regular,Menlo,monospace;background:#fff;border:1px solid var(--rule);padding:1px 5px;border-radius:4px;color:var(--ink)}
+
+/* Done */
+.dh{padding:16px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:9px;margin-bottom:12px}
+.dh h2{margin:0 0 4px;font-size:20px;color:var(--ok)}
+.dh p{margin:0;color:#15532a;font-size:13px}
+.tl{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.tc{flex:1;min-width:120px;border:1px solid var(--rule);border-radius:9px;padding:11px 13px;background:#fff}
+.tc v{font-weight:700;font-size:20px;display:block;font-style:normal;letter-spacing:-.01em}
+.tc s{font-size:11.5px;color:var(--muted);text-decoration:none}
+.tlf{font-size:12px;color:var(--muted);margin:2px 0 12px}
+
+/* Past */
+.backbar{display:flex;align-items:center;gap:8px;margin:-4px 0 12px;font-size:12px;color:var(--muted)}
+.backbar button{background:none;border:none;color:var(--accent);font-weight:600;cursor:pointer;padding:0;text-decoration:underline}
+.pr{display:grid;grid-template-columns:1fr auto;gap:10px;padding:10px 14px;border:1px solid var(--rule);border-radius:8px;margin-bottom:7px;font-size:13px;background:#fff;align-items:center}
+.pr b{display:block;font-weight:600}.pr i{color:var(--muted);font-size:12px;font-style:normal}
+
+/* Foot */
+.ft{padding:12px 24px;border-top:1px solid var(--rule);background:#f8fafc;display:flex;justify-content:space-between;gap:10px;align-items:center}
+.ft .l1,.ft .r1{display:flex;gap:8px}
+@media(max-width:720px){.sheet{width:100vw}.admin{display:none}.hd,.spine,.body,.ft{padding-left:16px;padding-right:16px}.sm dl{grid-template-columns:1fr}}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+</style>
+</head>
+<body>
+<div class="admin" aria-hidden="true">
+  <div class="top"></div>
+  <div class="row">
+    <div class="side"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="main"><div class="gh t"></div><div class="gh"></div><div class="gh b"></div></div>
+  </div>
+</div>
+<div class="veil" aria-hidden="true"></div>
+
+<aside class="sheet" role="dialog" aria-modal="true" aria-labelledby="tt">
+  <header class="hd">
+    <div><div class="crumb">Tools / Universal Importer</div><h1 id="tt">New import</h1></div>
+    <button class="ico" id="recBtn" aria-label="Past imports" title="Past imports">↺</button>
+    <button class="ico" id="cls" aria-label="Close">×</button>
+  </header>
+
+  <nav class="spine" id="stp" aria-label="Progress">
+    <button class="sp on" data-s="0">Source</button>
+    <button class="sp" data-s="1">Configure</button>
+    <button class="sp" data-s="2">Confirm</button>
+    <button class="sp" data-s="3">Run</button>
+    <button class="sp" data-s="4">Done</button>
+  </nav>
+
+  <div class="body">
+
+    <section class="p on" data-p="0">
+      <h2>Where is your content?</h2>
+      <p class="l">A URL, server path, file or folder. We'll guess the rest.</p>
+      <div class="fd"><label for="src">Source</label><input id="src" type="text" value="https://github.com/WordPress/gutenberg/tree/trunk/docs"></div>
+      <div class="sc">
+        <button class="ch" data-f="https://github.com/">GitHub</button>
+        <button class="ch" data-f="https://example.com/wp-json/">WordPress site</button>
+        <button class="ch" data-f="https://example.com/feed/">Feed / OPML</button>
+        <button class="ch" data-f="/var/www/content">Server path</button>
+        <button class="ch" data-f="https://example.com/sitemap.xml">Sitemap</button>
+      </div>
+      <div class="inf" id="inf">
+        <span class="ti" id="tc">GitHub repository</span>
+        <span class="why" id="tw">Repo, branch and subpath recognised.</span>
+        <button class="cg" id="ct" aria-haspopup="menu" aria-expanded="false">Not this? Change</button>
+        <div class="tm" id="tmn" role="menu">
+          <button data-t="GitHub repository" data-w="Repo, branch and subpath recognised."><b>GitHub repository</b><i>Markdown parsed as pages.</i></button>
+          <button data-t="WordPress REST site" data-w="REST root detected."><b>WordPress REST site</b><i>Posts and pages via REST.</i></button>
+          <button data-t="Feed (Atom/RSS/RDF)" data-w="Feed sniffed from URL."><b>Feed (Atom/RSS/RDF)</b><i>Currently-advertised items.</i></button>
+          <button data-t="OPML feed list" data-w="OPML root document."><b>OPML feed list</b><i>Up to 20 feeds walked.</i></button>
+          <button data-t="Server path" data-w="Local filesystem path."><b>Server path</b><i>Folder on this server.</i></button>
+          <button data-t="Uploaded file/folder" data-w="Staged folder."><b>Uploaded file/folder</b><i>Files staged in cache.</i></button>
+          <button data-t="Reachable URL" data-w="Single remote page."><b>Reachable URL</b><i>Single document.</i></button>
+          <button data-t="Sitemap" data-w="URLs walked and deduped."><b>Sitemap</b><i>Walks and dedupes URLs.</i></button>
+          <button data-t="PDF" data-w="Native parser ≤16 MiB."><b>PDF</b><i>Structure + images.</i></button>
+          <button data-t="EPUB" data-w="EPUB container/OPF/spine."><b>EPUB</b><i>OPF and spine.</i></button>
+        </div>
+      </div>
+      <div class="wn" id="mm" hidden>Type doesn't look right for this URL. You can still proceed.</div>
+      <div class="resume">
+        <span>One paused session: <b>example.com/wp-json/</b> · 7 of 24 pages.</span>
+        <button id="rsm">Resume</button>
+      </div>
+    </section>
+
+    <section class="p" data-p="1">
+      <h2>Configure</h2>
+      <p class="l">Smart defaults are set. Adjust only what you need.</p>
+      <div class="cols">
+        <div>
+          <div class="g">
+            <h3>URL treatment</h3>
+            <p class="h">How to handle absolute links inside content.</p>
+            <label class="rd"><input type="radio" name="u" value="ask" checked><span><b>Ask when old URLs are found</b><i>Recommended. Pauses on first-party URLs.</i></span></label>
+            <label class="rd"><input type="radio" name="u" value="keep"><span><b>Keep URLs unchanged</b><i>No rewrites.</i></span></label>
+            <label class="rd"><input type="radio" name="u" value="rewrite"><span><b>Rewrite listed domains</b><i>Pre-confirm a host list.</i></span></label>
+            <div class="dw" id="dw"><div class="fd" style="margin-top:6px"><label for="dom">Domains</label><input id="dom" placeholder="example.com, www.example.com"></div></div>
+          </div>
+        </div>
+        <div>
+          <div class="g">
+            <h3>Run</h3>
+            <p class="h">Dry runs prepare everything but write nothing.</p>
+            <div class="tr"><div><b>Dry run</b><i>Traverse and prepare; no pages written.</i></div><button class="sw" id="dr" role="switch" aria-checked="false" aria-label="Dry run"></button></div>
+            <div class="tr"><div><b>Import as drafts</b><i>Otherwise published immediately.</i></div><button class="sw" id="df" role="switch" aria-checked="false" aria-label="Drafts"></button></div>
+          </div>
+          <details><summary>More options</summary><div class="dt"><span>Cache reuse</span><b>on</b><span>Secrets</span><b>env only</b><span>Relationship map</span><b>per-item template</b></div></details>
+        </div>
+      </div>
+    </section>
+
+    <section class="p" data-p="2">
+      <h2>Review &amp; start</h2>
+      <p class="l">One last look before we begin.</p>
+      <div class="sm"><dl>
+        <dt>Source</dt><dd id="sS">github.com/WordPress/gutenberg/tree/trunk/docs</dd>
+        <dt>Type</dt><dd id="sT">GitHub repository</dd>
+        <dt>Subpath</dt><dd>docs</dd>
+        <dt>URL treatment</dt><dd id="sU">Ask when old URLs are found</dd>
+        <dt>Run mode</dt><dd id="sM">Real run</dd>
+        <dt>Post status</dt><dd id="sP">Publish</dd>
+        <dt>Preview</dt><dd>≈ 38 documents · ≈ 22 media references</dd>
+      </dl></div>
+      <p class="peek">From peek discovery of <code>trunk/docs</code>.</p>
+    </section>
+
+    <section class="p" data-p="3">
+      <div class="rh" id="rh">
+        <div class="lr">
+          <div>
+            <div class="ac" id="ac" aria-live="polite"><span class="pu"></span>Queued.</div>
+            <div class="mt" id="cn">0 / 38 items</div>
+          </div>
+          <button class="btn gh" id="abt">Abort</button>
+        </div>
+        <div class="bar in" id="bw" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="br"></span></div>
+      </div>
+
+      <div class="sg" id="sgs">
+        <div class="sr ac"><span class="mk"></span><div><b>Read source</b><i>Fetching repository files with sparse Git.</i></div><span class="pl">In progress</span></div>
+        <div class="sr id"><span class="mk"></span><div><b>Prepare content</b><i></i></div><span class="pl"></span></div>
+        <div class="sr id"><span class="mk"></span><div><b>URL treatment</b><i></i></div><span class="pl"></span></div>
+        <div class="sr id"><span class="mk"></span><div><b>Import media</b><i></i></div><span class="pl"></span></div>
+        <div class="sr id"><span class="mk"></span><div><b>Write pages</b><i></i></div><span class="pl"></span></div>
+        <div class="sr id"><span class="mk"></span><div><b>Finish</b><i></i></div><span class="pl"></span></div>
+      </div>
+      <div id="ds"></div>
+      <div class="lg" aria-live="polite">
+        <h4>Activity <span>live · keepalive 5s</span></h4>
+        <ol id="ll"><li><b>14:01</b> Reading the source.</li></ol>
+      </div>
+      <details><summary>Technical details</summary><div class="dt"><span>Source items</span><b id="dti">0 / 38</b><span>Media</span><b id="dtm">0 / 22</b><span>Backoffs</span><b id="dtb">0</b><span>Stuck CLI</span><b class="kb">wp universal-importer tick</b></div></details>
+    </section>
+
+    <section class="p" data-p="4">
+      <div class="dh"><h2 id="dT">Import complete.</h2><p id="dS">38 pages · 22 media · 4 min 12 s</p></div>
+      <div class="tl">
+        <div class="tc"><v>38</v><s>Pages written</s></div>
+        <div class="tc"><v>22</v><s>Media imported</s></div>
+      </div>
+      <p class="tlf">No drafts, no errors.</p>
+      <button class="btn pri" id="viewBtn">View imported content</button>
+    </section>
+
+    <section class="p" data-p="past">
+      <div class="backbar"><button id="backBtn">← Back to import</button></div>
+      <h2>Past imports</h2>
+      <p class="l">The 10 most recent sessions. Resume any paused or failed run.</p>
+      <div class="pr"><div><b>https://example.com/wp-json/</b><i>7 of 24 pages · stopped during URL treatment · 2 days ago</i></div><span class="pl" style="background:#fef3c7;color:#92400e">paused</span></div>
+      <div class="pr"><div><b>/var/www/exports/blog-archive</b><i>128 of 128 pages · done · last week</i></div><span class="pl" style="background:#dcfce7;color:var(--ok)">done</span></div>
+      <div class="pr"><div><b>https://example.org/sitemap.xml</b><i>3 of ? pages · failed: network · 3 weeks ago</i></div><span class="pl" style="background:#fee2e2;color:#991b1b">failed</span></div>
+    </section>
+  </div>
+
+  <footer class="ft">
+    <div class="l1"><button class="btn" id="bk">Back</button></div>
+    <div class="r1"><button class="btn gh" id="cn2">Cancel</button><button class="btn pri" id="nx">Continue</button></div>
+  </footer>
+</aside>
+
+<script>
+(function(){
+  const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
+  let step=0,urlMode='ask',dry=false,drafts=false,timer=null,past=false,prev=0,done=false;
+  function show(p){$$('.p').forEach(e=>e.classList.toggle('on',e.dataset.p===String(p)))}
+  function stepper(){$$('.sp').forEach((e,i)=>{e.classList.remove('on','dn');if(i<step)e.classList.add('dn');else if(i===step)e.classList.add('on')});document.getElementById('stp').style.display=step===1?'none':''}
+  function setStep(n){past=false;done=n===4?done:false;step=Math.max(0,Math.min(4,n));show(step);stepper();foot();sync()}
+  function foot(){const b=$('#bk'),x=$('#nx'),c=$('#cn2');
+    b.disabled=step===0||past;
+    if(past){x.textContent='Back to import';c.style.display='none';b.disabled=true;return}
+    c.style.display='';
+    x.textContent=step===0?'Continue':step===1?'Review':step===2?(dry?'Start dry run':'Import this content'):step===3?'Running…':'View imported content';
+  }
+  function sync(){
+    $('#sU').textContent=urlMode==='ask'?'Ask when old URLs are found':urlMode==='keep'?'Keep URLs unchanged':('Rewrite listed domains'+($('#dom').value.trim()?' ('+$('#dom').value.trim()+')':''));
+    $('#sM').textContent=dry?'Dry run':'Real run';
+    $('#sP').textContent=drafts?'Draft':'Publish';
+  }
+  $$('.sp').forEach(e=>e.addEventListener('click',()=>{const t=+e.dataset.s;if(t<=step+1&&!past)setStep(t)}));
+  $$('.ch').forEach(c=>c.addEventListener('click',()=>{if(c.dataset.f)$('#src').value=c.dataset.f;classify()}));
+  $('#ct').addEventListener('click',e=>{e.stopPropagation();const m=$('#tmn');const o=m.classList.toggle('on');$('#ct').setAttribute('aria-expanded',o)});
+  document.addEventListener('click',e=>{if(!e.target.closest('#inf'))$('#tmn').classList.remove('on')});
+  $$('#tmn button').forEach(b=>b.addEventListener('click',()=>{
+    $('#tc').textContent=b.dataset.t;$('#tw').textContent=b.dataset.w;$('#sT').textContent=b.dataset.t;
+    $('#tmn').classList.remove('on');
+    const v=$('#src').value;$('#mm').hidden=!(/github\.com/.test(v)&&b.dataset.t!=='GitHub repository');
+  }));
+  function classify(){
+    const v=$('#src').value.trim();let t='Reachable URL',w='Single remote page.';
+    if(/github\.com/.test(v)){t='GitHub repository';w='Repo, branch and subpath recognised.'}
+    else if(/wp-json/.test(v)){t='WordPress REST site';w='REST root detected.'}
+    else if(/sitemap\.xml/.test(v)){t='Sitemap';w='URLs walked and deduped.'}
+    else if(/\.opml/.test(v)){t='OPML feed list';w='OPML root document.'}
+    else if(/feed|rss|atom|\.xml/.test(v)){t='Feed (Atom/RSS/RDF)';w='Feed sniffed from URL.'}
+    else if(/^\//.test(v)){t='Server path';w='Local filesystem path.'}
+    else if(/\.pdf$/i.test(v)){t='PDF';w='Native parser ≤16 MiB.'}
+    else if(/\.epub$/i.test(v)){t='EPUB';w='EPUB container/OPF/spine.'}
+    $('#tc').textContent=t;$('#tw').textContent=w;$('#sT').textContent=t;
+    $('#sS').textContent=v.replace(/^https?:\/\//,'');$('#mm').hidden=true;
+  }
+  $('#src').addEventListener('input',classify);
+  $$('input[name=u]').forEach(r=>r.addEventListener('change',()=>{urlMode=r.value;$('#dw').classList.toggle('on',urlMode==='rewrite');sync()}));
+  $('#dom').addEventListener('input',sync);
+  $('#dr').addEventListener('click',()=>{dry=!dry;$('#dr').classList.toggle('on',dry);$('#dr').setAttribute('aria-checked',dry);sync();foot()});
+  $('#df').addEventListener('click',()=>{drafts=!drafts;$('#df').classList.toggle('on',drafts);$('#df').setAttribute('aria-checked',drafts);sync()});
+  $('#nx').addEventListener('click',()=>{
+    if(past){setStep(prev);return}
+    if(step===2){setStep(3);startRun();return}
+    if(step===3)return;
+    if(step===4){try{alert('Would open: edit.php?post_type=page&universal_importer_session_id=…')}catch(e){};return}
+    setStep(step+1);
+  });
+  $('#bk').addEventListener('click',()=>{if(!past)setStep(step-1)});
+  $('#cn2').addEventListener('click',()=>{setStep(0);resetRun()});
+  $('#cls').addEventListener('click',()=>{try{alert('Sheet closed.')}catch(e){}});
+  $('#recBtn').addEventListener('click',()=>{prev=step;past=true;show('past');foot()});
+  $('#backBtn').addEventListener('click',()=>setStep(prev));
+  $('#rsm').addEventListener('click',()=>{setStep(3);startRun(true)});
+  $('#viewBtn').addEventListener('click',()=>{try{alert('Would open: edit.php?post_type=page&universal_importer_session_id=…')}catch(e){}});
+  $('#abt').addEventListener('click',inlineAbort);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){if(past){setStep(prev);return}$('#tmn').classList.remove('on')}
+    if(e.key==='Enter'&&document.activeElement.tagName!=='TEXTAREA'&&!document.activeElement.classList.contains('btn')&&step!==3){$('#nx').click()}
+  });
+  function inlineAbort(){
+    const slot=$('#ds');
+    slot.innerHTML=`<div class="dc"><h3>Abort this import?</h3><p>Drafts written so far stay in place. The session can be resumed later if you choose.</p><div class="ax"><button class="btn pri" id="okAb">Yes, abort</button><button class="btn" id="kpAb">Keep running</button></div></div>`;
+    $('#okAb').addEventListener('click',()=>{resetRun();setStep(0)});
+    $('#kpAb').addEventListener('click',()=>{slot.innerHTML=''});
+  }
+  const ST=[
+    {a:'Reading the source.',s:'Fetching repository files with sparse Git.'},
+    {a:'Preparing 12 items.',s:'Markdown to block documents.'},
+    {a:'Choose URL treatment to continue.',s:'2 first-party domains detected.'},
+    {a:'Importing media.',s:'22 references — fetching first-party assets.'},
+    {a:'Writing pages.',s:'Persisting drafts.'},
+    {a:'Checking import state.',s:'Final checks and relationships.'}
+  ];
+  function resetRun(){if(timer){clearTimeout(timer);timer=null}
+    $$('.sr').forEach((r,i)=>{r.classList.remove('dn','ac','bl');r.classList.add('id');r.querySelector('.pl').textContent=''});
+    const first=$$('.sr')[0];first.classList.remove('id');first.classList.add('ac');first.querySelector('.pl').textContent='In progress';first.querySelector('i').textContent='Fetching repository files with sparse Git.';
+    $('#ac').innerHTML='<span class="pu"></span>Queued.';$('#cn').textContent='0 / 38 items';
+    $('#bw').classList.remove('bl');$('#bw').classList.add('in');$('#br').style.width='0%';$('#bw').setAttribute('aria-valuenow','0');
+    $('#rh').classList.remove('bl');
+    $('#ll').innerHTML='';$('#ds').innerHTML='';done=false;
+    $('#dti').textContent='0 / 38';$('#dtm').textContent='0 / 22';$('#dtb').textContent='0';
+  }
+  function log(t){const li=document.createElement('li');const n=new Date(),h=String(n.getHours()).padStart(2,'0'),m=String(n.getMinutes()).padStart(2,'0');li.innerHTML='<b>'+h+':'+m+'</b> '+t;$('#ll').prepend(li)}
+  function startRun(){
+    resetRun();let i=0,paused=false,backoffs=0;
+    function tick(ms,fn){timer=setTimeout(fn,ms)}
+    function adv(){
+      if(paused)return;
+      if(i>=ST.length){
+        $$('.sr').forEach(r=>{r.classList.remove('ac','bl','id');r.classList.add('dn');r.querySelector('.pl').textContent=''});
+        if(dry)$$('.sr')[4].querySelector('i').textContent='Dry run: no pages written.';
+        $('#ac').innerHTML='<span class="pu" style="background:var(--ok)"></span>'+(dry?'Dry run complete.':'Import complete.');
+        $('#cn').textContent='38 / 38 items';
+        $('#br').style.width='100%';$('#bw').classList.remove('in');$('#bw').setAttribute('aria-valuenow','100');
+        $('#dti').textContent='38 / 38';$('#dtm').textContent='22 / 22';
+        log('Import complete.');done=true;tick(700,()=>setStep(4));return;
+      }
+      $$('.sr').forEach((r,n)=>{r.classList.remove('ac');if(n<i){r.classList.add('dn');r.classList.remove('id');r.querySelector('.pl').textContent=''}else if(n===i){r.classList.add('ac');r.classList.remove('id');r.querySelector('.pl').textContent='In progress';r.querySelector('i').textContent=ST[i].s}});
+      const s=ST[i];$('#ac').innerHTML='<span class="pu"></span>'+s.a;
+      const pct=Math.round(i/ST.length*100);$('#br').style.width=pct+'%';$('#bw').setAttribute('aria-valuenow',pct);
+      if(i>0)$('#bw').classList.remove('in');
+      $('#cn').textContent=Math.round(38*i/ST.length)+' / 38 items';
+      $('#dti').textContent=Math.round(38*i/ST.length)+' / 38';
+      if(i>=3)$('#dtm').textContent=Math.round(22*(i-2)/3)+' / 22';
+      log(s.a);
+      if(i===3)setTimeout(()=>{if(!paused){backoffs++;$('#dtb').textContent=backoffs;log('Waiting for the remote source. (HTTP 429 — retry in 87 s)')}},500);
+      if(i===2&&urlMode==='ask'){
+        const r=$$('.sr')[2];r.classList.remove('ac');r.classList.add('bl');r.querySelector('.pl').textContent='Needs attention';r.querySelector('i').textContent='Run paused. Answer the prompt below to continue.';
+        $('#bw').classList.add('bl');$('#bw').classList.remove('in');$('#rh').classList.add('bl');
+        $('#ac').innerHTML='<span class="pu"></span>Choose URL treatment to continue.';
+        decision();paused=true;return;
+      }
+      i++;tick(900,adv);
+    }
+    function decision(){
+      const slot=$('#ds');
+      slot.innerHTML=`<div class="dc"><h3>Rewrite old-site URLs to this site?</h3><p>2 first-party domains found. Selected hosts move; unselected stay as written.</p><div class="dl">
+        <label class="di"><input type="checkbox" checked><div><b>developer.wordpress.org</b><i>e.g. https://developer.wordpress.org/block-editor/</i></div></label>
+        <label class="di"><input type="checkbox" checked><div><b>make.wordpress.org/core</b><i>e.g. https://make.wordpress.org/core/handbook/</i></div></label>
+      </div><div class="ax"><button class="btn pri" data-d="selected">Rewrite selected</button><button class="btn" data-d="all">Yes, rewrite all</button><button class="btn" data-d="none">No, keep all URLs</button></div></div>`;
+      $$('#ds button').forEach(b=>b.addEventListener('click',()=>resolve(b.dataset.d)));
+      // place decision card after the blocked stage row
+      const blocked=$$('.sr')[2];blocked.after(slot.firstChild);
+    }
+    function resolve(k){
+      const r=$$('.sr')[2];r.classList.remove('bl');r.classList.add('dn');r.querySelector('.pl').textContent='';
+      r.querySelector('i').textContent=k==='all'?'All first-party domains will be rewritten.':k==='none'?'All URLs kept as written.':'Rewriting selected domains only.';
+      $('#bw').classList.remove('bl');$('#rh').classList.remove('bl');
+      $('#ds').innerHTML='';$$('.dc').forEach(x=>x.remove());log('Decision resolved · '+k);paused=false;i=3;tick(500,adv);
+    }
+    tick(700,adv);
+  }
+  classify();sync();foot();
+})();
+</script>
+</body>
+</html>
