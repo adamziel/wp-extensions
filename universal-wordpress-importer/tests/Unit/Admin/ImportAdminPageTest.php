@@ -401,12 +401,12 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( "dropzone.addEventListener('drop'", $source );
 		$this->assertStringContainsString( 'readDirectoryEntries', $source );
 		$this->assertStringContainsString( 'webkitGetAsEntry', $source );
-		$this->assertStringContainsString( 'Upload files or a folder', $source );
+		$this->assertStringContainsString( 'Upload a file or folder', $source );
 		$this->assertStringContainsString( 'id="universal-importer-clear-files"', $source );
 		$this->assertStringContainsString( 'Clear selection', $source );
 		$this->assertStringContainsString( 'countFilesByExtension(browserFiles, \'.pdf\')', $source );
-		$this->assertStringContainsString( 'URL or server path', $source );
-		$this->assertStringContainsString( 'RSS/Atom/OPML feed', $source );
+		$this->assertStringContainsString( 'Drop a file or folder anywhere on this card', $source );
+		$this->assertStringContainsString( 'type="url"', $source );
 		$this->assertStringContainsString( 'GitHub repo', $source );
 		$this->assertStringContainsString( 'Feed or OPML', $source );
 		$this->assertStringContainsString( 'Selected file tree', $source );
@@ -469,6 +469,19 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'AJAX_GITHUB_DIRS', $source );
 		$this->assertStringContainsString( 'var keepaliveInFlight = false', $source );
 		$this->assertStringContainsString( 'if (!activeSessionId || keepaliveInFlight)', $source );
+		// Transcript / memo column structure (option-30 design).
+		$this->assertStringContainsString( 'universal-importer-convo', $source );
+		$this->assertStringContainsString( 'universal-importer-turn', $source );
+		$this->assertStringContainsString( 'universal-importer-memo', $source );
+		$this->assertStringContainsString( 'universal-importer-memo-num', $source );
+		$this->assertStringContainsString( 'Paste a URL', $source );
+		$this->assertStringContainsString( 'Past imports', $source );
+		// Source capture is URL or upload only — no typed server paths in the UI.
+		$this->assertStringNotContainsString( 'Server path', $source );
+		$this->assertStringNotContainsString( '/path/to/export', $source );
+		$this->assertStringNotContainsString( 'URL or server path', $source );
+		// Drag handler only reacts when the drag has Files (so dragging text/URLs doesn't light up the card).
+		$this->assertStringContainsString( "types.indexOf('Files')", $source );
 	}
 
 	/**

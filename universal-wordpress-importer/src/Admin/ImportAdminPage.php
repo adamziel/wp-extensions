@@ -683,133 +683,571 @@ final class ImportAdminPage {
 		?>
 		<style>
 			.universal-importer-admin {
-				--ui-accent: #3858e9;
-				--ui-border: #dcdcde;
-				--ui-muted: #646970;
-				--ui-surface: #fff;
-				max-width: 1280px;
+				--ui-bg: #fbf8f1;
+				--ui-ink: #1f2937;
+				--ui-rule: #eadfca;
+				--ui-rule2: #d9caa3;
+				--ui-accent: #a16207;
+				--ui-soft: #fef3c7;
+				--ui-muted: #7a6a52;
+				--ui-ok: #365314;
+				--ui-warn: #92400e;
+				--ui-warn-bg: #fff3df;
+				background: var(--ui-bg);
+				color: var(--ui-ink);
+				font: 14.5px/1.55 "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+				margin: 0 auto;
+				max-width: 720px;
+				padding: 24px 22px 80px;
 			}
 			.universal-importer-admin,
 			.universal-importer-admin * {
 				box-sizing: border-box;
 			}
+			.universal-importer-admin code {
+				font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+				font-size: .92em;
+			}
+			.universal-importer-admin button,
+			.universal-importer-admin input,
+			.universal-importer-admin textarea,
+			.universal-importer-admin select {
+				font: inherit;
+				color: inherit;
+			}
+			.universal-importer-top {
+				align-items: baseline;
+				display: flex;
+				gap: 12px;
+				justify-content: space-between;
+				margin-bottom: 18px;
+			}
 			.universal-importer-admin h1 {
-				font-size: 28px;
+				font-size: 14px;
+				font-weight: 600;
+				letter-spacing: .02em;
 				line-height: 1.2;
-				margin: 24px 0 6px;
+				margin: 0;
+			}
+			.universal-importer-admin h1 span {
+				color: var(--ui-muted);
+				font-weight: 400;
+			}
+			.universal-importer-top-actions {
+				display: flex;
+				gap: 12px;
+			}
+			.universal-importer-link-button {
+				background: none;
+				border: 0;
+				color: var(--ui-muted);
+				cursor: pointer;
+				font: inherit;
+				font-size: 12.5px;
+				padding: 0;
+			}
+			.universal-importer-link-button:hover {
+				color: var(--ui-ink);
 			}
 			.universal-importer-lede {
-				color: var(--ui-muted);
-				font-size: 14px;
-				margin: 0 0 20px;
-				max-width: 780px;
-			}
-			.universal-importer-start {
-				background: var(--ui-surface);
-				border: 1px solid var(--ui-border);
-				border-radius: 8px;
-				box-shadow: 0 1px 2px rgba(0,0,0,.04);
-				margin: 18px 0 28px;
-				padding: 24px;
-			}
-			.universal-importer-start.is-hidden {
 				display: none;
 			}
-			.universal-importer-section-heading {
-				font-size: 18px;
-				line-height: 1.3;
-				margin: 0 0 12px;
-			}
-			.universal-importer-start-grid {
-				display: grid;
-				gap: 24px;
-				grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr);
-			}
-			.universal-importer-field {
-				margin: 0 0 18px;
-			}
-			.universal-importer-source-shortcuts {
-				display: grid;
-				gap: 10px;
-				grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-				margin: 0 0 18px;
-			}
-			.universal-importer-source-shortcut {
-				background: #fff;
-				border: 1px solid var(--ui-border);
-				border-radius: 6px;
-				color: #1d2327;
-				cursor: pointer;
-				min-height: 74px;
-				padding: 11px 12px;
-				text-align: left;
-				width: 100%;
-			}
-			.universal-importer-source-shortcut:hover,
-			.universal-importer-source-shortcut:focus {
-				border-color: var(--ui-accent);
-				box-shadow: 0 0 0 1px var(--ui-accent);
-				outline: none;
-			}
-			.universal-importer-source-shortcut strong,
-			.universal-importer-source-shortcut span {
-				display: block;
-			}
-			.universal-importer-source-shortcut span {
+			.universal-importer-strip {
+				border-top: 1px solid var(--ui-rule);
+				border-bottom: 1px solid var(--ui-rule);
 				color: var(--ui-muted);
-				font-size: 12px;
-				line-height: 1.4;
-				margin-top: 4px;
+				display: none;
+				font-size: 11.5px;
+				margin: -4px 0 14px;
+				padding: 10px 0;
 			}
-			.universal-importer-field label,
-			.universal-importer-field legend {
-				color: #1d2327;
+			.universal-importer-strip.is-visible {
 				display: block;
-				font-size: 13px;
-				font-weight: 600;
-				margin: 0 0 7px;
 			}
-			.universal-importer-field input[type="text"] {
-				border-radius: 6px;
-				font-size: 14px;
-				max-width: 720px;
-				min-height: 40px;
-				width: 100%;
+			.universal-importer-strip-row {
+				display: flex;
+				flex-wrap: wrap;
+				font-variant-numeric: tabular-nums;
+				gap: 14px;
+			}
+			.universal-importer-strip-stage {
+				align-items: center;
+				display: inline-flex;
+				gap: 6px;
+				white-space: nowrap;
+			}
+			.universal-importer-strip-stage .universal-importer-strip-dot {
+				background: #dcd1b3;
+				border-radius: 50%;
+				flex: none;
+				height: 8px;
+				width: 8px;
+			}
+			.universal-importer-strip-stage.is-active {
+				color: var(--ui-ink);
+				font-weight: 600;
+			}
+			.universal-importer-strip-stage.is-active .universal-importer-strip-dot {
+				background: var(--ui-accent);
+				box-shadow: 0 0 0 3px #f6e3b2;
+			}
+			.universal-importer-strip-stage.is-done .universal-importer-strip-dot {
+				background: var(--ui-ok);
+			}
+			.universal-importer-strip-stage.is-blocked .universal-importer-strip-dot {
+				animation: universal-importer-pulse-dot 1.2s ease-in-out infinite;
+				background: var(--ui-warn);
+			}
+			@keyframes universal-importer-pulse-dot {
+				0%, 100% { box-shadow: 0 0 0 0 rgba(146, 64, 14, .4); }
+				50% { box-shadow: 0 0 0 5px rgba(146, 64, 14, 0); }
+			}
+			.universal-importer-past {
+				border-top: 1px solid var(--ui-rule);
+				border-bottom: 1px solid var(--ui-rule);
+				display: none;
+				margin-bottom: 18px;
+				padding: 12px 0;
+			}
+			.universal-importer-past.is-visible {
+				display: block;
+			}
+			.universal-importer-past h2 {
+				color: var(--ui-muted);
+				font-size: 11px;
+				font-weight: 700;
+				letter-spacing: .12em;
+				margin: 0 0 8px;
+				text-transform: uppercase;
+			}
+			.universal-importer-past-row {
+				align-items: center;
+				border-top: 1px dotted var(--ui-rule);
+				display: flex;
+				font-size: 12.5px;
+				gap: 12px;
+				justify-content: space-between;
+				padding: 8px 0;
+			}
+			.universal-importer-past-row:first-child {
+				border-top: 0;
+			}
+			.universal-importer-past-src {
+				font-family: ui-monospace, Menlo, monospace;
+				word-break: break-all;
+			}
+			.universal-importer-past-meta {
+				color: var(--ui-muted);
+				font-size: 11.5px;
+			}
+			.universal-importer-past-empty {
+				color: var(--ui-muted);
+				font-size: 12.5px;
+				margin: 0;
+				padding: 8px 0;
+			}
+			.universal-importer-convo {
+				display: block;
+			}
+			.universal-importer-turn {
+				animation: universal-importer-fade .18s ease-out;
+				border-bottom: 1px dashed var(--ui-rule);
+				padding: 14px 0;
+			}
+			.universal-importer-turn:last-child {
+				border-bottom: 0;
+			}
+			@keyframes universal-importer-fade {
+				from { opacity: 0; transform: translateY(4px); }
+				to { opacity: 1; transform: none; }
+			}
+			.universal-importer-speaker {
+				align-items: center;
+				color: var(--ui-muted);
+				display: flex;
+				font-size: 10.5px;
+				font-weight: 700;
+				gap: 8px;
+				letter-spacing: .12em;
+				margin-bottom: 6px;
+				text-transform: uppercase;
+			}
+			.universal-importer-turn.is-sys .universal-importer-speaker {
+				color: var(--ui-accent);
+			}
+			.universal-importer-turn.is-usr .universal-importer-speaker {
+				color: var(--ui-ok);
+			}
+			.universal-importer-turn.is-dec .universal-importer-speaker {
+				color: var(--ui-warn);
+			}
+			.universal-importer-paused-chip {
+				background: var(--ui-warn-bg);
+				border: 1px solid var(--ui-warn);
+				border-radius: 999px;
+				color: var(--ui-warn);
+				display: inline-flex;
+				font-size: 10px;
+				font-weight: 700;
+				gap: 5px;
+				letter-spacing: .06em;
+				padding: 1px 7px;
+			}
+			.universal-importer-edit {
+				background: none;
+				border: 0;
+				border-radius: 3px;
+				color: var(--ui-accent);
+				cursor: pointer;
+				font-size: 11.5px;
+				font-weight: 600;
+				letter-spacing: 0;
+				margin-left: auto;
+				padding: 1px 4px;
+				text-transform: none;
+			}
+			.universal-importer-edit::before {
+				content: "\B7 ";
+			}
+			.universal-importer-edit:hover {
+				background: var(--ui-soft);
+				text-decoration: underline;
+			}
+			.universal-importer-body {
+				font-size: 14.5px;
+				line-height: 1.55;
 			}
 			.universal-importer-hint {
 				color: var(--ui-muted);
 				display: block;
-				font-size: 12px;
-				margin: 6px 0 0;
+				font-size: 13px;
+				margin: 3px 0 0;
 			}
-			.universal-importer-dropzone {
+			.universal-importer-stack {
+				display: grid;
+				gap: 10px;
+				margin-top: 12px;
+			}
+			.universal-importer-memo {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				padding: 12px 13px;
+				position: relative;
+			}
+			.universal-importer-memo.is-focus {
+				background: #fffaeb;
+				border-color: var(--ui-accent);
+			}
+			.universal-importer-memo-num {
+				background: var(--ui-accent);
+				border-radius: 6px 0 6px 0;
+				color: #fff;
+				font-size: 10px;
+				font-weight: 700;
+				left: -1px;
+				letter-spacing: .08em;
+				padding: 2px 7px;
+				position: absolute;
+				top: -1px;
+			}
+			.universal-importer-memo h3 {
+				font-size: 13.5px;
+				font-weight: 600;
+				letter-spacing: .01em;
+				margin: 0 0 2px 28px;
+			}
+			.universal-importer-memo-desc {
+				color: var(--ui-muted);
+				font-size: 12px;
+				margin: 0 0 8px 28px;
+			}
+			.universal-importer-memo .universal-importer-field {
+				margin-top: 6px;
+			}
+			.universal-importer-memo input[type="url"],
+			.universal-importer-memo input[type="text"] {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 5px;
+				padding: 9px 11px;
+				width: 100%;
+			}
+			.universal-importer-memo input:focus {
+				border-color: var(--ui-accent);
+				outline: 2px solid var(--ui-soft);
+				outline-offset: 1px;
+			}
+			.universal-importer-divider {
 				align-items: center;
-				background: #f6f7f7;
-				border: 1px dashed #8c8f94;
-				border-radius: 8px;
+				color: var(--ui-muted);
+				display: flex;
+				font-size: 11px;
+				font-weight: 700;
+				gap: 10px;
+				letter-spacing: .1em;
+				margin: 2px 0;
+				text-transform: uppercase;
+			}
+			.universal-importer-divider::before,
+			.universal-importer-divider::after {
+				background: var(--ui-rule);
+				content: "";
+				flex: 1;
+				height: 1px;
+			}
+			.universal-importer-shortcuts {
 				display: flex;
 				flex-wrap: wrap;
-				gap: 14px;
-				justify-content: space-between;
+				gap: 6px;
 				margin-top: 10px;
-				padding: 16px;
+			}
+			.universal-importer-chip {
+				background: transparent;
+				border: 1px solid var(--ui-rule);
+				border-radius: 999px;
+				color: var(--ui-muted);
+				cursor: pointer;
+				font-size: 11.5px;
+				padding: 3px 9px;
+			}
+			.universal-importer-chip:hover {
+				border-color: var(--ui-accent);
+				color: var(--ui-ink);
+			}
+			.universal-importer-group-label {
+				color: var(--ui-muted);
+				font-size: 10.5px;
+				font-weight: 700;
+				letter-spacing: .1em;
+				margin: 14px 0 6px;
+				text-transform: uppercase;
+			}
+			.universal-importer-opts {
+				display: grid;
+				gap: 5px;
+			}
+			.universal-importer-opt {
+				align-items: flex-start;
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				cursor: pointer;
+				display: flex;
+				gap: 9px;
+				padding: 9px 11px;
+			}
+			.universal-importer-opt.is-on {
+				background: #fffaeb;
+				border-color: var(--ui-accent);
+			}
+			.universal-importer-opt input {
+				margin-top: 2px;
+			}
+			.universal-importer-opt b {
+				display: block;
+				font-size: 13.5px;
+				font-weight: 600;
+			}
+			.universal-importer-opt small {
+				color: var(--ui-muted);
+				display: block;
+				font-size: 12px;
+			}
+			.universal-importer-line-toggle {
+				align-items: center;
+				border-top: 1px dotted var(--ui-rule);
+				display: flex;
+				justify-content: space-between;
+				padding: 8px 0;
+			}
+			.universal-importer-line-toggle:first-of-type {
+				border-top: 0;
+			}
+			.universal-importer-line-toggle b {
+				font-size: 13.5px;
+			}
+			.universal-importer-line-toggle small {
+				color: var(--ui-muted);
+				display: block;
+				font-size: 12px;
+			}
+			.universal-importer-switch {
+				background: #ddd2b3;
+				border: 0;
+				border-radius: 999px;
+				cursor: pointer;
+				flex: none;
+				height: 18px;
+				position: relative;
+				width: 32px;
+			}
+			.universal-importer-switch::after {
+				background: #fff;
+				border-radius: 50%;
+				content: "";
+				height: 14px;
+				left: 2px;
+				position: absolute;
+				top: 2px;
+				transition: transform .15s;
+				width: 14px;
+			}
+			.universal-importer-switch.is-on {
+				background: var(--ui-accent);
+			}
+			.universal-importer-switch.is-on::after {
+				transform: translateX(14px);
+			}
+			.universal-importer-domain-input {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				margin-top: 6px;
+				padding: 8px 10px;
+				width: 100%;
+			}
+			.universal-importer-btns {
+				align-items: center;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				margin-top: 12px;
+			}
+			.universal-importer-btn {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				cursor: pointer;
+				font-size: 13px;
+				font-weight: 600;
+				padding: 7px 14px;
+			}
+			.universal-importer-btn:hover {
+				border-color: var(--ui-accent);
+			}
+			.universal-importer-btn:disabled {
+				cursor: not-allowed;
+				opacity: .5;
+			}
+			.universal-importer-btn.is-primary {
+				background: var(--ui-accent);
+				border-color: var(--ui-accent);
+				color: #fff;
+			}
+			.universal-importer-btn.is-primary:hover:not(:disabled) {
+				background: #8a5306;
+			}
+			.universal-importer-btn.is-ghost {
+				background: transparent;
+				border-color: transparent;
+				color: var(--ui-muted);
+			}
+			.universal-importer-btn.is-ghost:hover {
+				color: var(--ui-ink);
+			}
+			.universal-importer-btn.is-danger {
+				border-color: #e3c79a;
+				color: var(--ui-warn);
+			}
+			.universal-importer-btn.is-danger:hover {
+				background: var(--ui-warn-bg);
+			}
+			.universal-importer-start-form {
+				margin: 0;
+				padding: 0;
+			}
+			.universal-importer-start-form.is-hidden {
+				display: none;
+			}
+			.universal-importer-source-shortcuts {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 6px;
+				margin-top: 10px;
+			}
+			.universal-importer-source-shortcut {
+				background: transparent;
+				border: 1px solid var(--ui-rule);
+				border-radius: 999px;
+				color: var(--ui-muted);
+				cursor: pointer;
+				font-size: 11.5px;
+				padding: 3px 9px;
+			}
+			.universal-importer-source-shortcut:hover,
+			.universal-importer-source-shortcut:focus {
+				border-color: var(--ui-accent);
+				color: var(--ui-ink);
+				outline: none;
+			}
+			.universal-importer-source-shortcut strong,
+			.universal-importer-source-shortcut span {
+				display: inline;
+				font: inherit;
+			}
+			.universal-importer-source-shortcut span {
+				display: none;
+			}
+			.universal-importer-dropzone {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				padding: 12px 13px;
+				position: relative;
+				transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
 			}
 			.universal-importer-dropzone.is-dragging {
-				background: #f0f6fc;
+				background: var(--ui-soft);
 				border-color: var(--ui-accent);
-				box-shadow: 0 0 0 1px var(--ui-accent);
+				box-shadow: inset 0 0 0 2px rgba(161, 98, 7, .18), 0 0 0 4px rgba(161, 98, 7, .12);
+			}
+			.universal-importer-drop-stmt {
+				margin: 10px 0 4px;
+				padding: 8px 4px 2px;
+				text-align: center;
+			}
+			.universal-importer-drop-stmt-big {
+				color: var(--ui-ink);
+				font-size: 17px;
+				font-weight: 600;
+				letter-spacing: .005em;
+				line-height: 1.25;
+			}
+			.universal-importer-drop-stmt-sub {
+				color: var(--ui-muted);
+				font-size: 12.5px;
+				margin-top: 6px;
+			}
+			.universal-importer-drop-sep {
+				color: #bda66f;
+				margin: 0 4px;
+			}
+			.universal-importer-file-pick {
+				background: none;
+				border: 0;
+				color: var(--ui-accent);
+				cursor: pointer;
+				font: inherit;
+				font-size: inherit;
+				font-weight: 600;
+				padding: 0;
+				text-decoration: underline;
+				text-decoration-color: rgba(161, 98, 7, .35);
+				text-underline-offset: 2px;
+			}
+			.universal-importer-file-pick:hover {
+				text-decoration-color: var(--ui-accent);
 			}
 			.universal-importer-upload-copy {
-				flex: 1 1 340px;
 				min-width: 0;
 			}
 			.universal-importer-upload-actions {
 				align-items: center;
 				display: flex;
-				flex: 0 0 auto;
-				flex-wrap: wrap;
 				gap: 8px;
-				justify-content: flex-end;
+				justify-content: center;
+				margin-top: 10px;
 			}
 			.universal-importer-file-input {
 				clip: rect(1px, 1px, 1px, 1px);
@@ -821,8 +1259,24 @@ final class ImportAdminPage {
 				width: 1px;
 			}
 			.universal-importer-file-summary {
-				font-weight: 600;
+				color: var(--ui-muted);
+				font-size: 12.5px;
 				margin-top: 10px;
+				overflow: hidden;
+				padding: 0 6px;
+				text-align: center;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			.universal-importer-file-summary.has-files {
+				color: var(--ui-ok);
+				font-weight: 600;
+			}
+			.universal-importer-upload-hint {
+				color: var(--ui-muted);
+				font-size: 11.5px;
+				margin-top: 10px;
+				text-align: center;
 			}
 			.universal-importer-file-preview {
 				color: var(--ui-muted);
@@ -1039,20 +1493,25 @@ final class ImportAdminPage {
 				overflow-wrap: anywhere;
 			}
 			.universal-importer-url-options {
-				border: 1px solid var(--ui-border);
-				border-radius: 8px;
-				background: #fbfbfc;
-				padding: 12px;
+				display: contents;
 			}
 			.universal-importer-url-intro {
-				margin: 0 0 12px;
+				display: none;
 			}
 			.universal-importer-option {
-				align-items: start;
-				display: grid;
+				align-items: flex-start;
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				cursor: pointer;
+				display: flex;
 				gap: 9px;
-				grid-template-columns: 20px minmax(0, 1fr);
-				margin: 0 0 12px;
+				margin: 0 0 5px;
+				padding: 9px 11px;
+			}
+			.universal-importer-option.is-on {
+				background: #fffaeb;
+				border-color: var(--ui-accent);
 			}
 			.universal-importer-option input {
 				margin-top: 2px;
@@ -1062,446 +1521,839 @@ final class ImportAdminPage {
 			}
 			.universal-importer-option strong {
 				display: block;
+				font-size: 13.5px;
+				font-weight: 600;
 			}
 			.universal-importer-option .universal-importer-hint,
 			.universal-importer-domain-list .universal-importer-hint {
+				color: var(--ui-muted);
 				display: block;
+				font-size: 12px;
+				margin: 0;
 			}
 			.universal-importer-domain-entry {
 				display: block;
-				margin-top: 12px;
+				margin-top: 8px;
 			}
 			.universal-importer-domain-entry span:first-child {
-				color: #1d2327;
+				color: var(--ui-muted);
 				display: block;
-				font-size: 13px;
-				font-weight: 600;
+				font-size: 10.5px;
+				font-weight: 700;
+				letter-spacing: .1em;
 				margin-bottom: 6px;
+				text-transform: uppercase;
 			}
 			.universal-importer-domain-entry input[type="text"] {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
 				border-radius: 6px;
-				min-height: 36px;
+				padding: 8px 10px;
 				width: 100%;
 			}
 			.universal-importer-actions {
 				align-items: center;
 				display: flex;
-				gap: 12px;
-				margin-top: 20px;
+				flex-wrap: wrap;
+				gap: 8px;
+				margin-top: 14px;
+			}
+			.universal-importer-actions .button {
+				background: var(--ui-accent);
+				border: 1px solid var(--ui-accent);
+				border-radius: 6px;
+				color: #fff;
+				cursor: pointer;
+				font-size: 13px;
+				font-weight: 600;
+				padding: 7px 14px;
+				text-decoration: none;
+			}
+			.universal-importer-actions .button-primary,
+			.universal-importer-actions input[type="submit"] {
+				background: var(--ui-accent);
+				border-color: var(--ui-accent);
+				color: #fff;
+				min-height: auto;
+				text-shadow: none;
+			}
+			.universal-importer-actions input[type="submit"]:hover {
+				background: #8a5306;
 			}
 			.universal-importer-sessions {
 				display: grid;
-				gap: 16px;
+				gap: 12px;
 			}
 			.universal-importer-sessions.is-empty {
 				display: none;
 			}
 			.universal-importer-empty-progress {
-				color: var(--ui-muted);
-				margin: 0 0 18px;
+				display: none;
 			}
 			.universal-importer-card {
-				background: var(--ui-surface);
-				border: 1px solid var(--ui-border);
-				border-radius: 8px;
-				box-shadow: 0 1px 2px rgba(0,0,0,.04);
-				overflow: hidden;
+				background: transparent;
+				border: 0;
+				border-radius: 0;
+				box-shadow: none;
+				padding: 0;
 			}
 			.universal-importer-card.is-importing {
-				border-color: #c3c4c7;
-				box-shadow: 0 6px 18px rgba(0,0,0,.07);
+				box-shadow: none;
 			}
 			.universal-importer-card-header,
 			.universal-importer-card-body {
-				padding: 18px 20px;
+				padding: 0;
 			}
 			.universal-importer-card-header {
-				align-items: flex-start;
-				border-bottom: 1px solid #f0f0f1;
+				align-items: baseline;
+				border-bottom: 0;
 				display: flex;
-				gap: 18px;
+				flex-wrap: wrap;
+				gap: 10px;
 				justify-content: space-between;
+				margin-bottom: 6px;
 			}
 			.universal-importer-source-title {
-				font-size: 16px;
-				font-weight: 600;
-				margin: 0 0 6px;
+				color: var(--ui-muted);
+				font-family: ui-monospace, Menlo, monospace;
+				font-size: 12.5px;
+				font-weight: 400;
+				margin: 0;
 				overflow-wrap: anywhere;
+				word-break: break-all;
 			}
 			.universal-importer-meta {
 				color: var(--ui-muted);
-				font-size: 12px;
+				font-size: 11.5px;
 				margin: 0;
 			}
 			.universal-importer-status-pill {
-				background: #f6f7f7;
-				border: 1px solid var(--ui-border);
+				background: var(--ui-warn-bg);
+				border: 1px solid var(--ui-warn);
 				border-radius: 999px;
-				font-size: 12px;
-				font-weight: 600;
-				padding: 4px 10px;
-				text-transform: capitalize;
+				color: var(--ui-warn);
+				font-size: 10px;
+				font-weight: 700;
+				letter-spacing: .06em;
+				padding: 1px 7px;
+				text-transform: uppercase;
 				white-space: nowrap;
 			}
 			.universal-importer-progressbar {
-				background: #f0f0f1;
+				background: #f0e4c4;
 				border-radius: 999px;
-				height: 10px;
-				margin: 12px 0 8px;
+				height: 4px;
+				margin: 8px 0;
 				overflow: hidden;
+				position: relative;
 			}
 			.universal-importer-progressbar span {
-				background: linear-gradient(90deg, #3858e9, #008a20);
+				background: var(--ui-accent);
 				display: block;
 				height: 100%;
-				min-width: 4px;
+				min-width: 0;
+				transition: width .35s ease;
 			}
 			.universal-importer-progressbar.is-indeterminate span {
-				animation: universal-importer-progress-indeterminate 1.2s ease-in-out infinite;
-				min-width: 35%;
-				width: 35%;
+				animation: universal-importer-progress-indeterminate 1.4s ease-in-out infinite;
+				width: 30%;
 			}
 			@keyframes universal-importer-progress-indeterminate {
-				0% {
-					transform: translateX(-120%);
-				}
-				100% {
-					transform: translateX(300%);
-				}
+				0% { margin-left: -30%; }
+				100% { margin-left: 100%; }
 			}
 			.universal-importer-current-action {
-				font-size: 14px;
-				font-weight: 600;
-				margin: 0 0 14px;
+				font-size: 14.5px;
+				font-weight: 500;
+				margin: 0 0 6px;
 			}
 			.universal-importer-attention {
-				border-left-color: #dba617;
-				margin: 14px 0;
+				background: var(--ui-warn-bg);
+				border: 1px solid var(--ui-warn);
+				border-left: 3px solid var(--ui-warn);
+				border-radius: 6px;
+				color: var(--ui-warn);
+				margin: 10px 0;
+				padding: 10px 12px;
 			}
 			.universal-importer-attention-actions {
-				margin: 10px 0 0;
+				margin: 8px 0 0;
 			}
 			.universal-importer-stage-title {
-				font-size: 15px;
+				color: var(--ui-muted);
+				font-size: 10.5px;
 				font-weight: 700;
-				margin: 22px 0 10px;
+				letter-spacing: .1em;
+				margin: 14px 0 8px;
+				text-transform: uppercase;
 			}
 			.universal-importer-checklist {
 				display: grid;
-				gap: 10px;
-				grid-template-columns: minmax(0, 1fr);
+				gap: 4px;
 				list-style: none;
-				margin: 0 0 14px;
-				max-width: 880px;
+				margin: 0 0 10px;
 				padding: 0;
 			}
-			.universal-importer-card.is-importing .universal-importer-checklist {
-				gap: 12px;
-			}
 			.universal-importer-step {
-				align-items: start;
-				border: 1px solid var(--ui-border);
-				border-radius: 8px;
-				display: grid;
-				gap: 12px;
-				grid-template-columns: 32px minmax(0, 1fr);
-				padding: 13px 14px;
-				position: relative;
+				align-items: center;
+				color: var(--ui-muted);
+				display: flex;
+				font-size: 12px;
+				gap: 8px;
+				padding: 4px 0;
 			}
 			.universal-importer-stage-index {
-				align-items: center;
-				background: #f6f7f7;
-				border: 1px solid var(--ui-border);
-				border-radius: 999px;
-				color: var(--ui-muted);
-				display: inline-flex;
-				font-size: 12px;
-				font-weight: 700;
-				height: 28px;
-				justify-content: center;
-				line-height: 28px;
-				margin-top: 0;
-				text-align: center;
-				width: 28px;
+				background: #dcd1b3;
+				border-radius: 50%;
+				flex: none;
+				height: 8px;
+				margin: 0;
+				overflow: hidden;
+				padding: 0;
+				text-indent: -9999px;
+				width: 8px;
 			}
 			.universal-importer-step strong {
-				display: block;
+				color: var(--ui-ink);
 				font-size: 13px;
+				font-weight: 500;
 			}
 			.universal-importer-step span {
 				color: var(--ui-muted);
-				display: block;
+				display: inline;
 				font-size: 12px;
-				margin-top: 3px;
-			}
-			.universal-importer-stage-note {
-				color: #3c434a;
-				margin-top: 8px;
-				overflow-wrap: anywhere;
-			}
-			.universal-importer-step .universal-importer-stage-index {
-				align-self: start;
-				display: inline-flex;
 				margin-top: 0;
 			}
+			.universal-importer-stage-note {
+				color: var(--ui-muted);
+				display: block;
+				margin-top: 2px;
+				overflow-wrap: anywhere;
+			}
 			.universal-importer-step-heading {
-				align-items: baseline;
+				align-items: center;
 				display: flex;
 				flex-wrap: wrap;
 				gap: 8px;
-				justify-content: space-between;
-				margin-bottom: 2px;
 			}
 			.universal-importer-step-heading strong {
 				margin-right: auto;
 			}
 			.universal-importer-step-heading .universal-importer-step-state {
-				background: #f6f7f7;
-				border: 1px solid var(--ui-border);
-				border-radius: 999px;
+				background: transparent;
+				border: 0;
 				color: var(--ui-muted);
-				display: inline-flex;
-				font-size: 11px;
+				font-size: 10.5px;
 				font-weight: 700;
-				line-height: 1.3;
-				margin-top: 0;
-				padding: 2px 7px;
+				letter-spacing: .06em;
+				margin: 0;
+				padding: 0;
 				text-transform: uppercase;
 			}
-			.universal-importer-step[data-state="done"] {
-				background: #f0f6e8;
-				border-color: #b8d6a1;
-			}
 			.universal-importer-step[data-state="done"] .universal-importer-stage-index {
-				background: #008a20;
-				border-color: #008a20;
-				color: #fff;
-			}
-			.universal-importer-step[data-state="active"] {
-				background: #f0f6fc;
-				border-color: #72aee6;
-				box-shadow: inset 3px 0 0 #3858e9;
+				background: var(--ui-ok);
 			}
 			.universal-importer-step[data-state="active"] .universal-importer-stage-index {
-				background: #3858e9;
-				border-color: #3858e9;
-				color: #fff;
+				background: var(--ui-accent);
+				box-shadow: 0 0 0 3px #f6e3b2;
 			}
-			.universal-importer-step[data-state="blocked"] {
-				background: #fcf9e8;
-				border-color: #dba617;
-				box-shadow: inset 3px 0 0 #dba617;
+			.universal-importer-step[data-state="active"] {
+				color: var(--ui-ink);
 			}
-			.universal-importer-step[data-state="pending"] {
-				background: #fbfbfc;
+			.universal-importer-step[data-state="active"] strong {
+				font-weight: 600;
 			}
 			.universal-importer-step[data-state="blocked"] .universal-importer-stage-index {
-				background: #dba617;
-				border-color: #dba617;
-				color: #1d2327;
+				animation: universal-importer-pulse-dot 1.2s ease-in-out infinite;
+				background: var(--ui-warn);
 			}
-			.universal-importer-step[data-state="active"] .universal-importer-step-state {
-				background: #3858e9;
-				border-color: #3858e9;
-				color: #fff;
+			.universal-importer-step[data-state="blocked"] {
+				color: var(--ui-warn);
 			}
-			.universal-importer-step[data-state="done"] .universal-importer-step-state {
-				background: #008a20;
-				border-color: #008a20;
-				color: #fff;
-			}
+			.universal-importer-step[data-state="active"] .universal-importer-step-state,
+			.universal-importer-step[data-state="done"] .universal-importer-step-state,
 			.universal-importer-step[data-state="blocked"] .universal-importer-step-state {
-				background: #dba617;
-				border-color: #dba617;
-				color: #1d2327;
+				background: transparent;
+				border: 0;
+				color: inherit;
 			}
 			.universal-importer-log {
-				border-top: 1px solid #f0f0f1;
-				margin-top: 14px;
-				padding-top: 12px;
+				border-top: 1px dashed var(--ui-rule);
+				color: var(--ui-muted);
+				font-size: 13px;
+				margin-top: 10px;
+				padding-top: 10px;
+			}
+			.universal-importer-log strong {
+				color: var(--ui-muted);
+				font-size: 10.5px;
+				font-weight: 700;
+				letter-spacing: .1em;
+				text-transform: uppercase;
 			}
 			.universal-importer-log ol {
-				margin: 8px 0 0 20px;
+				list-style: none;
+				margin: 6px 0 0;
 				max-height: 220px;
 				overflow: auto;
+				padding: 0;
 			}
 			.universal-importer-log li {
-				margin-bottom: 7px;
+				display: flex;
+				gap: 8px;
+				margin-bottom: 4px;
+			}
+			.universal-importer-log li::before {
+				color: var(--ui-accent);
+				content: "\B7";
+				flex: none;
+				font-weight: 700;
+				text-align: center;
+				width: 10px;
 			}
 			.universal-importer-decision {
-				background: #fff8e5;
-				border: 1px solid #dba617;
-				border-radius: 8px;
-				margin-top: 14px;
-				padding: 14px;
+				background: transparent;
+				border: 0;
+				border-left: 3px solid var(--ui-warn);
+				border-radius: 0;
+				margin-top: 10px;
+				padding: 4px 0 4px 12px;
+			}
+			.universal-importer-decisions h4 {
+				color: var(--ui-warn);
+				font-size: 10.5px;
+				font-weight: 700;
+				letter-spacing: .12em;
+				margin: 8px 0 4px;
+				text-transform: uppercase;
 			}
 			.universal-importer-stage-decision {
-				margin-top: 12px;
+				margin-top: 8px;
 			}
 			.universal-importer-stage-decision h4 {
 				font-size: 13px;
-				margin: 0 0 8px;
+				margin: 0 0 6px;
 			}
 			.universal-importer-stage-decision .universal-importer-decision {
-				background: #fff;
+				background: transparent;
 				margin-top: 0;
 			}
 			.universal-importer-decision-actions {
 				display: flex;
 				flex-wrap: wrap;
 				gap: 8px;
-				margin: 12px 0 0;
+				margin: 10px 0 0;
+			}
+			.universal-importer-decision-actions .button {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				color: var(--ui-ink);
+				cursor: pointer;
+				font-size: 13px;
+				font-weight: 600;
+				padding: 7px 14px;
+			}
+			.universal-importer-decision-actions .button:hover {
+				border-color: var(--ui-accent);
+			}
+			.universal-importer-decision-actions .button-primary {
+				background: var(--ui-accent);
+				border-color: var(--ui-accent);
+				color: #fff;
+				text-shadow: none;
+			}
+			.universal-importer-decision-actions .button-primary:hover {
+				background: #8a5306;
 			}
 			.universal-importer-domain-list {
 				display: grid;
-				gap: 8px;
-				margin: 12px 0;
+				gap: 4px;
+				margin: 8px 0;
 			}
 			.universal-importer-domain-list label {
-				align-items: start;
-				display: grid;
-				gap: 9px;
-				grid-template-columns: 20px minmax(0, 1fr);
+				align-items: flex-start;
+				border-top: 1px dotted var(--ui-rule);
+				display: flex;
+				gap: 8px;
 				margin: 0;
+				padding: 8px 0;
+			}
+			.universal-importer-domain-list label:first-of-type {
+				border-top: 0;
 			}
 			.universal-importer-domain-list input {
-				margin-top: 2px;
+				margin-top: 3px;
 			}
-			@media (max-width: 960px) {
-				.universal-importer-start-grid,
-				.universal-importer-card-header {
-					display: block;
-				}
-				.universal-importer-status-pill {
-					display: inline-block;
-					margin-top: 10px;
-				}
+			.universal-importer-domain-list strong {
+				display: block;
+				font-family: ui-monospace, Menlo, monospace;
+				font-size: 13px;
+			}
+			.universal-importer-domain-list .universal-importer-hint {
+				font-family: ui-monospace, Menlo, monospace;
+				font-size: 11.5px;
+				word-break: break-all;
+			}
+			.universal-importer-pipeline {
+				margin-top: 8px;
+			}
+			.universal-importer-pipeline summary {
+				color: var(--ui-muted);
+				cursor: pointer;
+				font-size: 12px;
+				list-style: none;
+			}
+			.universal-importer-pipeline summary::-webkit-details-marker {
+				display: none;
+			}
+			.universal-importer-pipeline summary::before {
+				color: var(--ui-accent);
+				content: "+ ";
+				font-weight: 700;
+			}
+			.universal-importer-pipeline[open] summary::before {
+				content: "\2212 ";
+			}
+			.universal-importer-pipeline p,
+			.universal-importer-pipeline ul {
+				color: var(--ui-muted);
+				font-size: 12.5px;
+				margin: 6px 0;
+			}
+			.universal-importer-pipeline h4 {
+				color: var(--ui-muted);
+				font-size: 10.5px;
+				font-weight: 700;
+				letter-spacing: .1em;
+				margin: 10px 0 4px;
+				text-transform: uppercase;
+			}
+			.universal-importer-relationship-warnings {
+				background: var(--ui-warn-bg);
+				border: 1px solid var(--ui-warn);
+				border-radius: 6px;
+				color: var(--ui-warn);
+				margin: 10px 0;
+				padding: 10px 12px;
+			}
+			.universal-importer-notice {
+				border: 1px solid var(--ui-rule);
+				border-left: 3px solid var(--ui-accent);
+				border-radius: 6px;
+				margin: 0 0 14px;
+				padding: 8px 12px;
+			}
+			.universal-importer-notice.notice-error {
+				border-color: var(--ui-warn);
+				border-left-color: var(--ui-warn);
+				color: var(--ui-warn);
+			}
+			.universal-importer-notice.notice-success {
+				border-color: var(--ui-ok);
+				border-left-color: var(--ui-ok);
+				color: var(--ui-ok);
+			}
+			.universal-importer-notice.notice-warning {
+				border-color: var(--ui-warn);
+				border-left-color: var(--ui-warn);
+				color: var(--ui-warn);
+			}
+			.universal-importer-notice p {
+				margin: 0;
+			}
+			.universal-importer-github-picker {
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				margin: 8px 0 0;
+				padding: 8px 10px;
+			}
+			.universal-importer-github-picker[hidden] {
+				display: none;
+			}
+			.universal-importer-github-picker-header {
+				align-items: center;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				justify-content: space-between;
+				margin-bottom: 4px;
+			}
+			.universal-importer-github-picker-header strong {
+				font-size: 12px;
+			}
+			.universal-importer-github-picker .button {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				color: var(--ui-ink);
+				cursor: pointer;
+				font-size: 12px;
+				font-weight: 600;
+				padding: 4px 10px;
+			}
+			.universal-importer-github-selection {
+				color: var(--ui-muted);
+				font-size: 11.5px;
+				margin: 0;
+			}
+			.universal-importer-modal[hidden] {
+				display: none;
+			}
+			.universal-importer-modal {
+				align-items: center;
+				background: rgba(31, 41, 55, .45);
+				bottom: 0;
+				display: flex;
+				justify-content: center;
+				left: 0;
+				padding: 24px;
+				position: fixed;
+				right: 0;
+				top: 0;
+				z-index: 100000;
+			}
+			.universal-importer-modal-dialog {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 8px;
+				box-shadow: 0 22px 70px rgba(0, 0, 0, .28);
+				display: grid;
+				grid-template-rows: auto minmax(0, 1fr) auto;
+				max-height: min(680px, calc(100vh - 48px));
+				max-width: 640px;
+				min-height: 360px;
+				outline: none;
+				overflow: hidden;
+				width: min(640px, calc(100vw - 48px));
+			}
+			.universal-importer-modal-header,
+			.universal-importer-modal-footer {
+				align-items: center;
+				display: flex;
+				gap: 12px;
+				justify-content: space-between;
+				padding: 12px 16px;
+			}
+			.universal-importer-modal-header {
+				border-bottom: 1px solid var(--ui-rule);
+			}
+			.universal-importer-modal-header h2 {
+				font-size: 13.5px;
+				font-weight: 600;
+				margin: 0;
+			}
+			.universal-importer-modal-close {
+				background: transparent;
+				border: 0;
+				border-radius: 4px;
+				color: var(--ui-muted);
+				cursor: pointer;
+				font-size: 22px;
+				height: 28px;
+				line-height: 1;
+				width: 28px;
+			}
+			.universal-importer-modal-close:hover {
+				color: var(--ui-ink);
+			}
+			.universal-importer-modal-body {
+				display: grid;
+				grid-template-rows: auto auto minmax(0, 1fr);
+				min-height: 0;
+				padding: 12px 16px;
+			}
+			.universal-importer-github-filter label {
+				color: var(--ui-muted);
+				display: block;
+				font-size: 10.5px;
+				font-weight: 700;
+				letter-spacing: .1em;
+				margin: 0 0 6px;
+				text-transform: uppercase;
+			}
+			.universal-importer-github-filter input[type="search"] {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 5px;
+				padding: 8px 10px;
+				width: 100%;
+			}
+			.universal-importer-github-picker-status {
+				color: var(--ui-muted);
+				font-size: 11.5px;
+				margin: 8px 0 6px;
+			}
+			.universal-importer-github-tree {
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				list-style: none;
+				margin: 0;
+				min-height: 180px;
+				overflow: auto;
+				padding: 4px;
+			}
+			.universal-importer-github-tree li {
+				margin: 0;
+			}
+			.universal-importer-github-directory {
+				background: transparent;
+				border: 0;
+				border-radius: 4px;
+				color: var(--ui-ink);
+				cursor: pointer;
+				display: block;
+				font-size: 12.5px;
+				line-height: 1.4;
+				min-height: 26px;
+				overflow-wrap: anywhere;
+				padding: 4px 8px;
+				text-align: left;
+				width: 100%;
+			}
+			.universal-importer-github-directory:hover,
+			.universal-importer-github-directory:focus {
+				background: var(--ui-soft);
+				outline: none;
+			}
+			.universal-importer-github-directory.is-selected {
+				background: var(--ui-soft);
+				color: var(--ui-accent);
+				font-weight: 600;
+			}
+			.universal-importer-github-empty {
+				color: var(--ui-muted);
+				margin: 12px;
+			}
+			.universal-importer-modal-footer {
+				border-top: 1px solid var(--ui-rule);
+			}
+			.universal-importer-modal-actions {
+				display: flex;
+				flex: 0 0 auto;
+				gap: 8px;
+			}
+			.universal-importer-modal-selection {
+				color: var(--ui-muted);
+				font-size: 11.5px;
+				margin: 0;
+				min-width: 0;
+				overflow-wrap: anywhere;
+			}
+			.universal-importer-modal-actions .button {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				color: var(--ui-ink);
+				cursor: pointer;
+				font-size: 12.5px;
+				font-weight: 600;
+				padding: 5px 12px;
+			}
+			.universal-importer-modal-actions .button-primary {
+				background: var(--ui-accent);
+				border-color: var(--ui-accent);
+				color: #fff;
+			}
+			.universal-importer-modal-actions .button-primary:disabled {
+				cursor: not-allowed;
+				opacity: .5;
+			}
+			.universal-importer-tally {
+				display: inline-flex;
+				font-size: 13.5px;
+				font-variant-numeric: tabular-nums;
+				gap: 14px;
+				margin-top: 10px;
+			}
+			.universal-importer-file-preview ul {
+				list-style: none;
+				margin: 0;
+				padding-left: 18px;
+			}
+			.universal-importer-file-preview [role="treeitem"] {
+				margin: 0;
+				outline: none;
+				overflow-wrap: anywhere;
+			}
+			.universal-importer-file-preview [role="treeitem"][aria-expanded="false"] > [role="group"] {
+				display: none;
+			}
+			.universal-importer-file-preview-item {
+				align-items: start;
+				border-radius: 4px;
+				display: grid;
+				gap: 4px;
+				grid-template-columns: 14px minmax(0, 1fr);
+				line-height: 1.35;
+				min-height: 22px;
+				padding: 2px 4px;
+			}
+			.universal-importer-file-preview [role="treeitem"]:focus > .universal-importer-file-preview-item {
+				box-shadow: inset 0 0 0 2px var(--ui-accent);
+			}
+			.universal-importer-file-preview-marker {
+				color: var(--ui-muted);
+				font-family: monospace;
+				text-align: center;
+			}
+			.universal-importer-file-preview-name {
+				min-width: 0;
 			}
 			@media (max-width: 600px) {
-				.universal-importer-start {
-					padding: 16px;
+				.universal-importer-admin {
+					padding: 18px 16px 80px;
 				}
-				.universal-importer-dropzone {
-					display: block;
-				}
-				.universal-importer-upload-actions {
-					display: grid;
-					grid-template-columns: 1fr;
-					justify-content: stretch;
-					margin-top: 12px;
-				}
-				.universal-importer-upload-actions .button {
-					text-align: center;
+				.universal-importer-drop-stmt-big {
+					font-size: 16px;
 				}
 			}
 		</style>
 		<div class="wrap universal-importer-admin">
-			<h1><?php esc_html_e( 'Universal Importer', 'universal-wordpress-importer' ); ?></h1>
-			<p class="universal-importer-lede"><?php esc_html_e( 'Import files, folders, archives, or reachable URLs into WordPress pages.', 'universal-wordpress-importer' ); ?></p>
-			<?php if ( '' !== $error ) : ?>
-				<div class="notice notice-error"><p><?php echo esc_html( $error ); ?></p></div>
-			<?php endif; ?>
-			<div id="universal-importer-notice" class="notice" style="display:none"><p></p></div>
-			<form id="universal-importer-start-form" class="universal-importer-start<?php echo $has_active_import ? ' is-hidden' : ''; ?>">
-				<h2 class="universal-importer-section-heading"><?php esc_html_e( 'Select content', 'universal-wordpress-importer' ); ?></h2>
-				<div class="universal-importer-start-grid">
-					<div>
-						<div class="universal-importer-source-shortcuts" aria-label="<?php echo esc_attr__( 'Import source shortcuts', 'universal-wordpress-importer' ); ?>">
-							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://github.com/owner/repository/tree/main/docs">
-								<strong><?php esc_html_e( 'GitHub repo', 'universal-wordpress-importer' ); ?></strong>
-								<span><?php esc_html_e( 'Branch or subdirectory URL.', 'universal-wordpress-importer' ); ?></span>
-							</button>
-							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/">
-								<strong><?php esc_html_e( 'WordPress site', 'universal-wordpress-importer' ); ?></strong>
-								<span><?php esc_html_e( 'REST API, pages, posts, and comments.', 'universal-wordpress-importer' ); ?></span>
-							</button>
-							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/feed.xml">
-								<strong><?php esc_html_e( 'Feed or OPML', 'universal-wordpress-importer' ); ?></strong>
-								<span><?php esc_html_e( 'RSS, Atom, RDF, or a feed list.', 'universal-wordpress-importer' ); ?></span>
-							</button>
-							<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="/path/to/export">
-								<strong><?php esc_html_e( 'Server path', 'universal-wordpress-importer' ); ?></strong>
-								<span><?php esc_html_e( 'Local folder, file, or archive.', 'universal-wordpress-importer' ); ?></span>
-							</button>
-							<button type="button" class="universal-importer-source-shortcut" data-file-trigger="folder">
-								<strong><?php esc_html_e( 'Browser folder', 'universal-wordpress-importer' ); ?></strong>
-								<span><?php esc_html_e( 'Choose a folder from this device.', 'universal-wordpress-importer' ); ?></span>
-							</button>
-						</div>
-						<p class="universal-importer-field">
-							<label for="universal-importer-source"><?php esc_html_e( 'URL or server path', 'universal-wordpress-importer' ); ?></label>
-							<input type="text" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( '/path/to/export, https://example.com/, https://example.com/feed.xml, https://example.com/feeds.opml, or https://github.com/org/repo', 'universal-wordpress-importer' ); ?>">
-							<span class="universal-importer-hint"><?php esc_html_e( 'Use a server path, WordPress site URL, REST root, RSS/Atom/OPML feed, remote page, or GitHub repo.', 'universal-wordpress-importer' ); ?></span>
-						</p>
-						<div id="universal-importer-github-picker" class="universal-importer-github-picker" hidden>
-							<div class="universal-importer-github-picker-header">
-								<strong><?php esc_html_e( 'GitHub directory', 'universal-wordpress-importer' ); ?></strong>
-								<button type="button" class="button" id="universal-importer-github-browse"><?php esc_html_e( 'Choose directory', 'universal-wordpress-importer' ); ?></button>
-							</div>
-							<p id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"></p>
-						</div>
-						<div id="universal-importer-dropzone" class="universal-importer-dropzone">
-							<div class="universal-importer-upload-copy">
-								<strong><?php esc_html_e( 'Upload files or a folder', 'universal-wordpress-importer' ); ?></strong>
-								<p class="universal-importer-hint"><?php esc_html_e( 'PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP, or a folder.', 'universal-wordpress-importer' ); ?></p>
-								<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
-								<ul id="universal-importer-file-preview" class="universal-importer-file-preview" role="tree" aria-label="<?php echo esc_attr__( 'Selected file tree', 'universal-wordpress-importer' ); ?>" aria-live="polite"></ul>
-							</div>
-							<div class="universal-importer-upload-actions">
-								<label class="button" for="universal-importer-file-picker"><?php esc_html_e( 'Choose files', 'universal-wordpress-importer' ); ?></label>
-								<label class="button" for="universal-importer-folder-picker"><?php esc_html_e( 'Choose folder', 'universal-wordpress-importer' ); ?></label>
-								<button type="button" class="button" id="universal-importer-clear-files" disabled><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button>
-							</div>
-							<input type="file" id="universal-importer-file-picker" class="universal-importer-file-input" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
-							<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
-						</div>
-					</div>
-					<div>
-						<fieldset class="universal-importer-field universal-importer-url-options">
-							<legend><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></legend>
-							<p class="universal-importer-hint universal-importer-url-intro"><?php esc_html_e( 'Choose what happens to old-site links inside imported content.', 'universal-wordpress-importer' ); ?></p>
-							<label class="universal-importer-option">
-								<input type="radio" name="url_rewrite_mode" value="ask" checked>
-								<span><strong><?php esc_html_e( 'Ask when old URLs are found', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Recommended for most imports.', 'universal-wordpress-importer' ); ?></span></span>
-							</label>
-							<label class="universal-importer-option">
-								<input type="radio" name="url_rewrite_mode" value="preserve">
-								<span><strong><?php esc_html_e( 'Keep URLs unchanged', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Links keep pointing to their original site.', 'universal-wordpress-importer' ); ?></span></span>
-							</label>
-							<label class="universal-importer-option">
-								<input type="radio" name="url_rewrite_mode" value="rewrite">
-								<span><strong><?php esc_html_e( 'Rewrite listed domains', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Paths are preserved on this site.', 'universal-wordpress-importer' ); ?></span></span>
-							</label>
-							<label class="universal-importer-domain-entry" for="universal-importer-domains">
-								<span><?php esc_html_e( 'Old site domains', 'universal-wordpress-importer' ); ?></span>
-								<input type="text" id="universal-importer-domains" name="confirmed_domains" placeholder="<?php echo esc_attr__( 'example.com, www.example.com', 'universal-wordpress-importer' ); ?>">
-								<span class="universal-importer-hint"><?php esc_html_e( 'Optional unless you choose Rewrite listed domains.', 'universal-wordpress-importer' ); ?></span>
-							</label>
-						</fieldset>
-						<label class="universal-importer-option">
-							<input type="checkbox" name="import_as_drafts" value="1">
-							<span><strong><?php esc_html_e( 'Import as drafts', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Leave unchecked to publish imported pages immediately.', 'universal-wordpress-importer' ); ?></span></span>
-						</label>
-						<label class="universal-importer-option">
-							<input type="checkbox" name="dry_run" value="1">
-							<span><strong><?php esc_html_e( 'Dry run', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Traverse and prepare the import without writing WordPress posts.', 'universal-wordpress-importer' ); ?></span></span>
-						</label>
-					</div>
+			<div class="universal-importer-top">
+				<h1><?php esc_html_e( 'Universal Importer', 'universal-wordpress-importer' ); ?> <span>· <?php esc_html_e( 'transcript', 'universal-wordpress-importer' ); ?></span></h1>
+				<div class="universal-importer-top-actions">
+					<button type="button" class="universal-importer-link-button" id="universal-importer-past-toggle"><?php esc_html_e( 'Past imports', 'universal-wordpress-importer' ); ?></button>
 				</div>
-				<p class="universal-importer-actions">
-					<?php submit_button( __( 'Import this content', 'universal-wordpress-importer' ), 'primary', 'submit', false ); ?>
-				</p>
-			</form>
-			<h2><?php esc_html_e( 'Current import', 'universal-wordpress-importer' ); ?></h2>
-			<p id="universal-importer-empty-progress" class="universal-importer-empty-progress"<?php echo null === $primary_session ? '' : ' style="display:none"'; ?>><?php esc_html_e( 'Choose content above to start an import.', 'universal-wordpress-importer' ); ?></p>
-			<div id="universal-importer-sessions" class="universal-importer-sessions<?php echo null === $primary_session ? ' is-empty' : ''; ?>">
-				<?php $this->render_session_list( null === $primary_session ? array() : array( $primary_session ) ); ?>
 			</div>
+			<div class="universal-importer-strip" id="universal-importer-strip" aria-label="<?php echo esc_attr__( 'Run stages', 'universal-wordpress-importer' ); ?>">
+				<div class="universal-importer-strip-row">
+					<span class="universal-importer-strip-stage" data-stage-key="read_source"><span class="universal-importer-strip-dot"></span><?php esc_html_e( 'Read source', 'universal-wordpress-importer' ); ?></span>
+					<span class="universal-importer-strip-stage" data-stage-key="prepare_content"><span class="universal-importer-strip-dot"></span><?php esc_html_e( 'Prepare content', 'universal-wordpress-importer' ); ?></span>
+					<span class="universal-importer-strip-stage" data-stage-key="url_treatment"><span class="universal-importer-strip-dot"></span><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></span>
+					<span class="universal-importer-strip-stage" data-stage-key="import_media"><span class="universal-importer-strip-dot"></span><?php esc_html_e( 'Import media', 'universal-wordpress-importer' ); ?></span>
+					<span class="universal-importer-strip-stage" data-stage-key="write_pages"><span class="universal-importer-strip-dot"></span><?php esc_html_e( 'Write pages', 'universal-wordpress-importer' ); ?></span>
+					<span class="universal-importer-strip-stage" data-stage-key="finish"><span class="universal-importer-strip-dot"></span><?php esc_html_e( 'Finish', 'universal-wordpress-importer' ); ?></span>
+				</div>
+			</div>
+			<div class="universal-importer-past" id="universal-importer-past" aria-label="<?php echo esc_attr__( 'Past imports', 'universal-wordpress-importer' ); ?>">
+				<h2><?php esc_html_e( 'Past imports', 'universal-wordpress-importer' ); ?></h2>
+				<p class="universal-importer-past-empty"><?php esc_html_e( 'No previous imports yet.', 'universal-wordpress-importer' ); ?></p>
+			</div>
+			<?php if ( '' !== $error ) : ?>
+				<div class="universal-importer-notice notice-error"><p><?php echo esc_html( $error ); ?></p></div>
+			<?php endif; ?>
+			<div id="universal-importer-notice" class="universal-importer-notice" style="display:none"><p></p></div>
+			<main class="universal-importer-convo" id="universal-importer-convo" aria-live="polite">
+				<form id="universal-importer-start-form" class="universal-importer-start-form universal-importer-start<?php echo $has_active_import ? ' is-hidden' : ''; ?>">
+					<section class="universal-importer-turn is-sys">
+						<div class="universal-importer-speaker"><?php esc_html_e( 'Importer', 'universal-wordpress-importer' ); ?></div>
+						<div class="universal-importer-body">
+							<div><?php esc_html_e( 'What should I import?', 'universal-wordpress-importer' ); ?></div>
+							<div class="universal-importer-hint"><?php esc_html_e( 'Two ways in. Use one.', 'universal-wordpress-importer' ); ?></div>
+							<div class="universal-importer-stack">
+								<div class="universal-importer-memo is-focus" id="universal-importer-memo-url">
+									<span class="universal-importer-memo-num">1</span>
+									<h3><?php esc_html_e( 'Paste a URL', 'universal-wordpress-importer' ); ?></h3>
+									<p class="universal-importer-memo-desc"><?php esc_html_e( 'A site, a feed, a repo, a sitemap — anything reachable on the web.', 'universal-wordpress-importer' ); ?></p>
+									<div class="universal-importer-field">
+										<label for="universal-importer-source" class="screen-reader-text"><?php esc_html_e( 'Source URL', 'universal-wordpress-importer' ); ?></label>
+										<input type="url" id="universal-importer-source" name="source" required placeholder="<?php echo esc_attr__( 'https://…', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Source URL', 'universal-wordpress-importer' ); ?>">
+									</div>
+									<div class="universal-importer-source-shortcuts" aria-label="<?php echo esc_attr__( 'Import source shortcuts', 'universal-wordpress-importer' ); ?>">
+										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://github.com/owner/repository/tree/main/docs">
+											<strong><?php esc_html_e( 'GitHub repo', 'universal-wordpress-importer' ); ?></strong>
+											<span><?php esc_html_e( 'Branch or subdirectory URL.', 'universal-wordpress-importer' ); ?></span>
+										</button>
+										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/">
+											<strong><?php esc_html_e( 'WordPress site', 'universal-wordpress-importer' ); ?></strong>
+											<span><?php esc_html_e( 'REST API, pages, posts, and comments.', 'universal-wordpress-importer' ); ?></span>
+										</button>
+										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/feed.xml">
+											<strong><?php esc_html_e( 'Feed or OPML', 'universal-wordpress-importer' ); ?></strong>
+											<span><?php esc_html_e( 'RSS, Atom, RDF, or a feed list.', 'universal-wordpress-importer' ); ?></span>
+										</button>
+										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/sitemap.xml">
+											<strong><?php esc_html_e( 'Sitemap', 'universal-wordpress-importer' ); ?></strong>
+											<span><?php esc_html_e( 'sitemap.xml or index.', 'universal-wordpress-importer' ); ?></span>
+										</button>
+										<button type="button" class="universal-importer-source-shortcut" data-source-placeholder="https://example.com/wp-content/export.xml">
+											<strong><?php esc_html_e( 'WXR export', 'universal-wordpress-importer' ); ?></strong>
+											<span><?php esc_html_e( 'WordPress export XML URL.', 'universal-wordpress-importer' ); ?></span>
+										</button>
+									</div>
+									<div id="universal-importer-github-picker" class="universal-importer-github-picker" hidden>
+										<div class="universal-importer-github-picker-header">
+											<strong><?php esc_html_e( 'GitHub directory', 'universal-wordpress-importer' ); ?></strong>
+											<button type="button" class="button" id="universal-importer-github-browse"><?php esc_html_e( 'Choose directory', 'universal-wordpress-importer' ); ?></button>
+										</div>
+										<p id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"></p>
+									</div>
+								</div>
+								<div class="universal-importer-divider" aria-hidden="true"><?php esc_html_e( 'or', 'universal-wordpress-importer' ); ?></div>
+								<div id="universal-importer-dropzone" class="universal-importer-memo universal-importer-dropzone" aria-label="<?php echo esc_attr__( 'Drop a file or folder on this card', 'universal-wordpress-importer' ); ?>">
+									<span class="universal-importer-memo-num">2</span>
+									<h3><?php esc_html_e( 'Upload a file or folder', 'universal-wordpress-importer' ); ?></h3>
+									<p class="universal-importer-memo-desc"><?php esc_html_e( 'From this computer. .zip, .epub, .pdf, WXR .xml, or a whole folder.', 'universal-wordpress-importer' ); ?></p>
+									<div class="universal-importer-drop-stmt">
+										<div class="universal-importer-drop-stmt-big" id="universal-importer-drop-line"><?php esc_html_e( 'Drop a file or folder anywhere on this card', 'universal-wordpress-importer' ); ?></div>
+										<div class="universal-importer-drop-stmt-sub"><?php esc_html_e( 'or', 'universal-wordpress-importer' ); ?> <label class="universal-importer-file-pick" for="universal-importer-file-picker"><?php esc_html_e( 'Choose files', 'universal-wordpress-importer' ); ?></label><span class="universal-importer-drop-sep">·</span><label class="universal-importer-file-pick" for="universal-importer-folder-picker"><?php esc_html_e( 'Choose folder', 'universal-wordpress-importer' ); ?></label></div>
+									</div>
+									<div class="universal-importer-upload-copy">
+										<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
+										<ul id="universal-importer-file-preview" class="universal-importer-file-preview" role="tree" aria-label="<?php echo esc_attr__( 'Selected file tree', 'universal-wordpress-importer' ); ?>" aria-live="polite"></ul>
+									</div>
+									<p class="universal-importer-upload-hint"><?php esc_html_e( 'PDF, EPUB, HTML, Markdown, text, WXR/XML, ZIP, or a folder. Stays in this browser session.', 'universal-wordpress-importer' ); ?></p>
+									<div class="universal-importer-upload-actions" hidden>
+										<button type="button" class="universal-importer-btn" id="universal-importer-clear-files" disabled><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button>
+									</div>
+									<input type="file" id="universal-importer-file-picker" class="universal-importer-file-input" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
+									<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
+								</div>
+							</div>
+						</div>
+					</section>
+					<section class="universal-importer-turn is-sys">
+						<div class="universal-importer-speaker"><?php esc_html_e( 'Configure', 'universal-wordpress-importer' ); ?></div>
+						<div class="universal-importer-body">
+							<div><?php esc_html_e( 'Configure the run.', 'universal-wordpress-importer' ); ?></div>
+							<div class="universal-importer-hint"><?php esc_html_e( 'Defaults are sensible.', 'universal-wordpress-importer' ); ?></div>
+							<fieldset class="universal-importer-url-options">
+								<legend class="universal-importer-group-label"><?php esc_html_e( 'URL treatment', 'universal-wordpress-importer' ); ?></legend>
+								<p class="universal-importer-hint universal-importer-url-intro"><?php esc_html_e( 'Choose what happens to old-site links inside imported content.', 'universal-wordpress-importer' ); ?></p>
+								<label class="universal-importer-option is-on">
+									<input type="radio" name="url_rewrite_mode" value="ask" checked>
+									<span><strong><?php esc_html_e( 'Ask when old URLs are found', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Recommended — confirm domains mid-run.', 'universal-wordpress-importer' ); ?></span></span>
+								</label>
+								<label class="universal-importer-option">
+									<input type="radio" name="url_rewrite_mode" value="preserve">
+									<span><strong><?php esc_html_e( 'Keep URLs unchanged', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Links keep pointing to their original site.', 'universal-wordpress-importer' ); ?></span></span>
+								</label>
+								<label class="universal-importer-option">
+									<input type="radio" name="url_rewrite_mode" value="rewrite">
+									<span><strong><?php esc_html_e( 'Rewrite listed domains', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Skip the mid-run prompt — list domains below.', 'universal-wordpress-importer' ); ?></span></span>
+								</label>
+								<label class="universal-importer-domain-entry" for="universal-importer-domains">
+									<span><?php esc_html_e( 'Old site domains', 'universal-wordpress-importer' ); ?></span>
+									<input type="text" id="universal-importer-domains" name="confirmed_domains" placeholder="<?php echo esc_attr__( 'example.com, www.example.com', 'universal-wordpress-importer' ); ?>">
+									<span class="universal-importer-hint"><?php esc_html_e( 'Optional unless you choose Rewrite listed domains.', 'universal-wordpress-importer' ); ?></span>
+								</label>
+							</fieldset>
+							<div class="universal-importer-group-label"><?php esc_html_e( 'Run mode', 'universal-wordpress-importer' ); ?></div>
+							<label class="universal-importer-option">
+								<input type="checkbox" name="dry_run" value="1">
+								<span><strong><?php esc_html_e( 'Dry run', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Plan only — no pages written.', 'universal-wordpress-importer' ); ?></span></span>
+							</label>
+							<label class="universal-importer-option">
+								<input type="checkbox" name="import_as_drafts" value="1">
+								<span><strong><?php esc_html_e( 'Import as drafts', 'universal-wordpress-importer' ); ?></strong><span class="universal-importer-hint"><?php esc_html_e( 'Otherwise published immediately.', 'universal-wordpress-importer' ); ?></span></span>
+							</label>
+							<p class="universal-importer-actions">
+								<?php submit_button( __( 'Import this content', 'universal-wordpress-importer' ), 'primary', 'submit', false ); ?>
+							</p>
+						</div>
+					</section>
+				</form>
+				<p id="universal-importer-empty-progress" class="universal-importer-empty-progress"<?php echo null === $primary_session ? '' : ' style="display:none"'; ?>><?php esc_html_e( 'Choose content above to start an import.', 'universal-wordpress-importer' ); ?></p>
+				<div id="universal-importer-sessions" class="universal-importer-sessions<?php echo null === $primary_session ? ' is-empty' : ''; ?>">
+					<?php $this->render_session_list( null === $primary_session ? array() : array( $primary_session ) ); ?>
+				</div>
+			</main>
 			<div id="universal-importer-github-modal" class="universal-importer-modal" role="dialog" aria-modal="true" aria-labelledby="universal-importer-github-modal-title" hidden>
 				<div class="universal-importer-modal-dialog" tabindex="-1">
 					<div class="universal-importer-modal-header">
 						<h2 id="universal-importer-github-modal-title"><?php esc_html_e( 'Choose GitHub directory', 'universal-wordpress-importer' ); ?></h2>
-						<button type="button" class="universal-importer-modal-close" id="universal-importer-github-close" aria-label="<?php echo esc_attr__( 'Close', 'universal-wordpress-importer' ); ?>">×</button>
+						<button type="button" class="universal-importer-modal-close" id="universal-importer-github-close" aria-label="<?php echo esc_attr__( 'Close', 'universal-wordpress-importer' ); ?>">&times;</button>
 					</div>
 					<div class="universal-importer-modal-body">
 						<p class="universal-importer-github-filter">
@@ -2095,9 +2947,20 @@ final class ImportAdminPage {
 				browserFiles = files || [];
 				sourceInput.required = browserFiles.length < 1;
 				clearFilesButton.disabled = browserFiles.length < 1;
+				var clearActions = document.querySelector ? document.querySelector('.universal-importer-upload-actions') : null;
+				if (clearActions) {
+					if (browserFiles.length) {
+						clearActions.removeAttribute('hidden');
+					} else {
+						clearActions.setAttribute('hidden', 'hidden');
+					}
+				}
 				syncGithubPickerVisibility();
 				if (!browserFiles.length) {
 					fileSummary.textContent = '';
+					if (fileSummary.classList && fileSummary.classList.remove) {
+						fileSummary.classList.remove('has-files');
+					}
 					filePreview.innerHTML = '';
 					return;
 				}
@@ -2110,28 +2973,82 @@ final class ImportAdminPage {
 					summary += ' · ' + pdfCount + ' PDF' + (pdfCount === 1 ? '' : 's');
 				}
 				fileSummary.textContent = summary + '.';
+				if (fileSummary.classList && fileSummary.classList.add) {
+					fileSummary.classList.add('has-files');
+				}
 				renderFilePreview(browserFiles);
+				if (typeof focusMemo === 'function') {
+					focusMemo('upload');
+				}
+			}
+
+			var memoUrl = document.getElementById('universal-importer-memo-url');
+			var memoUpload = dropzone;
+			var dropLine = document.getElementById('universal-importer-drop-line');
+			var originalDropText = dropLine ? dropLine.textContent : '';
+			var pastToggle = document.getElementById('universal-importer-past-toggle');
+			var pastPanel = document.getElementById('universal-importer-past');
+
+			function focusMemo(which) {
+				if (memoUrl && memoUrl.classList) {
+					if (which === 'url') {
+						memoUrl.classList.add('is-focus');
+					} else {
+						memoUrl.classList.remove('is-focus');
+					}
+				}
+				if (memoUpload && memoUpload.classList) {
+					if (which === 'upload') {
+						memoUpload.classList.add('is-focus');
+					} else {
+						memoUpload.classList.remove('is-focus');
+					}
+				}
 			}
 
 			sourceShortcuts.forEach(function(button) {
 				button.addEventListener('click', function() {
-					var trigger = button.getAttribute('data-file-trigger') || '';
 					var placeholder = button.getAttribute('data-source-placeholder') || '';
-					if (trigger === 'folder' && folderPicker && folderPicker.click) {
-						folderPicker.click();
-						return;
-					}
 					if (placeholder) {
-						sourceInput.placeholder = placeholder;
+						sourceInput.value = placeholder;
 					}
 					if (sourceInput.focus) {
 						sourceInput.focus();
 					}
+					setBrowserFiles([], '');
+					focusMemo('url');
+					syncGithubPickerVisibility();
 				});
 			});
 
-			sourceInput.addEventListener('input', syncGithubPickerVisibility);
+			sourceInput.addEventListener('focus', function() { focusMemo('url'); });
+			sourceInput.addEventListener('input', function() {
+				focusMemo('url');
+				syncGithubPickerVisibility();
+			});
 			sourceInput.addEventListener('change', syncGithubPickerVisibility);
+
+			if (pastToggle && pastPanel) {
+				pastToggle.addEventListener('click', function() {
+					pastPanel.classList.toggle('is-visible');
+				});
+			}
+
+			var urlRewriteRadios = form && form.querySelectorAll ? Array.prototype.slice.call(form.querySelectorAll('input[name="url_rewrite_mode"]')) : [];
+			urlRewriteRadios.forEach(function(radio) {
+				radio.addEventListener('change', function() {
+					urlRewriteRadios.forEach(function(r) {
+						var opt = r.closest ? r.closest('.universal-importer-option') : null;
+						if (opt && opt.classList) {
+							if (r.checked) {
+								opt.classList.add('is-on');
+							} else {
+								opt.classList.remove('is-on');
+							}
+						}
+					});
+				});
+			});
 
 			if (githubBrowseButton) {
 				githubBrowseButton.addEventListener('click', loadGithubDirectories);
@@ -2815,21 +3732,57 @@ final class ImportAdminPage {
 				setBrowserFiles([], '');
 			});
 
-			['dragenter', 'dragover'].forEach(function(type) {
-				dropzone.addEventListener(type, function(event) {
-					event.preventDefault();
-					dropzone.classList.add('is-dragging');
-				});
-			});
+			function dragHasFiles(event) {
+				if (!event.dataTransfer || !event.dataTransfer.types) {
+					return false;
+				}
+				var types = Array.prototype.slice.call(event.dataTransfer.types);
+				return types.indexOf('Files') !== -1;
+			}
 
-			['dragleave', 'drop'].forEach(function(type) {
-				dropzone.addEventListener(type, function(event) {
-					event.preventDefault();
-					dropzone.classList.remove('is-dragging');
-				});
+			function setDropActive(on) {
+				if (dropzone && dropzone.classList) {
+					if (on) {
+						dropzone.classList.add('is-dragging');
+					} else {
+						dropzone.classList.remove('is-dragging');
+					}
+				}
+				if (dropLine) {
+					dropLine.textContent = on ? '<?php echo esc_js( __( 'Release to upload', 'universal-wordpress-importer' ) ); ?>' : originalDropText;
+				}
+			}
+
+			var dragDepth = 0;
+			dropzone.addEventListener('dragenter', function(event) {
+				if (!dragHasFiles(event)) {
+					return;
+				}
+				event.preventDefault();
+				dragDepth++;
+				setDropActive(true);
+				focusMemo('upload');
+			});
+			dropzone.addEventListener('dragover', function(event) {
+				if (!dragHasFiles(event)) {
+					return;
+				}
+				event.preventDefault();
+				if (event.dataTransfer) {
+					event.dataTransfer.dropEffect = 'copy';
+				}
+			});
+			dropzone.addEventListener('dragleave', function() {
+				dragDepth = Math.max(0, dragDepth - 1);
+				if (!dragDepth) {
+					setDropActive(false);
+				}
 			});
 
 			dropzone.addEventListener('drop', function(event) {
+				event.preventDefault();
+				dragDepth = 0;
+				setDropActive(false);
 				filesFromDrop(event.dataTransfer).then(function(files) {
 					setBrowserFiles(files, '<?php echo esc_js( __( 'drop', 'universal-wordpress-importer' ) ); ?>');
 				}).catch(function(error) {
