@@ -40,6 +40,7 @@ const STATES = [
 	{ name: 'b-url-typed-github',  advance: 'source-typed', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs' },
 	{ name: 'b2-url-typed-wp',     advance: 'source-typed', url: 'https://example.com/wp-json/' },
 	{ name: 'b3-url-typed-feed',   advance: 'source-typed', url: 'https://example.com/feed.xml' },
+	{ name: 'b4-type-picker-open', advance: 'type-picker-open', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs' },
 	{ name: 'c-picker-loading',    advance: 'picker-loading', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs', stallPicker: true },
 	{ name: 'd-configure',         advance: 'configure', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs' },
 	{ name: 'e-confirm',           advance: 'confirm', url: 'https://github.com/WordPress/gutenberg/tree/trunk/docs' }
@@ -90,6 +91,13 @@ function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
 		await sleep(120);
 
 		if (advance === 'source-typed') { return; }
+
+		if (advance === 'type-picker-open') {
+			var typeTrigger = document.getElementById('universal-importer-inferred-change');
+			if (typeTrigger) { typeTrigger.click(); }
+			await sleep(120);
+			return;
+		}
 
 		if (advance === 'picker-loading') {
 			// Try the new stable selector first, fall back to the legacy button id.
@@ -144,6 +152,7 @@ function shot(state) {
 			'--no-sandbox',
 			'--disable-dev-shm-usage',
 			'--hide-scrollbars',
+			'--force-prefers-reduced-motion',
 			'--user-data-dir=' + profileDir,
 			'--virtual-time-budget=2000',
 			'--window-size=' + viewportWidth + ',1500',

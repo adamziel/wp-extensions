@@ -24,6 +24,7 @@ use UniversalImporter\Import\ImportSessionId;
 use UniversalImporter\Import\ImportSourceItem;
 use UniversalImporter\Import\SourceItemDocumentProcessor;
 use UniversalImporter\Import\WordPressImportSessionStore;
+use UniversalImporter\Tests\Unit\Import\FakeGitRepositoryFetcher;
 use UniversalImporter\Tests\Unit\Import\FakeRemoteContentFetcher;
 use UniversalImporter\Tests\Unit\Import\FakePostGateway;
 use UniversalImporter\Tests\Unit\Import\FakeWpdb;
@@ -552,92 +553,99 @@ final class ImportAdminPageTest extends TestCase {
 	}
 
 	/**
-	 * GitHub directory browsing resolves the default branch and returns selectable repository paths.
+	 * GitHub directory browsing resolves HEAD via the Git plumbing fetcher and never hits the GitHub REST API.
 	 *
 	 * @return void
 	 */
 	public function test_list_github_directories_returns_default_branch_tree_picker() {
-		$fetcher = new FakeRemoteContentFetcher();
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository',
-			array(
-				'default_branch' => 'main',
-			)
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-			array(
-				'tree' => array(
-					array(
-						'path' => 'docs',
-						'type' => 'tree',
-					),
-					array(
-						'path' => 'docs/api',
-						'type' => 'tree',
-					),
-					array(
-						'path' => 'README.md',
-						'type' => 'blob',
-					),
-				),
-			)
+		$content_fetcher = new FakeRemoteContentFetcher();
+		$git_fetcher     = new FakeGitRepositoryFetcher();
+		$git_fetcher->add_directory_listing(
+			'HEAD',
+			'',
+			'main',
+			array( 'docs', 'docs/api' )
 		);
 
-		$result = $this->create_page( null, null, $fetcher )->list_github_directories( 'https://github.com/example/repository' );
+		$result = $this->create_page( null, null, $content_fetcher, $git_fetcher )
+			->list_github_directories( 'https://github.com/example/repository' );
 
 		$this->assertSame( 'main', $result['ref'] );
 		$this->assertSame( '', $result['selected_path'] );
 		$this->assertSame( 'https://github.com/example/repository/tree/main', $result['selected_source_url'] );
 		$this->assertSame( array( '', 'docs', 'docs/api' ), array_column( $result['directories'], 'path' ) );
 		$this->assertSame( 'https://github.com/example/repository/tree/main/docs/api', $result['directories'][2]['source_url'] );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository',
-				'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-			),
-			$fetcher->get_requested_urls()
-		);
+
+		// The directory picker must NOT issue any GitHub REST API requests.
+		$this->assertSame( array(), $content_fetcher->get_requested_urls() );
+
+		// One Git plumbing request was made, with the HEAD ref the parser produced.
+		$requests = $git_fetcher->get_directory_requests();
+		$this->assertCount( 1, $requests );
+		$this->assertSame( 'example', $requests[0]['owner'] );
+		$this->assertSame( 'repository', $requests[0]['name'] );
+		$this->assertSame( 'HEAD', $requests[0]['ref'] );
+		$this->assertSame( '', $requests[0]['source_path'] );
 	}
 
 	/**
-	 * GitHub directory browsing uses branch/path fallback for slash-containing tree URLs.
+	 * GitHub directory browsing falls back to branch + path candidates when the first ref does not resolve.
 	 *
 	 * @return void
 	 */
 	public function test_list_github_directories_falls_back_to_branch_plus_path() {
-		$fetcher = new FakeRemoteContentFetcher();
-		$fetcher->add_json_error(
-			'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk/docs?recursive=1',
-			'GitHub tree ref was not found.'
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk?recursive=1',
-			array(
-				'tree' => array(
-					array(
-						'path' => 'docs',
-						'type' => 'tree',
-					),
-					array(
-						'path' => 'docs/reference',
-						'type' => 'tree',
-					),
-					array(
-						'path' => 'packages',
-						'type' => 'tree',
-					),
-				),
-			)
+		$content_fetcher = new FakeRemoteContentFetcher();
+		$git_fetcher     = new FakeGitRepositoryFetcher();
+
+		// trunk/docs is not a real ref — the Git plumbing fails to resolve it.
+		$git_fetcher->fail_directory_listing( 'trunk/docs', '', 'php-toolkit Git directory listing could not resolve a branch on the remote.' );
+
+		// The branch + path fallback succeeds.
+		$git_fetcher->add_directory_listing(
+			'trunk',
+			'docs',
+			'trunk',
+			array( 'docs', 'docs/reference' )
 		);
 
-		$result = $this->create_page( null, null, $fetcher )->list_github_directories( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
+		$result = $this->create_page( null, null, $content_fetcher, $git_fetcher )
+			->list_github_directories( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
 
 		$this->assertSame( 'trunk', $result['ref'] );
 		$this->assertSame( 'trunk/docs', $result['requested_ref'] );
 		$this->assertSame( 'docs', $result['selected_path'] );
 		$this->assertSame( 'https://github.com/WordPress/gutenberg/tree/trunk/docs', $result['selected_source_url'] );
-		$this->assertSame( array( '', 'docs', 'docs/reference', 'packages' ), array_column( $result['directories'], 'path' ) );
+		$this->assertSame( array( '', 'docs', 'docs/reference' ), array_column( $result['directories'], 'path' ) );
+
+		// No GitHub REST API hits.
+		$this->assertSame( array(), $content_fetcher->get_requested_urls() );
+
+		// Both candidates were tried via the Git fetcher.
+		$requests = $git_fetcher->get_directory_requests();
+		$this->assertCount( 2, $requests );
+		$this->assertSame( 'trunk/docs', $requests[0]['ref'] );
+		$this->assertSame( '', $requests[0]['source_path'] );
+		$this->assertSame( 'trunk', $requests[1]['ref'] );
+		$this->assertSame( 'docs', $requests[1]['source_path'] );
+	}
+
+	/**
+	 * Browsing GitHub directories never constructs an api.github.com URL via the remote content fetcher.
+	 *
+	 * @return void
+	 */
+	public function test_list_github_directories_never_hits_api_github_com() {
+		$content_fetcher = new FakeRemoteContentFetcher();
+		$git_fetcher     = new FakeGitRepositoryFetcher();
+		$git_fetcher->add_directory_listing( 'HEAD', '', 'main', array( 'docs' ) );
+
+		$this->create_page( null, null, $content_fetcher, $git_fetcher )
+			->list_github_directories( 'https://github.com/example/repository' );
+
+		foreach ( $content_fetcher->get_requested_urls() as $url ) {
+			$this->assertStringNotContainsString( 'api.github.com', $url );
+		}
+		$this->assertCount( 0, $content_fetcher->get_requested_urls() );
 	}
 
 	/**
@@ -1355,9 +1363,10 @@ final class ImportAdminPageTest extends TestCase {
 	 * @param callable|null                 $runner_factory  Optional runner factory.
 	 * @param ImportCacheDirectory|null     $cache_directory Optional upload cache directory.
 	 * @param FakeRemoteContentFetcher|null $content_fetcher Optional remote content fetcher.
+	 * @param FakeGitRepositoryFetcher|null $git_fetcher     Optional Git repository fetcher (admin directory picker).
 	 * @return ImportAdminPage
 	 */
-	private function create_page( callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, FakeRemoteContentFetcher $content_fetcher = null ) {
+	private function create_page( callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, FakeRemoteContentFetcher $content_fetcher = null, FakeGitRepositoryFetcher $git_fetcher = null ) {
 		return new ImportAdminPage(
 			$this->store,
 			function ( ImportSessionId $session_id ) {
@@ -1367,7 +1376,8 @@ final class ImportAdminPageTest extends TestCase {
 				return new FakeAdminRunner( $store );
 			} : $runner_factory,
 			$cache_directory,
-			$content_fetcher
+			$content_fetcher,
+			$git_fetcher
 		);
 	}
 

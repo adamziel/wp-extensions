@@ -85,6 +85,173 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 	}
 
 	/**
+	 * Lists repository directories under the requested subtree root.
+	 *
+	 * @param array<string,mixed>  $repo            Parsed repository data.
+	 * @param ImportCacheDirectory $cache_directory Cache directory.
+	 * @return array{ref:string,directories:array<int,string>}
+	 * @throws RuntimeException When the Git fetch fails or the requested subtree is missing.
+	 */
+	public function list_root_directories( array $repo, ImportCacheDirectory $cache_directory ) {
+		$this->assert_toolkit_available();
+
+		$owner       = isset( $repo['owner'] ) ? (string) $repo['owner'] : '';
+		$name        = isset( $repo['name'] ) ? (string) $repo['name'] : '';
+		$source_path = isset( $repo['source_path'] ) ? (string) $repo['source_path'] : '';
+		$requested   = isset( $repo['ref'] ) ? (string) $repo['ref'] : '';
+
+		if ( '' === $owner || '' === $name ) {
+			throw new RuntimeException( 'php-toolkit Git directory listing requires owner and repository name.' );
+		}
+
+		$repository_root = $cache_directory->path_for(
+			$this->synthetic_session_id( $owner, $name, $requested, $source_path ),
+			'github-git-directories',
+			array(
+				hash(
+					'sha256',
+					strtolower( $owner ) . '/' . strtolower( $name ) . "\n" . $requested . "\n" . $source_path
+				),
+			)
+		);
+
+		$git_repository = new GitRepository( LocalFilesystem::create( $repository_root ) );
+		$remote_url     = 'https://github.com/' . rawurlencode( $owner ) . '/' . rawurlencode( $name ) . '.git';
+		$http_client    = $this->http_client();
+
+		$git_repository->add_remote( 'origin', $remote_url );
+		$remote = $git_repository->get_remote_client( 'origin', array( 'http_client' => $http_client ) );
+
+		$branch = $this->resolve_branch_via_remote( $remote, $requested );
+		if ( '' === $branch ) {
+			throw new RuntimeException( 'php-toolkit Git directory listing could not resolve a branch on the remote.' );
+		}
+
+		$branch_ref = 'refs/heads/' . $branch;
+		$git_repository->set_branch_tip( $branch_ref, Commit::NULL_HASH );
+
+		$remote->pull(
+			$branch_ref,
+			array(
+				'force'   => true,
+				'path'    => $source_path,
+				'shallow' => true,
+			)
+		);
+
+		$filesystem = GitFilesystem::create( $git_repository );
+		$root       = '' === $source_path ? '/' : '/' . trim( $source_path, '/' );
+
+		if ( ! $filesystem->is_dir( $root ) ) {
+			throw new RuntimeException( 'php-toolkit Git directory listing did not find the requested repository path.' );
+		}
+
+		$directories = array();
+		$this->collect_directories( $filesystem, $root, $root, $directories );
+		sort( $directories, SORT_STRING );
+
+		return array(
+			'ref'         => $branch,
+			'directories' => $directories,
+		);
+	}
+
+	/**
+	 * Resolves the requested ref to a branch name via the remote ls-refs response.
+	 *
+	 * Accepts an empty ref or "HEAD" (resolves to the remote default branch) or an explicit branch name.
+	 *
+	 * @param object $remote Git remote client returned by GitRepository::get_remote_client.
+	 * @param string $ref    Requested ref.
+	 * @return string Resolved branch name, or empty string when no branch matches.
+	 * @throws RuntimeException When the remote cannot be queried.
+	 */
+	private function resolve_branch_via_remote( $remote, $ref ) {
+		$requested = trim( str_replace( '\\', '/', (string) $ref ), '/' );
+		$requested = '' === $requested ? 'HEAD' : $requested;
+
+		if ( 0 === strpos( $requested, 'refs/heads/' ) ) {
+			$requested = substr( $requested, strlen( 'refs/heads/' ) );
+		}
+
+		if ( '' !== $requested && 'HEAD' !== strtoupper( $requested ) ) {
+			return $this->branch_name( $requested );
+		}
+
+		$refs = $remote->ls_refs( '' );
+		if ( ! is_array( $refs ) || empty( $refs['HEAD'] ) ) {
+			return '';
+		}
+
+		$head_hash = (string) $refs['HEAD'];
+
+		foreach ( $refs as $ref_name => $hash ) {
+			if ( 0 !== strncmp( (string) $ref_name, 'refs/heads/', strlen( 'refs/heads/' ) ) ) {
+				continue;
+			}
+
+			if ( (string) $hash === $head_hash ) {
+				return $this->branch_name( substr( (string) $ref_name, strlen( 'refs/heads/' ) ) );
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Collects repository-root-relative directory paths reachable from a GitFilesystem root.
+	 *
+	 * The root path itself is not included (callers represent it as empty).
+	 *
+	 * @param object             $filesystem  GitFilesystem.
+	 * @param string             $path        Current path in the filesystem (absolute Git path).
+	 * @param string             $root_path   Path treated as the picker root (absolute Git path).
+	 * @param array<int,string>  $directories Collected relative paths.
+	 * @return void
+	 */
+	private function collect_directories( $filesystem, $path, $root_path, array &$directories ) {
+		if ( ! $filesystem->is_dir( $path ) ) {
+			return;
+		}
+
+		if ( $path !== $root_path ) {
+			$directories[] = trim( (string) $path, '/' );
+		}
+
+		$children = $filesystem->ls( $path );
+		if ( ! is_array( $children ) ) {
+			return;
+		}
+
+		sort( $children, SORT_STRING );
+
+		foreach ( $children as $child ) {
+			$child_path = '/' === $path ? '/' . $child : rtrim( $path, '/' ) . '/' . $child;
+
+			if ( ! $filesystem->is_dir( $child_path ) ) {
+				continue;
+			}
+
+			$this->collect_directories( $filesystem, $child_path, $root_path, $directories );
+		}
+	}
+
+	/**
+	 * Builds a deterministic synthetic session id for directory cache reuse.
+	 *
+	 * @param string $owner       Repository owner.
+	 * @param string $name        Repository name.
+	 * @param string $ref         Requested ref.
+	 * @param string $source_path Subtree path.
+	 * @return ImportSessionId
+	 */
+	private function synthetic_session_id( $owner, $name, $ref, $source_path ) {
+		$hash = hash( 'sha256', 'directory-picker:' . strtolower( $owner ) . '/' . strtolower( $name ) . "\n" . $ref . "\n" . $source_path );
+
+		return ImportSessionId::from_string( 'import_' . substr( $hash, 0, 32 ) );
+	}
+
+	/**
 	 * Verifies php-toolkit Git classes are installed.
 	 *
 	 * @return void

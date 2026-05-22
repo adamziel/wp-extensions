@@ -10,6 +10,7 @@ namespace UniversalImporter\Admin;
 use InvalidArgumentException;
 use RuntimeException;
 use UniversalImporter\Import\GitHubRepositorySourceUrl;
+use UniversalImporter\Import\GitRepositoryFetcherInterface;
 use UniversalImporter\Import\ImportCacheDirectory;
 use UniversalImporter\Import\ImportDecision;
 use UniversalImporter\Import\ImportMediaReference;
@@ -22,6 +23,7 @@ use UniversalImporter\Import\ImportRunner;
 use UniversalImporter\Import\ImportSession;
 use UniversalImporter\Import\ImportSessionId;
 use UniversalImporter\Import\ImportSourceItem;
+use UniversalImporter\Import\PhpToolkitGitRepositoryFetcher;
 use UniversalImporter\Import\WordPressRemoteContentFetcher;
 use UniversalImporter\Import\WordPressImportSessionStore;
 use UniversalImporter\Plugin;
@@ -80,20 +82,29 @@ final class ImportAdminPage {
 	private $content_fetcher;
 
 	/**
+	 * Optional Git repository fetcher override (admin directory picker).
+	 *
+	 * @var GitRepositoryFetcherInterface|null
+	 */
+	private $git_fetcher;
+
+	/**
 	 * Constructor.
 	 *
-	 * @param WordPressImportSessionStore|null         $store          Optional session store.
-	 * @param callable|null                            $scheduler      Optional continuation scheduler.
-	 * @param callable|null                            $runner_factory Optional runner factory.
+	 * @param WordPressImportSessionStore|null         $store           Optional session store.
+	 * @param callable|null                            $scheduler       Optional continuation scheduler.
+	 * @param callable|null                            $runner_factory  Optional runner factory.
 	 * @param ImportCacheDirectory|null                $cache_directory Optional upload cache directory.
-	 * @param ImportRemoteContentFetcherInterface|null $content_fetcher Optional GitHub directory fetcher.
+	 * @param ImportRemoteContentFetcherInterface|null $content_fetcher Optional remote content fetcher.
+	 * @param GitRepositoryFetcherInterface|null       $git_fetcher     Optional Git repository fetcher used by the admin directory picker.
 	 */
-	public function __construct( WordPressImportSessionStore $store = null, callable $scheduler = null, callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, ImportRemoteContentFetcherInterface $content_fetcher = null ) {
+	public function __construct( WordPressImportSessionStore $store = null, callable $scheduler = null, callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, ImportRemoteContentFetcherInterface $content_fetcher = null, GitRepositoryFetcherInterface $git_fetcher = null ) {
 		$this->store           = $store;
 		$this->scheduler       = $scheduler;
 		$this->runner_factory  = $runner_factory;
 		$this->cache_directory = $cache_directory;
 		$this->content_fetcher = $content_fetcher;
+		$this->git_fetcher     = $git_fetcher;
 	}
 
 	/**
@@ -327,23 +338,22 @@ final class ImportAdminPage {
 			throw new InvalidArgumentException( 'Enter a GitHub repository URL to browse directories.' );
 		}
 
-		$fetcher = $this->get_content_fetcher();
-
-		if ( 'HEAD' === strtoupper( $repo['ref'] ) ) {
-			$repo['ref'] = $this->fetch_github_default_branch( $fetcher, $repo );
-		}
-
-		$last_exception = null;
+		$git_fetcher     = $this->get_git_fetcher();
+		$cache_directory = $this->get_cache_directory();
+		$last_exception  = null;
 
 		foreach ( GitHubRepositorySourceUrl::candidates( $repo ) as $candidate ) {
 			try {
-				$tree = $fetcher->fetch_json( GitHubRepositorySourceUrl::tree_api_url( $candidate ) );
+				$listing = $git_fetcher->list_root_directories( $candidate, $cache_directory );
 
-				if ( ! is_array( $tree ) || ! isset( $tree['tree'] ) || ! is_array( $tree['tree'] ) ) {
-					throw new RuntimeException( 'GitHub tree response was malformed.' );
+				if ( ! is_array( $listing ) || ! isset( $listing['directories'] ) || ! is_array( $listing['directories'] ) ) {
+					throw new RuntimeException( 'php-toolkit Git directory listing response was malformed.' );
 				}
 
-				return $this->github_directory_snapshot( $candidate, $tree );
+				$resolved_ref = isset( $listing['ref'] ) && '' !== (string) $listing['ref'] ? (string) $listing['ref'] : $candidate['ref'];
+				$candidate    = $this->candidate_with_resolved_ref( $candidate, $resolved_ref );
+
+				return $this->github_directory_snapshot( $candidate, $listing['directories'] );
 			} catch ( RuntimeException $exception ) {
 				$last_exception = $exception;
 			}
@@ -353,6 +363,29 @@ final class ImportAdminPage {
 
 		// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are returned through escaped AJAX JSON.
 		throw new RuntimeException( 'GitHub directory tree could not be loaded: ' . $message );
+	}
+
+	/**
+	 * Returns a candidate descriptor with the requested-ref tracking preserved when the resolver upgrades HEAD.
+	 *
+	 * @param array<string,mixed> $candidate    Candidate.
+	 * @param string              $resolved_ref Branch returned by the Git fetcher.
+	 * @return array<string,mixed>
+	 */
+	private function candidate_with_resolved_ref( array $candidate, $resolved_ref ) {
+		$resolved_ref = GitHubRepositorySourceUrl::normalize_ref( (string) $resolved_ref );
+
+		if ( '' === $resolved_ref || $resolved_ref === $candidate['ref'] ) {
+			return $candidate;
+		}
+
+		$updated = $candidate;
+		if ( ! isset( $updated['requested_ref'] ) ) {
+			$updated['requested_ref'] = $candidate['ref'];
+		}
+		$updated['ref'] = $resolved_ref;
+
+		return $updated;
 	}
 
 	/**
@@ -713,12 +746,22 @@ final class ImportAdminPage {
 				font: inherit;
 				color: inherit;
 			}
+			.universal-importer-admin input[type="radio"],
+			.universal-importer-admin input[type="checkbox"] {
+				accent-color: var(--ui-accent);
+			}
+			.universal-importer-link-button:focus-visible {
+				border-radius: 2px;
+				color: var(--ui-ink);
+				outline: 2px solid var(--ui-accent-deep);
+				outline-offset: 2px;
+			}
 			.universal-importer-page-head {
 				align-items: baseline;
 				display: flex;
 				gap: 16px;
 				justify-content: space-between;
-				margin: 0 auto 14px;
+				margin: 0 auto 12px;
 				max-width: 720px;
 			}
 			.universal-importer-page-head .wp-heading-inline {
@@ -726,7 +769,7 @@ final class ImportAdminPage {
 				font-size: 23px;
 				font-weight: 400;
 				line-height: 1.3;
-				margin: 9px 0 4px;
+				margin: 8px 0 6px;
 				padding: 0;
 			}
 			.universal-importer-top { display: none; }
@@ -736,7 +779,7 @@ final class ImportAdminPage {
 				color: var(--ui-muted);
 				cursor: pointer;
 				font: inherit;
-				font-size: 12.5px;
+				font-size: 12px;
 				padding: 0;
 			}
 			.universal-importer-link-button:hover {
@@ -750,9 +793,9 @@ final class ImportAdminPage {
 				border-bottom: 1px solid var(--ui-rule);
 				color: var(--ui-muted);
 				display: none;
-				font-size: 11.5px;
-				margin: -4px 0 14px;
-				padding: 10px 0;
+				font-size: 12px;
+				margin: 0 0 12px;
+				padding: 12px 0;
 			}
 			.universal-importer-strip.is-visible {
 				display: block;
@@ -761,7 +804,7 @@ final class ImportAdminPage {
 				display: flex;
 				flex-wrap: wrap;
 				font-variant-numeric: tabular-nums;
-				gap: 14px;
+				gap: 12px;
 			}
 			.universal-importer-strip-stage {
 				align-items: center;
@@ -799,7 +842,7 @@ final class ImportAdminPage {
 				border-top: 1px solid var(--ui-rule);
 				border-bottom: 1px solid var(--ui-rule);
 				display: none;
-				margin-bottom: 18px;
+				margin-bottom: 16px;
 				padding: 12px 0;
 			}
 			.universal-importer-past.is-visible {
@@ -817,7 +860,7 @@ final class ImportAdminPage {
 				align-items: center;
 				border-top: 1px dotted var(--ui-rule);
 				display: flex;
-				font-size: 12.5px;
+				font-size: 12px;
 				gap: 12px;
 				justify-content: space-between;
 				padding: 8px 0;
@@ -831,11 +874,11 @@ final class ImportAdminPage {
 			}
 			.universal-importer-past-meta {
 				color: var(--ui-muted);
-				font-size: 11.5px;
+				font-size: 12px;
 			}
 			.universal-importer-past-empty {
 				color: var(--ui-muted);
-				font-size: 12.5px;
+				font-size: 12px;
 				margin: 0;
 				padding: 8px 0;
 			}
@@ -848,7 +891,7 @@ final class ImportAdminPage {
 				display: block;
 				margin: 0 auto;
 				max-width: 720px;
-				padding: 22px 24px 26px;
+				padding: 24px;
 			}
 			.universal-importer-strip,
 			.universal-importer-past {
@@ -858,7 +901,7 @@ final class ImportAdminPage {
 			.universal-importer-turn {
 				animation: universal-importer-fade .18s ease-out;
 				border-bottom: 1px dashed var(--ui-rule);
-				padding: 14px 0;
+				padding: 12px 0;
 			}
 			.universal-importer-turn:last-child {
 				border-bottom: 0;
@@ -867,11 +910,15 @@ final class ImportAdminPage {
 				from { opacity: 0; transform: translateY(4px); }
 				to { opacity: 1; transform: none; }
 			}
+			@media (prefers-reduced-motion: reduce) {
+				.universal-importer-turn { animation: none; }
+				.universal-importer-btn.is-prominent:hover:not(:disabled) { transform: none; }
+			}
 			.universal-importer-speaker {
 				align-items: center;
 				color: var(--ui-muted);
 				display: flex;
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				gap: 8px;
 				letter-spacing: .12em;
@@ -893,11 +940,11 @@ final class ImportAdminPage {
 				border-radius: 999px;
 				color: var(--ui-warn);
 				display: inline-flex;
-				font-size: 10px;
+				font-size: 11px;
 				font-weight: 700;
-				gap: 5px;
+				gap: 6px;
 				letter-spacing: .06em;
-				padding: 1px 7px;
+				padding: 2px 8px;
 			}
 			.universal-importer-edit {
 				background: none;
@@ -929,7 +976,7 @@ final class ImportAdminPage {
 				color: var(--ui-ink);
 				flex: 1;
 				font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-				font-size: 12.5px;
+				font-size: 12px;
 				overflow: hidden;
 				text-overflow: ellipsis;
 				white-space: nowrap;
@@ -938,7 +985,7 @@ final class ImportAdminPage {
 				display: none;
 			}
 			.universal-importer-classify-line {
-				font-size: 14.5px;
+				font-size: 14px;
 				line-height: 1.55;
 			}
 			.universal-importer-override {
@@ -959,8 +1006,8 @@ final class ImportAdminPage {
 				border: 0;
 				border-radius: 4px;
 				cursor: pointer;
-				font-size: 12.5px;
-				padding: 6px 8px;
+				font-size: 12px;
+				padding: 8px 12px;
 				text-align: left;
 			}
 			.universal-importer-override button:hover {
@@ -973,21 +1020,21 @@ final class ImportAdminPage {
 			}
 			.universal-importer-dom-err {
 				color: var(--ui-warn);
-				font-size: 11.5px;
-				margin: 6px 0 0;
+				font-size: 12px;
+				margin: 8px 0 0;
 			}
 			.universal-importer-dom-err[hidden] {
 				display: none;
 			}
 			.universal-importer-body {
-				font-size: 14.5px;
+				font-size: 14px;
 				line-height: 1.55;
 			}
 			.universal-importer-hint {
 				color: var(--ui-muted);
 				display: block;
 				font-size: 13px;
-				margin: 3px 0 0;
+				margin: 4px 0 0;
 			}
 			.universal-importer-stack {
 				display: grid;
@@ -998,7 +1045,7 @@ final class ImportAdminPage {
 				background: #fff;
 				border: 1px solid var(--ui-rule);
 				border-radius: 6px;
-				padding: 12px 13px;
+				padding: 12px 16px;
 				position: relative;
 			}
 			.universal-importer-memo.is-focus {
@@ -1006,10 +1053,10 @@ final class ImportAdminPage {
 				border-color: var(--ui-accent);
 			}
 			.universal-importer-memo h3 {
-				font-size: 13.5px;
+				font-size: 13px;
 				font-weight: 600;
 				letter-spacing: .01em;
-				margin: 0 0 4px;
+				margin: 0 0 6px;
 			}
 			.universal-importer-memo .universal-importer-field {
 				margin-top: 6px;
@@ -1019,7 +1066,7 @@ final class ImportAdminPage {
 				background: #fff;
 				border: 1px solid var(--ui-rule);
 				border-radius: 5px;
-				padding: 9px 11px;
+				padding: 8px 12px;
 				width: 100%;
 			}
 			.universal-importer-memo input:focus {
@@ -1029,15 +1076,15 @@ final class ImportAdminPage {
 			}
 			.universal-importer-group-label {
 				color: var(--ui-muted);
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .1em;
-				margin: 14px 0 6px;
+				margin: 12px 0 6px;
 				text-transform: uppercase;
 			}
 			.universal-importer-opts {
 				display: grid;
-				gap: 5px;
+				gap: 6px;
 			}
 			.universal-importer-opt {
 				align-items: flex-start;
@@ -1046,8 +1093,8 @@ final class ImportAdminPage {
 				border-radius: 6px;
 				cursor: pointer;
 				display: flex;
-				gap: 9px;
-				padding: 9px 11px;
+				gap: 8px;
+				padding: 8px 12px;
 			}
 			.universal-importer-opt.is-on {
 				background: #fffaeb;
@@ -1058,7 +1105,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-opt b {
 				display: block;
-				font-size: 13.5px;
+				font-size: 13px;
 				font-weight: 600;
 			}
 			.universal-importer-opt small {
@@ -1077,7 +1124,7 @@ final class ImportAdminPage {
 				border-top: 0;
 			}
 			.universal-importer-line-toggle b {
-				font-size: 13.5px;
+				font-size: 13px;
 			}
 			.universal-importer-line-toggle small {
 				color: var(--ui-muted);
@@ -1116,7 +1163,7 @@ final class ImportAdminPage {
 				border: 1px solid var(--ui-rule);
 				border-radius: 6px;
 				margin-top: 6px;
-				padding: 8px 10px;
+				padding: 8px 12px;
 				width: 100%;
 			}
 			.universal-importer-btns {
@@ -1133,10 +1180,15 @@ final class ImportAdminPage {
 				cursor: pointer;
 				font-size: 13px;
 				font-weight: 600;
-				padding: 7px 14px;
+				padding: 8px 12px;
 			}
 			.universal-importer-btn:hover {
 				border-color: var(--ui-accent);
+			}
+			.universal-importer-btn:focus-visible {
+				border-color: var(--ui-accent);
+				outline: 2px solid var(--ui-soft);
+				outline-offset: 1px;
 			}
 			.universal-importer-btn:disabled {
 				cursor: not-allowed;
@@ -1156,7 +1208,7 @@ final class ImportAdminPage {
 				font-size: 14px;
 				font-weight: 700;
 				letter-spacing: .01em;
-				padding: 11px 26px;
+				padding: 12px 24px;
 			}
 			.universal-importer-btn.is-prominent:hover:not(:disabled) {
 				box-shadow: 0 1px 0 rgba(0, 0, 0, .04), 0 3px 10px rgba(133, 77, 8, .35);
@@ -1193,7 +1245,7 @@ final class ImportAdminPage {
 				background: #fff;
 				border: 1px solid var(--ui-rule);
 				border-radius: 6px;
-				padding: 14px 16px;
+				padding: 12px 16px;
 				position: relative;
 				transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
 			}
@@ -1211,16 +1263,16 @@ final class ImportAdminPage {
 			}
 			.universal-importer-accepts {
 				color: var(--ui-muted);
-				font-size: 11.5px;
+				font-size: 12px;
 				line-height: 1.5;
-				margin: -2px 0 12px;
+				margin: 0 0 12px;
 			}
 			.universal-importer-pick-row {
 				align-items: center;
 				color: var(--ui-muted);
 				display: flex;
 				flex-wrap: wrap;
-				font-size: 12.5px;
+				font-size: 12px;
 				gap: 6px;
 				margin-top: 8px;
 			}
@@ -1259,7 +1311,7 @@ final class ImportAdminPage {
 				display: none;
 			}
 			.universal-importer-inferred {
-				margin-top: 10px;
+				margin-top: 12px;
 				position: relative;
 			}
 			.universal-importer-inferred[hidden] {
@@ -1276,7 +1328,7 @@ final class ImportAdminPage {
 				gap: 8px;
 				font-size: 13px;
 				font-weight: 600;
-				padding: 7px 10px 7px 9px;
+				padding: 8px 12px;
 				text-align: left;
 				min-width: 240px;
 				transition: border-color .12s ease, box-shadow .12s ease, background-color .12s ease;
@@ -1362,12 +1414,15 @@ final class ImportAdminPage {
 				grid-template-columns: 22px 1fr 16px;
 				gap: 10px;
 				font-size: 13px;
-				padding: 8px 10px;
+				padding: 8px 12px;
 				text-align: left;
 			}
-			.universal-importer-inferred-popover button[role="option"]:hover,
+			.universal-importer-inferred-popover button[role="option"]:hover {
+				background: #fff8e1;
+			}
 			.universal-importer-inferred-popover button[role="option"]:focus-visible {
 				background: #fff8e1;
+				box-shadow: 0 0 0 2px var(--ui-accent-deep);
 				outline: none;
 			}
 			.universal-importer-inferred-popover button[role="option"][aria-selected="true"] {
@@ -1399,7 +1454,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-typepick-opt-desc {
 				color: var(--ui-muted);
-				font-size: 11.5px;
+				font-size: 12px;
 				font-weight: 400;
 				line-height: 1.35;
 			}
@@ -1431,7 +1486,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-file-summary {
 				color: var(--ui-muted);
-				font-size: 12.5px;
+				font-size: 12px;
 				margin: 8px 0 0;
 				overflow: hidden;
 				text-overflow: ellipsis;
@@ -1474,7 +1529,7 @@ final class ImportAdminPage {
 				grid-template-columns: 14px minmax(0, 1fr);
 				line-height: 1.35;
 				min-height: 22px;
-				padding: 2px 4px;
+				padding: 2px 8px;
 			}
 			.universal-importer-file-preview [role="treeitem"]:focus > .universal-importer-file-preview-item {
 				box-shadow: inset 0 0 0 2px var(--ui-accent);
@@ -1494,8 +1549,8 @@ final class ImportAdminPage {
 				border-radius: 6px;
 				display: flex;
 				gap: 12px;
-				margin: 10px 0 0;
-				padding: 8px 8px 8px 12px;
+				margin: 8px 0 0;
+				padding: 8px 12px;
 			}
 			.universal-importer-github-picker[hidden] {
 				display: none;
@@ -1523,7 +1578,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-github-picker-kicker {
 				color: var(--ui-muted);
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .08em;
 				text-transform: uppercase;
@@ -1544,9 +1599,9 @@ final class ImportAdminPage {
 				display: inline-flex;
 				flex: none;
 				gap: 6px;
-				font-size: 12.5px;
+				font-size: 12px;
 				font-weight: 600;
-				padding: 6px 10px;
+				padding: 8px 12px;
 				transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease;
 			}
 			.universal-importer-github-picker-btn:hover {
@@ -1564,99 +1619,8 @@ final class ImportAdminPage {
 				display: block;
 				color: var(--ui-accent-deep);
 			}
-			.universal-importer-modal[hidden] {
-				display: none;
-			}
-			.universal-importer-modal {
-				align-items: center;
-				background: rgba(30, 30, 30, .55);
-				bottom: 0;
-				display: flex;
-				justify-content: center;
-				left: 0;
-				padding: 24px;
-				position: fixed;
-				right: 0;
-				top: 0;
-				z-index: 100000;
-			}
-			.universal-importer-modal-dialog {
-				background: #fff;
-				border-radius: 8px;
-				box-shadow: 0 22px 70px rgba(0,0,0,.28);
-				display: grid;
-				grid-template-rows: auto minmax(0, 1fr) auto;
-				max-height: min(760px, calc(100vh - 48px));
-				max-width: 760px;
-				min-height: 420px;
-				outline: none;
-				overflow: hidden;
-				width: min(760px, calc(100vw - 48px));
-			}
-			.universal-importer-modal-header,
-			.universal-importer-modal-footer {
-				align-items: center;
-				display: flex;
-				gap: 12px;
-				justify-content: space-between;
-				padding: 16px 18px;
-			}
-			.universal-importer-modal-header {
-				border-bottom: 1px solid var(--ui-border);
-			}
-			.universal-importer-modal-header h2 {
-				font-size: 18px;
-				line-height: 1.3;
-				margin: 0;
-			}
-			.universal-importer-modal-close {
-				align-items: center;
-				background: transparent;
-				border: 0;
-				border-radius: 4px;
-				color: #50575e;
-				cursor: pointer;
-				display: inline-flex;
-				font-size: 24px;
-				height: 32px;
-				justify-content: center;
-				line-height: 1;
-				padding: 0;
-				width: 32px;
-			}
-			.universal-importer-modal-close:hover,
-			.universal-importer-modal-close:focus {
-				box-shadow: inset 0 0 0 2px var(--ui-accent);
-				outline: none;
-			}
-			.universal-importer-modal-body {
-				display: flex;
-				flex-direction: column;
-				min-height: 0;
-				padding: 16px 18px;
-			}
-			.universal-importer-modal-body > .universal-importer-github-tree {
-				flex: 1 1 auto;
-			}
 			.universal-importer-github-filter {
-				margin: 0 0 12px;
-			}
-			.universal-importer-github-filter label {
-				color: #1d2327;
-				display: block;
-				font-size: 13px;
-				font-weight: 600;
-				margin: 0 0 7px;
-			}
-			.universal-importer-github-filter input[type="search"] {
-				border-radius: 6px;
-				min-height: 38px;
-				width: 100%;
-			}
-			.universal-importer-github-picker-status {
-				color: var(--ui-muted);
-				font-size: 12px;
-				margin: 0 0 10px;
+				margin: 0 0 8px;
 			}
 			.universal-importer-github-skeleton {
 				display: flex;
@@ -1673,7 +1637,7 @@ final class ImportAdminPage {
 				background-size: 200% 100%;
 				border-radius: 4px;
 				display: block;
-				height: 14px;
+				height: 12px;
 				width: 100%;
 				animation: universal-importer-shimmer 1.2s ease-in-out infinite;
 			}
@@ -1691,66 +1655,6 @@ final class ImportAdminPage {
 			@media (prefers-reduced-motion: reduce) {
 				.universal-importer-github-skeleton-row { animation: none; }
 			}
-			.universal-importer-github-tree {
-				border: 1px solid var(--ui-border);
-				border-radius: 6px;
-				list-style: none;
-				margin: 0;
-				min-height: 180px;
-				overflow: auto;
-				padding: 6px;
-			}
-			.universal-importer-github-tree[hidden] {
-				display: none;
-			}
-			.universal-importer-github-tree li {
-				margin: 0;
-			}
-			.universal-importer-github-directory {
-				background: transparent;
-				border: 0;
-				border-radius: 4px;
-				color: #1d2327;
-				cursor: pointer;
-				display: block;
-				line-height: 1.4;
-				min-height: 28px;
-				overflow-wrap: anywhere;
-				padding-bottom: 5px;
-				padding-top: 5px;
-				text-align: left;
-				width: 100%;
-			}
-			.universal-importer-github-directory:hover,
-			.universal-importer-github-directory:focus {
-				background: #f0f6fc;
-				box-shadow: inset 0 0 0 2px var(--ui-accent);
-				outline: none;
-			}
-			.universal-importer-github-directory.is-selected {
-				background: #f0f6e8;
-				box-shadow: inset 3px 0 0 #008a20;
-				font-weight: 600;
-			}
-			.universal-importer-github-empty {
-				color: var(--ui-muted);
-				margin: 12px;
-			}
-			.universal-importer-modal-footer {
-				border-top: 1px solid var(--ui-border);
-			}
-			.universal-importer-modal-actions {
-				display: flex;
-				flex: 0 0 auto;
-				gap: 8px;
-			}
-			.universal-importer-modal-selection {
-				color: var(--ui-muted);
-				font-size: 12px;
-				margin: 0;
-				min-width: 0;
-				overflow-wrap: anywhere;
-			}
 			.universal-importer-url-options {
 				display: contents;
 			}
@@ -1764,9 +1668,9 @@ final class ImportAdminPage {
 				border-radius: 6px;
 				cursor: pointer;
 				display: flex;
-				gap: 9px;
-				margin: 0 0 5px;
-				padding: 9px 11px;
+				gap: 8px;
+				margin: 0 0 6px;
+				padding: 8px 12px;
 			}
 			.universal-importer-option.is-on {
 				background: #fffaeb;
@@ -1780,7 +1684,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-option strong {
 				display: block;
-				font-size: 13.5px;
+				font-size: 13px;
 				font-weight: 600;
 			}
 			.universal-importer-option .universal-importer-hint,
@@ -1797,7 +1701,7 @@ final class ImportAdminPage {
 			.universal-importer-domain-entry span:first-child {
 				color: var(--ui-muted);
 				display: block;
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .1em;
 				margin-bottom: 6px;
@@ -1807,7 +1711,7 @@ final class ImportAdminPage {
 				background: #fff;
 				border: 1px solid var(--ui-rule);
 				border-radius: 6px;
-				padding: 8px 10px;
+				padding: 8px 12px;
 				width: 100%;
 			}
 			.universal-importer-actions {
@@ -1815,7 +1719,7 @@ final class ImportAdminPage {
 				display: flex;
 				flex-wrap: wrap;
 				gap: 8px;
-				margin-top: 14px;
+				margin-top: 12px;
 			}
 			.universal-importer-actions .button {
 				background: var(--ui-accent);
@@ -1825,7 +1729,7 @@ final class ImportAdminPage {
 				cursor: pointer;
 				font-size: 13px;
 				font-weight: 600;
-				padding: 7px 14px;
+				padding: 8px 12px;
 				text-decoration: none;
 			}
 			.universal-importer-actions .button-primary,
@@ -1875,7 +1779,7 @@ final class ImportAdminPage {
 			.universal-importer-source-title {
 				color: var(--ui-muted);
 				font-family: ui-monospace, Menlo, monospace;
-				font-size: 12.5px;
+				font-size: 12px;
 				font-weight: 400;
 				margin: 0;
 				overflow-wrap: anywhere;
@@ -1883,7 +1787,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-meta {
 				color: var(--ui-muted);
-				font-size: 11.5px;
+				font-size: 12px;
 				margin: 0;
 			}
 			.universal-importer-status-pill {
@@ -1891,10 +1795,10 @@ final class ImportAdminPage {
 				border: 1px solid var(--ui-warn);
 				border-radius: 999px;
 				color: var(--ui-warn);
-				font-size: 10px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .06em;
-				padding: 1px 7px;
+				padding: 2px 8px;
 				text-transform: uppercase;
 				white-space: nowrap;
 			}
@@ -1922,7 +1826,7 @@ final class ImportAdminPage {
 				100% { margin-left: 100%; }
 			}
 			.universal-importer-current-action {
-				font-size: 14.5px;
+				font-size: 14px;
 				font-weight: 500;
 				margin: 0 0 6px;
 			}
@@ -1932,25 +1836,25 @@ final class ImportAdminPage {
 				border-left: 3px solid var(--ui-warn);
 				border-radius: 6px;
 				color: var(--ui-warn);
-				margin: 10px 0;
-				padding: 10px 12px;
+				margin: 8px 0;
+				padding: 12px 16px;
 			}
 			.universal-importer-attention-actions {
 				margin: 8px 0 0;
 			}
 			.universal-importer-stage-title {
 				color: var(--ui-muted);
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .1em;
-				margin: 14px 0 8px;
+				margin: 12px 0 6px;
 				text-transform: uppercase;
 			}
 			.universal-importer-checklist {
 				display: grid;
 				gap: 4px;
 				list-style: none;
-				margin: 0 0 10px;
+				margin: 0 0 12px;
 				padding: 0;
 			}
 			.universal-importer-step {
@@ -1959,7 +1863,7 @@ final class ImportAdminPage {
 				display: flex;
 				font-size: 12px;
 				gap: 8px;
-				padding: 4px 0;
+				padding: 8px 0;
 			}
 			.universal-importer-stage-index {
 				background: #dcd1b3;
@@ -2002,7 +1906,7 @@ final class ImportAdminPage {
 				background: transparent;
 				border: 0;
 				color: var(--ui-muted);
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .06em;
 				margin: 0;
@@ -2040,19 +1944,19 @@ final class ImportAdminPage {
 				border-top: 1px dashed var(--ui-rule);
 				color: var(--ui-muted);
 				font-size: 13px;
-				margin-top: 10px;
-				padding-top: 10px;
+				margin-top: 12px;
+				padding-top: 12px;
 			}
 			.universal-importer-log strong {
 				color: var(--ui-muted);
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .1em;
 				text-transform: uppercase;
 			}
 			.universal-importer-log ol {
 				list-style: none;
-				margin: 6px 0 0;
+				margin: 8px 0 0;
 				max-height: 220px;
 				overflow: auto;
 				padding: 0;
@@ -2060,7 +1964,7 @@ final class ImportAdminPage {
 			.universal-importer-log li {
 				display: flex;
 				gap: 8px;
-				margin-bottom: 4px;
+				margin-bottom: 6px;
 			}
 			.universal-importer-log li::before {
 				color: var(--ui-accent);
@@ -2075,15 +1979,15 @@ final class ImportAdminPage {
 				border: 0;
 				border-left: 3px solid var(--ui-warn);
 				border-radius: 0;
-				margin-top: 10px;
-				padding: 4px 0 4px 12px;
+				margin-top: 12px;
+				padding: 8px 12px;
 			}
 			.universal-importer-decisions h4 {
 				color: var(--ui-warn);
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .12em;
-				margin: 8px 0 4px;
+				margin: 8px 0 6px;
 				text-transform: uppercase;
 			}
 			.universal-importer-stage-decision {
@@ -2101,7 +2005,7 @@ final class ImportAdminPage {
 				display: flex;
 				flex-wrap: wrap;
 				gap: 8px;
-				margin: 10px 0 0;
+				margin: 8px 0 0;
 			}
 			.universal-importer-decision-actions .button {
 				background: #fff;
@@ -2111,7 +2015,7 @@ final class ImportAdminPage {
 				cursor: pointer;
 				font-size: 13px;
 				font-weight: 600;
-				padding: 7px 14px;
+				padding: 8px 12px;
 			}
 			.universal-importer-decision-actions .button:hover {
 				border-color: var(--ui-accent);
@@ -2142,7 +2046,7 @@ final class ImportAdminPage {
 				border-top: 0;
 			}
 			.universal-importer-domain-list input {
-				margin-top: 3px;
+				margin-top: 2px;
 			}
 			.universal-importer-domain-list strong {
 				display: block;
@@ -2151,7 +2055,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-domain-list .universal-importer-hint {
 				font-family: ui-monospace, Menlo, monospace;
-				font-size: 11.5px;
+				font-size: 12px;
 				word-break: break-all;
 			}
 			.universal-importer-pipeline {
@@ -2177,15 +2081,15 @@ final class ImportAdminPage {
 			.universal-importer-pipeline p,
 			.universal-importer-pipeline ul {
 				color: var(--ui-muted);
-				font-size: 12.5px;
-				margin: 6px 0;
+				font-size: 12px;
+				margin: 8px 0;
 			}
 			.universal-importer-pipeline h4 {
 				color: var(--ui-muted);
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .1em;
-				margin: 10px 0 4px;
+				margin: 8px 0 6px;
 				text-transform: uppercase;
 			}
 			.universal-importer-relationship-warnings {
@@ -2193,14 +2097,14 @@ final class ImportAdminPage {
 				border: 1px solid var(--ui-warn);
 				border-radius: 6px;
 				color: var(--ui-warn);
-				margin: 10px 0;
-				padding: 10px 12px;
+				margin: 8px 0;
+				padding: 12px 16px;
 			}
 			.universal-importer-notice {
 				border: 1px solid var(--ui-rule);
 				border-left: 3px solid var(--ui-accent);
 				border-radius: 6px;
-				margin: 0 0 14px;
+				margin: 0 0 12px;
 				padding: 8px 12px;
 			}
 			.universal-importer-notice.notice-error {
@@ -2263,7 +2167,7 @@ final class ImportAdminPage {
 				border-bottom: 1px solid var(--ui-rule);
 			}
 			.universal-importer-modal-header h2 {
-				font-size: 13.5px;
+				font-size: 13px;
 				font-weight: 600;
 				margin: 0;
 			}
@@ -2273,13 +2177,18 @@ final class ImportAdminPage {
 				border-radius: 4px;
 				color: var(--ui-muted);
 				cursor: pointer;
-				font-size: 22px;
+				font-size: 23px;
 				height: 28px;
 				line-height: 1;
 				width: 28px;
 			}
 			.universal-importer-modal-close:hover {
 				color: var(--ui-ink);
+			}
+			.universal-importer-modal-close:focus-visible {
+				color: var(--ui-ink);
+				outline: 2px solid var(--ui-accent-deep);
+				outline-offset: 1px;
 			}
 			.universal-importer-modal-body {
 				display: flex;
@@ -2293,7 +2202,7 @@ final class ImportAdminPage {
 			.universal-importer-github-filter label {
 				color: var(--ui-muted);
 				display: block;
-				font-size: 10.5px;
+				font-size: 11px;
 				font-weight: 700;
 				letter-spacing: .1em;
 				margin: 0 0 6px;
@@ -2303,12 +2212,17 @@ final class ImportAdminPage {
 				background: #fff;
 				border: 1px solid var(--ui-rule);
 				border-radius: 5px;
-				padding: 8px 10px;
+				padding: 8px 12px;
 				width: 100%;
+			}
+			.universal-importer-github-filter input[type="search"]:focus {
+				border-color: var(--ui-accent);
+				outline: 2px solid var(--ui-soft);
+				outline-offset: 1px;
 			}
 			.universal-importer-github-picker-status {
 				color: var(--ui-muted);
-				font-size: 11.5px;
+				font-size: 12px;
 				margin: 8px 0 6px;
 			}
 			.universal-importer-github-tree {
@@ -2318,7 +2232,7 @@ final class ImportAdminPage {
 				margin: 0;
 				min-height: 180px;
 				overflow: auto;
-				padding: 4px;
+				padding: 6px;
 			}
 			.universal-importer-github-tree li {
 				margin: 0;
@@ -2330,11 +2244,11 @@ final class ImportAdminPage {
 				color: var(--ui-ink);
 				cursor: pointer;
 				display: block;
-				font-size: 12.5px;
+				font-size: 12px;
 				line-height: 1.4;
 				min-height: 26px;
 				overflow-wrap: anywhere;
-				padding: 4px 8px;
+				padding: 2px 8px;
 				text-align: left;
 				width: 100%;
 			}
@@ -2343,6 +2257,9 @@ final class ImportAdminPage {
 				background: var(--ui-soft);
 				outline: none;
 			}
+			.universal-importer-github-directory:focus-visible {
+				box-shadow: inset 0 0 0 2px var(--ui-accent);
+			}
 			.universal-importer-github-directory.is-selected {
 				background: var(--ui-soft);
 				color: var(--ui-accent);
@@ -2350,7 +2267,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-github-empty {
 				color: var(--ui-muted);
-				margin: 12px;
+				margin: 12px 0;
 			}
 			.universal-importer-modal-footer {
 				border-top: 1px solid var(--ui-rule);
@@ -2362,7 +2279,7 @@ final class ImportAdminPage {
 			}
 			.universal-importer-modal-selection {
 				color: var(--ui-muted);
-				font-size: 11.5px;
+				font-size: 12px;
 				margin: 0;
 				min-width: 0;
 				overflow-wrap: anywhere;
@@ -2373,14 +2290,30 @@ final class ImportAdminPage {
 				border-radius: 6px;
 				color: var(--ui-ink);
 				cursor: pointer;
-				font-size: 12.5px;
+				font-size: 12px;
 				font-weight: 600;
-				padding: 5px 12px;
+				padding: 8px 12px;
+			}
+			.universal-importer-modal-actions .button:hover {
+				border-color: var(--ui-accent);
+			}
+			.universal-importer-modal-actions .button:focus-visible {
+				border-color: var(--ui-accent);
+				outline: 2px solid var(--ui-soft);
+				outline-offset: 1px;
 			}
 			.universal-importer-modal-actions .button-primary {
 				background: var(--ui-accent);
 				border-color: var(--ui-accent);
 				color: #fff;
+			}
+			.universal-importer-modal-actions .button-primary:hover:not(:disabled) {
+				background: var(--ui-accent-deep);
+				border-color: var(--ui-accent-deep);
+			}
+			.universal-importer-modal-actions .button-primary:focus-visible {
+				outline: 2px solid var(--ui-accent-deep);
+				outline-offset: 2px;
 			}
 			.universal-importer-modal-actions .button-primary:disabled {
 				cursor: not-allowed;
@@ -2388,10 +2321,10 @@ final class ImportAdminPage {
 			}
 			.universal-importer-tally {
 				display: inline-flex;
-				font-size: 13.5px;
+				font-size: 13px;
 				font-variant-numeric: tabular-nums;
-				gap: 14px;
-				margin-top: 10px;
+				gap: 12px;
+				margin-top: 12px;
 			}
 			.universal-importer-file-preview ul {
 				list-style: none;
@@ -2414,7 +2347,7 @@ final class ImportAdminPage {
 				grid-template-columns: 14px minmax(0, 1fr);
 				line-height: 1.35;
 				min-height: 22px;
-				padding: 2px 4px;
+				padding: 2px 8px;
 			}
 			.universal-importer-file-preview [role="treeitem"]:focus > .universal-importer-file-preview-item {
 				box-shadow: inset 0 0 0 2px var(--ui-accent);
@@ -2432,7 +2365,7 @@ final class ImportAdminPage {
 					padding: 18px 16px 80px;
 				}
 				.universal-importer-memo-prompt {
-					font-size: 13.5px;
+					font-size: 13px;
 				}
 			}
 		</style>
@@ -5306,40 +5239,30 @@ final class ImportAdminPage {
 	}
 
 	/**
-	 * Fetches the default branch for a GitHub repository.
+	 * Loads the Git repository fetcher used by the admin directory picker.
 	 *
-	 * @param ImportRemoteContentFetcherInterface $fetcher Remote JSON fetcher.
-	 * @param array{owner:string,name:string}     $repo    Repository data.
-	 * @return string
-	 * @throws RuntimeException When the repository response is malformed.
+	 * @return GitRepositoryFetcherInterface
 	 */
-	private function fetch_github_default_branch( ImportRemoteContentFetcherInterface $fetcher, array $repo ) {
-		$metadata = $fetcher->fetch_json( GitHubRepositorySourceUrl::repository_api_url( $repo ) );
-		$branch   = isset( $metadata['default_branch'] ) ? GitHubRepositorySourceUrl::normalize_ref( (string) $metadata['default_branch'] ) : '';
-
-		if ( '' === $branch || 'HEAD' === strtoupper( $branch ) ) {
-			throw new RuntimeException( 'GitHub repository response did not include a default branch.' );
+	private function get_git_fetcher() {
+		if ( null === $this->git_fetcher ) {
+			$this->git_fetcher = new PhpToolkitGitRepositoryFetcher();
 		}
 
-		return $branch;
+		return $this->git_fetcher;
 	}
 
 	/**
-	 * Builds an admin directory picker snapshot from a GitHub tree response.
+	 * Builds an admin directory picker snapshot from a Git-resolved directory list.
 	 *
-	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo Repository data.
-	 * @param array<string,mixed>                                                                                   $tree GitHub tree response.
+	 * @param array{owner:string,name:string,ref:string,source_path:string,source_url:string,requested_ref?:string} $repo                 Repository data.
+	 * @param array<int,string>                                                                                     $directory_paths      Repository-root-relative directory paths discovered via Git.
 	 * @return array<string,mixed>
 	 */
-	private function github_directory_snapshot( array $repo, array $tree ) {
+	private function github_directory_snapshot( array $repo, array $directory_paths ) {
 		$paths = array( '' => true );
 
-		foreach ( isset( $tree['tree'] ) && is_array( $tree['tree'] ) ? $tree['tree'] : array() as $entry ) {
-			if ( ! is_array( $entry ) || ! isset( $entry['type'], $entry['path'] ) || 'tree' !== (string) $entry['type'] ) {
-				continue;
-			}
-
-			$path = GitHubRepositorySourceUrl::normalize_source_path( (string) $entry['path'] );
+		foreach ( $directory_paths as $entry_path ) {
+			$path = GitHubRepositorySourceUrl::normalize_source_path( (string) $entry_path );
 			if ( '' !== $path ) {
 				$paths[ $path ] = true;
 			}
@@ -5383,7 +5306,7 @@ final class ImportAdminPage {
 			'selected_path'       => $selected_path,
 			'selected_source_url' => GitHubRepositorySourceUrl::source_url( $repo, $selected_path ),
 			'source_url'          => GitHubRepositorySourceUrl::source_url( $repo, '' ),
-			'truncated'           => ! empty( $tree['truncated'] ),
+			'truncated'           => false,
 			'directories'         => $directories,
 		);
 	}
