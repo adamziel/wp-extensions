@@ -5138,4 +5138,63 @@ final class ImportHtmlBlockConverterTest extends TestCase {
 		$this->assertStringContainsString( '<!-- wp:freeform -->', $markup );
 		$this->assertStringContainsString( '<section><custom-card>Opaque</custom-card></section>', $markup );
 	}
+
+	/**
+	 * UTF-8 multibyte characters round-trip through DOMDocument byte-for-byte.
+	 *
+	 * Regression coverage for the mojibake observed when importing
+	 * https://adamadam.blog: curly quotes, em-dashes, accented letters,
+	 * and arrow glyphs would emerge as "a~", "a,", "a^" sequences because
+	 * DOMDocument::loadHTML interpreted UTF-8 bytes as ISO-8859-1.
+	 *
+	 * @return void
+	 */
+	public function test_utf8_multibyte_characters_round_trip_through_block_conversion() {
+		$converter = new ImportHtmlBlockConverter();
+		$summary   = array();
+
+		$em_dash         = "\xE2\x80\x94";
+		$left_curly      = "\xE2\x80\x9C";
+		$right_curly     = "\xE2\x80\x9D";
+		$right_arrow     = "\xE2\x86\x92";
+		$i_diaeresis     = "\xC3\xAF";
+		$e_acute         = "\xC3\xA9";
+		$left_apostrophe = "\xE2\x80\x98";
+
+		$paragraph = 'I was so afraid people would judge me that I spent a lot of time rewriting everything in a "safer' . $em_dash . 'I think' . $em_dash . '" voice. The na' . $i_diaeresis . 've caf' . $e_acute . ' served 2 ' . $right_arrow . ' 3 espressos, and ' . $left_curly . 'smart quotes' . $right_curly . ' plus ' . $left_apostrophe . 'apostrophes' . $left_apostrophe . ' must survive.';
+
+		$markup = $converter->convert( '<p>' . $paragraph . '</p>', $summary );
+
+		$this->assertSame( 'structured', $summary['html_block_conversion'] );
+		$this->assertStringContainsString( '<!-- wp:paragraph -->', $markup );
+		$this->assertStringContainsString( '<p>' . $paragraph . '</p>', $markup );
+		// 0xC3 0xA2 0xE2 0x82 0xAC is the UTF-8 of "â€" — the mojibake signature.
+		$this->assertStringNotContainsString( "\xC3\xA2\xE2\x82\xAC", $markup );
+		$this->assertSame( $paragraph, trim( strip_tags( $markup ) ) );
+	}
+
+	/**
+	 * UTF-8 multibyte characters survive the executable-attribute sanitizer.
+	 *
+	 * The sanitizer also calls DOMDocument::loadHTML and was a second
+	 * mojibake source on the adamadam.blog import.
+	 *
+	 * @return void
+	 */
+	public function test_utf8_multibyte_characters_round_trip_through_sanitizer() {
+		$converter = new ImportHtmlBlockConverter();
+
+		$em_dash      = "\xE2\x80\x94";
+		$right_curly  = "\xE2\x80\x9D";
+		$left_curly   = "\xE2\x80\x9C";
+		$right_arrow  = "\xE2\x86\x92";
+		$e_acute      = "\xC3\xA9";
+		$a_grave      = "\xC3\xA0";
+
+		$content = '<p>Le caf' . $e_acute . ' ' . $a_grave . ' Paris ' . $em_dash . ' really ' . $em_dash . ' is open from 2 ' . $right_arrow . ' 11 daily. ' . $left_curly . 'Bonjour' . $right_curly . '</p>';
+
+		$sanitized = $converter->sanitize_executable_html_attributes( $content );
+
+		$this->assertSame( $content, $sanitized );
+	}
 }

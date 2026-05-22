@@ -141,7 +141,7 @@ final class ImportHtmlBlockConverter {
 		$document = new \DOMDocument();
 		$previous = libxml_use_internal_errors( true );
 		$loaded   = $document->loadHTML(
-			'<!DOCTYPE html><html><body><div id="universal-importer-sanitizer-root">' . $content . '</div></body></html>',
+			'<!DOCTYPE html><html><body><div id="universal-importer-sanitizer-root">' . $this->encode_html_for_libxml( $content ) . '</div></body></html>',
 			LIBXML_NONET
 		);
 		libxml_clear_errors();
@@ -160,6 +160,43 @@ final class ImportHtmlBlockConverter {
 		$this->sanitize_dom_node( $root );
 
 		return trim( $this->inner_html( $root ) );
+	}
+
+	/**
+	 * Encodes non-ASCII bytes as numeric HTML entities for DOMDocument::loadHTML.
+	 *
+	 * PHP's libxml-backed loadHTML() assumes the input is ISO-8859-1 unless a
+	 * <meta charset> tag is present near the top of the document. Imported
+	 * content is UTF-8 (e.g. curly quotes, em-dashes, accented letters) but
+	 * the source pages can also embed their own <meta charset> declarations
+	 * which would conflict with one we inject. Converting non-ASCII codepoints
+	 * to &#NNNN; entities makes loadHTML treat the payload as pure ASCII and
+	 * yields byte-for-byte UTF-8 round-tripping without relying on libxml
+	 * charset guessing.
+	 *
+	 * @param string $content UTF-8 HTML fragment.
+	 * @return string ASCII-only HTML where non-ASCII bytes are numeric entities.
+	 */
+	private function encode_html_for_libxml( $content ) {
+		$content = (string) $content;
+
+		if ( '' === $content ) {
+			return '';
+		}
+
+		if ( function_exists( 'mb_encode_numericentity' ) ) {
+			$encoded = mb_encode_numericentity(
+				$content,
+				array( 0x80, 0x10FFFF, 0, 0x1FFFFF ),
+				'UTF-8'
+			);
+
+			if ( is_string( $encoded ) ) {
+				return $encoded;
+			}
+		}
+
+		return $content;
 	}
 
 	/**
@@ -417,7 +454,7 @@ final class ImportHtmlBlockConverter {
 		$document = new \DOMDocument();
 		$previous = libxml_use_internal_errors( true );
 		$loaded   = $document->loadHTML(
-			'<!DOCTYPE html><html><body><div id="universal-importer-html-root">' . (string) $content . '</div></body></html>',
+			'<!DOCTYPE html><html><body><div id="universal-importer-html-root">' . $this->encode_html_for_libxml( (string) $content ) . '</div></body></html>',
 			LIBXML_NONET
 		);
 		libxml_clear_errors();

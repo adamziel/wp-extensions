@@ -649,6 +649,50 @@ final class ImportAdminPageTest extends TestCase {
 	}
 
 	/**
+	 * The candidate fall-through loop must catch every Throwable, not only
+	 * RuntimeException. The actual crash that motivated this guard surfaced as
+	 * a WordPress\Filesystem\FilesystemException (which extends Exception, not
+	 * RuntimeException), so we simulate that here with a plain Exception and
+	 * confirm the snapshot still returns the fallback candidate's directories.
+	 *
+	 * @return void
+	 */
+	public function test_list_github_directories_falls_back_when_first_candidate_throws() {
+		$content_fetcher = new FakeRemoteContentFetcher();
+		$git_fetcher     = new FakeGitRepositoryFetcher();
+
+		// First candidate (naive ref "trunk/docs") blows up with a non-RuntimeException
+		// upstream failure — mirroring the FilesystemException seen in the wild.
+		$git_fetcher->throw_directory_listing(
+			'trunk/docs',
+			'',
+			new \Exception( 'Failed to write to file: /cache/refs/heads/trunk/docs' )
+		);
+
+		// Fallback candidate (ref=trunk, source_path=docs) succeeds.
+		$git_fetcher->add_directory_listing(
+			'trunk',
+			'docs',
+			'trunk',
+			array( 'docs', 'docs/reference' )
+		);
+
+		$result = $this->create_page( null, null, $content_fetcher, $git_fetcher )
+			->list_github_directories( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
+
+		$this->assertSame( 'trunk', $result['ref'] );
+		$this->assertSame( 'trunk/docs', $result['requested_ref'] );
+		$this->assertSame( 'docs', $result['selected_path'] );
+		$this->assertSame( array( '', 'docs', 'docs/reference' ), array_column( $result['directories'], 'path' ) );
+
+		$requests = $git_fetcher->get_directory_requests();
+		$this->assertCount( 2, $requests );
+		$this->assertSame( 'trunk/docs', $requests[0]['ref'] );
+		$this->assertSame( 'trunk', $requests[1]['ref'] );
+		$this->assertSame( 'docs', $requests[1]['source_path'] );
+	}
+
+	/**
 	 * Preserve mode stores an explicit "do not rewrite" URL decision.
 	 *
 	 * @return void

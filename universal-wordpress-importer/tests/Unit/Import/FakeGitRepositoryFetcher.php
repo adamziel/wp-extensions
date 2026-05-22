@@ -56,6 +56,16 @@ final class FakeGitRepositoryFetcher implements GitRepositoryFetcherInterface {
 	private $directory_failures = array();
 
 	/**
+	 * Directory-listing throwables keyed by ref + "\n" + source_path.
+	 *
+	 * Used to simulate non-RuntimeException failures (e.g. FilesystemException)
+	 * that the admin must still catch as it falls through to the next candidate.
+	 *
+	 * @var array<string,\Throwable>
+	 */
+	private $directory_throwables = array();
+
+	/**
 	 * Requested directory-listing candidates.
 	 *
 	 * @var array<int,array<string,mixed>>
@@ -173,6 +183,21 @@ final class FakeGitRepositoryFetcher implements GitRepositoryFetcherInterface {
 	}
 
 	/**
+	 * Configures a directory-listing failure that raises an arbitrary Throwable
+	 * for a ref + source path. Use this to simulate non-RuntimeException
+	 * failures (e.g. WordPress\Filesystem\FilesystemException) coming out of
+	 * the Git fetcher.
+	 *
+	 * @param string     $ref         Requested ref.
+	 * @param string     $source_path Requested source path.
+	 * @param \Throwable $throwable   Throwable to raise.
+	 * @return void
+	 */
+	public function throw_directory_listing( $ref, $source_path, \Throwable $throwable ) {
+		$this->directory_throwables[ (string) $ref . "\n" . (string) $source_path ] = $throwable;
+	}
+
+	/**
 	 * Returns directory-listing requests in order.
 	 *
 	 * @return array<int,array<string,mixed>>
@@ -195,6 +220,10 @@ final class FakeGitRepositoryFetcher implements GitRepositoryFetcherInterface {
 		$ref         = isset( $repo['ref'] ) ? (string) $repo['ref'] : '';
 		$source_path = isset( $repo['source_path'] ) ? (string) $repo['source_path'] : '';
 		$key         = $ref . "\n" . $source_path;
+
+		if ( isset( $this->directory_throwables[ $key ] ) ) {
+			throw $this->directory_throwables[ $key ];
+		}
 
 		if ( isset( $this->directory_failures[ $key ] ) ) {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Unit-test diagnostics are not rendered directly.

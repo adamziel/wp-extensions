@@ -10,6 +10,7 @@ namespace UniversalImporter\Import;
 // phpcs:disable WordPress.WP.AlternativeFunctions -- Importer-managed cache files are written outside the uploads API by design.
 
 use RuntimeException;
+use Throwable;
 use WordPress\Filesystem\LocalFilesystem;
 use WordPress\Git\GitFilesystem;
 use WordPress\Git\GitRepository;
@@ -37,6 +38,10 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 		$branch = $this->branch_name( isset( $repo['ref'] ) ? (string) $repo['ref'] : '' );
 		if ( '' === $branch ) {
 			throw new RuntimeException( 'php-toolkit Git traversal requires an explicit branch name.' );
+		}
+
+		if ( false !== strpos( $branch, '/' ) ) {
+			throw new RuntimeException( 'Invalid Git ref: branch names cannot contain a slash.' );
 		}
 
 		$repository_root = $cache_directory->path_for(
@@ -104,56 +109,79 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 			throw new RuntimeException( 'php-toolkit Git directory listing requires owner and repository name.' );
 		}
 
-		$repository_root = $cache_directory->path_for(
-			$this->synthetic_session_id( $owner, $name, $requested, $source_path ),
-			'github-git-directories',
-			array(
-				hash(
-					'sha256',
-					strtolower( $owner ) . '/' . strtolower( $name ) . "\n" . $requested . "\n" . $source_path
-				),
-			)
-		);
-
-		$git_repository = new GitRepository( LocalFilesystem::create( $repository_root ) );
-		$remote_url     = 'https://github.com/' . rawurlencode( $owner ) . '/' . rawurlencode( $name ) . '.git';
-		$http_client    = $this->http_client();
-
-		$git_repository->add_remote( 'origin', $remote_url );
-		$remote = $git_repository->get_remote_client( 'origin', array( 'http_client' => $http_client ) );
-
-		$branch = $this->resolve_branch_via_remote( $remote, $requested );
-		if ( '' === $branch ) {
-			throw new RuntimeException( 'php-toolkit Git directory listing could not resolve a branch on the remote.' );
+		// Reject refs that cannot be branch names. Branches do not contain slashes,
+		// so a ref like "trunk/docs" is the URL parser's naive first guess that must
+		// be rejected here so the admin's candidate loop falls through to the
+		// (correctly parsed) fallback candidate before any filesystem writes occur.
+		$normalized_ref = $this->branch_name( $requested );
+		if ( '' !== $normalized_ref && false !== strpos( $normalized_ref, '/' ) ) {
+			throw new RuntimeException( 'Invalid Git ref: branch names cannot contain a slash.' );
 		}
 
-		$branch_ref = 'refs/heads/' . $branch;
-		$git_repository->set_branch_tip( $branch_ref, Commit::NULL_HASH );
+		try {
+			$repository_root = $cache_directory->path_for(
+				$this->synthetic_session_id( $owner, $name, $requested, $source_path ),
+				'github-git-directories',
+				array(
+					hash(
+						'sha256',
+						strtolower( $owner ) . '/' . strtolower( $name ) . "\n" . $requested . "\n" . $source_path
+					),
+				)
+			);
 
-		$remote->pull(
-			$branch_ref,
-			array(
-				'force'   => true,
-				'path'    => $source_path,
-				'shallow' => true,
-			)
-		);
+			$git_repository = new GitRepository( LocalFilesystem::create( $repository_root ) );
+			$remote_url     = 'https://github.com/' . rawurlencode( $owner ) . '/' . rawurlencode( $name ) . '.git';
+			$http_client    = $this->http_client();
 
-		$filesystem = GitFilesystem::create( $git_repository );
-		$root       = '' === $source_path ? '/' : '/' . trim( $source_path, '/' );
+			$git_repository->add_remote( 'origin', $remote_url );
+			$remote = $git_repository->get_remote_client( 'origin', array( 'http_client' => $http_client ) );
 
-		if ( ! $filesystem->is_dir( $root ) ) {
-			throw new RuntimeException( 'php-toolkit Git directory listing did not find the requested repository path.' );
+			$branch = $this->resolve_branch_via_remote( $remote, $requested );
+			if ( '' === $branch ) {
+				throw new RuntimeException( 'php-toolkit Git directory listing could not resolve a branch on the remote.' );
+			}
+
+			if ( false !== strpos( $branch, '/' ) ) {
+				throw new RuntimeException( 'Invalid Git ref: branch names cannot contain a slash.' );
+			}
+
+			$branch_ref = 'refs/heads/' . $branch;
+			$git_repository->set_branch_tip( $branch_ref, Commit::NULL_HASH );
+
+			$remote->pull(
+				$branch_ref,
+				array(
+					'force'   => true,
+					'path'    => $source_path,
+					'shallow' => true,
+				)
+			);
+
+			$filesystem = GitFilesystem::create( $git_repository );
+			$root       = '' === $source_path ? '/' : '/' . trim( $source_path, '/' );
+
+			if ( ! $filesystem->is_dir( $root ) ) {
+				throw new RuntimeException( 'php-toolkit Git directory listing did not find the requested repository path.' );
+			}
+
+			$directories = array();
+			$this->collect_directories( $filesystem, $root, $root, $directories );
+			sort( $directories, SORT_STRING );
+
+			return array(
+				'ref'         => $branch,
+				'directories' => $directories,
+			);
+		} catch ( RuntimeException $exception ) {
+			throw $exception;
+		} catch ( Throwable $throwable ) {
+			// Belt-and-braces: wrap any non-RuntimeException upstream failure
+			// (e.g. WordPress\Filesystem\FilesystemException) into a RuntimeException
+			// so the admin's candidate-fallback loop can reliably catch it.
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are returned through escaped AJAX JSON.
+			throw new RuntimeException( 'php-toolkit Git directory listing failed: ' . $throwable->getMessage(), 0, $throwable );
 		}
-
-		$directories = array();
-		$this->collect_directories( $filesystem, $root, $root, $directories );
-		sort( $directories, SORT_STRING );
-
-		return array(
-			'ref'         => $branch,
-			'directories' => $directories,
-		);
 	}
 
 	/**
@@ -203,10 +231,10 @@ final class PhpToolkitGitRepositoryFetcher implements GitRepositoryFetcherInterf
 	 *
 	 * The root path itself is not included (callers represent it as empty).
 	 *
-	 * @param object             $filesystem  GitFilesystem.
-	 * @param string             $path        Current path in the filesystem (absolute Git path).
-	 * @param string             $root_path   Path treated as the picker root (absolute Git path).
-	 * @param array<int,string>  $directories Collected relative paths.
+	 * @param object            $filesystem  GitFilesystem.
+	 * @param string            $path        Current path in the filesystem (absolute Git path).
+	 * @param string            $root_path   Path treated as the picker root (absolute Git path).
+	 * @param array<int,string> $directories Collected relative paths.
 	 * @return void
 	 */
 	private function collect_directories( $filesystem, $path, $root_path, array &$directories ) {

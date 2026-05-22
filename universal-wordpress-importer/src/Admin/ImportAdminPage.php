@@ -9,6 +9,7 @@ namespace UniversalImporter\Admin;
 
 use InvalidArgumentException;
 use RuntimeException;
+use Throwable;
 use UniversalImporter\Import\GitHubRepositorySourceUrl;
 use UniversalImporter\Import\GitRepositoryFetcherInterface;
 use UniversalImporter\Import\ImportCacheDirectory;
@@ -356,6 +357,11 @@ final class ImportAdminPage {
 				return $this->github_directory_snapshot( $candidate, $listing['directories'] );
 			} catch ( RuntimeException $exception ) {
 				$last_exception = $exception;
+			} catch ( Throwable $throwable ) {
+				// Catch every other unexpected failure (e.g. FilesystemException) so
+				// the candidate-fallback loop is reliable; otherwise a bad first
+				// candidate would surface as a 500 from the AJAX endpoint.
+				$last_exception = new RuntimeException( $throwable->getMessage(), 0, $throwable );
 			}
 		}
 
@@ -1865,6 +1871,9 @@ final class ImportAdminPage {
 				gap: 8px;
 				padding: 8px 0;
 			}
+			.universal-importer-step[hidden] {
+				display: none;
+			}
 			.universal-importer-stage-index {
 				background: #dcd1b3;
 				border-radius: 50%;
@@ -1939,6 +1948,148 @@ final class ImportAdminPage {
 				background: transparent;
 				border: 0;
 				color: inherit;
+			}
+			/* ----- Calm running-state checklist UI ----- */
+			.universal-importer-step.is-active-row {
+				background: #fdf5d8;
+				border: 1px solid #f6e3b2;
+				border-radius: 8px;
+				padding: 10px 12px;
+				position: relative;
+				z-index: 2;
+			}
+			.universal-importer-step.is-active-row strong {
+				font-size: 14px;
+				font-weight: 600;
+			}
+			.universal-importer-step.is-active-row .universal-importer-stage-index {
+				background: var(--ui-accent);
+				box-shadow: 0 0 0 3px #f6e3b2, 0 0 0 6px rgba(217, 119, 6, .15);
+				height: 10px;
+				width: 10px;
+				animation: universal-importer-pulse-dot 1.4s ease-in-out infinite;
+			}
+			.universal-importer-step.is-done-row {
+				color: var(--ui-muted);
+				opacity: .8;
+				padding: 4px 0;
+			}
+			.universal-importer-step.is-done-row .universal-importer-stage-index {
+				background: var(--ui-ok);
+				color: #fff;
+				font-size: 9px;
+				font-weight: 700;
+				height: 12px;
+				line-height: 12px;
+				text-align: center;
+				text-indent: 0;
+				width: 12px;
+			}
+			.universal-importer-step.is-done-row strong {
+				font-weight: 500;
+			}
+			.universal-importer-step.is-next-row {
+				color: var(--ui-muted);
+				padding: 4px 0 4px 0;
+			}
+			.universal-importer-step.is-next-row .universal-importer-stage-index {
+				background: transparent;
+				border: 1px dashed #c0b48f;
+			}
+			.universal-importer-step.is-next-row strong {
+				font-weight: 500;
+				color: var(--ui-muted);
+			}
+			.universal-importer-step-next {
+				color: var(--ui-muted) !important;
+				font-style: italic;
+				text-transform: none !important;
+				letter-spacing: 0 !important;
+				font-weight: 500 !important;
+			}
+			.universal-importer-step-body {
+				display: flex;
+				flex-direction: column;
+				flex: 1;
+				gap: 2px;
+			}
+			.universal-importer-step-detail {
+				color: var(--ui-muted);
+				display: block;
+				font-size: 12px;
+			}
+			.universal-importer-step.is-active-row .universal-importer-step-detail {
+				color: var(--ui-ink);
+				font-size: 13px;
+			}
+			.universal-importer-stage-disclosure {
+				background: transparent;
+				border: 0;
+				color: var(--ui-muted);
+				cursor: pointer;
+				font-size: 11px;
+				font-weight: 600;
+				letter-spacing: .04em;
+				margin: 0 0 12px;
+				padding: 4px 0;
+				text-decoration: underline;
+				text-underline-offset: 3px;
+			}
+			.universal-importer-stage-disclosure:hover {
+				color: var(--ui-ink);
+			}
+			.universal-importer-stage-disclosure .universal-importer-stage-disclosure-hide {
+				display: none;
+			}
+			.universal-importer-stage-disclosure[aria-expanded="true"] .universal-importer-stage-disclosure-show {
+				display: none;
+			}
+			.universal-importer-stage-disclosure[aria-expanded="true"] .universal-importer-stage-disclosure-hide {
+				display: inline;
+			}
+			/* ----- Calmer running-state header / status line ----- */
+			.universal-importer-card-header-main {
+				display: flex;
+				flex-direction: column;
+				gap: 4px;
+			}
+			.universal-importer-status-line {
+				align-items: center;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 6px;
+			}
+			.universal-importer-status-sep {
+				color: #c0b48f;
+			}
+			.universal-importer-status-word {
+				color: var(--ui-warn);
+				font-weight: 700;
+				letter-spacing: .04em;
+				text-transform: uppercase;
+				font-size: 11px;
+			}
+			.universal-importer-progress-line {
+				font-variant-numeric: tabular-nums;
+			}
+			.universal-importer-working {
+				align-items: center;
+				color: var(--ui-accent);
+				display: inline-flex;
+				font-weight: 600;
+				gap: 6px;
+			}
+			.universal-importer-working-dot {
+				animation: universal-importer-working-breathe 1.6s ease-in-out infinite;
+				background: var(--ui-accent);
+				border-radius: 50%;
+				display: inline-block;
+				height: 8px;
+				width: 8px;
+			}
+			@keyframes universal-importer-working-breathe {
+				0%, 100% { opacity: .35; transform: scale(.85); }
+				50% { opacity: 1; transform: scale(1.1); }
 			}
 			.universal-importer-log {
 				border-top: 1px dashed var(--ui-rule);
@@ -3610,25 +3761,35 @@ final class ImportAdminPage {
 				var dashboard = session.dashboard || {};
 				var summary = dashboard.summary || { total: 0, completed: 0, errors: 0 };
 				var percent = Math.max(0, Math.min(100, Number(dashboard.percentage || 0)));
-				var total = summary.total || '?';
 				var progressClass = dashboard.indeterminate ? ' is-indeterminate' : '';
 				var progressNote = dashboard.progress_note || '';
+				var progressSummary = dashboard.progress_summary || '';
 				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : (dashboard.status_label || session.status);
 				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : (session.post_status === 'draft' ? '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Publishes pages', 'universal-wordpress-importer' ) ); ?>');
 				var importingClass = isImportLocked(session) ? ' is-importing' : '';
+				var showWorking = importingClass && !dashboard.attention_message;
 				var html = '<section class="universal-importer-card' + importingClass + '" data-session-id="' + escapeHtml(session.id) + '">';
 				html += '<div class="universal-importer-card-header">';
-				html += '<div><h3 class="universal-importer-source-title">' + escapeHtml(session.source) + '</h3>';
-				html += '<p class="universal-importer-meta">' + mode + '</p></div>';
-				html += '<span class="universal-importer-status-pill">' + escapeHtml(displayStatus) + '</span>';
+				html += '<div class="universal-importer-card-header-main"><h3 class="universal-importer-source-title">' + escapeHtml(session.source) + '</h3>';
+				html += '<p class="universal-importer-meta universal-importer-status-line">';
+				html += '<span class="universal-importer-status-word">' + escapeHtml(displayStatus) + '</span>';
+				html += '<span class="universal-importer-status-sep" aria-hidden="true">·</span>';
+				html += '<span>' + escapeHtml(mode) + '</span>';
+				if (showWorking) {
+					html += '<span class="universal-importer-status-sep" aria-hidden="true">·</span>';
+					html += '<span class="universal-importer-working" aria-live="polite"><span class="universal-importer-working-dot" aria-hidden="true"></span><?php echo esc_js( __( 'Working', 'universal-wordpress-importer' ) ); ?></span>';
+				}
+				html += '</p></div>';
 				html += '</div><div class="universal-importer-card-body">';
 				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
 				html += '<div class="universal-importer-progressbar' + progressClass + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
-				html += '<p class="universal-importer-meta">';
+				html += '<p class="universal-importer-meta universal-importer-progress-line">';
 				if (progressNote) {
 					html += escapeHtml(progressNote);
+				} else if (progressSummary) {
+					html += escapeHtml(progressSummary);
 				} else {
-					html += percent + '% · ' + summary.completed + ' / ' + total + ' <?php echo esc_js( __( 'items complete', 'universal-wordpress-importer' ) ); ?>';
+					html += percent + '% <?php echo esc_js( __( 'complete', 'universal-wordpress-importer' ) ); ?>';
 				}
 				if (summary.errors) {
 					html += ' · ' + summary.errors + ' <?php echo esc_js( __( 'errors', 'universal-wordpress-importer' ) ); ?>';
@@ -3664,10 +3825,49 @@ final class ImportAdminPage {
 				if (!items.length) {
 					return '';
 				}
+				// Find the index of the active/blocked stage so we can fold
+				// the noisy "Not started" rows away by default. Fall back to
+				// the last completed stage if nothing is currently active.
+				var activeIndex = -1;
+				for (var ai = 0; ai < items.length; ai++) {
+					var aState = items[ai].state || 'pending';
+					if (aState === 'active' || aState === 'blocked') {
+						activeIndex = ai;
+						break;
+					}
+				}
+				if (activeIndex === -1) {
+					var lastDone = -1;
+					for (var di = 0; di < items.length; di++) {
+						if ((items[di].state || 'pending') === 'done') { lastDone = di; }
+					}
+					activeIndex = lastDone;
+				}
+				var nextIndex = (activeIndex >= 0 && activeIndex + 1 < items.length) ? activeIndex + 1 : -1;
 				var html = '<div class="universal-importer-stage-title"><?php echo esc_js( __( 'Import stages', 'universal-wordpress-importer' ) ); ?></div><ol class="universal-importer-checklist" aria-label="<?php echo esc_js( __( 'Import stages', 'universal-wordpress-importer' ) ); ?>">';
-				items.forEach(function(item) {
+				items.forEach(function(item, idx) {
 					var state = item.state || 'pending';
-					var itemHtml = '<li class="universal-importer-step" data-state="' + escapeHtml(state) + '"><span class="universal-importer-stage-index">' + escapeHtml(item.index || '') + '</span><span><span class="universal-importer-step-heading"><strong>' + escapeHtml(item.label || '') + '</strong><span class="universal-importer-step-state">' + escapeHtml(checklistStateLabel(state)) + '</span></span><span>' + escapeHtml(item.detail || '') + '</span>';
+					var rowClasses = ['universal-importer-step'];
+					var isActiveRow = (idx === activeIndex) && (state === 'active' || state === 'blocked');
+					var isNextRow = (idx === nextIndex) && state === 'pending';
+					var isCollapsible = !isActiveRow && !isNextRow;
+					if (isActiveRow) { rowClasses.push('is-active-row'); }
+					if (isNextRow) { rowClasses.push('is-next-row'); }
+					if (state === 'done') { rowClasses.push('is-done-row'); }
+					if (isCollapsible) { rowClasses.push('is-collapsible'); }
+					var stateBadge = '';
+					if (state !== 'pending') {
+						stateBadge = '<span class="universal-importer-step-state">' + escapeHtml(checklistStateLabel(state)) + '</span>';
+					} else if (isNextRow) {
+						stateBadge = '<span class="universal-importer-step-state universal-importer-step-next"><?php echo esc_js( __( 'Up next', 'universal-wordpress-importer' ) ); ?></span>';
+					}
+					var indexLabel = state === 'done' ? '✓' : (item.index || '');
+					var itemHtml = '<li class="' + rowClasses.join(' ') + '" data-state="' + escapeHtml(state) + '"' + (isCollapsible ? ' hidden' : '') + '>';
+					itemHtml += '<span class="universal-importer-stage-index" aria-hidden="true">' + escapeHtml(indexLabel) + '</span>';
+					itemHtml += '<span class="universal-importer-step-body"><span class="universal-importer-step-heading"><strong>' + escapeHtml(item.label || '') + '</strong>' + stateBadge + '</span>';
+					if (item.detail) {
+						itemHtml += '<span class="universal-importer-step-detail">' + escapeHtml(item.detail) + '</span>';
+					}
 					if (item.note) {
 						itemHtml += '<span class="universal-importer-stage-note">' + escapeHtml(item.note) + '</span>';
 					}
@@ -3678,6 +3878,7 @@ final class ImportAdminPage {
 					html += itemHtml;
 				});
 				html += '</ol>';
+				html += '<button type="button" class="universal-importer-stage-disclosure" data-action="toggle-stages" aria-expanded="false"><span class="universal-importer-stage-disclosure-show"><?php echo esc_js( __( 'Show all stages', 'universal-wordpress-importer' ) ); ?></span><span class="universal-importer-stage-disclosure-hide"><?php echo esc_js( __( 'Hide other stages', 'universal-wordpress-importer' ) ); ?></span></button>';
 				return html;
 			}
 
@@ -4120,6 +4321,24 @@ final class ImportAdminPage {
 			});
 
 			sessions.addEventListener('click', function(event) {
+				var disclosureBtn = event.target.closest ? event.target.closest('.universal-importer-stage-disclosure') : null;
+				if (disclosureBtn) {
+					event.preventDefault();
+					var checklist = disclosureBtn.parentNode ? disclosureBtn.parentNode.querySelector('.universal-importer-checklist') : null;
+					var expanded = disclosureBtn.getAttribute('aria-expanded') === 'true';
+					disclosureBtn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+					if (checklist) {
+						var rows = checklist.querySelectorAll('.is-collapsible');
+						for (var ri = 0; ri < rows.length; ri++) {
+							if (expanded) {
+								rows[ri].setAttribute('hidden', '');
+							} else {
+								rows[ri].removeAttribute('hidden');
+							}
+						}
+					}
+					return;
+				}
 				if (event.target.classList.contains('universal-importer-start-over')) {
 					if (form && form.classList) {
 						form.classList.remove('is-hidden');
@@ -4629,51 +4848,56 @@ final class ImportAdminPage {
 		}
 
 		foreach ( $sessions as $session ) {
-			$dashboard      = isset( $session['dashboard'] ) && is_array( $session['dashboard'] ) ? $session['dashboard'] : array();
-			$summary        = isset( $dashboard['summary'] ) && is_array( $dashboard['summary'] ) ? $dashboard['summary'] : array();
-			$percentage     = isset( $dashboard['percentage'] ) ? max( 0, min( 100, (int) $dashboard['percentage'] ) ) : 0;
-			$progress_class = ! empty( $dashboard['indeterminate'] ) ? ' universal-importer-progressbar is-indeterminate' : ' universal-importer-progressbar';
-			$total          = empty( $summary['total'] ) ? '?' : (string) $summary['total'];
-			$completed      = isset( $summary['completed'] ) ? (int) $summary['completed'] : 0;
-			$errors         = isset( $summary['errors'] ) ? (int) $summary['errors'] : 0;
-			$progress_note  = isset( $dashboard['progress_note'] ) ? (string) $dashboard['progress_note'] : '';
-			$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking import state.', 'universal-wordpress-importer' );
-			$display_status = empty( $dashboard['attention_message'] ) ? ( isset( $dashboard['status_label'] ) && '' !== (string) $dashboard['status_label'] ? (string) $dashboard['status_label'] : (string) $session['status'] ) : __( 'Needs attention', 'universal-wordpress-importer' );
-			$card_class     = $this->is_active_admin_session( $session ) ? 'universal-importer-card is-importing' : 'universal-importer-card';
-			$mode_label     = ! empty( $session['dry_run'] ) ? __( 'Dry run', 'universal-wordpress-importer' ) : ( isset( $session['post_status'] ) && 'draft' === $session['post_status'] ? __( 'Creates drafts', 'universal-wordpress-importer' ) : __( 'Publishes pages', 'universal-wordpress-importer' ) );
+			$dashboard         = isset( $session['dashboard'] ) && is_array( $session['dashboard'] ) ? $session['dashboard'] : array();
+			$summary           = isset( $dashboard['summary'] ) && is_array( $dashboard['summary'] ) ? $dashboard['summary'] : array();
+			$percentage        = isset( $dashboard['percentage'] ) ? max( 0, min( 100, (int) $dashboard['percentage'] ) ) : 0;
+			$progress_class    = ! empty( $dashboard['indeterminate'] ) ? ' universal-importer-progressbar is-indeterminate' : ' universal-importer-progressbar';
+			$errors            = isset( $summary['errors'] ) ? (int) $summary['errors'] : 0;
+			$progress_note     = isset( $dashboard['progress_note'] ) ? (string) $dashboard['progress_note'] : '';
+			$progress_summary  = isset( $dashboard['progress_summary'] ) ? (string) $dashboard['progress_summary'] : '';
+			$current_action    = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : __( 'Checking import state.', 'universal-wordpress-importer' );
+			$display_status    = empty( $dashboard['attention_message'] ) ? ( isset( $dashboard['status_label'] ) && '' !== (string) $dashboard['status_label'] ? (string) $dashboard['status_label'] : (string) $session['status'] ) : __( 'Needs attention', 'universal-wordpress-importer' );
+			$is_active_session = $this->is_active_admin_session( $session );
+			$card_class        = $is_active_session ? 'universal-importer-card is-importing' : 'universal-importer-card';
+			$mode_label        = ! empty( $session['dry_run'] ) ? __( 'Dry run', 'universal-wordpress-importer' ) : ( isset( $session['post_status'] ) && 'draft' === $session['post_status'] ? __( 'Creates drafts', 'universal-wordpress-importer' ) : __( 'Publishes pages', 'universal-wordpress-importer' ) );
 			?>
 			<section class="<?php echo esc_attr( $card_class ); ?>" data-session-id="<?php echo esc_attr( $session['id'] ); ?>">
 				<div class="universal-importer-card-header">
-					<div>
+					<div class="universal-importer-card-header-main">
 						<h3 class="universal-importer-source-title"><?php echo esc_html( $session['source'] ); ?></h3>
-						<p class="universal-importer-meta">
-							<?php echo esc_html( $mode_label ); ?>
+						<p class="universal-importer-meta universal-importer-status-line">
+							<span class="universal-importer-status-word"><?php echo esc_html( $display_status ); ?></span>
+							<span class="universal-importer-status-sep" aria-hidden="true">·</span>
+							<span><?php echo esc_html( $mode_label ); ?></span>
+							<?php if ( $is_active_session && empty( $dashboard['attention_message'] ) ) : ?>
+								<span class="universal-importer-status-sep" aria-hidden="true">·</span>
+								<span class="universal-importer-working" aria-live="polite"><span class="universal-importer-working-dot" aria-hidden="true"></span><?php esc_html_e( 'Working', 'universal-wordpress-importer' ); ?></span>
+							<?php endif; ?>
 						</p>
 					</div>
-					<span class="universal-importer-status-pill"><?php echo esc_html( $display_status ); ?></span>
 				</div>
 				<div class="universal-importer-card-body">
 					<p class="universal-importer-current-action"><?php echo esc_html( $current_action ); ?></p>
 					<div class="<?php echo esc_attr( trim( $progress_class ) ); ?>" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( (string) $percentage ); ?>">
 						<span style="width:<?php echo esc_attr( (string) $percentage ); ?>%"></span>
 					</div>
-					<p class="universal-importer-meta">
+					<p class="universal-importer-meta universal-importer-progress-line">
 						<?php
 						if ( '' !== $progress_note ) {
 							echo esc_html( $progress_note );
+						} elseif ( '' !== $progress_summary ) {
+							echo esc_html( $progress_summary );
 						} else {
 							echo esc_html(
 								sprintf(
-									/* translators: 1: percentage complete, 2: completed items, 3: total items. */
-									__( '%1$d%% - %2$d / %3$s items complete', 'universal-wordpress-importer' ),
-									$percentage,
-									$completed,
-									$total
+									/* translators: %d: percentage complete. */
+									__( '%d%% complete', 'universal-wordpress-importer' ),
+									$percentage
 								)
 							);
 						}
 						if ( 0 < $errors ) {
-							echo esc_html( sprintf( /* translators: %d: error count. */ __( ' - %d errors', 'universal-wordpress-importer' ), $errors ) );
+							echo esc_html( sprintf( /* translators: %d: error count. */ __( ' · %d errors', 'universal-wordpress-importer' ), $errors ) );
 						}
 						?>
 					</p>
@@ -4714,19 +4938,76 @@ final class ImportAdminPage {
 			return;
 		}
 
+		$active_index = -1;
+		foreach ( $items as $idx => $item ) {
+			$state = isset( $item['state'] ) ? (string) $item['state'] : 'pending';
+			if ( 'active' === $state || 'blocked' === $state ) {
+				$active_index = $idx;
+				break;
+			}
+		}
+
+		// If nothing is active (all done or all pending), default to the
+		// last done index so the user still sees the calm collapsed view.
+		if ( -1 === $active_index ) {
+			$last_done = -1;
+			foreach ( $items as $idx => $item ) {
+				$state = isset( $item['state'] ) ? (string) $item['state'] : 'pending';
+				if ( 'done' === $state ) {
+					$last_done = $idx;
+				}
+			}
+			$active_index = $last_done;
+		}
+
+		$next_index = -1;
+		if ( $active_index >= 0 && $active_index + 1 < count( $items ) ) {
+			$next_index = $active_index + 1;
+		}
+
 		?>
 		<div class="universal-importer-stage-title"><?php esc_html_e( 'Import stages', 'universal-wordpress-importer' ); ?></div>
 		<ol class="universal-importer-checklist" aria-label="<?php echo esc_attr__( 'Import stages', 'universal-wordpress-importer' ); ?>">
-			<?php foreach ( $items as $item ) : ?>
-				<?php $state = isset( $item['state'] ) ? (string) $item['state'] : 'pending'; ?>
-				<li class="universal-importer-step" data-state="<?php echo esc_attr( isset( $item['state'] ) ? $item['state'] : 'pending' ); ?>">
-					<span class="universal-importer-stage-index"><?php echo esc_html( isset( $item['index'] ) ? $item['index'] : '' ); ?></span>
-					<span>
+			<?php foreach ( $items as $idx => $item ) : ?>
+				<?php
+				$state          = isset( $item['state'] ) ? (string) $item['state'] : 'pending';
+				$row_classes    = array( 'universal-importer-step' );
+				$is_active_row  = ( $idx === $active_index ) && ( 'active' === $state || 'blocked' === $state );
+				$is_next_row    = ( $idx === $next_index ) && 'pending' === $state;
+				$is_collapsible = ! $is_active_row && ! $is_next_row;
+
+				if ( $is_active_row ) {
+					$row_classes[] = 'is-active-row';
+				}
+				if ( $is_next_row ) {
+					$row_classes[] = 'is-next-row';
+				}
+				if ( 'done' === $state ) {
+					$row_classes[] = 'is-done-row';
+				}
+				if ( $is_collapsible ) {
+					$row_classes[] = 'is-collapsible';
+				}
+				?>
+				<li
+					class="<?php echo esc_attr( implode( ' ', $row_classes ) ); ?>"
+					data-state="<?php echo esc_attr( $state ); ?>"
+					<?php echo $is_collapsible ? 'hidden' : ''; ?>
+				>
+					<span class="universal-importer-stage-index" aria-hidden="true"><?php echo 'done' === $state ? '&#x2713;' : esc_html( isset( $item['index'] ) ? $item['index'] : '' ); ?></span>
+					<span class="universal-importer-step-body">
 						<span class="universal-importer-step-heading">
 							<strong><?php echo esc_html( isset( $item['label'] ) ? $item['label'] : '' ); ?></strong>
-							<span class="universal-importer-step-state"><?php echo esc_html( $this->dashboard_stage_status_label( $state ) ); ?></span>
+							<?php if ( 'pending' !== $state ) : ?>
+								<span class="universal-importer-step-state"><?php echo esc_html( $this->dashboard_stage_status_label( $state ) ); ?></span>
+							<?php elseif ( $is_next_row ) : ?>
+								<span class="universal-importer-step-state universal-importer-step-next"><?php esc_html_e( 'Up next', 'universal-wordpress-importer' ); ?></span>
+							<?php endif; ?>
 						</span>
-						<span><?php echo esc_html( isset( $item['detail'] ) ? $item['detail'] : '' ); ?></span>
+						<?php $detail = isset( $item['detail'] ) ? (string) $item['detail'] : ''; ?>
+						<?php if ( '' !== $detail ) : ?>
+							<span class="universal-importer-step-detail"><?php echo esc_html( $detail ); ?></span>
+						<?php endif; ?>
 						<?php if ( ! empty( $item['note'] ) ) : ?>
 							<span class="universal-importer-stage-note"><?php echo esc_html( (string) $item['note'] ); ?></span>
 						<?php endif; ?>
@@ -4737,6 +5018,10 @@ final class ImportAdminPage {
 				</li>
 			<?php endforeach; ?>
 		</ol>
+		<button type="button" class="universal-importer-stage-disclosure" data-action="toggle-stages" aria-expanded="false">
+			<span class="universal-importer-stage-disclosure-show"><?php esc_html_e( 'Show all stages', 'universal-wordpress-importer' ); ?></span>
+			<span class="universal-importer-stage-disclosure-hide"><?php esc_html_e( 'Hide other stages', 'universal-wordpress-importer' ); ?></span>
+		</button>
 		<?php
 	}
 
@@ -5617,8 +5902,111 @@ final class ImportAdminPage {
 				'errors'    => $errors,
 			),
 			'checklist'         => $this->dashboard_checklist( $session, $source_counts ),
+			'progress_summary'  => $this->dashboard_progress_summary( $session, $source_counts, $total, $completed, $percentage ),
 			'activity_log'      => $this->dashboard_activity_log( $session ),
 		);
+	}
+
+	/**
+	 * Builds an explicit progress summary that names the active stage and the
+	 * unit being counted. Replaces the ambiguous "X% · A / B items complete".
+	 *
+	 * @param array<string,mixed> $session       Session snapshot.
+	 * @param array<string,int>   $source_counts Source item status counts.
+	 * @param int                 $total         Progress total.
+	 * @param int                 $completed     Progress completed.
+	 * @param int                 $percentage    Computed percentage.
+	 * @return string
+	 */
+	private function dashboard_progress_summary( array $session, array $source_counts, $total, $completed, $percentage ) {
+		if ( ImportSession::STATUS_DONE === $session['status'] ) {
+			return $this->admin_text( 'Import complete.' );
+		}
+
+		if ( ImportSession::STATUS_ABORTED === $session['status'] ) {
+			return $this->admin_text( 'Import aborted.' );
+		}
+
+		$checklist    = $this->dashboard_checklist( $session, $source_counts );
+		$active_index = 0;
+		$active_label = '';
+		$total_stages = count( $checklist );
+		foreach ( $checklist as $idx => $stage ) {
+			$state = isset( $stage['state'] ) ? (string) $stage['state'] : 'pending';
+			if ( 'active' === $state || 'blocked' === $state ) {
+				$active_index = $idx + 1;
+				$active_label = isset( $stage['label'] ) ? (string) $stage['label'] : '';
+				break;
+			}
+		}
+
+		if ( 0 === $active_index ) {
+			// All stages "done" or "pending" — fall through to a calm default.
+			return '';
+		}
+
+		$source_total   = isset( $session['source_items']['total'] ) ? (int) $session['source_items']['total'] : 0;
+		$document_total = isset( $session['prepared_documents']['total'] ) ? (int) $session['prepared_documents']['total'] : 0;
+		$post_total     = isset( $session['posts']['persisted'] ) ? (int) $session['posts']['persisted'] : 0;
+		$media_total    = isset( $session['media']['total'] ) ? (int) $session['media']['total'] : 0;
+		$media_statuses = isset( $session['media']['statuses'] ) && is_array( $session['media']['statuses'] ) ? $session['media']['statuses'] : array();
+		$media_queued   = isset( $media_statuses['queued'] ) ? (int) $media_statuses['queued'] : 0;
+		$active_key     = isset( $checklist[ $active_index - 1 ]['key'] ) ? (string) $checklist[ $active_index - 1 ]['key'] : '';
+
+		// Stage progress phrase — speak in units that match the active stage.
+		$stage_phrase = '';
+		if ( 'read_source' === $active_key ) {
+			if ( 0 < $source_total ) {
+				$stage_phrase = sprintf(
+					/* translators: 1: source items read, 2: total source items. */
+					$this->admin_text( '%1$d of %2$d source items read' ),
+					$completed,
+					$source_total
+				);
+			}
+		} elseif ( 'prepare_content' === $active_key ) {
+			if ( 0 < $source_total ) {
+				$stage_phrase = sprintf(
+					/* translators: 1: prepared documents, 2: source items. */
+					$this->admin_text( '%1$d of %2$d items prepared' ),
+					$document_total,
+					$source_total
+				);
+			}
+		} elseif ( 'import_media' === $active_key ) {
+			if ( 0 < $media_total ) {
+				$imported     = max( 0, $media_total - $media_queued );
+				$stage_phrase = sprintf(
+					/* translators: 1: media imported, 2: total media. */
+					$this->admin_text( '%1$d of %2$d media items imported' ),
+					$imported,
+					$media_total
+				);
+			}
+		} elseif ( 'write_pages' === $active_key ) {
+			if ( 0 < $document_total ) {
+				$stage_phrase = sprintf(
+					/* translators: 1: pages written, 2: total pages. */
+					$this->admin_text( '%1$d of %2$d pages written' ),
+					$post_total,
+					$document_total
+				);
+			}
+		}
+
+		$stage_label = sprintf(
+			/* translators: 1: current stage number, 2: total stages, 3: stage label. */
+			$this->admin_text( 'Stage %1$d of %2$d · %3$s' ),
+			$active_index,
+			$total_stages,
+			$active_label
+		);
+
+		if ( '' !== $stage_phrase ) {
+			return $stage_label . ' · ' . $stage_phrase . sprintf( ' (%d%%)', $percentage );
+		}
+
+		return $stage_label;
 	}
 
 	/**
@@ -5924,42 +6312,42 @@ final class ImportAdminPage {
 				'index'  => '1',
 				'key'    => 'read_source',
 				'label'  => $this->admin_text( 'Read source' ),
-				'detail' => $this->admin_text( 'Not started.' ),
+				'detail' => '',
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '2',
 				'key'    => 'prepare_content',
 				'label'  => $this->admin_text( 'Prepare content' ),
-				'detail' => $this->admin_text( 'Not started.' ),
+				'detail' => '',
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '3',
 				'key'    => 'url_treatment',
 				'label'  => $this->admin_text( 'URL treatment' ),
-				'detail' => $this->admin_text( 'Not started.' ),
+				'detail' => '',
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '4',
 				'key'    => 'import_media',
 				'label'  => $this->admin_text( 'Import media' ),
-				'detail' => $this->admin_text( 'Not started.' ),
+				'detail' => '',
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '5',
 				'key'    => 'write_pages',
 				'label'  => $this->admin_text( 'Write pages' ),
-				'detail' => $this->admin_text( 'Not started.' ),
+				'detail' => '',
 				'state'  => 'pending',
 			),
 			array(
 				'index'  => '6',
 				'key'    => 'finish',
 				'label'  => $this->admin_text( 'Finish' ),
-				'detail' => $this->admin_text( 'Not started.' ),
+				'detail' => '',
 				'state'  => 'pending',
 			),
 		);

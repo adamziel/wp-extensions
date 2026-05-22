@@ -78,6 +78,10 @@ if ( ! function_exists( 'sprintf_safe' ) ) {
 use UniversalImporter\Admin\ImportAdminPage;
 use UniversalImporter\Import\InMemoryImportSessionStore;
 
+// Flag: --running injects a fake running session so we can review the
+// in-flight UI without spinning up a real worker.
+$inject_running = in_array( '--running', $argv ?? array(), true );
+
 // Anonymous class that satisfies just what render_admin_page() needs.
 $store = new class {
 	public function list_recent_sessions( $limit = 10 ) { return array(); }
@@ -97,6 +101,96 @@ try {
 	echo "\n<!-- RENDER ERROR: " . htmlspecialchars( $e->getMessage(), ENT_QUOTES, 'UTF-8' ) . " -->\n";
 }
 $body = ob_get_clean();
+
+if ( $inject_running ) {
+	// Build a minimal snapshot matching the shape returned by
+	// ImportAdminPage::get_status_snapshot(), with stage 1 active and 6 of
+	// 7 source items read. We render render_session_list() directly via
+	// reflection and splice the output into the static page so design
+	// review can see the actual running-state markup.
+	$fake_session = array(
+		'id'                    => 'preview-running',
+		'source'                => 'https://adamadam.blog',
+		'status'                => 'running',
+		'post_status'           => 'publish',
+		'dry_run'               => false,
+		'pending_decisions'     => array(),
+		'relationship_warnings' => array(),
+		'recent_events'         => array(
+			array( 'type' => 'source.queued',   'message' => 'Queued 7 URLs from adamadam.blog',  'created_at' => '2026-05-22 10:00:00', 'context' => array() ),
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/the-summer-bookshelf/', 'created_at' => '2026-05-22 10:00:08', 'context' => array() ),
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/sailing-notes/',         'created_at' => '2026-05-22 10:00:12', 'context' => array() ),
+		),
+		'source_items'          => array(
+			'total'    => 7,
+			'statuses' => array( 'queued' => 1, 'processing' => 0, 'discovered' => 0, 'imported' => 6, 'skipped' => 0, 'failed' => 0 ),
+			'recent'   => array(),
+		),
+		'prepared_documents'    => array( 'total' => 0, 'recent' => array() ),
+		'posts'                 => array( 'persisted' => 0 ),
+		'comments'              => array( 'persisted' => 0 ),
+		'media'                 => array( 'total' => 0, 'statuses' => array() ),
+		'progress'              => array( 'total' => 7, 'completed' => 6, 'errors' => 0 ),
+		'github_git'            => array( 'active' => false, 'recent' => array() ),
+		'remote_backoff'        => array( 'total' => 0, 'recent' => array() ),
+		'epub_tocs'             => array( 'total' => 0, 'recent' => array() ),
+		'pdf_documents'         => array( 'total' => 0, 'recent' => array() ),
+		'dashboard'             => array(
+			'percentage'        => 85,
+			'indeterminate'     => false,
+			'status_label'      => 'running',
+			'progress_note'     => '',
+			'current_action'    => 'Reading the source.',
+			'attention_message' => '',
+			'needs_keepalive'   => true,
+			'summary'           => array( 'total' => 7, 'completed' => 6, 'errors' => 0 ),
+			'checklist'         => array(
+				array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '6 of 7 source items read', 'state' => 'active' ),
+				array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => '',                          'state' => 'pending' ),
+				array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => '',                          'state' => 'pending' ),
+				array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '',                          'state' => 'pending' ),
+				array( 'index' => '5', 'key' => 'write_pages',     'label' => 'Write pages',     'detail' => '',                          'state' => 'pending' ),
+				array( 'index' => '6', 'key' => 'finish',          'label' => 'Finish',          'detail' => '',                          'state' => 'pending' ),
+			),
+			'progress_summary'  => 'Stage 1 of 6 · Read source · 6 of 7 source items read (85%)',
+			'activity_log'      => array(
+				array( 'type' => 'source.imported', 'message' => 'Read /2024/the-summer-bookshelf/', 'created_at' => '2026-05-22 10:00:08' ),
+				array( 'type' => 'source.imported', 'message' => 'Read /2024/sailing-notes/',         'created_at' => '2026-05-22 10:00:12' ),
+			),
+		),
+	);
+
+	$render_method = $reflection->getMethod( 'render_session_list' );
+	$render_method->setAccessible( true );
+
+	ob_start();
+	$render_method->invoke( $page, array( $fake_session ) );
+	$session_html = ob_get_clean();
+
+	// Wrap the rendered session card in a faux .universal-importer-admin
+	// container so the CSS custom properties resolve, and replace the body
+	// entirely with this focused running-state view for design review.
+	$body = '<div class="wrap universal-importer-admin"><h1 class="wp-heading-inline">Universal Importer (running-state preview)</h1>'
+		. '<div id="universal-importer-sessions" class="universal-importer-sessions">'
+		. $session_html
+		. '</div></div>'
+		. '<!-- styles+JS are still inherited from the previously rendered output above -->';
+
+	// To keep the original styles, prepend the <style> blocks captured from
+	// the full render so the preview shows accurate CSS.
+	if ( preg_match( '/<style.*?<\/style>/s', $body, $m ) === 0 ) {
+		// Re-capture full styles from the previously rendered page so the
+		// preview body looks correct.
+		ob_start();
+		$page->render_admin_page();
+		$full_body = ob_get_clean();
+		$styles = '';
+		if ( preg_match_all( '/<style\b[^>]*>.*?<\/style>/s', $full_body, $matches ) ) {
+			$styles = implode( "\n", $matches[0] );
+		}
+		$body = $styles . $body;
+	}
+}
 
 // Wrap the rendered importer page in a faithful wp-admin chrome
 // simulation (admin bar + side menu + content canvas) so design review
