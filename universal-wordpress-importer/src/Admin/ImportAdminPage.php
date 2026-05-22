@@ -1213,7 +1213,7 @@ final class ImportAdminPage {
 				color: var(--ui-muted);
 				font-size: 11.5px;
 				line-height: 1.5;
-				margin: 10px 0 0;
+				margin: -2px 0 12px;
 			}
 			.universal-importer-pick-row {
 				align-items: center;
@@ -1222,10 +1222,30 @@ final class ImportAdminPage {
 				flex-wrap: wrap;
 				font-size: 12.5px;
 				gap: 6px;
-				margin-top: 6px;
+				margin-top: 8px;
 			}
 			.universal-importer-pick-sep {
 				color: var(--ui-rule);
+			}
+			.universal-importer-text-link {
+				background: none;
+				border: 0;
+				color: var(--ui-accent);
+				cursor: pointer;
+				font: inherit;
+				padding: 0;
+				text-decoration: underline;
+				text-underline-offset: 3px;
+			}
+			.universal-importer-text-link:hover { color: var(--ui-accent-deep); }
+			.universal-importer-text-link:focus-visible {
+				border-radius: 2px;
+				outline: 2px solid var(--ui-accent-deep);
+				outline-offset: 2px;
+			}
+			.universal-importer-pick-or {
+				color: var(--ui-muted);
+				margin-left: 2px;
 			}
 			.universal-importer-upload-copy {
 				min-width: 0;
@@ -1239,59 +1259,166 @@ final class ImportAdminPage {
 				display: none;
 			}
 			.universal-importer-inferred {
-				align-items: center;
-				display: flex;
-				flex-wrap: wrap;
-				gap: 8px;
-				margin-top: 8px;
+				margin-top: 10px;
 				position: relative;
 			}
 			.universal-importer-inferred[hidden] {
 				display: none;
 			}
-			.universal-importer-inferred-chip {
-				background: var(--ui-soft);
+			.universal-importer-typepick-trigger {
+				align-items: center;
+				background: #fff;
 				border: 1px solid var(--ui-rule);
-				border-radius: 999px;
+				border-radius: 6px;
 				color: var(--ui-ink);
-				font-size: 12px;
+				cursor: pointer;
+				display: inline-flex;
+				gap: 8px;
+				font-size: 13px;
 				font-weight: 600;
-				padding: 2px 10px;
+				padding: 7px 10px 7px 9px;
+				text-align: left;
+				min-width: 240px;
+				transition: border-color .12s ease, box-shadow .12s ease, background-color .12s ease;
 			}
-			.universal-importer-inferred-change {
-				font-size: 12px;
+			.universal-importer-typepick-trigger:hover {
+				background: #fff8e1;
+				border-color: var(--ui-rule2);
+			}
+			.universal-importer-typepick-trigger:focus-visible {
+				border-color: var(--ui-accent);
+				box-shadow: 0 0 0 3px rgba(161, 98, 7, .18);
+				outline: none;
+			}
+			.universal-importer-typepick-trigger[aria-expanded="true"] {
+				background: var(--ui-soft);
+				border-color: var(--ui-accent);
+				box-shadow: 0 0 0 3px rgba(161, 98, 7, .14);
+			}
+			.universal-importer-typepick-icon {
+				color: var(--ui-accent-deep);
+				display: inline-flex;
+				flex: none;
+				width: 16px;
+				height: 16px;
+				align-items: center;
+				justify-content: center;
+			}
+			.universal-importer-typepick-icon svg {
+				width: 16px;
+				height: 16px;
+				display: block;
+			}
+			.universal-importer-inferred-chip {
+				flex: 1 1 auto;
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+			}
+			.universal-importer-typepick-chev {
+				color: var(--ui-muted);
+				display: inline-flex;
+				flex: none;
+				width: 12px;
+				height: 12px;
+				transition: transform .12s ease;
+			}
+			.universal-importer-typepick-chev svg {
+				width: 12px;
+				height: 12px;
+				display: block;
+			}
+			.universal-importer-typepick-trigger[aria-expanded="true"] .universal-importer-typepick-chev {
+				transform: rotate(180deg);
 			}
 			.universal-importer-inferred-popover {
 				background: #fff;
 				border: 1px solid var(--ui-rule);
-				border-radius: 6px;
-				box-shadow: 0 12px 28px rgba(0, 0, 0, .14);
+				border-radius: 8px;
+				box-shadow: 0 16px 40px rgba(31, 41, 55, .18);
 				display: flex;
 				flex-direction: column;
+				gap: 1px;
 				left: 0;
-				min-width: 200px;
-				padding: 4px;
+				min-width: 320px;
+				max-width: 400px;
+				padding: 6px;
 				position: absolute;
-				top: calc(100% + 4px);
-				z-index: 20;
+				top: calc(100% + 6px);
+				z-index: 30;
 			}
 			.universal-importer-inferred-popover[hidden] {
 				display: none;
 			}
-			.universal-importer-inferred-popover button {
+			.universal-importer-inferred-popover button[role="option"] {
+				align-items: center;
 				background: transparent;
 				border: 0;
-				border-radius: 4px;
+				border-radius: 6px;
 				color: var(--ui-ink);
 				cursor: pointer;
-				font-size: 12.5px;
-				padding: 6px 10px;
+				display: grid;
+				grid-template-columns: 22px 1fr 16px;
+				gap: 10px;
+				font-size: 13px;
+				padding: 8px 10px;
 				text-align: left;
 			}
-			.universal-importer-inferred-popover button:hover,
-			.universal-importer-inferred-popover button:focus {
-				background: var(--ui-soft);
+			.universal-importer-inferred-popover button[role="option"]:hover,
+			.universal-importer-inferred-popover button[role="option"]:focus-visible {
+				background: #fff8e1;
 				outline: none;
+			}
+			.universal-importer-inferred-popover button[role="option"][aria-selected="true"] {
+				background: var(--ui-soft);
+			}
+			.universal-importer-typepick-opt-icon {
+				color: var(--ui-accent-deep);
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				width: 22px;
+				height: 22px;
+			}
+			.universal-importer-typepick-opt-icon svg {
+				width: 18px;
+				height: 18px;
+				display: block;
+			}
+			.universal-importer-typepick-opt-body {
+				display: flex;
+				flex-direction: column;
+				gap: 2px;
+				min-width: 0;
+			}
+			.universal-importer-typepick-opt-title {
+				color: var(--ui-ink);
+				font-size: 13px;
+				font-weight: 600;
+			}
+			.universal-importer-typepick-opt-desc {
+				color: var(--ui-muted);
+				font-size: 11.5px;
+				font-weight: 400;
+				line-height: 1.35;
+			}
+			.universal-importer-typepick-opt-check {
+				color: var(--ui-accent-deep);
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				width: 16px;
+				height: 16px;
+				opacity: 0;
+			}
+			.universal-importer-inferred-popover button[role="option"][aria-selected="true"] .universal-importer-typepick-opt-check {
+				opacity: 1;
+			}
+			.universal-importer-typepick-opt-check svg {
+				width: 14px;
+				height: 14px;
+				display: block;
 			}
 			.universal-importer-file-input {
 				clip: rect(1px, 1px, 1px, 1px);
@@ -1362,24 +1489,80 @@ final class ImportAdminPage {
 			}
 			.universal-importer-github-picker {
 				align-items: center;
-				color: var(--ui-muted);
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
 				display: flex;
-				flex-wrap: wrap;
-				font-size: 12px;
-				gap: 6px;
-				margin: 8px 0 0;
+				gap: 12px;
+				margin: 10px 0 0;
+				padding: 8px 8px 8px 12px;
 			}
 			.universal-importer-github-picker[hidden] {
 				display: none;
 			}
+			.universal-importer-github-picker-icon {
+				color: var(--ui-accent-deep);
+				display: inline-flex;
+				flex: none;
+				width: 22px;
+				height: 22px;
+				align-items: center;
+				justify-content: center;
+			}
+			.universal-importer-github-picker-icon svg {
+				width: 20px;
+				height: 20px;
+				display: block;
+			}
 			.universal-importer-github-picker-label {
+				display: flex;
+				flex-direction: column;
+				flex: 1 1 auto;
+				min-width: 0;
+				gap: 2px;
+			}
+			.universal-importer-github-picker-kicker {
 				color: var(--ui-muted);
-				font-weight: 600;
+				font-size: 10.5px;
+				font-weight: 700;
+				letter-spacing: .08em;
+				text-transform: uppercase;
 			}
 			.universal-importer-github-selection {
 				color: var(--ui-ink);
 				font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+				font-size: 13px;
 				overflow-wrap: anywhere;
+			}
+			.universal-importer-github-picker-btn {
+				align-items: center;
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 5px;
+				color: var(--ui-ink);
+				cursor: pointer;
+				display: inline-flex;
+				flex: none;
+				gap: 6px;
+				font-size: 12.5px;
+				font-weight: 600;
+				padding: 6px 10px;
+				transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease;
+			}
+			.universal-importer-github-picker-btn:hover {
+				background: var(--ui-soft);
+				border-color: var(--ui-rule2);
+			}
+			.universal-importer-github-picker-btn:focus-visible {
+				border-color: var(--ui-accent);
+				box-shadow: 0 0 0 3px rgba(161, 98, 7, .18);
+				outline: none;
+			}
+			.universal-importer-github-picker-btn svg {
+				width: 14px;
+				height: 14px;
+				display: block;
+				color: var(--ui-accent-deep);
 			}
 			.universal-importer-modal[hidden] {
 				display: none;
@@ -2038,27 +2221,6 @@ final class ImportAdminPage {
 			.universal-importer-notice p {
 				margin: 0;
 			}
-			.universal-importer-github-picker {
-				align-items: center;
-				color: var(--ui-muted);
-				display: flex;
-				flex-wrap: wrap;
-				font-size: 12px;
-				gap: 6px;
-				margin: 8px 0 0;
-			}
-			.universal-importer-github-picker[hidden] {
-				display: none;
-			}
-			.universal-importer-github-picker-label {
-				color: var(--ui-muted);
-				font-weight: 600;
-			}
-			.universal-importer-github-selection {
-				color: var(--ui-ink);
-				font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
-				overflow-wrap: anywhere;
-			}
 			.universal-importer-modal[hidden] {
 				display: none;
 			}
@@ -2310,38 +2472,97 @@ final class ImportAdminPage {
 							<div class="universal-importer-body">
 							<div id="universal-importer-dropzone" class="universal-importer-memo universal-importer-dropzone is-focus" aria-label="<?php echo esc_attr__( 'Paste a URL or drop a file', 'universal-wordpress-importer' ); ?>">
 								<h3 class="universal-importer-memo-prompt"><?php esc_html_e( 'Paste a URL or drop a file', 'universal-wordpress-importer' ); ?></h3>
+								<p class="universal-importer-accepts"><?php esc_html_e( 'URLs · GitHub repos · feeds · sitemaps · ZIP · folders · PDF · EPUB · Markdown · HTML · WXR XML', 'universal-wordpress-importer' ); ?></p>
 								<div class="universal-importer-field">
 									<label for="universal-importer-source" class="screen-reader-text"><?php esc_html_e( 'Source URL', 'universal-wordpress-importer' ); ?></label>
 									<input type="url" id="universal-importer-source" name="source" placeholder="<?php echo esc_attr__( 'https://…', 'universal-wordpress-importer' ); ?>" aria-label="<?php echo esc_attr__( 'Source URL', 'universal-wordpress-importer' ); ?>" autofocus>
 								</div>
 								<div id="universal-importer-inferred" class="universal-importer-inferred" hidden>
-									<span class="universal-importer-inferred-chip" id="universal-importer-inferred-chip"></span>
-									<button type="button" class="universal-importer-link-button universal-importer-inferred-change" id="universal-importer-inferred-change" aria-haspopup="listbox" aria-expanded="false"><?php esc_html_e( 'Change', 'universal-wordpress-importer' ); ?></button>
+									<button type="button" class="universal-importer-typepick-trigger" id="universal-importer-inferred-change" aria-haspopup="listbox" aria-expanded="false">
+										<span class="universal-importer-typepick-icon" data-tp-trigger-icon aria-hidden="true"></span>
+										<span class="universal-importer-inferred-chip" id="universal-importer-inferred-chip"></span>
+										<span class="universal-importer-typepick-chev" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+									</button>
 									<div id="universal-importer-inferred-popover" class="universal-importer-inferred-popover" role="listbox" aria-label="<?php echo esc_attr__( 'Override source type', 'universal-wordpress-importer' ); ?>" hidden>
-										<button type="button" role="option" data-type="GitHub repository"><?php esc_html_e( 'GitHub repository', 'universal-wordpress-importer' ); ?></button>
-										<button type="button" role="option" data-type="WordPress site URL"><?php esc_html_e( 'WordPress site', 'universal-wordpress-importer' ); ?></button>
-										<button type="button" role="option" data-type="RSS / Atom / RDF feed"><?php esc_html_e( 'RSS / Atom feed', 'universal-wordpress-importer' ); ?></button>
-										<button type="button" role="option" data-type="Sitemap.xml"><?php esc_html_e( 'Sitemap', 'universal-wordpress-importer' ); ?></button>
-										<button type="button" role="option" data-type="WP export XML (WXR)"><?php esc_html_e( 'WXR XML export', 'universal-wordpress-importer' ); ?></button>
-										<button type="button" role="option" data-type="Remote HTML page"><?php esc_html_e( 'Remote HTML page', 'universal-wordpress-importer' ); ?></button>
-										<button type="button" role="option" data-type="OPML feed list"><?php esc_html_e( 'OPML feed list', 'universal-wordpress-importer' ); ?></button>
+										<button type="button" role="option" data-type="GitHub repository">
+											<span class="universal-importer-typepick-opt-icon" data-tp-option-icon="GitHub repository" aria-hidden="true"></span>
+											<span class="universal-importer-typepick-opt-body">
+												<span class="universal-importer-typepick-opt-title"><?php esc_html_e( 'GitHub repository', 'universal-wordpress-importer' ); ?></span>
+												<span class="universal-importer-typepick-opt-desc"><?php esc_html_e( 'Markdown, MDX, and docs from a public repo.', 'universal-wordpress-importer' ); ?></span>
+											</span>
+											<span class="universal-importer-typepick-opt-check" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+										</button>
+										<button type="button" role="option" data-type="WordPress site URL">
+											<span class="universal-importer-typepick-opt-icon" data-tp-option-icon="WordPress site URL" aria-hidden="true"></span>
+											<span class="universal-importer-typepick-opt-body">
+												<span class="universal-importer-typepick-opt-title"><?php esc_html_e( 'WordPress site', 'universal-wordpress-importer' ); ?></span>
+												<span class="universal-importer-typepick-opt-desc"><?php esc_html_e( 'Pulls posts and pages over the REST API.', 'universal-wordpress-importer' ); ?></span>
+											</span>
+											<span class="universal-importer-typepick-opt-check" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+										</button>
+										<button type="button" role="option" data-type="RSS / Atom / RDF feed">
+											<span class="universal-importer-typepick-opt-icon" data-tp-option-icon="RSS / Atom / RDF feed" aria-hidden="true"></span>
+											<span class="universal-importer-typepick-opt-body">
+												<span class="universal-importer-typepick-opt-title"><?php esc_html_e( 'RSS / Atom feed', 'universal-wordpress-importer' ); ?></span>
+												<span class="universal-importer-typepick-opt-desc"><?php esc_html_e( 'Subscribes to a syndication feed.', 'universal-wordpress-importer' ); ?></span>
+											</span>
+											<span class="universal-importer-typepick-opt-check" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+										</button>
+										<button type="button" role="option" data-type="Sitemap.xml">
+											<span class="universal-importer-typepick-opt-icon" data-tp-option-icon="Sitemap.xml" aria-hidden="true"></span>
+											<span class="universal-importer-typepick-opt-body">
+												<span class="universal-importer-typepick-opt-title"><?php esc_html_e( 'Sitemap', 'universal-wordpress-importer' ); ?></span>
+												<span class="universal-importer-typepick-opt-desc"><?php esc_html_e( 'Crawls every URL listed in the sitemap.', 'universal-wordpress-importer' ); ?></span>
+											</span>
+											<span class="universal-importer-typepick-opt-check" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+										</button>
+										<button type="button" role="option" data-type="WP export XML (WXR)">
+											<span class="universal-importer-typepick-opt-icon" data-tp-option-icon="WP export XML (WXR)" aria-hidden="true"></span>
+											<span class="universal-importer-typepick-opt-body">
+												<span class="universal-importer-typepick-opt-title"><?php esc_html_e( 'WXR XML export', 'universal-wordpress-importer' ); ?></span>
+												<span class="universal-importer-typepick-opt-desc"><?php esc_html_e( 'A WordPress eXtended RSS export file.', 'universal-wordpress-importer' ); ?></span>
+											</span>
+											<span class="universal-importer-typepick-opt-check" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+										</button>
+										<button type="button" role="option" data-type="Remote HTML page">
+											<span class="universal-importer-typepick-opt-icon" data-tp-option-icon="Remote HTML page" aria-hidden="true"></span>
+											<span class="universal-importer-typepick-opt-body">
+												<span class="universal-importer-typepick-opt-title"><?php esc_html_e( 'Remote HTML page', 'universal-wordpress-importer' ); ?></span>
+												<span class="universal-importer-typepick-opt-desc"><?php esc_html_e( 'A single web page or article.', 'universal-wordpress-importer' ); ?></span>
+											</span>
+											<span class="universal-importer-typepick-opt-check" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+										</button>
+										<button type="button" role="option" data-type="OPML feed list">
+											<span class="universal-importer-typepick-opt-icon" data-tp-option-icon="OPML feed list" aria-hidden="true"></span>
+											<span class="universal-importer-typepick-opt-body">
+												<span class="universal-importer-typepick-opt-title"><?php esc_html_e( 'OPML feed list', 'universal-wordpress-importer' ); ?></span>
+												<span class="universal-importer-typepick-opt-desc"><?php esc_html_e( 'A bundle of feed subscriptions.', 'universal-wordpress-importer' ); ?></span>
+											</span>
+											<span class="universal-importer-typepick-opt-check" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+										</button>
 									</div>
 								</div>
 								<div id="universal-importer-github-picker" class="universal-importer-github-picker" hidden>
-									<span class="universal-importer-github-picker-label"><?php esc_html_e( 'Path:', 'universal-wordpress-importer' ); ?></span>
-									<span id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"><?php esc_html_e( 'repository root', 'universal-wordpress-importer' ); ?></span>
-									<button type="button" class="universal-importer-link-button" id="universal-importer-github-browse"><?php esc_html_e( 'change', 'universal-wordpress-importer' ); ?></button>
+									<span class="universal-importer-github-picker-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M2.5 5.5a1 1 0 011-1h3.5l1.5 1.5h7a1 1 0 011 1V15a1 1 0 01-1 1h-12a1 1 0 01-1-1V5.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></span>
+									<span class="universal-importer-github-picker-label">
+										<span class="universal-importer-github-picker-kicker"><?php esc_html_e( 'Repository path', 'universal-wordpress-importer' ); ?></span>
+										<span id="universal-importer-github-selection" class="universal-importer-github-selection" aria-live="polite"><?php esc_html_e( 'repository root', 'universal-wordpress-importer' ); ?></span>
+									</span>
+									<button type="button" class="universal-importer-github-picker-btn" id="universal-importer-github-browse" data-action="open-directory-picker">
+										<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1.5 4a.5.5 0 01.5-.5h2.4l1 1H12a.5.5 0 01.5.5v6.5a.5.5 0 01-.5.5H2a.5.5 0 01-.5-.5V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+										<?php esc_html_e( 'Change folder', 'universal-wordpress-importer' ); ?>
+									</button>
 								</div>
 								<div class="universal-importer-upload-copy">
 									<p id="universal-importer-file-summary" class="universal-importer-file-summary" aria-live="polite"></p>
 									<ul id="universal-importer-file-preview" class="universal-importer-file-preview" role="tree" aria-label="<?php echo esc_attr__( 'Selected file tree', 'universal-wordpress-importer' ); ?>" aria-live="polite"></ul>
 								</div>
-								<p class="universal-importer-accepts"><?php esc_html_e( 'URLs · GitHub repos · feeds · sitemaps · ZIP · folders · PDF · EPUB · Markdown · HTML · WXR XML', 'universal-wordpress-importer' ); ?></p>
 								<div class="universal-importer-pick-row">
-									<label class="universal-importer-link-button" for="universal-importer-file-picker"><?php esc_html_e( 'Choose file', 'universal-wordpress-importer' ); ?></label>
+									<label class="universal-importer-text-link" for="universal-importer-file-picker"><?php esc_html_e( 'Choose file', 'universal-wordpress-importer' ); ?></label>
 									<span class="universal-importer-pick-sep" aria-hidden="true">·</span>
-									<label class="universal-importer-link-button" for="universal-importer-folder-picker"><?php esc_html_e( 'Choose folder', 'universal-wordpress-importer' ); ?></label>
-									<span class="universal-importer-upload-actions" id="universal-importer-upload-actions" hidden><span class="universal-importer-pick-sep" aria-hidden="true">·</span><button type="button" class="universal-importer-link-button" id="universal-importer-clear-files"><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button></span>
+									<label class="universal-importer-text-link" for="universal-importer-folder-picker"><?php esc_html_e( 'Choose folder', 'universal-wordpress-importer' ); ?></label>
+									<span class="universal-importer-pick-or"><?php esc_html_e( 'or drop a file here', 'universal-wordpress-importer' ); ?></span>
+									<span class="universal-importer-upload-actions" id="universal-importer-upload-actions" hidden><span class="universal-importer-pick-sep" aria-hidden="true">·</span><button type="button" class="universal-importer-text-link" id="universal-importer-clear-files"><?php esc_html_e( 'Clear selection', 'universal-wordpress-importer' ); ?></button></span>
 								</div>
 								<input type="file" id="universal-importer-file-picker" class="universal-importer-file-input" multiple accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip,application/pdf,application/epub+zip,text/html,text/markdown,text/plain,application/xml,text/xml,application/zip">
 								<input type="file" id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory>
@@ -2552,13 +2773,53 @@ final class ImportAdminPage {
 				}
 			}
 
+			var typeIcons = {
+				'GitHub repository': '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5C4.41 1.5 1.5 4.42 1.5 8.02c0 2.88 1.86 5.33 4.45 6.19.32.06.44-.14.44-.31v-1.21c-1.81.39-2.19-.77-2.19-.77-.3-.75-.72-.95-.72-.95-.58-.4.05-.39.05-.39.65.05.99.67.99.67.57.98 1.5.7 1.87.53.06-.42.23-.7.41-.86-1.45-.16-2.96-.72-2.96-3.21 0-.71.25-1.29.67-1.74-.07-.16-.29-.83.06-1.72 0 0 .55-.18 1.79.66.52-.14 1.08-.22 1.63-.22.55 0 1.11.07 1.63.22 1.24-.84 1.79-.66 1.79-.66.36.89.13 1.56.07 1.72.42.45.66 1.03.66 1.74 0 2.49-1.51 3.04-2.96 3.21.23.2.43.59.43 1.19v1.77c0 .17.12.38.45.31 2.59-.86 4.45-3.31 4.45-6.19 0-3.6-2.91-6.52-6.5-6.52z" fill="currentColor"/></svg>',
+				'WordPress site URL': '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4"/><path d="M3.9 6L5.6 11l1.4-3.6L8.4 11l1.7-5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+				'RSS / Atom / RDF feed': '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="3.5" cy="12.5" r="1.4" fill="currentColor"/><path d="M2.5 8a5.5 5.5 0 015.5 5.5M2.5 4a9.5 9.5 0 019.5 9.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+				'Sitemap.xml': '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="6" y="1.5" width="4" height="3" rx="0.5" stroke="currentColor" stroke-width="1.3"/><rect x="1.5" y="11.5" width="4" height="3" rx="0.5" stroke="currentColor" stroke-width="1.3"/><rect x="6" y="11.5" width="4" height="3" rx="0.5" stroke="currentColor" stroke-width="1.3"/><rect x="10.5" y="11.5" width="4" height="3" rx="0.5" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.5v3M3.5 8.5v2.5M8 8.5v2.5M12.5 8.5v2.5M3.5 8.5h9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+				'WP export XML (WXR)': '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3.5 1.5h6l3 3v9.5a.5.5 0 01-.5.5h-8.5a.5.5 0 01-.5-.5v-12a.5.5 0 01.5-.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9.5 1.5v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.7 9.5l-1 1 1 1M10.3 9.5l1 1-1 1M8.7 9.2l-1.2 2.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+				'Remote HTML page': '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 5.5h13" stroke="currentColor" stroke-width="1.3"/><circle cx="3" cy="4" r="0.5" fill="currentColor"/><circle cx="4.5" cy="4" r="0.5" fill="currentColor"/><path d="M4 8h6M4 10h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+				'OPML feed list': '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="3" cy="4" r="1" fill="currentColor"/><circle cx="3" cy="8" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><path d="M6 4h7M6 8h7M6 12h7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+				'_fallback': '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.4"/><path d="M8 4.5v4M8 11h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'
+			};
+
+			function renderTypePickerIcons() {
+				if (!inferredPopover) { return; }
+				var slots = inferredPopover.querySelectorAll ? inferredPopover.querySelectorAll('[data-tp-option-icon]') : [];
+				for (var i = 0; i < slots.length; i++) {
+					if (slots[i].innerHTML) { continue; }
+					var key = slots[i].getAttribute('data-tp-option-icon') || '';
+					slots[i].innerHTML = typeIcons[key] || typeIcons._fallback;
+				}
+			}
+
+			function setTriggerIcon(type) {
+				if (!inferredChangeBtn || !inferredChangeBtn.querySelector) { return; }
+				var holder = inferredChangeBtn.querySelector('[data-tp-trigger-icon]');
+				if (!holder) { return; }
+				holder.innerHTML = typeIcons[type] || typeIcons._fallback;
+			}
+
+			function markPopoverSelected(type) {
+				if (!inferredPopover || !inferredPopover.querySelectorAll) { return; }
+				var opts = inferredPopover.querySelectorAll('button[role="option"]');
+				for (var i = 0; i < opts.length; i++) {
+					var match = opts[i].getAttribute('data-type') === type;
+					opts[i].setAttribute('aria-selected', match ? 'true' : 'false');
+				}
+			}
+
 			function refreshInferredType() {
 				if (!inferredWrap || !inferredChip) {
 					return;
 				}
+				renderTypePickerIcons();
 				// Honour any user override; otherwise compute from current input.
 				if (flowState && flowState.typeOverride) {
-					inferredChip.textContent = flowState.typeOverride;
+					inferredChip.textContent = displayLabelForType(flowState.typeOverride);
+					setTriggerIcon(flowState.typeOverride);
+					markPopoverSelected(flowState.typeOverride);
 					inferredWrap.removeAttribute('hidden');
 					return;
 				}
@@ -2566,11 +2827,27 @@ final class ImportAdminPage {
 				if (!inferred || !inferred.type) {
 					inferredWrap.setAttribute('hidden', 'hidden');
 					inferredChip.textContent = '';
+					setTriggerIcon('');
+					markPopoverSelected('');
 					closeInferredPopover();
 					return;
 				}
-				inferredChip.textContent = inferred.type;
+				inferredChip.textContent = displayLabelForType(inferred.type);
+				setTriggerIcon(inferred.type);
+				markPopoverSelected(inferred.type);
 				inferredWrap.removeAttribute('hidden');
+			}
+
+			function displayLabelForType(type) {
+				// Map canonical internal type identifiers to friendly display labels.
+				// Keep the dropdown option titles and the closed-trigger label in sync.
+				if (!inferredPopover || !type) { return type || ''; }
+				var match = inferredPopover.querySelector('button[data-type="' + String(type).replace(/"/g, '\\"') + '"]');
+				if (match) {
+					var title = match.querySelector('.universal-importer-typepick-opt-title');
+					if (title && title.textContent) { return title.textContent; }
+				}
+				return type;
 			}
 
 			function openInferredPopover() {
@@ -3138,9 +3415,16 @@ final class ImportAdminPage {
 						flowState.typeOverride = chosen;
 					}
 					if (inferredChip) {
-						inferredChip.textContent = chosen;
+						inferredChip.textContent = displayLabelForType(chosen);
 					}
+					setTriggerIcon(chosen);
+					markPopoverSelected(chosen);
+					var stateTypeEl = document.getElementById('universal-importer-state-source-type');
+					if (stateTypeEl) { stateTypeEl.value = chosen; }
 					closeInferredPopover();
+					if (inferredChangeBtn && inferredChangeBtn.focus) {
+						inferredChangeBtn.focus();
+					}
 				});
 			}
 			if (document && document.addEventListener) {
