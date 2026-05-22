@@ -188,6 +188,15 @@ if ( $inject_running ) {
 				'created_at' => '2026-05-22 09:59:55',
 			),
 			array(
+				// Real importer fires github.fetch_queued with a phrasing that
+				// restates the current-action line ("Queued to fetch GitHub
+				// repository files."). It is the second copy of one fact the
+				// user reported, so the stage panel must filter it out.
+				'type'       => 'github.fetch_queued',
+				'message'    => 'GitHub repository fetch queued; file count will appear after discovery.',
+				'created_at' => '2026-05-22 09:59:56',
+			),
+			array(
 				'type'       => 'github.git_unavailable',
 				'message'    => 'php-toolkit Git traversal failed for ref "trunk/docs" at path "/": Invalid Git ref: branch names cannot contain a slash. The importer will try the next GitHub path candidate.',
 				'created_at' => '2026-05-22 10:00:00',
@@ -246,9 +255,11 @@ if ( $inject_running ) {
 		$fake_session['dashboard']['percentage']     = 14;
 		$fake_session['dashboard']['current_action'] = 'Preparing imported content.';
 		$fake_session['dashboard']['progress_summary'] = 'Stage 2 of 6 · Prepare content · 5 of 117 documents converted (14%)';
+		// Detail strings mirror what dashboard_checklist() would build for the
+		// same counts so the snapshot exercises the plural-form code path.
 		$fake_session['dashboard']['checklist']      = array(
 			array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '117 source items found.', 'state' => 'done' ),
-			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => '',                        'state' => 'active' ),
+			array( 'index' => '2', 'key' => 'prepare_content', 'label' => 'Prepare content', 'detail' => 'Preparing 112 items.',    'state' => 'active' ),
 			array( 'index' => '3', 'key' => 'url_treatment',   'label' => 'URL treatment',   'detail' => '',                        'state' => 'pending' ),
 			array( 'index' => '4', 'key' => 'import_media',    'label' => 'Import media',    'detail' => '',                        'state' => 'pending' ),
 			array( 'index' => '5', 'key' => 'write_pages',     'label' => 'Write pages',     'detail' => '',                        'state' => 'pending' ),
@@ -298,8 +309,13 @@ if ( $inject_running ) {
 			'statuses' => array( 'queued' => 0, 'processing' => 0, 'discovered' => 0, 'imported' => 117, 'skipped' => 0, 'failed' => 0 ),
 			'recent'   => array(),
 		);
-		$fake_session['dashboard']['percentage']     = 50;
-		$fake_session['dashboard']['current_action'] = 'Choose how old URLs should be handled.';
+		// Mirror what the live admin's dashboard_payload() emits when a
+		// confirm-first-party-domains decision is pending. The scenario is
+		// only useful as a deduplication fixture when its dashboard values
+		// match what render_session_list() actually sees in production.
+		$fake_session['dashboard']['percentage']       = 50;
+		$fake_session['dashboard']['current_action']   = 'Choose URL treatment to continue.';
+		$fake_session['dashboard']['attention_message'] = 'Answer the prompt below to continue the import.';
 		$fake_session['dashboard']['progress_summary'] = 'Stage 3 of 6 · URL treatment · waiting for your choice';
 		$fake_session['dashboard']['checklist']      = array(
 			array( 'index' => '1', 'key' => 'read_source',     'label' => 'Read source',     'detail' => '117 source items found.',     'state' => 'done' ),

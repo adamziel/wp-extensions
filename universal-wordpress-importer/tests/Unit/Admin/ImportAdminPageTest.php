@@ -452,8 +452,10 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'function syncPrimaryView(session)', $source );
 		$this->assertStringContainsString( 'function isImportLocked(session)', $source );
 		$this->assertStringContainsString( 'function canStartAnotherImport(session)', $source );
-		$this->assertStringContainsString( 'function renderStageDecision(session, stageKey)', $source );
+		$this->assertStringContainsString( 'function renderStageDecision()', $source );
 		$this->assertStringContainsString( 'universal-importer-stage-decision', $source );
+		$this->assertStringContainsString( 'function renderHoistedUrlDecision(session)', $source );
+		$this->assertStringContainsString( 'universal-importer-hoisted-decision', $source );
 		$this->assertStringContainsString( 'universal-importer-start-over', $source );
 		$this->assertStringContainsString( 'universal-importer-card is-importing', $source );
 		$this->assertStringContainsString( 'universal-importer-start-form" class="universal-importer-start', $source );

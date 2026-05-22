@@ -2151,6 +2151,26 @@ final class ImportAdminPage {
 				background: transparent;
 				margin-top: 0;
 			}
+			.universal-importer-hoisted-decision {
+				border: 1px solid var(--ui-warn);
+				border-left-width: 4px;
+				border-radius: 8px;
+				background: #fdf6ec;
+				margin: 16px 0 4px;
+				padding: 14px 16px;
+			}
+			.universal-importer-hoisted-decision .universal-importer-decisions {
+				margin: 0;
+			}
+			.universal-importer-hoisted-decision .universal-importer-decisions h4 {
+				margin-top: 0;
+			}
+			.universal-importer-hoisted-decision .universal-importer-decision {
+				background: transparent;
+				border-left: 0;
+				margin-top: 8px;
+				padding: 0;
+			}
 			.universal-importer-decision-actions {
 				display: flex;
 				flex-wrap: wrap;
@@ -3856,12 +3876,11 @@ final class ImportAdminPage {
 				var summary = dashboard.summary || { total: 0, completed: 0, errors: 0 };
 				var percent = Math.max(0, Math.min(100, Number(dashboard.percentage || 0)));
 				var progressClass = dashboard.indeterminate ? ' is-indeterminate' : '';
-				var progressNote = dashboard.progress_note || '';
-				var progressSummary = dashboard.progress_summary || '';
 				var displayStatus = dashboard.attention_message ? '<?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?>' : (dashboard.status_label || session.status);
 				var mode = session.dry_run ? '<?php echo esc_js( __( 'Dry run', 'universal-wordpress-importer' ) ); ?>' : (session.post_status === 'draft' ? '<?php echo esc_js( __( 'Creates drafts', 'universal-wordpress-importer' ) ); ?>' : '<?php echo esc_js( __( 'Publishes pages', 'universal-wordpress-importer' ) ); ?>');
 				var importingClass = isImportLocked(session) ? ' is-importing' : '';
 				var showWorking = importingClass && !dashboard.attention_message;
+				var hasPendingDecision = !!(session.pending_decisions && session.pending_decisions.length);
 				var html = '<section class="universal-importer-card' + importingClass + '" data-session-id="' + escapeHtml(session.id) + '">';
 				html += '<div class="universal-importer-card-header">';
 				html += '<div class="universal-importer-card-header-main"><h3 class="universal-importer-source-title">' + escapeHtml(session.source) + '</h3>';
@@ -3875,21 +3894,19 @@ final class ImportAdminPage {
 				}
 				html += '</p></div>';
 				html += '</div><div class="universal-importer-card-body">';
-				html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
 				html += '<div class="universal-importer-progressbar' + progressClass + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
-				html += '<p class="universal-importer-meta universal-importer-progress-line">';
-				if (progressSummary) {
-					html += escapeHtml(progressSummary);
-				} else if (progressNote) {
-					html += escapeHtml(progressNote);
-				} else {
-					html += percent + '% <?php echo esc_js( __( 'complete', 'universal-wordpress-importer' ) ); ?>';
+				// Drop the current-action line while a decision is pending —
+				// the hoisted decision card heading speaks the same fact.
+				if (!hasPendingDecision) {
+					html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
 				}
 				if (summary.errors) {
-					html += ' · ' + summary.errors + ' <?php echo esc_js( __( 'errors', 'universal-wordpress-importer' ) ); ?>';
+					var errorTemplate = (summary.errors === 1)
+						? '<?php echo esc_js( __( '%d error', 'universal-wordpress-importer' ) ); ?>'
+						: '<?php echo esc_js( __( '%d errors', 'universal-wordpress-importer' ) ); ?>';
+					html += '<p class="universal-importer-meta universal-importer-progress-line">' + escapeHtml(errorTemplate.replace('%d', String(summary.errors))) + '</p>';
 				}
-				html += '</p>';
-				if (dashboard.attention_message) {
+				if (dashboard.attention_message && !hasPendingDecision) {
 					html += '<div class="notice notice-warning inline universal-importer-attention"><p><strong><?php echo esc_js( __( 'Needs attention', 'universal-wordpress-importer' ) ); ?></strong><br>' + escapeHtml(dashboard.attention_message) + '</p>';
 					if (canStartAnotherImport(session)) {
 						html += '<p class="universal-importer-attention-actions"><button type="button" class="button button-primary universal-importer-start-over"><?php echo esc_js( __( 'Start another import', 'universal-wordpress-importer' ) ); ?></button></p>';
@@ -3897,6 +3914,7 @@ final class ImportAdminPage {
 					html += '</div>';
 				}
 				html += renderChecklist(dashboard.checklist || [], session);
+				html += renderHoistedUrlDecision(session);
 				html += renderConfirmedDomainsCard(session);
 				if (session.relationship_warnings && session.relationship_warnings.length) {
 					html += renderRelationshipWarnings(session.relationship_warnings);
@@ -3918,6 +3936,14 @@ final class ImportAdminPage {
 			function renderChecklist(items, session) {
 				if (!items.length) {
 					return '';
+				}
+				// When a confirm-first-party-domains decision is pending the
+				// URL-treatment row drops out of the stage list; the hoisted
+				// decision card (see renderHoistedUrlDecision) is the single
+				// visible place that names "URL treatment" until the decision
+				// is resolved.
+				if (urlDecisions(session).length) {
+					items = items.filter(function(it) { return it.key !== 'url_treatment'; });
 				}
 				// Find the index of the active/blocked stage so we can fold
 				// the noisy "Not started" rows away by default. Fall back to
@@ -3976,7 +4002,7 @@ final class ImportAdminPage {
 					}
 					if (isActiveRow && item.key) {
 						var bucket = groupedEvents[item.key] || [];
-						itemHtml += renderStageActivity(bucket, session, item);
+						itemHtml += renderStageActivity(bucket, session);
 					}
 					itemHtml += '</span></li>';
 					html += itemHtml;
@@ -4204,12 +4230,19 @@ final class ImportAdminPage {
 				return rows;
 			}
 
-			function renderStageActivity(events, session, item) {
+			function renderStageActivity(events, session) {
 				if (!events || !events.length) {
 					return '';
 				}
 				var progress = session.progress || {};
 				var rows = dedupEvents(events, progress);
+				if (!rows.length) { return ''; }
+				var currentAction = (session.dashboard && session.dashboard.current_action) || '';
+				if (currentAction) {
+					rows = rows.filter(function(row) {
+						return !stageLogRowDuplicatesCurrentAction(row.text, currentAction);
+					});
+				}
 				if (!rows.length) { return ''; }
 				var html = '<div class="universal-importer-stage-log"><strong>' + escapeHtml('<?php echo esc_js( __( 'This stage so far', 'universal-wordpress-importer' ) ); ?>') + '</strong><ol>';
 				rows.forEach(function(row) {
@@ -4217,6 +4250,43 @@ final class ImportAdminPage {
 				});
 				html += '</ol></div>';
 				return html;
+			}
+
+			// Mirrors stage_log_row_duplicates_current_action() in PHP — drops
+			// "This stage so far" rows that semantically restate the live
+			// current-action sentence.
+			function stageLogSignature(text) {
+				var lower = String(text || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+				if (!lower) { return ''; }
+				var filler = {
+					'a':1,'an':1,'the':1,'to':1,'for':1,'of':1,'and':1,'or':1,'in':1,'on':1,'at':1,
+					'after':1,'before':1,'with':1,'from':1,'is':1,'are':1,'was':1,'were':1,'be':1,
+					'will':1,'this':1,'that':1,'these':1,'those':1,'it':1,'so':1,'just':1
+				};
+				var tokens = {};
+				lower.split(' ').forEach(function(token) {
+					if (!token || filler[token] || /^[0-9]+$/.test(token)) { return; }
+					tokens[token] = true;
+				});
+				var keys = Object.keys(tokens);
+				keys.sort();
+				return keys.join(' ');
+			}
+
+			function stageLogRowDuplicatesCurrentAction(rowText, currentAction) {
+				var rowSig = stageLogSignature(rowText);
+				var actionSig = stageLogSignature(currentAction);
+				if (!rowSig || !actionSig) { return false; }
+				if (rowSig === actionSig) { return true; }
+				var rowTokens = rowSig.split(' ').filter(Boolean);
+				var actionTokens = actionSig.split(' ').filter(Boolean);
+				if (!rowTokens.length || !actionTokens.length) { return false; }
+				var actionSet = {};
+				actionTokens.forEach(function(t) { actionSet[t] = true; });
+				var overlap = 0;
+				rowTokens.forEach(function(t) { if (actionSet[t]) { overlap++; } });
+				var smaller = Math.min(rowTokens.length, actionTokens.length);
+				return smaller > 0 && (overlap / smaller) >= 0.6;
 			}
 
 			function urlDecisions(session) {
@@ -4231,13 +4301,17 @@ final class ImportAdminPage {
 				});
 			}
 
-			function renderStageDecision(session, stageKey) {
-				var decisions = stageKey === 'url_treatment' ? urlDecisions(session) : [];
+			function renderStageDecision() {
+				// URL-treatment decisions render as a hoisted card now.
+				return '';
+			}
+
+			function renderHoistedUrlDecision(session) {
+				var decisions = urlDecisions(session);
 				if (!decisions.length) {
 					return '';
 				}
-
-				return '<div class="universal-importer-stage-decision">' + renderDecisions(session, decisions, true) + '</div>';
+				return '<div class="universal-importer-hoisted-decision">' + renderDecisions(session, decisions, false) + '</div>';
 			}
 
 			function checklistStateLabel(state) {
@@ -5356,36 +5430,41 @@ final class ImportAdminPage {
 					</div>
 				</div>
 				<div class="universal-importer-card-body">
-					<p class="universal-importer-current-action"><?php echo esc_html( $current_action ); ?></p>
 					<div class="<?php echo esc_attr( trim( $progress_class ) ); ?>" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( (string) $percentage ); ?>">
 						<span style="width:<?php echo esc_attr( (string) $percentage ); ?>%"></span>
 					</div>
-					<p class="universal-importer-meta universal-importer-progress-line">
-						<?php
-						// progress_summary names the stage structurally
-						// ("Stage 1 of 6 · Read source") — that never echoes
-						// the current_action fact. progress_note is a sentence
-						// that often re-states current_action, so we only fall
-						// back to it when no structural summary is available.
-						if ( '' !== $progress_summary ) {
-							echo esc_html( $progress_summary );
-						} elseif ( '' !== $progress_note ) {
-							echo esc_html( $progress_note );
-						} else {
-							echo esc_html(
-								sprintf(
-									/* translators: %d: percentage complete. */
-									__( '%d%% complete', 'universal-wordpress-importer' ),
-									$percentage
-								)
-							);
-						}
-						if ( 0 < $errors ) {
-							echo esc_html( sprintf( /* translators: %d: error count. */ __( ' · %d errors', 'universal-wordpress-importer' ), $errors ) );
-						}
+					<?php
+					// Suppress the current-action line when a decision is pending:
+					// the decision card heading speaks the same fact ("URL treatment")
+					// and a separate "Choose URL treatment to continue." line would
+					// just restate it. Otherwise the current-action line is the only
+					// running-state sentence shown above the stage list.
+					$has_pending_decision = ! empty( $session['pending_decisions'] );
+					if ( ! $has_pending_decision ) :
 						?>
-					</p>
-					<?php if ( ! empty( $dashboard['attention_message'] ) ) : ?>
+						<p class="universal-importer-current-action"><?php echo esc_html( $current_action ); ?></p>
+						<?php
+					endif;
+					if ( 0 < $errors ) :
+						?>
+						<p class="universal-importer-meta universal-importer-progress-line">
+							<?php
+							$error_template = 1 === $errors
+								/* translators: %d: error count (singular). */
+								? __( '%d error', 'universal-wordpress-importer' )
+								/* translators: %d: error count (plural). */
+								: __( '%d errors', 'universal-wordpress-importer' );
+							echo esc_html( sprintf( $error_template, $errors ) );
+							?>
+						</p>
+						<?php
+					endif;
+					// progress_summary intentionally not rendered: it named the
+					// stage ("Stage 1 of 6 · Read source"), which the active
+					// stage row in the Import stages list already labels.
+					unset( $progress_summary, $progress_note );
+					?>
+					<?php if ( ! empty( $dashboard['attention_message'] ) && ! $has_pending_decision ) : ?>
 						<div class="notice notice-warning inline universal-importer-attention">
 							<p><strong><?php esc_html_e( 'Needs attention', 'universal-wordpress-importer' ); ?></strong><br><?php echo esc_html( (string) $dashboard['attention_message'] ); ?></p>
 							<?php if ( $this->can_start_another_import( $session ) ) : ?>
@@ -5394,6 +5473,7 @@ final class ImportAdminPage {
 						</div>
 					<?php endif; ?>
 					<?php $this->render_dashboard_checklist( isset( $dashboard['checklist'] ) && is_array( $dashboard['checklist'] ) ? $dashboard['checklist'] : array(), $session ); ?>
+					<?php $this->render_hoisted_url_decision( $session ); ?>
 					<?php $this->render_url_policy_card( $session ); ?>
 					<?php $this->render_relationship_warnings( $session ); ?>
 					<?php $this->render_pending_decisions( $session, true ); ?>
@@ -5420,6 +5500,22 @@ final class ImportAdminPage {
 	private function render_dashboard_checklist( array $items, array $session ) {
 		if ( empty( $items ) ) {
 			return;
+		}
+
+		// When a confirm-first-party-domains decision is pending the URL-treatment
+		// row drops out of the stage list — the hoisted decision card (see
+		// render_hoisted_url_decision) is the single visible place that names
+		// the stage while the decision is unresolved.
+		$hide_url_treatment_row = $this->is_url_decision_pending( $session );
+		if ( $hide_url_treatment_row ) {
+			$items = array_values(
+				array_filter(
+					$items,
+					function ( $item ) {
+						return ! ( isset( $item['key'] ) && 'url_treatment' === $item['key'] );
+					}
+				)
+			);
 		}
 
 		$active_index = -1;
@@ -5452,6 +5548,7 @@ final class ImportAdminPage {
 		$dashboard      = isset( $session['dashboard'] ) && is_array( $session['dashboard'] ) ? $session['dashboard'] : array();
 		$raw_events     = isset( $dashboard['activity_log'] ) && is_array( $dashboard['activity_log'] ) ? $dashboard['activity_log'] : ( isset( $session['recent_events'] ) && is_array( $session['recent_events'] ) ? $session['recent_events'] : array() );
 		$progress       = isset( $session['progress'] ) && is_array( $session['progress'] ) ? $session['progress'] : array();
+		$current_action = isset( $dashboard['current_action'] ) ? (string) $dashboard['current_action'] : '';
 		$stage_buckets  = $this->group_events_by_stage( $raw_events );
 
 		?>
@@ -5509,7 +5606,7 @@ final class ImportAdminPage {
 						if ( $is_active_row && isset( $item['key'] ) ) {
 							$stage_key      = (string) $item['key'];
 							$stage_events   = isset( $stage_buckets[ $stage_key ] ) ? $stage_buckets[ $stage_key ] : array();
-							$this->render_stage_activity_log( $stage_events, $progress );
+							$this->render_stage_activity_log( $stage_events, $progress, $current_action );
 						}
 						?>
 					</span>
@@ -5683,6 +5780,7 @@ final class ImportAdminPage {
 			'source.discovery_complete',
 			'github.git_queued',
 			'github.git_fetching',
+			'github.fetch_queued',
 			'remote.fetching',
 		);
 		if ( in_array( $type, $source_fetching_types, true ) ) {
@@ -5766,6 +5864,7 @@ final class ImportAdminPage {
 			'source.fetching',
 			'github.git_queued',
 			'github.git_fetching',
+			'github.fetch_queued',
 		);
 		return in_array( $type, $status_types, true );
 	}
@@ -5859,12 +5958,33 @@ final class ImportAdminPage {
 	/**
 	 * Renders a per-stage activity log under the active checklist row.
 	 *
-	 * @param array<int,array<string,mixed>> $events   Stage events.
-	 * @param array<string,mixed>            $progress Session progress block.
+	 * @param array<int,array<string,mixed>> $events         Stage events.
+	 * @param array<string,mixed>            $progress       Session progress block.
+	 * @param string                         $current_action Current-action sentence; rows that restate it are dropped.
 	 * @return void
 	 */
-	private function render_stage_activity_log( array $events, array $progress ) {
+	private function render_stage_activity_log( array $events, array $progress, $current_action = '' ) {
 		$rows = $this->dedup_events( $events, $progress );
+
+		// Final pass: drop rows whose text duplicates the current-action line.
+		// dedup_events already filters diagnostic noise and pure-status
+		// placeholders, but a row can still semantically restate the live
+		// current_action — e.g. "GitHub repository fetch queued; file count
+		// will appear after discovery." beside a "Queued to fetch GitHub
+		// repository files." current-action sentence — and surface as a
+		// second copy of one fact. Hide the entire panel when no rows remain.
+		$current_action = (string) $current_action;
+		if ( '' !== $current_action && ! empty( $rows ) ) {
+			$rows = array_values(
+				array_filter(
+					$rows,
+					function ( $row ) use ( $current_action ) {
+						return ! $this->stage_log_row_duplicates_current_action( (string) $row['text'], $current_action );
+					}
+				)
+			);
+		}
+
 		if ( empty( $rows ) ) {
 			return;
 		}
@@ -5879,6 +5999,95 @@ final class ImportAdminPage {
 			</ol>
 		</div>
 		<?php
+	}
+
+	/**
+	 * Returns whether a "This stage so far" row textually restates the live
+	 * current-action sentence. Comparison is on a lowercased token signature so
+	 * "Queued to fetch GitHub repository files." matches "GitHub repository
+	 * fetch queued; file count will appear after discovery." once the
+	 * non-content words and punctuation drop out.
+	 *
+	 * @param string $row_text       Row text.
+	 * @param string $current_action Current-action sentence.
+	 * @return bool
+	 */
+	private function stage_log_row_duplicates_current_action( $row_text, $current_action ) {
+		$row_signature    = $this->stage_log_signature( $row_text );
+		$action_signature = $this->stage_log_signature( $current_action );
+		if ( '' === $row_signature || '' === $action_signature ) {
+			return false;
+		}
+		if ( $row_signature === $action_signature ) {
+			return true;
+		}
+		// Treat as duplicate when one signature is a token-subset of the
+		// other AND they share enough content tokens to be the same fact.
+		$row_tokens    = array_filter( explode( ' ', $row_signature ) );
+		$action_tokens = array_filter( explode( ' ', $action_signature ) );
+		if ( empty( $row_tokens ) || empty( $action_tokens ) ) {
+			return false;
+		}
+		$overlap = array_intersect( $row_tokens, $action_tokens );
+		$smaller = min( count( $row_tokens ), count( $action_tokens ) );
+		return $smaller > 0 && count( $overlap ) / $smaller >= 0.6;
+	}
+
+	/**
+	 * Builds a normalized signature for stage-log duplication checks.
+	 *
+	 * Lowercases, strips punctuation, removes common filler words and digits,
+	 * then sorts the remaining content tokens so word-order differences do
+	 * not defeat the comparison.
+	 *
+	 * @param string $text Text to normalize.
+	 * @return string
+	 */
+	private function stage_log_signature( $text ) {
+		$text = strtolower( (string) $text );
+		$text = preg_replace( '/[^a-z0-9 ]+/u', ' ', $text );
+		$text = preg_replace( '/\s+/', ' ', (string) $text );
+		$text = trim( (string) $text );
+		if ( '' === $text ) {
+			return '';
+		}
+		$filler = array(
+			'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'in', 'on', 'at',
+			'after', 'before', 'with', 'from', 'is', 'are', 'was', 'were', 'be',
+			'will', 'this', 'that', 'these', 'those', 'it', 'so', 'just',
+		);
+		$tokens = array();
+		foreach ( explode( ' ', $text ) as $token ) {
+			if ( '' === $token || in_array( $token, $filler, true ) ) {
+				continue;
+			}
+			if ( ctype_digit( $token ) ) {
+				continue;
+			}
+			$tokens[ $token ] = true;
+		}
+		$tokens = array_keys( $tokens );
+		sort( $tokens );
+		return implode( ' ', $tokens );
+	}
+
+	/**
+	 * Returns whether a confirm-first-party-domains decision is pending on a
+	 * session snapshot.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return bool
+	 */
+	private function is_url_decision_pending( array $session ) {
+		if ( empty( $session['pending_decisions'] ) ) {
+			return false;
+		}
+		foreach ( $session['pending_decisions'] as $decision ) {
+			if ( isset( $decision['key'] ) && 'confirm-first-party-domains' === $decision['key'] ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -5917,7 +6126,25 @@ final class ImportAdminPage {
 	 * @return void
 	 */
 	private function render_stage_decision( array $session, $stage_key ) {
-		if ( 'url_treatment' !== $stage_key || empty( $session['pending_decisions'] ) ) {
+		// URL-treatment decisions are no longer rendered inside the stage row.
+		// See render_hoisted_url_decision() — the card is hoisted to the card
+		// body so the prompt becomes the visual focus instead of being nested
+		// under a row label that restates "URL treatment".
+		unset( $session, $stage_key );
+	}
+
+	/**
+	 * Renders the URL-treatment decision card as its own focal block under the
+	 * Import stages list when a confirm-first-party-domains decision is pending.
+	 * The URL-treatment row in the Import stages list is hidden in that state
+	 * (see dashboard_checklist_pending_url_decision), so this card is the only
+	 * place where "URL treatment" is named while the decision is unresolved.
+	 *
+	 * @param array<string,mixed> $session Session snapshot.
+	 * @return void
+	 */
+	private function render_hoisted_url_decision( array $session ) {
+		if ( empty( $session['pending_decisions'] ) ) {
 			return;
 		}
 
@@ -5933,8 +6160,8 @@ final class ImportAdminPage {
 		}
 
 		?>
-		<div class="universal-importer-stage-decision">
-			<?php $this->render_pending_decisions( $session, false, $url_decisions, true ); ?>
+		<div class="universal-importer-hoisted-decision">
+			<?php $this->render_pending_decisions( $session, false, $url_decisions, false ); ?>
 		</div>
 		<?php
 	}
@@ -6999,18 +7226,26 @@ final class ImportAdminPage {
 		$post_total      = isset( $session['posts']['persisted'] ) ? (int) $session['posts']['persisted'] : 0;
 
 		if ( ! empty( $source_statuses['failed'] ) ) {
+			$failed_source = (int) $source_statuses['failed'];
 			return sprintf(
-				/* translators: %d: failed source item count. */
-				$this->admin_text( '%d source item needs attention.' ),
-				(int) $source_statuses['failed']
+				1 === $failed_source
+					/* translators: %d: failed source item count (singular). */
+					? $this->admin_text( '%d source item needs attention.' )
+					/* translators: %d: failed source item count (plural). */
+					: $this->admin_text( '%d source items need attention.' ),
+				$failed_source
 			);
 		}
 
 		if ( ! empty( $media_statuses['failed'] ) ) {
+			$failed_media = (int) $media_statuses['failed'];
 			return sprintf(
-				/* translators: %d: failed media reference count. */
-				$this->admin_text( '%d media item needs attention.' ),
-				(int) $media_statuses['failed']
+				1 === $failed_media
+					/* translators: %d: failed media reference count (singular). */
+					? $this->admin_text( '%d media item needs attention.' )
+					/* translators: %d: failed media reference count (plural). */
+					: $this->admin_text( '%d media items need attention.' ),
+				$failed_media
 			);
 		}
 
@@ -7064,18 +7299,26 @@ final class ImportAdminPage {
 		}
 
 		if ( ! empty( $source_statuses['failed'] ) ) {
+			$failed_source = (int) $source_statuses['failed'];
 			return sprintf(
-				/* translators: %d: failed source item count. */
-				$this->admin_text( '%d source item failed. The importer will not continue until the source problem is corrected and a new import is started.' ),
-				(int) $source_statuses['failed']
+				1 === $failed_source
+					/* translators: %d: failed source item count (singular). */
+					? $this->admin_text( '%d source item failed. The importer will not continue until the source problem is corrected and a new import is started.' )
+					/* translators: %d: failed source item count (plural). */
+					: $this->admin_text( '%d source items failed. The importer will not continue until the source problem is corrected and a new import is started.' ),
+				$failed_source
 			);
 		}
 
 		if ( ! empty( $media_statuses['failed'] ) ) {
+			$failed_media = (int) $media_statuses['failed'];
 			return sprintf(
-				/* translators: %d: failed media item count. */
-				$this->admin_text( '%d media item failed. Drafts may still exist, but media references need review.' ),
-				(int) $media_statuses['failed']
+				1 === $failed_media
+					/* translators: %d: failed media item count (singular). */
+					? $this->admin_text( '%d media item failed. Drafts may still exist, but media references need review.' )
+					/* translators: %d: failed media item count (plural). */
+					: $this->admin_text( '%d media items failed. Drafts may still exist, but media references need review.' ),
+				$failed_media
 			);
 		}
 
@@ -7228,7 +7471,14 @@ final class ImportAdminPage {
 		);
 
 		if ( 0 < $source_failed ) {
-			$stages[0]['detail'] = sprintf( $this->admin_text( '%d source item failed.' ), $source_failed );
+			$stages[0]['detail'] = sprintf(
+				1 === $source_failed
+					/* translators: %d: failed source item count (singular). */
+					? $this->admin_text( '%d source item failed.' )
+					/* translators: %d: failed source item count (plural). */
+					: $this->admin_text( '%d source items failed.' ),
+				$source_failed
+			);
 			$stages[0]['note']   = $this->dashboard_source_failure_note( $session );
 			$stages[0]['state']  = 'blocked';
 			return $stages;
@@ -7250,18 +7500,30 @@ final class ImportAdminPage {
 			$stages[0]['detail'] = $this->admin_text( 'No source items found.' );
 			$stages[0]['state']  = 'done';
 		} else {
+			$found_template = 1 === $source_total
+				/* translators: %d: source item count (singular). */
+				? $this->admin_text( '%d source item found.' )
+				/* translators: %d: source item count (plural). */
+				: $this->admin_text( '%d source items found.' );
 			if ( 0 < $queued_or_processing ) {
-				$stages[0]['detail'] = sprintf( $this->admin_text( '%d source items found.' ), $source_total );
+				$stages[0]['detail'] = sprintf( $found_template, $source_total );
 				$stages[0]['state']  = 'active';
 				return $stages;
 			}
 
-			$stages[0]['detail'] = sprintf( $this->admin_text( '%d source items found.' ), $source_total );
+			$stages[0]['detail'] = sprintf( $found_template, $source_total );
 			$stages[0]['state']  = 'done';
 		}
 
 		if ( 0 < $source_discovered ) {
-			$stages[1]['detail'] = sprintf( $this->admin_text( 'Preparing %d item.' ), $source_discovered );
+			$stages[1]['detail'] = sprintf(
+				1 === $source_discovered
+					/* translators: %d: items being prepared (singular). */
+					? $this->admin_text( 'Preparing %d item.' )
+					/* translators: %d: items being prepared (plural). */
+					: $this->admin_text( 'Preparing %d items.' ),
+				$source_discovered
+			);
 			$stages[1]['state']  = 'active';
 			return $stages;
 		}
@@ -7272,7 +7534,18 @@ final class ImportAdminPage {
 			return $stages;
 		}
 
-		$stages[1]['detail'] = 0 < $document_total ? sprintf( $this->admin_text( '%d documents ready.' ), $document_total ) : $this->admin_text( 'No importable documents found.' );
+		if ( 0 < $document_total ) {
+			$stages[1]['detail'] = sprintf(
+				1 === $document_total
+					/* translators: %d: prepared document count (singular). */
+					? $this->admin_text( '%d document ready.' )
+					/* translators: %d: prepared document count (plural). */
+					: $this->admin_text( '%d documents ready.' ),
+				$document_total
+			);
+		} else {
+			$stages[1]['detail'] = $this->admin_text( 'No importable documents found.' );
+		}
 		$stages[1]['state']  = 'done';
 
 		if ( $has_decision ) {
@@ -7285,18 +7558,43 @@ final class ImportAdminPage {
 		$stages[2]['state']  = 'done';
 
 		if ( 0 < $media_failed ) {
-			$stages[3]['detail'] = sprintf( $this->admin_text( '%d media item failed.' ), $media_failed );
+			$stages[3]['detail'] = sprintf(
+				1 === $media_failed
+					/* translators: %d: failed media count (singular). */
+					? $this->admin_text( '%d media item failed.' )
+					/* translators: %d: failed media count (plural). */
+					: $this->admin_text( '%d media items failed.' ),
+				$media_failed
+			);
 			$stages[3]['state']  = 'blocked';
 			return $stages;
 		}
 
 		if ( 0 < $media_open ) {
-			$stages[3]['detail'] = sprintf( $this->admin_text( '%d media items queued.' ), $media_open );
+			$stages[3]['detail'] = sprintf(
+				1 === $media_open
+					/* translators: %d: queued media count (singular). */
+					? $this->admin_text( '%d media item queued.' )
+					/* translators: %d: queued media count (plural). */
+					: $this->admin_text( '%d media items queued.' ),
+				$media_open
+			);
 			$stages[3]['state']  = 'active';
 			return $stages;
 		}
 
-		$stages[3]['detail'] = 0 < $media_total ? sprintf( $this->admin_text( '%d media items imported.' ), $media_total ) : $this->admin_text( 'No media found.' );
+		if ( 0 < $media_total ) {
+			$stages[3]['detail'] = sprintf(
+				1 === $media_total
+					/* translators: %d: imported media count (singular). */
+					? $this->admin_text( '%d media item imported.' )
+					/* translators: %d: imported media count (plural). */
+					: $this->admin_text( '%d media items imported.' ),
+				$media_total
+			);
+		} else {
+			$stages[3]['detail'] = $this->admin_text( 'No media found.' );
+		}
 		$stages[3]['state']  = 'done';
 
 		if ( $is_dry_run ) {
