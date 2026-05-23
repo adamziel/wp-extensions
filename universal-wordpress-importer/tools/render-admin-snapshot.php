@@ -39,6 +39,18 @@ if ( ! function_exists( '__' ) ) {
 if ( ! function_exists( 'admin_url' ) ) {
 	function admin_url( $path = '' ) { return 'https://example.test/wp-admin/' . ltrim( (string) $path, '/' ); }
 }
+if ( ! function_exists( 'home_url' ) ) {
+	function home_url( $path = '/' ) { return 'https://my-blog.example/' . ltrim( (string) $path, '/' ); }
+}
+if ( ! function_exists( 'wp_parse_url' ) ) {
+	function wp_parse_url( $url, $component = -1 ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- Snapshot tool shim.
+		return -1 === $component ? parse_url( (string) $url ) : parse_url( (string) $url, $component );
+	}
+}
+if ( ! function_exists( '_n' ) ) {
+	function _n( $single, $plural, $count, $domain = null ) { return 1 === (int) $count ? $single : $plural; }
+}
 if ( ! function_exists( 'wp_die' ) ) {
 	function wp_die( $message = '', $title = '', $args = array() ) { echo $message; exit; }
 }
@@ -271,7 +283,10 @@ if ( $inject_running ) {
 
 	if ( 'stage-3-decision' === $scenario ) {
 		// URL-treatment decision is pending; show the new per-host UI with
-		// a realistic mix of GitHub-flavored domains.
+		// a realistic mix of GitHub-flavored domains. Source is a GitHub repo
+		// so the inferred-primary path can light up github.com (and, if
+		// present, the matching GitHub Pages host).
+		$fake_session['source'] = 'https://github.com/WordPress/gutenberg/tree/trunk/docs';
 		$fake_session['pending_decisions'] = array(
 			array(
 				'key'     => 'confirm-first-party-domains',

@@ -717,6 +717,7 @@ final class ImportAdminPage {
 			'nonce'              => $nonce,
 			'sessions'           => null === $primary_session ? array() : array( $primary_session ),
 			'primary_session_id' => null === $primary_session ? '' : (string) $primary_session['id'],
+			'home_host'          => $this->admin_home_host(),
 		);
 
 		?>
@@ -1892,7 +1893,6 @@ final class ImportAdminPage {
 			}
 			.universal-importer-step span {
 				color: var(--ui-muted);
-				display: inline;
 				font-size: 12px;
 				margin-top: 0;
 			}
@@ -2201,39 +2201,109 @@ final class ImportAdminPage {
 			}
 			.universal-importer-domain-list {
 				display: grid;
-				gap: 4px;
-				margin: 8px 0;
-			}
-			.universal-importer-domain-list label {
-				align-items: flex-start;
-				border-top: 1px dotted var(--ui-rule);
-				display: flex;
-				gap: 8px;
-				margin: 0;
-				padding: 8px 0;
-			}
-			.universal-importer-domain-list label:first-of-type {
-				border-top: 0;
-			}
-			.universal-importer-domain-list input {
-				margin-top: 2px;
-			}
-			.universal-importer-domain-list strong {
-				display: block;
-				font-family: ui-monospace, Menlo, monospace;
-				font-size: 13px;
-			}
-			.universal-importer-domain-list .universal-importer-hint {
-				font-family: ui-monospace, Menlo, monospace;
-				font-size: 12px;
-				word-break: break-all;
+				gap: 6px;
+				margin: 10px 0;
 			}
 			.universal-importer-domain-row {
+				align-items: center;
+				display: grid;
+				grid-template-columns: auto 1fr auto;
+				gap: 10px;
+				padding: 8px 0;
+			}
+			.universal-importer-domain-row + .universal-importer-domain-row {
+				border-top: 1px dotted var(--ui-rule);
+			}
+			.universal-importer-domain-row.is-primary {
+				background: #fff8e6;
+				border: 1px solid var(--ui-rule);
+				border-radius: 6px;
+				padding: 10px 12px;
+			}
+			.universal-importer-domain-row.is-primary + .universal-importer-domain-row.is-primary {
+				border-top: 1px solid var(--ui-rule);
+			}
+			.universal-importer-domain-toggle {
+				align-items: center;
 				cursor: pointer;
+				display: inline-flex;
+				margin: 0;
+			}
+			.universal-importer-domain-toggle input {
+				margin: 0;
+			}
+			.universal-importer-domain-fromto {
+				align-items: center;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 6px;
+				min-width: 0;
+			}
+			.universal-importer-domain-input {
+				background: #fff;
+				border: 1px solid var(--ui-rule);
+				border-radius: 4px;
+				color: var(--ui-ink);
+				font-family: ui-monospace, Menlo, monospace;
+				font-size: 13px;
+				min-width: 0;
+				padding: 4px 8px;
+				width: 220px;
+				max-width: 100%;
+			}
+			.universal-importer-domain-input:focus {
+				border-color: var(--ui-accent);
+				outline: 2px solid var(--ui-soft);
+				outline-offset: 0;
+			}
+			.universal-importer-domain-arrow {
+				color: var(--ui-muted);
+				font-size: 14px;
+			}
+			.universal-importer-domain-meta {
+				color: var(--ui-muted);
+				display: grid;
+				font-size: 12px;
+				gap: 2px;
+				justify-items: end;
+				text-align: right;
+				white-space: nowrap;
+			}
+			.universal-importer-domain-meta .universal-importer-hint {
+				font-family: ui-monospace, Menlo, monospace;
+				font-size: 11px;
+				max-width: 280px;
+				overflow: hidden;
+				text-overflow: ellipsis;
 			}
 			.universal-importer-domain-count {
 				color: var(--ui-muted);
 				font-size: 12px;
+			}
+			.universal-importer-domain-disclosure {
+				background: transparent;
+				border: 0;
+				color: var(--ui-muted);
+				cursor: pointer;
+				font-size: 12px;
+				font-weight: 600;
+				padding: 6px 0 2px;
+				text-align: left;
+				text-decoration: underline;
+				text-underline-offset: 3px;
+			}
+			.universal-importer-domain-disclosure:hover {
+				color: var(--ui-ink);
+			}
+			.universal-importer-domain-extras {
+				display: grid;
+				gap: 4px;
+			}
+			.universal-importer-domain-extras[hidden] {
+				display: none;
+			}
+			.universal-importer-decision-headline {
+				margin: 4px 0;
 			}
 			.universal-importer-decision-actions .button[disabled],
 			.universal-importer-decision-actions .button.is-disabled {
@@ -3895,11 +3965,9 @@ final class ImportAdminPage {
 				html += '</p></div>';
 				html += '</div><div class="universal-importer-card-body">';
 				html += '<div class="universal-importer-progressbar' + progressClass + '" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + percent + '"><span style="width:' + percent + '%"></span></div>';
-				// Drop the current-action line while a decision is pending —
-				// the hoisted decision card heading speaks the same fact.
-				if (!hasPendingDecision) {
-					html += '<p class="universal-importer-current-action">' + escapeHtml(dashboard.current_action || '<?php echo esc_js( __( 'Checking import state.', 'universal-wordpress-importer' ) ); ?>') + '</p>';
-				}
+				// The current-action sentence is rendered inside the active
+				// stage row (see renderChecklist), so it does not also appear
+				// here above the stage list.
 				if (summary.errors) {
 					var errorTemplate = (summary.errors === 1)
 						? '<?php echo esc_js( __( '%d error', 'universal-wordpress-importer' ) ); ?>'
@@ -3938,13 +4006,13 @@ final class ImportAdminPage {
 					return '';
 				}
 				// When a confirm-first-party-domains decision is pending the
-				// URL-treatment row drops out of the stage list; the hoisted
-				// decision card (see renderHoistedUrlDecision) is the single
-				// visible place that names "URL treatment" until the decision
-				// is resolved.
+				// entire stage list disappears — the hoisted decision card is
+				// the single thing the user sees so the choice gets full
+				// attention.
 				if (urlDecisions(session).length) {
-					items = items.filter(function(it) { return it.key !== 'url_treatment'; });
+					return '';
 				}
+				var currentAction = (session.dashboard && session.dashboard.current_action) || '';
 				// Find the index of the active/blocked stage so we can fold
 				// the noisy "Not started" rows away by default. Fall back to
 				// the last completed stage if nothing is currently active.
@@ -3982,17 +4050,31 @@ final class ImportAdminPage {
 					if (state === 'done') { rowClasses.push('is-done-row'); }
 					if (isCollapsible) { rowClasses.push('is-collapsible'); }
 					var stateBadge = '';
-					if (state !== 'pending') {
+					if (state === 'done') {
 						stateBadge = '<span class="universal-importer-step-state">' + escapeHtml(checklistStateLabel(state)) + '</span>';
 					} else if (isNextRow) {
 						stateBadge = '<span class="universal-importer-step-state universal-importer-step-next"><?php echo esc_js( __( 'Up next', 'universal-wordpress-importer' ) ); ?></span>';
 					}
 					var indexLabel = state === 'done' ? '✓' : (item.index || '');
+					// Active row: heading sentence is the current-action line.
+					// This collapses the "Read source / Fetching repository files
+					// with sparse Git." duplication into one in-progress sentence.
+					var headingLabel = item.label || '';
+					if (isActiveRow && currentAction) {
+						headingLabel = currentAction;
+					}
 					var itemHtml = '<li class="' + rowClasses.join(' ') + '" data-state="' + escapeHtml(state) + '"' + (isCollapsible ? ' hidden' : '') + '>';
 					itemHtml += '<span class="universal-importer-stage-index" aria-hidden="true">' + escapeHtml(indexLabel) + '</span>';
-					itemHtml += '<span class="universal-importer-step-body"><span class="universal-importer-step-heading"><strong>' + escapeHtml(item.label || '') + '</strong>' + stateBadge + '</span>';
-					if (item.detail) {
-						itemHtml += '<span class="universal-importer-step-detail">' + escapeHtml(item.detail) + '</span>';
+					itemHtml += '<span class="universal-importer-step-body"><span class="universal-importer-step-heading"><strong>' + escapeHtml(headingLabel) + '</strong>' + stateBadge + '</span>';
+					var detailText = item.detail || '';
+					// Active row: the heading is the current-action sentence and
+					// "This stage so far" surfaces granular counts. A detail line
+					// here would only restate one of those.
+					if (isActiveRow) {
+						detailText = '';
+					}
+					if (detailText) {
+						itemHtml += '<span class="universal-importer-step-detail">' + escapeHtml(detailText) + '</span>';
 					}
 					if (item.note) {
 						itemHtml += '<span class="universal-importer-stage-note">' + escapeHtml(item.note) + '</span>';
@@ -4378,9 +4460,6 @@ final class ImportAdminPage {
 					html += '</div>';
 				} else if (policy.mode === 'preserve') {
 					html += '<strong>' + escapeHtml('<?php echo esc_js( __( 'Keeping all URLs unchanged.', 'universal-wordpress-importer' ) ); ?>') + '</strong>';
-					if (policy.persistent) {
-						html += ' <span class="universal-importer-url-policy-hint">' + escapeHtml('<?php echo esc_js( __( 'Don’t ask again is on.', 'universal-wordpress-importer' ) ); ?>') + '</span>';
-					}
 				}
 				html += '</div>';
 				return html;
@@ -4520,40 +4599,95 @@ final class ImportAdminPage {
 			}
 
 			function renderUrlDecision(session, decision) {
-				var domains = decision.options && decision.options.domains ? decision.options.domains : [];
+				var domains = (decision.options && decision.options.domains ? decision.options.domains : []).slice();
 				var examples = decision.options && decision.options.examples ? decision.options.examples : {};
 				var counts = decision.options && decision.options.counts ? decision.options.counts : {};
-				var defaults = decision.options && decision.options.defaults ? decision.options.defaults : null;
-				var html = '<p><strong><?php echo esc_js( __( 'Rewrite old-site URLs to this site?', 'universal-wordpress-importer' ) ); ?></strong></p>';
-				html += '<p class="description"><?php echo esc_js( __( 'Selected hosts move to this site and keep the same paths. Unselected hosts stay unchanged.', 'universal-wordpress-importer' ) ); ?></p>';
-				html += '<div class="universal-importer-domain-list" data-decision-domain-list>';
-				domains.forEach(function(domain) {
+				var sourceUrl = (session && session.source) || '';
+				var homeHost = (config && config.home_host) || '';
+				var primaryHosts = inferPrimaryDomains(sourceUrl, domains);
+				if (!primaryHosts.length && domains.length) {
+					var best = String(domains[0]);
+					var bestCount = Number(counts[best] || 0);
+					domains.forEach(function(d) {
+						var c = Number(counts[d] || 0);
+						if (c > bestCount) { best = String(d); bestCount = c; }
+					});
+					primaryHosts = [best];
+				}
+				var primarySet = {};
+				primaryHosts.forEach(function(d) { primarySet[d] = true; });
+				var additional = domains.filter(function(d) { return !primarySet[d]; });
+
+				function renderRow(domain, isPrimary) {
 					var domainExamples = examples[domain] || [];
-					var defaultChecked = defaults && defaults.hasOwnProperty(domain) ? !!defaults[domain] : true;
-					var countLabel = '';
-					if (counts && counts[domain]) {
-						countLabel = ' · ' + counts[domain] + ' <?php echo esc_js( __( 'URLs found', 'universal-wordpress-importer' ) ); ?>';
+					var count = Number(counts[domain] || 0);
+					var s = '<div class="universal-importer-domain-row' + (isPrimary ? ' is-primary' : '') + '">';
+					s += '<label class="universal-importer-domain-toggle">';
+					s += '<input type="checkbox" class="universal-importer-decision-domain" value="' + escapeHtml(domain) + '"' + (isPrimary ? ' checked' : '') + '>';
+					s += '<span class="screen-reader-text">' + escapeHtml(domain) + '</span>';
+					s += '</label>';
+					s += '<span class="universal-importer-domain-fromto">';
+					s += '<input type="text" class="universal-importer-domain-input" data-domain-from value="' + escapeHtml(domain) + '" aria-label="<?php echo esc_js( __( 'Source domain', 'universal-wordpress-importer' ) ); ?>">';
+					s += '<span class="universal-importer-domain-arrow" aria-hidden="true">&rarr;</span>';
+					s += '<input type="text" class="universal-importer-domain-input" data-domain-to value="' + escapeHtml(homeHost) + '" aria-label="<?php echo esc_js( __( 'This site', 'universal-wordpress-importer' ) ); ?>">';
+					s += '</span>';
+					if (count > 0 || domainExamples.length) {
+						s += '<span class="universal-importer-domain-meta">';
+						if (count > 0) {
+							var template = (count === 1)
+								? '<?php echo esc_js( __( '%d URL found', 'universal-wordpress-importer' ) ); ?>'
+								: '<?php echo esc_js( __( '%d URLs found', 'universal-wordpress-importer' ) ); ?>';
+							s += '<span class="universal-importer-domain-count">' + escapeHtml(template.replace('%d', String(count))) + '</span>';
+						}
+						if (domainExamples.length) {
+							s += '<span class="universal-importer-hint">' + escapeHtml(domainExamples[0]) + '</span>';
+						}
+						s += '</span>';
 					}
-					html += '<label class="universal-importer-domain-row">';
-					html += '<input type="checkbox" class="universal-importer-decision-domain" value="' + escapeHtml(domain) + '"' + (defaultChecked ? ' checked' : '') + '>';
-					html += '<span>';
-					html += '<strong>' + escapeHtml(domain) + '</strong>';
-					if (countLabel) {
-						html += '<span class="universal-importer-domain-count">' + countLabel + '</span>';
-					}
-					if (domainExamples.length) {
-						html += '<span class="universal-importer-hint">' + escapeHtml(domainExamples[0]) + '</span>';
-					}
-					html += '</span>';
-					html += '</label>';
-				});
+					s += '</div>';
+					return s;
+				}
+
+				var html = '<p class="universal-importer-decision-headline"><strong><?php echo esc_js( __( 'Rewrite URLs found in the imported content?', 'universal-wordpress-importer' ) ); ?></strong></p>';
+				html += '<p class="description"><?php echo esc_js( __( 'These domains looked like the source site. Selected rows have their URLs rewritten to point at this site; the rest are left unchanged.', 'universal-wordpress-importer' ) ); ?></p>';
+				html += '<div class="universal-importer-domain-list" data-decision-domain-list>';
+				primaryHosts.forEach(function(d) { html += renderRow(d, true); });
+				if (additional.length) {
+					var disclosureTemplate = (additional.length === 1)
+						? '<?php echo esc_js( __( 'Review %d more domain found in the content', 'universal-wordpress-importer' ) ); ?>'
+						: '<?php echo esc_js( __( 'Review %d more domains found in the content', 'universal-wordpress-importer' ) ); ?>';
+					html += '<button type="button" class="universal-importer-domain-disclosure" data-action="toggle-domain-extras" aria-expanded="false">' + escapeHtml(disclosureTemplate.replace('%d', String(additional.length))) + '</button>';
+					html += '<div class="universal-importer-domain-extras" data-domain-extras hidden>';
+					additional.forEach(function(d) { html += renderRow(d, false); });
+					html += '</div>';
+				}
 				html += '</div>';
 				html += '<p class="universal-importer-decision-actions">';
-				html += '<button type="button" class="button button-primary universal-importer-resolve-decision" data-url-choice="selected" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '" data-primary-action><?php echo esc_js( __( 'Rewrite selected', 'universal-wordpress-importer' ) ); ?> <span data-selected-count>(0)</span></button> ';
-				html += '<button type="button" class="button universal-importer-resolve-decision" data-url-choice="none" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '"><?php echo esc_js( __( 'Keep all URLs as-is', 'universal-wordpress-importer' ) ); ?></button> ';
-				html += '<button type="button" class="button universal-importer-resolve-decision is-quiet" data-url-choice="never" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '" title="<?php echo esc_attr__( 'Apply preserve mode for the rest of this session and skip future prompts.', 'universal-wordpress-importer' ); ?>"><?php echo esc_js( __( 'Don’t ask again — keep all', 'universal-wordpress-importer' ) ); ?></button>';
+				html += '<button type="button" class="button button-primary universal-importer-resolve-decision" data-url-choice="selected" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '" data-primary-action><?php echo esc_js( __( 'Rewrite these', 'universal-wordpress-importer' ) ); ?> <span data-selected-count>(' + primaryHosts.length + ')</span></button>';
+				html += '<button type="button" class="button universal-importer-resolve-decision" data-url-choice="none" data-session-id="' + escapeHtml(session.id) + '" data-decision-key="' + escapeHtml(decision.key) + '"><?php echo esc_js( __( 'Keep all URLs as-is', 'universal-wordpress-importer' ) ); ?></button>';
 				html += '</p>';
 				return html;
+			}
+
+			function inferPrimaryDomains(sourceUrl, discovered) {
+				var primary = [];
+				if (!sourceUrl) { return primary; }
+				var parsed;
+				try { parsed = new URL(sourceUrl); } catch (e) { return primary; }
+				var host = parsed.host || '';
+				if (host && discovered.indexOf(host) !== -1) {
+					primary.push(host);
+				}
+				if (host === 'github.com') {
+					var seg = (parsed.pathname || '').split('/').filter(Boolean);
+					if (seg.length) {
+						var pagesHost = seg[0].toLowerCase() + '.github.io';
+						if (discovered.indexOf(pagesHost) !== -1 && primary.indexOf(pagesHost) === -1) {
+							primary.push(pagesHost);
+						}
+					}
+				}
+				return primary;
 			}
 
 			function getDecisionAnswerTemplate(decision) {
@@ -4610,7 +4744,6 @@ final class ImportAdminPage {
 						emptyProgress.style.display = 'none';
 					}
 					refreshAllDecisionCounts(sessions);
-					autoResolvePersistentUrlPolicy(primary);
 				} else {
 					sessions.innerHTML = '';
 					sessions.classList.add('is-empty');
@@ -4721,7 +4854,6 @@ final class ImportAdminPage {
 
 				request(action, payload).then(function(session) {
 					upsertSession(session);
-					showNotice('<?php echo esc_js( __( 'Import started.', 'universal-wordpress-importer' ) ); ?>', 'success');
 					startKeepalive(session.id);
 					tick();
 				}).catch(function(error) {
@@ -4828,27 +4960,8 @@ final class ImportAdminPage {
 				Array.prototype.slice.call(nodes).forEach(updateDecisionPrimaryCount);
 			}
 
-			// Auto-resolve future URL prompts if the user previously chose
-			// "don't ask again" for this session.
-			function autoResolvePersistentUrlPolicy(session) {
-				if (!session || !session.id) { return false; }
-				var policy = readUrlPolicy(session.id);
-				if (!policy || !policy.persistent || policy.mode !== 'preserve') { return false; }
-				var hasUrlDecision = (session.pending_decisions || []).some(function(d) { return d && d.key === 'confirm-first-party-domains'; });
-				if (!hasUrlDecision) { return false; }
-				// Resolve silently using the same AJAX surface — confirmed_domains
-				// empty means "preserve". The backend handler accepts this shape.
-				request('<?php echo esc_js( self::AJAX_DECIDE ); ?>', {
-					session_id: session.id,
-					decision_key: 'confirm-first-party-domains',
-					url_rewrite_choice: 'none',
-					confirmed_domains: ''
-				}).then(function(updated) {
-					upsertSession(updated);
-					tick();
-				}).catch(function() { /* ignore — user can still resolve manually */ });
-				return true;
-			}
+			// (Persistent "don't ask again" URL policy auto-resolution was
+			// removed — the secondary button no longer exists.)
 
 			sessions.addEventListener('change', function(event) {
 				if (event.target && event.target.classList && event.target.classList.contains('universal-importer-decision-domain')) {
@@ -4876,6 +4989,21 @@ final class ImportAdminPage {
 					}
 					return;
 				}
+				var domainDisclosure = event.target.closest ? event.target.closest('.universal-importer-domain-disclosure') : null;
+				if (domainDisclosure) {
+					event.preventDefault();
+					var expandedDomains = domainDisclosure.getAttribute('aria-expanded') === 'true';
+					domainDisclosure.setAttribute('aria-expanded', expandedDomains ? 'false' : 'true');
+					var extras = domainDisclosure.parentNode ? domainDisclosure.parentNode.querySelector('[data-domain-extras]') : null;
+					if (extras) {
+						if (expandedDomains) {
+							extras.setAttribute('hidden', '');
+						} else {
+							extras.removeAttribute('hidden');
+						}
+					}
+					return;
+				}
 				if (event.target.classList.contains('universal-importer-start-over')) {
 					if (form && form.classList) {
 						form.classList.remove('is-hidden');
@@ -4894,12 +5022,7 @@ final class ImportAdminPage {
 					}
 					var button = event.target;
 					var decision = button.closest('.universal-importer-decision');
-					var rawChoice = button.getAttribute('data-url-choice') || 'selected';
-					// 'never' is the don't-ask-again flavor — it resolves THIS prompt
-					// as 'none' AND sets a session-wide preserve policy so future
-					// prompts in this run auto-resolve client-side.
-					var persistent = rawChoice === 'never';
-					var apiChoice = persistent ? 'none' : rawChoice;
+					var apiChoice = button.getAttribute('data-url-choice') || 'selected';
 					var data = {
 						session_id: button.getAttribute('data-session-id'),
 						decision_key: button.getAttribute('data-decision-key'),
@@ -4908,26 +5031,34 @@ final class ImportAdminPage {
 					var domainCheckboxes = decision.querySelectorAll('.universal-importer-decision-domain');
 					var answer = decision.querySelector('.universal-importer-decision-answer');
 					var selectedDomains = [];
+					var domainMap = [];
 					if (domainCheckboxes.length) {
 						Array.prototype.slice.call(domainCheckboxes).forEach(function(input) {
+							var row = input.closest('.universal-importer-domain-row') || input.parentNode;
+							var fromInput = row && row.querySelector ? row.querySelector('[data-domain-from]') : null;
+							var toInput = row && row.querySelector ? row.querySelector('[data-domain-to]') : null;
+							var fromValue = fromInput && fromInput.value ? fromInput.value.trim() : input.value;
+							var toValue = toInput && toInput.value ? toInput.value.trim() : '';
+							if (!fromValue) { return; }
 							if (apiChoice === 'all' || (apiChoice === 'selected' && input.checked)) {
-								selectedDomains.push(input.value);
+								selectedDomains.push(fromValue);
+								if (toValue) {
+									domainMap.push(fromValue + '=>' + toValue);
+								}
 							}
 						});
 						data.confirmed_domains = apiChoice === 'none' ? '' : selectedDomains.join(', ');
+						if (apiChoice !== 'none' && domainMap.length) {
+							data.confirmed_domain_map = domainMap.join('|');
+						}
 					}
 					if (answer) {
 						data.answer = answer.value;
 					}
-					// Persist the chosen policy for the rest of the run so the
-					// "rewriting these" chips remain visible after the panel
-					// disappears, and so future prompts can auto-resolve when
-					// the user opted out persistently.
 					writeUrlPolicy(data.session_id, {
 						resolved: true,
 						mode: apiChoice === 'none' ? 'preserve' : 'rewrite',
-						domains: apiChoice === 'none' ? [] : selectedDomains,
-						persistent: persistent
+						domains: apiChoice === 'none' ? [] : selectedDomains
 					});
 					request('<?php echo esc_js( self::AJAX_DECIDE ); ?>', data).then(function(session) {
 						upsertSession(session);
@@ -5434,17 +5565,12 @@ final class ImportAdminPage {
 						<span style="width:<?php echo esc_attr( (string) $percentage ); ?>%"></span>
 					</div>
 					<?php
-					// Suppress the current-action line when a decision is pending:
-					// the decision card heading speaks the same fact ("URL treatment")
-					// and a separate "Choose URL treatment to continue." line would
-					// just restate it. Otherwise the current-action line is the only
-					// running-state sentence shown above the stage list.
+					// The current-action sentence used to render here as a
+					// standalone line above the stage list. It now lives inside
+					// the active stage row (see render_dashboard_checklist), so
+					// the user sees one in-progress box rather than the same
+					// fact repeated above and below the progress bar.
 					$has_pending_decision = ! empty( $session['pending_decisions'] );
-					if ( ! $has_pending_decision ) :
-						?>
-						<p class="universal-importer-current-action"><?php echo esc_html( $current_action ); ?></p>
-						<?php
-					endif;
 					if ( 0 < $errors ) :
 						?>
 						<p class="universal-importer-meta universal-importer-progress-line">
@@ -5502,20 +5628,11 @@ final class ImportAdminPage {
 			return;
 		}
 
-		// When a confirm-first-party-domains decision is pending the URL-treatment
-		// row drops out of the stage list — the hoisted decision card (see
-		// render_hoisted_url_decision) is the single visible place that names
-		// the stage while the decision is unresolved.
-		$hide_url_treatment_row = $this->is_url_decision_pending( $session );
-		if ( $hide_url_treatment_row ) {
-			$items = array_values(
-				array_filter(
-					$items,
-					function ( $item ) {
-						return ! ( isset( $item['key'] ) && 'url_treatment' === $item['key'] );
-					}
-				)
-			);
+		// When the URL-treatment decision is pending, the entire stage list
+		// and its supporting chrome disappear. The hoisted decision card is
+		// the only thing the user should see — full attention on the choice.
+		if ( $this->is_url_decision_pending( $session ) ) {
+			return;
 		}
 
 		$active_index = -1;
@@ -5556,10 +5673,10 @@ final class ImportAdminPage {
 		<ol class="universal-importer-checklist" aria-label="<?php echo esc_attr__( 'Import stages', 'universal-wordpress-importer' ); ?>">
 			<?php foreach ( $items as $idx => $item ) : ?>
 				<?php
-				$state          = isset( $item['state'] ) ? (string) $item['state'] : 'pending';
-				$row_classes    = array( 'universal-importer-step' );
-				$is_active_row  = ( $idx === $active_index ) && ( 'active' === $state || 'blocked' === $state );
-				$is_next_row    = ( $idx === $next_index ) && 'pending' === $state;
+				$state         = isset( $item['state'] ) ? (string) $item['state'] : 'pending';
+				$row_classes   = array( 'universal-importer-step' );
+				$is_active_row = ( $idx === $active_index ) && ( 'active' === $state || 'blocked' === $state );
+				$is_next_row   = ( $idx === $next_index ) && 'pending' === $state;
 				// Done rows stay visible as a compact one-liner so prior stages
 				// remain glanceable; only noisy pending rows fold behind disclosure.
 				$is_collapsible = ! $is_active_row && ! $is_next_row && 'done' !== $state;
@@ -5585,14 +5702,36 @@ final class ImportAdminPage {
 					<span class="universal-importer-stage-index" aria-hidden="true"><?php echo 'done' === $state ? '&#x2713;' : esc_html( isset( $item['index'] ) ? $item['index'] : '' ); ?></span>
 					<span class="universal-importer-step-body">
 						<span class="universal-importer-step-heading">
-							<strong><?php echo esc_html( isset( $item['label'] ) ? $item['label'] : '' ); ?></strong>
-							<?php if ( 'pending' !== $state ) : ?>
+							<?php
+							// Active stage row: the heading becomes the current-action
+							// sentence ("Fetching repository files with sparse Git.")
+							// instead of the stage label ("Read source"). This is the
+							// single in-progress sentence — no separate stage label
+							// above it, no separate action line below.
+							$heading_label = isset( $item['label'] ) ? (string) $item['label'] : '';
+							if ( $is_active_row && '' !== $current_action ) {
+								$heading_label = $current_action;
+							}
+							?>
+							<strong><?php echo esc_html( $heading_label ); ?></strong>
+							<?php if ( 'done' === $state ) : ?>
 								<span class="universal-importer-step-state"><?php echo esc_html( $this->dashboard_stage_status_label( $state ) ); ?></span>
 							<?php elseif ( $is_next_row ) : ?>
 								<span class="universal-importer-step-state universal-importer-step-next"><?php esc_html_e( 'Up next', 'universal-wordpress-importer' ); ?></span>
 							<?php endif; ?>
 						</span>
-						<?php $detail = isset( $item['detail'] ) ? (string) $item['detail'] : ''; ?>
+						<?php
+						$detail = isset( $item['detail'] ) ? (string) $item['detail'] : '';
+						// In the active row the heading already speaks the current
+						// action and the "This stage so far" log surfaces granular
+						// counts. A separate detail line below the heading just
+						// restates the same fact in a less specific form (e.g.
+						// "Preparing imported content." + "Preparing 112 items.").
+						// Drop it.
+						if ( $is_active_row ) {
+							$detail = '';
+						}
+						?>
 						<?php if ( '' !== $detail ) : ?>
 							<span class="universal-importer-step-detail"><?php echo esc_html( $detail ); ?></span>
 						<?php endif; ?>
@@ -5604,8 +5743,8 @@ final class ImportAdminPage {
 						<?php endif; ?>
 						<?php
 						if ( $is_active_row && isset( $item['key'] ) ) {
-							$stage_key      = (string) $item['key'];
-							$stage_events   = isset( $stage_buckets[ $stage_key ] ) ? $stage_buckets[ $stage_key ] : array();
+							$stage_key    = (string) $item['key'];
+							$stage_events = isset( $stage_buckets[ $stage_key ] ) ? $stage_buckets[ $stage_key ] : array();
 							$this->render_stage_activity_log( $stage_events, $progress, $current_action );
 						}
 						?>
@@ -5683,23 +5822,23 @@ final class ImportAdminPage {
 	 */
 	private function boilerplate_event_types() {
 		return array(
-			'document.prepared'         => true,
-			'document.html_complete'    => true,
+			'document.prepared'          => true,
+			'document.html_complete'     => true,
 			'document.markdown_complete' => true,
-			'document.epub_complete'    => true,
-			'document.text_complete'    => true,
+			'document.epub_complete'     => true,
+			'document.text_complete'     => true,
 			'document.pdf_text_complete' => true,
-			'document.wxr_complete'     => true,
+			'document.wxr_complete'      => true,
 			'document.wxr_post_prepared' => true,
-			'media.attachment_created'  => true,
-			'media.attachment_reused'   => true,
-			'media.reference_queued'    => true,
-			'media.reference_rewritten' => true,
-			'url.rewritten'             => true,
-			'post.created'              => true,
-			'post.updated'              => true,
-			'comment.created'           => true,
-			'comment.updated'           => true,
+			'media.attachment_created'   => true,
+			'media.attachment_reused'    => true,
+			'media.reference_queued'     => true,
+			'media.reference_rewritten'  => true,
+			'url.rewritten'              => true,
+			'post.created'               => true,
+			'post.updated'               => true,
+			'comment.created'            => true,
+			'comment.updated'            => true,
 		);
 	}
 
@@ -5771,7 +5910,7 @@ final class ImportAdminPage {
 	 * @return string
 	 */
 	private function semantic_group_for_event_type( $type ) {
-		$type = (string) $type;
+		$type                  = (string) $type;
 		$source_fetching_types = array(
 			'source.queued',
 			'source.fetching',
@@ -5915,11 +6054,11 @@ final class ImportAdminPage {
 				);
 				$order[]        = $key;
 			}
-			$groups[ $key ]['count']++;
+			++$groups[ $key ]['count'];
 			$groups[ $key ]['latest'] = $message;
 			$groups[ $key ]['type']   = $type;
 		}
-		$rows = array();
+		$rows           = array();
 		$document_types = array(
 			'document.prepared',
 			'document.html_complete',
@@ -5935,7 +6074,10 @@ final class ImportAdminPage {
 			if ( ! empty( $g['is_semantic'] ) ) {
 				// Latest phrasing wins; never multiply (semantic groups speak
 				// in a single voice).
-				$rows[] = array( 'text' => $g['latest'], 'count' => $g['count'] );
+				$rows[] = array(
+					'text'  => $g['latest'],
+					'count' => $g['count'],
+				);
 				continue;
 			}
 			$template = $g['is_boilerplate'] ? $this->template_for_event_type( $g['type'] ) : '';
@@ -5943,14 +6085,23 @@ final class ImportAdminPage {
 				$uses_total = in_array( $g['type'], $document_types, true );
 				$total      = isset( $progress['total'] ) ? (int) $progress['total'] : 0;
 				$prefix     = ( $uses_total && $total > $g['count'] ) ? ( $g['count'] . ' / ' . $total ) : (string) $g['count'];
-				$rows[]     = array( 'text' => $prefix . ' ' . $template, 'count' => $g['count'] );
+				$rows[]     = array(
+					'text'  => $prefix . ' ' . $template,
+					'count' => $g['count'],
+				);
 				continue;
 			}
 			if ( $g['count'] > 1 ) {
-				$rows[] = array( 'text' => $g['count'] . ' × ' . $g['message'], 'count' => $g['count'] );
+				$rows[] = array(
+					'text'  => $g['count'] . ' × ' . $g['message'],
+					'count' => $g['count'],
+				);
 				continue;
 			}
-			$rows[] = array( 'text' => $g['message'], 'count' => 1 );
+			$rows[] = array(
+				'text'  => $g['message'],
+				'count' => 1,
+			);
 		}
 		return $rows;
 	}
@@ -6052,9 +6203,34 @@ final class ImportAdminPage {
 			return '';
 		}
 		$filler = array(
-			'a', 'an', 'the', 'to', 'for', 'of', 'and', 'or', 'in', 'on', 'at',
-			'after', 'before', 'with', 'from', 'is', 'are', 'was', 'were', 'be',
-			'will', 'this', 'that', 'these', 'those', 'it', 'so', 'just',
+			'a',
+			'an',
+			'the',
+			'to',
+			'for',
+			'of',
+			'and',
+			'or',
+			'in',
+			'on',
+			'at',
+			'after',
+			'before',
+			'with',
+			'from',
+			'is',
+			'are',
+			'was',
+			'were',
+			'be',
+			'will',
+			'this',
+			'that',
+			'these',
+			'those',
+			'it',
+			'so',
+			'just',
 		);
 		$tokens = array();
 		foreach ( explode( ' ', $text ) as $token ) {
@@ -6362,7 +6538,8 @@ final class ImportAdminPage {
 			<?php endif; ?>
 			<?php
 			$pipeline_events = isset( $session['recent_events'] ) && is_array( $session['recent_events'] ) ? $session['recent_events'] : array();
-			if ( ! empty( $pipeline_events ) ) : ?>
+			if ( ! empty( $pipeline_events ) ) :
+				?>
 				<h4><?php esc_html_e( 'Recent events', 'universal-wordpress-importer' ); ?></h4>
 				<ul class="universal-importer-pipeline-events">
 					<?php foreach ( $pipeline_events as $event ) : ?>
@@ -6450,46 +6627,116 @@ final class ImportAdminPage {
 				<div class="universal-importer-decision" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>">
 					<?php if ( 'confirm-first-party-domains' === $decision['key'] ) : ?>
 						<?php
-						$domains  = isset( $decision['options']['domains'] ) && is_array( $decision['options']['domains'] ) ? $decision['options']['domains'] : array();
-						$examples = isset( $decision['options']['examples'] ) && is_array( $decision['options']['examples'] ) ? $decision['options']['examples'] : array();
-						$counts   = isset( $decision['options']['counts'] ) && is_array( $decision['options']['counts'] ) ? $decision['options']['counts'] : array();
-						$defaults = isset( $decision['options']['defaults'] ) && is_array( $decision['options']['defaults'] ) ? $decision['options']['defaults'] : array();
-						$selected_count = 0;
-						foreach ( $domains as $d ) {
-							$is_default = array_key_exists( (string) $d, $defaults ) ? ! empty( $defaults[ (string) $d ] ) : true;
-							if ( $is_default ) {
-								$selected_count++;
+						$domains       = isset( $decision['options']['domains'] ) && is_array( $decision['options']['domains'] ) ? array_values( $decision['options']['domains'] ) : array();
+						$examples      = isset( $decision['options']['examples'] ) && is_array( $decision['options']['examples'] ) ? $decision['options']['examples'] : array();
+						$counts        = isset( $decision['options']['counts'] ) && is_array( $decision['options']['counts'] ) ? $decision['options']['counts'] : array();
+						$source_url    = isset( $session['source'] ) ? (string) $session['source'] : '';
+						$home_host     = $this->admin_home_host();
+						$primary_hosts = $this->source_url_likely_domains( $source_url, $domains );
+						// Always have at least one primary row pre-checked so the user
+						// can accept the proposal without having to think about it.
+						if ( empty( $primary_hosts ) && ! empty( $domains ) ) {
+							$best       = (string) $domains[0];
+							$best_count = isset( $counts[ $best ] ) ? (int) $counts[ $best ] : 0;
+							foreach ( $domains as $candidate ) {
+								$candidate       = (string) $candidate;
+								$candidate_count = isset( $counts[ $candidate ] ) ? (int) $counts[ $candidate ] : 0;
+								if ( $candidate_count > $best_count ) {
+									$best       = $candidate;
+									$best_count = $candidate_count;
+								}
+							}
+							$primary_hosts = array( $best );
+						}
+						$primary_set = array_flip( $primary_hosts );
+						$additional  = array();
+						foreach ( $domains as $candidate ) {
+							$candidate = (string) $candidate;
+							if ( ! isset( $primary_set[ $candidate ] ) ) {
+								$additional[] = $candidate;
 							}
 						}
+						$selected_count = count( $primary_hosts );
 						?>
-						<p><strong><?php esc_html_e( 'Rewrite old-site URLs to this site?', 'universal-wordpress-importer' ); ?></strong></p>
-						<p class="description"><?php esc_html_e( 'Selected hosts move to this site and keep the same paths. Unselected hosts stay unchanged.', 'universal-wordpress-importer' ); ?></p>
+						<p class="universal-importer-decision-headline"><strong><?php esc_html_e( 'Rewrite URLs found in the imported content?', 'universal-wordpress-importer' ); ?></strong></p>
+						<p class="description"><?php esc_html_e( 'These domains looked like the source site. Selected rows have their URLs rewritten to point at this site; the rest are left unchanged.', 'universal-wordpress-importer' ); ?></p>
 						<div class="universal-importer-domain-list" data-decision-domain-list>
-							<?php foreach ( $domains as $domain ) : ?>
-								<?php
+							<?php
+							foreach ( $primary_hosts as $domain ) :
 								$domain          = (string) $domain;
 								$domain_examples = isset( $examples[ $domain ] ) && is_array( $examples[ $domain ] ) ? $examples[ $domain ] : array();
 								$domain_count    = isset( $counts[ $domain ] ) ? (int) $counts[ $domain ] : 0;
-								$is_checked      = array_key_exists( $domain, $defaults ) ? ! empty( $defaults[ $domain ] ) : true;
 								?>
-								<label class="universal-importer-domain-row">
-									<input type="checkbox" class="universal-importer-decision-domain" value="<?php echo esc_attr( $domain ); ?>"<?php echo $is_checked ? ' checked' : ''; ?>>
-									<span>
-										<strong><?php echo esc_html( $domain ); ?></strong>
-										<?php if ( $domain_count > 0 ) : ?>
-											<span class="universal-importer-domain-count"><?php echo esc_html( ' · ' . $domain_count . ' ' . __( 'URLs found', 'universal-wordpress-importer' ) ); ?></span>
-										<?php endif; ?>
-										<?php if ( ! empty( $domain_examples ) ) : ?>
-											<span class="universal-importer-hint"><?php echo esc_html( (string) $domain_examples[0] ); ?></span>
-										<?php endif; ?>
+								<div class="universal-importer-domain-row is-primary">
+									<label class="universal-importer-domain-toggle">
+										<input type="checkbox" class="universal-importer-decision-domain" value="<?php echo esc_attr( $domain ); ?>" checked>
+										<span class="screen-reader-text"><?php echo esc_html( sprintf( /* translators: %s: source domain. */ __( 'Rewrite %s', 'universal-wordpress-importer' ), $domain ) ); ?></span>
+									</label>
+									<span class="universal-importer-domain-fromto">
+										<input type="text" class="universal-importer-domain-input" data-domain-from value="<?php echo esc_attr( $domain ); ?>" aria-label="<?php echo esc_attr__( 'Source domain', 'universal-wordpress-importer' ); ?>">
+										<span class="universal-importer-domain-arrow" aria-hidden="true">&rarr;</span>
+										<input type="text" class="universal-importer-domain-input" data-domain-to value="<?php echo esc_attr( $home_host ); ?>" aria-label="<?php echo esc_attr__( 'This site', 'universal-wordpress-importer' ); ?>">
 									</span>
-								</label>
+									<?php if ( $domain_count > 0 || ! empty( $domain_examples ) ) : ?>
+										<span class="universal-importer-domain-meta">
+											<?php if ( $domain_count > 0 ) : ?>
+												<span class="universal-importer-domain-count"><?php echo esc_html( sprintf( /* translators: %d: number of URLs found. */ $this->admin_text_n( '%d URL found', '%d URLs found', $domain_count ), $domain_count ) ); ?></span>
+											<?php endif; ?>
+											<?php if ( ! empty( $domain_examples ) ) : ?>
+												<span class="universal-importer-hint"><?php echo esc_html( (string) $domain_examples[0] ); ?></span>
+											<?php endif; ?>
+										</span>
+									<?php endif; ?>
+								</div>
 							<?php endforeach; ?>
+
+							<?php if ( ! empty( $additional ) ) : ?>
+								<button type="button" class="universal-importer-domain-disclosure" data-action="toggle-domain-extras" aria-expanded="false">
+									<?php
+									echo esc_html(
+										sprintf(
+											/* translators: %d: number of additional discovered domains. */
+											$this->admin_text_n( 'Review %d more domain found in the content', 'Review %d more domains found in the content', count( $additional ) ),
+											count( $additional )
+										)
+									);
+									?>
+								</button>
+								<div class="universal-importer-domain-extras" data-domain-extras hidden>
+									<?php
+									foreach ( $additional as $domain ) :
+										$domain          = (string) $domain;
+										$domain_examples = isset( $examples[ $domain ] ) && is_array( $examples[ $domain ] ) ? $examples[ $domain ] : array();
+										$domain_count    = isset( $counts[ $domain ] ) ? (int) $counts[ $domain ] : 0;
+										?>
+										<div class="universal-importer-domain-row">
+											<label class="universal-importer-domain-toggle">
+												<input type="checkbox" class="universal-importer-decision-domain" value="<?php echo esc_attr( $domain ); ?>">
+												<span class="screen-reader-text"><?php echo esc_html( sprintf( /* translators: %s: source domain. */ __( 'Rewrite %s', 'universal-wordpress-importer' ), $domain ) ); ?></span>
+											</label>
+											<span class="universal-importer-domain-fromto">
+												<input type="text" class="universal-importer-domain-input" data-domain-from value="<?php echo esc_attr( $domain ); ?>" aria-label="<?php echo esc_attr__( 'Source domain', 'universal-wordpress-importer' ); ?>">
+												<span class="universal-importer-domain-arrow" aria-hidden="true">&rarr;</span>
+												<input type="text" class="universal-importer-domain-input" data-domain-to value="<?php echo esc_attr( $home_host ); ?>" aria-label="<?php echo esc_attr__( 'This site', 'universal-wordpress-importer' ); ?>">
+											</span>
+											<?php if ( $domain_count > 0 || ! empty( $domain_examples ) ) : ?>
+												<span class="universal-importer-domain-meta">
+													<?php if ( $domain_count > 0 ) : ?>
+														<span class="universal-importer-domain-count"><?php echo esc_html( sprintf( /* translators: %d: number of URLs found. */ $this->admin_text_n( '%d URL found', '%d URLs found', $domain_count ), $domain_count ) ); ?></span>
+													<?php endif; ?>
+													<?php if ( ! empty( $domain_examples ) ) : ?>
+														<span class="universal-importer-hint"><?php echo esc_html( (string) $domain_examples[0] ); ?></span>
+													<?php endif; ?>
+												</span>
+											<?php endif; ?>
+										</div>
+									<?php endforeach; ?>
+								</div>
+							<?php endif; ?>
 						</div>
 						<p class="universal-importer-decision-actions">
-							<button type="button" class="button button-primary universal-importer-resolve-decision" data-url-choice="selected" data-session-id="<?php echo esc_attr( $session['id'] ); ?>" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>" data-primary-action<?php echo 0 === $selected_count ? ' disabled' : ''; ?>><?php esc_html_e( 'Rewrite selected', 'universal-wordpress-importer' ); ?> <span data-selected-count>(<?php echo (int) $selected_count; ?>)</span></button>
+							<button type="button" class="button button-primary universal-importer-resolve-decision" data-url-choice="selected" data-session-id="<?php echo esc_attr( $session['id'] ); ?>" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>" data-primary-action<?php echo 0 === $selected_count ? ' disabled' : ''; ?>><?php esc_html_e( 'Rewrite these', 'universal-wordpress-importer' ); ?> <span data-selected-count>(<?php echo (int) $selected_count; ?>)</span></button>
 							<button type="button" class="button universal-importer-resolve-decision" data-url-choice="none" data-session-id="<?php echo esc_attr( $session['id'] ); ?>" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>"><?php esc_html_e( 'Keep all URLs as-is', 'universal-wordpress-importer' ); ?></button>
-							<button type="button" class="button universal-importer-resolve-decision is-quiet" data-url-choice="never" data-session-id="<?php echo esc_attr( $session['id'] ); ?>" data-decision-key="<?php echo esc_attr( $decision['key'] ); ?>" title="<?php echo esc_attr__( 'Apply preserve mode for the rest of this session and skip future prompts.', 'universal-wordpress-importer' ); ?>"><?php esc_html_e( 'Don’t ask again — keep all', 'universal-wordpress-importer' ); ?></button>
 						</p>
 					<?php else : ?>
 						<p><strong><?php echo esc_html( $decision['key'] ); ?>:</strong> <?php echo esc_html( $decision['prompt'] ); ?></p>
@@ -7168,6 +7415,65 @@ final class ImportAdminPage {
 	}
 
 	/**
+	 * Returns the current WP site's host (for the URL-rewrite "to" default).
+	 *
+	 * Falls back to an empty string when WordPress isn't loaded (admin snapshot
+	 * tooling) — the admin UI then renders a blank "to" input the user can fill.
+	 *
+	 * @return string
+	 */
+	private function admin_home_host() {
+		if ( function_exists( 'home_url' ) ) {
+			$home  = (string) home_url( '/' );
+			$parts = function_exists( 'wp_parse_url' ) ? wp_parse_url( $home ) : parse_url( $home ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+			if ( is_array( $parts ) && ! empty( $parts['host'] ) ) {
+				return (string) $parts['host'];
+			}
+		}
+		return '';
+	}
+
+	/**
+	 * Returns the set of domains we believe are the "primary" base for the
+	 * source — i.e. the domains a fresh user would expect to see proposed for
+	 * rewrite without having to think.
+	 *
+	 * - HTTP(S) URL: the host of the source URL.
+	 * - github.com/<user>/<repo>...: also <user>.github.io (if listed among
+	 *   discovered domains) since GitHub Pages content commonly references
+	 *   the repo's project pages site.
+	 * - WXR / sitemap / OPML / feed: the host of the source URL.
+	 *
+	 * @param string            $source_url        The session's source.
+	 * @param array<int,string> $discovered Discovered hosts from the decision.
+	 * @return array<int,string>
+	 */
+	private function source_url_likely_domains( $source_url, array $discovered ) {
+		$source_url = (string) $source_url;
+		$primary    = array();
+
+		$parts = function_exists( 'wp_parse_url' ) ? wp_parse_url( $source_url ) : parse_url( $source_url ); // phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url
+		$host  = is_array( $parts ) && isset( $parts['host'] ) ? (string) $parts['host'] : '';
+
+		if ( '' !== $host && in_array( $host, $discovered, true ) ) {
+			$primary[] = $host;
+		}
+
+		// GitHub: also suggest the matching <user>.github.io if discovered.
+		if ( 'github.com' === $host && is_array( $parts ) && ! empty( $parts['path'] ) ) {
+			$segments = array_values( array_filter( explode( '/', (string) $parts['path'] ) ) );
+			if ( ! empty( $segments[0] ) ) {
+				$pages_host = strtolower( $segments[0] ) . '.github.io';
+				if ( in_array( $pages_host, $discovered, true ) && ! in_array( $pages_host, $primary, true ) ) {
+					$primary[] = $pages_host;
+				}
+			}
+		}
+
+		return $primary;
+	}
+
+	/**
 	 * Translates admin snapshot strings when WordPress is loaded.
 	 *
 	 * @param string $text English text.
@@ -7180,6 +7486,23 @@ final class ImportAdminPage {
 		}
 
 		return $text;
+	}
+
+	/**
+	 * Plural-aware admin_text — falls through to plain English when WordPress
+	 * isn't loaded (e.g. when the admin snapshot tool runs in isolation).
+	 *
+	 * @param string $single Singular template.
+	 * @param string $plural Plural template.
+	 * @param int    $count  Count.
+	 * @return string
+	 */
+	private function admin_text_n( $single, $plural, $count ) {
+		if ( function_exists( '_n' ) ) {
+			// phpcs:ignore WordPress.WP.I18n.NonSingularStringLiteralSingular,WordPress.WP.I18n.NonSingularStringLiteralPlural -- Centralized fallback for non-WP test runs.
+			return _n( $single, $plural, (int) $count, 'universal-wordpress-importer' );
+		}
+		return 1 === (int) $count ? $single : $plural;
 	}
 
 	/**
@@ -7479,8 +7802,8 @@ final class ImportAdminPage {
 					: $this->admin_text( '%d source items failed.' ),
 				$source_failed
 			);
-			$stages[0]['note']   = $this->dashboard_source_failure_note( $session );
-			$stages[0]['state']  = 'blocked';
+			$stages[0]['note']  = $this->dashboard_source_failure_note( $session );
+			$stages[0]['state'] = 'blocked';
 			return $stages;
 		}
 
@@ -7493,7 +7816,7 @@ final class ImportAdminPage {
 				// stay empty until there is something the user-facing log
 				// would actually contribute.
 				$stages[0]['detail'] = '';
-				$stages[0]['state'] = 'active';
+				$stages[0]['state']  = 'active';
 				return $stages;
 			}
 
@@ -7524,7 +7847,7 @@ final class ImportAdminPage {
 					: $this->admin_text( 'Preparing %d items.' ),
 				$source_discovered
 			);
-			$stages[1]['state']  = 'active';
+			$stages[1]['state'] = 'active';
 			return $stages;
 		}
 
@@ -7546,7 +7869,7 @@ final class ImportAdminPage {
 		} else {
 			$stages[1]['detail'] = $this->admin_text( 'No importable documents found.' );
 		}
-		$stages[1]['state']  = 'done';
+		$stages[1]['state'] = 'done';
 
 		if ( $has_decision ) {
 			$stages[2]['detail'] = $this->admin_text( 'Choose how old URLs should be handled.' );
@@ -7566,7 +7889,7 @@ final class ImportAdminPage {
 					: $this->admin_text( '%d media items failed.' ),
 				$media_failed
 			);
-			$stages[3]['state']  = 'blocked';
+			$stages[3]['state'] = 'blocked';
 			return $stages;
 		}
 
@@ -7579,7 +7902,7 @@ final class ImportAdminPage {
 					: $this->admin_text( '%d media items queued.' ),
 				$media_open
 			);
-			$stages[3]['state']  = 'active';
+			$stages[3]['state'] = 'active';
 			return $stages;
 		}
 
@@ -7595,7 +7918,7 @@ final class ImportAdminPage {
 		} else {
 			$stages[3]['detail'] = $this->admin_text( 'No media found.' );
 		}
-		$stages[3]['state']  = 'done';
+		$stages[3]['state'] = 'done';
 
 		if ( $is_dry_run ) {
 			$stages[4]['detail'] = $this->admin_text( 'Dry run: no pages written.' );
