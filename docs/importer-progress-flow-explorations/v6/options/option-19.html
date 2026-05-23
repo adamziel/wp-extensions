@@ -1,0 +1,631 @@
+<!doctype html>
+<!-- Theme 5 — Cockpit Mini — V3: Vertical phase rail on left, single canonical meta -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Universal Importer · Theme 5 · V3 — Vertical Rail</title>
+<style>
+:root{
+  --bg:#eef1f1;--card:#fff;--ink:#0b0d10;--rule:#d4d8dd;--rl2:#e7eaee;
+  --acc:#0f766e;--soft:#d3f0ec;--mu:#475569;--ok:#0f766e;--wn:#b45309;--wns:#fef3c7;--bad:#b91c1c;
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 var(--sans)}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+.page{min-height:100vh;display:grid;place-items:start center;padding:28px 16px}
+.con{width:min(820px,100%);background:var(--card);border:1px solid var(--rule);border-radius:10px;box-shadow:0 12px 32px rgba(11,13,16,.06);overflow:hidden}
+
+.head{display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-bottom:1px solid var(--rule);background:#fafbfc;font-size:11px;color:var(--mu)}
+.head b{font-weight:600;color:var(--ink);font-size:12px;letter-spacing:.02em}
+.head .meta{font-family:var(--mono)}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#cbd5e1;margin-right:4px;vertical-align:middle}
+.dot.live{background:var(--ok);animation:pulse 1.6s infinite}
+.dot.warn{background:var(--wn)}
+@keyframes pulse{50%{box-shadow:0 0 0 4px rgba(15,118,110,0)}0%,100%{box-shadow:0 0 0 0 rgba(15,118,110,.4)}}
+
+/* layout: rail + body (rail collapses to top strip below 720) */
+.split{display:grid;grid-template-columns:200px 1fr;min-height:430px}
+.rail{border-right:1px solid var(--rule);background:#fafbfc;display:flex;flex-direction:column}
+.rail .grp{padding:6px 12px 4px;font-family:var(--mono);font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.05em}
+.rail ol{margin:0;padding:0;list-style:none;flex:1}
+.rail li{position:relative;padding:8px 12px 8px 26px;border-top:1px solid var(--rl2);font-size:12px}
+.rail li:first-child{border-top:0}
+.rail li .nx{position:absolute;left:10px;top:9px;font-family:var(--mono);font-size:10px;color:var(--mu)}
+.rail li .nm{font-weight:500}
+.rail li .sub{display:block;font-size:10px;color:var(--mu);font-family:var(--mono);margin-top:1px}
+.rail li.act{background:var(--soft)}
+.rail li.act .nx,.rail li.act .nm{color:var(--acc)}
+.rail li.act::after{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--acc)}
+.rail li.dn .nx::before{content:"✓ "}
+.rail li.dn .nx,.rail li.dn .nm{color:var(--ok)}
+.rail li.blk{background:var(--wns)}
+.rail li.blk .nx::before{content:"! "}
+.rail li.blk .nx,.rail li.blk .nm{color:var(--wn)}
+.rail .foot{padding:6px 12px;border-top:1px solid var(--rule);font-family:var(--mono);font-size:10px;color:var(--mu);display:flex;justify-content:space-between}
+
+.body{padding:14px 16px}
+.panel{display:none}.panel.on{display:block}
+h2{margin:0 0 2px;font-size:13px;font-weight:600}
+.lead{margin:0 0 12px;color:var(--mu);font-size:11px}
+.kbd{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border:1px solid var(--rule);border-bottom-width:2px;border-radius:3px;background:#fff;font-family:var(--mono);font-size:10px;color:var(--mu)}
+
+.cap{position:relative;border:1px solid var(--rule);border-radius:6px;background:#fff;display:grid;grid-template-columns:auto 1fr;align-items:center}
+.cap:focus-within{border-color:var(--acc);box-shadow:0 0 0 3px rgba(15,118,110,.12)}
+.cap .pfx{padding:0 8px 0 10px;font-family:var(--mono);font-size:12px;color:var(--mu)}
+.cap input{border:0;outline:0;padding:9px 10px 9px 4px;background:transparent;font-family:var(--mono);font-size:12px;width:100%}
+.sugg{margin-top:6px;border:1px solid var(--rl2);border-radius:6px;padding:5px;font-family:var(--mono);font-size:11px;display:none}
+.sugg.on{display:block}
+.sugg .r{display:grid;grid-template-columns:80px 1fr;gap:6px;padding:3px 4px;border-radius:3px;cursor:pointer}
+.sugg .r:hover{background:var(--soft)}
+.sugg .r .t{color:var(--acc);font-weight:600}
+
+.inf{margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;font-size:12px}
+.inf .lbl{font-family:var(--mono);font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
+.inf .val{font-weight:600}
+.inf button{font-size:11px;color:var(--acc);background:0;border:0;padding:0}
+.inf .ex{flex-basis:100%;font-size:11px;color:var(--mu)}
+
+.types{display:none;margin-top:8px;border:1px solid var(--rule);border-radius:6px;padding:4px;grid-template-columns:repeat(2,1fr);gap:2px}
+.types.on{display:grid}
+.types button{text-align:left;background:0;border:0;padding:5px 8px;border-radius:3px;font-family:var(--mono);font-size:11px;color:var(--ink)}
+.types button:hover{background:var(--soft)}
+.types button .mn{color:var(--acc);font-weight:700;display:inline-block;width:14px}
+
+.side{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:11px}
+.side button{background:0;border:0;color:var(--acc);padding:0;font-size:11px}
+
+.tree{margin-top:8px;border:1px solid var(--rule);border-radius:6px;max-height:160px;overflow:auto;font-family:var(--mono);font-size:11px}
+.tree .r{display:grid;grid-template-columns:1fr auto;gap:6px;padding:4px 8px;border-bottom:1px solid var(--rl2);cursor:pointer}
+.tree .r:last-child{border-bottom:0}
+.tree .r:hover{background:#f3f5f8}
+.tree .r.sel{background:var(--soft)}
+.tree .r .c{color:var(--mu);font-size:10px}
+.tfoot{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--mu)}
+.tfoot b{color:var(--ink)}
+.tfoot .tr{color:var(--wn);font-weight:600}
+
+/* configure — sentence case headers in card-shaped rows */
+.field{padding:9px 0;border-bottom:1px dashed var(--rl2)}
+.field:last-of-type{border-bottom:0}
+.field .head{padding:0;background:0;border:0;display:flex;justify-content:space-between;align-items:baseline;color:var(--ink);font-size:11px;font-weight:600;margin-bottom:4px}
+.field .head .h{color:var(--mu);font-family:var(--mono);font-size:10px;font-weight:400}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:5px;overflow:hidden}
+.seg button{border:0;background:#fff;padding:5px 10px;font-size:11px;color:var(--mu);border-right:1px solid var(--rl2)}
+.seg button:last-child{border-right:0}
+.seg button.on{background:var(--acc);color:#fff}
+.seg-hint{margin-top:4px;font-size:11px;color:var(--mu)}
+.swt{position:relative;width:32px;height:18px;border:1px solid var(--rule);border-radius:999px;background:#fff;cursor:pointer;padding:0;vertical-align:middle}
+.swt::after{content:"";position:absolute;left:1px;top:1px;width:14px;height:14px;border-radius:50%;background:#cbd5e1;transition:.18s}
+.swt.on{background:var(--acc);border-color:var(--acc)}
+.swt.on::after{transform:translateX(14px);background:#fff}
+.dom{display:none;margin-top:6px;width:100%;border:1px solid var(--rule);border-radius:5px;padding:6px 9px;font-family:var(--mono);font-size:11px}
+.dom.on{display:block}
+
+.rv{display:grid;grid-template-columns:120px 1fr;gap:4px 12px;font-size:12px;border:1px solid var(--rule);border-radius:6px;padding:9px 12px;background:#fafbfc}
+.rv dt{font-family:var(--mono);font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;padding-top:2px}
+.rv dd{margin:0;font-family:var(--mono);font-size:11px}
+.rv dd b{font-family:var(--sans);font-weight:600;font-size:12px}
+.peek{margin-top:6px;font-size:10px;color:var(--mu);font-family:var(--mono)}
+
+.run-top{display:flex;justify-content:space-between;gap:10px;align-items:end;margin-bottom:6px}
+.run-top .a .lv{font-family:var(--mono);font-size:10px;color:var(--mu);display:block;margin-bottom:2px;text-transform:uppercase;letter-spacing:.04em}
+.run-top .s{text-align:right;font-family:var(--mono);font-size:10px;color:var(--mu)}
+.bar{height:6px;background:#e7eaee;border-radius:999px;overflow:hidden;margin:6px 0 4px}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),#14b8a6);transition:width .3s}
+.bar.idt i{width:30%;animation:idt 1.3s linear infinite}
+.bar.pse i{background:repeating-linear-gradient(45deg,var(--wn) 0 6px,#d97706 6px 12px)}
+@keyframes idt{0%{margin-left:-30%}100%{margin-left:100%}}
+
+.pause-ban{display:none;margin-top:8px;padding:6px 10px;font-size:11px;color:#7c2d12;background:var(--wns);border:1px solid var(--wn);border-radius:4px;font-weight:600}
+.pause-ban.on{display:block}
+
+.log{margin-top:10px;border:1px solid var(--rl2);border-radius:6px;background:#fafbfc;max-height:160px;overflow:auto;font-family:var(--mono);font-size:11px}
+.log .e{display:grid;grid-template-columns:54px 12px 1fr;gap:6px;padding:3px 8px;border-bottom:1px solid #eef1f4}
+.log .e:last-child{border-bottom:0}
+.log .e .t{color:var(--mu);font-size:10px}
+.log .e .lv{color:var(--mu);font-size:10px;text-align:center}
+.log .e.warn .lv{color:var(--wn)}
+
+/* decision — elevated treatment vs data */
+.dec{display:none;margin-top:10px;border-radius:8px;padding:12px 14px;background:#fff;border:2px solid var(--wn);box-shadow:0 4px 12px rgba(180,83,9,.18)}
+.dec.on{display:block}
+.dec h3{margin:0 0 4px;font-size:14px;font-weight:700;color:#7c2d12}
+.dec p{margin:0 0 10px;color:#7c2d12;font-size:12px}
+.dec label{display:flex;gap:8px;align-items:center;padding:5px 0;font-size:12px;border-top:1px solid #fbe6c2}
+.dec label .ex{color:var(--mu);font-family:var(--mono);font-size:10px;margin-left:auto}
+.dec-a{display:flex;gap:6px;margin-top:10px}
+.dec-a button{flex:1;padding:8px 8px;border-radius:5px;border:1px solid var(--rule);background:#fff;font-size:12px;font-weight:600}
+.dec-a .p{background:var(--wn);border-color:var(--wn);color:#fff}
+.abort-confirm{display:none;margin-top:10px;border:1px solid var(--wn);background:#fff7ed;border-radius:6px;padding:10px 12px;font-size:12px}
+.abort-confirm.on{display:block}
+.abort-confirm b{display:block;font-size:12.5px;color:#7c2d12;margin-bottom:2px}
+.abort-confirm small{display:block;color:var(--mu);font-size:11px;margin-bottom:8px}
+.abort-confirm .ac-a{display:flex;gap:6px}
+.abort-confirm button{padding:6px 11px;border-radius:5px;border:1px solid var(--rule);background:#fff;font-size:11.5px;font-weight:600}
+.abort-confirm .danger{background:var(--wn);border-color:var(--wn);color:#fff}
+
+.foot{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 12px;border-top:1px solid var(--rule);background:#fafbfc}
+.hints{display:flex;flex-wrap:wrap;gap:8px;font-size:10px;color:var(--mu);font-family:var(--mono)}
+.hints span{display:inline-flex;gap:4px;align-items:center}
+.acts{display:flex;gap:6px}
+.btn{padding:6px 12px;border-radius:5px;border:1px solid var(--rule);background:#fff;font-size:12px;font-weight:600}
+.btn.p{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn.q{color:var(--mu)}
+.btn.danger{color:var(--bad);border-color:#fecaca}
+
+.recov{display:none;margin-top:10px;border:1px solid var(--rule);border-radius:6px;padding:8px 10px;font-size:11px}
+.recov.on{display:block}
+.recov .h{font-family:var(--mono);font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;display:flex;justify-content:space-between}
+.recov .h button{background:0;border:0;color:var(--acc);font-size:10px;padding:0}
+.recov .r{display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:5px 6px;font-family:var(--mono);font-size:11px;align-items:center}
+.recov .r .st{text-transform:uppercase;font-size:10px}
+.recov .r .st.p{color:var(--wn)}.recov .r .st.d{color:var(--ok)}.recov .r .st.f{color:var(--bad)}
+.recov .r .a{color:var(--acc);background:0;border:0;padding:0;font-weight:600}
+
+.tally{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:10px 0}
+.tally div{border:1px solid var(--rule);border-radius:5px;padding:8px;background:#fafbfc}
+.tally .n{font-family:var(--mono);font-size:18px;font-weight:600}
+.tally .l{font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
+.tally .ok .n{color:var(--ok)}
+.disc{margin-top:8px}
+.disc summary{cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;padding:3px 0;list-style:none}
+.disc summary::before{content:"▸ ";color:var(--acc)}
+.disc[open] summary::before{content:"▾ "}
+.disc .b{padding:6px 0;font-size:11px;color:var(--mu)}
+
+@media (max-width:720px){
+  .split{grid-template-columns:1fr}
+  .rail{border-right:0;border-bottom:1px solid var(--rule)}
+  .rail ol{display:grid;grid-template-columns:repeat(3,1fr)}
+  .rail li{padding:6px 8px 6px 22px;border-top:0;border-right:1px solid var(--rl2)}
+  .rail li:nth-child(3n){border-right:0}
+  .rail li:nth-child(n+4){border-top:1px solid var(--rl2)}
+  .rail li .sub{display:none}
+  .rail li.act::after{display:none}
+  .rail .foot{display:none}
+  .rv{grid-template-columns:1fr}
+  .tally{grid-template-columns:repeat(2,1fr)}
+}
+</style>
+</head>
+<body>
+<div class="page">
+<div class="con" role="application" aria-label="Universal Importer cockpit">
+
+  <div class="head">
+    <span><b>Universal Importer</b> · cockpit</span>
+    <span class="meta"><span class="dot" id="dot"></span><span id="status">ready</span></span>
+  </div>
+
+  <div class="split">
+    <nav class="rail" aria-label="Phases">
+      <div class="grp" id="railGrp">Steps</div>
+      <ol id="rail" data-mode="wizard">
+        <li class="act" data-w="source"><span class="nx">01</span><span class="nm">Source</span></li>
+        <li data-w="configure"><span class="nx">02</span><span class="nm">Configure</span></li>
+        <li data-w="confirm"><span class="nx">03</span><span class="nm">Confirm</span></li>
+        <li data-w="run"><span class="nx">04</span><span class="nm">Run</span></li>
+      </ol>
+      <div class="foot"><span id="modeMeta">real run</span><span id="phaseMeta">idle</span></div>
+    </nav>
+
+    <div class="body">
+
+      <section class="panel on" data-panel="source">
+        <h2>Source</h2>
+        <p class="lead">Paste a URL, type a path, drop a file/folder, or start with <span class="kbd">&gt;</span>.</p>
+        <div class="cap">
+          <span class="pfx" id="pfx">URL</span>
+          <input id="src" value="https://github.com/WordPress/gutenberg/tree/trunk/docs" aria-label="Source URL or command" autocomplete="off">
+        </div>
+        <input type="file" id="fileIn" multiple webkitdirectory style="display:none">
+
+        <div class="sugg" id="sugg" role="listbox">
+          <div class="r" data-cmd="github wordpress/gutenberg"><span class="t">&gt; github</span><span>pick a directory</span></div>
+          <div class="r" data-cmd="wp https://example.com/wp-json/"><span class="t">&gt; wp</span><span>WordPress REST</span></div>
+          <div class="r" data-cmd="feed https://example.com/feed/"><span class="t">&gt; feed</span><span>RSS / Atom</span></div>
+          <div class="r" data-cmd="upload"><span class="t">&gt; upload</span><span>file or folder</span></div>
+          <div class="r" data-cmd="resume"><span class="t">&gt; resume</span><span>past sessions</span></div>
+        </div>
+
+        <div class="inf">
+          <span class="lbl">type</span>
+          <span class="val" id="ivl">GitHub repository</span>
+          <button id="ovrBtn">change · <span class="kbd">⌘K</span></button>
+          <span class="ex" id="iex">Fetch the repo and parse Markdown docs as pages. Directory picker opens next.</span>
+        </div>
+
+        <div class="types" id="types" role="listbox" aria-label="Override source type">
+          <button data-t="github"><span class="mn">G</span>itHub repository</button>
+          <button data-t="wp"><span class="mn">W</span>ordPress site</button>
+          <button data-t="feed"><span class="mn">F</span>eed (RSS/Atom)</button>
+          <button data-t="opml"><span class="mn">O</span>PML</button>
+          <button data-t="path"><span class="mn">P</span>ath (server)</button>
+          <button data-t="upload"><span class="mn">U</span>pload</button>
+          <button data-t="url"><span class="mn">R</span>eachable URL</button>
+          <button data-t="sitemap"><span class="mn">S</span>itemap.xml</button>
+          <button data-t="pdf"><span class="mn">D</span>ocument · PDF</button>
+          <button data-t="epub"><span class="mn">E</span>PUB</button>
+        </div>
+
+        <div class="side">
+          <button id="upBtn">Upload folder…</button>
+          <button id="recBtn">Past imports · 3</button>
+        </div>
+
+        <div class="recov" id="recov" role="region" aria-label="Past imports">
+          <div class="h"><span>Past imports</span><button id="recClose">close</button></div>
+          <div class="r"><span>https://example.com/wp-json/</span><span class="st p">paused · 7/24</span><button class="a" data-resume>Resume</button></div>
+          <div class="r"><span>github.com/acme/handbook</span><span class="st d">done · 2 d</span><span></span></div>
+          <div class="r"><span>/srv/old-blog/export.xml</span><span class="st f">failed</span><button class="a">Details</button></div>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="github">
+        <h2>GitHub · directory</h2>
+        <p class="lead">Choose a directory. <span class="kbd">/</span> filter · <span class="kbd">⏎</span> select.</p>
+        <div class="cap"><span class="pfx">filter</span><input id="ghFilter" placeholder="docs/explanations" autocomplete="off"></div>
+        <div class="tree" id="ghTree" role="listbox">
+          <div class="r"><span>/</span><span class="c">12 dirs</span></div>
+          <div class="r"><span>docs</span><span class="c">142 files</span></div>
+          <div class="r sel"><span>docs/explanations</span><span class="c">38 files ✓</span></div>
+          <div class="r"><span>docs/reference-guides</span><span class="c">84 files</span></div>
+          <div class="r"><span>docs/getting-started</span><span class="c">12 files</span></div>
+          <div class="r"><span>packages/block-library/src</span><span class="c">truncated…</span></div>
+        </div>
+        <div class="tfoot"><span>selected: <b id="ghSel">docs/explanations</b> · branch <b>trunk</b></span><span class="tr">tree truncated — use filter</span></div>
+      </section>
+
+      <section class="panel" data-panel="configure">
+        <h2>Configure</h2>
+        <p class="lead">Smart defaults. Adjust what you need.</p>
+
+        <div class="field">
+          <div class="head"><span>URL treatment</span><span class="h"><span class="kbd">U</span></span></div>
+          <div class="seg" id="urlSeg" role="radiogroup" aria-label="URL treatment">
+            <button class="on" data-u="ask">Ask</button>
+            <button data-u="keep">Keep unchanged</button>
+            <button data-u="rewrite">Rewrite listed</button>
+          </div>
+          <div class="seg-hint" id="urlHint">Pause mid-run and confirm which domains to rewrite to this site.</div>
+          <input class="dom" id="domInput" placeholder="example.com, www.example.com" aria-label="Domains to rewrite">
+        </div>
+
+        <div class="field">
+          <div class="head"><span>Run mode</span><span class="h"><span class="kbd">⌘D</span></span></div>
+          <div><button class="swt" id="drySwt" role="switch" aria-checked="false"></button> <span id="dryLbl" style="color:var(--mu);font-size:11px;margin-left:6px">Real run · writes pages</span></div>
+        </div>
+
+        <div class="field">
+          <div class="head"><span>Post status</span><span class="h"><span class="kbd">⌘S</span></span></div>
+          <div><button class="swt" id="draftSwt" role="switch" aria-checked="false"></button> <span id="draftLbl" style="color:var(--mu);font-size:11px;margin-left:6px">Publish</span></div>
+        </div>
+
+        <details class="disc">
+          <summary>More options</summary>
+          <div class="b">The run continues via WP-Cron after browser close. Force a tick with <code>wp universal-importer tick &lt;session&gt;</code>.</div>
+        </details>
+      </section>
+
+      <section class="panel" data-panel="confirm">
+        <h2>Confirm</h2>
+        <p class="lead">Review and start. <span class="kbd">⏎</span> begins.</p>
+        <dl class="rv">
+          <dt>source</dt><dd id="rvSrc">github.com/WordPress/gutenberg/tree/trunk/docs</dd>
+          <dt>type</dt><dd><b id="rvType">GitHub repository</b></dd>
+          <dt>directory</dt><dd id="rvDir">docs/explanations</dd>
+          <dt>url treatment</dt><dd id="rvUrl">ask</dd>
+          <dt>run mode</dt><dd id="rvMode">real run</dd>
+          <dt>post status</dt><dd id="rvStat">publish</dd>
+          <dt>estimated</dt><dd>≈ 38 documents · ≈ 22 media references</dd>
+        </dl>
+        <div class="peek">peek discovery · trunk/docs/explanations · 38 files seen</div>
+      </section>
+
+      <section class="panel" data-panel="run">
+        <div class="run-top">
+          <div class="a"><span class="lv" id="actLbl">current action</span><span id="actTxt" aria-live="polite">Queued.</span></div>
+          <div class="s" aria-live="polite"><span id="pctTxt">0%</span> · <span id="cntTxt">0 / 38</span></div>
+        </div>
+        <div class="bar idt" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+        <div class="pause-ban" id="pauseBan">Run paused — answer the decision below to continue.</div>
+
+        <div class="dec" id="decision" role="region" aria-label="URL treatment decision">
+          <h3>Rewrite old-site URLs to this site?</h3>
+          <p>Selected domains move to this site, paths preserved. Unselected stay unchanged.</p>
+          <label><input type="checkbox" checked> developer.wordpress.org <span class="ex">/block-editor/</span></label>
+          <label><input type="checkbox" checked> make.wordpress.org/core <span class="ex">/core/handbook/</span></label>
+          <div class="dec-a">
+            <button class="p" data-dec="selected">Rewrite selected ⏎</button>
+            <button data-dec="all">Yes, all</button>
+            <button data-dec="none">Keep all</button>
+          </div>
+        </div>
+
+        <div class="abort-confirm" id="abortConfirm">
+          <b>Abort this import?</b>
+          <small>Pages written so far stay. Pending items will not be written.</small>
+          <div class="ac-a">
+            <button class="danger" id="abortYes">Yes, abort</button>
+            <button id="abortNo">Cancel</button>
+          </div>
+        </div>
+
+        <div class="log" id="log" aria-live="polite" aria-label="Activity log"></div>
+      </section>
+
+      <section class="panel" data-panel="done">
+        <h2 id="doneTitle">Import complete.</h2>
+        <p class="lead" id="doneLead">38 pages written · 22 media imported · 1m 24s elapsed.</p>
+        <div class="tally" id="tally">
+          <div class="ok"><div class="n" id="tlPages">38</div><div class="l">pages</div></div>
+          <div><div class="n" id="tlMedia">22</div><div class="l">media</div></div>
+          <div><div class="n" id="tlWarn">1</div><div class="l">warnings</div></div>
+        </div>
+        <details class="disc"><summary>Warning · 1</summary><div class="b">Relationship mapping skipped on <code>docs/explanations/architecture/data-flow.md</code> — author "@gziolo" not matched to a local user.</div></details>
+        <div id="dryHand" style="display:none;margin-top:8px;font-size:11px;color:var(--mu)">Dry run finished without writing. <button id="goReal" class="btn p" style="padding:4px 10px;font-size:11px">Run for real now ⏎</button></div>
+      </section>
+
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="hints" id="hints"></div>
+    <div class="acts">
+      <button class="btn q" id="back">Back</button>
+      <button class="btn p" id="next">Continue ⏎</button>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<script>
+(function(){
+const $=s=>document.querySelector(s);
+const $$=s=>[...document.querySelectorAll(s)];
+const panels=["source","github","configure","confirm","run","done"];
+const railMap={source:0,github:0,configure:0,confirm:0,run:0,done:5};
+let step=0,dry=false,drafts=false,urlMode="ask",overriding=false,paused=false,timer=null,resumeIdx=4;
+
+function show(name){
+  step=panels.indexOf(name);
+  $$(".panel").forEach(p=>p.classList.toggle("on",p.dataset.panel===name));
+  const isRun=name==="run",isDone=name==="done";
+  $("#back").style.visibility=(name==="source"||isDone)?"hidden":"visible";
+  if(name==="source"){$("#next").textContent="Continue ⏎";$("#next").className="btn p"}
+  else if(name==="github"){$("#next").textContent="Use directory ⏎"}
+  else if(name==="configure"){$("#next").textContent="Continue ⏎"}
+  else if(name==="confirm"){$("#next").textContent=dry?"Start dry run ⏎":"Import this content ⏎"}
+  else if(name==="run"){$("#next").textContent="Running…";$("#next").disabled=true;$("#back").textContent="Abort";$("#back").className="btn danger"}
+  else if(name==="done"){$("#next").textContent="View imported content ⏎";$("#next").disabled=false;$("#back").textContent="Start another";$("#back").className="btn q"}
+  if(!isRun)$("#next").disabled=false;
+  if(name!=="run"&&name!=="done"){$("#back").textContent="Back";$("#back").className="btn q"}
+  setHints(name);
+  $("#status").textContent=isRun?(paused?"paused":"running"):isDone?"done":"ready";
+  $("#dot").classList.remove("live","warn");
+  if(isRun&&!paused)$("#dot").classList.add("live");
+  if(isRun&&paused)$("#dot").classList.add("warn");
+  // rail: pre-run shows 4-step wizard tracking the current panel; run/done managed by setPhase
+  if(!isRun&&!isDone){
+    morphRailToWizard();
+    const wMap={source:0,github:0,configure:1,confirm:2};
+    const ai=wMap[name]??0;
+    $$(".rail li").forEach((li,i)=>{li.classList.remove("dn","blk","act");li.querySelector(".sub")?.remove();if(i<ai)li.classList.add("dn");else if(i===ai)li.classList.add("act")});
+  }
+  // phase meta foot
+  $("#modeMeta").textContent=dry?"dry run":"real run";
+  $("#phaseMeta").textContent=isRun?(paused?"paused":"running"):isDone?"complete":"idle";
+}
+function setHints(name){
+  const m={source:[["⏎","Continue"],["⌘K","Override type"],["/","Filter"]],
+    github:[["↑↓","Nav"],["⏎","Select"],["/","Filter"],["Esc","Back"]],
+    configure:[["⌘D","Dry run"],["⌘S","Drafts"],["⏎","Review"]],
+    confirm:[["⏎","Start"],["Esc","Back"]],
+    run:[["⌘.","Abort"]],
+    done:[["⏎","View content"]]};
+  $("#hints").innerHTML=(m[name]||[]).map(([k,l])=>'<span><span class="kbd">'+k+'</span> '+l+'</span>').join('');
+}
+
+$("#back").addEventListener("click",()=>{
+  if(panels[step]==="run"){$("#abortConfirm").classList.add("on");return}
+  if(panels[step]==="done"){resetAll();return}
+  show(panels[Math.max(0,step-1)]);
+});
+$("#abortYes").addEventListener("click",()=>{$("#abortConfirm").classList.remove("on");stopRun();show("source")});
+$("#abortNo").addEventListener("click",()=>$("#abortConfirm").classList.remove("on"));
+$("#next").addEventListener("click",advance);
+function advance(){
+  const c=panels[step];
+  if(c==="source"){if(/github/i.test($("#ivl").textContent))show("github");else show("configure")}
+  else if(c==="github"){show("configure")}
+  else if(c==="configure"){updateReview();show("confirm")}
+  else if(c==="confirm"){show("run");startRun()}
+  else if(c==="done"){alert("Would navigate to edit.php?post_type=page&universal_importer_session_id=…")}
+}
+function updateReview(){
+  $("#rvSrc").textContent=$("#src").value;
+  $("#rvType").textContent=$("#ivl").textContent;
+  $("#rvDir").textContent=(/github/i.test($("#ivl").textContent))?$("#ghSel").textContent:"—";
+  $("#rvUrl").textContent={ask:"ask",keep:"keep unchanged",rewrite:"rewrite listed"}[urlMode];
+  $("#rvMode").textContent=dry?"dry run":"real run";
+  $("#rvStat").textContent=drafts?"draft":"publish";
+}
+
+const src=$("#src");
+function classify(v){
+  const x=(v||"").trim();
+  if(!x)return{t:"empty",lbl:"—",ex:""};
+  if(x.startsWith(">"))return{t:"cmd",lbl:"Command",ex:"Press Enter to run."};
+  if(/github\.com/i.test(x))return{t:"github",lbl:"GitHub repository",ex:"Fetch the repo and parse Markdown docs as pages. Directory picker opens next."};
+  if(/\/wp-json/i.test(x))return{t:"wp",lbl:"WordPress REST site",ex:"Read via REST."};
+  if(/^https?:.*\/feed/i.test(x)||/\.xml$/i.test(x))return{t:"feed",lbl:"Feed (RSS/Atom)",ex:"Imports currently-advertised items only."};
+  if(/sitemap/i.test(x))return{t:"sitemap",lbl:"Sitemap",ex:"URLs walked and deduped."};
+  if(/^\//.test(x))return{t:"path",lbl:"Server path",ex:"Local filesystem path."};
+  if(/^https?:/i.test(x))return{t:"url",lbl:"Reachable URL",ex:"REST, then feed, then HTML."};
+  return{t:"unknown",lbl:"Unknown",ex:"Will try multiple detectors."};
+}
+function syncInfer(){
+  const v=src.value,c=classify(v);
+  if(v.startsWith(">")){$("#sugg").classList.add("on");$("#pfx").textContent="cmd"}
+  else{$("#sugg").classList.remove("on");$("#pfx").textContent=/^\//.test(v)?"path":"URL"}
+  $("#ivl").textContent=c.lbl;$("#iex").textContent=c.ex;
+}
+src.addEventListener("input",syncInfer);
+src.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();advance()}});
+
+$$("#sugg .r").forEach(r=>r.addEventListener("click",()=>{
+  const c=r.dataset.cmd||"";
+  if(c==="resume"){$("#recov").classList.add("on");src.value="";syncInfer();return}
+  if(c==="upload"){$("#fileIn").click();return}
+  src.value="> "+c;syncInfer();
+}));
+$("#upBtn").addEventListener("click",()=>$("#fileIn").click());
+$("#fileIn").addEventListener("change",e=>{
+  const n=e.target.files.length;if(!n)return;
+  src.value="";$("#pfx").textContent="files";
+  $("#ivl").textContent="Uploaded folder";
+  $("#iex").textContent="Folder selected · "+n+" files. Tree preview ready.";
+});
+$("#recBtn").addEventListener("click",()=>$("#recov").classList.toggle("on"));
+$("#recClose").addEventListener("click",()=>$("#recov").classList.remove("on"));
+$$("#recov [data-resume]").forEach(b=>b.addEventListener("click",()=>{src.value="https://example.com/wp-json/";syncInfer();$("#recov").classList.remove("on")}));
+
+$("#ovrBtn").addEventListener("click",()=>{overriding=!overriding;$("#types").classList.toggle("on",overriding)});
+$$("#types button").forEach(b=>b.addEventListener("click",()=>{
+  const m={github:"GitHub repository",wp:"WordPress site",feed:"Feed (RSS/Atom)",opml:"OPML feed list",path:"Server path",upload:"Uploaded folder",url:"Reachable URL",sitemap:"Sitemap",pdf:"PDF",epub:"EPUB"};
+  $("#ivl").textContent=m[b.dataset.t]||"Unknown";
+  $("#iex").textContent="Type set. Downstream steps re-resolve.";
+  $("#types").classList.remove("on");overriding=false;
+}));
+$$("#ghTree .r").forEach(r=>r.addEventListener("click",()=>{$$("#ghTree .r").forEach(x=>x.classList.remove("sel"));r.classList.add("sel");$("#ghSel").textContent=r.querySelector("span").textContent}));
+$("#ghFilter").addEventListener("input",e=>{const v=e.target.value.toLowerCase();$$("#ghTree .r").forEach(r=>{r.style.display=(!v||r.querySelector("span").textContent.toLowerCase().includes(v))?"":"none"})});
+
+const urlHints={ask:"Pause mid-run and confirm which domains to rewrite to this site.",keep:"Leave every URL exactly as found. Safest for verbatim archives.",rewrite:"Rewrite only the domains you list."};
+$$("#urlSeg button").forEach(b=>b.addEventListener("click",()=>{
+  $$("#urlSeg button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  urlMode=b.dataset.u;$("#urlHint").textContent=urlHints[urlMode];
+  $("#domInput").classList.toggle("on",urlMode==="rewrite");
+}));
+$("#drySwt").addEventListener("click",()=>{dry=!dry;$("#drySwt").classList.toggle("on",dry);$("#drySwt").setAttribute("aria-checked",dry);$("#dryLbl").textContent=dry?"Dry run · no pages written":"Real run · writes pages"});
+$("#draftSwt").addEventListener("click",()=>{drafts=!drafts;$("#draftSwt").classList.toggle("on",drafts);$("#draftSwt").setAttribute("aria-checked",drafts);$("#draftLbl").textContent=drafts?"Draft":"Publish"});
+
+const stages=[
+  {a:"Reading the source.",pct:8,s:"queued"},
+  {a:"Fetching repository files with sparse Git.",pct:18,s:"38 found"},
+  {a:"Preparing 12 items.",pct:38,s:"12 / 38"},
+  {a:"Choose URL treatment to continue.",pct:48,s:"awaiting",block:true},
+  {a:"Importing media.",pct:70,s:"18 / 22"},
+  {a:"Writing pages.",pct:90,s:"28 / 38"},
+  {a:"Import complete.",pct:100,s:"done"}
+];
+function setRail(i,state,sub){
+  const li=$$(".rail li")[i];if(!li)return;
+  li.classList.remove("act","dn","blk");
+  if(state==="active")li.classList.add("act");
+  else if(state==="done")li.classList.add("dn");
+  else if(state==="blocked")li.classList.add("blk");
+  let s=li.querySelector(".sub");if(s)s.remove();
+  if(sub){s=document.createElement("span");s.className="sub";s.textContent=sub;li.appendChild(s)}
+}
+function logEvt(t,msg,lv){const log=$("#log");const e=document.createElement("div");e.className="e"+(lv?" "+lv:"");e.innerHTML='<span class="t">'+t+'</span><span class="lv">'+(lv==="warn"?"!":"·")+'</span><span>'+msg+'</span>';log.appendChild(e);log.scrollTop=log.scrollHeight}
+function fmt(t){return [t.getHours(),t.getMinutes(),t.getSeconds()].map(x=>String(x).padStart(2,"0")).join(":")}
+
+const WIZARD_STEPS=["Source","Configure","Confirm","Run"];
+const PHASE_STEPS=["Read source","Prepare content","URL treatment","Import media","Write pages","Finish"];
+function morphRail(mode){
+  const rail=$("#rail");
+  if(rail.dataset.mode===mode)return;
+  rail.dataset.mode=mode;
+  $("#railGrp").textContent=mode==="wizard"?"Steps":"Phases";
+  const arr=mode==="wizard"?WIZARD_STEPS:PHASE_STEPS;
+  rail.innerHTML=arr.map((l,i)=>'<li><span class="nx">'+String(i+1).padStart(2,"0")+'</span><span class="nm">'+l+'</span></li>').join("");
+}
+function morphRailToWizard(){morphRail("wizard")}
+function morphRailToPhases(){morphRail("phases")}
+
+function startRun(){
+  paused=false;$("#log").innerHTML="";$("#decision").classList.remove("on");$("#pauseBan").classList.remove("on");
+  morphRailToPhases();
+  $$(".rail li").forEach((li,i)=>setRail(i,null,""));
+  setRail(0,"active","starting…");
+  $("#bar").classList.add("idt");$("#bar").classList.remove("pse");
+  $("#pctTxt").textContent="0%";$("#cntTxt").textContent="0 / 38";
+  $("#dot").classList.add("live");$("#status").textContent="running";$("#phaseMeta").textContent="running";
+  logEvt(fmt(new Date()),"GitHub repository fetch queued; file count will appear after discovery.");
+  let i=0;
+  function tick(){
+    if(i>=stages.length){finishRun();return}
+    const s=stages[i],now=new Date();
+    $("#actTxt").textContent=s.a;
+    $("#actLbl").textContent=s.block?"needs attention":"current action";
+    $("#pctTxt").textContent=s.pct+"%";
+    $("#bar").classList.toggle("idt",s.pct<20);
+    $("#bar i").style.width=s.pct+"%";
+    $("#bar").setAttribute("aria-valuenow",s.pct);
+    const phMap=[0,0,1,2,3,4,5],phI=phMap[i];
+    for(let k=0;k<phI;k++)setRail(k,"done","");
+    if(s.block){setRail(phI,"blocked","awaiting input");$("#decision").classList.add("on");$("#pauseBan").classList.add("on");$("#cntTxt").textContent="paused";$("#bar").classList.add("pse");paused=true;$("#dot").classList.remove("live");$("#dot").classList.add("warn");$("#status").textContent="paused";$("#phaseMeta").textContent="paused";logEvt(fmt(now),"Choose URL treatment to continue.","warn");return}
+    setRail(phI,"active",s.s);
+    $("#cntTxt").textContent=s.pct===100?"38 / 38":Math.round(s.pct/100*38)+" / 38";
+    const ev={0:"Fetching repository files with sparse Git.",1:"38 source items found.",2:"Preparing 12 items.",4:"Importing media.",5:"Writing pages.",6:"Import complete."};
+    if(ev[i])logEvt(fmt(now),ev[i]);
+    if(dry&&i===5){$("#actTxt").textContent="Dry run: no pages written.";setRail(4,"active","dry run")}
+    i++;timer=setTimeout(tick,900);
+  }
+  tick();
+  $$(".dec-a button").forEach(b=>b.onclick=()=>{
+    const ch=b.dataset.dec;
+    $("#decision").classList.remove("on");$("#pauseBan").classList.remove("on");
+    setRail(2,"done","");
+    $("#bar").classList.remove("pse");
+    paused=false;$("#dot").classList.add("live");$("#dot").classList.remove("warn");$("#status").textContent="running";$("#phaseMeta").textContent="running";
+    const lbl=ch==="selected"?"Rewrite selected":ch==="all"?"Rewrite all":"Keep all unchanged";
+    logEvt(fmt(new Date()),lbl+" — resuming.");
+    $("#actLbl").textContent="current action";
+    i=resumeIdx;timer=setTimeout(tick,400);
+  });
+}
+function stopRun(){if(timer)clearTimeout(timer);timer=null;$("#dot").classList.remove("live","warn")}
+function finishRun(){
+  stopRun();$("#bar i").style.width="100%";$("#bar").classList.remove("idt");
+  $("#pctTxt").textContent="100%";$("#cntTxt").textContent="38 / 38";
+  for(let k=0;k<6;k++)setRail(k,"done","");
+  $("#status").textContent="done";$("#phaseMeta").textContent="complete";
+  if(dry){$("#doneTitle").textContent="Dry run complete.";$("#doneLead").textContent="38 documents prepared · 22 media references checked · 1m 18s elapsed.";$("#tlPages").textContent="0";$("#dryHand").style.display="block"}
+  else{$("#doneTitle").textContent="Import complete.";$("#doneLead").textContent="38 pages written · 22 media imported · 1m 24s elapsed.";$("#tlPages").textContent="38";$("#dryHand").style.display="none"}
+  show("done");
+}
+$("#goReal").addEventListener("click",()=>{dry=false;show("run");startRun()});
+
+function resetAll(){
+  stopRun();dry=false;drafts=false;urlMode="ask";overriding=false;
+  $("#drySwt").classList.remove("on");$("#drySwt").setAttribute("aria-checked",false);$("#dryLbl").textContent="Real run · writes pages";
+  $("#draftSwt").classList.remove("on");$("#draftSwt").setAttribute("aria-checked",false);$("#draftLbl").textContent="Publish";
+  $$("#urlSeg button").forEach((x,i)=>x.classList.toggle("on",i===0));$("#domInput").classList.remove("on");$("#urlHint").textContent=urlHints.ask;
+  $("#types").classList.remove("on");$("#recov").classList.remove("on");
+  src.value="https://github.com/WordPress/gutenberg/tree/trunk/docs";syncInfer();
+  show("source");
+}
+
+document.addEventListener("keydown",e=>{
+  const isInput=/INPUT|TEXTAREA/.test(e.target.tagName);
+  if(e.key==="Escape"){
+    if(panels[step]==="source"){if(overriding){overriding=false;$("#types").classList.remove("on");return}if($("#recov").classList.contains("on")){$("#recov").classList.remove("on");return}}
+    else if(panels[step]!=="run"&&panels[step]!=="done"){show(panels[Math.max(0,step-1)])}
+  }
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){e.preventDefault();$("#ovrBtn").click()}
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="d"&&panels[step]==="configure"){e.preventDefault();$("#drySwt").click()}
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="s"&&panels[step]==="configure"){e.preventDefault();$("#draftSwt").click()}
+  if(e.key==="Enter"&&!isInput&&panels[step]!=="run"){e.preventDefault();$("#next").click()}
+});
+
+syncInfer();setHints("source");
+})();
+</script>
+</body>
+</html>

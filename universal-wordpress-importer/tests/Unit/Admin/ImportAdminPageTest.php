@@ -24,6 +24,7 @@ use UniversalImporter\Import\ImportSessionId;
 use UniversalImporter\Import\ImportSourceItem;
 use UniversalImporter\Import\SourceItemDocumentProcessor;
 use UniversalImporter\Import\WordPressImportSessionStore;
+use UniversalImporter\Tests\Unit\Import\FakeGitRepositoryFetcher;
 use UniversalImporter\Tests\Unit\Import\FakeRemoteContentFetcher;
 use UniversalImporter\Tests\Unit\Import\FakePostGateway;
 use UniversalImporter\Tests\Unit\Import\FakeWpdb;
@@ -395,20 +396,35 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'id="universal-importer-folder-picker"', $source );
 		$this->assertStringContainsString( 'accept=".pdf,.epub,.html,.htm,.md,.markdown,.txt,.xml,.wxr,.zip', $source );
 		$this->assertStringContainsString( 'id="universal-importer-folder-picker" class="universal-importer-file-input" multiple webkitdirectory directory', $source );
-		$this->assertStringContainsString( 'Choose files', $source );
+		// One combined affordance now: a single Source card with text-link "Choose file" / "Choose folder".
+		$this->assertStringContainsString( 'Choose file', $source );
 		$this->assertStringContainsString( 'Choose folder', $source );
 		$this->assertStringContainsString( 'universal-importer-file-preview', $source );
 		$this->assertStringContainsString( "dropzone.addEventListener('drop'", $source );
 		$this->assertStringContainsString( 'readDirectoryEntries', $source );
 		$this->assertStringContainsString( 'webkitGetAsEntry', $source );
-		$this->assertStringContainsString( 'Upload files or a folder', $source );
+		// The dual-card layout, numbered badges, OR divider, shortcut chips, and verbose dropzone copy are all gone.
+		$this->assertStringNotContainsString( 'Upload a file or folder', $source );
+		$this->assertStringNotContainsString( 'Drop a file or folder anywhere on this card', $source );
+		$this->assertStringNotContainsString( 'What should I import?', $source );
+		$this->assertStringNotContainsString( 'Two ways in. Use one.', $source );
+		$this->assertStringNotContainsString( 'universal-importer-memo-num', $source );
+		$this->assertStringNotContainsString( 'universal-importer-source-shortcut', $source );
+		$this->assertStringNotContainsString( 'universal-importer-divider', $source );
+		$this->assertStringNotContainsString( 'data-source-placeholder', $source );
+		// Shortcut chip labels are gone (the chips themselves have been removed).
+		$this->assertStringNotContainsString( '>GitHub repo<', $source );
+		$this->assertStringNotContainsString( 'Feed or OPML', $source );
+		$this->assertStringNotContainsString( 'WXR export', $source );
+		// Clear selection is still rendered, but lives inside a hidden wrapper until files are selected.
 		$this->assertStringContainsString( 'id="universal-importer-clear-files"', $source );
 		$this->assertStringContainsString( 'Clear selection', $source );
+		$this->assertStringContainsString( 'id="universal-importer-upload-actions" hidden', $source );
 		$this->assertStringContainsString( 'countFilesByExtension(browserFiles, \'.pdf\')', $source );
-		$this->assertStringContainsString( 'URL or server path', $source );
-		$this->assertStringContainsString( 'RSS/Atom/OPML feed', $source );
-		$this->assertStringContainsString( 'GitHub repo', $source );
-		$this->assertStringContainsString( 'Feed or OPML', $source );
+		$this->assertStringContainsString( 'type="url"', $source );
+		// The terse "accepts" line replaces the old shortcut/explainer chrome.
+		$this->assertStringContainsString( 'universal-importer-accepts', $source );
+		$this->assertStringContainsString( 'GitHub repos · feeds · sitemaps', $source );
 		$this->assertStringContainsString( 'Selected file tree', $source );
 		$this->assertStringContainsString( 'role="tree"', $source );
 		$this->assertStringContainsString( "filePreview.addEventListener('keydown'", $source );
@@ -436,8 +452,10 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'function syncPrimaryView(session)', $source );
 		$this->assertStringContainsString( 'function isImportLocked(session)', $source );
 		$this->assertStringContainsString( 'function canStartAnotherImport(session)', $source );
-		$this->assertStringContainsString( 'function renderStageDecision(session, stageKey)', $source );
+		$this->assertStringContainsString( 'function renderStageDecision()', $source );
 		$this->assertStringContainsString( 'universal-importer-stage-decision', $source );
+		$this->assertStringContainsString( 'function renderHoistedUrlDecision(session)', $source );
+		$this->assertStringContainsString( 'universal-importer-hoisted-decision', $source );
 		$this->assertStringContainsString( 'universal-importer-start-over', $source );
 		$this->assertStringContainsString( 'universal-importer-card is-importing', $source );
 		$this->assertStringContainsString( 'universal-importer-start-form" class="universal-importer-start', $source );
@@ -448,7 +466,9 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'function reattachActiveSession()', $source );
 		$this->assertStringContainsString( 'reattachActiveSession();', $source );
 		$this->assertStringContainsString( 'universal-importer-github-picker', $source );
-		$this->assertStringContainsString( 'Choose directory', $source );
+		// Inline GitHub path picker on the Source card: "Path: ... [change]".
+		$this->assertStringContainsString( 'universal-importer-github-picker-label', $source );
+		$this->assertStringContainsString( 'id="universal-importer-github-browse"', $source );
 		$this->assertStringContainsString( 'universal-importer-github-modal', $source );
 		$this->assertStringContainsString( 'Choose GitHub directory', $source );
 		$this->assertStringContainsString( 'Filter directories', $source );
@@ -469,95 +489,209 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertStringContainsString( 'AJAX_GITHUB_DIRS', $source );
 		$this->assertStringContainsString( 'var keepaliveInFlight = false', $source );
 		$this->assertStringContainsString( 'if (!activeSessionId || keepaliveInFlight)', $source );
+		// Transcript / memo column structure (option-30 design).
+		$this->assertStringContainsString( 'universal-importer-convo', $source );
+		$this->assertStringContainsString( 'universal-importer-turn', $source );
+		$this->assertStringContainsString( 'universal-importer-memo', $source );
+		// Single combined source affordance — one terse prompt instead of dual cards with explainers.
+		$this->assertStringContainsString( 'Paste a URL or drop a file', $source );
+		$this->assertStringContainsString( 'Past imports', $source );
+		// Inline inferred-type chip with a Change override popover lives on the Source card itself.
+		$this->assertStringContainsString( 'id="universal-importer-inferred"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-inferred-chip"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-inferred-change"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-inferred-popover"', $source );
+		$this->assertStringContainsString( 'function refreshInferredType()', $source );
+		// Picker modal renders a shimmer skeleton while directories are being fetched.
+		$this->assertStringContainsString( 'universal-importer-github-skeleton', $source );
+		$this->assertStringContainsString( 'universal-importer-github-skeleton-row', $source );
+		$this->assertStringContainsString( '@keyframes universal-importer-shimmer', $source );
+		$this->assertStringContainsString( 'function setGithubSkeletonVisible(visible)', $source );
+		// Configure step no longer carries the "Configure the run." headline + "Defaults are sensible." lede.
+		$this->assertStringNotContainsString( 'Configure the run.', $source );
+		$this->assertStringNotContainsString( 'Defaults are sensible.', $source );
+		// Source capture is URL or upload only — no typed server paths in the UI.
+		$this->assertStringNotContainsString( 'Server path', $source );
+		$this->assertStringNotContainsString( '/path/to/export', $source );
+		$this->assertStringNotContainsString( 'URL or server path', $source );
+		// Drag handler only reacts when the drag has Files (so dragging text/URLs doesn't light up the card).
+		$this->assertStringContainsString( "types.indexOf('Files')", $source );
+		// Progressive turn flow: only the source turn lives in the initial DOM.
+		$this->assertStringContainsString( 'id="universal-importer-turn-source" data-turn-key="source"', $source );
+		// Configure and Confirm are JS templates, not rendered upfront. Classify step has been removed.
+		$this->assertStringNotContainsString( '<template id="universal-importer-template-classify">', $source );
+		$this->assertStringContainsString( '<template id="universal-importer-template-configure">', $source );
+		$this->assertStringContainsString( '<template id="universal-importer-template-confirm">', $source );
+		// Next button on the source memo; the initial Clear button has been removed.
+		$this->assertStringContainsString( 'id="universal-importer-source-continue"', $source );
+		$this->assertStringNotContainsString( 'id="universal-importer-source-clear"', $source );
+		// State-machine hooks: locked summary bubbles render without Edit links — Back buttons are now the way back.
+		$this->assertStringContainsString( 'universal-importer-turn.is-past', $source );
+		$this->assertStringNotContainsString( 'data-edit-key', $source );
+		$this->assertStringContainsString( 'function jumpBack(key)', $source );
+		$this->assertStringContainsString( 'function dropTurnsAfter(key)', $source );
+		$this->assertStringNotContainsString( 'function renderClassifyTurn()', $source );
+		// Every non-Source step carries a Back button.
+		$this->assertStringContainsString( 'data-action="back"', $source );
+		$this->assertStringContainsString( 'function renderConfigureTurn()', $source );
+		$this->assertStringContainsString( 'function renderConfirmTurn()', $source );
+		$this->assertStringContainsString( 'function inferSourceType()', $source );
+		// Classify step is gone, but the inferred-type chip ships with an inline override popover.
+		// `Server path` was never a valid public source and stays excluded.
+		$this->assertStringContainsString( 'data-type="GitHub repository"', $source );
+		$this->assertStringContainsString( 'data-type="WordPress site URL"', $source );
+		$this->assertStringNotContainsString( 'data-type="Server path"', $source );
+		// URL input is a real type="url" field (no typed-path UI).
+		$this->assertStringContainsString( 'type="url" id="universal-importer-source"', $source );
+		// Hidden form state inputs carry the configure choices to submit.
+		$this->assertStringContainsString( 'id="universal-importer-state-url-mode"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-state-drafts"', $source );
+		$this->assertStringContainsString( 'id="universal-importer-state-domains"', $source );
+		// Dry-run option has been intentionally removed from the admin UI.
+		$this->assertStringNotContainsString( 'id="universal-importer-state-dry"', $source );
+		$this->assertStringNotContainsString( 'data-toggle="dry"', $source );
+		// "Edit anything above" has been removed from the Confirm turn.
+		$this->assertStringNotContainsString( 'Edit anything above', $source );
 	}
 
 	/**
-	 * GitHub directory browsing resolves the default branch and returns selectable repository paths.
+	 * GitHub directory browsing resolves HEAD via the Git plumbing fetcher and never hits the GitHub REST API.
 	 *
 	 * @return void
 	 */
 	public function test_list_github_directories_returns_default_branch_tree_picker() {
-		$fetcher = new FakeRemoteContentFetcher();
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository',
-			array(
-				'default_branch' => 'main',
-			)
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-			array(
-				'tree' => array(
-					array(
-						'path' => 'docs',
-						'type' => 'tree',
-					),
-					array(
-						'path' => 'docs/api',
-						'type' => 'tree',
-					),
-					array(
-						'path' => 'README.md',
-						'type' => 'blob',
-					),
-				),
-			)
+		$content_fetcher = new FakeRemoteContentFetcher();
+		$git_fetcher     = new FakeGitRepositoryFetcher();
+		$git_fetcher->add_directory_listing(
+			'HEAD',
+			'',
+			'main',
+			array( 'docs', 'docs/api' )
 		);
 
-		$result = $this->create_page( null, null, $fetcher )->list_github_directories( 'https://github.com/example/repository' );
+		$result = $this->create_page( null, null, $content_fetcher, $git_fetcher )
+			->list_github_directories( 'https://github.com/example/repository' );
 
 		$this->assertSame( 'main', $result['ref'] );
 		$this->assertSame( '', $result['selected_path'] );
 		$this->assertSame( 'https://github.com/example/repository/tree/main', $result['selected_source_url'] );
 		$this->assertSame( array( '', 'docs', 'docs/api' ), array_column( $result['directories'], 'path' ) );
 		$this->assertSame( 'https://github.com/example/repository/tree/main/docs/api', $result['directories'][2]['source_url'] );
-		$this->assertSame(
-			array(
-				'https://api.github.com/repos/example/repository',
-				'https://api.github.com/repos/example/repository/git/trees/main?recursive=1',
-			),
-			$fetcher->get_requested_urls()
-		);
+
+		// The directory picker must NOT issue any GitHub REST API requests.
+		$this->assertSame( array(), $content_fetcher->get_requested_urls() );
+
+		// One Git plumbing request was made, with the HEAD ref the parser produced.
+		$requests = $git_fetcher->get_directory_requests();
+		$this->assertCount( 1, $requests );
+		$this->assertSame( 'example', $requests[0]['owner'] );
+		$this->assertSame( 'repository', $requests[0]['name'] );
+		$this->assertSame( 'HEAD', $requests[0]['ref'] );
+		$this->assertSame( '', $requests[0]['source_path'] );
 	}
 
 	/**
-	 * GitHub directory browsing uses branch/path fallback for slash-containing tree URLs.
+	 * GitHub directory browsing falls back to branch + path candidates when the first ref does not resolve.
 	 *
 	 * @return void
 	 */
 	public function test_list_github_directories_falls_back_to_branch_plus_path() {
-		$fetcher = new FakeRemoteContentFetcher();
-		$fetcher->add_json_error(
-			'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk/docs?recursive=1',
-			'GitHub tree ref was not found.'
-		);
-		$fetcher->add_json(
-			'https://api.github.com/repos/WordPress/gutenberg/git/trees/trunk?recursive=1',
-			array(
-				'tree' => array(
-					array(
-						'path' => 'docs',
-						'type' => 'tree',
-					),
-					array(
-						'path' => 'docs/reference',
-						'type' => 'tree',
-					),
-					array(
-						'path' => 'packages',
-						'type' => 'tree',
-					),
-				),
-			)
+		$content_fetcher = new FakeRemoteContentFetcher();
+		$git_fetcher     = new FakeGitRepositoryFetcher();
+
+		// trunk/docs is not a real ref — the Git plumbing fails to resolve it.
+		$git_fetcher->fail_directory_listing( 'trunk/docs', '', 'php-toolkit Git directory listing could not resolve a branch on the remote.' );
+
+		// The branch + path fallback succeeds.
+		$git_fetcher->add_directory_listing(
+			'trunk',
+			'docs',
+			'trunk',
+			array( 'docs', 'docs/reference' )
 		);
 
-		$result = $this->create_page( null, null, $fetcher )->list_github_directories( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
+		$result = $this->create_page( null, null, $content_fetcher, $git_fetcher )
+			->list_github_directories( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
 
 		$this->assertSame( 'trunk', $result['ref'] );
 		$this->assertSame( 'trunk/docs', $result['requested_ref'] );
 		$this->assertSame( 'docs', $result['selected_path'] );
 		$this->assertSame( 'https://github.com/WordPress/gutenberg/tree/trunk/docs', $result['selected_source_url'] );
-		$this->assertSame( array( '', 'docs', 'docs/reference', 'packages' ), array_column( $result['directories'], 'path' ) );
+		$this->assertSame( array( '', 'docs', 'docs/reference' ), array_column( $result['directories'], 'path' ) );
+
+		// No GitHub REST API hits.
+		$this->assertSame( array(), $content_fetcher->get_requested_urls() );
+
+		// Both candidates were tried via the Git fetcher.
+		$requests = $git_fetcher->get_directory_requests();
+		$this->assertCount( 2, $requests );
+		$this->assertSame( 'trunk/docs', $requests[0]['ref'] );
+		$this->assertSame( '', $requests[0]['source_path'] );
+		$this->assertSame( 'trunk', $requests[1]['ref'] );
+		$this->assertSame( 'docs', $requests[1]['source_path'] );
+	}
+
+	/**
+	 * Browsing GitHub directories never constructs an api.github.com URL via the remote content fetcher.
+	 *
+	 * @return void
+	 */
+	public function test_list_github_directories_never_hits_api_github_com() {
+		$content_fetcher = new FakeRemoteContentFetcher();
+		$git_fetcher     = new FakeGitRepositoryFetcher();
+		$git_fetcher->add_directory_listing( 'HEAD', '', 'main', array( 'docs' ) );
+
+		$this->create_page( null, null, $content_fetcher, $git_fetcher )
+			->list_github_directories( 'https://github.com/example/repository' );
+
+		foreach ( $content_fetcher->get_requested_urls() as $url ) {
+			$this->assertStringNotContainsString( 'api.github.com', $url );
+		}
+		$this->assertCount( 0, $content_fetcher->get_requested_urls() );
+	}
+
+	/**
+	 * The candidate fall-through loop must catch every Throwable, not only
+	 * RuntimeException. The actual crash that motivated this guard surfaced as
+	 * a WordPress\Filesystem\FilesystemException (which extends Exception, not
+	 * RuntimeException), so we simulate that here with a plain Exception and
+	 * confirm the snapshot still returns the fallback candidate's directories.
+	 *
+	 * @return void
+	 */
+	public function test_list_github_directories_falls_back_when_first_candidate_throws() {
+		$content_fetcher = new FakeRemoteContentFetcher();
+		$git_fetcher     = new FakeGitRepositoryFetcher();
+
+		// First candidate (naive ref "trunk/docs") blows up with a non-RuntimeException
+		// upstream failure — mirroring the FilesystemException seen in the wild.
+		$git_fetcher->throw_directory_listing(
+			'trunk/docs',
+			'',
+			new \Exception( 'Failed to write to file: /cache/refs/heads/trunk/docs' )
+		);
+
+		// Fallback candidate (ref=trunk, source_path=docs) succeeds.
+		$git_fetcher->add_directory_listing(
+			'trunk',
+			'docs',
+			'trunk',
+			array( 'docs', 'docs/reference' )
+		);
+
+		$result = $this->create_page( null, null, $content_fetcher, $git_fetcher )
+			->list_github_directories( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
+
+		$this->assertSame( 'trunk', $result['ref'] );
+		$this->assertSame( 'trunk/docs', $result['requested_ref'] );
+		$this->assertSame( 'docs', $result['selected_path'] );
+		$this->assertSame( array( '', 'docs', 'docs/reference' ), array_column( $result['directories'], 'path' ) );
+
+		$requests = $git_fetcher->get_directory_requests();
+		$this->assertCount( 2, $requests );
+		$this->assertSame( 'trunk/docs', $requests[0]['ref'] );
+		$this->assertSame( 'trunk', $requests[1]['ref'] );
+		$this->assertSame( 'docs', $requests[1]['source_path'] );
 	}
 
 	/**
@@ -1052,6 +1186,34 @@ final class ImportAdminPageTest extends TestCase {
 	}
 
 	/**
+	 * Pending GitHub imports explain repository discovery before the first worker response returns.
+	 *
+	 * @return void
+	 */
+	public function test_status_snapshot_explains_pending_github_repository_discovery() {
+		$page     = $this->create_page();
+		$snapshot = $page->create_import_session( 'https://github.com/WordPress/gutenberg/tree/trunk/docs' );
+
+		$this->assertSame( ImportSession::STATUS_PENDING, $snapshot['status'] );
+		$this->assertSame( 0, $snapshot['source_items']['total'] );
+		$this->assertSame( 0, $snapshot['dashboard']['summary']['total'] );
+		$this->assertTrue( $snapshot['dashboard']['indeterminate'] );
+		$this->assertSame( 'Starting', $snapshot['dashboard']['status_label'] );
+		$this->assertSame( 'Queued to fetch GitHub repository files.', $snapshot['dashboard']['current_action'] );
+		$this->assertSame( 'File count appears after GitHub repository discovery.', $snapshot['dashboard']['progress_note'] );
+		$this->assertTrue( $snapshot['dashboard']['needs_keepalive'] );
+		$this->assertSame( 'active', $snapshot['dashboard']['checklist'][0]['state'] );
+		// Active-stage detail stays empty in the pre-discovery state so the
+		// current_action line is the single source of truth for what's
+		// happening right now.
+		$this->assertSame( '', $snapshot['dashboard']['checklist'][0]['detail'] );
+		$this->assertSame( 'github.fetch_queued', $snapshot['recent_events'][0]['type'] );
+		$this->assertSame( 'trunk/docs', $snapshot['recent_events'][0]['context']['github_ref'] );
+		$this->assertSame( '', $snapshot['recent_events'][0]['context']['github_source_path'] );
+		$this->assertStringNotContainsString( 'Queued.', $snapshot['dashboard']['current_action'] );
+	}
+
+	/**
 	 * GitHub sparse checkout progress is shown without counting internal state as a source file.
 	 *
 	 * @return void
@@ -1086,8 +1248,12 @@ final class ImportAdminPageTest extends TestCase {
 		$this->assertSame( 0, $details['source_items']['statuses'][ ImportSourceItem::STATUS_PROCESSING ] );
 		$this->assertTrue( $details['github_git']['active'] );
 		$this->assertTrue( $details['dashboard']['indeterminate'] );
+		$this->assertSame( 'Fetching', $details['dashboard']['status_label'] );
+		$this->assertSame( 'Fetching repository files; file count appears after discovery.', $details['dashboard']['progress_note'] );
 		$this->assertSame( 'Fetching repository files with sparse Git.', $details['dashboard']['current_action'] );
-		$this->assertSame( 'Fetching repository files with sparse Git.', $details['dashboard']['checklist'][0]['detail'] );
+		// Active-stage detail stays empty while fetching so the current_action
+		// line owns the description and the checklist row stays glanceable.
+		$this->assertSame( '', $details['dashboard']['checklist'][0]['detail'] );
 	}
 
 	/**
@@ -1243,14 +1409,164 @@ final class ImportAdminPageTest extends TestCase {
 	}
 
 	/**
+	 * Five identical "document.prepared" events collapse to one row that
+	 * displays the count against progress.total when available.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_collapses_boilerplate_into_count_with_total() {
+		$page = $this->create_page();
+
+		$events = array();
+		for ( $i = 0; $i < 5; $i++ ) {
+			$events[] = array(
+				'type'    => 'document.prepared',
+				'message' => 'Source item was converted into initial block markup.',
+			);
+		}
+
+		$rows = $page->dedup_events( $events, array( 'total' => 117 ) );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( '5 / 117 documents converted to block markup', $rows[0]['text'] );
+		$this->assertSame( 5, $rows[0]['count'] );
+	}
+
+	/**
+	 * Distinct messages on a non-boilerplate type stay as separate rows so
+	 * the user still sees each path. Only repeats of the exact message
+	 * collapse, with a multiplier prefix.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_keeps_distinct_paths_and_multiplies_exact_repeats() {
+		$page = $this->create_page();
+
+		$events = array(
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/a' ),
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/b' ),
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/b' ),
+			array( 'type' => 'source.imported', 'message' => 'Read /2024/c' ),
+		);
+
+		$rows = $page->dedup_events( $events );
+
+		$this->assertCount( 3, $rows );
+		$this->assertSame( 'Read /2024/a', $rows[0]['text'] );
+		$this->assertSame( '2 × Read /2024/b', $rows[1]['text'] );
+		$this->assertSame( 'Read /2024/c', $rows[2]['text'] );
+	}
+
+	/**
+	 * Non-document boilerplate types (media, URLs) collapse to a count but
+	 * do NOT show the progress.total ceiling, since "117 documents" is not
+	 * a meaningful upper bound for media imports.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_omits_total_for_non_document_templates() {
+		$page = $this->create_page();
+
+		$events = array();
+		for ( $i = 0; $i < 3; $i++ ) {
+			$events[] = array( 'type' => 'media.attachment_created', 'message' => 'Imported image-' . $i );
+		}
+
+		$rows = $page->dedup_events( $events, array( 'total' => 117 ) );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( '3 media items imported', $rows[0]['text'] );
+		$this->assertSame( 3, $rows[0]['count'] );
+	}
+
+	/**
+	 * Distinct event types that all mean "fetching from the source" collapse
+	 * into a single user-log row, with the latest phrasing winning.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_collapses_semantic_source_fetching_into_one_row() {
+		$page = $this->create_page();
+
+		$events = array(
+			array( 'type' => 'source.queued',        'message' => 'Queued to fetch GitHub repository files.' ),
+			array( 'type' => 'github.git_fetching', 'message' => 'Fetching repository files with sparse Git.' ),
+			array( 'type' => 'source.fetching',     'message' => 'Fetching repository files; file count appears after discovery.' ),
+		);
+
+		$rows = $page->dedup_events( $events );
+
+		// All three pre-discovery status events are filtered as
+		// status-placeholders so they do not echo the current-action line.
+		// What survives is whatever real progress comes later — here, none.
+		$this->assertSame( array(), $rows );
+	}
+
+	/**
+	 * Recovered-failure diagnostics (sparse Git ref failure that the importer
+	 * rolled past) do not appear in the user log row stream produced by
+	 * dedup_events. They remain queryable via is_diagnostic_noise_event so the
+	 * Technical details section can still surface them.
+	 *
+	 * @return void
+	 */
+	public function test_dedup_events_filters_recovered_failure_diagnostics() {
+		$page = $this->create_page();
+
+		$events = array(
+			array(
+				'type'    => 'github.git_unavailable',
+				'message' => 'php-toolkit Git traversal failed for ref "trunk/docs" at path "/": Invalid Git ref: branch names cannot contain a slash. The importer will try the next GitHub path candidate.',
+			),
+			array(
+				'type'    => 'source.imported',
+				'message' => 'Read /docs/intro.md',
+			),
+		);
+
+		$rows = $page->dedup_events( $events );
+
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'Read /docs/intro.md', $rows[0]['text'] );
+
+		$this->assertTrue( $page->is_diagnostic_noise_event( $events[0] ) );
+		$this->assertFalse( $page->is_diagnostic_noise_event( $events[1] ) );
+	}
+
+	/**
+	 * Diagnostic noise is also detected by message substring, so unfamiliar
+	 * event types still get filtered out as long as the message carries one
+	 * of the recovery signatures.
+	 *
+	 * @return void
+	 */
+	public function test_is_diagnostic_noise_event_matches_recovery_substrings() {
+		$page = $this->create_page();
+
+		$this->assertTrue( $page->is_diagnostic_noise_event( array(
+			'type'    => 'custom.something',
+			'message' => 'Outer adapter fell back to next-best resolver.',
+		) ) );
+		$this->assertTrue( $page->is_diagnostic_noise_event( array(
+			'type'    => 'custom.something',
+			'message' => 'WordPress\\Importer\\X failed.',
+		) ) );
+		$this->assertFalse( $page->is_diagnostic_noise_event( array(
+			'type'    => 'source.imported',
+			'message' => 'Read /a',
+		) ) );
+	}
+
+	/**
 	 * Creates an admin page with fake dependencies.
 	 *
 	 * @param callable|null                 $runner_factory  Optional runner factory.
 	 * @param ImportCacheDirectory|null     $cache_directory Optional upload cache directory.
 	 * @param FakeRemoteContentFetcher|null $content_fetcher Optional remote content fetcher.
+	 * @param FakeGitRepositoryFetcher|null $git_fetcher     Optional Git repository fetcher (admin directory picker).
 	 * @return ImportAdminPage
 	 */
-	private function create_page( callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, FakeRemoteContentFetcher $content_fetcher = null ) {
+	private function create_page( callable $runner_factory = null, ImportCacheDirectory $cache_directory = null, FakeRemoteContentFetcher $content_fetcher = null, FakeGitRepositoryFetcher $git_fetcher = null ) {
 		return new ImportAdminPage(
 			$this->store,
 			function ( ImportSessionId $session_id ) {
@@ -1260,7 +1576,8 @@ final class ImportAdminPageTest extends TestCase {
 				return new FakeAdminRunner( $store );
 			} : $runner_factory,
 			$cache_directory,
-			$content_fetcher
+			$content_fetcher,
+			$git_fetcher
 		);
 	}
 

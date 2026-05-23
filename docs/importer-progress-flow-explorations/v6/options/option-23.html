@@ -1,0 +1,549 @@
+<!doctype html>
+<!-- Theme 6 - Split View - Variation 3: SVG wire connectors between paired rows -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Universal Importer - Theme 6 - V3 - Wire Connectors</title>
+<style>
+:root{--bg:#f7fafc;--ink:#0f172a;--rule:#e2e8f0;--accent:#15803d;--soft:#dcfce7;--muted:#475569;--warn:#92400e;--warns:#fef3c7;--paper:#fff}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 "Inter",ui-sans-serif,system-ui,-apple-system,sans-serif}
+button,input{font:inherit;color:inherit}
+a{color:var(--accent);text-decoration:none}
+.app{max-width:1280px;margin:0 auto;padding:22px 20px}
+.head{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;margin-bottom:14px}
+.head h1{margin:0;font-size:21px;font-weight:600;letter-spacing:-.01em}
+.crumb{font-size:12.5px;color:var(--muted);margin-bottom:2px}
+.lnk{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12.5px;padding:6px 8px;border-radius:6px}
+.lnk:hover{background:#eef2f7;color:var(--ink)}
+.btn{padding:9px 14px;border:1px solid var(--rule);border-radius:8px;background:#fff;cursor:pointer;font-weight:600;font-size:13px}
+.btn:hover{background:#f1f5f9}
+.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.primary:hover{background:#166534}
+.btn.ghost{background:none;border:none;color:var(--muted)}
+
+.tape{display:flex;font-size:11.5px;color:var(--muted);margin-bottom:12px;border-bottom:1px solid var(--rule)}
+.tape b{flex:1;padding:7px 10px;border-bottom:2px solid transparent;font-weight:500}
+.tape b.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+.tape b.done{color:var(--accent)}
+
+.wire{position:relative;background:var(--paper);border:1px solid var(--rule);border-radius:12px;overflow:hidden}
+.cols{display:grid;grid-template-columns:1fr 120px 1fr;position:relative;min-height:460px}
+.col{padding:16px;min-width:0;position:relative;z-index:2;display:flex;flex-direction:column}
+.col.src{border-right:1px solid var(--rule);background:#fbfcfd}
+.col.out{border-left:1px solid var(--rule)}
+.gutter{position:relative;background:#fbfcfd;z-index:1}
+.gutter svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.gutter .strip{position:relative;padding:14px 8px;text-align:center;font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);font-weight:600;z-index:3}
+.gutter .strip .a{display:block;font-size:12.5px;color:var(--ink);font-weight:600;text-transform:none;letter-spacing:0;margin-top:6px;min-height:32px;line-height:1.35}
+.gutter .strip .bar{height:5px;background:#e2e8f0;border-radius:999px;overflow:hidden;margin-top:8px}
+.gutter .strip .bar > i{display:block;height:100%;width:0;background:var(--accent);border-radius:999px;transition:width .35s}
+.gutter .strip .bar.indet > i{width:35%;animation:slide 1.4s ease-in-out infinite}
+.gutter .strip .bar.paused > i{background:repeating-linear-gradient(45deg,#f59e0b,#f59e0b 4px,#fef3c7 4px,#fef3c7 8px)}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+.gutter .strip .pct{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:4px}
+
+.col-label{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);font-weight:600;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+.col-label small{font-weight:500;text-transform:none;letter-spacing:0;font-size:12px;color:var(--muted)}
+
+.cap-field{display:flex;gap:6px;border:1px solid var(--rule);border-radius:9px;background:#fff;padding:4px;margin-bottom:8px}
+.cap-field input{flex:1;border:none;outline:none;padding:8px 10px;background:transparent;font-size:13.5px;min-width:0}
+.cap-field button{padding:7px 10px;border:1px solid var(--rule);border-radius:6px;background:#fff;cursor:pointer;font-weight:600;font-size:12px}
+.shorts{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.chip{padding:4px 9px;border:1px solid var(--rule);border-radius:999px;background:#fff;font-size:11.5px;color:var(--muted);cursor:pointer}
+.chip:hover{background:#f1f5f9}
+.chip.on{background:var(--soft);color:var(--accent);border-color:#bbf7d0;font-weight:600}
+.inf{padding:8px 10px;background:#fff;border:1px solid var(--rule);border-radius:8px;font-size:12.5px;display:none;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.inf.show{display:flex}
+.inf .dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.inf b{color:var(--ink)}
+.inf button{margin-left:auto;font-size:11.5px;color:var(--accent);background:none;border:none;cursor:pointer;text-decoration:underline}
+.expl{font-size:11.5px;color:var(--muted);margin-bottom:8px;display:none}
+.expl.show{display:block}
+.over{display:none;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;background:#fff;margin-bottom:8px}
+.over.show{display:block}
+.over h4{margin:0 0 6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+
+/* paired row cards - same shape both sides */
+.rowscroll{flex:1;overflow:auto;max-height:340px}
+.rows{display:flex;flex-direction:column;gap:5px}
+.row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;padding:8px 10px;border-radius:7px;background:#fff;border:1px solid var(--rule);align-items:center;font-size:12.5px}
+.row .dot{width:7px;height:7px;border-radius:50%;background:#cbd5e1;flex:none}
+.row.active .dot{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.18)}
+.row.done .dot{background:var(--accent)}
+.row .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;font-size:12.5px}
+.row.src-row .name{font-family:ui-monospace,Menlo,monospace;font-weight:400;font-size:12px}
+.row .slug{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
+.row .pill{font-size:9.5px;padding:2px 6px;border-radius:999px;background:#e2e8f0;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.row.predicted .pill{background:#e2e8f0}
+.row.active .pill{background:var(--warns);color:var(--warn)}
+.row.done .pill{background:var(--soft);color:var(--accent)}
+
+.outsum{padding:16px 12px;font-size:13px;color:var(--ink);background:#fafbfc;border:1px dashed var(--rule);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px}
+.outsum b{font-weight:600}
+.outsum small{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+.outsum .tg{font-size:12px;color:var(--accent);background:none;border:none;cursor:pointer;text-decoration:underline}
+
+.tfoot{font-size:11.5px;color:var(--muted);margin-top:8px}
+
+.belt{display:flex;flex-wrap:wrap;gap:5px;padding:10px 14px;border-top:1px solid var(--rule);background:#fbfcfd;justify-content:center}
+.stg{display:flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;border:1px solid var(--rule);font-size:11px;color:var(--muted);background:#fff}
+.stg .n{width:14px;height:14px;border-radius:50%;background:#e2e8f0;display:grid;place-items:center;font-size:8.5px;font-weight:700;color:var(--muted)}
+.stg.active{color:var(--ink);border-color:#cbd5e1;font-weight:600}
+.stg.active .n{background:var(--accent);color:#fff}
+.stg.done{color:var(--accent);border-color:#bbf7d0;background:var(--soft)}
+.stg.done .n{background:var(--accent);color:#fff}
+.stg.blocked{color:var(--warn);border-color:#fde68a;background:#fffbeb}
+.stg.blocked .n{background:#f59e0b;color:#fff}
+
+.card{background:var(--paper);border:1px solid var(--rule);border-radius:12px;padding:14px 16px;margin-top:12px}
+.card h3{margin:0 0 4px;font-size:15px;font-weight:600}
+.card .lead{margin:0 0 10px;color:var(--muted);font-size:12.5px}
+.section{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;margin-bottom:6px}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:flex;gap:10px;padding:9px 12px;border:1px solid var(--rule);border-radius:8px;background:#fff;cursor:pointer;font-size:13px}
+.opt.on{border-color:var(--accent);background:var(--soft)}
+.opt input{margin-top:3px}
+.opt small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+.dom{margin-top:8px;display:none}
+.dom.show{display:block}
+.dom input{width:100%;padding:8px 10px;border:1px solid var(--rule);border-radius:7px}
+.tog{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--rule);border-radius:8px;margin-top:8px;cursor:pointer}
+.tog small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px}
+.sw{width:34px;height:20px;background:#cbd5e1;border-radius:999px;position:relative;flex:none}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
+.tog.on .sw{background:var(--accent)}
+.tog.on .sw::after{transform:translateX(14px)}
+.foot{display:flex;justify-content:space-between;margin-top:12px;gap:8px;flex-wrap:wrap}
+.abort-confirm{display:none;margin-top:10px;padding:10px 12px;border:1px solid var(--warn);background:var(--warns);border-radius:8px;font-size:13px}
+.abort-confirm.on{display:block}
+.abort-confirm b{display:block;margin-bottom:2px;color:var(--warn)}
+.abort-confirm small{display:block;color:var(--muted);font-size:12px;margin-bottom:8px}
+.abort-confirm .ac-row{display:flex;gap:6px}
+.abort-confirm button{padding:6px 11px;border-radius:6px;border:1px solid var(--rule);background:#fff;font-size:12px;font-weight:600;cursor:pointer}
+.abort-confirm .danger{background:var(--warn);border-color:var(--warn);color:#fff}
+
+.banner{display:none;background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:10px 14px;margin-top:12px;color:#78350f;font-size:13px;font-weight:600;align-items:center;gap:10px}
+.banner.show{display:flex}
+.banner .ic{width:22px;height:22px;border-radius:50%;background:#f59e0b;color:#fff;display:grid;place-items:center;font-weight:700;flex:none}
+
+.decision{background:#fff;border:1px solid #fde68a;border-radius:12px;padding:14px 16px;margin-top:10px;display:none}
+.decision.show{display:block}
+.decision h3{margin:0 0 4px;font-size:14px;color:#78350f}
+.decision p{margin:0 0 10px;color:#92400e;font-size:12.5px}
+.dlist{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.dlist label{display:flex;gap:8px;padding:7px 10px;border:1px solid #fde68a;border-radius:7px;background:#fffbeb;font-size:13px;cursor:pointer}
+.dlist code{display:block;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);margin-top:2px}
+
+.log{display:none;background:#fff;border:1px solid var(--rule);border-radius:10px;margin-top:10px;padding:10px 14px}
+.log.show{display:block}
+.log h4{margin:0 0 6px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.log ol{margin:0;padding:0;list-style:none;font-size:11.5px;color:var(--muted);max-height:100px;overflow:auto;font-family:ui-monospace,Menlo,monospace}
+.log li{padding:2px 0;display:flex;gap:8px}
+.log li time{flex:none;color:#94a3b8}
+
+.pulse{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:4px;animation:pulse 1.4s infinite;vertical-align:middle}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+
+.overlay{position:fixed;inset:0;background:rgba(15,23,42,.5);display:none;align-items:flex-start;justify-content:center;padding:60px 16px;z-index:50}
+.overlay.show{display:flex}
+.sheet{background:#fff;border-radius:12px;max-width:520px;width:100%;padding:18px}
+.sess{padding:11px;border:1px solid var(--rule);border-radius:8px;display:flex;justify-content:space-between;gap:12px;margin-bottom:8px;align-items:center}
+.sess code{font-family:ui-monospace,Menlo,monospace;font-size:12px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess .sm{font-size:11px;color:var(--muted);margin-top:2px}
+.sp{font-size:10px;padding:2px 6px;border-radius:999px;background:var(--warns);color:var(--warn);font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-right:6px}
+
+.tallies{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px;margin-top:10px}
+.tl{padding:10px;border:1px solid var(--rule);border-radius:8px;background:#fff}
+.tl b{display:block;font-size:18px;font-weight:600}
+.tl span{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+
+@media (max-width: 980px){
+  .cols{grid-template-columns:1fr}
+  .col.src,.col.out{border:none;border-top:1px solid var(--rule)}
+  .gutter{border:none;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+  .gutter svg{display:none}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="head">
+    <div>
+      <div class="crumb"><a href="#">Tools</a> &rsaquo; Universal Importer</div>
+      <h1>Source items become pages, one wire at a time.</h1>
+    </div>
+    <button class="lnk" id="pastBtn">Past imports</button>
+  </div>
+
+  <div class="tape" id="tape">
+    <b id="tp1" class="on">Source</b><b id="tp2">Configure</b><b id="tp3">Confirm</b><b id="tp4">Run</b>
+  </div>
+
+  <div class="wire">
+    <div class="cols">
+      <section class="col src">
+        <div class="col-label"><span>Source</span><small id="srcMeta">no input yet</small></div>
+        <div class="cap-field">
+          <input id="srcInput" placeholder="Paste URL or pick a folder">
+          <button id="browseBtn">Browse</button>
+        </div>
+        <div class="shorts" id="shorts">
+          <button class="chip" data-st="https://github.com/WordPress/gutenberg/tree/trunk/docs">GitHub</button>
+          <button class="chip" data-st="https://example.com/wp-json/">WordPress</button>
+          <button class="chip" data-st="https://example.com/feed/">Feed</button>
+          <button class="chip" data-st="/var/www/imports/">Path</button>
+        </div>
+        <div class="inf" id="inf"><span class="dot"></span><span>Inferred as</span> <b id="typeName">GitHub repository</b><button id="changeType">Change</button></div>
+        <div class="expl" id="expl">We'll fetch the repo and parse Markdown docs as pages.</div>
+        <div class="over" id="over"><h4>Override type</h4><div id="typeList" class="shorts"></div></div>
+
+        <div class="rowscroll" id="srcScroll" style="display:none">
+          <div class="rows" id="srcRows"></div>
+        </div>
+        <div class="tfoot" id="srcFoot" style="display:none">Branch <b>trunk</b> &middot; <code>docs/</code> &middot; <a href="#" id="repick">Change directory</a></div>
+      </section>
+
+      <aside class="gutter" aria-hidden="true">
+        <svg id="connectors" preserveAspectRatio="none"></svg>
+        <div class="strip">
+          <div id="phase">Step 1</div>
+          <div class="a" id="actLine" aria-live="polite">Capture content.</div>
+          <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+          <div class="pct" id="pct">&nbsp;</div>
+        </div>
+      </aside>
+
+      <section class="col out">
+        <div class="col-label"><span>Outcome</span><small id="outMeta">predicted after capture</small></div>
+        <div id="outEmpty" style="padding:30px 6px;color:var(--muted);font-size:12.5px;line-height:1.55">
+          <div style="font-weight:600;color:var(--ink);margin-bottom:4px">What will exist</div>
+          Capture a source on the left; predicted pages will appear here. Wires in the gutter pair each source item with its target page as the run flows.
+        </div>
+        <div class="outsum" id="outsum" style="display:none">
+          <div><b id="outCount">~38 pages will be created</b><small>docs/ on trunk &middot; 22 media references</small></div>
+          <button class="tg" id="outToggle">Show all</button>
+        </div>
+        <div class="rowscroll" id="outScroll" style="display:none">
+          <div class="rows" id="outRows"></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="belt" id="belt">
+      <div class="stg" data-s="0"><span class="n">1</span>Read source</div>
+      <div class="stg" data-s="1"><span class="n">2</span>Prepare content</div>
+      <div class="stg" data-s="2"><span class="n">3</span>URL treatment</div>
+      <div class="stg" data-s="3"><span class="n">4</span>Import media</div>
+      <div class="stg" data-s="4"><span class="n">5</span>Write pages</div>
+      <div class="stg" data-s="5"><span class="n">6</span>Finish</div>
+    </div>
+  </div>
+
+  <div class="banner" id="banner"><div class="ic">!</div><div>Run paused. Choose URL treatment below to continue.</div></div>
+
+  <div class="card" id="configCard" style="display:none">
+    <h3>Configure</h3>
+    <div class="section">URL treatment</div>
+    <div class="opts" id="urlOpts">
+      <label class="opt on"><input type="radio" name="urlt" value="ask" checked><div><b>Ask when old URLs are found</b><small>Recommended. Decide mid-run.</small></div></label>
+      <label class="opt"><input type="radio" name="urlt" value="keep"><div><b>Keep URLs unchanged</b><small>Don't rewrite anything.</small></div></label>
+      <label class="opt"><input type="radio" name="urlt" value="rewrite"><div><b>Rewrite listed domains</b><small>Map specific domains.</small></div></label>
+    </div>
+    <div class="dom" id="dom"><input id="domInput" placeholder="example.com, www.example.com"></div>
+    <div class="tog" id="dryT" role="switch" aria-checked="false"><div><b>Dry run</b><small>Prepare but don't write pages.</small></div><div class="sw"></div></div>
+    <div class="tog" id="draftT" role="switch" aria-checked="false"><div><b>Import as drafts</b><small>Pages stay unpublished until reviewed.</small></div><div class="sw"></div></div>
+    <div class="foot">
+      <button class="btn ghost" onclick="setStep('classified')">&larr; Back</button>
+      <button class="btn primary" onclick="setStep('confirm')">Review &rarr;</button>
+    </div>
+  </div>
+
+  <div class="card" id="confirmCard" style="display:none">
+    <h3>Ready</h3>
+    <p class="lead">Review the summary and start.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;font-size:12.5px">
+      <div><span style="color:var(--muted)">Source</span><br><b>WordPress/gutenberg</b></div>
+      <div><span style="color:var(--muted)">Type</span><br><b>GitHub repository</b></div>
+      <div><span style="color:var(--muted)">Subpath</span><br><b>docs/ (trunk)</b></div>
+      <div><span style="color:var(--muted)">URLs</span><br><b id="sUrl">Ask</b></div>
+      <div><span style="color:var(--muted)">Mode</span><br><b id="sRun">Real run</b></div>
+      <div><span style="color:var(--muted)">Status</span><br><b id="sStat">Publish</b></div>
+      <div><span style="color:var(--muted)">Preview</span><br><b>~38 docs / 22 media</b></div>
+    </div>
+    <div class="foot">
+      <button class="btn ghost" onclick="setStep('configure')">&larr; Back</button>
+      <button class="btn primary" id="startBtn" onclick="startRun()">Import this content</button>
+    </div>
+  </div>
+
+  <div class="decision" id="decision">
+    <h3>Rewrite old-site URLs to this site?</h3>
+    <p>Selected domains will be rewritten in content; unselected stay as-is. <b>Run paused until you choose.</b></p>
+    <div class="dlist">
+      <label><input type="checkbox" checked> <span><b>developer.wordpress.org</b><code>https://developer.wordpress.org/block-editor/</code></span></label>
+      <label><input type="checkbox" checked> <span><b>make.wordpress.org/core</b><code>https://make.wordpress.org/core/handbook/</code></span></label>
+    </div>
+    <div class="foot">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn primary" onclick="resolveDecision('selected')">Rewrite selected domains</button>
+        <button class="btn" onclick="resolveDecision('all')">Yes, rewrite all</button>
+        <button class="btn" onclick="resolveDecision('none')">No, keep all URLs</button>
+      </div>
+      <button class="btn ghost" onclick="askAbort()">Abort</button>
+    </div>
+  </div>
+
+  <div class="card" id="completeCard" style="display:none">
+    <h3 id="cTitle">Import complete.</h3>
+    <p class="lead" id="cSub">38 pages written, 22 media imported.</p>
+    <div class="tallies" id="tallies"></div>
+    <div class="foot">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn primary" onclick="alert('Open: edit.php?post_type=page&universal_importer_session_id=...')">View imported content</button>
+        <button class="btn" id="rerunReal" style="display:none" onclick="setStep('confirm');setDry(false);document.getElementById('startBtn').textContent='Import this content'">Run for real with the same choices</button>
+      </div>
+      <button class="btn ghost" onclick="setStep('empty')">Start another import</button>
+    </div>
+  </div>
+
+  <div id="runFoot" style="display:none;margin-top:8px;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);gap:8px;flex-wrap:wrap">
+    <div><span class="pulse"></span>Live &middot; keepalive 5 s. Stuck? <code style="font-family:ui-monospace,Menlo,monospace">wp universal-importer tick &lt;session&gt;</code></div>
+    <button class="btn" onclick="askAbort()">Abort</button>
+  </div>
+
+  <div class="abort-confirm" id="abortConfirm">
+    <b>Abort this import?</b>
+    <small>Anything written so far stays. Pending items will not be written.</small>
+    <div class="ac-row">
+      <button class="danger" onclick="doAbort()">Yes, abort</button>
+      <button onclick="cancelAbort()">Cancel</button>
+    </div>
+  </div>
+
+  <div class="log" id="logBox"><h4>Activity</h4><ol id="logList" aria-live="polite"></ol></div>
+</div>
+
+<div class="overlay" id="pastOverlay" role="dialog" aria-label="Past imports">
+  <div class="sheet">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <h3 style="margin:0;font-size:15px">Past imports</h3>
+      <button class="btn ghost" onclick="closePast()">Close</button>
+    </div>
+    <div class="sess"><div><code>https://example.com/wp-json/</code><div class="sm"><span class="sp">Paused</span>7 of 24 pages &middot; Stopped during URL treatment &middot; 2d</div></div><button class="btn primary" onclick="resumePast()">Resume</button></div>
+    <div class="sess"><div><code>/var/www/imports/2024-q1/</code><div class="sm"><span class="sp" style="background:var(--soft);color:var(--accent)">Done</span>162 pages &middot; 1w</div></div><button class="btn">View</button></div>
+  </div>
+</div>
+
+<script>
+const TYPES=["GitHub repository","WordPress REST site","WordPress site","Feed (Atom/RSS/RDF)","OPML feed list","Server path","Uploaded file/folder","Reachable URL","Sitemap","PDF","EPUB"];
+const FILES=["getting-started.md","block-editor/intro.md","block-editor/principles.md","block-editor/glossary.md","block-editor/handbook.md","reference/data.md","reference/themes.md","how-to/sidebar.md"];
+// Titles are derived from the source filename — no hand-authored copy
+function titleFromFile(f){return f.split('/').pop().replace(/\.md$/,'')}
+const TITLES=FILES.map(titleFromFile);
+function slug(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'')}
+
+let urlT='ask',dry=false,asDr=false,pages=0,curStep='empty';
+function setDry(v){ dry=v; const t=document.getElementById('dryT'); t.classList.toggle('on',v); t.setAttribute('aria-checked',v?'true':'false'); }
+
+function renderSrcRows(){
+  const w=document.getElementById('srcRows');
+  if(w.children.length) return;
+  let h='';
+  for(let i=0;i<FILES.length;i++){
+    h+=`<div class="row src-row predicted" data-i="${i}">
+      <span class="dot"></span>
+      <div style="min-width:0"><div class="name">${FILES[i]}</div></div>
+      <span class="pill">Queued</span>
+    </div>`;
+  }
+  h+=`<div class="row" style="opacity:.65"><span class="dot"></span><div><div class="name" style="font-family:Inter,system-ui">+ 30 more source items</div></div><span class="pill">+30</span></div>`;
+  w.innerHTML=h;
+}
+
+function renderOutRows(){
+  const w=document.getElementById('outRows');
+  if(w.children.length) return;
+  let h='';
+  for(let i=0;i<TITLES.length;i++){
+    h+=`<div class="row out-row predicted" data-i="${i}">
+      <span class="dot"></span>
+      <div style="min-width:0"><div class="name">${TITLES[i]}</div><div class="slug">/${slug(TITLES[i])}</div></div>
+      <span class="pill">Predicted</span>
+    </div>`;
+  }
+  h+=`<div class="row" style="opacity:.65"><span class="dot"></span><div><div class="name">+ 30 more pages predicted</div></div><span class="pill">+30</span></div>`;
+  w.innerHTML=h;
+}
+
+let connRAF=null;
+function drawConnectors(){
+  if(connRAF) cancelAnimationFrame(connRAF);
+  connRAF=requestAnimationFrame(()=>{
+    const svg=document.getElementById('connectors');
+    const g=svg.parentElement;
+    const gr=g.getBoundingClientRect();
+    if(gr.width<10||curStep==='empty'){ svg.innerHTML=''; return; }
+    svg.setAttribute('viewBox',`0 0 ${gr.width} ${gr.height}`);
+    let lines='';
+    const inRun=['running','blocked','done'].includes(curStep);
+    for(let i=0;i<FILES.length;i++){
+      const sR=document.querySelector('.row.src-row[data-i="'+i+'"]');
+      const oR=document.querySelector('.row.out-row[data-i="'+i+'"]');
+      if(!sR||!oR) continue;
+      const sb=sR.getBoundingClientRect(), ob=oR.getBoundingClientRect();
+      const gtop=gr.top, gbot=gr.bottom;
+      // Skip rows scrolled out of gutter view
+      const y1=sb.top+sb.height/2-gtop, y2=ob.top+ob.height/2-gtop;
+      if(sb.bottom<gtop||sb.top>gbot||ob.bottom<gtop||ob.top>gbot) continue;
+      const isDone=sR.classList.contains('done'), isActive=sR.classList.contains('active');
+      // Pre-run: thin grey ghost lines. Run: only show active + done lines.
+      if(inRun && !isDone && !isActive) continue;
+      const color=isDone?'#15803d':(isActive?'#f59e0b':'#cbd5e1');
+      const op=isDone||isActive?0.85:0.28;
+      const w=isActive?2:(isDone?1.5:1);
+      const x1=0,x2=gr.width;
+      const cx1=gr.width*0.5, cx2=gr.width*0.5;
+      lines+=`<path d="M${x1} ${y1} C ${cx1} ${y1} ${cx2} ${y2} ${x2} ${y2}" fill="none" stroke="${color}" stroke-width="${w}" opacity="${op}"/>`;
+    }
+    svg.innerHTML=lines;
+  });
+}
+
+function setStep(s){
+  curStep=s; document.body.dataset.step=s;
+  const empty=document.getElementById('outEmpty'),sum=document.getElementById('outsum'),sScroll=document.getElementById('srcScroll'),sFoot=document.getElementById('srcFoot'),oScroll=document.getElementById('outScroll'),cfg=document.getElementById('configCard'),cfm=document.getElementById('confirmCard'),cmp=document.getElementById('completeCard'),dec=document.getElementById('decision'),ban=document.getElementById('banner'),rf=document.getElementById('runFoot'),log=document.getElementById('logBox');
+  cfg.style.display=cfm.style.display=cmp.style.display=rf.style.display='none';
+  dec.classList.remove('show'); ban.classList.remove('show'); log.classList.remove('show');
+  document.getElementById('bar').classList.remove('paused');
+
+  if(s==='empty'){ empty.style.display='block'; sum.style.display='none'; sScroll.style.display='none'; sFoot.style.display='none'; oScroll.style.display='none'; document.getElementById('srcMeta').textContent='no input yet'; document.getElementById('outMeta').textContent='predicted after capture'; document.getElementById('inf').classList.remove('show'); document.getElementById('expl').classList.remove('show'); document.getElementById('srcInput').value=''; setTape(0); setPhase('Step 1','Capture content.',0,false); }
+  else if(s==='classified'){ empty.style.display='none'; sScroll.style.display='block'; sFoot.style.display='block'; renderSrcRows(); sum.style.display='flex'; document.getElementById('outMeta').textContent='~38 pages'; setTape(0); setPhase('Step 1','Inferred. Continue.',25,false); }
+  else if(s==='configure'){ empty.style.display='none'; sScroll.style.display='block'; sFoot.style.display='block'; sum.style.display='flex'; cfg.style.display='block'; setTape(1); setPhase('Step 2','Adjust settings.',50,false); }
+  else if(s==='confirm'){ empty.style.display='none'; sScroll.style.display='block'; sFoot.style.display='block'; sum.style.display='flex'; cfm.style.display='block';
+    document.getElementById('sUrl').textContent=urlT==='ask'?'Ask':(urlT==='keep'?'Keep unchanged':'Rewrite listed');
+    document.getElementById('sRun').textContent=dry?'Dry run':'Real run';
+    document.getElementById('sStat').textContent=asDr?'Drafts':'Publish';
+    document.getElementById('startBtn').textContent=dry?'Start dry run':'Import this content';
+    setTape(2); setPhase('Step 3','Review and start.',75,false); }
+  else if(s==='running'){ empty.style.display='none'; sScroll.style.display='block'; sFoot.style.display='block'; sum.style.display='none'; oScroll.style.display='block'; renderOutRows(); rf.style.display='flex'; log.classList.add('show'); setTape(3); }
+  else if(s==='blocked'){ empty.style.display='none'; sScroll.style.display='block'; sFoot.style.display='block'; oScroll.style.display='block'; ban.classList.add('show'); dec.classList.add('show'); log.classList.add('show'); rf.style.display='flex'; setTape(3); document.getElementById('bar').classList.add('paused'); }
+  else if(s==='done'){ empty.style.display='none'; sScroll.style.display='block'; sFoot.style.display='block'; oScroll.style.display='block'; cmp.style.display='block'; log.classList.add('show'); setTape(3);
+    document.querySelectorAll('.stg').forEach(x=>{x.classList.remove('active','blocked');x.classList.add('done')});
+    setPhase('Done','',100,false); document.getElementById('actLine').innerHTML=dry?'Dry run complete.':'Import complete.';
+    document.getElementById('cTitle').textContent=dry?'Dry run complete.':'Import complete.';
+    document.getElementById('cSub').textContent=dry?'38 documents prepared, 22 media references resolved. No pages written.':'38 pages written, 22 media imported.';
+    document.getElementById('rerunReal').style.display=dry?'':'none';
+    const tals=[{n:dry?'0 (dry)':String(pages),l:'Pages'},{n:'22',l:'Media'},{n:'00:42',l:'Elapsed'}];
+    if(!dry) tals.unshift({n:'38',l:'Source items'});
+    document.getElementById('tallies').innerHTML=tals.map(t=>`<div class="tl"><b>${t.n}</b><span>${t.l}</span></div>`).join('');
+  }
+  drawConnectors();
+}
+
+function setTape(step){
+  ['tp1','tp2','tp3','tp4'].forEach((id,ix)=>{
+    const el=document.getElementById(id); el.classList.remove('on','done');
+    if(ix<step) el.classList.add('done'); else if(ix===step) el.classList.add('on');
+  });
+}
+
+function setPhase(p,a,pct,indet){
+  document.getElementById('phase').textContent=p;
+  document.getElementById('actLine').innerHTML=(p.indexOf('Stage')===0?'<span class="pulse"></span>':'')+a;
+  const bar=document.getElementById('bar'); bar.classList.toggle('indet',!!indet); bar.firstElementChild.style.width=(indet?100:pct)+'%';
+  bar.setAttribute('aria-valuenow',pct);
+  document.getElementById('pct').textContent=indet?'discovering':(pct?pct+'%':'');
+}
+
+function setStage(ix,st){ const e=document.querySelector('.stg[data-s="'+ix+'"]'); if(!e) return; e.classList.remove('active','done','blocked'); if(st) e.classList.add(st); }
+function updateSrc(i,state){ const r=document.querySelector('.row.src-row[data-i="'+i+'"]'); if(!r) return; r.classList.remove('predicted','active','done'); const p=r.querySelector('.pill'); if(state==='processing'){ r.classList.add('active'); p.textContent='Processing'; r.scrollIntoView({block:'nearest'}); } else if(state==='done'){ r.classList.add('done'); p.textContent='Done'; } else r.classList.add('predicted'); drawConnectors(); }
+function updateOut(i,state){ const r=document.querySelector('.row.out-row[data-i="'+i+'"]'); if(!r) return; r.classList.remove('predicted','active','done'); const p=r.querySelector('.pill'); if(state==='processing'){ r.classList.add('active'); p.textContent='Writing'; r.scrollIntoView({block:'nearest'}); } else if(state==='done'){ r.classList.add('done'); p.textContent=dry?'Prepared':'Done'; } else r.classList.add('predicted'); drawConnectors(); }
+
+function logLine(m){
+  const ol=document.getElementById('logList'); const li=document.createElement('li');
+  const t=new Date(); const ts=String(t.getHours()).padStart(2,'0')+':'+String(t.getMinutes()).padStart(2,'0')+':'+String(t.getSeconds()).padStart(2,'0');
+  li.innerHTML='<time>'+ts+'</time><span>'+m+'</span>';
+  ol.insertBefore(li,ol.firstChild);
+  while(ol.children.length>10) ol.removeChild(ol.lastChild);
+}
+
+const stageDefs=[{a:'Reading the source.',d:2400,indet:true},{a:'Preparing 12 items.',d:1800},{a:'Choose URL treatment to continue.',pauses:true},{a:'Importing media.',d:2200},{a:'Writing pages.',d:2800},{a:'Import complete.',d:800}];
+
+function startRun(){
+  setStep('running'); pages=0;
+  document.querySelectorAll('.stg').forEach(x=>x.classList.remove('done','active','blocked'));
+  document.querySelectorAll('.row.src-row,.row.out-row').forEach(r=>{r.classList.remove('active','done');r.classList.add('predicted');const p=r.querySelector('.pill');p.textContent=r.classList.contains('src-row')?'Queued':'Predicted'});
+  document.getElementById('logList').innerHTML='';
+  logLine('GitHub repository fetch queued; file count will appear after discovery.');
+  setTimeout(()=>logLine('Fetching repository files with sparse Git.'),700);
+  advance(0);
+}
+
+function advance(ix){
+  if(ix>0) setStage(ix-1,'done');
+  if(ix>=stageDefs.length){ setStep('done'); logLine('Import complete.'); return; }
+  const s=stageDefs[ix];
+  setStage(ix,'active');
+  setPhase('Stage '+(ix+1)+' of 6',s.a,5,false);
+  if(s.pauses){ setStage(ix,'blocked'); setPhase('Stage 3 blocked',s.a,45,false); setStep('blocked'); logLine('Choose URL treatment to continue.'); return; }
+  if(ix===0){ setPhase('Stage 1 of 6','Reading the source.',10,true); setTimeout(()=>logLine('38 source items found.'),1000); setTimeout(()=>advance(ix+1),s.d); }
+  else if(ix===1){ let i=0,T=FILES.length; const t=()=>{ if(i>=T){ advance(ix+1); return; } updateSrc(i,'processing'); if(i===3) logLine('Preparing 12 items.'); setPhase('Stage 2 of 6','Preparing '+(i+1)+' / '+T,20+Math.round(15*(i/T)),false); i++; setTimeout(t,260);}; t(); }
+  else if(ix===3){ let i=0,T=22; const t=()=>{ if(i>=T){ advance(ix+1); return; } if(i===0) logLine('Importing media.'); setPhase('Stage 4 of 6','Importing media '+(i+1)+'/'+T,50+Math.round(12*(i/T)),false); i++; setTimeout(t,80);}; t(); }
+  else if(ix===4){ let i=0,T=FILES.length; logLine('Writing pages.'); const t=()=>{ if(i>=T){ advance(ix+1); return; } updateSrc(i,'done'); updateOut(i,'processing'); setTimeout(()=>updateOut(i,'done'),260); if(!dry) pages++; setPhase('Stage 5 of 6','Writing '+(i+1)+' of 38 pages.',65+Math.round(30*(i/T)),false); document.getElementById('outMeta').textContent=(i+1)+' of 38 '+(dry?'prepared':'written'); i++; setTimeout(t,340);}; t(); }
+  else if(ix===5){ setPhase('Stage 6 of 6','Checking import state.',98,false); setTimeout(()=>{ setStage(5,'done'); setStep('done'); logLine('Import complete.'); },s.d); }
+}
+
+function resolveDecision(k){ logLine('decision.resolved: confirm-first-party-domains ('+k+').'); setStage(2,'done'); setStep('running'); setTimeout(()=>advance(3),200); }
+function askAbort(){ document.getElementById('abortConfirm').classList.add('on'); }
+function cancelAbort(){ document.getElementById('abortConfirm').classList.remove('on'); }
+function doAbort(){ document.getElementById('abortConfirm').classList.remove('on'); logLine('Import aborted.'); setStep('empty'); }
+
+const inp=document.getElementById('srcInput');
+function classify(v){
+  if(!v){ document.getElementById('inf').classList.remove('show'); document.getElementById('expl').classList.remove('show'); setStep('empty'); return; }
+  let t='Reachable URL',ex='Single document import.';
+  if(v.startsWith('/')){ t='Server path'; ex='Walk the directory and import its files.'; }
+  else if(v.includes('github.com')){ t='GitHub repository'; ex="We'll fetch the repo and parse Markdown docs as pages."; }
+  else if(v.includes('/wp-json')){ t='WordPress REST site'; ex='REST API import.'; }
+  else if(v.includes('/feed')){ t='Feed (Atom/RSS/RDF)'; ex='Currently-advertised items only.'; }
+  document.getElementById('typeName').textContent=t;
+  document.getElementById('expl').textContent=ex;
+  document.getElementById('inf').classList.add('show');
+  document.getElementById('expl').classList.add('show');
+  document.getElementById('srcMeta').textContent='captured';
+  setStep('classified');
+}
+
+inp.addEventListener('input',e=>classify(e.target.value.trim()));
+document.getElementById('shorts').addEventListener('click',e=>{ const c=e.target.closest('.chip'); if(!c) return; inp.value=c.dataset.st; classify(inp.value); });
+document.getElementById('browseBtn').addEventListener('click',()=>{ inp.value=''; classify('/uploads/local-folder/'); document.getElementById('typeName').textContent='Uploaded file/folder'; document.getElementById('expl').textContent='Files staged. Max 500 files / 128 MB.'; });
+
+document.getElementById('typeList').innerHTML=TYPES.map(t=>`<button class="chip" data-t="${t}">${t}</button>`).join('');
+document.getElementById('changeType').addEventListener('click',()=>document.getElementById('over').classList.toggle('show'));
+document.getElementById('typeList').addEventListener('click',e=>{ const c=e.target.closest('.chip'); if(!c) return; document.querySelectorAll('#typeList .chip').forEach(x=>x.classList.remove('on')); c.classList.add('on'); document.getElementById('typeName').textContent=c.dataset.t; });
+
+document.getElementById('urlOpts').addEventListener('change',e=>{ urlT=e.target.value; document.querySelectorAll('.opt').forEach(o=>o.classList.toggle('on',o.contains(e.target))); document.getElementById('dom').classList.toggle('show',urlT==='rewrite'); });
+document.getElementById('dryT').addEventListener('click',e=>{ setDry(!e.currentTarget.classList.contains('on')); });
+document.getElementById('draftT').addEventListener('click',e=>{ const t=e.currentTarget; t.classList.toggle('on'); asDr=t.classList.contains('on'); t.setAttribute('aria-checked',asDr?'true':'false'); });
+
+document.getElementById('outToggle').addEventListener('click',()=>{ const o=document.getElementById('outScroll'); renderOutRows(); const open=o.style.display!=='block'; o.style.display=open?'block':'none'; document.getElementById('outToggle').textContent=open?'Hide':'Show all'; drawConnectors(); });
+
+document.getElementById('pastBtn').addEventListener('click',()=>document.getElementById('pastOverlay').classList.add('show'));
+function closePast(){ document.getElementById('pastOverlay').classList.remove('show'); }
+function resumePast(){ closePast(); inp.value='https://example.com/wp-json/'; classify(inp.value); setStep('blocked'); document.querySelectorAll('.stg').forEach((x,i)=>{x.classList.remove('active','blocked','done'); if(i<2) x.classList.add('done'); if(i===2) x.classList.add('blocked')}); setPhase('Stage 3 blocked','Choose URL treatment to continue.',45,false); logLine('Session resumed. Awaiting decision.'); }
+
+document.getElementById('repick')?.addEventListener('click',e=>{e.preventDefault(); alert('GitHub directory picker (Selected: docs/). Use this directory.');});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ closePast(); document.getElementById('over').classList.remove('show'); } });
+
+// Track scroll inside the row scrollers + window resize/scroll for accurate connector positions
+['srcScroll','outScroll'].forEach(id=>document.getElementById(id).addEventListener('scroll',drawConnectors,{passive:true}));
+window.addEventListener('resize',drawConnectors);
+window.addEventListener('scroll',drawConnectors,{passive:true});
+if(window.ResizeObserver){ const ro=new ResizeObserver(drawConnectors); ro.observe(document.querySelector('.wire')); }
+
+setTimeout(()=>{ inp.value='https://github.com/WordPress/gutenberg/tree/trunk/docs'; classify(inp.value); },80);
+</script>
+</body>
+</html>

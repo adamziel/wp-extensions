@@ -40,6 +40,39 @@ final class FakeGitRepositoryFetcher implements GitRepositoryFetcherInterface {
 	private $requests = array();
 
 	/**
+	 * Directory listings keyed by ref + "\n" + source_path.
+	 *
+	 * Each entry is array{ref:string,directories:array<int,string>}.
+	 *
+	 * @var array<string,array{ref:string,directories:array<int,string>}>
+	 */
+	private $directory_listings = array();
+
+	/**
+	 * Directory-listing failures keyed by ref + "\n" + source_path.
+	 *
+	 * @var array<string,string>
+	 */
+	private $directory_failures = array();
+
+	/**
+	 * Directory-listing throwables keyed by ref + "\n" + source_path.
+	 *
+	 * Used to simulate non-RuntimeException failures (e.g. FilesystemException)
+	 * that the admin must still catch as it falls through to the next candidate.
+	 *
+	 * @var array<string,\Throwable>
+	 */
+	private $directory_throwables = array();
+
+	/**
+	 * Requested directory-listing candidates.
+	 *
+	 * @var array<int,array<string,mixed>>
+	 */
+	private $directory_requests = array();
+
+	/**
 	 * Adds a fake repository file.
 	 *
 	 * @param string $repository_path Repository-relative path.
@@ -119,5 +152,89 @@ final class FakeGitRepositoryFetcher implements GitRepositoryFetcherInterface {
 	 */
 	public function get_requests() {
 		return $this->requests;
+	}
+
+	/**
+	 * Configures a directory listing response keyed by ref and source path.
+	 *
+	 * @param string            $ref          Requested ref (e.g. "HEAD" or "trunk").
+	 * @param string            $source_path  Requested source path.
+	 * @param string            $resolved_ref Resolved branch name returned to the caller.
+	 * @param array<int,string> $directories  Repository-relative directory paths.
+	 * @return void
+	 */
+	public function add_directory_listing( $ref, $source_path, $resolved_ref, array $directories ) {
+		$this->directory_listings[ (string) $ref . "\n" . (string) $source_path ] = array(
+			'ref'         => (string) $resolved_ref,
+			'directories' => array_values( array_map( 'strval', $directories ) ),
+		);
+	}
+
+	/**
+	 * Configures a directory-listing failure for a ref + source path.
+	 *
+	 * @param string $ref         Requested ref.
+	 * @param string $source_path Requested source path.
+	 * @param string $message     Failure message.
+	 * @return void
+	 */
+	public function fail_directory_listing( $ref, $source_path, $message ) {
+		$this->directory_failures[ (string) $ref . "\n" . (string) $source_path ] = (string) $message;
+	}
+
+	/**
+	 * Configures a directory-listing failure that raises an arbitrary Throwable
+	 * for a ref + source path. Use this to simulate non-RuntimeException
+	 * failures (e.g. WordPress\Filesystem\FilesystemException) coming out of
+	 * the Git fetcher.
+	 *
+	 * @param string     $ref         Requested ref.
+	 * @param string     $source_path Requested source path.
+	 * @param \Throwable $throwable   Throwable to raise.
+	 * @return void
+	 */
+	public function throw_directory_listing( $ref, $source_path, \Throwable $throwable ) {
+		$this->directory_throwables[ (string) $ref . "\n" . (string) $source_path ] = $throwable;
+	}
+
+	/**
+	 * Returns directory-listing requests in order.
+	 *
+	 * @return array<int,array<string,mixed>>
+	 */
+	public function get_directory_requests() {
+		return $this->directory_requests;
+	}
+
+	/**
+	 * Lists repository directories under the requested subtree root.
+	 *
+	 * @param array<string,mixed>  $repo            Parsed repository data.
+	 * @param ImportCacheDirectory $cache_directory Cache directory.
+	 * @return array{ref:string,directories:array<int,string>}
+	 * @throws \RuntimeException When configured to fail.
+	 */
+	public function list_root_directories( array $repo, ImportCacheDirectory $cache_directory ) {
+		$this->directory_requests[] = $repo;
+
+		$ref         = isset( $repo['ref'] ) ? (string) $repo['ref'] : '';
+		$source_path = isset( $repo['source_path'] ) ? (string) $repo['source_path'] : '';
+		$key         = $ref . "\n" . $source_path;
+
+		if ( isset( $this->directory_throwables[ $key ] ) ) {
+			throw $this->directory_throwables[ $key ];
+		}
+
+		if ( isset( $this->directory_failures[ $key ] ) ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Unit-test diagnostics are not rendered directly.
+			throw new \RuntimeException( $this->directory_failures[ $key ] );
+		}
+
+		if ( ! isset( $this->directory_listings[ $key ] ) ) {
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Unit-test diagnostics are not rendered directly.
+			throw new \RuntimeException( 'No fake directory listing for ref=' . $ref . ' source_path=' . $source_path . '.' );
+		}
+
+		return $this->directory_listings[ $key ];
 	}
 }

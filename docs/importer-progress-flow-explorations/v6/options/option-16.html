@@ -1,0 +1,494 @@
+<!doctype html>
+<!-- Theme 4 — Conversation — V4 r2: Stage Memos (one bubble per stage, decision nested inside) -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Universal Importer · Theme 4 · V4</title>
+<style>
+:root{--bg:#fbf8f1;--paper:#fffdf6;--ink:#1f2937;--rule:#eadfca;--accent:#a16207;--soft:#fef3c7;--muted:#7a6a52;--ok:#365314;--warn:#92400e;--warnBg:#fff3df}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 "Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+code{font-family:ui-monospace,Menlo,monospace;font-size:.92em}
+.wrap{max-width:680px;margin:0 auto;padding:22px 20px 120px}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--rule);margin-bottom:16px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:14px}
+.brand .glyph{width:24px;height:24px;border-radius:6px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700}
+.top button{background:none;border:0;color:var(--muted);cursor:pointer;font:inherit;font-size:12.5px;padding:0}
+.top button:hover{color:var(--ink)}
+.paused-banner{display:none;position:sticky;top:0;z-index:10;background:var(--warnBg);border:1px solid var(--warn);border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:13px;color:var(--warn);font-weight:600;align-items:center;gap:10px}
+.paused-banner.show{display:flex}
+.paused-banner::before{content:"❚❚";font-size:11px;letter-spacing:-2px}
+.paused-banner small{color:var(--warn);font-weight:400;margin-left:auto;opacity:.85;font-size:11.5px}
+.memo{margin:10px 0;border:1px solid var(--rule);background:var(--paper);border-radius:14px;overflow:hidden;animation:fade .2s ease-out}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.memo.usr{background:#fffaeb;border-color:#f3e5b2;margin-left:36px}
+.memo.sys{margin-right:36px}
+.memo.dec{border-color:var(--warn);background:var(--warnBg)}
+.memo.past{opacity:.62}
+.memo.past:hover{opacity:.95}
+.memo .head{display:flex;align-items:center;gap:10px;padding:10px 14px}
+.memo .head .label{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.memo.usr .head .label{color:var(--ok)}
+.memo .head .time{margin-left:auto;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.memo .head .edit{margin-left:auto;font-size:11.5px;color:var(--accent);background:none;border:0;cursor:pointer;padding:1px 4px;border-radius:3px;font-weight:600}
+.memo .head .edit::before{content:"· "}
+.memo .head .edit:hover{background:var(--soft);text-decoration:underline}
+.memo .body{padding:0 14px 12px;font-size:14.5px;line-height:1.55}
+.memo .body .hint{margin-top:3px;font-size:12.5px;color:var(--muted)}
+/* Stage memo */
+.stage-memo .head{cursor:pointer;padding-left:12px;border-left:3px solid transparent}
+.stage-memo[data-status="active"] .head{border-left-color:var(--accent)}
+.stage-memo[data-status="done"] .head{border-left-color:var(--ok)}
+.stage-memo[data-status="blocked"] .head{border-left-color:var(--warn)}
+.stage-memo .stage-num{display:inline-flex;align-items:center;justify-content:center;height:20px;padding:0 8px;border-radius:4px;background:#f1e7d0;color:var(--muted);font:600 10.5px/1 ui-monospace,Menlo,monospace;letter-spacing:.05em;flex:none}
+.stage-memo[data-status="active"] .stage-num{background:var(--accent);color:#fff}
+.stage-memo[data-status="done"] .stage-num{background:var(--ok);color:#fff}
+.stage-memo[data-status="blocked"] .stage-num{background:var(--warn);color:#fff}
+.stage-memo .main{padding:0 14px 8px 29px;font-size:14px;display:flex;align-items:center;gap:8px}
+.stage-memo .main .act{flex:1}
+.stage-memo .main .summary{color:var(--muted);font-size:12px}
+.stage-memo .chev{font-size:11px;color:var(--muted);transition:transform .15s}
+.stage-memo.open .chev{transform:rotate(180deg)}
+.subevents{display:none;padding:0 14px 12px 29px;border-top:1px dashed var(--rule);font-size:12.5px;color:var(--muted)}
+.stage-memo.open .subevents{display:block;padding-top:8px}
+.subevents .e{display:grid;grid-template-columns:48px 1fr;gap:10px;padding:3px 0;line-height:1.5}
+.subevents .e::before{content:"·";color:var(--accent);font-weight:700;grid-column:auto;display:none}
+.subevents .t{color:#b09a72;font-variant-numeric:tabular-nums;font-size:11px;padding-top:1px}
+.subevents .e.warn .t{color:var(--warn)}
+.subevents .e.warn{color:var(--warn)}
+.mini-bar{height:3px;background:#f0e4c4;border-radius:999px;overflow:hidden;margin:0 14px 10px 29px}
+.mini-bar > i{display:block;height:100%;background:var(--accent);width:0;transition:width .35s ease}
+.mini-bar.indet > i{width:25%;animation:indet 1.4s ease-in-out infinite}
+.mini-bar.done > i{background:var(--ok)}
+.mini-bar.paused{background:repeating-linear-gradient(90deg,#f0e4c4 0 6px,transparent 6px 12px);height:5px}
+.mini-bar.paused > i{display:none}
+@keyframes indet{0%{margin-left:-25%}100%{margin-left:100%}}
+/* In-stage decision panel */
+.in-decision{margin:8px 14px 12px 29px;padding:12px;border:1px solid var(--warn);border-radius:8px;background:#fff7e6}
+.in-decision .deceyebrow{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--warn);font-weight:700;margin-bottom:4px}
+.in-decision .q{font-size:14px}
+.in-decision .h{font-size:12px;color:var(--muted);margin-top:2px}
+/* Question controls (pre-run memos) */
+.field{margin-top:8px}
+.field .row{display:flex;gap:6px}
+.field input[type="url"],.field input[type="text"]{width:100%;padding:9px 11px;border:1px solid var(--rule);border-radius:8px;background:#fff;font-size:14px}
+.field input:focus{outline:2px solid var(--soft);outline-offset:1px;border-color:var(--accent)}
+.field .file{padding:9px 12px;border:1px solid var(--rule);background:#fff;cursor:pointer;border-radius:8px;font-size:13px;color:var(--muted);white-space:nowrap}
+.field .file:hover{border-color:var(--accent);color:var(--ink)}
+.field .row input{flex:1;min-width:0}
+.shortcuts{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{padding:4px 10px;border:1px solid var(--rule);border-radius:999px;background:#fff;font-size:12px;color:var(--muted);cursor:pointer}
+.chip:hover{border-color:var(--accent);color:var(--ink)}
+.opts{display:grid;gap:6px;margin-top:8px}
+.opt{padding:9px 11px;border:1px solid var(--rule);border-radius:8px;background:#fff;cursor:pointer;display:flex;align-items:flex-start;gap:8px}
+.opt.on{border-color:var(--accent);background:#fffaeb}
+.opt input{margin-top:2px}
+.opt b{display:block;font-size:13.5px;font-weight:600}
+.opt small{color:var(--muted);font-size:12px;display:block}
+.dom-err{margin-top:6px;font-size:11.5px;color:var(--warn);display:none}
+.dom-err.show{display:block}
+.row-switch{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border:1px solid var(--rule);border-radius:8px;background:#fff;margin-top:6px}
+.row-switch b{font-size:13.5px}
+.row-switch small{color:var(--muted);font-size:12px;display:block}
+.switch{width:34px;height:20px;background:#ddd2b3;border-radius:999px;position:relative;flex:none;cursor:pointer;border:0}
+.switch::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s}
+.switch.on{background:var(--accent)}
+.switch.on::after{transform:translateX(14px)}
+.btns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.btn{padding:8px 14px;border-radius:8px;border:1px solid var(--rule);background:#fff;cursor:pointer;font-weight:600;font-size:13px}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.primary:hover{background:#8a5306}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{color:var(--ink);border-color:var(--rule)}
+.btn.danger{color:var(--warn);border-color:#e3c79a}
+.btn.danger:hover{background:var(--warnBg)}
+.btn.small{padding:4px 10px;font-size:11.5px;font-weight:500}
+.override{margin-top:8px;display:none;border:1px solid var(--rule);background:#fff;border-radius:8px;padding:6px}
+.override.show{display:grid;grid-template-columns:1fr 1fr;gap:2px}
+.override button{padding:7px 9px;border:0;background:transparent;text-align:left;cursor:pointer;font-size:12.5px;border-radius:4px}
+.override button:hover{background:var(--soft)}
+.override button.on{background:var(--soft);color:var(--accent);font-weight:600}
+.warn-line{margin-top:6px;font-size:11.5px;color:var(--warn);display:none}
+.warn-line.show{display:block}
+.dom{display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid #f4e3b8;border-radius:8px;background:#fff;margin-top:6px}
+.dom input{margin-top:2px}
+.dom b{font-family:ui-monospace,Menlo,monospace;font-size:13px;display:block}
+.dom small{color:var(--muted);font-size:11.5px;font-family:ui-monospace,Menlo,monospace;display:block;word-break:break-all}
+.abort-confirm{display:none;margin:8px 14px 12px 29px;padding:8px 10px;background:var(--warnBg);border:1px solid var(--warn);border-radius:6px;font-size:12.5px}
+.abort-confirm.show{display:block}
+.abort-confirm .btns{margin-top:6px}
+.past{display:none;background:var(--paper);border:1px solid var(--rule);border-radius:12px;padding:12px 14px;margin:0 0 14px}
+.past.show{display:block}
+.past h3{margin:0 0 8px;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.past-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;font-size:12.5px;border-top:1px solid var(--rule)}
+.past-row:first-of-type{border-top:0}
+.past-row .src{font-family:ui-monospace,Menlo,monospace;word-break:break-all}
+.past-row .meta{color:var(--muted);font-size:11.5px}
+.tag{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.tag.paused{background:#fde68a;color:#78350f}
+.tag.done{background:#dcfce7;color:#14532d}
+.tag.failed{background:#fecaca;color:#7f1d1d}
+.tally{display:inline-flex;gap:14px;margin-top:10px;font-size:14px;font-variant-numeric:tabular-nums;flex-wrap:wrap}
+.tally b{font-weight:700}
+.tally .meta{color:var(--muted);font-size:11.5px}
+details{margin-top:6px}
+details summary{cursor:pointer;font-size:12px;color:var(--muted);list-style:none}
+details summary::-webkit-details-marker{display:none}
+details summary::before{content:"› ";color:var(--accent);font-weight:700}
+details[open] summary::before{content:"⌄ "}
+details > div{margin-top:6px;font-size:12.5px;color:var(--muted)}
+.composer{position:fixed;bottom:0;left:0;right:0;text-align:center;background:linear-gradient(to bottom,rgba(251,248,241,0),var(--bg) 24px);padding:18px 12px;pointer-events:none;font-size:11.5px;color:var(--muted)}
+.composer kbd{padding:1px 5px;border:1px solid var(--rule);border-radius:3px;background:#fff;font-family:ui-monospace,Menlo,monospace;font-size:10.5px}
+@media(max-width:520px){.wrap{padding:18px 14px 120px}.memo.usr{margin-left:14px}.memo.sys{margin-right:14px}.override.show{grid-template-columns:1fr}.stage-memo .main,.subevents,.mini-bar,.in-decision,.abort-confirm{margin-left:14px;padding-left:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top">
+<div class="brand"><span class="glyph">U</span>Universal Importer</div>
+<button id="pastBtn">Past imports</button>
+</div>
+
+<div class="paused-banner" id="pausedBanner" role="alert">Run paused. Choose URL treatment to continue.<small>stage 3 of 6</small></div>
+
+<div class="past" id="pastPanel">
+<h3>Past imports · last 10</h3>
+<div class="past-row">
+<div><div class="src">https://example.com/wp-json/</div><div class="meta">2 days ago · 7 of 24 pages · Stopped during URL treatment</div></div>
+<div style="display:flex;gap:6px;align-items:center"><span class="tag paused">Paused</span><button class="btn small">Resume</button></div>
+</div>
+<div class="past-row">
+<div><div class="src">https://feeds.example.org/atom</div><div class="meta">5 days ago · Source unreachable (HTTP 503)</div></div>
+<div style="display:flex;gap:6px;align-items:center"><span class="tag failed">Failed</span><button class="btn small">Retry</button></div>
+</div>
+<div class="past-row">
+<div><div class="src">/srv/uploads/handbook-export.zip</div><div class="meta">1 week ago · 41 pages · 22 media</div></div>
+<span class="tag done">Done</span>
+</div>
+</div>
+
+<main id="convo" aria-live="polite"></main>
+</div>
+<div class="composer"><kbd>↵</kbd> answer · <kbd>Esc</kbd> abort run · click a stage memo to expand sub-events</div>
+
+<script>
+(function(){
+const convo = document.getElementById('convo');
+const pausedBanner = document.getElementById('pausedBanner');
+document.getElementById('pastBtn').addEventListener('click', ()=>document.getElementById('pastPanel').classList.toggle('show'));
+
+let state = {
+source:'https://github.com/WordPress/gutenberg/tree/trunk/docs',
+type:'GitHub repository', urlTreat:'ask', domains:'', dryRun:false, drafts:false, aborted:false
+};
+let turn=0, firstSys=true;
+function el(h){const d=document.createElement('div');d.innerHTML=h.trim();return d.firstElementChild;}
+function nowTime(){const d=new Date();return d.toTimeString().slice(0,5)}
+function scrollEnd(){window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'});}
+function addSys(html, opts){
+turn++; opts = opts||{};
+const showLabel = firstSys || opts.label;
+firstSys = false;
+const labelHtml = showLabel ? `<div class="label">${opts.label||'Importer'}</div><div class="time">${nowTime()}</div>` : `<div class="time">${nowTime()}</div>`;
+const n = el(`<section class="memo sys" data-turn="${turn}"><div class="head">${labelHtml}</div><div class="body">${html}</div></section>`);
+convo.appendChild(n);scrollEnd();return n;
+}
+function addUsr(html, editKey){
+turn++;
+const n = el(`<section class="memo usr" data-turn="${turn}"><div class="head"><div class="label">You</div><button class="edit" data-k="${editKey||''}">edit</button></div><div class="body">${html}</div></section>`);
+convo.appendChild(n);
+n.querySelector('.edit').addEventListener('click',()=>jumpTo(editKey,n));
+scrollEnd();return n;
+}
+function lockLast(){const t=convo.lastElementChild;if(t)t.classList.add('past');}
+function jumpTo(k, fromNode){
+if(!k) return;
+let n = fromNode.nextElementSibling;
+while(n){const x=n;n=n.nextElementSibling;x.remove();}
+fromNode.remove();turn--;
+if(k==='source') step1_source();
+else if(k==='type') step2_classify();
+else if(k==='configure') step3_configure();
+else if(k==='confirm') step4_confirm();
+}
+
+function step1_source(){
+const t = addSys(`
+<div>What should I import?</div>
+<div class="hint">A URL, a server path, or a folder/file drop.</div>
+<div class="field"><div class="row"><input type="url" id="src" value="${state.source}" placeholder="https://… or /path/…"><label class="file" for="fileIn">Browse…</label><input id="fileIn" type="file" webkitdirectory multiple style="display:none"></div></div>
+<div class="shortcuts">
+<button class="chip">GitHub</button>
+<button class="chip">WordPress site</button>
+<button class="chip">Feed / OPML</button>
+<button class="chip">Server path</button>
+<button class="chip">Browser folder</button>
+<button class="chip">PDF / EPUB</button>
+</div>
+<div class="btns"><button class="btn primary" id="go">Continue</button><button class="btn ghost" id="clr">Clear</button></div>
+`);
+const input = t.querySelector('#src');
+t.querySelector('#clr').addEventListener('click', ()=>{input.value='';input.focus();});
+t.querySelector('#go').addEventListener('click', ()=>{
+state.source = input.value || state.source;
+lockLast();t.remove();turn--;
+addUsr(`<code>${state.source}</code>`,'source');
+step2_classify();
+});
+input.addEventListener('keydown', e=>{if(e.key==='Enter'){e.preventDefault();t.querySelector('#go').click();}});
+input.focus();
+}
+
+function step2_classify(){
+const t = addSys(`
+<div>GitHub repository · subdirectory <code>docs</code> · ≈38 docs detected.</div>
+<div class="hint">Tree truncated at 1,000 entries — use filter if needed.</div>
+<div class="btns">
+<button class="btn primary" id="ok">Yes, continue</button>
+<button class="btn" id="no">Change type…</button>
+</div>
+<div class="override" id="ov" role="listbox">
+<button class="on">GitHub repository</button>
+<button>WordPress site</button>
+<button>Feed (RSS/Atom/RDF)</button>
+<button>OPML feed list</button>
+<button>Server path</button>
+<button>Uploaded file/folder</button>
+<button>Reachable URL</button>
+<button>Sitemap</button>
+<button>PDF</button>
+<button>EPUB</button>
+</div>
+<div class="warn-line" id="warn">Type doesn't match the source — still proceed?</div>
+`);
+const ov = t.querySelector('#ov');
+const warn = t.querySelector('#warn');
+t.querySelector('#no').addEventListener('click', ()=>ov.classList.toggle('show'));
+ov.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{
+ov.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+b.classList.add('on');
+state.type = b.textContent;
+if(state.type!=='GitHub repository') warn.classList.add('show'); else warn.classList.remove('show');
+}));
+t.querySelector('#ok').addEventListener('click', ()=>{
+lockLast();t.remove();turn--;
+addUsr(`${state.type}${state.type==='GitHub repository'?' · <code>docs</code>':''}`,'type');
+step3_configure();
+});
+}
+
+function step3_configure(){
+const t = addSys(`
+<div>Configure the run.</div>
+<div class="hint">Defaults are sensible.</div>
+<div class="opts" id="rads">
+<label class="opt on"><input type="radio" name="u" value="ask" checked><span><b>Ask when old URLs are found</b><small>Recommended — confirm domains mid-run</small></span></label>
+<label class="opt"><input type="radio" name="u" value="keep"><span><b>Keep URLs unchanged</b><small>Leave links as written</small></span></label>
+<label class="opt"><input type="radio" name="u" value="rewrite"><span><b>Rewrite listed domains</b><small>Skip the mid-run prompt — list domains below</small></span></label>
+</div>
+<input id="dom" type="text" placeholder="example.com, www.example.com" style="display:none;width:100%;margin-top:6px;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;background:#fff" aria-label="Domains to rewrite">
+<div class="dom-err" id="domErr">List at least one domain.</div>
+<div class="row-switch"><div><b>Dry run</b><small>Plan only — no pages written</small></div><button class="switch" id="swDry" aria-pressed="false"></button></div>
+<div class="row-switch"><div><b>Import as drafts</b><small>Otherwise published immediately</small></div><button class="switch" id="swDr" aria-pressed="false"></button></div>
+<details><summary>More options</summary><div>Cache reuse: auto · Secrets: env-only · CLI: <code>wp universal-importer import &lt;source&gt;</code></div></details>
+<div class="btns"><button class="btn primary" id="rv">Review</button><button class="btn" id="bk">Back</button></div>
+`);
+const rads = t.querySelector('#rads');
+const dom = t.querySelector('#dom');
+const domErr = t.querySelector('#domErr');
+rads.querySelectorAll('input').forEach(r=>r.addEventListener('change',()=>{
+rads.querySelectorAll('.opt').forEach(x=>x.classList.remove('on'));
+r.closest('.opt').classList.add('on');
+state.urlTreat = r.value;
+dom.style.display = r.value==='rewrite'?'block':'none';
+domErr.classList.remove('show');
+}));
+t.querySelector('#swDry').addEventListener('click',e=>{const on=!e.target.classList.contains('on');e.target.classList.toggle('on');e.target.setAttribute('aria-pressed',on);state.dryRun=on;});
+t.querySelector('#swDr').addEventListener('click',e=>{const on=!e.target.classList.contains('on');e.target.classList.toggle('on');e.target.setAttribute('aria-pressed',on);state.drafts=on;});
+t.querySelector('#bk').addEventListener('click',()=>jumpTo('source',t));
+t.querySelector('#rv').addEventListener('click',()=>{
+if(state.urlTreat==='rewrite'){
+state.domains = (dom.value||'').trim();
+if(!state.domains){domErr.classList.add('show');dom.focus();return;}
+}
+lockLast();t.remove();turn--;
+const s = [
+state.urlTreat==='ask'?'Ask':state.urlTreat==='keep'?'Keep unchanged':`Rewrite: ${state.domains}`,
+state.dryRun?'Dry run':'Real run',
+state.drafts?'Drafts':'Publish'
+].join(' · ');
+addUsr(s,'configure');
+step4_confirm();
+});
+}
+
+function step4_confirm(){
+const t = addSys(`
+<div>Ready to ${state.dryRun?'plan':'import'}.</div>
+<div class="hint">
+<code>${state.source}</code><br>
+${state.type} · subdir <code>docs</code><br>
+${state.urlTreat==='ask'?'Ask on URLs':state.urlTreat==='keep'?'Keep URLs':'Rewrite '+state.domains} · ${state.dryRun?'Dry run':'Real run'} · ${state.drafts?'Drafts':'Publish'}<br>
+≈38 documents · ≈22 media references · discovery: <code>trunk/docs</code>
+</div>
+<div class="btns"><button class="btn primary" id="go">${state.dryRun?'Start dry run':'Import this content'}</button><button class="btn" id="bk">Back</button></div>
+`);
+t.querySelector('#bk').addEventListener('click',()=>jumpTo('configure',t));
+t.querySelector('#go').addEventListener('click',()=>{
+lockLast();t.remove();turn--;
+addUsr(state.dryRun?'Start dry run':'Import this content','confirm');
+step5_run();
+});
+}
+
+const stageLabels = ['Read source','Prepare content','URL treatment','Import media','Write pages','Finish'];
+let stageMemos = {};
+function makeStageMemo(stageIdx){
+turn++;
+const num = String(stageIdx+1).padStart(2,'0');
+const n = el(`
+<section class="memo sys stage-memo open" data-turn="${turn}" data-stage="${stageIdx}" data-status="active">
+<div class="head"><span class="stage-num">${num}</span><div class="label">${stageLabels[stageIdx]}</div><div class="time">${nowTime()}</div><span class="chev">▾</span></div>
+<div class="main"><span class="act">Starting.</span><span class="summary"></span></div>
+<div class="mini-bar indet"><i></i></div>
+<div class="subevents"></div>
+</section>
+`);
+convo.appendChild(n);
+n.querySelector('.head').addEventListener('click',()=>n.classList.toggle('open'));
+stageMemos[stageIdx] = n;
+scrollEnd();
+return n;
+}
+function updateStageMemo(stageIdx, opts){
+const n = stageMemos[stageIdx]; if(!n) return;
+if(opts.act) n.querySelector('.act').textContent = opts.act;
+if(opts.status){
+n.dataset.status = opts.status;
+}
+if(opts.pct!=null){
+const bar = n.querySelector('.mini-bar');
+bar.classList.remove('indet');
+bar.querySelector('i').style.width = opts.pct + '%';
+if(opts.status==='done') bar.classList.add('done');
+}
+if(opts.paused){n.querySelector('.mini-bar').classList.add('paused');}
+if(opts.event){
+n.querySelector('.subevents').insertAdjacentHTML('beforeend', `<div class="e ${opts.lvl||''}"><span class="t">${nowTime()}</span><span>${opts.event}</span></div>`);
+}
+if(opts.summary!=null){
+const s = n.querySelector('.summary');
+s.textContent = opts.summary;
+}
+}
+function collapseStageMemo(stageIdx){
+const n = stageMemos[stageIdx]; if(!n) return;
+n.classList.remove('open');
+const subs = n.querySelectorAll('.subevents .e').length;
+if(subs && !n.querySelector('.summary').textContent){
+n.querySelector('.summary').textContent = `${subs} event${subs===1?'':'s'}`;
+}
+}
+
+function step5_run(){
+const m0 = makeStageMemo(0);
+const sched = [
+{at:300, s:0, ev:'GitHub repository fetch queued; file count will appear after discovery.', act:'Reading the source.'},
+{at:1100, s:0, ev:'Fetching repository files with sparse Git.', act:'Fetching repository files with sparse Git.'},
+{at:1900, s:0, ev:'38 source items found.', act:'38 source items found.', pct:100, status:'done', summary:'38 items found.', closeAfter:true},
+{at:2200, s:1, openStage:true, ev:'Preparing 12 items.', act:'Preparing 12 items.', pct:50},
+{at:3000, s:1, ev:'12 documents prepared.', act:'12 documents prepared.', pct:100, status:'done', summary:'12 prepared.', closeAfter:true},
+{at:3300, s:2, openStage:true, ev:'Choose URL treatment to continue.', act:'Choose URL treatment to continue.', status:'blocked', paused:true, decision:true, lvl:'warn'}
+];
+sched.forEach(s=>{
+setTimeout(()=>{
+if(state.aborted) return;
+if(s.openStage) makeStageMemo(s.s);
+updateStageMemo(s.s, {act:s.act, pct:s.pct, status:s.status, event:s.ev, paused:s.paused, summary:s.summary, lvl:s.lvl});
+if(s.closeAfter) collapseStageMemo(s.s);
+if(s.decision){pausedBanner.classList.add('show');renderInDecision(s.s);}
+}, s.at);
+});
+}
+
+function renderInDecision(stageIdx){
+const memo = stageMemos[stageIdx];
+const dom1='developer.wordpress.org', dom2='make.wordpress.org/core';
+const panel = el(`
+<div class="in-decision" id="inDec">
+<div class="deceyebrow">Decision · paused</div>
+<div class="q">Rewrite old-site URLs to this site?</div>
+<div class="h">Selected hosts will be rewritten; unselected stay as written. Decision key: <code>confirm-first-party-domains</code></div>
+<label class="dom"><input type="checkbox" checked data-d="${dom1}"><div><b>${dom1}</b><small>https://developer.wordpress.org/block-editor/</small></div></label>
+<label class="dom"><input type="checkbox" checked data-d="${dom2}"><div><b>${dom2}</b><small>https://make.wordpress.org/core/handbook/</small></div></label>
+<div class="btns">
+<button class="btn primary" id="dsel">Rewrite selected</button>
+<button class="btn" id="dall">Rewrite all</button>
+<button class="btn" id="dnone">Keep all URLs</button>
+</div>
+</div>
+`);
+memo.querySelector('.mini-bar').insertAdjacentElement('afterend', panel);
+scrollEnd();
+function resolve(kind){
+let summary='';
+if(kind==='sel'){const c=[...panel.querySelectorAll('input:checked')].map(x=>x.dataset.d);summary=c.length?`Rewrite: ${c.join(', ')}`:'Keep all (none selected)';}
+else if(kind==='all') summary='Rewrite all: '+[dom1,dom2].join(', ');
+else summary='Keep all URLs';
+panel.remove();
+updateStageMemo(stageIdx,{act:'Resolved.',pct:100,status:'done',summary,event:`Resolved: ${summary}`});
+memo.querySelector('.mini-bar').classList.remove('paused');
+collapseStageMemo(stageIdx);
+pausedBanner.classList.remove('show');
+addUsr(summary,'');
+step7_resume();
+}
+panel.querySelector('#dsel').addEventListener('click',()=>resolve('sel'));
+panel.querySelector('#dall').addEventListener('click',()=>resolve('all'));
+panel.querySelector('#dnone').addEventListener('click',()=>resolve('none'));
+}
+
+function step7_resume(){
+const sched = [
+{at:300, s:3, openStage:true, ev:'Importing media.', act:'Importing media. 18 of 22 done.', pct:62},
+{at:1100, s:3, ev:'Waiting for the remote source. HTTP 429 — retry in 87 s.', act:'Waiting for the remote source.', lvl:'warn'},
+{at:1900, s:3, ev:'22 media imported.', act:'22 media imported.', pct:100, status:'done', summary:'22 media imported.', closeAfter:true},
+{at:2200, s:4, openStage:true, ev:'Writing pages.', act:state.dryRun?'Dry run: no pages written.':'Writing 8 of 38 pages.', pct:80},
+{at:3000, s:4, ev:state.dryRun?'Dry run: 38 documents prepared.':'38 pages written.', act:state.dryRun?'Dry run: no pages written.':'38 pages written.', pct:100, status:'done', summary:state.dryRun?'38 prepared.':'38 pages written.', closeAfter:true},
+{at:3300, s:5, openStage:true, ev:'Final checks.', act:'Final checks.', pct:50},
+{at:3900, s:5, ev:'Import complete.', act:'Import complete.', pct:100, status:'done', summary:'Complete.', done:true}
+];
+sched.forEach(s=>{
+setTimeout(()=>{
+if(s.openStage) makeStageMemo(s.s);
+updateStageMemo(s.s,{act:s.act,pct:s.pct,status:s.status,event:s.ev,lvl:s.lvl,summary:s.summary});
+if(s.closeAfter) collapseStageMemo(s.s);
+if(s.done) step8_complete();
+}, s.at);
+});
+}
+
+function step8_complete(){
+setTimeout(()=>{
+addSys(`
+<div>${state.dryRun?'Dry run complete.':'Import complete.'}</div>
+<div class="hint">${state.dryRun?'38 documents prepared — nothing written.':'1m 42s elapsed.'}</div>
+<div class="tally"><b>${state.dryRun?'—':'38'}</b>&nbsp;pages · <b>22</b>&nbsp;media <span class="meta">· 0 errors · 0 comments</span></div>
+<div class="btns">
+<button class="btn primary">View imported content</button>
+${state.dryRun?'<button class="btn">Run for real with the same choices</button>':''}
+<button class="btn">Start another import</button>
+<button class="btn ghost">Download report</button>
+</div>
+`,{label:'Summary'});
+},500);
+}
+
+step1_source();
+})();
+</script>
+</body>
+</html>

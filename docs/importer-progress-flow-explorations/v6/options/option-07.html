@@ -1,0 +1,485 @@
+<!doctype html>
+<!-- Theme 2 — Page Canvas — V3: Phase grid 2×3. Round 2: collapsed cells pre-run, no "Step XX" prefix, softer decision border, sentence-case fields. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Theme 2 · Page Canvas · V3 — Phase Grid</title>
+<style>
+:root{--bg:#fdfdfb;--ink:#111418;--rule:#e7e7e3;--accent:#7c1d6f;--soft:#f4e8f0;--muted:#6b7280;--ok:#176649;--warn:#b45309;--soft2:#fbf3da}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14.5px/1.55 "Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+button,input,select{font:inherit;color:inherit}
+a{color:var(--accent);text-decoration:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.adminbar{height:32px;background:#1d2327;color:#c3c4c7;font-size:13px;display:flex;align-items:center;padding:0 16px;gap:14px}
+.adminbar b{color:#fff;font-weight:600}
+.wrap{max-width:820px;margin:0 auto;padding:18px 28px 60px}
+.top{display:flex;align-items:baseline;justify-content:space-between;gap:18px;margin:6px 0 18px}
+.top h1{font-size:30px;line-height:1.12;letter-spacing:-.015em;margin:0;font-weight:700}
+.top .meta{font-size:13px;color:var(--muted)}
+.top .meta a{color:var(--muted);border-bottom:1px dotted var(--rule)}
+.top .meta a:hover{color:var(--ink)}
+section{display:none}
+section.on{display:block}
+/* Phase grid — compact 56px cells pre-run; active/done/blocked expand to show status + bar */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 24px}
+@media(max-width:680px){.grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:440px){.grid{grid-template-columns:1fr}.grid .cell{padding:10px 12px}}
+.cell{border:1px solid var(--rule);border-radius:8px;padding:6px 12px;background:#fff;display:flex;flex-direction:row;align-items:center;gap:8px;min-height:36px;font-size:13.5px;position:relative;transition:padding .2s,min-height .2s}
+.cell .n{font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+.cell .lbl{font-size:13.5px;font-weight:600;line-height:1.25}
+.cell .st{font-size:11.5px;color:var(--muted);display:none;flex-basis:100%}
+.cell.active,.cell.done,.cell.blocked{min-height:80px;padding-top:12px;padding-bottom:12px;flex-direction:column;align-items:stretch;gap:4px}
+.cell.active .st,.cell.done .st,.cell.blocked .st{display:block}
+.cell.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--soft)}
+.cell.active .n{color:var(--accent)}
+.cell.active .st{color:var(--accent)}
+.cell.done{background:#fafaf7}
+.cell.done .st{color:var(--ok)}
+.cell.done .st::before{content:"✓ ";color:var(--ok);font-weight:600}
+.cell.blocked{border-color:#e3c98a;background:#fdf6e3}
+.cell.blocked .st{color:var(--warn);font-weight:600}
+.cell .mini{height:3px;background:#eeece5;border-radius:999px;margin-top:auto;overflow:hidden;display:none}
+.cell.active .mini{display:block}
+.cell.active .mini span{display:block;height:100%;background:var(--accent);width:35%;animation:indet 1.6s infinite ease-in-out}
+@keyframes indet{0%{margin-left:-35%}100%{margin-left:100%}}
+/* Inputs */
+.lede{font-size:15px;color:var(--muted);margin:0 0 22px;max-width:580px}
+.capture input{padding:14px 16px;border:1px solid var(--rule);border-radius:10px;width:100%;font-size:15px;background:#fff}
+.capture input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px var(--soft)}
+.row-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
+.browse{padding:10px 14px;border:1px solid var(--rule);border-radius:8px;background:#fff;cursor:pointer;font-weight:600;font-size:13.5px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.chip{padding:6px 11px;border:1px solid var(--rule);border-radius:999px;background:#fff;font-size:12.5px;color:var(--muted);cursor:pointer}
+.chip:hover{border-color:var(--accent);color:var(--ink)}
+.hint{font-size:12.5px;color:var(--muted);margin-top:14px}
+.past-card{margin-top:28px;padding:14px 16px;border:1px solid var(--rule);border-radius:10px;background:#fff;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.past-card b{display:block;font-weight:600;font-size:13.5px;word-break:break-all}
+.past-card span{color:var(--muted);font-size:12.5px}
+.btn-link{background:none;border:0;color:var(--accent);font-weight:600;cursor:pointer;padding:0;font-size:13.5px}
+.tag{padding:2px 8px;border-radius:999px;font-size:11.5px;font-weight:600;background:var(--soft2);color:var(--warn)}
+.tag.failed{background:#fbeae5;color:#b91c1c}
+.src-block .val{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;background:#fff;border:1px solid var(--rule);border-radius:10px;padding:13px 15px;word-break:break-all}
+.inferred{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0 2px;font-size:13.5px}
+.pill{padding:5px 11px;background:var(--soft);color:var(--accent);border-radius:999px;font-weight:600;font-size:12.5px}
+.explain{color:var(--muted);font-size:13.5px;margin:2px 0 14px}
+.types{display:none;grid-template-columns:repeat(2,1fr);gap:6px;padding:10px;border:1px solid var(--rule);border-radius:10px;margin:10px 0;background:#fff}
+.types.on{display:grid}
+.types button{text-align:left;padding:8px 11px;background:#fff;border:1px solid transparent;border-radius:8px;cursor:pointer;font-size:13px}
+.types button.active{background:var(--soft);color:var(--accent)}
+.warn-text{font-size:12.5px;color:var(--warn);margin-top:8px;display:none}
+.warn-text.on{display:block}
+@media(max-width:560px){.types{grid-template-columns:1fr}}
+.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:24px;align-items:center}
+.primary{padding:12px 20px;background:var(--ink);color:#fff;border:0;border-radius:10px;font-weight:600;cursor:pointer;font-size:14.5px}
+.primary:hover{background:#000}
+.ghost{padding:12px 18px;background:transparent;border:1px solid var(--rule);border-radius:10px;font-weight:600;cursor:pointer}
+.back{font-size:13px;color:var(--muted);background:none;border:0;cursor:pointer;padding:0;margin-bottom:10px}
+.back:hover{color:var(--ink)}
+/* Configure — sentence-case field titles */
+.fields{display:grid;gap:24px}
+.field h3{margin:0 0 6px;font-size:15px;font-weight:600}
+.field .field-hint{margin:0 0 8px;font-size:12.5px;color:var(--muted)}
+.radios{display:grid;gap:0;border-top:1px solid var(--rule)}
+.radio{display:grid;grid-template-columns:auto 1fr;gap:12px;padding:12px 2px;border-bottom:1px solid var(--rule);cursor:pointer;align-items:flex-start}
+.radio:last-child{border-bottom:0}
+.radio input{margin-top:3px}
+.radio b{font-weight:600;display:block;font-size:14px}
+.radio small{display:block;color:var(--muted);font-size:12.5px;margin-top:1px}
+.domains{padding:6px 2px 6px 28px;display:none}
+.domains.on{display:block}
+.domains input{width:100%;max-width:420px;padding:9px 11px;border:1px solid var(--rule);border-radius:6px;background:#fff;font-size:13.5px}
+.toggles{display:grid;gap:0;border-top:1px solid var(--rule)}
+.tog{display:grid;grid-template-columns:1fr auto;gap:12px;padding:12px 2px;align-items:center;border-bottom:1px solid var(--rule);cursor:pointer}
+.tog:last-child{border-bottom:0}
+.tog b{display:block;font-size:14px;font-weight:600}
+.tog small{display:block;color:var(--muted);font-size:12.5px;margin-top:1px}
+.sw{width:36px;height:20px;background:#dad9d2;border-radius:999px;position:relative;flex:none}
+.sw::after{content:"";position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .2s}
+.tog.on .sw{background:var(--accent)}
+.tog.on .sw::after{transform:translateX(16px)}
+details summary{cursor:pointer;color:var(--muted);font-size:13px;padding:6px 0}
+.tech{font-size:12.5px;color:var(--muted);display:grid;gap:4px;padding-bottom:4px}
+.kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;padding:1px 5px;border:1px solid var(--rule);border-radius:4px;background:#fff;color:var(--muted)}
+/* Confirm — Source/Type get prominence */
+.summary{margin:0;display:grid;gap:0;border-top:1px solid var(--rule)}
+.summary .row{display:grid;grid-template-columns:130px 1fr;gap:18px;padding:12px 2px;border-bottom:1px solid var(--rule);align-items:baseline;font-size:14px}
+.summary .row.lead{padding:18px 2px}
+.summary .row dt{margin:0;color:var(--muted);font-weight:500;font-size:12.5px;text-transform:uppercase;letter-spacing:.04em}
+.summary .row dd{margin:0;font-weight:500}
+.summary .row.lead dd{font-size:17px;font-weight:600}
+.summary .row.lead dd.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;word-break:break-all}
+/* Run state — uses the grid as progress, plus thin overall bar */
+.runline{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-size:14.5px}
+.runline .pulse{width:8px;height:8px;background:var(--ok);border-radius:50%;flex:none;animation:pulse 1.4s infinite}
+.runline.paused .pulse{background:var(--warn);animation:none}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+.runtop{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);margin:0 0 10px}
+.bar{height:5px;background:#eeece5;border-radius:999px;overflow:hidden;margin:0 0 22px}
+.bar span{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--ok));transition:width .35s}
+.bar.paused span{background:repeating-linear-gradient(45deg,var(--warn),var(--warn) 6px,#e0a056 6px,#e0a056 12px)}
+/* Softer decision card — soft amber background, no heavy border */
+.dec-card{border:1px solid var(--rule);background:#fdf6e3;border-radius:10px;padding:16px;margin:0 0 18px}
+.attn{font-size:12px;color:var(--warn);font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin:0 0 8px}
+.abort-confirm{display:none;margin:8px 0 12px;padding:10px 14px;border:1px solid var(--rule);border-radius:8px;background:var(--soft2);font-size:13px;color:var(--warn);align-items:center;gap:10px}
+.abort-confirm.on{display:flex;flex-wrap:wrap}
+.abort-confirm b{font-weight:600}
+.abort-confirm .ac-acts{display:flex;gap:6px;margin-left:auto}
+.abort-confirm button{padding:6px 11px;border-radius:6px;border:1px solid var(--rule);background:#fff;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--ink)}
+.abort-confirm .danger{background:var(--warn);color:#fff;border-color:var(--warn)}
+.dec h4{margin:0 0 4px;font-size:15.5px;font-weight:600}
+.dec .desc{font-size:13.5px;color:var(--muted);margin:0 0 12px}
+.dec ul{list-style:none;margin:0 0 14px;padding:0;display:grid;gap:6px}
+.dec li{display:grid;grid-template-columns:auto 1fr;gap:10px;padding:10px;border:1px solid var(--rule);border-radius:8px;background:#fff}
+.dec li b{display:block;font-size:13.5px}
+.dec li small{display:block;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;margin-top:2px;word-break:break-all}
+.dec .acts{display:flex;flex-wrap:wrap;gap:8px}
+.dec .acts button{padding:10px 14px;border-radius:8px;border:1px solid var(--rule);background:#fff;cursor:pointer;font-weight:600;font-size:13.5px}
+.dec .acts .primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+.log{margin:18px 0 0;font-size:13px;color:var(--muted)}
+.log h3{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.log ul{margin:0;padding:0;list-style:none;max-height:160px;overflow:auto}
+.log li{padding:3px 0;border-top:1px dotted var(--rule);display:grid;grid-template-columns:auto 1fr;gap:8px}
+.log li:first-child{border-top:0}
+.log li time{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;padding-top:1px}
+.tallies{display:flex;flex-wrap:wrap;gap:18px 30px;margin:18px 0 12px}
+.tally b{font-size:28px;display:block;font-weight:700;line-height:1;letter-spacing:-.01em}
+.tally span{font-size:12.5px;color:var(--muted)}
+.t-footer{font-size:12.5px;color:var(--muted)}
+.resumed{padding:10px 14px;border-radius:8px;background:var(--soft);color:var(--accent);font-size:13px;margin:0 0 14px;font-weight:600;display:none}
+.resumed.on{display:block}
+.crumb{color:var(--muted);font-size:12.5px;margin:0 0 2px}
+.crumb a{color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="adminbar"><b>WordPress</b> <span>My Site</span> <span style="margin-left:auto">howdy, admin</span></div>
+<div class="wrap">
+  <div class="crumb"><a href="#">Tools</a> ›  Universal Importer</div>
+  <div class="top">
+    <h1 id="pageTitle">Bring content in.</h1>
+    <span class="meta"><a href="#" id="pastLink">Past imports (10)</a></span>
+  </div>
+
+  <!-- 6-cell phase grid — compact pre-run, expanded when a cell is active/done/blocked. -->
+  <div class="grid" id="grid" aria-label="Import stages">
+    <div class="cell" data-stage="0"><span class="n">01</span><span class="lbl">Read source</span><span class="st">Not started</span><div class="mini"><span></span></div></div>
+    <div class="cell" data-stage="1"><span class="n">02</span><span class="lbl">Prepare content</span><span class="st">Not started</span><div class="mini"><span></span></div></div>
+    <div class="cell" data-stage="2"><span class="n">03</span><span class="lbl">URL treatment</span><span class="st">Not started</span><div class="mini"><span></span></div></div>
+    <div class="cell" data-stage="3"><span class="n">04</span><span class="lbl">Import media</span><span class="st">Not started</span><div class="mini"><span></span></div></div>
+    <div class="cell" data-stage="4"><span class="n">05</span><span class="lbl">Write pages</span><span class="st">Not started</span><div class="mini"><span></span></div></div>
+    <div class="cell" data-stage="5"><span class="n">06</span><span class="lbl">Finish</span><span class="st">Not started</span><div class="mini"><span></span></div></div>
+  </div>
+
+  <section id="s-empty" class="on">
+    <p class="lede">Paste a URL, drop a folder, or point at a server path. We'll figure out what it is.</p>
+    <div class="capture">
+      <input id="srcInput" type="text" placeholder="https://… or /path/to/folder" aria-label="Source URL, path, or file">
+    </div>
+    <div class="row-actions">
+      <button class="browse" id="browseBtn" type="button">Choose folder…</button>
+      <button class="browse" id="browseFileBtn" type="button">Choose file…</button>
+    </div>
+    <div class="chips" role="list">
+      <button class="chip" data-chip="https://github.com/WordPress/gutenberg/tree/trunk/docs">GitHub</button>
+      <button class="chip" data-chip="https://example.com/wp-json/">WordPress</button>
+      <button class="chip" data-chip="https://example.com/feed/">Feed/OPML</button>
+      <button class="chip" data-chip="/srv/content/">Server path</button>
+      <button class="chip" data-chip="https://example.com/sitemap.xml">Sitemap</button>
+    </div>
+    <p class="hint">Accepts PDF, EPUB, HTML, Markdown, WXR/XML, ZIP. Limits: 500 files / 128 MB.</p>
+    <div class="past-card" id="resumeCard">
+      <div>
+        <b>https://example.com/wp-json/</b>
+        <span>Paused 2h ago · Stopped during URL treatment · 7 of 24 pages written</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="tag">paused</span>
+        <button class="btn-link" id="resumeBtn" type="button">Resume →</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="s-classified">
+    <button class="back" id="backToEmpty" type="button">← Start over</button>
+    <div class="src-block"><div class="val" id="srcDisplay">https://github.com/WordPress/gutenberg/tree/trunk/docs</div></div>
+    <div class="inferred">
+      <span class="pill" id="typePill">GitHub repository</span>
+      <span style="color:var(--muted);font-size:13px">· 38 documents · 22 media references · from trunk/docs</span>
+    </div>
+    <p class="explain">We'll fetch with sparse Git, parse Markdown as pages, bring images along.</p>
+    <p><button class="btn-link" id="overrideBtn" type="button">Not this? Change type</button></p>
+    <div class="types" id="typeList" role="listbox">
+      <button data-type="GitHub repository" class="active">GitHub repository</button>
+      <button data-type="WordPress site">WordPress site</button>
+      <button data-type="Feed (Atom/RSS/RDF)">Feed (Atom/RSS/RDF)</button>
+      <button data-type="OPML feed list">OPML feed list</button>
+      <button data-type="Server path">Server path</button>
+      <button data-type="Uploaded file/folder">Uploaded file/folder</button>
+      <button data-type="Reachable URL">Reachable URL</button>
+      <button data-type="Sitemap">Sitemap</button>
+      <button data-type="PDF">PDF</button>
+      <button data-type="EPUB">EPUB</button>
+    </div>
+    <p class="warn-text" id="warnText">Type doesn't look right for this URL — still proceed?</p>
+    <div class="actions"><button class="primary" id="toConfigure" type="button">Continue</button></div>
+  </section>
+
+  <section id="s-configure">
+    <button class="back" id="backToClassified" type="button">← Back</button>
+    <div class="fields">
+      <div class="field">
+        <h3>URL treatment</h3>
+        <p class="field-hint">What should happen to URLs that point at other domains?</p>
+        <div class="radios" role="radiogroup">
+          <label class="radio"><input type="radio" name="urlt" value="ask" checked><span><b>Ask when old URLs are found</b><small>Recommended. We'll pause once to confirm which domains to rewrite.</small></span></label>
+          <label class="radio"><input type="radio" name="urlt" value="keep"><span><b>Keep URLs unchanged</b><small>Useful when the source already points at this site.</small></span></label>
+          <label class="radio"><input type="radio" name="urlt" value="rewrite"><span><b>Rewrite listed domains</b><small>Skip the prompt by listing domains now.</small></span></label>
+        </div>
+        <div class="domains" id="domainBox"><input type="text" id="domainInput" placeholder="example.com, www.example.com" aria-label="Domains to rewrite"></div>
+      </div>
+      <div class="field">
+        <h3>Run options</h3>
+        <div class="toggles">
+          <button type="button" class="tog" id="togDry" aria-pressed="false"><div><b>Dry run</b><small>Traverse and prepare, but don't write pages.</small></div><span class="sw" aria-hidden="true"></span></button>
+          <button type="button" class="tog" id="togDraft" aria-pressed="false"><div><b>Import as drafts</b><small>Posts go in as drafts. Resolves post status up front.</small></div><span class="sw" aria-hidden="true"></span></button>
+        </div>
+      </div>
+      <details><summary>More options</summary>
+        <div class="tech">
+          <span>Cache reuse: on.</span>
+          <span>Secrets are env-only.</span>
+          <span>Power user: <span class="kbd">wp universal-importer import &lt;source&gt;</span></span>
+        </div>
+      </details>
+    </div>
+    <div class="actions"><button class="primary" id="toConfirm" type="button">Review →</button></div>
+  </section>
+
+  <section id="s-confirm">
+    <button class="back" id="backToConfigure" type="button">← Back</button>
+    <dl class="summary">
+      <div class="row lead"><dt>Source</dt><dd class="mono">https://github.com/WordPress/gutenberg/tree/trunk/docs</dd></div>
+      <div class="row lead"><dt>Type</dt><dd id="cType">GitHub repository</dd></div>
+      <div class="row"><dt>Items</dt><dd>≈ 38 documents · ≈ 22 media references · from trunk/docs</dd></div>
+      <div class="row"><dt>URL treatment</dt><dd id="cURL">Ask when old URLs are found</dd></div>
+      <div class="row"><dt>Post status</dt><dd id="cStat">Publish</dd></div>
+      <div class="row"><dt>Run mode</dt><dd id="cMode">Real run</dd></div>
+    </dl>
+    <div class="actions">
+      <button class="primary" id="startRun" type="button">Import this content</button>
+      <button class="ghost" id="cancelConfirm" type="button">Cancel</button>
+    </div>
+  </section>
+
+  <section id="s-run">
+    <div class="resumed" id="resumed">Resumed from URL treatment pause. Continue below.</div>
+    <p class="runline" id="runline"><span class="pulse" aria-hidden="true"></span><span id="actionLine" aria-live="polite">Reading the source.</span></p>
+    <div class="runtop">
+      <span id="pctText">0% · 0 / 38 items</span>
+      <button class="btn-link" id="abortBtn" type="button" style="color:var(--muted)">Abort</button>
+    </div>
+    <div class="abort-confirm" id="abortConfirm" role="alertdialog" aria-label="Confirm abort">
+      <b>Abort this import?</b>
+      <span style="color:var(--muted);font-size:12.5px">Items already written will stay.</span>
+      <span class="ac-acts"><button class="danger" id="abortYes" type="button">Yes, abort</button><button id="abortNo" type="button">Cancel</button></span>
+    </div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar"><span id="barFill"></span></div>
+    <div class="dec-card" id="decCard" style="display:none">
+      <p class="attn">Run paused · Needs attention</p>
+      <div class="dec">
+        <h4>Rewrite old-site URLs to this site?</h4>
+        <p class="desc">Selected hosts will be rewritten to this site's domain. Unselected hosts stay as-is.</p>
+        <ul>
+          <li><input type="checkbox" checked aria-label="developer.wordpress.org"><div><b>developer.wordpress.org</b><small>Example: https://developer.wordpress.org/block-editor/</small></div></li>
+          <li><input type="checkbox" checked aria-label="make.wordpress.org/core"><div><b>make.wordpress.org/core</b><small>Example: https://make.wordpress.org/core/handbook/</small></div></li>
+        </ul>
+        <div class="acts">
+          <button class="primary" data-dec="selected" type="button">Rewrite selected domains</button>
+          <button data-dec="all" type="button">Yes, rewrite all</button>
+          <button data-dec="none" type="button">No, keep all URLs</button>
+        </div>
+      </div>
+    </div>
+    <details><summary>Technical details</summary>
+      <div class="tech">
+        <span>Source items: queued 38 · processing 0 · imported 0 · failed 0</span>
+        <span>Prepared documents: 0 of 38</span>
+        <span>Media: queued 22 · imported 0 · skipped 0 · failed 0</span>
+        <span>Run continues in background via WP-Cron · <span class="kbd">wp universal-importer tick &lt;session&gt;</span></span>
+      </div>
+    </details>
+    <div class="log"><h3>Activity (latest first)</h3><ul id="logList" aria-live="polite"></ul></div>
+  </section>
+
+  <section id="s-complete">
+    <p class="lede" id="completeLede" style="font-size:16px;color:var(--ink)">38 pages written from the Gutenberg docs.</p>
+    <div class="tallies">
+      <div class="tally"><b id="tPages">38</b><span>Pages written</span></div>
+      <div class="tally" id="tDraftWrap" style="display:none"><b id="tDrafts">0</b><span>Drafts</span></div>
+      <div class="tally"><b>22</b><span>Media imported</span></div>
+    </div>
+    <p class="t-footer" id="tFooter">0 errors · 0 warnings · elapsed 00:42</p>
+    <div class="actions">
+      <button class="primary" id="viewBtn" type="button">View imported content</button>
+      <button class="ghost" id="anotherBtn" type="button">Start another import</button>
+      <button class="btn-link" id="realRunBtn" type="button" style="display:none">Run for real with the same choices</button>
+    </div>
+  </section>
+</div>
+
+<script>
+(function(){
+const titles={empty:"Bring content in.",classified:"Confirm the source.",configure:"Configure.",confirm:"Ready to import.",run:"Importing.",complete:"Import complete."};
+const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+let dry=false,draft=false,urlt="ask",timer=null,paused=false,startTs=0;
+
+function show(id){$$("section").forEach(s=>s.classList.remove("on"));document.getElementById(id).classList.add("on")}
+function setTitle(t){$("#pageTitle").textContent=titles[t]||titles.empty}
+function tstamp(){const d=new Date();return d.toTimeString().slice(0,8)}
+function logAdd(line){const li=document.createElement("li");li.innerHTML=`<time>${tstamp()}</time><span>${line}</span>`;$("#logList").insertBefore(li,$("#logList").firstChild)}
+function setCell(i,state){
+  const c=$(`.cell[data-stage='${i}']`);if(!c)return;
+  c.classList.remove("active","done","blocked");
+  if(state)c.classList.add(state);
+  const lbl=state==="done"?"Done":state==="active"?"In progress":state==="blocked"?"Needs attention":"Not started";
+  c.querySelector(".st").textContent=lbl;
+}
+function resetCells(){$$(".cell").forEach((c,i)=>{c.classList.remove("active","done","blocked");c.querySelector(".st").textContent="Not started"})}
+function pct(p){
+  $("#bar").setAttribute("aria-valuenow",p);
+  $("#barFill").style.width=p+"%";
+  $("#pctText").textContent=p+"% · "+Math.round(p*0.38)+" / 38 items";
+}
+
+$("#pastLink").addEventListener("click",e=>{
+  e.preventDefault();
+  if(!$("#s-empty").classList.contains("on")){setTitle("empty");show("s-empty");resetCells()}
+  setTimeout(()=>$("#resumeCard").scrollIntoView({behavior:"smooth",block:"center"}),80);
+});
+
+$$(".chip").forEach(c=>c.addEventListener("click",()=>{const v=c.dataset.chip;$("#srcInput").value=v;goClassified()}));
+$("#browseBtn").addEventListener("click",()=>{$("#srcInput").value="(folder selection — 42 files)";goClassified()});
+$("#browseFileBtn").addEventListener("click",()=>{$("#srcInput").value="(file selection — export.wxr)";goClassified()});
+$("#srcInput").addEventListener("keydown",e=>{if(e.key==="Enter"&&$("#srcInput").value)goClassified()});
+
+function goClassified(){
+  setTitle("classified");show("s-classified");
+  const v=$("#srcInput").value||"https://github.com/WordPress/gutenberg/tree/trunk/docs";
+  $("#srcDisplay").textContent=v;
+}
+$("#backToEmpty").addEventListener("click",()=>{setTitle("empty");show("s-empty")});
+$("#overrideBtn").addEventListener("click",()=>$("#typeList").classList.toggle("on"));
+$$("#typeList button").forEach(b=>b.addEventListener("click",()=>{
+  $$("#typeList button").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");$("#typePill").textContent=b.dataset.type;
+  $("#warnText").classList.toggle("on",b.dataset.type!=="GitHub repository");
+}));
+$("#toConfigure").addEventListener("click",()=>{setTitle("configure");show("s-configure")});
+$$("input[name=urlt]").forEach(r=>r.addEventListener("change",()=>{
+  urlt=r.value;$("#domainBox").classList.toggle("on",r.value==="rewrite");
+}));
+$("#togDry").addEventListener("click",()=>{dry=!dry;$("#togDry").classList.toggle("on",dry);$("#togDry").setAttribute("aria-pressed",dry)});
+$("#togDraft").addEventListener("click",()=>{draft=!draft;$("#togDraft").classList.toggle("on",draft);$("#togDraft").setAttribute("aria-pressed",draft)});
+$("#backToClassified").addEventListener("click",()=>{setTitle("classified");show("s-classified")});
+$("#toConfirm").addEventListener("click",()=>{
+  setTitle("confirm");show("s-confirm");
+  $("#cURL").textContent=urlt==="ask"?"Ask when old URLs are found":urlt==="keep"?"Keep URLs unchanged":"Rewrite listed domains";
+  $("#cStat").textContent=draft?"Draft":"Publish";
+  $("#cMode").textContent=dry?"Dry run":"Real run";
+  $("#startRun").textContent=dry?"Start dry run":"Import this content";
+});
+$("#backToConfigure").addEventListener("click",()=>{setTitle("configure");show("s-configure")});
+$("#cancelConfirm").addEventListener("click",()=>{setTitle("empty");show("s-empty")});
+$("#startRun").addEventListener("click",()=>{setTitle("run");show("s-run");runStart()});
+
+function runStart(){
+  $("#logList").innerHTML="";paused=false;startTs=Date.now();
+  $("#resumed").classList.remove("on");$("#runline").classList.remove("paused");$("#bar").classList.remove("paused");
+  $("#decCard").style.display="none";
+  resetCells();setCell(0,"active");pct(0);
+  $("#actionLine").textContent="Reading the source.";
+  logAdd("GitHub repository fetch queued; file count will appear after discovery.");
+  let t=0;
+  timer=setInterval(()=>{
+    t++;
+    if(t===1){logAdd("Fetching repository files with sparse Git.");$("#actionLine").textContent="Fetching repository files with sparse Git."}
+    if(t===2){pct(18);logAdd("38 source items found.")}
+    if(t===3){setCell(0,"done");setCell(1,"active");$("#actionLine").textContent="Preparing 12 items.";pct(30);logAdd("Preparing 12 items.")}
+    if(t===4){setCell(1,"done");setCell(2,"blocked");
+      $("#decCard").style.display="block";
+      $("#runline").classList.add("paused");$("#bar").classList.add("paused");
+      $("#actionLine").textContent="Choose URL treatment to continue.";
+      logAdd("Choose URL treatment to continue.");pct(40);
+      clearInterval(timer);timer=null;paused=true;
+      if(urlt!=="ask")setTimeout(()=>resolveDecision("auto"),250);
+    }
+  },900);
+}
+
+$$("[data-dec]").forEach(b=>b.addEventListener("click",()=>resolveDecision(b.dataset.dec)));
+function resolveDecision(kind){
+  if(!paused)return;paused=false;
+  setCell(2,"done");setCell(3,"active");
+  $("#decCard").style.display="none";
+  $("#runline").classList.remove("paused");$("#bar").classList.remove("paused");
+  logAdd(kind==="none"?"Decision: keep all URLs.":kind==="all"?"Decision: rewrite all domains.":"Decision: rewrite selected domains.");
+  $("#actionLine").textContent="Importing media.";logAdd("Importing media.");pct(55);
+  let t=0;
+  timer=setInterval(()=>{
+    t++;
+    if(t===1){setCell(3,"done");setCell(4,"active");
+      $("#actionLine").textContent=dry?"Dry run: no pages written.":"Writing pages.";
+      logAdd(dry?"Dry run: no pages written.":"Writing pages.");pct(75)}
+    if(t===2)pct(90);
+    if(t===3){setCell(4,"done");setCell(5,"active");$("#actionLine").textContent="Checking import state.";pct(96)}
+    if(t===4){setCell(5,"done");
+      $("#actionLine").textContent="Import complete.";logAdd("Import complete.");
+      pct(100);clearInterval(timer);timer=null;setTimeout(showComplete,420)}
+  },820);
+}
+
+function showComplete(){
+  setTitle("complete");show("s-complete");
+  $("#tPages").textContent=dry?"0":"38";
+  $("#tDrafts").textContent=draft?"38":"0";
+  $("#tDraftWrap").style.display=draft?"":"none";
+  $("#completeLede").textContent=dry?"Traversed and prepared 38 documents. No pages were written.":(draft?"38 drafts written from the Gutenberg docs.":"38 pages written from the Gutenberg docs.");
+  $("#tFooter").textContent=`0 errors · 0 warnings · elapsed ${Math.max(1,Math.round((Date.now()-startTs)/1000))}s`;
+  $("#realRunBtn").style.display=dry?"inline-block":"none";
+}
+
+$("#resumeBtn").addEventListener("click",()=>{
+  setTitle("run");show("s-run");paused=true;
+  $("#resumed").classList.add("on");
+  $("#actionLine").textContent="Choose URL treatment to continue.";
+  $("#runline").classList.add("paused");$("#bar").classList.add("paused");
+  resetCells();setCell(0,"done");setCell(1,"done");setCell(2,"blocked");
+  $("#decCard").style.display="block";
+  pct(40);$("#pctText").textContent="40% · 7 / 24 items";
+  $("#logList").innerHTML="";logAdd("Choose URL treatment to continue.");logAdd("Resumed: example.com session.");
+});
+
+$("#viewBtn").addEventListener("click",()=>alert("Would open: edit.php?post_type=page&universal_importer_session_id=…"));
+$("#anotherBtn").addEventListener("click",()=>{
+  dry=false;draft=false;urlt="ask";
+  document.querySelector("input[name=urlt][value=ask]").checked=true;
+  $("#togDry").classList.remove("on");$("#togDry").setAttribute("aria-pressed","false");
+  $("#togDraft").classList.remove("on");$("#togDraft").setAttribute("aria-pressed","false");
+  $("#domainBox").classList.remove("on");
+  setTitle("empty");show("s-empty");resetCells();
+});
+$("#realRunBtn").addEventListener("click",()=>{dry=false;$("#startRun").click()});
+$("#abortBtn").addEventListener("click",()=>{$("#abortConfirm").classList.add("on")});
+$("#abortYes").addEventListener("click",()=>{
+  $("#abortConfirm").classList.remove("on");
+  clearInterval(timer);timer=null;
+  $("#actionLine").textContent="Import aborted.";logAdd("Import aborted.");
+});
+$("#abortNo").addEventListener("click",()=>$("#abortConfirm").classList.remove("on"));
+document.addEventListener("keydown",e=>{if(e.key==="Escape")$("#typeList").classList.remove("on")});
+})();
+</script>
+</body>
+</html>
