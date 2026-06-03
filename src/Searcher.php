@@ -17,7 +17,9 @@ final class WP_FTS_Searcher
      */
     public function search(string $query, array $opts = []): array
     {
-        $terms = array_values(array_unique($this->analyzer->analyze_query($query)));
+        $queryOccurrences = $this->analyze_query($query, $opts);
+        $queryLang = $this->resolve_query_language($opts, $queryOccurrences);
+        $terms = $this->namespace_query_terms($queryOccurrences, $queryLang);
         if ($terms === []) {
             return [];
         }
@@ -54,12 +56,12 @@ final class WP_FTS_Searcher
             return [];
         }
 
-        $docLengths = $this->storage->get_doc_lengths(array_keys($candidateTermTfs));
+        $docLengths = WP_FTS_StorageCompat::get_doc_lengths($this->storage, array_keys($candidateTermTfs), $queryLang);
         if ($docLengths === []) {
             return [];
         }
 
-        $meta = $this->storage->get_meta();
+        $meta = WP_FTS_StorageCompat::get_meta($this->storage, $queryLang);
         $docCount = max(0, (int) $meta['doc_count']);
         if ($docCount === 0) {
             return [];
@@ -100,6 +102,90 @@ final class WP_FTS_Searcher
         });
 
         return array_slice($results, 0, $limit);
+    }
+
+    /**
+     * @return array<int,array<string,mixed>|string>
+     */
+    private function analyze_query(string $query, array $opts): array
+    {
+        $analysisOpts = $opts;
+        $explicitLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'query_lang']);
+        if ($explicitLang !== null) {
+            $analysisOpts['lang'] = $explicitLang;
+            $analysisOpts['language'] = $explicitLang;
+        } else {
+            $analysisOpts['default_lang'] = WP_FTS_TermNamespace::default_language($opts);
+        }
+
+        return $this->analyzer->analyze_query($query, $analysisOpts);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>|string> $queryOccurrences
+     */
+    private function resolve_query_language(array $opts, array $queryOccurrences): string
+    {
+        $explicitLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'query_lang']);
+        if ($explicitLang !== null) {
+            return $explicitLang;
+        }
+
+        foreach ($queryOccurrences as $occurrence) {
+            if (is_array($occurrence) && isset($occurrence['lang']) && trim((string) $occurrence['lang']) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang']);
+            }
+
+            $term = is_array($occurrence) ? (string) ($occurrence['term'] ?? '') : (string) $occurrence;
+            $split = WP_FTS_TermNamespace::split_term($term);
+            if ($split !== null) {
+                return $split['lang'];
+            }
+        }
+
+        return WP_FTS_TermNamespace::default_language($opts);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>|string> $queryOccurrences
+     * @return string[]
+     */
+    private function namespace_query_terms(array $queryOccurrences, string $queryLang): array
+    {
+        $terms = [];
+        $queryLang = WP_FTS_TermNamespace::canonicalize_lang($queryLang);
+
+        foreach ($queryOccurrences as $occurrence) {
+            $term = is_array($occurrence)
+                ? trim((string) ($occurrence['term'] ?? ''))
+                : trim((string) $occurrence);
+            if ($term === '') {
+                continue;
+            }
+
+            $split = WP_FTS_TermNamespace::split_term($term);
+            if ($split !== null) {
+                if ($split['lang'] !== $queryLang || $split['term'] === '') {
+                    continue;
+                }
+                $terms[] = WP_FTS_TermNamespace::namespace_term($queryLang, $split['term']);
+                continue;
+            }
+
+            $termLang = is_array($occurrence) && isset($occurrence['lang'])
+                ? WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang'], $queryLang)
+                : $queryLang;
+            if ($termLang !== $queryLang) {
+                continue;
+            }
+
+            $terms[] = WP_FTS_TermNamespace::namespace_term($queryLang, $term);
+        }
+
+        $terms = array_values(array_unique($terms));
+        sort($terms, SORT_STRING);
+
+        return $terms;
     }
 
     private function bm25(int $tf, int $docLen, int $docCount, int $docFreq, float $avgDocLen): float
