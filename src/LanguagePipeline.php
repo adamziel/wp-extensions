@@ -62,7 +62,7 @@ final class WP_FTS_LanguagePipeline
         $terms = [];
 
         foreach ($this->tokenize($text) as $rawToken) {
-            $term = $this->normalize_raw_token($rawToken, $language);
+            $term = $this->normalize_raw_token($rawToken['text'], $language, $rawToken['is_cjk']);
             if ($term === null) {
                 continue;
             }
@@ -91,19 +91,22 @@ final class WP_FTS_LanguagePipeline
         return $this->canonicalize_language($language) . "\x1e" . $term;
     }
 
-    public function normalize_raw_token(string $rawToken, string $language): ?string
+    public function normalize_raw_token(string $rawToken, string $language, bool $isCjk = false): ?string
     {
         $language = $this->canonicalize_language($language);
         $term = $this->normalizer->normalize_token($rawToken, $language);
 
-        if ($this->customStemmer !== null) {
+        if ($isCjk) {
+            // CJK n-grams are already the lexical units; stemming and Latin
+            // minimum-length pruning would damage recall for single characters.
+        } elseif ($this->customStemmer !== null) {
             $term = $this->customStemmer->stem($term, $language);
         } elseif ($this->enableStemming) {
             $term = $this->stem_for_language($term, $language);
         }
 
         $length = function_exists('mb_strlen') ? mb_strlen($term, 'UTF-8') : strlen($term);
-        if ($length < $this->minTermLen || strlen($term) > $this->maxTermBytes) {
+        if ((!$isCjk && $length < $this->minTermLen) || strlen($term) > $this->maxTermBytes) {
             return null;
         }
 
@@ -111,19 +114,99 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
-     * @return string[]
+     * @return array<int,array{text:string,is_cjk:bool}>
      */
     private function tokenize(string $text): array
     {
         $matches = [];
         if (@preg_match_all('/[\p{L}\p{N}_]+/u', $text, $matches) !== false) {
-            return $matches[0] ?? [];
+            $tokens = [];
+            foreach ($matches[0] ?? [] as $rawToken) {
+                foreach ($this->split_script_runs($rawToken) as $run) {
+                    if ($run['is_cjk']) {
+                        foreach ($this->cjk_tokens($run['text']) as $cjkToken) {
+                            $tokens[] = ['text' => $cjkToken, 'is_cjk' => true];
+                        }
+                        continue;
+                    }
+
+                    $tokens[] = ['text' => $run['text'], 'is_cjk' => false];
+                }
+            }
+
+            return $tokens;
         }
 
         $ascii = preg_replace('/[^\x20-\x7E]+/', ' ', $text) ?? '';
         preg_match_all('/[A-Za-z0-9_]+/', $ascii, $matches);
 
-        return $matches[0] ?? [];
+        return array_map(
+            static fn(string $token): array => ['text' => $token, 'is_cjk' => false],
+            $matches[0] ?? []
+        );
+    }
+
+    /**
+     * @return array<int,array{text:string,is_cjk:bool}>
+     */
+    private function split_script_runs(string $token): array
+    {
+        $runs = [];
+        $current = '';
+        $currentIsCjk = null;
+
+        foreach ($this->utf8_chars($token) as $char) {
+            $isCjk = $this->is_cjk_char($char);
+            if ($current !== '' && $isCjk !== $currentIsCjk) {
+                $runs[] = ['text' => $current, 'is_cjk' => (bool) $currentIsCjk];
+                $current = '';
+            }
+
+            $current .= $char;
+            $currentIsCjk = $isCjk;
+        }
+
+        if ($current !== '') {
+            $runs[] = ['text' => $current, 'is_cjk' => (bool) $currentIsCjk];
+        }
+
+        return $runs;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function cjk_tokens(string $run): array
+    {
+        $chars = $this->utf8_chars($run);
+        $count = count($chars);
+        if ($count <= 1) {
+            return $chars;
+        }
+
+        $tokens = [];
+        for ($i = 0; $i < $count - 1; $i++) {
+            $tokens[] = $chars[$i] . $chars[$i + 1];
+        }
+
+        return $tokens;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function utf8_chars(string $text): array
+    {
+        if (!preg_match_all('/./us', $text, $matches)) {
+            return [];
+        }
+
+        return $matches[0];
+    }
+
+    private function is_cjk_char(string $char): bool
+    {
+        return (bool) preg_match('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]/u', $char);
     }
 
     private function stem_for_language(string $term, string $language): string

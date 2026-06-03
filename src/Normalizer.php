@@ -170,7 +170,7 @@ final class WP_FTS_Normalizer
     private function fold_for_language(string $token, string $language): string
     {
         return match ($this->base_language($language)) {
-            'pl' => strtr($token, $this->polish_fold_map()),
+            'pl' => strtr($token, $this->latin_fallback_fold_map()),
             'de' => strtr($token, $this->german_fold_map()),
             'tr' => strtr($token, $this->turkish_fold_map()),
             default => strtr($token, $this->latin_fallback_fold_map()),
