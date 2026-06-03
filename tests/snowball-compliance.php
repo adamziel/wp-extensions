@@ -8,41 +8,48 @@ require_once __DIR__ . '/../src/bootstrap.php';
  */
 function wp_fts_snowball_datasets(): array
 {
+    $wamaniaDiverges = 'wamania/php-stemmer exposes this language, but its implementation does not match current official Snowball data';
+
     return [
         'arabic' => ['code' => 'ar', 'name' => 'Arabic'],
         'armenian' => ['code' => 'hy', 'name' => 'Armenian'],
         'basque' => ['code' => 'eu', 'name' => 'Basque'],
         'catalan' => ['code' => 'ca', 'name' => 'Catalan'],
         'czech' => ['code' => 'cs', 'name' => 'Czech'],
-        'danish' => ['code' => 'da', 'name' => 'Danish'],
-        'dutch' => ['code' => 'nl', 'name' => 'Dutch'],
-        'dutch_porter' => ['code' => 'nl', 'name' => 'Dutch Porter', 'variant' => true],
-        'english' => ['code' => 'en', 'name' => 'English'],
+        'danish' => ['code' => 'da', 'name' => 'Danish', 'skip_reason' => $wamaniaDiverges],
+        'dutch' => [
+            'code' => 'nl',
+            'name' => 'Dutch',
+            'variant' => true,
+            'skip_reason' => 'WP_FTS_SnowballStemmer maps nl to Wamania Dutch Porter; the newer official Dutch algorithm is not implemented',
+        ],
+        'dutch_porter' => ['code' => 'nl', 'name' => 'Dutch Porter'],
+        'english' => ['code' => 'en', 'name' => 'English', 'skip_reason' => $wamaniaDiverges],
         'esperanto' => ['code' => 'eo', 'name' => 'Esperanto'],
         'estonian' => ['code' => 'et', 'name' => 'Estonian'],
-        'finnish' => ['code' => 'fi', 'name' => 'Finnish'],
-        'french' => ['code' => 'fr', 'name' => 'French'],
-        'german' => ['code' => 'de', 'name' => 'German'],
+        'finnish' => ['code' => 'fi', 'name' => 'Finnish', 'skip_reason' => $wamaniaDiverges],
+        'french' => ['code' => 'fr', 'name' => 'French', 'skip_reason' => $wamaniaDiverges],
+        'german' => ['code' => 'de', 'name' => 'German', 'skip_reason' => $wamaniaDiverges],
         'greek' => ['code' => 'el', 'name' => 'Greek'],
         'hindi' => ['code' => 'hi', 'name' => 'Hindi'],
         'hungarian' => ['code' => 'hu', 'name' => 'Hungarian'],
         'indonesian' => ['code' => 'id', 'name' => 'Indonesian'],
         'irish' => ['code' => 'ga', 'name' => 'Irish'],
-        'italian' => ['code' => 'it', 'name' => 'Italian'],
+        'italian' => ['code' => 'it', 'name' => 'Italian', 'skip_reason' => $wamaniaDiverges],
         'lithuanian' => ['code' => 'lt', 'name' => 'Lithuanian'],
         'lovins' => ['code' => 'en', 'name' => 'Lovins English', 'variant' => true],
         'nepali' => ['code' => 'ne', 'name' => 'Nepali'],
-        'norwegian' => ['code' => 'no', 'name' => 'Norwegian'],
+        'norwegian' => ['code' => 'no', 'name' => 'Norwegian', 'skip_reason' => $wamaniaDiverges],
         'persian' => ['code' => 'fa', 'name' => 'Persian'],
         'polish' => ['code' => 'pl', 'name' => 'Polish'],
         'porter' => ['code' => 'en', 'name' => 'Porter English', 'variant' => true],
-        'portuguese' => ['code' => 'pt', 'name' => 'Portuguese'],
-        'romanian' => ['code' => 'ro', 'name' => 'Romanian'],
-        'russian' => ['code' => 'ru', 'name' => 'Russian'],
+        'portuguese' => ['code' => 'pt', 'name' => 'Portuguese', 'skip_reason' => $wamaniaDiverges],
+        'romanian' => ['code' => 'ro', 'name' => 'Romanian', 'skip_reason' => $wamaniaDiverges],
+        'russian' => ['code' => 'ru', 'name' => 'Russian', 'skip_reason' => $wamaniaDiverges],
         'serbian' => ['code' => 'sr', 'name' => 'Serbian'],
         'sesotho' => ['code' => 'st', 'name' => 'Sesotho'],
-        'spanish' => ['code' => 'es', 'name' => 'Spanish'],
-        'swedish' => ['code' => 'sv', 'name' => 'Swedish'],
+        'spanish' => ['code' => 'es', 'name' => 'Spanish', 'skip_reason' => $wamaniaDiverges],
+        'swedish' => ['code' => 'sv', 'name' => 'Swedish', 'skip_reason' => $wamaniaDiverges],
         'tamil' => ['code' => 'ta', 'name' => 'Tamil'],
         'turkish' => ['code' => 'tr', 'name' => 'Turkish'],
         'yiddish' => ['code' => 'yi', 'name' => 'Yiddish'],
@@ -147,14 +154,14 @@ foreach ($datasets as $dataset => $metadata) {
     $outputPath = $dir . DIRECTORY_SEPARATOR . 'output.txt';
 
     if (($metadata['variant'] ?? false) === true) {
-        $reason = 'algorithm variant is not part of WP_FTS_SnowballStemmer language support';
+        $reason = $metadata['skip_reason'] ?? 'algorithm variant is not part of WP_FTS_SnowballStemmer language support';
         $results['skip'][] = $label;
         fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
         continue;
     }
 
     if ($code === null || !$stemmer->supports_language($code)) {
-        $reason = 'language is not supported by WP_FTS_SnowballStemmer via Wamania';
+        $reason = $metadata['skip_reason'] ?? 'language is not supported by WP_FTS_SnowballStemmer via Wamania';
         $results['skip'][] = $label;
         fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
         continue;

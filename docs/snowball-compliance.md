@@ -5,7 +5,11 @@ adapter against Snowball's official multilingual stemming data. The harness read
 each dataset's `voc.txt` input file and `output.txt` expected stems line by line.
 Languages supported by `WP_FTS_SnowballStemmer` through `wamania/php-stemmer` are
 tested; unsupported Snowball languages and alternate algorithm variants are
-reported as skipped.
+reported as skipped. The adapter only advertises Wamania algorithms that match
+the official fixtures exactly: Catalan and Dutch Porter (`nl`). Wamania exposes
+additional language classes, but those implementations currently diverge from
+the current official Snowball outputs, so the adapter treats them as unsupported
+instead of claiming Snowball compliance.
 
 Run it with:
 

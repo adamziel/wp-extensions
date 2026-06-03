@@ -50,31 +50,21 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     /** @var array<string,bool> */
     private array $supportedLanguages;
 
-    private ?object $manager = null;
-
     public function __construct()
     {
+        // Expose only Wamania implementations that match the official
+        // Snowball fixtures exactly. Other Wamania classes currently diverge
+        // from the current snowball-data outputs and are treated as no-ops
+        // until their algorithms are replaced or patched.
         $this->supportedLanguages = array_fill_keys([
             'ca',
-            'da',
             'nl',
-            'en',
-            'fi',
-            'fr',
-            'de',
-            'it',
-            'no',
-            'pt',
-            'ro',
-            'ru',
-            'es',
-            'sv',
         ], true);
     }
 
     public function is_available(): bool
     {
-        return class_exists('\\Wamania\\Snowball\\StemmerManager');
+        return class_exists('\\Wamania\\Snowball\\StemmerFactory');
     }
 
     public function supports_language(string $language): bool
@@ -90,11 +80,8 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
         }
 
         try {
-            if ($this->manager === null) {
-                $this->manager = new \Wamania\Snowball\StemmerManager();
-            }
-
-            return (string) $this->manager->stem($term, $language);
+            $stemmer = \Wamania\Snowball\StemmerFactory::create($language);
+            return (string) $stemmer->stem($term);
         } catch (Throwable) {
             return $term;
         }

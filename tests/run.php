@@ -525,9 +525,13 @@ test_case('custom stemmers preserve callable arity compatibility', function (): 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
     $snowball = new WP_FTS_SnowballStemmer();
     assert_same('kotami', $snowball->stem('kotami', 'pl'), 'Snowball adapter should no-op unsupported languages');
+    assert_same('running', $snowball->stem('running', 'en'), 'Snowball adapter should no-op non-compliant Wamania algorithms');
 
     if ($snowball->is_available()) {
-        assert_same('run', $snowball->stem('running', 'en'), 'Snowball adapter should use wamania when installed');
+        assert_true($snowball->supports_language('ca'), 'Snowball adapter should advertise compliant Catalan support');
+        assert_true($snowball->supports_language('nl-BE'), 'Snowball adapter should advertise compliant Dutch Porter support');
+        assert_same('abandon', $snowball->stem('abandonaments', 'ca'), 'Snowball adapter should use Wamania for compliant Catalan');
+        assert_same('aalmoez', $snowball->stem('aalmoezen', 'nl'), 'Snowball adapter should map Dutch to Wamania Dutch Porter');
     }
 
     $pipeline = new WP_FTS_LanguagePipeline([
