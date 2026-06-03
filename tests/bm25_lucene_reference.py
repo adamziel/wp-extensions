@@ -22,7 +22,7 @@ CORPUS = [
     ["durian", "apple"],
     ["apple", "carrot"],
 ]
-DOC_IDS = [1, 2, 3, 4]
+DOC_IDS = [101, 202, 303, 404]
 QUERIES = {
     "apple": ["apple"],
     "carrot apple": ["carrot", "apple"],
@@ -64,8 +64,10 @@ def bm25s_scores(query_tokens: list[str]) -> dict[int, float]:
 
     try:
         docs, scores = retriever.retrieve([query_tokens], corpus=DOC_IDS, k=len(CORPUS))
+        docs_are_final_ids = True
     except TypeError:
         docs, scores = retriever.retrieve([query_tokens], k=len(CORPUS))
+        docs_are_final_ids = False
 
     result: dict[int, float] = {}
     for raw_doc, raw_score in zip(docs[0], scores[0]):
@@ -74,7 +76,7 @@ def bm25s_scores(query_tokens: list[str]) -> dict[int, float]:
             continue
 
         doc = int(raw_doc)
-        doc_id = DOC_IDS[doc] if 0 <= doc < len(DOC_IDS) else doc
+        doc_id = doc if docs_are_final_ids else DOC_IDS[doc]
         result[doc_id] = score
 
     return result

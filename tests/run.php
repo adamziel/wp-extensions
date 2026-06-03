@@ -180,13 +180,73 @@ function test_records_have_lang(array $records): bool
 function test_call_analyzer(WP_FTS_Analyzer $analyzer, string $method, string $text, array $opts = []): array
 {
     $reflection = new ReflectionMethod($analyzer, $method);
-    if ($reflection->getNumberOfParameters() >= 2) {
+    $parameters = $reflection->getParameters();
+    if (count($parameters) >= 2) {
+        $secondParameter = $parameters[1];
+        if (test_parameter_accepts_type($secondParameter, 'array')) {
+            /** @var array<int,array<string,mixed>|string> */
+            return $analyzer->{$method}($text, $opts);
+        }
+
+        if (test_parameter_accepts_type($secondParameter, 'string')) {
+            $lang = (string) ($opts['lang'] ?? $opts['language'] ?? '');
+            if ($lang !== '') {
+                if (isset($parameters[2]) && test_parameter_accepts_type($parameters[2], 'array')) {
+                    /** @var array<int,array<string,mixed>|string> */
+                    return $analyzer->{$method}($text, $lang, $opts);
+                }
+
+                /** @var array<int,array<string,mixed>|string> */
+                return $analyzer->{$method}($text, $lang);
+            }
+        }
+
         /** @var array<int,array<string,mixed>|string> */
         return $analyzer->{$method}($text, $opts);
     }
 
     /** @var array<int,array<string,mixed>|string> */
     return $analyzer->{$method}($text);
+}
+
+function test_parameter_accepts_type(ReflectionParameter $parameter, string $typeName): bool
+{
+    $type = $parameter->getType();
+    if ($type === null) {
+        return false;
+    }
+
+    if ($type instanceof ReflectionNamedType) {
+        return $type->getName() === $typeName || $type->getName() === 'mixed';
+    }
+
+    if ($type instanceof ReflectionUnionType) {
+        foreach ($type->getTypes() as $namedType) {
+            if ($namedType->getName() === $typeName || $namedType->getName() === 'mixed') {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * @return array<int,array<string,mixed>|string>
+ */
+function test_call_query_occurrences(WP_FTS_Analyzer $analyzer, string $query, string $lang): array
+{
+    $opts = [
+        'lang' => $lang,
+        'language' => $lang,
+        'return' => 'occurrences',
+    ];
+
+    if (method_exists($analyzer, 'analyze_query_occurrences')) {
+        return test_call_analyzer($analyzer, 'analyze_query_occurrences', $query, $opts);
+    }
+
+    return test_call_analyzer($analyzer, 'analyze_query', $query, $opts);
 }
 
 /**
@@ -320,7 +380,11 @@ final class WP_FTS_Test_LanguagePartitionStorage implements WP_FTS_Storage
         ];
     }
 
-    public function put_doc(int $doc_id, int $doc_len, string $hash): void
+    /**
+     * @param int|string $primary_lang Legacy doc length or a language code.
+     * @param array<string,int>|string $lang_lengths Legacy hash or per-language lengths.
+     */
+    public function put_doc(int $doc_id, int|string $primary_lang, array|string $lang_lengths, ?string $hash = null): void
     {
     }
 
@@ -337,7 +401,7 @@ final class WP_FTS_Test_LanguagePartitionStorage implements WP_FTS_Storage
             : ['doc_count' => 100, 'len_sum' => 4000];
     }
 
-    public function add_meta(int $d_docs, int $d_len): void
+    public function add_meta(int|string $lang, ?int $d_docs = null, ?int $d_len = null): void
     {
     }
 
@@ -685,7 +749,7 @@ test_case('T8 per-language analyzer fixtures are enforced when language pipeline
 
     foreach ($fixtures as [$label, $lang, $input, $expectedTerms]) {
         $analyzer = new WP_FTS_Analyzer(['default_lang' => $lang, 'language' => $lang]);
-        $records = test_token_records(test_call_analyzer($analyzer, 'analyze_query', $input, ['lang' => $lang]));
+        $records = test_token_records(test_call_query_occurrences($analyzer, $input, $lang));
 
         assert_or_pending(
             test_records_have_lang($records),
