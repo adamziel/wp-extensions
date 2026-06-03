@@ -432,6 +432,177 @@ test_case('file backend persists language-aware state and migrates legacy docs',
     cleanup_storage($storage);
 });
 
+final class WP_FTS_Test_LanguageAwareStorage implements WP_FTS_Storage
+{
+    private WP_FTS_Storage_InMemory $inner;
+
+    /** @var array<int,string> */
+    private array $primaryLangByDoc = [];
+
+    /** @var array<int,array<string,int>> */
+    private array $langLengthsByDoc = [];
+
+    /** @var array<string,array{doc_count:int,len_sum:int}> */
+    private array $metaByLang = [];
+
+    /** @var array<int,array{primary:array<int,string>,lengths:array<int,array<string,int>>,meta:array<string,array{doc_count:int,len_sum:int}>}> */
+    private array $languageSnapshots = [];
+
+    public function __construct()
+    {
+        $this->inner = new WP_FTS_Storage_InMemory();
+    }
+
+    public function get_terms(array $terms): array
+    {
+        return $this->inner->get_terms($terms);
+    }
+
+    public function put_term(string $term, int $df, string $postings): void
+    {
+        $this->inner->put_term($term, $df, $postings);
+    }
+
+    public function delete_term(string $term): void
+    {
+        $this->inner->delete_term($term);
+    }
+
+    public function get_doc_lengths(array $doc_ids, ?string $lang = null): array
+    {
+        if ($lang === null) {
+            return $this->inner->get_doc_lengths($doc_ids);
+        }
+
+        $lang = WP_FTS_TermNamespace::canonicalize_lang($lang);
+        $lengths = [];
+        foreach (array_unique(array_map('intval', $doc_ids)) as $docId) {
+            $doc = $this->inner->get_doc($docId);
+            if ($doc === null || $doc['deleted']) {
+                continue;
+            }
+
+            $length = $this->langLengthsByDoc[$docId][$lang] ?? 0;
+            if ($length > 0) {
+                $lengths[$docId] = $length;
+            }
+        }
+        ksort($lengths, SORT_NUMERIC);
+
+        return $lengths;
+    }
+
+    public function get_doc(int $doc_id): ?array
+    {
+        $doc = $this->inner->get_doc($doc_id);
+        if ($doc === null) {
+            return null;
+        }
+
+        $doc['primary_lang'] = $this->primaryLangByDoc[$doc_id] ?? 'en';
+        $doc['lang_lengths'] = $this->langLengthsByDoc[$doc_id] ?? [];
+
+        return $doc;
+    }
+
+    public function put_doc(int $doc_id, int|string $doc_len_or_primary_lang, string|array $hash_or_lang_lengths, ?string $hash = null): void
+    {
+        if (is_string($doc_len_or_primary_lang) && is_array($hash_or_lang_lengths) && $hash !== null) {
+            $primaryLang = WP_FTS_TermNamespace::canonicalize_lang($doc_len_or_primary_lang);
+            $langLengths = WP_FTS_StorageCompat::normalize_lang_lengths($hash_or_lang_lengths);
+            $this->primaryLangByDoc[$doc_id] = $primaryLang;
+            $this->langLengthsByDoc[$doc_id] = $langLengths;
+            $this->inner->put_doc($doc_id, array_sum($langLengths), $hash);
+            return;
+        }
+
+        $docLen = max(0, (int) $doc_len_or_primary_lang);
+        $this->primaryLangByDoc[$doc_id] = 'en';
+        $this->langLengthsByDoc[$doc_id] = $docLen > 0 ? ['en' => $docLen] : [];
+        $this->inner->put_doc($doc_id, $docLen, (string) $hash_or_lang_lengths);
+    }
+
+    public function delete_doc(int $doc_id): void
+    {
+        $this->inner->delete_doc($doc_id);
+    }
+
+    public function get_meta(?string $lang = null): array
+    {
+        if ($lang === null) {
+            return $this->inner->get_meta();
+        }
+
+        $lang = WP_FTS_TermNamespace::canonicalize_lang($lang);
+
+        return $this->metaByLang[$lang] ?? ['doc_count' => 0, 'len_sum' => 0];
+    }
+
+    public function add_meta(int|string $lang_or_d_docs, ?int $d_docs_or_d_len = null, ?int $d_len = null): void
+    {
+        if (is_string($lang_or_d_docs) && $d_docs_or_d_len !== null && $d_len !== null) {
+            $lang = WP_FTS_TermNamespace::canonicalize_lang($lang_or_d_docs);
+            $current = $this->metaByLang[$lang] ?? ['doc_count' => 0, 'len_sum' => 0];
+            $this->metaByLang[$lang] = [
+                'doc_count' => max(0, $current['doc_count'] + $d_docs_or_d_len),
+                'len_sum' => max(0, $current['len_sum'] + $d_len),
+            ];
+            return;
+        }
+
+        $this->inner->add_meta((int) $lang_or_d_docs, (int) $d_docs_or_d_len);
+    }
+
+    public function all_terms(): array
+    {
+        return $this->inner->all_terms();
+    }
+
+    public function all_doc_ids(bool $include_deleted = false): array
+    {
+        return $this->inner->all_doc_ids($include_deleted);
+    }
+
+    public function begin_transaction(): void
+    {
+        $this->inner->begin_transaction();
+        $this->languageSnapshots[] = [
+            'primary' => $this->primaryLangByDoc,
+            'lengths' => $this->langLengthsByDoc,
+            'meta' => $this->metaByLang,
+        ];
+    }
+
+    public function commit(): void
+    {
+        $this->inner->commit();
+        array_pop($this->languageSnapshots);
+    }
+
+    public function rollback(): void
+    {
+        $this->inner->rollback();
+        $snapshot = array_pop($this->languageSnapshots);
+        if ($snapshot === null) {
+            return;
+        }
+
+        $this->primaryLangByDoc = $snapshot['primary'];
+        $this->langLengthsByDoc = $snapshot['lengths'];
+        $this->metaByLang = $snapshot['meta'];
+    }
+
+    public function flush(): void
+    {
+        $this->inner->flush();
+    }
+
+    public function optimize(): void
+    {
+        $this->inner->optimize();
+    }
+}
+
 test_case('analyzer skips unsafe regions and applies boosts', function (): void {
     $analyzer = new WP_FTS_Analyzer();
     $occurrences = $analyzer->analyze_content(
@@ -788,6 +959,96 @@ test_case('hash skip avoids unchanged rewrites', function (): void {
     $snapshot = storage_snapshot($storage);
     assert_true(!$indexer->index_document(10, '<p>alpha beta</p>'), 'same content should be skipped');
     assert_same($snapshot, storage_snapshot($storage), 'unchanged document should not rewrite storage');
+});
+
+test_case('indexer consumes analyzer occurrences with language tags', function (): void {
+    $indexer = new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), new WP_FTS_Analyzer());
+    $method = new ReflectionMethod(WP_FTS_Indexer::class, 'weighted_term_frequencies_by_language');
+    $method->setAccessible(true);
+
+    [$frequencies, $langLengths] = $method->invoke($indexer, [
+        ['term' => 'shared', 'weight' => 1.0, 'lang' => 'en_US'],
+        ['term' => 'shared', 'weight' => 2.4, 'lang' => 'pl'],
+        ['term' => 'jablko', 'weight' => 0.6, 'lang' => 'pl'],
+        ['term' => 'fallback', 'weight' => 1.0],
+    ], 'de');
+
+    assert_same([
+        WP_FTS_TermNamespace::namespace_term('de', 'fallback') => 1,
+        WP_FTS_TermNamespace::namespace_term('en-US', 'shared') => 1,
+        WP_FTS_TermNamespace::namespace_term('pl', 'jablko') => 1,
+        WP_FTS_TermNamespace::namespace_term('pl', 'shared') => 2,
+    ], $frequencies, 'language-tagged occurrences should be namespaced independently');
+    assert_same(['de' => 1, 'en-US' => 1, 'pl' => 3], $langLengths, 'doc lengths should be partitioned by occurrence language');
+});
+
+test_case('language options namespace terms and isolate search partitions', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $storage = new WP_FTS_Test_LanguageAwareStorage();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>shared apple</p>', ['lang' => 'en_US']);
+    $indexer->index_document(2, '<p>shared jablko</p>', ['lang' => 'pl']);
+
+    $terms = $storage->all_terms();
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('en-US', 'shared'), $terms, true), 'English shared term should be namespaced');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'shared'), $terms, true), 'Polish shared term should be namespaced');
+    assert_true(!in_array('shared', $terms, true), 'raw unnamespaced term should not be stored');
+
+    assert_same(['doc_count' => 1, 'len_sum' => 2], $storage->get_meta('en-US'), 'English stats should be independent');
+    assert_same(['doc_count' => 1, 'len_sum' => 2], $storage->get_meta('pl'), 'Polish stats should be independent');
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same(1, $searcher->search('shared', ['lang' => 'en_US'])[0]['doc_id'] ?? null, 'English query should only search English partition');
+    assert_same(2, $searcher->search('shared', ['lang' => 'pl'])[0]['doc_id'] ?? null, 'Polish query should only search Polish partition');
+    assert_same([], $searcher->search('jablko', ['lang' => 'en_US']), 'English query should not match Polish terms');
+});
+
+test_case('searcher preserves analyzer-selected query language', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['query_lang' => 'pl']);
+    $storage = new WP_FTS_Test_LanguageAwareStorage();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>lodz polish</p>', ['lang' => 'pl']);
+    $indexer->index_document(2, '<p>lodz english</p>', ['lang' => 'en']);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $results = $searcher->search('lodz');
+
+    assert_same(1, count($results), 'analyzer-selected Polish query should only search the Polish partition');
+    assert_same(1, $results[0]['doc_id'], 'unqualified query should hit the Polish partition selected by the analyzer');
+});
+
+test_case('indexer passes default document language to analyzer as document_lang', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $storage = new WP_FTS_Test_LanguageAwareStorage();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>lodz</p>', ['default_lang' => 'pl']);
+
+    $terms = $storage->all_terms();
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'lodz'), $terms, true), 'default_lang should reach analyzer as document_lang');
+    assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('en', 'lodz'), $terms, true), 'default_lang should not be lost to analyzer fallback language');
+    assert_same(1, (new WP_FTS_Searcher($storage, $analyzer))->search('lodz', ['lang' => 'pl'])[0]['doc_id'] ?? null, 'Polish query should find the default_lang document');
+});
+
+test_case('reindex and delete adjust old per-language stats', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $storage = new WP_FTS_Test_LanguageAwareStorage();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(7, '<p>alpha beta</p>', ['lang' => 'en']);
+    assert_same(['doc_count' => 1, 'len_sum' => 2], $storage->get_meta('en'), 'initial English stats should count the document');
+    assert_same(['doc_count' => 0, 'len_sum' => 0], $storage->get_meta('pl'), 'Polish stats should start empty');
+
+    $indexer->index_document(7, '<p>alpha beta</p>', ['lang' => 'pl']);
+    assert_same(['doc_count' => 0, 'len_sum' => 0], $storage->get_meta('en'), 'reindexing into Polish should decrement old English stats');
+    assert_same(['doc_count' => 1, 'len_sum' => 2], $storage->get_meta('pl'), 'reindexing into Polish should increment Polish stats');
+    assert_same([], (new WP_FTS_Searcher($storage, $analyzer))->search('alpha', ['lang' => 'en']), 'old English postings should be removed on reindex');
+
+    assert_true($indexer->delete_document(7), 'delete should tombstone an active document');
+    assert_same(['doc_count' => 0, 'len_sum' => 0], $storage->get_meta('pl'), 'delete should decrement current language stats');
+    assert_same([], (new WP_FTS_Searcher($storage, $analyzer))->search('alpha', ['lang' => 'pl']), 'deleted doc should not be returned');
 });
 
 test_case('file backend persists and matches in-memory backend', function (): void {

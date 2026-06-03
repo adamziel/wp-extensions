@@ -8,6 +8,8 @@ if (is_file($wp_fts_vendor_autoload)) {
 
 $wp_fts_files = [
     __DIR__ . '/StorageInterface.php',
+    __DIR__ . '/TermNamespace.php',
+    __DIR__ . '/StorageCompat.php',
     __DIR__ . '/Normalizer.php',
     __DIR__ . '/Stemmer.php',
     __DIR__ . '/LanguagePipeline.php',

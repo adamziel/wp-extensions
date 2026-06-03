@@ -96,7 +96,7 @@ final class WP_FTS_Analyzer
             'stemmer' => $options['stemmer'] ?? null,
         ]);
 
-        $this->defaultLanguage = $this->canonicalLanguage($options['default_lang'] ?? $options['language'] ?? null) ?? 'und';
+        $this->defaultLanguage = $this->canonicalLanguage($options['default_lang'] ?? $options['language'] ?? null) ?? 'en';
         $this->documentLanguage = $this->canonicalLanguage($options['document_lang'] ?? null);
         $this->queryLanguage = $this->canonicalLanguage($options['query_lang'] ?? null);
 
@@ -519,7 +519,7 @@ final class WP_FTS_Analyzer
             $this->wordpressDocumentLanguage($options),
             $this->wordpressSiteLanguage(),
             $this->defaultLanguage,
-        ]) ?? 'und';
+        ]) ?? 'en';
     }
 
     /**
@@ -537,7 +537,7 @@ final class WP_FTS_Analyzer
             $this->wordpressQueryLanguage(),
             $this->wordpressSiteLanguage(),
             $this->defaultLanguage,
-        ]) ?? 'und';
+        ]) ?? 'en';
     }
 
     /**
