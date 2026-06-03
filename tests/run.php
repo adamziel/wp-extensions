@@ -7,6 +7,61 @@ final class WP_FTS_TestFailure extends RuntimeException
 {
 }
 
+final class WP_FTS_Fake_HTML_Processor
+{
+    private int $offset = -1;
+
+    /**
+     * @param array<int,array{type:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}> $tokens
+     */
+    public function __construct(private array $tokens)
+    {
+    }
+
+    public function next_token(): bool
+    {
+        $this->offset++;
+
+        return isset($this->tokens[$this->offset]);
+    }
+
+    public function get_token_type(): ?string
+    {
+        return $this->current()['type'] ?? null;
+    }
+
+    /**
+     * @return string[]|null
+     */
+    public function get_breadcrumbs(): ?array
+    {
+        return $this->current()['breadcrumbs'] ?? [];
+    }
+
+    public function get_modifiable_text(): string
+    {
+        return (string) ($this->current()['text'] ?? '');
+    }
+
+    public function is_tag_closer(): bool
+    {
+        return (bool) ($this->current()['closing'] ?? false);
+    }
+
+    public function get_attribute(string $name): mixed
+    {
+        return ($this->current()['attrs'] ?? [])[$name] ?? null;
+    }
+
+    /**
+     * @return array{type?:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}
+     */
+    private function current(): array
+    {
+        return $this->tokens[$this->offset] ?? [];
+    }
+}
+
 /**
  * @var array<int,array{name:string,fn:callable}>
  */
@@ -60,6 +115,20 @@ function test_weight_by_term(array $occurrences): array
     ksort($weights, SORT_STRING);
 
     return $weights;
+}
+
+/**
+ * @return array<string,string>
+ */
+function test_lang_by_term(array $occurrences): array
+{
+    $langs = [];
+    foreach ($occurrences as $occurrence) {
+        $langs[$occurrence['term']] = $occurrence['lang'];
+    }
+    ksort($langs, SORT_STRING);
+
+    return $langs;
 }
 
 /**
@@ -211,6 +280,83 @@ test_case('analyzer folds diacritics and null processor falls back safely', func
     ]);
     $terms = test_terms($fallback->analyze_content('<p>Plain <b>text</b></p><script>ignored</script>'));
     assert_same(['plain', 'text'], $terms, 'null WP_HTML_Processor should fall back to stripped plain text');
+});
+
+test_case('analyzer carries document and element language tags', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en-US']);
+    $occurrences = $analyzer->analyze_content(
+        '<article><p>Hello world</p><p lang="pl">Łódź Wrocław</p><p lang=zh-Hant>中文搜索</p></article>'
+    );
+    $langs = test_lang_by_term($occurrences);
+
+    assert_same('en-US', $langs['hello'], 'untagged text should use resolved document language');
+    assert_same('pl', $langs['lodz'], 'quoted lang attribute should override document language');
+    assert_same('pl', $langs['wroclaw'], 'nested Polish segment should keep lang');
+    assert_same('zh-Hant', $langs['中文'], 'unquoted script lang should be canonicalized');
+    assert_same('zh-Hant', $langs['搜索'], 'CJK bigrams should carry segment lang');
+
+    $namespaced = $analyzer->weighted_term_frequencies($occurrences, ['namespace_terms' => true]);
+    assert_true(isset($namespaced["pl\x1elodz"]), 'weighted frequencies should optionally namespace by language');
+});
+
+test_case('query analysis exposes language-aware occurrences while preserving term shim', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+
+    assert_same(['lodz', 'cafe'], $analyzer->analyze_query('Łódź café', ['lang' => 'pl']), 'plain query shim should return terms');
+    assert_same(
+        [
+            ['term' => 'lodz', 'lang' => 'pl'],
+            ['term' => 'cafe', 'lang' => 'pl'],
+        ],
+        $analyzer->analyze_query_occurrences('Łódź café', ['lang' => 'pl']),
+        'query occurrences should carry explicit language'
+    );
+    assert_same(
+        [
+            ['term' => 'lodz', 'lang' => 'pl'],
+            ['term' => 'cafe', 'lang' => 'pl'],
+        ],
+        $analyzer->analyze_query('Łódź café', ['lang' => 'pl', 'return' => 'occurrences']),
+        'compat method should expose occurrence format on request'
+    );
+});
+
+test_case('processor extraction tracks lang without double-decoding text', function (): void {
+    $fake = new WP_FTS_Fake_HTML_Processor([
+        ['type' => '#tag', 'breadcrumbs' => ['HTML', 'BODY', 'P'], 'attrs' => ['lang' => 'pl']],
+        ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'P'], 'text' => 'Łódź &copy;'],
+        ['type' => '#tag', 'breadcrumbs' => ['HTML', 'BODY', 'P'], 'closing' => true],
+        ['type' => '#tag', 'breadcrumbs' => ['HTML', 'BODY', 'DIV']],
+        ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'DIV'], 'text' => 'Plain sibling'],
+        ['type' => '#tag', 'breadcrumbs' => ['HTML', 'BODY', 'SCRIPT'], 'text' => 'secret_token'],
+    ]);
+    $analyzer = new WP_FTS_Analyzer([
+        'default_lang' => 'en',
+        'html_processor_factory' => static fn(string $html): WP_FTS_Fake_HTML_Processor => $fake,
+    ]);
+
+    $occurrences = $analyzer->analyze_content('<p>unused</p>');
+    $terms = test_terms($occurrences);
+    $langs = test_lang_by_term($occurrences);
+
+    assert_true(in_array('copy', $terms, true), 'processor text must not be entity-decoded a second time');
+    assert_true(!in_array('secret_token', $terms, true), 'tag-token modifiable text must not be indexed');
+    assert_same('pl', $langs['lodz'], 'processor lang attribute should apply to text descendants');
+    assert_same('en', $langs['plain'], 'closed processor lang scope must not leak to sibling tags');
+});
+
+test_case('tokenizer handles mixed script runs and CJK min length', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['min_term_len' => 3]);
+
+    assert_same(['abc', '東京', 'def'], $analyzer->analyze_query('abc東京def', ['lang' => 'ja']), 'mixed Latin/CJK runs should split by script');
+    assert_same(['中文', '文搜', '搜索', '日'], $analyzer->analyze_query('中文搜索 日 x', ['lang' => 'zh-Hans']), 'CJK bigrams and single chars should bypass min length');
+});
+
+test_case('analyzer tolerates invalid UTF-8 without optional extensions', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $terms = $analyzer->analyze_query("bad\xffutf");
+
+    assert_true($terms !== [], 'invalid UTF-8 recovery should not fatal or drop all ASCII text');
 });
 
 test_case('index and query analyzers normalize plain text identically', function (): void {
