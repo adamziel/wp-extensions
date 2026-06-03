@@ -5,7 +5,7 @@ final class WP_FTS_Searcher
 {
     public function __construct(
         private WP_FTS_Storage $storage,
-        private WP_FTS_Analyzer $analyzer,
+        private object $analyzer,
         private float $k1 = 1.2,
         private float $b = 0.75,
     ) {
@@ -110,11 +110,16 @@ final class WP_FTS_Searcher
     private function analyze_query(string $query, array $opts): array
     {
         $analysisOpts = $this->query_analysis_options($opts);
+        $analysisOpts['return'] = 'occurrences';
 
         if (method_exists($this->analyzer, 'analyze_query_occurrences')) {
             return $this->normalize_query_analysis(
                 $this->analyzer->analyze_query_occurrences($query, $analysisOpts)
             );
+        }
+
+        if (!is_callable([$this->analyzer, 'analyze_query'])) {
+            throw new LogicException('Analyzer must provide analyze_query().');
         }
 
         $returnOpts = $analysisOpts;

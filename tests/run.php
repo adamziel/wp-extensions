@@ -95,6 +95,13 @@ function assert_float_near(float $expected, float $actual, string $message, floa
     }
 }
 
+function assert_contains(string $needle, string $haystack, string $message): void
+{
+    if (!str_contains($haystack, $needle)) {
+        throw new WP_FTS_TestFailure($message . "\nMissing: " . var_export($needle, true) . "\nIn: " . $haystack);
+    }
+}
+
 /**
  * @return string[]
  */
@@ -600,6 +607,457 @@ final class WP_FTS_Test_LanguageAwareStorage implements WP_FTS_Storage
     public function optimize(): void
     {
         $this->inner->optimize();
+    }
+}
+
+final class WP_FTS_Test_Prepared_SQL
+{
+    /**
+     * @param array<int,mixed> $args
+     */
+    public function __construct(
+        public string $sql,
+        public array $args,
+    ) {
+    }
+
+    public function __toString(): string
+    {
+        return $this->sql;
+    }
+}
+
+final class WP_FTS_Test_WPDB
+{
+    public string $prefix = 'wp_';
+    public string $posts = 'wp_posts';
+
+    /** @var array<int,string> */
+    public array $queries = [];
+
+    /** @var array<int,array{sql:string,args:array<int,mixed>}> */
+    public array $prepared = [];
+
+    /** @var array<string,array{doc_freq:int,postings:string}> */
+    public array $terms = [];
+
+    /** @var array<int,array{lang:string,doc_len:int,content_hash:?string,is_deleted:int}> */
+    public array $docs = [];
+
+    /** @var array<int,array<string,int>> */
+    public array $docLengths = [];
+
+    /** @var array<string,array<string,int>> */
+    public array $meta = [];
+
+    /** @var array<int,object> */
+    public array $postRows = [];
+
+    public function prepare(string $sql, mixed ...$args): WP_FTS_Test_Prepared_SQL
+    {
+        $this->prepared[] = ['sql' => $sql, 'args' => $args];
+
+        return new WP_FTS_Test_Prepared_SQL($sql, $args);
+    }
+
+    public function query(mixed $statement): int|bool
+    {
+        [$sql, $args] = $this->statement_parts($statement);
+        $this->queries[] = $sql;
+
+        if (str_starts_with($sql, 'CREATE TABLE') || in_array($sql, ['START TRANSACTION', 'COMMIT', 'ROLLBACK'], true)) {
+            return true;
+        }
+
+        if (str_starts_with($sql, 'INSERT INTO wp_fts_terms')) {
+            $term = (string) $args[0];
+            $this->terms[$term] = [
+                'doc_freq' => (int) $args[1],
+                'postings' => (string) $args[2],
+            ];
+            ksort($this->terms, SORT_STRING);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_terms WHERE term = %s')) {
+            unset($this->terms[(string) $args[0]]);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'INSERT INTO wp_fts_docs') && count($args) === 4) {
+            $docId = (int) $args[0];
+            $this->docs[$docId] = [
+                'lang' => (string) $args[1],
+                'doc_len' => (int) $args[2],
+                'content_hash' => (string) $args[3],
+                'is_deleted' => 0,
+            ];
+            ksort($this->docs, SORT_NUMERIC);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'INSERT INTO wp_fts_docs') && count($args) === 2) {
+            $docId = (int) $args[0];
+            $this->docs[$docId] ??= [
+                'lang' => (string) $args[1],
+                'doc_len' => 0,
+                'content_hash' => null,
+                'is_deleted' => 0,
+            ];
+            $this->docs[$docId]['is_deleted'] = 1;
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_doc_lengths WHERE doc_id = %d')) {
+            unset($this->docLengths[(int) $args[0]]);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_doc_lengths WHERE doc_id IN')) {
+            foreach ($args as $docId) {
+                unset($this->docLengths[(int) $docId]);
+            }
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'INSERT INTO wp_fts_doc_lengths')) {
+            $docId = (int) $args[0];
+            $this->docLengths[$docId][(string) $args[1]] = (int) $args[2];
+            ksort($this->docLengths[$docId], SORT_STRING);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'INSERT INTO wp_fts_meta')) {
+            $lang = (string) $args[0];
+            $key = (string) $args[1];
+            $delta = (int) $args[3];
+            $this->meta[$lang][$key] = max(0, ($this->meta[$lang][$key] ?? 0) + $delta);
+            ksort($this->meta[$lang], SORT_STRING);
+            ksort($this->meta, SORT_STRING);
+            return 1;
+        }
+
+        if ($sql === 'DELETE FROM wp_fts_meta') {
+            $this->meta = [];
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_docs WHERE doc_id IN')) {
+            foreach ($args as $docId) {
+                unset($this->docs[(int) $docId]);
+            }
+            return 1;
+        }
+
+        return true;
+    }
+
+    /**
+     * @return object[]
+     */
+    public function get_results(mixed $statement): array
+    {
+        [$sql, $args] = $this->statement_parts($statement);
+
+        if (str_starts_with($sql, 'SELECT term, doc_freq, postings FROM wp_fts_terms')) {
+            $rows = [];
+            foreach ($args as $term) {
+                $term = (string) $term;
+                if (isset($this->terms[$term])) {
+                    $rows[] = (object) [
+                        'term' => $term,
+                        'doc_freq' => $this->terms[$term]['doc_freq'],
+                        'postings' => $this->terms[$term]['postings'],
+                    ];
+                }
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT dl.doc_id, dl.doc_len FROM wp_fts_doc_lengths')) {
+            $lang = (string) $args[0];
+            $ids = array_map('intval', array_slice($args, 1));
+            $rows = [];
+            foreach ($ids as $docId) {
+                if (($this->docs[$docId]['is_deleted'] ?? 1) === 0 && isset($this->docLengths[$docId][$lang])) {
+                    $rows[] = (object) ['doc_id' => $docId, 'doc_len' => $this->docLengths[$docId][$lang]];
+                }
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT doc_id, doc_len FROM wp_fts_docs')) {
+            $rows = [];
+            foreach (array_map('intval', $args) as $docId) {
+                if (($this->docs[$docId]['is_deleted'] ?? 1) === 0) {
+                    $rows[] = (object) ['doc_id' => $docId, 'doc_len' => $this->docs[$docId]['doc_len']];
+                }
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT lang, doc_len FROM wp_fts_doc_lengths')) {
+            $rows = [];
+            foreach ($this->docLengths[(int) $args[0]] ?? [] as $lang => $docLen) {
+                $rows[] = (object) ['lang' => $lang, 'doc_len' => $docLen];
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT k, v FROM wp_fts_meta WHERE lang = %s')) {
+            $rows = [];
+            foreach ($this->meta[(string) $args[0]] ?? [] as $key => $value) {
+                $rows[] = (object) ['k' => $key, 'v' => $value];
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT k, COALESCE(SUM(v), 0) AS v FROM wp_fts_meta')) {
+            $aggregate = [];
+            foreach ($this->meta as $row) {
+                foreach ($row as $key => $value) {
+                    $aggregate[$key] = ($aggregate[$key] ?? 0) + $value;
+                }
+            }
+            $rows = [];
+            foreach ($aggregate as $key => $value) {
+                $rows[] = (object) ['k' => $key, 'v' => $value];
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT ID, post_content, post_title')) {
+            $last = (int) $args[count($args) - 2];
+            $limit = (int) $args[count($args) - 1];
+            $rows = array_values(array_filter(
+                $this->postRows,
+                static fn(object $row): bool => (int) $row->ID > $last
+            ));
+            usort($rows, static fn(object $a, object $b): int => (int) $a->ID <=> (int) $b->ID);
+            return array_slice($rows, 0, $limit);
+        }
+
+        if (str_starts_with($sql, 'SELECT dl.lang, COUNT(*) AS doc_count')) {
+            $aggregate = [];
+            foreach ($this->docLengths as $docId => $lengths) {
+                if (($this->docs[$docId]['is_deleted'] ?? 1) !== 0) {
+                    continue;
+                }
+                foreach ($lengths as $lang => $docLen) {
+                    if ($docLen <= 0) {
+                        continue;
+                    }
+                    $aggregate[$lang] ??= ['doc_count' => 0, 'len_sum' => 0];
+                    $aggregate[$lang]['doc_count']++;
+                    $aggregate[$lang]['len_sum'] += $docLen;
+                }
+            }
+
+            $rows = [];
+            foreach ($aggregate as $lang => $row) {
+                $rows[] = (object) ['lang' => $lang, 'doc_count' => $row['doc_count'], 'len_sum' => $row['len_sum']];
+            }
+            return $rows;
+        }
+
+        return [];
+    }
+
+    public function get_row(mixed $statement): ?object
+    {
+        [$sql, $args] = $this->statement_parts($statement);
+        if (str_starts_with($sql, 'SELECT doc_id, lang, doc_len, content_hash, is_deleted FROM wp_fts_docs')) {
+            $docId = (int) $args[0];
+            if (!isset($this->docs[$docId])) {
+                return null;
+            }
+
+            return (object) array_merge(['doc_id' => $docId], $this->docs[$docId]);
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array<int,int|string>
+     */
+    public function get_col(string $sql): array
+    {
+        if (str_starts_with($sql, 'SELECT term FROM wp_fts_terms')) {
+            return array_keys($this->terms);
+        }
+
+        if (str_starts_with($sql, 'SELECT doc_id FROM wp_fts_docs WHERE is_deleted = 1')) {
+            return array_keys(array_filter(
+                $this->docs,
+                static fn(array $doc): bool => $doc['is_deleted'] === 1
+            ));
+        }
+
+        if (str_starts_with($sql, 'SELECT doc_id FROM wp_fts_docs')) {
+            $includeDeleted = !str_contains($sql, 'WHERE is_deleted = 0');
+            return array_keys(array_filter(
+                $this->docs,
+                static fn(array $doc): bool => $includeDeleted || $doc['is_deleted'] === 0
+            ));
+        }
+
+        return [];
+    }
+
+    /**
+     * @return array{0:string,1:array<int,mixed>}
+     */
+    private function statement_parts(mixed $statement): array
+    {
+        if ($statement instanceof WP_FTS_Test_Prepared_SQL) {
+            return [$statement->sql, $statement->args];
+        }
+
+        return [(string) $statement, []];
+    }
+}
+
+final class WP_FTS_Test_Language_Aware_Analyzer
+{
+    /** @var array<int,array<string,mixed>> */
+    public array $contentOptions = [];
+
+    /** @var array<int,array<string,mixed>> */
+    public array $queryOccurrenceOptions = [];
+
+    /** @var array<int,array<string,mixed>> */
+    public array $queryOptions = [];
+
+    /**
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    public function analyze_content(string $html, array $options = []): array
+    {
+        $this->contentOptions[] = $options;
+        $documentLang = $this->language_from_options($options, ['document_lang', 'lang', 'language']);
+        $occurrences = [];
+
+        if (str_contains($html, 'zamek')) {
+            $occurrences[] = ['term' => 'zamek', 'weight' => 1.0, 'lang' => $documentLang];
+        }
+        if (str_contains($html, 'castle')) {
+            $occurrences[] = ['term' => 'castle', 'weight' => 1.0, 'lang' => 'en'];
+        }
+
+        return $occurrences;
+    }
+
+    /**
+     * @return array<int,array{term:string,lang:string}>
+     */
+    public function analyze_query_occurrences(string $query, array $options = []): array
+    {
+        $this->queryOccurrenceOptions[] = $options;
+
+        return $this->query_occurrences($query, $this->language_from_options($options, ['query_lang', 'lang', 'language']));
+    }
+
+    /**
+     * @return array<int,string|array{term:string,lang:string}>
+     */
+    public function analyze_query(string $query, array $options = []): array
+    {
+        $this->queryOptions[] = $options;
+        $occurrences = $this->query_occurrences($query, $this->language_from_options($options, ['query_lang', 'lang', 'language']));
+
+        if (($options['return'] ?? null) === 'occurrences') {
+            return $occurrences;
+        }
+
+        return array_map(static fn(array $occurrence): string => $occurrence['term'], $occurrences);
+    }
+
+    /**
+     * @param array<int,string> $keys
+     */
+    private function language_from_options(array $options, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (isset($options[$key]) && is_string($options[$key]) && trim($options[$key]) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang($options[$key]);
+            }
+        }
+
+        return 'en';
+    }
+
+    /**
+     * @return array<int,array{term:string,lang:string}>
+     */
+    private function query_occurrences(string $query, string $lang): array
+    {
+        if (!str_contains($query, 'zamek')) {
+            return [];
+        }
+
+        return $lang === 'en' ? [] : [['term' => 'zamek', 'lang' => $lang]];
+    }
+}
+
+final class WP_FTS_Test_Query_Fallback_Analyzer
+{
+    /** @var array<int,array<string,mixed>> */
+    public array $queryOptions = [];
+
+    /**
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    public function analyze_content(string $html, array $options = []): array
+    {
+        $lang = isset($options['document_lang']) && is_string($options['document_lang'])
+            ? WP_FTS_TermNamespace::canonicalize_lang($options['document_lang'])
+            : 'en';
+
+        return str_contains($html, 'zamek')
+            ? [['term' => 'zamek', 'weight' => 1.0, 'lang' => $lang]]
+            : [];
+    }
+
+    /**
+     * @return array<int,string|array{term:string,lang:string}>
+     */
+    public function analyze_query(string $query, array $options = []): array
+    {
+        $this->queryOptions[] = $options;
+        $lang = isset($options['query_lang']) && is_string($options['query_lang'])
+            ? WP_FTS_TermNamespace::canonicalize_lang($options['query_lang'])
+            : 'en';
+        if (!str_contains($query, 'zamek') || $lang === 'en') {
+            return [];
+        }
+
+        if (($options['return'] ?? null) === 'occurrences') {
+            return [['term' => 'zamek', 'lang' => $lang]];
+        }
+
+        return ['zamek'];
+    }
+}
+
+if (!class_exists('WP_CLI')) {
+    final class WP_CLI
+    {
+        /** @var string[] */
+        public static array $successMessages = [];
+
+        public static function add_command(string $name, string $class): void
+        {
+        }
+
+        public static function success(string $message): void
+        {
+            self::$successMessages[] = $message;
+        }
+
+        public static function warning(string $message): void
+        {
+        }
     }
 }
 
@@ -1136,6 +1594,168 @@ test_case('incremental and full rebuild converge for in-memory and file backends
             }
         }
     }
+});
+
+test_case('language partitions isolate same normalized terms', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>zamek wspolny</p>', ['lang' => 'pl_PL']);
+    $indexer->index_document(2, '<p>zamek wspolny</p>', ['lang' => 'en-US']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same(1, $storage->get_meta('pl-PL')['doc_count'], 'Polish partition should count one doc');
+    assert_same(1, $storage->get_meta('en-US')['doc_count'], 'English partition should count one doc');
+    assert_same(2, $storage->get_meta()['doc_count'], 'global meta should aggregate language partitions');
+    assert_same([1 => 2], $storage->get_doc_lengths([1, 2], 'pl-PL'), 'Polish lengths should exclude English doc');
+    assert_same([2 => 2], $storage->get_doc_lengths([1, 2], 'en-US'), 'English lengths should exclude Polish doc');
+    $polishResults = $searcher->search('zamek', ['lang' => 'pl-PL']);
+    assert_same(1, count($polishResults), 'Polish query should return one doc');
+    assert_same(1, $polishResults[0]['doc_id'], 'Polish query should return only Polish doc');
+    assert_same(2, $searcher->search('zamek', ['lang' => 'en-US'])[0]['doc_id'], 'English query should return only English doc');
+    assert_same([], $searcher->search('zamek', ['lang' => 'de']), 'unpopulated language partition should not match');
+
+    assert_true($indexer->index_document(1, '<p>zamek wspolny</p>', ['lang' => 'en-US']), 'changing only document language should rewrite the index');
+    assert_same([], $searcher->search('zamek', ['lang' => 'pl-PL']), 'old language postings should be removed after language change');
+    assert_same([1, 2], array_column($searcher->search('zamek', ['lang' => 'en-US', 'limit' => 10]), 'doc_id'), 'new language should contain both English docs');
+});
+
+test_case('indexing passes resolved document language to analyzer', function (): void {
+    $analyzer = new WP_FTS_Test_Language_Aware_Analyzer();
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'pl']);
+
+    $plTerm = WP_FTS_TermNamespace::term_key('zamek', 'pl');
+    assert_same([$plTerm], $storage->all_terms(), 'explicit Polish document language should namespace emitted terms as Polish');
+    assert_same(['doc_count' => 1, 'len_sum' => 1], $storage->get_meta('pl'), 'Polish doc metadata should match Polish terms');
+    assert_same(['doc_count' => 0, 'len_sum' => 0], $storage->get_meta('en'), 'English metadata should not be touched by Polish-only content');
+    assert_same('pl', $storage->get_doc(1)['primary_lang'], 'stored primary language should remain Polish');
+    assert_same(['pl' => 1], $storage->get_doc(1)['lang_lengths'], 'stored document lengths should remain Polish');
+    assert_same('pl', $analyzer->contentOptions[0]['lang'], 'analyzer should receive lang option');
+    assert_same('pl', $analyzer->contentOptions[0]['language'], 'analyzer should receive language option');
+    assert_same('pl', $analyzer->contentOptions[0]['document_lang'], 'analyzer should receive document_lang option');
+
+    $mixed = new WP_FTS_Storage_InMemory();
+    $mixedIndexer = new WP_FTS_Indexer($mixed, $analyzer);
+    $mixedIndexer->index_document(2, '<p>zamek</p><code lang="en">castle</code>', ['lang' => 'pl']);
+    assert_same(
+        [WP_FTS_TermNamespace::term_key('castle', 'en'), $plTerm],
+        $mixed->all_terms(),
+        'indexer should preserve occurrence-level language overrides returned by the analyzer'
+    );
+    assert_same(['en' => 1, 'pl' => 1], $mixed->get_doc(2)['lang_lengths'], 'mixed-language occurrences should keep per-language lengths');
+});
+
+test_case('search passes resolved query language and prefers query occurrences', function (): void {
+    $analyzer = new WP_FTS_Test_Language_Aware_Analyzer();
+    assert_same([], $analyzer->analyze_query_occurrences('zamek'), 'fixture English pipeline should remove the Polish regression term');
+    $analyzer->queryOccurrenceOptions = [];
+
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'pl']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('zamek', ['lang' => 'pl']), 'doc_id'), 'Polish query language should reach occurrence analysis');
+    assert_same([], $analyzer->queryOptions, 'search should prefer analyze_query_occurrences when it is available');
+    assert_same('pl', $analyzer->queryOccurrenceOptions[0]['lang'], 'occurrence analysis should receive lang option');
+    assert_same('pl', $analyzer->queryOccurrenceOptions[0]['language'], 'occurrence analysis should receive language option');
+    assert_same('pl', $analyzer->queryOccurrenceOptions[0]['query_lang'], 'occurrence analysis should receive query_lang option');
+    assert_same('occurrences', $analyzer->queryOccurrenceOptions[0]['return'], 'occurrence analysis should request occurrence output');
+});
+
+test_case('search requests occurrence output through query fallback', function (): void {
+    $analyzer = new WP_FTS_Test_Query_Fallback_Analyzer();
+    assert_same([], $analyzer->analyze_query('zamek'), 'fixture English fallback pipeline should remove the Polish regression term');
+    $analyzer->queryOptions = [];
+
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'pl']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('zamek', ['lang' => 'pl']), 'doc_id'), 'query fallback should analyze under explicit Polish language');
+    assert_same('pl', $analyzer->queryOptions[0]['lang'], 'query fallback should receive lang option');
+    assert_same('pl', $analyzer->queryOptions[0]['language'], 'query fallback should receive language option');
+    assert_same('pl', $analyzer->queryOptions[0]['query_lang'], 'query fallback should receive query_lang option');
+    assert_same('occurrences', $analyzer->queryOptions[0]['return'], 'query fallback should request occurrence output');
+});
+
+test_case('mysql storage emits language-aware binary schema and stores per-language docs', function (): void {
+    $wpdb = new WP_FTS_Test_WPDB();
+    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $storage->create_tables();
+
+    assert_same(4, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create four tables');
+    $schemaSql = implode("\n", $wpdb->queries);
+    assert_contains('term varbinary(255) NOT NULL', $schemaSql, 'terms table should use exact binary term keys');
+    assert_contains('CREATE TABLE wp_fts_doc_lengths', $schemaSql, 'schema should include doc-language lengths table');
+    assert_contains('PRIMARY KEY  (doc_id,lang)', $schemaSql, 'doc lengths should be keyed by doc and language');
+    assert_contains('PRIMARY KEY  (lang,k)', $schemaSql, 'meta should be keyed by language and key');
+    assert_true(!str_contains(strtolower($schemaSql), 'fulltext'), 'schema must not use MySQL FULLTEXT');
+
+    $plTerm = WP_FTS_TermNamespace::term_key('zamek', 'pl');
+    $enTerm = WP_FTS_TermNamespace::term_key('zamek', 'en');
+    assert_true($plTerm !== $enTerm && str_contains($plTerm, WP_FTS_TermNamespace::SEPARATOR), 'term keys should be language namespaced');
+    $storage->put_term($plTerm, 1, WP_FTS_PostingsCodec::encode([7 => 2]));
+    $storage->put_term($enTerm, 1, WP_FTS_PostingsCodec::encode([8 => 1]));
+    assert_same([$enTerm, $plTerm], $storage->all_terms(), 'binary namespaced terms should remain separate rows');
+
+    $storage->put_doc(7, 'pl_PL', ['pl_PL' => 4, 'en' => 2], 'abc123');
+    $doc = $storage->get_doc(7);
+    assert_same('pl-PL', $doc['primary_lang'], 'document primary language should be canonicalized');
+    assert_same(['en' => 2, 'pl-PL' => 4], $doc['lang_lengths'], 'document should keep per-language lengths');
+    assert_same([7 => 4], $storage->get_doc_lengths([7], 'pl_PL'), 'language length lookup should use doc-length table');
+    assert_same([7 => 2], $storage->get_doc_lengths([7], 'en'), 'secondary language length should be queryable');
+
+    $storage->add_meta('pl_PL', 1, 4);
+    $storage->add_meta('en', 1, 2);
+    assert_same(['doc_count' => 1, 'len_sum' => 4], $storage->get_meta('pl-PL'), 'language meta should be partitioned');
+    assert_same(['doc_count' => 2, 'len_sum' => 6], $storage->get_meta(), 'global meta should aggregate partitions');
+});
+
+test_case('wp cli reindex accepts language source filters and limit', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $fake->postRows = [
+        (object) ['ID' => 10, 'post_title' => 'Pierwszy', 'post_content' => '<p>zamek alfa</p>'],
+        (object) ['ID' => 11, 'post_title' => 'Drugi', 'post_content' => '<p>zamek beta</p>'],
+    ];
+    $wpdb = $fake;
+    WP_CLI::$successMessages = [];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $command->reindex([], [
+            'post_status' => 'publish,draft',
+            'post_type' => 'post,page',
+            'lang' => 'pl_PL',
+            'limit' => '1',
+            'batch_size' => '25',
+        ]);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(['Indexed 1 posts in pl-PL.'], WP_CLI::$successMessages, 'CLI should report canonical language and limited count');
+    assert_same([10], array_keys($fake->docs), 'CLI limit should restrict indexed posts');
+    assert_same('pl-PL', $fake->docs[10]['lang'], 'CLI language option should reach MySQL docs');
+    assert_same(['pl-PL' => 7], $fake->docLengths[10], 'CLI reindex should write boosted per-language doc length');
+
+    $postSelect = null;
+    foreach ($fake->prepared as $prepared) {
+        if (str_starts_with($prepared['sql'], 'SELECT ID, post_content, post_title')) {
+            $postSelect = $prepared;
+            break;
+        }
+    }
+    assert_true($postSelect !== null, 'CLI reindex should prepare a batched posts query');
+    assert_same(['publish', 'draft', 'post', 'page', 0, 1], $postSelect['args'], 'CLI source filters and remaining limit should be prepared');
 });
 
 $failures = 0;

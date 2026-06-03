@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 final class WP_FTS_TermNamespace
 {
+    public const DEFAULT_LANG = 'und';
+    public const MAX_TERM_KEY_BYTES = 255;
     public const SEPARATOR = "\x1e";
 
     public static function canonicalize_lang(?string $lang, string $fallback = 'en'): string
@@ -43,6 +45,16 @@ final class WP_FTS_TermNamespace
     public static function namespace_term(string $lang, string $term): string
     {
         return self::canonicalize_lang($lang) . self::SEPARATOR . $term;
+    }
+
+    public static function term_key(string $term, string $lang): string
+    {
+        return self::namespace_term($lang, $term);
+    }
+
+    public static function term_key_fits(string $term, string $lang): bool
+    {
+        return strlen(self::namespace_term($lang, $term)) <= self::MAX_TERM_KEY_BYTES;
     }
 
     /**
@@ -102,5 +114,26 @@ final class WP_FTS_TermNamespace
         }
 
         return 'en';
+    }
+
+    /**
+     * @param array<string|int,mixed> $lengths
+     * @return array<string,int>
+     */
+    public static function normalize_lengths(array $lengths): array
+    {
+        $normalized = [];
+        foreach ($lengths as $lang => $length) {
+            $length = max(0, (int) $length);
+            if ($length === 0) {
+                continue;
+            }
+
+            $canonicalLang = self::canonicalize_lang((string) $lang, self::DEFAULT_LANG);
+            $normalized[$canonicalLang] = ($normalized[$canonicalLang] ?? 0) + $length;
+        }
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
     }
 }
