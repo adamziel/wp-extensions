@@ -39,7 +39,9 @@ final class WP_FTS_CallbackStemmer implements WP_FTS_Stemmer
     {
         $reflection = new ReflectionFunction(Closure::fromCallable($callback));
 
-        return $reflection->isVariadic() || $reflection->getNumberOfParameters() >= 2;
+        // Preserve the legacy one-argument stemmer contract for callables such
+        // as metaphone(), whose optional second parameter is not a language.
+        return $reflection->isVariadic() || $reflection->getNumberOfRequiredParameters() >= 2;
     }
 }
 

@@ -273,10 +273,20 @@ test_case('custom stemmers preserve callable arity compatibility', function (): 
     ]);
     assert_same(['ahpla'], $reverseAnalyzer->analyze_query('alpha'), 'internal one-argument callables should keep working');
 
+    $metaphoneAnalyzer = new WP_FTS_Analyzer([
+        'stemmer' => 'metaphone',
+    ]);
+    assert_same(['TSTNK'], $metaphoneAnalyzer->analyze_query('testing'), 'optional non-language parameters should not receive language');
+
     $languageAware = new WP_FTS_LanguagePipeline([
         'stemmer' => static fn(string $term, string $language): string => $language . ':' . $term,
     ]);
     assert_same(['en-GB:color'], $languageAware->analyze('colour', 'en-GB'), 'two-argument custom stemmers should receive language');
+
+    $variadic = new WP_FTS_LanguagePipeline([
+        'stemmer' => static fn(string $term, string ...$args): string => count($args) . ':' . $term,
+    ]);
+    assert_same(['1:color'], $variadic->analyze('colour', 'en-GB'), 'variadic custom stemmers should receive language');
 });
 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
