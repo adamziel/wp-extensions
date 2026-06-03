@@ -21,6 +21,8 @@ final class WP_FTS_Analyzer
     private int $minTermLen;
     private int $maxTermBytes;
     private bool $foldDiacritics;
+    private string $defaultDocumentLang;
+    private string $defaultQueryLang;
 
     /**
      * @param array{
@@ -30,6 +32,11 @@ final class WP_FTS_Analyzer
      *   min_term_len?:int,
      *   max_term_bytes?:int,
      *   fold_diacritics?:bool,
+     *   lang?:string,
+     *   language?:string,
+     *   document_lang?:string,
+     *   query_lang?:string,
+     *   locale?:string,
      *   stemmer?:callable|null,
      *   html_processor_factory?:callable|null
      * } $options
@@ -68,6 +75,16 @@ final class WP_FTS_Analyzer
         $this->minTermLen = max(1, (int) ($options['min_term_len'] ?? 2));
         $this->maxTermBytes = max(1, (int) ($options['max_term_bytes'] ?? 255));
         $this->foldDiacritics = (bool) ($options['fold_diacritics'] ?? true);
+        $this->defaultDocumentLang = WP_FTS_TermNamespace::language_from_options(
+            $options,
+            'en',
+            ['lang', 'language', 'document_lang', 'locale']
+        ) ?? 'en';
+        $this->defaultQueryLang = WP_FTS_TermNamespace::language_from_options(
+            $options,
+            $this->defaultDocumentLang,
+            ['query_lang', 'lang', 'language', 'locale']
+        ) ?? $this->defaultDocumentLang;
         $this->stemmer = $options['stemmer'] ?? null;
         $this->htmlProcessorFactory = $options['html_processor_factory'] ?? null;
 
@@ -83,16 +100,18 @@ final class WP_FTS_Analyzer
     /**
      * Analyze HTML content and return weighted token occurrences in source order.
      *
-     * @return array<int,array{term:string,weight:float}>
+     * @return array<int,array{term:string,weight:float,lang:string}>
      */
-    public function analyze_content(string $html): array
+    public function analyze_content(string $html, array $opts = []): array
     {
         $tokens = [];
+        $lang = $this->resolveDocumentLanguage($opts);
         foreach ($this->extractHtmlSegments($html) as $segment) {
             foreach ($this->tokenizeText($segment['text']) as $term) {
                 $tokens[] = [
                     'term' => $term,
                     'weight' => $segment['weight'],
+                    'lang' => $lang,
                 ];
             }
         }
@@ -101,17 +120,40 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Query analysis intentionally skips only the HTML extraction stage.
+     * Query analysis intentionally skips only the HTML extraction stage. It
+     * stays a plain-term compatibility shim unless occurrence output is
+     * requested.
      *
-     * @return string[]
+     * @return string[]|array<int,array{term:string,lang:string}>
      */
-    public function analyze_query(string $query): array
+    public function analyze_query(string $query, array $opts = []): array
     {
+        if ($this->queryRequestsOccurrences($opts)) {
+            return $this->analyze_query_occurrences($query, $opts);
+        }
+
         return $this->tokenizeText($query);
     }
 
     /**
-     * @param array<int,array{term:string,weight:float}> $occurrences
+     * @return array<int,array{term:string,lang:string}>
+     */
+    public function analyze_query_occurrences(string $query, array $opts = []): array
+    {
+        $lang = $this->resolveQueryLanguage($opts);
+        $occurrences = [];
+        foreach ($this->tokenizeText($query) as $term) {
+            $occurrences[] = [
+                'term' => $term,
+                'lang' => $lang,
+            ];
+        }
+
+        return $occurrences;
+    }
+
+    /**
+     * @param array<int,array{term:string,weight:float,lang?:string}> $occurrences
      * @return array<string,int>
      */
     public function weighted_term_frequencies(array $occurrences): array
@@ -370,6 +412,35 @@ final class WP_FTS_Analyzer
         }
 
         return $token;
+    }
+
+    private function resolveDocumentLanguage(array $opts): string
+    {
+        return WP_FTS_TermNamespace::language_from_options(
+            $opts,
+            $this->defaultDocumentLang,
+            ['lang', 'language', 'document_lang', 'locale']
+        ) ?? $this->defaultDocumentLang;
+    }
+
+    private function resolveQueryLanguage(array $opts): string
+    {
+        return WP_FTS_TermNamespace::language_from_options(
+            $opts,
+            $this->defaultQueryLang,
+            ['query_lang', 'lang', 'language', 'locale']
+        ) ?? $this->defaultQueryLang;
+    }
+
+    private function queryRequestsOccurrences(array $opts): bool
+    {
+        foreach (['return', 'format'] as $key) {
+            if (isset($opts[$key]) && strtolower(trim((string) $opts[$key])) === 'occurrences') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function foldDiacritics(string $text): string

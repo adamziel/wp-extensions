@@ -560,6 +560,34 @@ test_case('language options namespace terms and isolate search partitions', func
     assert_same([], $searcher->search('jablko', ['lang' => 'en_US']), 'English query should not match Polish terms');
 });
 
+test_case('searcher preserves analyzer-selected query language', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['query_lang' => 'pl']);
+    $storage = new WP_FTS_Test_LanguageAwareStorage();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>lodz polish</p>', ['lang' => 'pl']);
+    $indexer->index_document(2, '<p>lodz english</p>', ['lang' => 'en']);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $results = $searcher->search('lodz');
+
+    assert_same(1, count($results), 'analyzer-selected Polish query should only search the Polish partition');
+    assert_same(1, $results[0]['doc_id'], 'unqualified query should hit the Polish partition selected by the analyzer');
+});
+
+test_case('indexer passes default document language to analyzer as document_lang', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $storage = new WP_FTS_Test_LanguageAwareStorage();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>lodz</p>', ['default_lang' => 'pl']);
+
+    $terms = $storage->all_terms();
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'lodz'), $terms, true), 'default_lang should reach analyzer as document_lang');
+    assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('en', 'lodz'), $terms, true), 'default_lang should not be lost to analyzer fallback language');
+    assert_same(1, (new WP_FTS_Searcher($storage, $analyzer))->search('lodz', ['lang' => 'pl'])[0]['doc_id'] ?? null, 'Polish query should find the default_lang document');
+});
+
 test_case('reindex and delete adjust old per-language stats', function (): void {
     $analyzer = new WP_FTS_Analyzer();
     $storage = new WP_FTS_Test_LanguageAwareStorage();

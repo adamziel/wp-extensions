@@ -203,6 +203,7 @@ LIMIT %d",
     {
         $analysisOpts = $opts;
         $analysisOpts['default_lang'] = $primaryLang;
+        $analysisOpts['document_lang'] = $primaryLang;
         if (WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'primary_lang', 'document_lang']) !== null) {
             $analysisOpts['lang'] = $primaryLang;
             $analysisOpts['language'] = $primaryLang;

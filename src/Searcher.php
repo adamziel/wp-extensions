@@ -109,16 +109,64 @@ final class WP_FTS_Searcher
      */
     private function analyze_query(string $query, array $opts): array
     {
-        $analysisOpts = $opts;
-        $explicitLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'query_lang']);
-        if ($explicitLang !== null) {
-            $analysisOpts['lang'] = $explicitLang;
-            $analysisOpts['language'] = $explicitLang;
-        } else {
-            $analysisOpts['default_lang'] = WP_FTS_TermNamespace::default_language($opts);
+        $analysisOpts = $this->query_analysis_options($opts);
+
+        if (method_exists($this->analyzer, 'analyze_query_occurrences')) {
+            return $this->normalize_query_analysis(
+                $this->analyzer->analyze_query_occurrences($query, $analysisOpts)
+            );
         }
 
-        return $this->analyzer->analyze_query($query, $analysisOpts);
+        $returnOpts = $analysisOpts;
+        $returnOpts['return'] = 'occurrences';
+        $occurrences = $this->normalize_query_analysis($this->analyzer->analyze_query($query, $returnOpts));
+        if ($this->has_occurrence_rows($occurrences)) {
+            return $occurrences;
+        }
+
+        $formatOpts = $analysisOpts;
+        $formatOpts['format'] = 'occurrences';
+        $occurrences = $this->normalize_query_analysis($this->analyzer->analyze_query($query, $formatOpts));
+        if ($this->has_occurrence_rows($occurrences)) {
+            return $occurrences;
+        }
+
+        return $this->normalize_query_analysis($this->analyzer->analyze_query($query, $analysisOpts));
+    }
+
+    private function query_analysis_options(array $opts): array
+    {
+        $analysisOpts = $opts;
+        $explicitLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']);
+        if ($explicitLang !== null) {
+            $analysisOpts['query_lang'] = $explicitLang;
+            $analysisOpts['lang'] = $explicitLang;
+            $analysisOpts['language'] = $explicitLang;
+        }
+
+        return $analysisOpts;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>|string>
+     */
+    private function normalize_query_analysis(mixed $analysis): array
+    {
+        return is_array($analysis) ? array_values($analysis) : [];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>|string> $analysis
+     */
+    private function has_occurrence_rows(array $analysis): bool
+    {
+        foreach ($analysis as $occurrence) {
+            if (is_array($occurrence)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -126,7 +174,7 @@ final class WP_FTS_Searcher
      */
     private function resolve_query_language(array $opts, array $queryOccurrences): string
     {
-        $explicitLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'query_lang']);
+        $explicitLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']);
         if ($explicitLang !== null) {
             return $explicitLang;
         }
