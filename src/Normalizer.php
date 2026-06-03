@@ -36,7 +36,7 @@ final class WP_FTS_Normalizer
 
         $canonical = [$primary];
         foreach (array_slice($parts, 1) as $part) {
-            if (strlen($part) === 2 || strlen($part) === 3 && ctype_digit($part)) {
+            if (strlen($part) === 2 || strlen($part) === 3 && $this->is_ascii_digit($part)) {
                 $canonical[] = strtoupper($part);
                 continue;
             }
@@ -50,6 +50,11 @@ final class WP_FTS_Normalizer
         }
 
         return implode('-', $canonical);
+    }
+
+    private function is_ascii_digit(string $value): bool
+    {
+        return $value !== '' && preg_match('/^[0-9]+$/', $value) === 1;
     }
 
     public function base_language(string $language): string

@@ -620,9 +620,9 @@ final class WP_FTS_Analyzer
 
             if ($index === 0) {
                 $canonical[] = strtolower($part);
-            } elseif (strlen($part) === 4 && ctype_alpha($part)) {
+            } elseif (strlen($part) === 4 && self::isAsciiAlpha($part)) {
                 $canonical[] = ucfirst(strtolower($part));
-            } elseif ((strlen($part) === 2 && ctype_alpha($part)) || (strlen($part) === 3 && ctype_digit($part))) {
+            } elseif ((strlen($part) === 2 && self::isAsciiAlpha($part)) || (strlen($part) === 3 && self::isAsciiDigit($part))) {
                 $canonical[] = strtoupper($part);
             } else {
                 $canonical[] = strtolower($part);
@@ -630,6 +630,16 @@ final class WP_FTS_Analyzer
         }
 
         return $canonical === [] ? 'und' : implode('-', $canonical);
+    }
+
+    private static function isAsciiAlpha(string $value): bool
+    {
+        return $value !== '' && preg_match('/^[A-Za-z]+$/', $value) === 1;
+    }
+
+    private static function isAsciiDigit(string $value): bool
+    {
+        return $value !== '' && preg_match('/^[0-9]+$/', $value) === 1;
     }
 
     /**

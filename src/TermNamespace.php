@@ -30,9 +30,9 @@ final class WP_FTS_TermNamespace
 
             if ($i === 0) {
                 $canonical[] = strtolower($part);
-            } elseif (strlen($part) === 4 && ctype_alpha($part)) {
+            } elseif (strlen($part) === 4 && self::is_ascii_alpha($part)) {
                 $canonical[] = ucfirst(strtolower($part));
-            } elseif ((strlen($part) === 2 && ctype_alpha($part)) || (strlen($part) === 3 && ctype_digit($part))) {
+            } elseif ((strlen($part) === 2 && self::is_ascii_alpha($part)) || (strlen($part) === 3 && self::is_ascii_digit($part))) {
                 $canonical[] = strtoupper($part);
             } else {
                 $canonical[] = strtolower($part);
@@ -40,6 +40,16 @@ final class WP_FTS_TermNamespace
         }
 
         return $canonical !== [] ? implode('-', $canonical) : self::canonicalize_lang($fallback, 'en');
+    }
+
+    private static function is_ascii_alpha(string $value): bool
+    {
+        return $value !== '' && preg_match('/^[A-Za-z]+$/', $value) === 1;
+    }
+
+    private static function is_ascii_digit(string $value): bool
+    {
+        return $value !== '' && preg_match('/^[0-9]+$/', $value) === 1;
     }
 
     public static function namespace_term(string $lang, string $term): string
