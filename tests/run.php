@@ -7,6 +7,10 @@ final class WP_FTS_TestFailure extends RuntimeException
 {
 }
 
+final class WP_FTS_TestPending extends RuntimeException
+{
+}
+
 final class WP_FTS_Fake_HTML_Processor
 {
     private int $offset = -1;
@@ -102,12 +106,17 @@ function assert_contains(string $needle, string $haystack, string $message): voi
     }
 }
 
+function mark_pending(string $message): never
+{
+    throw new WP_FTS_TestPending($message);
+}
+
 /**
  * @return string[]
  */
 function test_terms(array $occurrences): array
 {
-    return array_map(static fn(array $token): string => $token['term'], $occurrences);
+    return array_map(static fn(array|string $token): string => is_array($token) ? (string) $token['term'] : $token, $occurrences);
 }
 
 function test_normalize_without_mbstring(WP_FTS_Normalizer $normalizer, string $token, string $language): string
@@ -155,6 +164,177 @@ function test_lang_by_term(array $occurrences): array
 }
 
 /**
+ * @return array{term:string,lang:?string}
+ */
+function test_split_namespaced_term(string $term): array
+{
+    if (str_contains($term, WP_FTS_TermNamespace::SEPARATOR)) {
+        [$lang, $bareTerm] = explode(WP_FTS_TermNamespace::SEPARATOR, $term, 2);
+        return ['term' => $bareTerm, 'lang' => $lang];
+    }
+
+    return ['term' => $term, 'lang' => null];
+}
+
+/**
+ * @param array<int,array<string,mixed>|string> $tokens
+ * @return array<int,array{term:string,lang:?string,weight:?float}>
+ */
+function test_token_records(array $tokens): array
+{
+    $records = [];
+    foreach ($tokens as $token) {
+        if (is_string($token)) {
+            $split = test_split_namespaced_term($token);
+            $records[] = [
+                'term' => $split['term'],
+                'lang' => $split['lang'],
+                'weight' => null,
+            ];
+            continue;
+        }
+
+        $split = test_split_namespaced_term((string) ($token['term'] ?? ''));
+        $lang = $token['lang'] ?? $token['language'] ?? $split['lang'];
+        $records[] = [
+            'term' => $split['term'],
+            'lang' => is_string($lang) && $lang !== '' ? $lang : null,
+            'weight' => isset($token['weight']) ? (float) $token['weight'] : null,
+        ];
+    }
+
+    return $records;
+}
+
+/**
+ * @param array<int,array{term:string,lang:?string,weight:?float}> $records
+ * @return string[]
+ */
+function test_terms_for_lang(array $records, string $lang): array
+{
+    $terms = [];
+    foreach ($records as $record) {
+        if ($record['lang'] === $lang) {
+            $terms[] = $record['term'];
+        }
+    }
+
+    return $terms;
+}
+
+/**
+ * @param array<int,array{term:string,lang:?string,weight:?float}> $records
+ * @return string[]
+ */
+function test_langs_for_term(array $records, string $term): array
+{
+    $langs = [];
+    foreach ($records as $record) {
+        if ($record['term'] === $term && $record['lang'] !== null) {
+            $langs[$record['lang']] = true;
+        }
+    }
+
+    $result = array_keys($langs);
+    sort($result, SORT_STRING);
+
+    return $result;
+}
+
+/**
+ * @param array<int,array{term:string,lang:?string,weight:?float}> $records
+ */
+function test_records_have_lang(array $records): bool
+{
+    if ($records === []) {
+        return false;
+    }
+
+    foreach ($records as $record) {
+        if ($record['lang'] === null) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * @return array<int,array<string,mixed>|string>
+ */
+function test_call_analyzer(WP_FTS_Analyzer $analyzer, string $method, string $text, array $opts = []): array
+{
+    $reflection = new ReflectionMethod($analyzer, $method);
+    $parameters = $reflection->getParameters();
+    if (count($parameters) >= 2) {
+        $secondParameter = $parameters[1];
+        if (test_parameter_accepts_type($secondParameter, 'array')) {
+            /** @var array<int,array<string,mixed>|string> */
+            return $analyzer->{$method}($text, $opts);
+        }
+
+        if (test_parameter_accepts_type($secondParameter, 'string')) {
+            $lang = (string) ($opts['lang'] ?? $opts['language'] ?? '');
+            if ($lang !== '') {
+                if (isset($parameters[2]) && test_parameter_accepts_type($parameters[2], 'array')) {
+                    /** @var array<int,array<string,mixed>|string> */
+                    return $analyzer->{$method}($text, $lang, $opts);
+                }
+
+                /** @var array<int,array<string,mixed>|string> */
+                return $analyzer->{$method}($text, $lang);
+            }
+        }
+
+        /** @var array<int,array<string,mixed>|string> */
+        return $analyzer->{$method}($text, $opts);
+    }
+
+    /** @var array<int,array<string,mixed>|string> */
+    return $analyzer->{$method}($text);
+}
+
+function test_parameter_accepts_type(ReflectionParameter $parameter, string $typeName): bool
+{
+    $type = $parameter->getType();
+    if ($type === null) {
+        return false;
+    }
+
+    if ($type instanceof ReflectionNamedType) {
+        return $type->getName() === $typeName || $type->getName() === 'mixed';
+    }
+
+    if ($type instanceof ReflectionUnionType) {
+        foreach ($type->getTypes() as $namedType) {
+            if ($namedType->getName() === $typeName || $namedType->getName() === 'mixed') {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * @return array<int,array<string,mixed>|string>
+ */
+function test_call_query_occurrences(WP_FTS_Analyzer $analyzer, string $query, string $lang): array
+{
+    $opts = [
+        'lang' => $lang,
+        'language' => $lang,
+        'return' => 'occurrences',
+    ];
+
+    if (method_exists($analyzer, 'analyze_query_occurrences')) {
+        return test_call_analyzer($analyzer, 'analyze_query_occurrences', $query, $opts);
+    }
+
+    return test_call_analyzer($analyzer, 'analyze_query', $query, $opts);
+}
+
+/**
  * @return array<int,array{text:string,weight:float,lang:string}>
  */
 function test_fallback_segments(WP_FTS_Analyzer $analyzer, string $html, string $documentLang): array
@@ -163,6 +343,47 @@ function test_fallback_segments(WP_FTS_Analyzer $analyzer, string $html, string 
     $method->setAccessible(true);
 
     return $method->invoke($analyzer, $html, $documentLang);
+}
+
+/**
+ * @return array{exit:int,stdout:string,stderr:string}
+ */
+function test_run_php_without_extensions(string $code): array
+{
+    if (!function_exists('proc_open')) {
+        mark_pending('proc_open() is unavailable, so the optional-extension smoke test cannot run in this PHP build.');
+    }
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $process = proc_open([PHP_BINARY, '-n', '-r', $code], $descriptors, $pipes, dirname(__DIR__));
+    if (!is_resource($process)) {
+        mark_pending('Could not start a PHP subprocess for the optional-extension smoke test.');
+    }
+
+    fclose($pipes[0]);
+    $stdout = (string) stream_get_contents($pipes[1]);
+    $stderr = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exit = proc_close($process);
+
+    return [
+        'exit' => is_int($exit) ? $exit : 1,
+        'stdout' => $stdout,
+        'stderr' => $stderr,
+    ];
+}
+
+function test_bm25_score(int $tf, int $docLen, int $docCount, int $docFreq, float $avgDocLen, float $k1 = 1.2, float $b = 0.75): float
+{
+    $idf = log(1.0 + (($docCount - $docFreq + 0.5) / ($docFreq + 0.5)));
+    $normalizer = $tf + $k1 * (1.0 - $b + $b * ($docLen / max(1.0, $avgDocLen)));
+
+    return $idf * (($tf * ($k1 + 1.0)) / $normalizer);
 }
 
 /**
@@ -1037,6 +1258,112 @@ final class WP_FTS_Test_Query_Fallback_Analyzer
         }
 
         return ['zamek'];
+    }
+}
+
+final class WP_FTS_Test_LanguagePartitionStorage implements WP_FTS_Storage
+{
+    public ?string $lastDocLengthLang = null;
+    public ?string $lastMetaLang = null;
+
+    private string $term;
+
+    public function __construct()
+    {
+        $this->term = WP_FTS_TermNamespace::namespace_term('en', 'needle');
+    }
+
+    public function get_terms(array $terms): array
+    {
+        if (!in_array($this->term, $terms, true)) {
+            return [];
+        }
+
+        return [
+            $this->term => [
+                'df' => 1,
+                'postings' => WP_FTS_PostingsCodec::encode([101 => 2]),
+            ],
+        ];
+    }
+
+    public function put_term(string $term, int $df, string $postings): void
+    {
+    }
+
+    public function delete_term(string $term): void
+    {
+    }
+
+    public function get_doc_lengths(array $doc_ids, ?string $lang = null): array
+    {
+        $this->lastDocLengthLang = $lang;
+
+        return $lang === 'en' ? [101 => 4] : [101 => 400];
+    }
+
+    public function get_doc(int $doc_id): ?array
+    {
+        return [
+            'doc_len' => 4,
+            'content_hash' => 'test',
+            'deleted' => false,
+        ];
+    }
+
+    /**
+     * @param int|string $primary_lang Legacy doc length or a language code.
+     * @param array<string,int>|string $lang_lengths Legacy hash or per-language lengths.
+     */
+    public function put_doc(int $doc_id, int|string $primary_lang, array|string $lang_lengths, ?string $hash = null): void
+    {
+    }
+
+    public function delete_doc(int $doc_id): void
+    {
+    }
+
+    public function get_meta(?string $lang = null): array
+    {
+        $this->lastMetaLang = $lang;
+
+        return $lang === 'en'
+            ? ['doc_count' => 2, 'len_sum' => 8]
+            : ['doc_count' => 100, 'len_sum' => 4000];
+    }
+
+    public function add_meta(int|string $lang_or_d_docs, int $d_docs_or_d_len, ?int $d_len = null): void
+    {
+    }
+
+    public function all_terms(): array
+    {
+        return [$this->term];
+    }
+
+    public function all_doc_ids(bool $include_deleted = false): array
+    {
+        return [101];
+    }
+
+    public function begin_transaction(): void
+    {
+    }
+
+    public function commit(): void
+    {
+    }
+
+    public function rollback(): void
+    {
+    }
+
+    public function flush(): void
+    {
+    }
+
+    public function optimize(): void
+    {
     }
 }
 
