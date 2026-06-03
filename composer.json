@@ -4,7 +4,8 @@
   "type": "wordpress-plugin",
   "license": "proprietary",
   "require": {
-    "php": ">=8.1"
+    "php": ">=8.1",
+    "wamania/php-stemmer": "^3.0"
   },
   "autoload": {
     "files": [

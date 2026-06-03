@@ -13,14 +13,10 @@ final class WP_FTS_Analyzer
     private array $stopwords;
 
     /** @var callable|null */
-    private $stemmer;
-
-    /** @var callable|null */
     private $htmlProcessorFactory;
 
-    private int $minTermLen;
-    private int $maxTermBytes;
-    private bool $foldDiacritics;
+    private WP_FTS_LanguagePipeline $languagePipeline;
+    private string $defaultLanguage;
 
     /**
      * @param array{
@@ -30,6 +26,12 @@ final class WP_FTS_Analyzer
      *   min_term_len?:int,
      *   max_term_bytes?:int,
      *   fold_diacritics?:bool,
+     *   default_lang?:string,
+     *   language?:string,
+     *   namespace_terms?:bool,
+     *   enable_stemming?:bool,
+     *   polish_stemming?:string,
+     *   language_pipeline?:WP_FTS_LanguagePipeline,
      *   stemmer?:callable|null,
      *   html_processor_factory?:callable|null
      * } $options
@@ -65,16 +67,23 @@ final class WP_FTS_Analyzer
             $this->boosts[strtoupper((string) $tag)] = (float) $boost;
         }
 
-        $this->minTermLen = max(1, (int) ($options['min_term_len'] ?? 2));
-        $this->maxTermBytes = max(1, (int) ($options['max_term_bytes'] ?? 255));
-        $this->foldDiacritics = (bool) ($options['fold_diacritics'] ?? true);
-        $this->stemmer = $options['stemmer'] ?? null;
         $this->htmlProcessorFactory = $options['html_processor_factory'] ?? null;
+        $this->languagePipeline = $options['language_pipeline'] ?? new WP_FTS_LanguagePipeline([
+            'min_term_len' => (int) ($options['min_term_len'] ?? 2),
+            'max_term_bytes' => (int) ($options['max_term_bytes'] ?? 255),
+            'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
+            'namespace_terms' => (bool) ($options['namespace_terms'] ?? false),
+            'enable_stemming' => (bool) ($options['enable_stemming'] ?? false),
+            'polish_stemming' => (string) ($options['polish_stemming'] ?? 'conservative'),
+            'stemmer' => $options['stemmer'] ?? null,
+        ]);
+        $this->defaultLanguage = $this->languagePipeline->canonicalize_language(
+            (string) ($options['default_lang'] ?? $options['language'] ?? 'und')
+        );
 
         $this->stopwords = [];
         foreach (($options['stopwords'] ?? []) as $word) {
-            $normalized = $this->normalizeToken((string) $word);
-            if ($normalized !== null) {
+            foreach ($this->languagePipeline->analyze((string) $word, $this->defaultLanguage) as $normalized) {
                 $this->stopwords[$normalized] = true;
             }
         }
@@ -83,16 +92,34 @@ final class WP_FTS_Analyzer
     /**
      * Analyze HTML content and return weighted token occurrences in source order.
      *
-     * @return array<int,array{term:string,weight:float}>
+     * @return array<int,array{term:string,weight:float,lang:string}>
      */
-    public function analyze_content(string $html): array
+    public function analyze_content(string $html, ?string $language = null): array
+    {
+        return $this->analyze_content_terms($html, $language);
+    }
+
+    /**
+     * Analyze HTML content and return weighted, language-tagged token
+     * occurrences in source order.
+     *
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    public function analyze_content_terms(string $html, ?string $language = null): array
     {
         $tokens = [];
+        $fallbackLanguage = $this->languagePipeline->canonicalize_language($language ?? $this->defaultLanguage);
         foreach ($this->extractHtmlSegments($html) as $segment) {
-            foreach ($this->tokenizeText($segment['text']) as $term) {
+            $segmentLanguage = $this->languagePipeline->canonicalize_language($segment['lang'] ?? $fallbackLanguage);
+            foreach ($this->languagePipeline->analyze_detailed($segment['text'], $segmentLanguage) as $term) {
+                if (isset($this->stopwords[$term['term']])) {
+                    continue;
+                }
+
                 $tokens[] = [
-                    'term' => $term,
+                    'term' => $term['term'],
                     'weight' => $segment['weight'],
+                    'lang' => $term['lang'],
                 ];
             }
         }
@@ -105,13 +132,36 @@ final class WP_FTS_Analyzer
      *
      * @return string[]
      */
-    public function analyze_query(string $query): array
+    public function analyze_query(string $query, ?string $language = null): array
     {
-        return $this->tokenizeText($query);
+        return array_map(
+            static fn(array $term): string => $term['term'],
+            $this->analyze_query_terms($query, $language)
+        );
     }
 
     /**
-     * @param array<int,array{term:string,weight:float}> $occurrences
+     * Query analysis intentionally skips only the HTML extraction stage.
+     *
+     * @return array<int,array{term:string,lang:string}>
+     */
+    public function analyze_query_terms(string $query, ?string $language = null): array
+    {
+        $terms = [];
+        $language = $this->languagePipeline->canonicalize_language($language ?? $this->defaultLanguage);
+        foreach ($this->languagePipeline->analyze_detailed($query, $language) as $term) {
+            if (isset($this->stopwords[$term['term']])) {
+                continue;
+            }
+
+            $terms[] = $term;
+        }
+
+        return $terms;
+    }
+
+    /**
+     * @param array<int,array{term:string,weight:float,lang?:string}> $occurrences
      * @return array<string,int>
      */
     public function weighted_term_frequencies(array $occurrences): array
@@ -132,7 +182,7 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * @return array<int,array{text:string,weight:float}>
+     * @return array<int,array{text:string,weight:float,lang?:string}>
      */
     private function extractHtmlSegments(string $html): array
     {
@@ -175,7 +225,7 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * @return array<int,array{text:string,weight:float}>
+     * @return array<int,array{text:string,weight:float,lang?:string}>
      */
     private function extractWithProcessor(mixed $processor): array
     {
@@ -201,7 +251,7 @@ final class WP_FTS_Analyzer
             }
 
             $segments[] = [
-                'text' => html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                'text' => $text,
                 'weight' => $this->boostForAncestors($breadcrumbs),
             ];
         }
@@ -213,7 +263,7 @@ final class WP_FTS_Analyzer
      * Test and non-WordPress fallback parser. It is deliberately small, but keeps a
      * tag stack so skip and boost decisions follow the same ancestor-based model.
      *
-     * @return array<int,array{text:string,weight:float}>
+     * @return array<int,array{text:string,weight:float,lang?:string}>
      */
     private function extractWithFallbackParser(string $html): array
     {
@@ -324,97 +374,6 @@ final class WP_FTS_Analyzer
         }
 
         return $weight;
-    }
-
-    /**
-     * @return string[]
-     */
-    private function tokenizeText(string $text): array
-    {
-        $matches = [];
-        if (@preg_match_all('/[\p{L}\p{N}_]+/u', $text, $matches) === false) {
-            $text = mb_convert_encoding($text, 'UTF-8', 'UTF-8');
-            preg_match_all('/[\p{L}\p{N}_]+/u', $text, $matches);
-        }
-
-        $terms = [];
-        foreach ($matches[0] ?? [] as $rawToken) {
-            $term = $this->normalizeToken($rawToken);
-            if ($term === null || isset($this->stopwords[$term])) {
-                continue;
-            }
-
-            $terms[] = $term;
-        }
-
-        return $terms;
-    }
-
-    private function normalizeToken(string $token): ?string
-    {
-        $token = function_exists('mb_strtolower')
-            ? mb_strtolower($token, 'UTF-8')
-            : strtolower($token);
-
-        if ($this->foldDiacritics) {
-            $token = $this->foldDiacritics($token);
-        }
-
-        if ($this->stemmer !== null) {
-            $token = (string) ($this->stemmer)($token);
-        }
-
-        $length = function_exists('mb_strlen') ? mb_strlen($token, 'UTF-8') : strlen($token);
-        if ($length < $this->minTermLen || strlen($token) > $this->maxTermBytes) {
-            return null;
-        }
-
-        return $token;
-    }
-
-    private function foldDiacritics(string $text): string
-    {
-        if (!preg_match('/[^\x00-\x7F]/', $text)) {
-            return $text;
-        }
-
-        $text = strtr($text, [
-            'ą' => 'a',
-            'ć' => 'c',
-            'ę' => 'e',
-            'ł' => 'l',
-            'ń' => 'n',
-            'ó' => 'o',
-            'ś' => 's',
-            'ź' => 'z',
-            'ż' => 'z',
-            'Ą' => 'A',
-            'Ć' => 'C',
-            'Ę' => 'E',
-            'Ł' => 'L',
-            'Ń' => 'N',
-            'Ó' => 'O',
-            'Ś' => 'S',
-            'Ź' => 'Z',
-            'Ż' => 'Z',
-        ]);
-
-        if (!preg_match('/[^\x00-\x7F]/', $text)) {
-            return $text;
-        }
-
-        if (class_exists('Transliterator')) {
-            $converted = transliterator_transliterate(
-                'NFD; [:Nonspacing Mark:] Remove; NFC; Any-Latin; Latin-ASCII',
-                $text
-            );
-            if (is_string($converted)) {
-                return $converted;
-            }
-        }
-
-        $converted = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
-        return is_string($converted) ? $converted : $text;
     }
 
     private function stripAllTags(string $html): string
