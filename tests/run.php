@@ -132,6 +132,17 @@ function test_lang_by_term(array $occurrences): array
 }
 
 /**
+ * @return array<int,array{text:string,weight:float,lang:string}>
+ */
+function test_fallback_segments(WP_FTS_Analyzer $analyzer, string $html, string $documentLang): array
+{
+    $method = new ReflectionMethod(WP_FTS_Analyzer::class, 'extractWithFallbackParser');
+    $method->setAccessible(true);
+
+    return $method->invoke($analyzer, $html, $documentLang);
+}
+
+/**
  * @param array<int,string> $documents
  * @return array<int,array{doc_id:int,score:float}>
  */
@@ -299,6 +310,28 @@ test_case('analyzer carries document and element language tags', function (): vo
     assert_true(isset($namespaced["pl\x1elodz"]), 'weighted frequencies should optionally namespace by language');
 });
 
+test_case('element language scopes end at siblings and restore parent scopes', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+
+    $langs = test_lang_by_term($analyzer->analyze_content('<p lang=pl>Łódź<p>Hello'));
+    assert_same('pl', $langs['lodz'], 'omitted-close paragraph should keep its own lang');
+    assert_same('en', $langs['hello'], 'omitted-close sibling should return to document lang');
+
+    $langs = test_lang_by_term($analyzer->analyze_content('<p lang=pl>Łódź</p><p>Hello</p>'));
+    assert_same('en', $langs['hello'], 'explicit-close sibling should return to document lang');
+
+    $langs = test_lang_by_term($analyzer->analyze_content(
+        '<section lang=pl>Łódź <span lang=en>Hello</span> Wrocław</section>'
+    ));
+    assert_same('pl', $langs['lodz'], 'parent lang should apply before nested override');
+    assert_same('en', $langs['hello'], 'nested lang should override parent lang');
+    assert_same('pl', $langs['wroclaw'], 'parent lang should restore after nested override ends');
+
+    $segments = test_fallback_segments($analyzer, '<ul><li lang=pl>Łódź<li>Hello</ul>', 'en');
+    assert_same('pl', $segments[0]['lang'] ?? null, 'fallback optional-end list item should keep its own lang');
+    assert_same('en', $segments[1]['lang'] ?? null, 'fallback optional-end sibling should not inherit previous lang');
+});
+
 test_case('query analysis exposes language-aware occurrences while preserving term shim', function (): void {
     $analyzer = new WP_FTS_Analyzer();
 
@@ -325,6 +358,8 @@ test_case('processor extraction tracks lang without double-decoding text', funct
     $fake = new WP_FTS_Fake_HTML_Processor([
         ['type' => '#tag', 'breadcrumbs' => ['HTML', 'BODY', 'P'], 'attrs' => ['lang' => 'pl']],
         ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'P'], 'text' => 'Łódź &copy;'],
+        ['type' => '#tag', 'breadcrumbs' => ['HTML', 'BODY', 'P']],
+        ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'P'], 'text' => 'Hello'],
         ['type' => '#tag', 'breadcrumbs' => ['HTML', 'BODY', 'P'], 'closing' => true],
         ['type' => '#tag', 'breadcrumbs' => ['HTML', 'BODY', 'DIV']],
         ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'DIV'], 'text' => 'Plain sibling'],
@@ -342,6 +377,7 @@ test_case('processor extraction tracks lang without double-decoding text', funct
     assert_true(in_array('copy', $terms, true), 'processor text must not be entity-decoded a second time');
     assert_true(!in_array('secret_token', $terms, true), 'tag-token modifiable text must not be indexed');
     assert_same('pl', $langs['lodz'], 'processor lang attribute should apply to text descendants');
+    assert_same('en', $langs['hello'], 'processor same-depth sibling opener should clear prior element lang');
     assert_same('en', $langs['plain'], 'closed processor lang scope must not leak to sibling tags');
 });
 

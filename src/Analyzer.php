@@ -299,6 +299,7 @@ final class WP_FTS_Analyzer
                     continue;
                 }
 
+                unset($langByDepth[$depth]);
                 $lang = $this->processorLangAttribute($processor);
                 if ($lang !== null) {
                     $langByDepth[$depth] = $lang;
@@ -396,6 +397,7 @@ final class WP_FTS_Analyzer
                 if (preg_match('/^<\s*([A-Za-z][A-Za-z0-9:-]*)/s', $part, $m)) {
                     $opening = strtoupper($m[1]);
                     $selfClosing = (bool) preg_match('/\/\s*>$/', $part);
+                    $this->closeFallbackOptionalEndTags($stack, $opening);
                     if (!isset($voidTags[$opening]) && !$selfClosing) {
                         $stack[] = [
                             'tag' => $opening,
@@ -921,6 +923,68 @@ final class WP_FTS_Analyzer
         $value = $doubleQuoted !== '' ? $doubleQuoted : ($singleQuoted !== '' ? $singleQuoted : $unquoted);
 
         return $this->canonicalLanguage(html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
+    /**
+     * @param array<int,array{tag:string,lang:?string}> $stack
+     */
+    private function closeFallbackOptionalEndTags(array &$stack, string $opening): void
+    {
+        while ($stack !== []) {
+            $top = $stack[count($stack) - 1]['tag'];
+            if (!$this->fallbackOptionalEndTagClosesBefore($top, $opening)) {
+                return;
+            }
+
+            array_pop($stack);
+        }
+    }
+
+    private function fallbackOptionalEndTagClosesBefore(string $openTag, string $newTag): bool
+    {
+        static $pClosers = [
+            'ADDRESS' => true,
+            'ARTICLE' => true,
+            'ASIDE' => true,
+            'BLOCKQUOTE' => true,
+            'DETAILS' => true,
+            'DIV' => true,
+            'DL' => true,
+            'FIELDSET' => true,
+            'FIGCAPTION' => true,
+            'FIGURE' => true,
+            'FOOTER' => true,
+            'FORM' => true,
+            'H1' => true,
+            'H2' => true,
+            'H3' => true,
+            'H4' => true,
+            'H5' => true,
+            'H6' => true,
+            'HEADER' => true,
+            'HR' => true,
+            'MAIN' => true,
+            'MENU' => true,
+            'NAV' => true,
+            'OL' => true,
+            'P' => true,
+            'PRE' => true,
+            'SECTION' => true,
+            'TABLE' => true,
+            'UL' => true,
+        ];
+
+        return match ($openTag) {
+            'P' => isset($pClosers[$newTag]),
+            'LI' => $newTag === 'LI',
+            'DT', 'DD' => $newTag === 'DT' || $newTag === 'DD',
+            'OPTION' => $newTag === 'OPTION',
+            'OPTGROUP' => $newTag === 'OPTGROUP',
+            'TR' => in_array($newTag, ['TR', 'THEAD', 'TBODY', 'TFOOT'], true),
+            'TD', 'TH' => in_array($newTag, ['TD', 'TH', 'TR', 'THEAD', 'TBODY', 'TFOOT'], true),
+            'THEAD', 'TBODY', 'TFOOT' => in_array($newTag, ['THEAD', 'TBODY', 'TFOOT'], true),
+            default => false,
+        };
     }
 
     /**
