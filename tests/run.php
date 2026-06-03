@@ -48,6 +48,22 @@ function test_terms(array $occurrences): array
     return array_map(static fn(array $token): string => $token['term'], $occurrences);
 }
 
+function test_normalize_without_mbstring(WP_FTS_Normalizer $normalizer, string $token, string $language): string
+{
+    $language = $normalizer->canonicalize_language($language);
+
+    $lowercase = new ReflectionMethod($normalizer, 'lowercase_without_mbstring');
+    $lowercase->setAccessible(true);
+    $fold = new ReflectionMethod($normalizer, 'fold_for_language');
+    $fold->setAccessible(true);
+
+    return (string) $fold->invoke(
+        $normalizer,
+        (string) $lowercase->invoke($normalizer, $token, $language),
+        $language
+    );
+}
+
 /**
  * @return array<string,float>
  */
@@ -231,6 +247,15 @@ test_case('language normalizer applies dialect and language-specific folding map
     );
 });
 
+test_case('language normalizer fallback lowercases uppercase non-ASCII without mbstring', function (): void {
+    $normalizer = new WP_FTS_Normalizer();
+
+    assert_same('zolc', test_normalize_without_mbstring($normalizer, 'ŻÓŁĆ', 'pl'), 'Polish source fallback should fold uppercase diacritics');
+    assert_same('aerger', test_normalize_without_mbstring($normalizer, 'ÄRGER', 'de'), 'German source fallback should expand uppercase umlauts');
+    assert_same('cig', test_normalize_without_mbstring($normalizer, 'ÇİĞ', 'tr'), 'Turkish source fallback should lowercase and fold uppercase letters');
+    assert_same('ecole', test_normalize_without_mbstring($normalizer, 'ÉCOLE', 'fr'), 'Latin source fallback should fold uppercase diacritics');
+});
+
 test_case('language pipeline emits deterministic namespaced terms', function (): void {
     $pipeline = new WP_FTS_LanguagePipeline([
         'namespace_terms' => true,
@@ -240,6 +265,18 @@ test_case('language pipeline emits deterministic namespaced terms', function ():
 
     assert_same(["en-GB\x1ecolor", "en-GB\x1ewroclaw"], $terms, 'namespaced terms should use canonical language keys');
     assert_same('656e2d47421e636f6c6f72', bin2hex($terms[0]), 'namespace separator should be byte-stable');
+});
+
+test_case('custom stemmers preserve callable arity compatibility', function (): void {
+    $reverseAnalyzer = new WP_FTS_Analyzer([
+        'stemmer' => 'strrev',
+    ]);
+    assert_same(['ahpla'], $reverseAnalyzer->analyze_query('alpha'), 'internal one-argument callables should keep working');
+
+    $languageAware = new WP_FTS_LanguagePipeline([
+        'stemmer' => static fn(string $term, string $language): string => $language . ':' . $term,
+    ]);
+    assert_same(['en-GB:color'], $languageAware->analyze('colour', 'en-GB'), 'two-argument custom stemmers should receive language');
 });
 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {

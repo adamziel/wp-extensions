@@ -18,15 +18,28 @@ final class WP_FTS_CallbackStemmer implements WP_FTS_Stemmer
 {
     /** @var callable */
     private $callback;
+    private bool $passesLanguage;
 
     public function __construct(callable $callback)
     {
         $this->callback = $callback;
+        $this->passesLanguage = $this->accepts_language($callback);
     }
 
     public function stem(string $term, string $language): string
     {
-        return (string) ($this->callback)($term, $language);
+        return (string) (
+            $this->passesLanguage
+                ? ($this->callback)($term, $language)
+                : ($this->callback)($term)
+        );
+    }
+
+    private function accepts_language(callable $callback): bool
+    {
+        $reflection = new ReflectionFunction(Closure::fromCallable($callback));
+
+        return $reflection->isVariadic() || $reflection->getNumberOfParameters() >= 2;
     }
 }
 

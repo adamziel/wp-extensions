@@ -79,6 +79,22 @@ final class WP_FTS_Normalizer
      */
     private function lowercase(string $token, string $language): string
     {
+        if (function_exists('mb_strtolower')) {
+            if ($this->base_language($language) === 'tr') {
+                $token = strtr($token, [
+                    'I' => 'ı',
+                    'İ' => 'i',
+                ]);
+            }
+
+            return mb_strtolower($token, 'UTF-8');
+        }
+
+        return $this->lowercase_without_mbstring($token, $language);
+    }
+
+    private function lowercase_without_mbstring(string $token, string $language): string
+    {
         if ($this->base_language($language) === 'tr') {
             $token = strtr($token, [
                 'I' => 'ı',
@@ -86,9 +102,7 @@ final class WP_FTS_Normalizer
             ]);
         }
 
-        return function_exists('mb_strtolower')
-            ? mb_strtolower($token, 'UTF-8')
-            : strtolower($token);
+        return strtr(strtolower($token), $this->utf8_uppercase_lowercase_map());
     }
 
     private function normalize_dialect(string $token, string $language): string
@@ -275,6 +289,76 @@ final class WP_FTS_Normalizer
             'ž' => 'z',
             'ð' => 'd',
             'þ' => 'th',
+        ];
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function utf8_uppercase_lowercase_map(): array
+    {
+        return [
+            'À' => 'à',
+            'Á' => 'á',
+            'Â' => 'â',
+            'Ã' => 'ã',
+            'Ä' => 'ä',
+            'Å' => 'å',
+            'Ā' => 'ā',
+            'Ă' => 'ă',
+            'Ą' => 'ą',
+            'Æ' => 'æ',
+            'Ç' => 'ç',
+            'Ć' => 'ć',
+            'Č' => 'č',
+            'Ď' => 'ď',
+            'Đ' => 'đ',
+            'È' => 'è',
+            'É' => 'é',
+            'Ê' => 'ê',
+            'Ë' => 'ë',
+            'Ē' => 'ē',
+            'Ė' => 'ė',
+            'Ę' => 'ę',
+            'Ě' => 'ě',
+            'Ğ' => 'ğ',
+            'Ì' => 'ì',
+            'Í' => 'í',
+            'Î' => 'î',
+            'Ï' => 'ï',
+            'Ī' => 'ī',
+            'İ' => 'i',
+            'Ł' => 'ł',
+            'Ñ' => 'ñ',
+            'Ń' => 'ń',
+            'Ň' => 'ň',
+            'Ò' => 'ò',
+            'Ó' => 'ó',
+            'Ô' => 'ô',
+            'Õ' => 'õ',
+            'Ö' => 'ö',
+            'Ø' => 'ø',
+            'Ō' => 'ō',
+            'Œ' => 'œ',
+            'Ř' => 'ř',
+            'Ś' => 'ś',
+            'Ş' => 'ş',
+            'Š' => 'š',
+            'ẞ' => 'ß',
+            'Ť' => 'ť',
+            'Ù' => 'ù',
+            'Ú' => 'ú',
+            'Û' => 'û',
+            'Ü' => 'ü',
+            'Ū' => 'ū',
+            'Ů' => 'ů',
+            'Ý' => 'ý',
+            'Ÿ' => 'ÿ',
+            'Ź' => 'ź',
+            'Ż' => 'ż',
+            'Ž' => 'ž',
+            'Ð' => 'ð',
+            'Þ' => 'þ',
         ];
     }
 
