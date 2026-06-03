@@ -5,7 +5,7 @@ final class WP_FTS_Searcher
 {
     public function __construct(
         private WP_FTS_Storage $storage,
-        private WP_FTS_Analyzer $analyzer,
+        private object $analyzer,
         private float $k1 = 1.2,
         private float $b = 0.75,
     ) {
@@ -18,7 +18,7 @@ final class WP_FTS_Searcher
     public function search(string $query, array $opts = []): array
     {
         $queryLang = $this->resolve_language($opts['lang'] ?? $opts['language'] ?? null);
-        $terms = $this->query_term_keys($this->analyzer->analyze_query($query), $queryLang);
+        $terms = $this->query_term_keys($this->analyze_query($query, $queryLang), $queryLang);
         if ($terms === []) {
             return [];
         }
@@ -112,7 +112,30 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @param array<int,string|array{term:string,lang?:string}> $queryTerms
+     * @return array<int,string|array{term?:string,lang?:string}>
+     */
+    private function analyze_query(string $query, string $queryLang): array
+    {
+        $options = [
+            'lang' => $queryLang,
+            'language' => $queryLang,
+            'query_lang' => $queryLang,
+            'return' => 'occurrences',
+        ];
+
+        if (is_callable([$this->analyzer, 'analyze_query_occurrences'])) {
+            return $this->analyzer->analyze_query_occurrences($query, $options);
+        }
+
+        if (!is_callable([$this->analyzer, 'analyze_query'])) {
+            throw new LogicException('Analyzer must provide analyze_query().');
+        }
+
+        return $this->analyzer->analyze_query($query, $options);
+    }
+
+    /**
+     * @param array<int,string|array{term?:string,lang?:string}> $queryTerms
      * @return string[]
      */
     private function query_term_keys(array $queryTerms, string $queryLang): array

@@ -498,6 +498,128 @@ final class WP_FTS_Test_WPDB
     }
 }
 
+final class WP_FTS_Test_Language_Aware_Analyzer
+{
+    /** @var array<int,array<string,mixed>> */
+    public array $contentOptions = [];
+
+    /** @var array<int,array<string,mixed>> */
+    public array $queryOccurrenceOptions = [];
+
+    /** @var array<int,array<string,mixed>> */
+    public array $queryOptions = [];
+
+    /**
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    public function analyze_content(string $html, array $options = []): array
+    {
+        $this->contentOptions[] = $options;
+        $documentLang = $this->language_from_options($options, ['document_lang', 'lang', 'language']);
+        $occurrences = [];
+
+        if (str_contains($html, 'zamek')) {
+            $occurrences[] = ['term' => 'zamek', 'weight' => 1.0, 'lang' => $documentLang];
+        }
+        if (str_contains($html, 'castle')) {
+            $occurrences[] = ['term' => 'castle', 'weight' => 1.0, 'lang' => 'en'];
+        }
+
+        return $occurrences;
+    }
+
+    /**
+     * @return array<int,array{term:string,lang:string}>
+     */
+    public function analyze_query_occurrences(string $query, array $options = []): array
+    {
+        $this->queryOccurrenceOptions[] = $options;
+
+        return $this->query_occurrences($query, $this->language_from_options($options, ['query_lang', 'lang', 'language']));
+    }
+
+    /**
+     * @return array<int,string|array{term:string,lang:string}>
+     */
+    public function analyze_query(string $query, array $options = []): array
+    {
+        $this->queryOptions[] = $options;
+        $occurrences = $this->query_occurrences($query, $this->language_from_options($options, ['query_lang', 'lang', 'language']));
+
+        if (($options['return'] ?? null) === 'occurrences') {
+            return $occurrences;
+        }
+
+        return array_map(static fn(array $occurrence): string => $occurrence['term'], $occurrences);
+    }
+
+    /**
+     * @param array<int,string> $keys
+     */
+    private function language_from_options(array $options, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (isset($options[$key]) && is_string($options[$key]) && trim($options[$key]) !== '') {
+                return WP_FTS_Language::canonicalize($options[$key]);
+            }
+        }
+
+        return 'en';
+    }
+
+    /**
+     * @return array<int,array{term:string,lang:string}>
+     */
+    private function query_occurrences(string $query, string $lang): array
+    {
+        if (!str_contains($query, 'zamek')) {
+            return [];
+        }
+
+        return $lang === 'en' ? [] : [['term' => 'zamek', 'lang' => $lang]];
+    }
+}
+
+final class WP_FTS_Test_Query_Fallback_Analyzer
+{
+    /** @var array<int,array<string,mixed>> */
+    public array $queryOptions = [];
+
+    /**
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    public function analyze_content(string $html, array $options = []): array
+    {
+        $lang = isset($options['document_lang']) && is_string($options['document_lang'])
+            ? WP_FTS_Language::canonicalize($options['document_lang'])
+            : 'en';
+
+        return str_contains($html, 'zamek')
+            ? [['term' => 'zamek', 'weight' => 1.0, 'lang' => $lang]]
+            : [];
+    }
+
+    /**
+     * @return array<int,string|array{term:string,lang:string}>
+     */
+    public function analyze_query(string $query, array $options = []): array
+    {
+        $this->queryOptions[] = $options;
+        $lang = isset($options['query_lang']) && is_string($options['query_lang'])
+            ? WP_FTS_Language::canonicalize($options['query_lang'])
+            : 'en';
+        if (!str_contains($query, 'zamek') || $lang === 'en') {
+            return [];
+        }
+
+        if (($options['return'] ?? null) === 'occurrences') {
+            return [['term' => 'zamek', 'lang' => $lang]];
+        }
+
+        return ['zamek'];
+    }
+}
+
 if (!class_exists('WP_CLI')) {
     final class WP_CLI
     {
@@ -792,6 +914,69 @@ test_case('language partitions isolate same normalized terms', function (): void
     assert_true($indexer->index_document(1, '<p>zamek wspolny</p>', ['lang' => 'en-US']), 'changing only document language should rewrite the index');
     assert_same([], $searcher->search('zamek', ['lang' => 'pl-PL']), 'old language postings should be removed after language change');
     assert_same([1, 2], array_column($searcher->search('zamek', ['lang' => 'en-US', 'limit' => 10]), 'doc_id'), 'new language should contain both English docs');
+});
+
+test_case('indexing passes resolved document language to analyzer', function (): void {
+    $analyzer = new WP_FTS_Test_Language_Aware_Analyzer();
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'pl']);
+
+    $plTerm = WP_FTS_Language::term_key('zamek', 'pl');
+    assert_same([$plTerm], $storage->all_terms(), 'explicit Polish document language should namespace emitted terms as Polish');
+    assert_same(['doc_count' => 1, 'len_sum' => 1], $storage->get_meta('pl'), 'Polish doc metadata should match Polish terms');
+    assert_same(['doc_count' => 0, 'len_sum' => 0], $storage->get_meta('en'), 'English metadata should not be touched by Polish-only content');
+    assert_same('pl', $storage->get_doc(1)['primary_lang'], 'stored primary language should remain Polish');
+    assert_same(['pl' => 1], $storage->get_doc(1)['lang_lengths'], 'stored document lengths should remain Polish');
+    assert_same('pl', $analyzer->contentOptions[0]['lang'], 'analyzer should receive lang option');
+    assert_same('pl', $analyzer->contentOptions[0]['language'], 'analyzer should receive language option');
+    assert_same('pl', $analyzer->contentOptions[0]['document_lang'], 'analyzer should receive document_lang option');
+
+    $mixed = new WP_FTS_Storage_InMemory();
+    $mixedIndexer = new WP_FTS_Indexer($mixed, $analyzer);
+    $mixedIndexer->index_document(2, '<p>zamek</p><code lang="en">castle</code>', ['lang' => 'pl']);
+    assert_same(
+        [WP_FTS_Language::term_key('castle', 'en'), $plTerm],
+        $mixed->all_terms(),
+        'indexer should preserve occurrence-level language overrides returned by the analyzer'
+    );
+    assert_same(['en' => 1, 'pl' => 1], $mixed->get_doc(2)['lang_lengths'], 'mixed-language occurrences should keep per-language lengths');
+});
+
+test_case('search passes resolved query language and prefers query occurrences', function (): void {
+    $analyzer = new WP_FTS_Test_Language_Aware_Analyzer();
+    assert_same([], $analyzer->analyze_query_occurrences('zamek'), 'fixture English pipeline should remove the Polish regression term');
+    $analyzer->queryOccurrenceOptions = [];
+
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'pl']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('zamek', ['lang' => 'pl']), 'doc_id'), 'Polish query language should reach occurrence analysis');
+    assert_same([], $analyzer->queryOptions, 'search should prefer analyze_query_occurrences when it is available');
+    assert_same('pl', $analyzer->queryOccurrenceOptions[0]['lang'], 'occurrence analysis should receive lang option');
+    assert_same('pl', $analyzer->queryOccurrenceOptions[0]['language'], 'occurrence analysis should receive language option');
+    assert_same('pl', $analyzer->queryOccurrenceOptions[0]['query_lang'], 'occurrence analysis should receive query_lang option');
+    assert_same('occurrences', $analyzer->queryOccurrenceOptions[0]['return'], 'occurrence analysis should request occurrence output');
+});
+
+test_case('search requests occurrence output through query fallback', function (): void {
+    $analyzer = new WP_FTS_Test_Query_Fallback_Analyzer();
+    assert_same([], $analyzer->analyze_query('zamek'), 'fixture English fallback pipeline should remove the Polish regression term');
+    $analyzer->queryOptions = [];
+
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'pl']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('zamek', ['lang' => 'pl']), 'doc_id'), 'query fallback should analyze under explicit Polish language');
+    assert_same('pl', $analyzer->queryOptions[0]['lang'], 'query fallback should receive lang option');
+    assert_same('pl', $analyzer->queryOptions[0]['language'], 'query fallback should receive language option');
+    assert_same('pl', $analyzer->queryOptions[0]['query_lang'], 'query fallback should receive query_lang option');
+    assert_same('occurrences', $analyzer->queryOptions[0]['return'], 'query fallback should request occurrence output');
 });
 
 test_case('mysql storage emits language-aware binary schema and stores per-language docs', function (): void {

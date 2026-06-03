@@ -5,7 +5,7 @@ final class WP_FTS_Indexer
 {
     public function __construct(
         private WP_FTS_Storage $storage,
-        private WP_FTS_Analyzer $analyzer,
+        private object $analyzer,
     ) {
     }
 
@@ -28,7 +28,7 @@ final class WP_FTS_Indexer
         }
 
         [$termFrequencies, $langLengths] = $this->weighted_term_frequencies_by_lang(
-            $this->analyzer->analyze_content($html),
+            $this->analyze_content($html, $primaryLang),
             $primaryLang
         );
 
@@ -218,22 +218,46 @@ LIMIT %d",
     }
 
     /**
-     * @param array<int,array{term:string,weight:float,lang?:string}> $occurrences
+     * @return array<int,array{term:string,weight?:float,lang?:string}|string>
+     */
+    private function analyze_content(string $html, string $primaryLang): array
+    {
+        if (!is_callable([$this->analyzer, 'analyze_content'])) {
+            throw new LogicException('Analyzer must provide analyze_content().');
+        }
+
+        return $this->analyzer->analyze_content($html, [
+            'lang' => $primaryLang,
+            'language' => $primaryLang,
+            'document_lang' => $primaryLang,
+        ]);
+    }
+
+    /**
+     * @param array<int,array{term?:string,weight?:float,lang?:string}|string> $occurrences
      * @return array{0:array<string,int>,1:array<string,int>}
      */
     private function weighted_term_frequencies_by_lang(array $occurrences, string $primaryLang): array
     {
         $weighted = [];
         foreach ($occurrences as $occurrence) {
-            $term = (string) ($occurrence['term'] ?? '');
+            if (is_array($occurrence)) {
+                $term = (string) ($occurrence['term'] ?? '');
+                $lang = $this->resolve_language($occurrence['lang'] ?? $primaryLang);
+                $weight = (float) ($occurrence['weight'] ?? 1.0);
+            } else {
+                $term = (string) $occurrence;
+                $lang = $primaryLang;
+                $weight = 1.0;
+            }
+
             if ($term === '') {
                 continue;
             }
-            $lang = $this->resolve_language($occurrence['lang'] ?? $primaryLang);
             if (!WP_FTS_Language::term_key_fits($term, $lang)) {
                 continue;
             }
-            $weighted[$lang][$term] = ($weighted[$lang][$term] ?? 0.0) + (float) ($occurrence['weight'] ?? 1.0);
+            $weighted[$lang][$term] = ($weighted[$lang][$term] ?? 0.0) + $weight;
         }
 
         $termFrequencies = [];
