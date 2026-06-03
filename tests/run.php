@@ -138,7 +138,7 @@ function assert_search_results_equal(array $expected, array $actual, string $mes
 }
 
 /**
- * @return array{terms:array<string,array{df:int,postings:array<int,int>}>,docs:array<int,array{doc_len:int,content_hash:?string,deleted:bool}>,meta:array{doc_count:int,len_sum:int}}
+ * @return array{terms:array<string,array{df:int,postings:array<int,int>}>,docs:array<int,array<string,mixed>>,meta:array<string,array{doc_count:int,len_sum:int}>}
  */
 function storage_snapshot(WP_FTS_Storage $storage): array
 {
@@ -161,8 +161,41 @@ function storage_snapshot(WP_FTS_Storage $storage): array
     return [
         'terms' => $terms,
         'docs' => $docs,
-        'meta' => $storage->get_meta(),
+        'meta' => storage_meta_snapshot($storage, $docs),
     ];
+}
+
+/**
+ * @param array<int,array<string,mixed>>|null $docs
+ * @return array<string,array{doc_count:int,len_sum:int}>
+ */
+function storage_meta_snapshot(WP_FTS_Storage $storage, ?array $docs = null): array
+{
+    $docs ??= [];
+    if ($docs === []) {
+        foreach ($storage->all_doc_ids(true) as $docId) {
+            $doc = $storage->get_doc($docId);
+            if ($doc !== null) {
+                $docs[$docId] = $doc;
+            }
+        }
+    }
+
+    $langs = [];
+    foreach ($docs as $doc) {
+        foreach (($doc['lang_lengths'] ?? []) as $lang => $_) {
+            $langs[(string) $lang] = true;
+        }
+    }
+    ksort($langs, SORT_STRING);
+
+    $meta = ['*' => $storage->get_meta()];
+    foreach (array_keys($langs) as $lang) {
+        $meta[$lang] = $storage->get_meta($lang);
+    }
+    ksort($meta, SORT_STRING);
+
+    return $meta;
 }
 
 /**
@@ -182,6 +215,126 @@ function temp_index_path(string $suffix): string
 {
     return sys_get_temp_dir() . '/wp_fts_' . getmypid() . '_' . $suffix . '_' . bin2hex(random_bytes(4)) . '.json';
 }
+
+/**
+ * @return array<string,callable():WP_FTS_Storage>
+ */
+function storage_factories(string $suffix): array
+{
+    return [
+        'memory' => static fn(): WP_FTS_Storage => new WP_FTS_Storage_InMemory(),
+        'file' => static fn(): WP_FTS_Storage => new WP_FTS_Storage_File(temp_index_path($suffix)),
+    ];
+}
+
+function cleanup_storage(WP_FTS_Storage $storage): void
+{
+    if (!$storage instanceof WP_FTS_Storage_File) {
+        return;
+    }
+
+    $ref = new ReflectionClass($storage);
+    $prop = $ref->getProperty('path');
+    $prop->setAccessible(true);
+    $path = (string) $prop->getValue($storage);
+    if (is_file($path)) {
+        unlink($path);
+    }
+}
+
+test_case('storage records per-language doc lengths and excludes tombstones from stats', function (): void {
+    foreach (storage_factories('lang_lengths') as $name => $factory) {
+        $storage = $factory();
+        $storage->put_doc(1, 'pl', ['pl' => 4, 'en' => 2], 'hash-1');
+        $storage->put_doc(2, 'en', ['en' => 3], 'hash-2');
+        $storage->put_doc(3, 'pl', ['pl' => 7, 'de' => 1], 'hash-3');
+        $storage->put_doc(4, 'pl', [], 'hash-4');
+
+        assert_same([
+            'primary_lang' => 'pl',
+            'lang_lengths' => ['en' => 2, 'pl' => 4],
+            'doc_len' => 6,
+            'content_hash' => 'hash-1',
+            'deleted' => false,
+        ], $storage->get_doc(1), "{$name} doc metadata should include primary lang and per-language lengths");
+        assert_same([1 => 4, 3 => 7], $storage->get_doc_lengths([1, 2, 3, 4], 'pl'), "{$name} pl lengths");
+        assert_same([1 => 2, 2 => 3], $storage->get_doc_lengths([1, 2, 3, 4], 'en'), "{$name} en lengths");
+        assert_same([1 => 6, 2 => 3, 3 => 8, 4 => 0], $storage->get_doc_lengths([1, 2, 3, 4]), "{$name} aggregate lengths");
+        assert_same(['doc_count' => 2, 'len_sum' => 11], $storage->get_meta('pl'), "{$name} pl meta");
+        assert_same(['doc_count' => 2, 'len_sum' => 5], $storage->get_meta('en'), "{$name} en meta");
+        assert_same(['doc_count' => 1, 'len_sum' => 1], $storage->get_meta('de'), "{$name} de meta");
+        assert_same(['doc_count' => 4, 'len_sum' => 17], $storage->get_meta(), "{$name} aggregate meta");
+
+        $storage->delete_doc(1);
+        assert_same([3 => 7], $storage->get_doc_lengths([1, 2, 3, 4], 'pl'), "{$name} deleted pl length should be hidden");
+        assert_same([2 => 3], $storage->get_doc_lengths([1, 2, 3, 4], 'en'), "{$name} deleted en length should be hidden");
+        assert_same(['doc_count' => 1, 'len_sum' => 7], $storage->get_meta('pl'), "{$name} deleted doc should leave pl meta");
+        assert_same(['doc_count' => 1, 'len_sum' => 3], $storage->get_meta('en'), "{$name} deleted doc should leave en meta");
+        assert_same(['doc_count' => 3, 'len_sum' => 11], $storage->get_meta(), "{$name} deleted doc should leave aggregate meta");
+
+        cleanup_storage($storage);
+    }
+});
+
+test_case('storage optimize purges tombstoned docs from language-namespaced postings', function (): void {
+    $term = "pl\x1ealpha";
+    foreach (storage_factories('lang_optimize') as $name => $factory) {
+        $storage = $factory();
+        $storage->put_doc(1, 'pl', ['pl' => 2], 'hash-1');
+        $storage->put_doc(2, 'pl', ['pl' => 3], 'hash-2');
+        $storage->put_term($term, 2, WP_FTS_PostingsCodec::encode([1 => 1, 2 => 2]));
+
+        $storage->delete_doc(1);
+        assert_same([2 => 3], $storage->get_doc_lengths([1, 2], 'pl'), "{$name} tombstone hidden before optimize");
+        assert_same(['doc_count' => 1, 'len_sum' => 3], $storage->get_meta('pl'), "{$name} tombstone excluded from meta before optimize");
+
+        $storage->optimize();
+        $row = $storage->get_terms([$term])[$term] ?? null;
+        assert_true($row !== null, "{$name} optimized term should remain for active postings");
+        assert_same(1, $row['df'], "{$name} optimized df");
+        assert_same([2 => 2], WP_FTS_PostingsCodec::decode($row['postings']), "{$name} optimized postings");
+        assert_same([2], $storage->all_doc_ids(true), "{$name} optimized docs should purge tombstone");
+        assert_same(['doc_count' => 1, 'len_sum' => 3], $storage->get_meta('pl'), "{$name} optimized meta");
+
+        cleanup_storage($storage);
+    }
+});
+
+test_case('file backend persists language-aware state and migrates legacy docs', function (): void {
+    $path = temp_index_path('legacy_migrate');
+    file_put_contents($path, json_encode([
+        'version' => 1,
+        'terms' => [],
+        'docs' => [
+            '9' => [
+                'doc_len' => 5,
+                'content_hash' => 'legacy-hash',
+                'deleted' => false,
+            ],
+        ],
+        'meta' => ['doc_count' => 1, 'len_sum' => 5],
+    ], JSON_THROW_ON_ERROR));
+
+    $storage = new WP_FTS_Storage_File($path);
+    assert_same([
+        'primary_lang' => '',
+        'lang_lengths' => ['' => 5],
+        'doc_len' => 5,
+        'content_hash' => 'legacy-hash',
+        'deleted' => false,
+    ], $storage->get_doc(9), 'legacy file docs should migrate to the unspecified language partition');
+    assert_same([9 => 5], $storage->get_doc_lengths([9], ''), 'legacy file doc length should remain queryable');
+    assert_same(['doc_count' => 1, 'len_sum' => 5], $storage->get_meta(''), 'legacy file meta should migrate');
+
+    $storage->put_doc(10, 'en', ['en' => 3, 'pl' => 4], 'hash-10');
+    $storage->put_term("en\x1eterm", 1, WP_FTS_PostingsCodec::encode([10 => 3]));
+    $storage->flush();
+
+    $reloaded = new WP_FTS_Storage_File($path);
+    assert_same(storage_snapshot($storage), storage_snapshot($reloaded), 'file language-aware state should persist exactly');
+
+    cleanup_storage($storage);
+});
 
 test_case('analyzer skips unsafe regions and applies boosts', function (): void {
     $analyzer = new WP_FTS_Analyzer();

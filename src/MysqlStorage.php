@@ -119,8 +119,9 @@ ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq), postings = VALUES(postings)
         ));
     }
 
-    public function get_doc_lengths(array $doc_ids): array
+    public function get_doc_lengths(array $doc_ids, ?string $lang = null): array
     {
+        $this->assert_legacy_language_partition($lang);
         $doc_ids = array_values(array_unique(array_map('intval', $doc_ids)));
         if ($doc_ids === []) {
             return [];
@@ -155,21 +156,33 @@ WHERE is_deleted = 0 AND doc_id IN ({$placeholders})",
         }
 
         return [
+            'primary_lang' => '',
+            'lang_lengths' => (int) $row->doc_len > 0 ? ['' => (int) $row->doc_len] : [],
             'doc_len' => (int) $row->doc_len,
             'content_hash' => $row->content_hash !== null ? (string) $row->content_hash : null,
             'deleted' => (bool) $row->is_deleted,
         ];
     }
 
-    public function put_doc(int $doc_id, int $doc_len, string $hash): void
+    public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void
     {
+        [$normalizedLang, $normalizedLengths, $contentHash] = $this->normalize_put_doc_args(
+            $primary_lang,
+            $lang_lengths,
+            $hash
+        );
+        $this->assert_legacy_language_partition($normalizedLang);
+        foreach (array_keys($normalizedLengths) as $lang) {
+            $this->assert_legacy_language_partition($lang);
+        }
+
         $sql = $this->wpdb->prepare(
             "INSERT INTO {$this->docsTable} (doc_id, doc_len, content_hash, is_deleted)
 VALUES (%d, %d, %s, 0)
 ON DUPLICATE KEY UPDATE doc_len = VALUES(doc_len), content_hash = VALUES(content_hash), is_deleted = 0",
             $doc_id,
-            max(0, $doc_len),
-            $hash
+            array_sum($normalizedLengths),
+            $contentHash
         );
         $this->wpdb->query($sql);
     }
@@ -185,8 +198,9 @@ ON DUPLICATE KEY UPDATE is_deleted = 1",
         $this->wpdb->query($sql);
     }
 
-    public function get_meta(): array
+    public function get_meta(?string $lang = null): array
     {
+        $this->assert_legacy_language_partition($lang);
         $rows = $this->wpdb->get_results("SELECT k, v FROM {$this->metaTable}");
         $meta = ['doc_count' => 0, 'len_sum' => 0];
         foreach ($rows ?: [] as $row) {
@@ -198,9 +212,12 @@ ON DUPLICATE KEY UPDATE is_deleted = 1",
         return $meta;
     }
 
-    public function add_meta(int $d_docs, int $d_len): void
+    public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void
     {
-        foreach (['doc_count' => $d_docs, 'len_sum' => $d_len] as $key => $delta) {
+        [$normalizedLang, $docDelta, $lenDelta] = $this->normalize_meta_args($lang, $d_docs, $d_len);
+        $this->assert_legacy_language_partition($normalizedLang);
+
+        foreach (['doc_count' => $docDelta, 'len_sum' => $lenDelta] as $key => $delta) {
             $sql = $this->wpdb->prepare(
                 "INSERT INTO {$this->metaTable} (k, v)
 VALUES (%s, %d)
@@ -274,5 +291,73 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + VALUES(v))",
         $lenSum = (int) ($row->s ?? 0);
         $this->wpdb->query("DELETE FROM {$this->metaTable} WHERE k IN ('doc_count', 'len_sum')");
         $this->add_meta($docCount, $lenSum);
+    }
+
+    /**
+     * Lane 5 owns the MySQL schema migration to fts_docs.lang, per-language doc
+     * lengths, and fts_meta(lang, k). Until then, this backend only supports the
+     * legacy aggregate partition.
+     */
+    private function assert_legacy_language_partition(?string $lang): void
+    {
+        if ($lang !== null && trim($lang) !== '') {
+            throw new RuntimeException('MySQL language-aware storage requires the Lane 5 schema update.');
+        }
+    }
+
+    /**
+     * @return array{string,array<string,int>,string}
+     */
+    private function normalize_put_doc_args(string|int $primary_lang, array|string $lang_lengths, ?string $hash): array
+    {
+        if (is_int($primary_lang) && is_string($lang_lengths) && $hash === null) {
+            return ['', $this->normalize_lang_lengths(['' => $primary_lang]), $lang_lengths];
+        }
+
+        if (!is_string($primary_lang) || !is_array($lang_lengths) || $hash === null) {
+            throw new InvalidArgumentException('put_doc expects ($doc_id, $primary_lang, $lang_lengths, $hash).');
+        }
+
+        return [$this->normalize_lang($primary_lang), $this->normalize_lang_lengths($lang_lengths), $hash];
+    }
+
+    /**
+     * @param array<string,int> $lang_lengths
+     * @return array<string,int>
+     */
+    private function normalize_lang_lengths(array $lang_lengths): array
+    {
+        $normalized = [];
+        foreach ($lang_lengths as $lang => $length) {
+            $length = max(0, (int) $length);
+            if ($length <= 0) {
+                continue;
+            }
+            $normalized[$this->normalize_lang((string) $lang)] = $length;
+        }
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
+    }
+
+    private function normalize_lang(string $lang): string
+    {
+        return trim($lang);
+    }
+
+    /**
+     * @return array{string,int,int}
+     */
+    private function normalize_meta_args(string|int $lang, int $d_docs, ?int $d_len): array
+    {
+        if (is_int($lang) && $d_len === null) {
+            return ['', $lang, $d_docs];
+        }
+
+        if (!is_string($lang) || $d_len === null) {
+            throw new InvalidArgumentException('add_meta expects ($lang, $d_docs, $d_len).');
+        }
+
+        return [$this->normalize_lang($lang), $d_docs, $d_len];
     }
 }
