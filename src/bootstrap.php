@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 $wp_fts_files = [
     __DIR__ . '/StorageInterface.php',
+    __DIR__ . '/Language.php',
     __DIR__ . '/Analyzer.php',
     __DIR__ . '/PostingsCodec.php',
     __DIR__ . '/InMemoryStorage.php',

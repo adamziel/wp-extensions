@@ -12,12 +12,13 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @param array{mode?:string,limit?:int} $opts
+     * @param array{mode?:string,limit?:int,lang?:string,language?:string} $opts
      * @return array<int,array{doc_id:int,score:float}>
      */
     public function search(string $query, array $opts = []): array
     {
-        $terms = array_values(array_unique($this->analyzer->analyze_query($query)));
+        $queryLang = $this->resolve_language($opts['lang'] ?? $opts['language'] ?? null);
+        $terms = $this->query_term_keys($this->analyzer->analyze_query($query), $queryLang);
         if ($terms === []) {
             return [];
         }
@@ -54,12 +55,12 @@ final class WP_FTS_Searcher
             return [];
         }
 
-        $docLengths = $this->storage->get_doc_lengths(array_keys($candidateTermTfs));
+        $docLengths = $this->storage->get_doc_lengths(array_keys($candidateTermTfs), $queryLang);
         if ($docLengths === []) {
             return [];
         }
 
-        $meta = $this->storage->get_meta();
+        $meta = $this->storage->get_meta($queryLang);
         $docCount = max(0, (int) $meta['doc_count']);
         if ($docCount === 0) {
             return [];
@@ -108,6 +109,55 @@ final class WP_FTS_Searcher
         $normalizer = $tf + $this->k1 * (1.0 - $this->b + $this->b * ($docLen / max(1.0, $avgDocLen)));
 
         return $idf * (($tf * ($this->k1 + 1.0)) / $normalizer);
+    }
+
+    /**
+     * @param array<int,string|array{term:string,lang?:string}> $queryTerms
+     * @return string[]
+     */
+    private function query_term_keys(array $queryTerms, string $queryLang): array
+    {
+        $keys = [];
+        foreach ($queryTerms as $queryTerm) {
+            if (is_array($queryTerm)) {
+                $term = (string) ($queryTerm['term'] ?? '');
+                $lang = $this->resolve_language($queryTerm['lang'] ?? $queryLang);
+            } else {
+                $term = (string) $queryTerm;
+                $lang = $queryLang;
+            }
+
+            if ($term === '' || !WP_FTS_Language::term_key_fits($term, $lang)) {
+                continue;
+            }
+
+            $keys[] = WP_FTS_Language::term_key($term, $lang);
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function resolve_language(mixed $lang): string
+    {
+        if (is_string($lang) && trim($lang) !== '') {
+            return WP_FTS_Language::canonicalize($lang);
+        }
+
+        if (function_exists('get_locale')) {
+            $locale = get_locale();
+            if (is_string($locale) && $locale !== '') {
+                return WP_FTS_Language::canonicalize($locale);
+            }
+        }
+
+        if (function_exists('get_bloginfo')) {
+            $siteLang = get_bloginfo('language');
+            if (is_string($siteLang) && $siteLang !== '') {
+                return WP_FTS_Language::canonicalize($siteLang);
+            }
+        }
+
+        return WP_FTS_Language::DEFAULT_LANG;
     }
 
     /**

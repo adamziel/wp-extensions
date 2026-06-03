@@ -21,19 +21,33 @@ final class WP_FTS_WPCLI_Command
      * [--post_type=<type>]
      * : Comma-separated post types. Default: post.
      *
+     * [--lang=<language>]
+     * : Force a language partition for indexed posts. Defaults to per-post/site language resolution.
+     *
+     * [--limit=<n>]
+     * : Maximum posts to index. Default: unlimited.
+     *
      * [--batch_size=<n>]
      * : Batch size. Default: 500.
      */
     public function reindex(array $args, array $assoc_args): void
     {
+        $langArg = $this->assoc_arg($assoc_args, ['lang', 'language'], null);
+        $lang = $langArg !== null ? $this->language_arg($langArg) : null;
         $indexer = $this->indexer();
-        $count = $indexer->reindex_all([
-            'post_status' => $this->csv_arg($assoc_args['post_status'] ?? 'publish', 'publish'),
-            'post_type' => $this->csv_arg($assoc_args['post_type'] ?? 'post', 'post'),
-            'batch_size' => isset($assoc_args['batch_size']) ? (int) $assoc_args['batch_size'] : 500,
-        ]);
+        $options = [
+            'post_status' => $this->csv_arg((string) $this->assoc_arg($assoc_args, ['post_status', 'post-status'], 'publish'), 'publish'),
+            'post_type' => $this->csv_arg((string) $this->assoc_arg($assoc_args, ['post_type', 'post-type'], 'post'), 'post'),
+            'limit' => $this->non_negative_int_arg($this->assoc_arg($assoc_args, ['limit'], 0), 0),
+            'batch_size' => $this->positive_int_arg($this->assoc_arg($assoc_args, ['batch_size', 'batch-size'], 500), 500),
+        ];
+        if ($lang !== null) {
+            $options['lang'] = $lang;
+        }
 
-        WP_CLI::success("Indexed {$count} posts.");
+        $count = $indexer->reindex_all($options);
+
+        WP_CLI::success($lang !== null ? "Indexed {$count} posts in {$lang}." : "Indexed {$count} posts.");
     }
 
     /**
@@ -49,6 +63,9 @@ final class WP_FTS_WPCLI_Command
      *
      * [--limit=<n>]
      * : Result count. Default: 10.
+     *
+     * [--lang=<language>]
+     * : Query language partition. Defaults to site locale.
      */
     public function search(array $args, array $assoc_args): void
     {
@@ -56,7 +73,8 @@ final class WP_FTS_WPCLI_Command
         $searcher = new WP_FTS_Searcher($this->storage(), new WP_FTS_Analyzer());
         $results = $searcher->search($query, [
             'mode' => (string) ($assoc_args['mode'] ?? 'OR'),
-            'limit' => isset($assoc_args['limit']) ? (int) $assoc_args['limit'] : 10,
+            'limit' => $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10),
+            'lang' => $this->language_arg($this->assoc_arg($assoc_args, ['lang', 'language'], null)),
         ]);
 
         WP_CLI\Utils\format_items('table', $results, ['doc_id', 'score']);
@@ -119,5 +137,55 @@ final class WP_FTS_WPCLI_Command
         $items = array_values(array_filter($items, static fn(string $item): bool => $item !== ''));
 
         return $items === [] ? [$fallback] : $items;
+    }
+
+    /**
+     * @param array<string,mixed> $assoc_args
+     * @param string[] $names
+     */
+    private function assoc_arg(array $assoc_args, array $names, mixed $default): mixed
+    {
+        foreach ($names as $name) {
+            if (array_key_exists($name, $assoc_args)) {
+                return $assoc_args[$name];
+            }
+        }
+
+        return $default;
+    }
+
+    private function language_arg(mixed $value): string
+    {
+        if (is_scalar($value) && trim((string) $value) !== '') {
+            return WP_FTS_Language::canonicalize((string) $value);
+        }
+
+        if (function_exists('get_locale')) {
+            $locale = get_locale();
+            if (is_string($locale) && $locale !== '') {
+                return WP_FTS_Language::canonicalize($locale);
+            }
+        }
+
+        if (function_exists('get_bloginfo')) {
+            $siteLang = get_bloginfo('language');
+            if (is_string($siteLang) && $siteLang !== '') {
+                return WP_FTS_Language::canonicalize($siteLang);
+            }
+        }
+
+        return WP_FTS_Language::DEFAULT_LANG;
+    }
+
+    private function positive_int_arg(mixed $value, int $fallback): int
+    {
+        $number = is_numeric($value) ? (int) $value : $fallback;
+        return max(1, $number);
+    }
+
+    private function non_negative_int_arg(mixed $value, int $fallback): int
+    {
+        $number = is_numeric($value) ? (int) $value : $fallback;
+        return max(0, $number);
     }
 }

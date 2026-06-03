@@ -17,23 +17,36 @@ interface WP_FTS_Storage
      * @param int[] $doc_ids
      * @return array<int,int> doc_id => doc_len
      */
-    public function get_doc_lengths(array $doc_ids): array;
+    public function get_doc_lengths(array $doc_ids, ?string $lang = null): array;
 
     /**
-     * @return array{doc_len:int,content_hash:?string,deleted:bool}|null
+     * @return array{doc_len:int,lang:string,primary_lang:string,lang_lengths:array<string,int>,content_hash:?string,deleted:bool}|null
      */
     public function get_doc(int $doc_id): ?array;
 
-    public function put_doc(int $doc_id, int $doc_len, string $hash): void;
+    /**
+     * Backward compatible forms:
+     * - put_doc($doc_id, $doc_len, $hash)
+     * - put_doc($doc_id, $primary_lang, $lang_lengths, $hash)
+     *
+     * @param int|string $doc_len_or_primary_lang
+     * @param string|array<string,int> $hash_or_lang_lengths
+     */
+    public function put_doc(int $doc_id, int|string $doc_len_or_primary_lang, string|array $hash_or_lang_lengths, ?string $hash = null): void;
 
     public function delete_doc(int $doc_id): void;
 
     /**
      * @return array{doc_count:int,len_sum:int}
      */
-    public function get_meta(): array;
+    public function get_meta(?string $lang = null): array;
 
-    public function add_meta(int $d_docs, int $d_len): void;
+    /**
+     * Backward compatible forms:
+     * - add_meta($d_docs, $d_len)
+     * - add_meta($lang, $d_docs, $d_len)
+     */
+    public function add_meta(int|string $lang_or_d_docs, int $d_docs_or_d_len, ?int $d_len = null): void;
 
     /**
      * @return string[]
