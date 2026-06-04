@@ -119,7 +119,7 @@ final class WP_FTS_LanguagePipeline
     private function tokenize(string $text): array
     {
         $matches = [];
-        if (@preg_match_all('/[\p{L}\p{N}_]+/u', $text, $matches) !== false) {
+        if (@preg_match_all('/[\p{L}\p{M}\p{N}_]+/u', $text, $matches) !== false) {
             $tokens = [];
             foreach ($matches[0] ?? [] as $rawToken) {
                 foreach ($this->split_script_runs($rawToken) as $run) {

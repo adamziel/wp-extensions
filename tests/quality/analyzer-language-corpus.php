@@ -1,0 +1,406 @@
+<?php
+declare(strict_types=1);
+
+/**
+ * @param array<int,array{term:string,weight?:float,lang?:string}> $occurrences
+ * @return array<string,string[]>
+ */
+function wp_fts_alc_langs_by_term(array $occurrences): array
+{
+    $langs = [];
+    foreach ($occurrences as $occurrence) {
+        $term = (string) $occurrence['term'];
+        $lang = (string) ($occurrence['lang'] ?? '');
+        if ($lang === '') {
+            continue;
+        }
+
+        $langs[$term][$lang] = true;
+    }
+
+    $result = [];
+    foreach ($langs as $term => $termLangs) {
+        $result[$term] = array_keys($termLangs);
+        sort($result[$term], SORT_STRING);
+    }
+    ksort($result, SORT_STRING);
+
+    return $result;
+}
+
+/**
+ * @param array<int,array{term:string,weight?:float,lang?:string}> $occurrences
+ * @return string[]
+ */
+function wp_fts_alc_occurrence_signature(array $occurrences): array
+{
+    return array_map(
+        static fn(array $occurrence): string => implode('|', [
+            (string) $occurrence['term'],
+            (string) ($occurrence['lang'] ?? ''),
+            number_format((float) ($occurrence['weight'] ?? 1.0), 1, '.', ''),
+        ]),
+        $occurrences
+    );
+}
+
+test_case('quality analyzer language corpus starts lane check accounting', function (): void {
+    $GLOBALS['wp_fts_analyzer_language_corpus_start'] = executed_check_count();
+    assert_true(true, 'lane check accounting should start after trunk tests have executed');
+});
+
+test_case('quality corpus routes inherited element languages across HTML shapes', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en-US']);
+    $cases = [
+        [
+            'label' => 'document default and explicit close',
+            'html' => '<article><p>helloalpha</p><section lang="pl">matkapl</section><p>fatheren</p></article>',
+            'expected' => [
+                'helloalpha' => ['en-US'],
+                'matkapl' => ['pl'],
+                'fatheren' => ['en-US'],
+            ],
+        ],
+        [
+            'label' => 'xml lang on block',
+            'html' => '<main xml:lang="de-DE"><p>Straße</p><p>Ärger</p></main>',
+            'expected' => [
+                'strasse' => ['de-DE'],
+                'aerger' => ['de-DE'],
+            ],
+        ],
+        [
+            'label' => 'nested override restores parent',
+            'html' => '<section lang=pl>zamekpl <span lang=en-GB>colourgb</span> lodzpl</section>',
+            'expected' => [
+                'zamekpl' => ['pl'],
+                'colourgb' => ['en-GB'],
+                'lodzpl' => ['pl'],
+            ],
+        ],
+        [
+            'label' => 'omitted paragraph close restores sibling',
+            'html' => '<p lang=pl>akapitpl<p>paragraphen',
+            'expected' => [
+                'akapitpl' => ['pl'],
+                'paragraphen' => ['en-US'],
+            ],
+        ],
+        [
+            'label' => 'explicit paragraph close restores sibling',
+            'html' => '<p lang=tr-TR>İzmir</p><p>plainen</p>',
+            'expected' => [
+                'izmir' => ['tr-TR'],
+                'plainen' => ['en-US'],
+            ],
+        ],
+        [
+            'label' => 'list item optional close restores ul language',
+            'html' => '<ul lang=pl><li>pierwszy<li lang=de>straße<li>drugi</ul>',
+            'expected' => [
+                'pierwszy' => ['pl'],
+                'strasse' => ['de'],
+                'drugi' => ['pl'],
+            ],
+        ],
+        [
+            'label' => 'table cells and rows restore parent table language',
+            'html' => '<table lang=pl><tr><td>komorka<td lang=tr>İstanbul<tr><td>powrot</table>',
+            'expected' => [
+                'komorka' => ['pl'],
+                'istanbul' => ['tr'],
+                'powrot' => ['pl'],
+            ],
+        ],
+        [
+            'label' => 'mixed CJK and Latin blocks',
+            'html' => '<article lang=zh-Hans><p>中文搜索</p><section lang=en-GB>colour</section><p>搜索</p></article>',
+            'expected' => [
+                '中文' => ['zh-Hans'],
+                '文搜' => ['zh-Hans'],
+                '搜索' => ['zh-Hans'],
+                'color' => ['en-GB'],
+            ],
+        ],
+        [
+            'label' => 'malformed child language falls back to parent',
+            'html' => '<section lang=pl><span lang="C.UTF-8">zamekpl</span><b>lodzpl</b></section>',
+            'expected' => [
+                'zamekpl' => ['pl'],
+                'lodzpl' => ['pl'],
+            ],
+        ],
+        [
+            'label' => 'empty language attribute falls back to document',
+            'html' => '<div lang=""><p>emptyfallback</p></div>',
+            'expected' => [
+                'emptyfallback' => ['en-US'],
+            ],
+        ],
+    ];
+
+    foreach ($cases as $case) {
+        record_check('html language scenario: ' . $case['label']);
+        $langs = wp_fts_alc_langs_by_term($analyzer->analyze_content($case['html']));
+        foreach ($case['expected'] as $term => $expectedLangs) {
+            assert_same($expectedLangs, $langs[$term] ?? [], "{$case['label']} term {$term}");
+        }
+    }
+});
+
+test_case('quality corpus excludes unsafe regions with language attributes', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    foreach (['script', 'style', 'template', 'svg'] as $tag) {
+        record_check("unsafe {$tag} language scenario");
+        $html = '<article lang=en><p>visible' . $tag . '</p><' . $tag . ' lang=pl>secret' . $tag .
+            '</' . $tag . '><p>after' . $tag . '</p></article>';
+        $terms = test_terms($analyzer->analyze_content($html));
+
+        assert_true(in_array('visible' . $tag, $terms, true), "{$tag} visible prefix should be indexed");
+        assert_true(in_array('after' . $tag, $terms, true), "{$tag} visible suffix should be indexed");
+        assert_true(!in_array('secret' . $tag, $terms, true), "{$tag} body should be excluded");
+    }
+
+    $terms = test_terms($analyzer->analyze_content(
+        '<article><!-- <p lang=pl>secretcomment</p> --><p>visiblecomment</p></article>'
+    ));
+    assert_true(in_array('visiblecomment', $terms, true), 'visible comment sibling should be indexed');
+    assert_true(!in_array('secretcomment', $terms, true), 'comment bodies should be excluded');
+});
+
+test_case('quality corpus keeps processor extraction in parity with fallback extraction', function (): void {
+    $html = '<article lang=pl><h1>Wrocław</h1><p><span lang=en-GB>colour</span> Łódź</p>' .
+        '<svg lang=de><text>secretvector</text></svg><p>powrót</p></article>';
+    $tokens = [
+        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE'], 'attrs' => ['lang' => 'pl']],
+        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'H1']],
+        ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'H1'], 'text' => 'Wrocław'],
+        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'P']],
+        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'P', 'SPAN'], 'attrs' => ['lang' => 'en-GB']],
+        ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'P', 'SPAN'], 'text' => 'colour'],
+        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'P', 'SPAN'], 'closing' => true],
+        ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'P'], 'text' => ' Łódź'],
+        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'SVG'], 'attrs' => ['lang' => 'de']],
+        ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'SVG', 'TEXT'], 'text' => 'secretvector'],
+        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'SVG'], 'closing' => true],
+        ['type' => '#tag', 'breadcrumbs' => ['ARTICLE', 'P']],
+        ['type' => '#text', 'breadcrumbs' => ['ARTICLE', 'P'], 'text' => 'powrót'],
+    ];
+
+    $fallback = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $processor = new WP_FTS_Analyzer([
+        'default_lang' => 'en',
+        'html_processor_factory' => static fn(string $unused): WP_FTS_Fake_HTML_Processor => new WP_FTS_Fake_HTML_Processor($tokens),
+    ]);
+
+    $fallbackSignature = wp_fts_alc_occurrence_signature($fallback->analyze_content($html));
+    $processorSignature = wp_fts_alc_occurrence_signature($processor->analyze_content($html));
+    assert_same($fallbackSignature, $processorSignature, 'fake processor and fallback parser should agree on terms, language, and boosts');
+    assert_true(!str_contains(implode('|', $processorSignature), 'secretvector'), 'processor path should exclude SVG text');
+});
+
+test_case('quality corpus tokenizes mixed scripts punctuation numbers emoji and invalid bytes', function (): void {
+    $cases = [
+        ['ja', 3, 'abc東京def', ['abc', '東京', 'def'], 'mixed Latin and Japanese'],
+        ['zh-Hans', 3, '中文搜索 日 x', ['中文', '文搜', '搜索', '日'], 'CJK bigrams bypass minimum length'],
+        ['en', 2, "don't-stop re-enter", ['don', 'stop', 're', 'enter'], 'apostrophe and hyphen boundaries'],
+        ['en', 2, 'v2_0 release42 🚀 emoji', ['v2_0', 'release42', 'emoji'], 'numbers underscores and emoji'],
+        ['fr', 2, "Cafe\u{0301} deja\u{0300}", ['cafe', 'deja'], 'Latin combining marks'],
+        ['pl', 2, "\u{0141}o\u{0301}d\u{017a} Za\u{017c}o\u{0301}\u{0142}c\u{0301}", ['lodz', 'zazolc'], 'Polish combining marks'],
+        ['de', 2, "fu\u{0308}r stra\u{00df}e", ['fuer', 'strasse'], 'German decomposed diaeresis'],
+        ['tr', 2, 'İstanbul Iğdır', ['istanbul', 'ıgdır'], 'Turkish dotted and dotless I'],
+        ['en', 2, "bad\xffutf café", ['bad', 'utf', 'caf'], 'invalid UTF-8 ASCII recovery'],
+    ];
+
+    foreach ($cases as [$lang, $minLen, $input, $expected, $label]) {
+        record_check('tokenization scenario: ' . $label);
+        $analyzer = new WP_FTS_Analyzer(['min_term_len' => $minLen]);
+        assert_same($expected, $analyzer->analyze_query($input, ['lang' => $lang]), $label);
+    }
+});
+
+test_case('quality corpus canonicalizes locale dialect script and malformed languages', function (): void {
+    $normalizer = new WP_FTS_Normalizer();
+    $canonicalCases = [
+        'en-us' => 'en-US',
+        'en_US' => 'en-US',
+        'EN-gb' => 'en-GB',
+        'pl_pl' => 'pl-PL',
+        'de-de' => 'de-DE',
+        'tr_tr' => 'tr-TR',
+        'zh-hans' => 'zh-Hans',
+        'ZH-HANT' => 'zh-Hant',
+        'zh-CN' => 'zh-Hans',
+        'zh-tw' => 'zh-Hant',
+        'en-latn-us' => 'en-Latn-US',
+        'sl-rozaj-biske' => 'sl-rozaj-biske',
+    ];
+    foreach ($canonicalCases as $input => $expected) {
+        record_check('canonical language scenario: ' . $input);
+        assert_same($expected, $normalizer->canonicalize_language($input), "canonicalize {$input}");
+    }
+
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'de-DE']);
+    foreach (['', 'C.UTF-8', 'POSIX', '@@@', '123', 'toolongprimary'] as $language) {
+        record_check('malformed analyzer language fallback: ' . ($language === '' ? 'empty' : $language));
+        $occurrences = $analyzer->analyze_content('<p>fallbackterm</p>', ['lang' => $language]);
+        assert_same(['de-DE'], wp_fts_alc_langs_by_term($occurrences)['fallbackterm'] ?? [], "fallback {$language}");
+    }
+});
+
+test_case('quality corpus applies language-specific folding including no-mbstring paths', function (): void {
+    $normalizer = new WP_FTS_Normalizer();
+    $cases = [
+        ['pl-PL', 'Żółć', 'zolc', 'Polish precomposed fold'],
+        ['pl', "Za\u{017c}o\u{0301}\u{0142}c\u{0301}", 'zazolc', 'Polish decomposed fold'],
+        ['de-DE', 'Straße', 'strasse', 'German sharp s fold'],
+        ['de', 'Ärger Öl für', 'aerger oel fuer', 'German whole-token input folds German umlauts'],
+        ['tr-TR', 'Iğdır', 'ıgdır', 'Turkish ASCII I maps to dotless i'],
+        ['tr', 'İZMİR', 'izmir', 'Turkish dotted capital I maps to i'],
+        ['fr', 'Crème', 'creme', 'Latin fallback acute fold'],
+        ['pt-BR', 'São', 'sao', 'Latin fallback tilde fold'],
+    ];
+
+    foreach ($cases as [$lang, $input, $expected, $label]) {
+        record_check('folding scenario: ' . $label);
+        assert_same($expected, $normalizer->normalize_token($input, $lang), $label);
+    }
+
+    $pipelineCases = [
+        ['de', 'Ärger Öl für', ['aerger', 'oel', 'fuer'], 'German tokenizer plus folding'],
+        ['fr', 'Crème brûlée São', ['creme', 'brulee', 'sao'], 'Latin fallback tokenizer plus folding'],
+        ['tr', 'IĞDIR İZMİR', ['ıgdır', 'izmir'], 'Turkish tokenizer plus folding'],
+    ];
+    foreach ($pipelineCases as [$lang, $input, $expected, $label]) {
+        record_check('pipeline folding scenario: ' . $label);
+        assert_same($expected, (new WP_FTS_LanguagePipeline())->analyze($input, $lang), $label);
+    }
+
+    $fallbackCases = [
+        ['pl', 'ŻÓŁĆ', 'zolc'],
+        ['de', 'ÄRGER', 'aerger'],
+        ['tr', 'ÇİĞ', 'cig'],
+        ['fr', 'ÉCOLE', 'ecole'],
+    ];
+    foreach ($fallbackCases as [$lang, $input, $expected]) {
+        record_check('no-mbstring uppercase fallback scenario: ' . $lang);
+        assert_same($expected, test_normalize_without_mbstring($normalizer, $input, $lang), "fallback {$lang}");
+    }
+});
+
+test_case('quality corpus exposes query occurrence output while preserving plain terms', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $cases = [
+        ['en-US', 'colour apple', ['color', 'apple']],
+        ['en-GB', 'organise colour', ['organize', 'color']],
+        ['pl-PL', 'Łódź Wrocław', ['lodz', 'wroclaw']],
+        ['de-DE', 'Straße Öl', ['strasse', 'oel']],
+        ['tr-TR', 'İstanbul Iğdır', ['istanbul', 'ıgdır']],
+        ['zh-Hans', '中文搜索', ['中文', '文搜', '搜索']],
+        ['zh-Hant', '繁體搜索', ['繁體', '體搜', '搜索']],
+    ];
+
+    foreach ($cases as [$lang, $query, $expectedTerms]) {
+        record_check('query occurrence scenario: ' . $lang);
+        $plain = $analyzer->analyze_query($query, ['lang' => $lang]);
+        $occurrences = $analyzer->analyze_query_occurrences($query, ['lang' => $lang]);
+        $compatOccurrences = $analyzer->analyze_query($query, ['language' => $lang, 'return' => 'occurrences']);
+
+        assert_same($expectedTerms, $plain, "plain query terms {$lang}");
+        assert_same($expectedTerms, array_column($occurrences, 'term'), "occurrence terms {$lang}");
+        assert_same($occurrences, $compatOccurrences, "compat occurrence terms {$lang}");
+        foreach ($occurrences as $occurrence) {
+            assert_same($normalLang = (new WP_FTS_Normalizer())->canonicalize_language($lang), $occurrence['lang'], "occurrence language {$normalLang}");
+        }
+    }
+});
+
+test_case('quality corpus keeps plain content and query analysis equivalent over generated dimensions', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['min_term_len' => 2]);
+    $normalizer = new WP_FTS_Normalizer();
+    $languages = ['en-US', 'en-GB', 'pl-PL', 'de-DE', 'tr-TR', 'zh-Hans', 'zh-Hant', 'ja', 'ko', 'fr'];
+    $texts = [
+        'Alpha beta',
+        'Wrocław café',
+        'Colour organise',
+        'Straße Ärger',
+        'İstanbul Iğdır',
+        '中文搜索',
+        '東京検索',
+        '한글검색',
+        "don't stop",
+        'v2_0 release42',
+        "Cafe\u{0301} deja\u{0300}",
+        'emoji 🚀 alpha',
+    ];
+
+    foreach ($languages as $language) {
+        $canonical = $normalizer->canonicalize_language($language);
+        foreach ($texts as $text) {
+            record_check("content/query parity {$canonical}: {$text}");
+            $content = $analyzer->analyze_content($text, ['lang' => $language]);
+            $query = $analyzer->analyze_query($text, ['lang' => $language]);
+
+            assert_same($query, test_terms($content), "content/query term parity {$canonical}");
+            foreach ($content as $occurrence) {
+                assert_same($canonical, $occurrence['lang'], "content occurrence language {$canonical}");
+            }
+        }
+    }
+});
+
+test_case('quality corpus keeps custom stemmer callable arities compatible', function (): void {
+    $cases = [
+        [
+            'label' => 'internal one arg',
+            'stemmer' => 'strrev',
+            'input' => 'alpha',
+            'lang' => 'en',
+            'expected' => ['ahpla'],
+        ],
+        [
+            'label' => 'internal optional non-language arg',
+            'stemmer' => 'metaphone',
+            'input' => 'testing',
+            'lang' => 'en',
+            'expected' => ['TSTNK'],
+        ],
+        [
+            'label' => 'one required plus optional arg',
+            'stemmer' => static fn(string $term, string $language = 'unused'): string => func_num_args() . ':' . $term,
+            'input' => 'alpha',
+            'lang' => 'en-GB',
+            'expected' => ['1:alpha'],
+        ],
+        [
+            'label' => 'two required args',
+            'stemmer' => static fn(string $term, string $language): string => $language . ':' . $term,
+            'input' => 'colour',
+            'lang' => 'en-GB',
+            'expected' => ['en-GB:color'],
+        ],
+        [
+            'label' => 'variadic args',
+            'stemmer' => static fn(string $term, string ...$args): string => count($args) . ':' . $term,
+            'input' => 'colour',
+            'lang' => 'en-GB',
+            'expected' => ['1:color'],
+        ],
+    ];
+
+    foreach ($cases as $case) {
+        record_check('custom stemmer arity scenario: ' . $case['label']);
+        $pipeline = new WP_FTS_LanguagePipeline(['stemmer' => $case['stemmer']]);
+        assert_same($case['expected'], $pipeline->analyze($case['input'], $case['lang']), $case['label']);
+    }
+});
+
+test_case('quality analyzer language corpus contributes at least five hundred checks', function (): void {
+    $start = (int) ($GLOBALS['wp_fts_analyzer_language_corpus_start'] ?? 0);
+    $contribution = executed_check_count() - $start;
+
+    assert_true(
+        $contribution >= 500,
+        "analyzer language corpus should contribute at least 500 checks/scenarios; saw {$contribution}"
+    );
+});
