@@ -15,25 +15,37 @@ interface WP_FTS_Storage
 
     /**
      * @param int[] $doc_ids
-     * @return array<int,int> doc_id => doc_len
+     * @return array<int,int> doc_id => doc length in $lang, or total length when $lang is null
      */
-    public function get_doc_lengths(array $doc_ids): array;
+    public function get_doc_lengths(array $doc_ids, ?string $lang = null): array;
 
     /**
-     * @return array{doc_len:int,content_hash:?string,deleted:bool}|null
+     * @return array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}|null
      */
     public function get_doc(int $doc_id): ?array;
 
-    public function put_doc(int $doc_id, int $doc_len, string $hash): void;
+    /**
+     * New callers pass ($doc_id, $primary_lang, $lang_lengths, $hash).
+     * Legacy callers may still pass ($doc_id, $doc_len, $hash), which maps to the
+     * aggregate/unspecified language partition.
+     *
+     * @param string|int $primary_lang
+     * @param array<string,int>|string $lang_lengths
+     */
+    public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void;
 
     public function delete_doc(int $doc_id): void;
 
     /**
      * @return array{doc_count:int,len_sum:int}
      */
-    public function get_meta(): array;
+    public function get_meta(?string $lang = null): array;
 
-    public function add_meta(int $d_docs, int $d_len): void;
+    /**
+     * New callers pass ($lang, $d_docs, $d_len). Legacy callers may still pass
+     * ($d_docs, $d_len), which updates the aggregate/unspecified partition.
+     */
+    public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void;
 
     /**
      * @return string[]

@@ -5,7 +5,7 @@ final class WP_FTS_Indexer
 {
     public function __construct(
         private WP_FTS_Storage $storage,
-        private WP_FTS_Analyzer $analyzer,
+        private object $analyzer,
     ) {
     }
 
@@ -20,23 +20,27 @@ final class WP_FTS_Indexer
             throw new InvalidArgumentException('Document id must be non-negative.');
         }
 
-        $hash = sha1($html);
+        $primaryLang = $this->resolve_document_language($opts);
+        $hash = $this->content_hash($html, $primaryLang);
         $existing = $this->storage->get_doc($doc_id);
         if ($existing !== null && !$existing['deleted'] && $existing['content_hash'] === $hash) {
             return false;
         }
 
-        $termFrequencies = $this->analyzer->weighted_term_frequencies(
-            $this->analyzer->analyze_content($html)
+        [$termFrequencies, $langLengths] = $this->weighted_term_frequencies_by_language(
+            $this->analyze_content($html, $opts, $primaryLang),
+            $primaryLang
         );
-        $docLen = array_sum($termFrequencies);
 
         $this->storage->begin_transaction();
         try {
             if ($existing !== null) {
                 $this->remove_doc_from_all_terms($doc_id);
                 if (!$existing['deleted']) {
-                    $this->storage->add_meta(-1, -$existing['doc_len']);
+                    $this->add_meta_deltas(
+                        WP_FTS_StorageCompat::doc_lang_lengths($existing, $primaryLang),
+                        -1
+                    );
                 }
             }
 
@@ -56,8 +60,8 @@ final class WP_FTS_Indexer
                 }
             }
 
-            $this->storage->put_doc($doc_id, $docLen, $hash);
-            $this->storage->add_meta(1, $docLen);
+            WP_FTS_StorageCompat::put_doc($this->storage, $doc_id, $primaryLang, $langLengths, $hash);
+            $this->add_meta_deltas($langLengths, 1);
             $this->storage->commit();
         } catch (Throwable $e) {
             $this->storage->rollback();
@@ -77,7 +81,10 @@ final class WP_FTS_Indexer
         $this->storage->begin_transaction();
         try {
             $this->storage->delete_doc($doc_id);
-            $this->storage->add_meta(-1, -$existing['doc_len']);
+            $this->add_meta_deltas(
+                WP_FTS_StorageCompat::doc_lang_lengths($existing, WP_FTS_StorageCompat::doc_primary_lang($existing, 'en')),
+                -1
+            );
             $this->storage->commit();
         } catch (Throwable $e) {
             $this->storage->rollback();
@@ -90,7 +97,7 @@ final class WP_FTS_Indexer
     /**
      * Reindex published posts directly from WordPress. Defaults match the v1 spec.
      *
-     * @param array{post_status?:string|string[],post_type?:string|string[],batch_size?:int} $opts
+     * @param array{post_status?:string|string[],post_type?:string|string[],batch_size?:int,limit?:int,lang?:string,language?:string} $opts
      */
     public function reindex_all(array $opts = []): int
     {
@@ -103,13 +110,19 @@ final class WP_FTS_Indexer
         $postStatuses = $this->normalize_list_option($opts['post_status'] ?? 'publish');
         $postTypes = $this->normalize_list_option($opts['post_type'] ?? 'post');
         $batchSize = max(1, (int) ($opts['batch_size'] ?? 500));
+        $limit = max(0, (int) ($opts['limit'] ?? 0));
         $last = 0;
         $count = 0;
 
         do {
+            $currentBatchSize = $limit > 0 ? min($batchSize, $limit - $count) : $batchSize;
+            if ($currentBatchSize <= 0) {
+                break;
+            }
+
             $statusPlaceholders = implode(',', array_fill(0, count($postStatuses), '%s'));
             $typePlaceholders = implode(',', array_fill(0, count($postTypes), '%s'));
-            $args = array_merge($postStatuses, $postTypes, [$last, $batchSize]);
+            $args = array_merge($postStatuses, $postTypes, [$last, $currentBatchSize]);
 
             $sql = $wpdb->prepare(
                 "SELECT ID, post_content, post_title
@@ -126,10 +139,13 @@ LIMIT %d",
             foreach ($rows ?: [] as $row) {
                 $last = (int) $row->ID;
                 $html = $this->compose_post_html((string) $row->post_title, (string) $row->post_content);
-                $this->index_document($last, $html);
+                $this->index_document($last, $html, [
+                    'lang' => $this->resolve_post_language($row, $opts),
+                    'post_id' => $last,
+                ]);
                 $count++;
             }
-        } while (!empty($rows));
+        } while (!empty($rows) && ($limit === 0 || $count < $limit));
 
         $this->flush();
 
@@ -173,18 +189,166 @@ LIMIT %d",
         }
     }
 
+    private function resolve_document_language(array $opts): string
+    {
+        $default = WP_FTS_TermNamespace::default_language($opts);
+
+        return WP_FTS_TermNamespace::language_from_options(
+            $opts,
+            $default,
+            ['lang', 'language', 'primary_lang', 'document_lang', 'locale']
+        ) ?? $default;
+    }
+
+    private function content_hash(string $html, string $primaryLang): string
+    {
+        return sha1(WP_FTS_TermNamespace::canonicalize_lang($primaryLang) . "\0" . $html);
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function analyze_content(string $html, array $opts, string $primaryLang): array
+    {
+        if (!is_callable([$this->analyzer, 'analyze_content'])) {
+            throw new LogicException('Analyzer must provide analyze_content().');
+        }
+
+        $analysisOpts = $opts;
+        $analysisOpts['default_lang'] = $primaryLang;
+        $analysisOpts['document_lang'] = $primaryLang;
+        if (WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'primary_lang', 'document_lang']) !== null) {
+            $analysisOpts['lang'] = $primaryLang;
+            $analysisOpts['language'] = $primaryLang;
+        }
+
+        return $this->analyzer->analyze_content($html, $analysisOpts);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>|string> $occurrences
+     * @return array{0:array<string,int>,1:array<string,int>}
+     */
+    private function weighted_term_frequencies_by_language(array $occurrences, string $defaultLang): array
+    {
+        $weights = [];
+        foreach ($occurrences as $occurrence) {
+            $term = is_array($occurrence)
+                ? trim((string) ($occurrence['term'] ?? ''))
+                : trim((string) $occurrence);
+            if ($term === '') {
+                continue;
+            }
+
+            $split = WP_FTS_TermNamespace::split_term($term);
+            $lang = is_array($occurrence) && isset($occurrence['lang'])
+                ? WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang'], $defaultLang)
+                : WP_FTS_TermNamespace::canonicalize_lang($defaultLang);
+            if ($split !== null) {
+                $lang = $split['lang'];
+                $term = $split['term'];
+            }
+
+            $weight = is_array($occurrence) ? (float) ($occurrence['weight'] ?? 1.0) : 1.0;
+            if ($weight <= 0.0) {
+                continue;
+            }
+
+            $namespacedTerm = WP_FTS_TermNamespace::namespace_term($lang, $term);
+            $weights[$namespacedTerm] = ($weights[$namespacedTerm] ?? 0.0) + $weight;
+        }
+
+        $frequencies = [];
+        $langLengths = [];
+        foreach ($weights as $term => $weight) {
+            $weightedTf = max(1, (int) round($weight));
+            $frequencies[$term] = $weightedTf;
+
+            $split = WP_FTS_TermNamespace::split_term($term);
+            $lang = $split !== null ? $split['lang'] : WP_FTS_TermNamespace::canonicalize_lang($defaultLang);
+            $langLengths[$lang] = ($langLengths[$lang] ?? 0) + $weightedTf;
+        }
+
+        ksort($frequencies, SORT_STRING);
+        ksort($langLengths, SORT_STRING);
+
+        return [$frequencies, $langLengths];
+    }
+
+    /**
+     * @param array<string,int> $langLengths
+     */
+    private function add_meta_deltas(array $langLengths, int $docDelta): void
+    {
+        $langLengths = WP_FTS_StorageCompat::normalize_lang_lengths($langLengths);
+        if ($langLengths === []) {
+            return;
+        }
+
+        if (!WP_FTS_StorageCompat::supports_language_meta($this->storage)) {
+            WP_FTS_StorageCompat::add_meta($this->storage, 'en', $docDelta, $docDelta * array_sum($langLengths));
+            return;
+        }
+
+        foreach ($langLengths as $lang => $length) {
+            WP_FTS_StorageCompat::add_meta($this->storage, $lang, $docDelta, $docDelta * $length);
+        }
+    }
+
     /**
      * @return string[]
      */
     private function normalize_list_option(string|array $value): array
     {
-        $items = is_array($value) ? $value : [$value];
-        $items = array_values(array_filter(array_map('strval', $items), static fn(string $item): bool => $item !== ''));
+        $items = [];
+        foreach (is_array($value) ? $value : [$value] as $item) {
+            foreach (explode(',', (string) $item) as $part) {
+                $part = trim($part);
+                if ($part !== '') {
+                    $items[] = $part;
+                }
+            }
+        }
+        $items = array_values(array_unique($items));
         if ($items === []) {
             throw new InvalidArgumentException('List options must contain at least one value.');
         }
 
         return $items;
+    }
+
+    private function resolve_post_language(object $row, array $opts): string
+    {
+        $explicit = WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'primary_lang', 'document_lang']);
+        if ($explicit !== null) {
+            return $explicit;
+        }
+
+        $postId = isset($row->ID) ? (int) $row->ID : 0;
+        if ($postId > 0 && function_exists('pll_get_post_language')) {
+            $lang = pll_get_post_language($postId, 'locale');
+            if (is_scalar($lang) && trim((string) $lang) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $lang);
+            }
+        }
+
+        if ($postId > 0 && function_exists('has_filter') && function_exists('apply_filters') && has_filter('wpml_post_language_details')) {
+            $details = apply_filters('wpml_post_language_details', null, $postId);
+            if (is_array($details)) {
+                $lang = $details['locale'] ?? $details['language_code'] ?? null;
+                if (is_scalar($lang) && trim((string) $lang) !== '') {
+                    return WP_FTS_TermNamespace::canonicalize_lang((string) $lang);
+                }
+            }
+            if (is_object($details)) {
+                $lang = $details->locale ?? $details->language_code ?? null;
+                if (is_scalar($lang) && trim((string) $lang) !== '') {
+                    return WP_FTS_TermNamespace::canonicalize_lang((string) $lang);
+                }
+            }
+        }
+
+        return WP_FTS_TermNamespace::default_language($opts);
     }
 
     private function compose_post_html(string $title, string $content): string
