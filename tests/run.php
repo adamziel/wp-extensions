@@ -118,6 +118,23 @@ function assert_or_pending(bool $condition, string $message, string $pendingReas
     }
 }
 
+function discover_quality_tests(?string $directory = null): void
+{
+    $directory ??= __DIR__ . '/quality';
+    if (!is_dir($directory)) {
+        return;
+    }
+
+    $files = glob($directory . '/*.php') ?: [];
+    sort($files, SORT_STRING);
+
+    foreach ($files as $file) {
+        if (is_file($file)) {
+            require_once $file;
+        }
+    }
+}
+
 /**
  * @return string[]
  */
@@ -2184,6 +2201,8 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_true($postSelect !== null, 'CLI reindex should prepare a batched posts query');
     assert_same(['publish', 'draft', 'post', 'page', 0, 1], $postSelect['args'], 'CLI source filters and remaining limit should be prepared');
 });
+
+discover_quality_tests();
 
 $failures = 0;
 $pending = 0;
