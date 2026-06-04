@@ -74,6 +74,10 @@ const WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS = 1500;
  */
 $tests = [];
 $wp_fts_check_count = 0;
+/**
+ * @var string[]
+ */
+$wp_fts_quality_test_files = [];
 
 function test_case(string $name, callable $fn): void
 {
@@ -96,6 +100,16 @@ function executed_check_count(): int
     global $wp_fts_check_count;
 
     return $wp_fts_check_count;
+}
+
+/**
+ * @return string[]
+ */
+function discovered_quality_test_files(): array
+{
+    global $wp_fts_quality_test_files;
+
+    return $wp_fts_quality_test_files;
 }
 
 function minimum_check_count(): int
@@ -160,17 +174,26 @@ function assert_or_pending(bool $condition, string $message, string $pendingReas
 
 function discover_quality_tests(?string $directory = null): void
 {
+    global $wp_fts_quality_test_files;
+
     $directory ??= __DIR__ . '/quality';
     if (!is_dir($directory)) {
         return;
     }
 
-    $files = glob($directory . '/*.php') ?: [];
+    $files = glob($directory . '/*.php');
+    if ($files === false) {
+        throw new WP_FTS_TestFailure("Could not discover quality tests in {$directory}.");
+    }
+
     sort($files, SORT_STRING);
 
     foreach ($files as $file) {
         if (is_file($file)) {
             require_once $file;
+            if (!in_array($file, $wp_fts_quality_test_files, true)) {
+                $wp_fts_quality_test_files[] = $file;
+            }
         }
     }
 }
@@ -2284,6 +2307,11 @@ test_case('wp cli reindex accepts language source filters and limit', function (
 discover_quality_tests();
 
 test_case('quality discovery loads tests/quality files', function (): void {
+    $discovered = array_map('basename', discovered_quality_test_files());
+    sort($discovered, SORT_STRING);
+
+    assert_true(in_array('000-discovery-sentinel.php', $discovered, true), 'quality discovery should record the sentinel file');
+    assert_true(in_array('harness-metrics.php', $discovered, true), 'quality discovery should record the metrics test file');
     assert_same(1, $GLOBALS['wp_fts_quality_discovery_sentinel'] ?? 0, 'quality discovery should include tests/quality/*.php exactly once');
 });
 
