@@ -9,9 +9,9 @@ php tests/run.php
 The PHP harness automatically loads `tests/quality/*.php`, reports named tests
 plus executed checks/scenarios, and enforces `WP_FTS_MIN_CHECKS`. Assertion
 helpers count one executed check; generated loops can call `record_check()` with
-an optional batch count. This isolated lane defaults the minimum to the existing
-40-test suite; final quality integration should raise the gate to at least 1500
-executed checks/scenarios.
+an optional batch count. On this integrated branch, the standard harness and
+Composer test entry points default to a minimum of 1500 executed checks/scenarios.
+Set `WP_FTS_MIN_CHECKS` only when a local or CI lane needs an explicit override.
 
 Run the optional external BM25 reference harness:
 

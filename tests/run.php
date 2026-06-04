@@ -66,7 +66,7 @@ final class WP_FTS_Fake_HTML_Processor
     }
 }
 
-const WP_FTS_DEFAULT_MIN_CHECKS = 40;
+const WP_FTS_DEFAULT_MIN_CHECKS = 1500;
 const WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS = 1500;
 
 /**
@@ -2346,7 +2346,7 @@ try {
 $checkCount = executed_check_count();
 if ($checkCount < $minimumChecks) {
     $gateFailures++;
-    fwrite(STDERR, "[FAIL] minimum check count\nExecuted {$checkCount} checks/scenarios; required {$minimumChecks}. Set WP_FTS_MIN_CHECKS to configure this lane. Final integration target is >= " . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . ".\n");
+    fwrite(STDERR, "[FAIL] minimum check count\nExecuted {$checkCount} checks/scenarios; required {$minimumChecks}. Set WP_FTS_MIN_CHECKS to override the default quality gate. Final integration target is >= " . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . ".\n");
 }
 
 $totalFailures = $failures + $gateFailures;
