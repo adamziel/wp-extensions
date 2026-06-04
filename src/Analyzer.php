@@ -59,6 +59,7 @@ final class WP_FTS_Analyzer
             'STYLE',
             'NOSCRIPT',
             'TEMPLATE',
+            'SVG',
             'NAV',
             'ASIDE',
             'FOOTER',
