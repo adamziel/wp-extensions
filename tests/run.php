@@ -2185,6 +2185,12 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_same(['publish', 'draft', 'post', 'page', 0, 1], $postSelect['args'], 'CLI source filters and remaining limit should be prepared');
 });
 
+$externalReferenceSuite = __DIR__ . '/quality/external-reference-suite.php';
+if (is_file($externalReferenceSuite)) {
+    require_once $externalReferenceSuite;
+}
+unset($externalReferenceSuite);
+
 $failures = 0;
 $pending = 0;
 $start = microtime(true);
