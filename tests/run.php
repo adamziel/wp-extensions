@@ -66,10 +66,14 @@ final class WP_FTS_Fake_HTML_Processor
     }
 }
 
+const WP_FTS_DEFAULT_MIN_CHECKS = 40;
+const WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS = 1500;
+
 /**
  * @var array<int,array{name:string,fn:callable}>
  */
 $tests = [];
+$wp_fts_check_count = 0;
 
 function test_case(string $name, callable $fn): void
 {
@@ -77,8 +81,40 @@ function test_case(string $name, callable $fn): void
     $tests[] = ['name' => $name, 'fn' => $fn];
 }
 
+function record_check(?string $label = null, int $count = 1): void
+{
+    if ($count < 1) {
+        throw new WP_FTS_TestFailure('record_check() count must be at least 1.');
+    }
+
+    global $wp_fts_check_count;
+    $wp_fts_check_count += $count;
+}
+
+function executed_check_count(): int
+{
+    global $wp_fts_check_count;
+
+    return $wp_fts_check_count;
+}
+
+function minimum_check_count(): int
+{
+    $raw = getenv('WP_FTS_MIN_CHECKS');
+    if ($raw === false || $raw === '') {
+        return WP_FTS_DEFAULT_MIN_CHECKS;
+    }
+
+    if (!is_string($raw) || preg_match('/^(0|[1-9][0-9]*)$/', $raw) !== 1) {
+        throw new WP_FTS_TestFailure('WP_FTS_MIN_CHECKS must be a non-negative integer.');
+    }
+
+    return (int) $raw;
+}
+
 function assert_true(bool $condition, string $message): void
 {
+    record_check($message);
     if (!$condition) {
         throw new WP_FTS_TestFailure($message);
     }
@@ -86,6 +122,7 @@ function assert_true(bool $condition, string $message): void
 
 function assert_same(mixed $expected, mixed $actual, string $message): void
 {
+    record_check($message);
     if ($expected !== $actual) {
         throw new WP_FTS_TestFailure($message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true));
     }
@@ -93,6 +130,7 @@ function assert_same(mixed $expected, mixed $actual, string $message): void
 
 function assert_float_near(float $expected, float $actual, string $message, float $epsilon = 1e-6): void
 {
+    record_check($message);
     $scale = max(1.0, abs($expected), abs($actual));
     if (abs($expected - $actual) / $scale > $epsilon) {
         throw new WP_FTS_TestFailure($message . "\nExpected: {$expected}\nActual: {$actual}");
@@ -101,6 +139,7 @@ function assert_float_near(float $expected, float $actual, string $message, floa
 
 function assert_contains(string $needle, string $haystack, string $message): void
 {
+    record_check($message);
     if (!str_contains($haystack, $needle)) {
         throw new WP_FTS_TestFailure($message . "\nMissing: " . var_export($needle, true) . "\nIn: " . $haystack);
     }
@@ -113,8 +152,26 @@ function mark_pending(string $message): never
 
 function assert_or_pending(bool $condition, string $message, string $pendingReason): void
 {
+    record_check($message);
     if (!$condition) {
         mark_pending($pendingReason . "\n" . $message);
+    }
+}
+
+function discover_quality_tests(?string $directory = null): void
+{
+    $directory ??= __DIR__ . '/quality';
+    if (!is_dir($directory)) {
+        return;
+    }
+
+    $files = glob($directory . '/*.php') ?: [];
+    sort($files, SORT_STRING);
+
+    foreach ($files as $file) {
+        if (is_file($file)) {
+            require_once $file;
+        }
     }
 }
 
@@ -369,6 +426,45 @@ function test_run_php_without_extensions(string $code): array
     $process = proc_open([PHP_BINARY, '-n', '-r', $code], $descriptors, $pipes, dirname(__DIR__));
     if (!is_resource($process)) {
         mark_pending('Could not start a PHP subprocess for the optional-extension smoke test.');
+    }
+
+    fclose($pipes[0]);
+    $stdout = (string) stream_get_contents($pipes[1]);
+    $stderr = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exit = proc_close($process);
+
+    return [
+        'exit' => is_int($exit) ? $exit : 1,
+        'stdout' => $stdout,
+        'stderr' => $stderr,
+    ];
+}
+
+/**
+ * @param array<string,string> $env
+ * @return array{exit:int,stdout:string,stderr:string}
+ */
+function test_run_harness_with_environment(array $env): array
+{
+    if (!function_exists('proc_open')) {
+        mark_pending('proc_open() is unavailable, so the harness subprocess test cannot run in this PHP build.');
+    }
+
+    $baseEnv = getenv();
+    if (!is_array($baseEnv)) {
+        $baseEnv = [];
+    }
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $process = proc_open([PHP_BINARY, __FILE__], $descriptors, $pipes, dirname(__DIR__), array_merge($baseEnv, $env));
+    if (!is_resource($process)) {
+        mark_pending('Could not start a PHP subprocess for the harness metrics test.');
     }
 
     fclose($pipes[0]);
@@ -2185,6 +2281,12 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_same(['publish', 'draft', 'post', 'page', 0, 1], $postSelect['args'], 'CLI source filters and remaining limit should be prepared');
 });
 
+discover_quality_tests();
+
+test_case('quality discovery loads tests/quality files', function (): void {
+    assert_same(1, $GLOBALS['wp_fts_quality_discovery_sentinel'] ?? 0, 'quality discovery should include tests/quality/*.php exactly once');
+});
+
 $failures = 0;
 $pending = 0;
 $start = microtime(true);
@@ -2204,9 +2306,26 @@ foreach ($tests as $test) {
 $duration = number_format(microtime(true) - $start, 3);
 $count = count($tests);
 $passed = $count - $failures - $pending;
-if ($failures > 0) {
-    fwrite(STDERR, "{$failures}/{$count} tests failed, {$pending} pending in {$duration}s\n");
+$gateFailures = 0;
+$minimumChecks = WP_FTS_DEFAULT_MIN_CHECKS;
+try {
+    $minimumChecks = minimum_check_count();
+} catch (WP_FTS_TestFailure $e) {
+    $gateFailures++;
+    fwrite(STDERR, "[FAIL] minimum check count configuration\n{$e->getMessage()}\n");
+}
+
+$checkCount = executed_check_count();
+if ($checkCount < $minimumChecks) {
+    $gateFailures++;
+    fwrite(STDERR, "[FAIL] minimum check count\nExecuted {$checkCount} checks/scenarios; required {$minimumChecks}. Set WP_FTS_MIN_CHECKS to configure this lane. Final integration target is >= " . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . ".\n");
+}
+
+$totalFailures = $failures + $gateFailures;
+$summary = "{$passed}/{$count} named tests passed; failures={$totalFailures}; pending={$pending}; checks/scenarios={$checkCount}; minimum checks={$minimumChecks}; final target>=" . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . "; duration={$duration}s\n";
+if ($totalFailures > 0) {
+    fwrite(STDERR, $summary);
     exit(1);
 }
 
-fwrite(STDOUT, "{$passed}/{$count} tests passed, {$pending} pending in {$duration}s\n");
+fwrite(STDOUT, $summary);
