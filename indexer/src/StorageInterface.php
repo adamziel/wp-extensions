@@ -1,69 +1,145 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Storage contract shared by in-memory, file, and MySQL index backends.
+ *
+ * Implementations store postings by namespaced term key, document metadata with
+ * per-language lengths, and collection metadata used by BM25. The interface also
+ * preserves legacy aggregate document/meta call shapes so older tests and
+ * adapters can still run.
+ */
 interface WP_FTS_Storage
 {
     /**
+     * Fetch term rows for the requested stored keys.
+     *
      * @param string[] $terms
-     * @return array<string,array{df:int,postings:string}>
+     * @return array<string,array{df:int,postings:string}> Map of stored term key
+     *         to document frequency and binary postings blob. Missing terms are
+     *         omitted.
      */
     public function get_terms(array $terms): array;
 
+    /**
+     * Insert, replace, or remove one term row.
+     *
+     * `$term` is normally `lang . "\\x1e" . normalized_term`. Passing `$df <= 0`
+     * should remove the row, matching the indexer's empty-postings behavior.
+     *
+     * @param string $term Stored term key.
+     * @param int $df Document frequency for the decoded postings.
+     * @param string $postings Binary postings blob from `WP_FTS_PostingsCodec`.
+     */
     public function put_term(string $term, int $df, string $postings): void;
 
+    /**
+     * Delete one stored term row if present.
+     *
+     * @param string $term Stored term key.
+     */
     public function delete_term(string $term): void;
 
     /**
+     * Return active document lengths for scoring.
+     *
+     * When `$lang` is null, lengths are aggregate document lengths. When `$lang`
+     * is supplied, only documents with a positive length in that language
+     * partition should be returned.
+     *
      * @param int[] $doc_ids
      * @return array<int,int> doc_id => doc length in $lang, or total length when $lang is null
      */
     public function get_doc_lengths(array $doc_ids, ?string $lang = null): array;
 
     /**
+     * Fetch stored metadata for one document id.
+     *
      * @return array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}|null
+     *         Null when the id has never been stored. Tombstones return
+     *         `deleted => true`.
      */
     public function get_doc(int $doc_id): ?array;
 
     /**
-     * New callers pass ($doc_id, $primary_lang, $lang_lengths, $hash).
+     * Store or replace document metadata.
+     *
+     * New callers pass `($doc_id, $primary_lang, $lang_lengths, $hash)`.
      * Legacy callers may still pass ($doc_id, $doc_len, $hash), which maps to the
      * aggregate/unspecified language partition.
      *
-     * @param string|int $primary_lang
-     * @param array<string,int>|string $lang_lengths
+     * @param string|int $primary_lang Canonical primary language in the new
+     *        shape, or aggregate document length in the legacy shape.
+     * @param array<string,int>|string $lang_lengths Per-language lengths in the
+     *        new shape, or content hash in the legacy shape.
+     * @param string|null $hash Content hash in the new shape.
      */
     public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void;
 
+    /**
+     * Mark a document as deleted.
+     *
+     * Implementations may keep a tombstone until `optimize()` compacts postings.
+     * Search must treat deleted documents as inactive by excluding their lengths.
+     */
     public function delete_doc(int $doc_id): void;
 
     /**
+     * Return collection metadata for BM25.
+     *
+     * With `$lang`, values are for that language partition. Without `$lang`,
+     * values are aggregate totals across active documents.
+     *
      * @return array{doc_count:int,len_sum:int}
      */
     public function get_meta(?string $lang = null): array;
 
     /**
-     * New callers pass ($lang, $d_docs, $d_len). Legacy callers may still pass
-     * ($d_docs, $d_len), which updates the aggregate/unspecified partition.
+     * Add signed deltas to collection metadata.
+     *
+     * New callers pass `($lang, $d_docs, $d_len)`. Legacy callers may still pass
+     * `($d_docs, $d_len)`, which updates the aggregate/unspecified partition.
+     * Implementations should clamp stored totals at zero.
      */
     public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void;
 
     /**
+     * List all term keys currently stored.
+     *
      * @return string[]
      */
     public function all_terms(): array;
 
     /**
+     * List known document ids.
+     *
+     * @param bool $include_deleted Include tombstoned ids when true.
      * @return int[]
      */
     public function all_doc_ids(bool $include_deleted = false): array;
 
+    /**
+     * Start a transaction or equivalent rollback scope.
+     */
     public function begin_transaction(): void;
 
+    /**
+     * Commit the current transaction or rollback scope.
+     */
     public function commit(): void;
 
+    /**
+     * Roll back the current transaction or rollback scope.
+     */
     public function rollback(): void;
 
+    /**
+     * Flush buffered writes to durable storage when applicable.
+     */
     public function flush(): void;
 
+    /**
+     * Compact tombstones, rebuild derived metadata, or perform backend tuning.
+     */
     public function optimize(): void;
 }

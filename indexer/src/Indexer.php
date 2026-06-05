@@ -1,8 +1,20 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Maintains postings, document metadata, and collection statistics for the FTS index.
+ *
+ * The indexer accepts HTML documents, delegates text analysis to the analyzer,
+ * stores terms under language namespaces, and keeps per-language document
+ * lengths in sync so the searcher can score BM25 inside one language partition.
+ */
 final class WP_FTS_Indexer
 {
+    /**
+     * @param WP_FTS_Storage $storage Storage backend for terms, documents, and
+     *        metadata. Backends may be language-aware or legacy aggregate-only.
+     * @param object $analyzer Analyzer object exposing `analyze_content()`.
+     */
     public function __construct(
         private WP_FTS_Storage $storage,
         private object $analyzer,
@@ -10,9 +22,31 @@ final class WP_FTS_Indexer
     }
 
     /**
-     * Index or replace a document.
+     * Add a document to the index, or replace its existing postings and metadata.
      *
-     * @return bool true when the index changed, false when the content hash matched
+     * Pass the same stable `$doc_id` whenever the same logical document is
+     * reindexed. `$html` may be a fragment or a full document; the analyzer reads
+     * visible text, applies element boosts, and honors HTML language scopes. Use
+     * `$opts['lang']`, `$opts['language']`, `$opts['primary_lang']`,
+     * `$opts['document_lang']`, or `$opts['locale']` when the caller already
+     * knows the document language.
+     *
+     * The content hash includes the resolved primary language, so the same HTML
+     * can be reindexed when its language partition changes. Replacements remove
+     * old postings and subtract old per-language metadata before adding the new
+     * postings and document lengths in one storage transaction.
+     *
+     * @param int $doc_id Stable non-negative document identifier used in
+     *        postings.
+     * @param string $html HTML fragment or document to analyze.
+     * @param array<string,mixed> $opts Document analysis options. Important keys
+     *        are `lang`, `language`, `primary_lang`, `document_lang`, `locale`,
+     *        and WordPress context such as `post_id`.
+     * @return bool True when postings or metadata changed; false when an
+     *         existing active document already had the same content hash.
+     * @throws InvalidArgumentException If `$doc_id` is negative.
+     * @throws LogicException If the analyzer does not provide `analyze_content()`.
+     * @throws Throwable Re-throws storage/analyzer failures after rollback.
      */
     public function index_document(int $doc_id, string $html, array $opts = []): bool
     {
@@ -71,6 +105,19 @@ final class WP_FTS_Indexer
         return true;
     }
 
+    /**
+     * Mark an indexed document as deleted and subtract its metadata contribution.
+     *
+     * Deletion is a tombstone operation: document metadata is marked deleted, but
+     * posting lists are compacted later by `optimize()`. This keeps deletes fast
+     * while allowing the searcher to ignore tombstoned docs through doc lengths.
+     *
+     * @param int $doc_id Document identifier previously passed to
+     *        `index_document()`.
+     * @return bool True when an active indexed document was tombstoned; false
+     *         when the id was unknown or already deleted.
+     * @throws Throwable Re-throws storage failures after rollback.
+     */
     public function delete_document(int $doc_id): bool
     {
         $existing = $this->storage->get_doc($doc_id);
@@ -97,7 +144,17 @@ final class WP_FTS_Indexer
     /**
      * Reindex published posts directly from WordPress. Defaults match the v1 spec.
      *
+     * This method pages through `$wpdb->posts` by ascending ID and indexes title
+     * plus content for each row. `post_status` and `post_type` accept comma
+     * separated strings or arrays. `limit => 0` means no limit. Language is
+     * resolved per post unless an explicit language option is supplied.
+     *
      * @param array{post_status?:string|string[],post_type?:string|string[],batch_size?:int,limit?:int,lang?:string,language?:string} $opts
+     *        WordPress query and language options.
+     * @return int Number of posts processed, including no-op reindexes.
+     * @throws RuntimeException Outside WordPress or without a `$wpdb` object.
+     * @throws InvalidArgumentException If list options normalize to an empty
+     *         list.
      */
     public function reindex_all(array $opts = []): int
     {
@@ -152,16 +209,29 @@ LIMIT %d",
         return $count;
     }
 
+    /**
+     * Flush buffered storage changes, if the backend buffers writes.
+     */
     public function flush(): void
     {
         $this->storage->flush();
     }
 
+    /**
+     * Ask the storage backend to compact deleted documents and posting lists.
+     */
     public function optimize(): void
     {
         $this->storage->optimize();
     }
 
+    /**
+     * Remove one document id from every posting list that currently references it.
+     *
+     * Reindexing must do this before writing new postings because a document's
+     * language, terms, and weighted frequencies may all change. Empty posting
+     * lists are removed entirely.
+     */
     private function remove_doc_from_all_terms(int $doc_id): void
     {
         $terms = $this->storage->all_terms();
@@ -189,6 +259,15 @@ LIMIT %d",
         }
     }
 
+    /**
+     * Resolve the primary language used for hashing and default term partitioning.
+     *
+     * Explicit document options win over the environment default. The analyzer
+     * may still return segment-level languages for nested HTML scopes.
+     *
+     * @param array<string,mixed> $opts Public `index_document()` options.
+     * @return string Canonical primary language.
+     */
     private function resolve_document_language(array $opts): string
     {
         $default = WP_FTS_TermNamespace::default_language($opts);
@@ -200,12 +279,25 @@ LIMIT %d",
         ) ?? $default;
     }
 
+    /**
+     * Hash document content together with its primary language partition.
+     *
+     * The NUL separator keeps the language and HTML portions unambiguous while
+     * preserving the existing SHA-1 storage shape.
+     */
     private function content_hash(string $html, string $primaryLang): string
     {
         return sha1(WP_FTS_TermNamespace::canonicalize_lang($primaryLang) . "\0" . $html);
     }
 
     /**
+     * Invoke the analyzer with document-language defaults filled in.
+     *
+     * When callers supplied an explicit document language, both `lang` and
+     * `language` are rewritten to the resolved primary language so older
+     * analyzers that only read those keys stay aligned with the indexer's hash
+     * and storage partition.
+     *
      * @return array<int,array<string,mixed>>
      */
     private function analyze_content(string $html, array $opts, string $primaryLang): array
@@ -226,6 +318,13 @@ LIMIT %d",
     }
 
     /**
+     * Collapse analyzer occurrences into namespaced term frequencies and lengths.
+     *
+     * Occurrences may be structured rows or legacy strings. Terms that already
+     * contain a namespace take precedence over the row language. Every stored key
+     * is normalized to `lang . "\\x1e" . term`, and per-language document
+     * lengths are the sum of rounded weighted term frequencies.
+     *
      * @param array<int,array<string,mixed>|string> $occurrences
      * @return array{0:array<string,int>,1:array<string,int>}
      */
@@ -276,6 +375,13 @@ LIMIT %d",
     }
 
     /**
+     * Apply per-language document and token-count deltas to collection metadata.
+     *
+     * `$docDelta` is `1` for an added active document and `-1` for a replaced or
+     * deleted active document. Length deltas are scaled by the same sign. Legacy
+     * storage backends receive one aggregate update under the compatibility
+     * adapter.
+     *
      * @param array<string,int> $langLengths
      */
     private function add_meta_deltas(array $langLengths, int $docDelta): void
@@ -296,7 +402,15 @@ LIMIT %d",
     }
 
     /**
+     * Normalize a string-or-array option into a non-empty list.
+     *
+     * Used for WP-CLI and WordPress reindex options. Array values may themselves
+     * contain comma-separated strings, matching how WP-CLI passes repeatable
+     * options.
+     *
+     * @param string|array<int|string,mixed> $value Raw option value.
      * @return string[]
+     * @throws InvalidArgumentException If no non-empty item remains.
      */
     private function normalize_list_option(string|array $value): array
     {
@@ -317,6 +431,16 @@ LIMIT %d",
         return $items;
     }
 
+    /**
+     * Resolve the language for one WordPress post row during bulk reindexing.
+     *
+     * Explicit options win. Otherwise Polylang and WPML are consulted with the
+     * row ID, then the configured default language is used.
+     *
+     * @param object $row `$wpdb->posts` row with an `ID` property.
+     * @param array<string,mixed> $opts Reindex options.
+     * @return string Canonical language for this post.
+     */
     private function resolve_post_language(object $row, array $opts): string
     {
         $explicit = WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'primary_lang', 'document_lang']);
@@ -351,6 +475,12 @@ LIMIT %d",
         return WP_FTS_TermNamespace::default_language($opts);
     }
 
+    /**
+     * Wrap a post title and content in minimal HTML for analyzer boosts.
+     *
+     * The title is escaped into a `<title>` element so it receives the analyzer's
+     * title boost. Post content is inserted as existing WordPress HTML.
+     */
     private function compose_post_html(string $title, string $content): string
     {
         $title = htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');

@@ -1,12 +1,34 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Builds and reads the language-prefixed term keys stored in postings.
+ *
+ * The index stores every lexical term under a language partition so the same
+ * spelling in different languages can score against different document-length
+ * statistics. The key format is `lang . "\\x1e" . term`, for example
+ * `en\\x1ecolor`.
+ */
 final class WP_FTS_TermNamespace
 {
     public const DEFAULT_LANG = 'und';
     public const MAX_TERM_KEY_BYTES = 255;
     public const SEPARATOR = "\x1e";
 
+    /**
+     * Normalize a user, locale, or storage language value into a stable tag.
+     *
+     * Empty values fall back to `$fallback`. The method accepts WordPress
+     * locale-style underscores and strips punctuation inside subtags, but it
+     * does not validate against a registry of real BCP 47 tags.
+     *
+     * @param string|null $lang Language candidate such as `en_US`, `pl`, or
+     *        `zh-Hant`. Null and blank strings use `$fallback`.
+     * @param string $fallback Language to use when `$lang` does not contain a
+     *        usable primary subtag.
+     * @return string Canonicalized tag with lower-case primary language,
+     *        title-case script, and upper-case region where recognizable.
+     */
     public static function canonicalize_lang(?string $lang, string $fallback = 'en'): string
     {
         $lang = trim((string) $lang);
@@ -42,33 +64,78 @@ final class WP_FTS_TermNamespace
         return $canonical !== [] ? implode('-', $canonical) : self::canonicalize_lang($fallback, 'en');
     }
 
+    /**
+     * Check whether a language subtag contains only ASCII letters.
+     */
     private static function is_ascii_alpha(string $value): bool
     {
         return $value !== '' && preg_match('/^[A-Za-z]+$/', $value) === 1;
     }
 
+    /**
+     * Check whether a language subtag contains only ASCII digits.
+     */
     private static function is_ascii_digit(string $value): bool
     {
         return $value !== '' && preg_match('/^[0-9]+$/', $value) === 1;
     }
 
+    /**
+     * Prefix a normalized term with its canonical language partition.
+     *
+     * Call this before reading or writing postings. `$term` should already be
+     * normalized by the analyzer; this helper only canonicalizes `$lang` and
+     * inserts the `\\x1e` separator.
+     *
+     * @param string $lang Language partition for BM25 statistics.
+     * @param string $term Normalized lexical term without a namespace prefix.
+     * @return string Namespaced key, for example `de\\x1ekind`.
+     */
     public static function namespace_term(string $lang, string $term): string
     {
         return self::canonicalize_lang($lang) . self::SEPARATOR . $term;
     }
 
+    /**
+     * Backward-compatible alias for `namespace_term()`.
+     *
+     * Older callers pass term first and language second. New code should prefer
+     * `namespace_term()` because its argument order mirrors the stored key.
+     *
+     * @param string $term Normalized lexical term without namespace.
+     * @param string $lang Language partition.
+     * @return string Namespaced term key.
+     */
     public static function term_key(string $term, string $lang): string
     {
         return self::namespace_term($lang, $term);
     }
 
+    /**
+     * Report whether a namespaced term fits the MySQL varbinary key.
+     *
+     * Use this before persisting custom analyzer output to MySQL. The check is
+     * byte-oriented because the storage key is `varbinary(255)`.
+     *
+     * @param string $term Normalized lexical term.
+     * @param string $lang Language partition.
+     * @return bool True when `lang . "\\x1e" . term` is at most 255 bytes.
+     */
     public static function term_key_fits(string $term, string $lang): bool
     {
         return strlen(self::namespace_term($lang, $term)) <= self::MAX_TERM_KEY_BYTES;
     }
 
     /**
-     * @return array{lang:string,term:string}|null
+     * Split a stored term key into language and lexical term parts.
+     *
+     * The separator must appear after at least one language byte. Unnamespaced
+     * legacy terms return null so callers can decide which fallback language to
+     * use.
+     *
+     * @param string $term Stored key, usually `lang . "\\x1e" . term`.
+     * @return array{lang:string,term:string}|null Parsed namespace, or null for
+     *         legacy/invalid keys.
      */
     public static function split_term(string $term): ?array
     {
@@ -84,7 +151,18 @@ final class WP_FTS_TermNamespace
     }
 
     /**
-     * @param string[] $keys
+     * Resolve the first usable language value from an options array.
+     *
+     * `$keys` is ordered by the caller's precedence. For example the indexer
+     * asks for `lang`, `language`, `primary_lang`, `document_lang`, then
+     * `locale`, while search prefers `query_lang` first.
+     *
+     * @param array<string,mixed> $opts Options from public APIs or WP-CLI.
+     * @param string|null $fallback Optional fallback returned when none of the
+     *        named keys contains a scalar non-empty value.
+     * @param string[] $keys Option names to inspect in priority order.
+     * @return string|null Canonical language, fallback language, or null when
+     *         no language could be resolved.
      */
     public static function language_from_options(array $opts, ?string $fallback = null, array $keys = ['lang', 'language', 'primary_lang', 'query_lang', 'default_lang', 'locale']): ?string
     {
@@ -102,6 +180,16 @@ final class WP_FTS_TermNamespace
         return $fallback !== null ? self::canonicalize_lang($fallback) : null;
     }
 
+    /**
+     * Resolve the default language for analysis when a document/query is silent.
+     *
+     * Explicit `default_lang` or `locale` options win. In WordPress this falls
+     * back to `get_locale()` and then `get_bloginfo('language')`; outside
+     * WordPress it returns `en`.
+     *
+     * @param array<string,mixed> $opts Optional caller-supplied language hints.
+     * @return string Canonical default language.
+     */
     public static function default_language(array $opts = []): string
     {
         $configured = self::language_from_options($opts, null, ['default_lang', 'locale']);
@@ -127,8 +215,13 @@ final class WP_FTS_TermNamespace
     }
 
     /**
-     * @param array<string|int,mixed> $lengths
-     * @return array<string,int>
+     * Canonicalize and aggregate per-language document lengths.
+     *
+     * Non-positive lengths are dropped. Duplicate language spellings such as
+     * `en_US` and `en-US` are merged after canonicalization.
+     *
+     * @param array<string|int,mixed> $lengths Map of language to token count.
+     * @return array<string,int> Sorted canonical language to positive length.
      */
     public static function normalize_lengths(array $lengths): array
     {

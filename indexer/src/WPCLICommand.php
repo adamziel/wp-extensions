@@ -1,8 +1,17 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * WP-CLI command surface for managing the custom FTS index.
+ *
+ * The command creates MySQL tables on demand, reindexes WordPress posts, searches
+ * the index, tombstones documents, and compacts deleted rows.
+ */
 final class WP_FTS_WPCLI_Command
 {
+    /**
+     * Register the `wp fts` command when WP-CLI is loaded.
+     */
     public static function register(): void
     {
         if (class_exists('WP_CLI')) {
@@ -29,6 +38,11 @@ final class WP_FTS_WPCLI_Command
      *
      * [--batch_size=<n>]
      * : Batch size. Default: 500.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options. Dashed and
+     *        underscored option names are both accepted for post status/type and
+     *        batch size.
      */
     public function reindex(array $args, array $assoc_args): void
     {
@@ -66,6 +80,10 @@ final class WP_FTS_WPCLI_Command
      *
      * [--lang=<language>]
      * : Query language partition. Defaults to site locale.
+     *
+     * @param string[] $args First positional argument is the query string.
+     * @param array<string,mixed> $assoc_args Options for mode, limit, and
+     *        language. Missing language falls back to site locale or `und`.
      */
     public function search(array $args, array $assoc_args): void
     {
@@ -87,6 +105,9 @@ final class WP_FTS_WPCLI_Command
      *
      * <doc_id>
      * : Document ID to delete.
+     *
+     * @param string[] $args First positional argument is the document id.
+     * @param array<string,mixed> $assoc_args Unused WP-CLI options.
      */
     public function delete(array $args, array $assoc_args): void
     {
@@ -102,6 +123,9 @@ final class WP_FTS_WPCLI_Command
 
     /**
      * Compact tombstones out of posting lists.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args Unused WP-CLI options.
      */
     public function optimize(array $args, array $assoc_args): void
     {
@@ -109,11 +133,20 @@ final class WP_FTS_WPCLI_Command
         WP_CLI::success('Optimized FTS index.');
     }
 
+    /**
+     * Build an indexer wired to MySQL storage and the default analyzer.
+     */
     private function indexer(): WP_FTS_Indexer
     {
         return new WP_FTS_Indexer($this->storage(), new WP_FTS_Analyzer());
     }
 
+    /**
+     * Create MySQL storage and ensure required tables exist.
+     *
+     * @return WP_FTS_Storage_Mysql Ready-to-use storage backend.
+     * @throws RuntimeException When `$wpdb` is unavailable.
+     */
     private function storage(): WP_FTS_Storage_Mysql
     {
         global $wpdb;
@@ -129,6 +162,10 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
+     * Parse a comma-separated WP-CLI option into a non-empty list.
+     *
+     * Empty input falls back to a single default item.
+     *
      * @return string[]
      */
     private function csv_arg(string $value, string $fallback): array
@@ -140,8 +177,15 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
+     * Return the first present associated argument from a list of accepted names.
+     *
+     * This lets commands accept both WP-CLI's dashed names and PHP-friendly
+     * underscored names.
+     *
      * @param array<string,mixed> $assoc_args
      * @param string[] $names
+     * @param mixed $default Value returned when none of the names is present.
+     * @return mixed Matched value or `$default`.
      */
     private function assoc_arg(array $assoc_args, array $names, mixed $default): mixed
     {
@@ -154,6 +198,15 @@ final class WP_FTS_WPCLI_Command
         return $default;
     }
 
+    /**
+     * Resolve and canonicalize a CLI language option.
+     *
+     * A scalar non-empty option wins. Otherwise the command falls back to
+     * WordPress site language and finally the storage default `und`.
+     *
+     * @param mixed $value Raw WP-CLI option value.
+     * @return string Canonical language partition.
+     */
     private function language_arg(mixed $value): string
     {
         if (is_scalar($value) && trim((string) $value) !== '') {
@@ -177,12 +230,18 @@ final class WP_FTS_WPCLI_Command
         return WP_FTS_TermNamespace::DEFAULT_LANG;
     }
 
+    /**
+     * Parse an integer option and clamp it to at least one.
+     */
     private function positive_int_arg(mixed $value, int $fallback): int
     {
         $number = is_numeric($value) ? (int) $value : $fallback;
         return max(1, $number);
     }
 
+    /**
+     * Parse an integer option and clamp it to zero or greater.
+     */
     private function non_negative_int_arg(mixed $value, int $fallback): int
     {
         $number = is_numeric($value) ? (int) $value : $fallback;

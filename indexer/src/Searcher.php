@@ -1,8 +1,22 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Scores indexed documents for a query using language-aware BM25.
+ *
+ * The searcher analyzes query text, resolves one query language partition, reads
+ * matching postings and active document lengths, then scores only documents that
+ * are active in that partition.
+ */
 final class WP_FTS_Searcher
 {
+    /**
+     * @param WP_FTS_Storage $storage Storage backend containing postings and
+     *        per-language metadata.
+     * @param object $analyzer Analyzer object exposing query analysis methods.
+     * @param float $k1 BM25 term-frequency saturation parameter.
+     * @param float $b BM25 document-length normalization parameter.
+     */
     public function __construct(
         private WP_FTS_Storage $storage,
         private object $analyzer,
@@ -12,8 +26,18 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @param array{mode?:string,limit?:int} $opts
-     * @return array<int,array{doc_id:int,score:float}>
+     * Search the index for documents matching a query.
+     *
+     * `mode` may be `OR` or `AND`; `AND` requires every query term to have a
+     * posting for a document. `limit` is clamped to at least 1. Language can be
+     * supplied with `query_lang`, `lang`, or `language`; otherwise the analyzer
+     * occurrence language or default language is used.
+     *
+     * @param array{mode?:string,limit?:int,query_lang?:string,lang?:string,language?:string,default_lang?:string,locale?:string} $opts
+     * @return array<int,array{doc_id:int,score:float}> Results sorted by
+     *         descending score and ascending doc id for ties.
+     * @throws InvalidArgumentException If `mode` is not `OR` or `AND`.
+     * @throws LogicException If the analyzer does not provide a query analyzer.
      */
     public function search(string $query, array $opts = []): array
     {
@@ -105,6 +129,12 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Analyze a query while supporting both current and legacy analyzer APIs.
+     *
+     * The preferred API is `analyze_query_occurrences()`. For older analyzers,
+     * this method tries `analyze_query()` with both `return` and `format`
+     * occurrence hints before falling back to whatever array that method returns.
+     *
      * @return array<int,array<string,mixed>|string>
      */
     private function analyze_query(string $query, array $opts): array
@@ -139,6 +169,15 @@ final class WP_FTS_Searcher
         return $this->normalize_query_analysis($this->analyzer->analyze_query($query, $analysisOpts));
     }
 
+    /**
+     * Prepare analyzer options with explicit query language aliases filled in.
+     *
+     * Older analyzers may read `lang` or `language` instead of `query_lang`, so
+     * an explicit query language is mirrored across all three names.
+     *
+     * @param array<string,mixed> $opts Public search options.
+     * @return array<string,mixed> Options passed to analyzer methods.
+     */
     private function query_analysis_options(array $opts): array
     {
         $analysisOpts = $opts;
@@ -153,6 +192,11 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Normalize analyzer output to a numerically indexed array.
+     *
+     * Non-array analyzer returns are treated as no query terms.
+     *
+     * @param mixed $analysis Raw analyzer result.
      * @return array<int,array<string,mixed>|string>
      */
     private function normalize_query_analysis(mixed $analysis): array
@@ -161,7 +205,10 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Check whether analyzer output contains structured occurrence rows.
+     *
      * @param array<int,array<string,mixed>|string> $analysis
+     * @return bool True when at least one item is an array.
      */
     private function has_occurrence_rows(array $analysis): bool
     {
@@ -175,7 +222,15 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Resolve the language partition for the whole query.
+     *
+     * Explicit search options win. Otherwise the first structured occurrence
+     * language or first already-namespaced term decides the partition. This keeps
+     * mixed analyzer output from accidentally querying multiple language stats in
+     * one BM25 calculation.
+     *
      * @param array<int,array<string,mixed>|string> $queryOccurrences
+     * @return string Canonical query language.
      */
     private function resolve_query_language(array $opts, array $queryOccurrences): string
     {
@@ -200,6 +255,12 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Convert analyzer query terms into stored term keys for one language.
+     *
+     * Terms already namespaced for another language are ignored. Unnamespaced
+     * terms inherit either their occurrence language or `$queryLang`. The result
+     * is unique and sorted so storage reads and tests are deterministic.
+     *
      * @param array<int,array<string,mixed>|string> $queryOccurrences
      * @return string[]
      */
@@ -241,6 +302,16 @@ final class WP_FTS_Searcher
         return $terms;
     }
 
+    /**
+     * Compute one term's BM25 contribution for one active document.
+     *
+     * @param int $tf Weighted term frequency in the document.
+     * @param int $docLen Document length for the query language partition.
+     * @param int $docCount Number of active documents in the partition.
+     * @param int $docFreq Active document frequency for the term.
+     * @param float $avgDocLen Average document length in the partition.
+     * @return float Positive BM25 contribution.
+     */
     private function bm25(int $tf, int $docLen, int $docCount, int $docFreq, float $avgDocLen): float
     {
         $idf = log(1.0 + (($docCount - $docFreq + 0.5) / ($docFreq + 0.5)));
@@ -250,6 +321,12 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Recompute document frequencies against active documents only.
+     *
+     * Stored `df` values may include tombstoned documents until `optimize()`
+     * compacts postings. Search scoring uses this filtered frequency so deleted
+     * documents do not affect IDF.
+     *
      * @param array<string,array<int,int>> $decodedByTerm
      * @param array<int,int> $activeDocLengths
      * @return array<string,int>

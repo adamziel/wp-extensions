@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Converts raw visible text into normalized, optionally stemmed index terms.
+ *
+ * The pipeline owns tokenization, Unicode normalization, CJK segmentation,
+ * optional term namespacing, and optional stemming. Analyzer classes use it for
+ * both documents and queries so both sides apply the same lexical contract.
+ */
 final class WP_FTS_LanguagePipeline
 {
     private WP_FTS_Normalizer $normalizer;
@@ -13,6 +20,13 @@ final class WP_FTS_LanguagePipeline
     private int $maxTermBytes;
 
     /**
+     * Configure the token analysis pipeline.
+     *
+     * Use `normalizer`, `snowball_stemmer`, or `polish_stemmer` to inject test
+     * doubles. Use `stemmer` for a custom stemmer; callables may accept either
+     * `($term)` or `($term, $language)`. `namespace_terms` is normally false for
+     * the high-level indexer, which namespaces after weighting.
+     *
      * @param array{
      *   normalizer?:WP_FTS_Normalizer,
      *   snowball_stemmer?:WP_FTS_SnowballStemmer,
@@ -43,6 +57,13 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Analyze text and return only term strings.
+     *
+     * Use this for legacy consumers that do not need per-term language metadata.
+     * New document/search code generally uses `analyze_detailed()`.
+     *
+     * @param string $text Plain visible text to tokenize.
+     * @param string $language Document or query language hint.
      * @return string[]
      */
     public function analyze(string $text, string $language): array
@@ -54,6 +75,15 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Analyze text and keep the language attached to every returned term.
+     *
+     * The language is canonicalized once per call and applied to every token.
+     * When `namespace_terms` is enabled, each `term` value is stored as
+     * `lang . "\\x1e" . term`; otherwise terms are returned without the
+     * namespace and the caller can decide when to namespace them.
+     *
+     * @param string $text Plain visible text to tokenize.
+     * @param string $language Document or query language hint.
      * @return array<int,array{term:string,lang:string}>
      */
     public function analyze_detailed(string $text, string $language): array
@@ -76,21 +106,46 @@ final class WP_FTS_LanguagePipeline
         return $terms;
     }
 
+    /**
+     * Canonicalize a language tag using the configured normalizer.
+     */
     public function canonicalize_language(string $language): string
     {
         return $this->normalizer->canonicalize_language($language);
     }
 
+    /**
+     * Return the primary language subtag for a language tag.
+     */
     public function base_language(string $language): string
     {
         return $this->normalizer->base_language($language);
     }
 
+    /**
+     * Build a namespaced term key using `lang . "\\x1e" . term`.
+     *
+     * @param string $language Language partition.
+     * @param string $term Normalized lexical term.
+     * @return string Namespaced storage key.
+     */
     public function namespace_term(string $language, string $term): string
     {
         return $this->canonicalize_language($language) . "\x1e" . $term;
     }
 
+    /**
+     * Normalize one raw token and apply stemming/length filters.
+     *
+     * CJK tokens skip stemming and Latin minimum-length pruning because the CJK
+     * tokenizer already emits single characters and bigrams as lexical units.
+     *
+     * @param string $rawToken Token text before case folding and dialect maps.
+     * @param string $language Language used for normalization and stemming.
+     * @param bool $isCjk True when the token came from a CJK script run.
+     * @return string|null Normalized term, or null when filtered by length or
+     *         byte-size limits.
+     */
     public function normalize_raw_token(string $rawToken, string $language, bool $isCjk = false): ?string
     {
         $language = $this->canonicalize_language($language);
@@ -114,6 +169,13 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Split text into raw tokens and CJK lexical units.
+     *
+     * The Unicode path first collects mixed-script word runs, then splits CJK and
+     * non-CJK runs so a Latin+CJK+Latin word run does not become one token. When
+     * Unicode regex support is unavailable, the fallback keeps ASCII tokens only.
+     *
+     * @param string $text Plain visible text.
      * @return array<int,array{text:string,is_cjk:bool}>
      */
     private function tokenize(string $text): array
@@ -147,6 +209,9 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Split a token whenever it crosses between CJK and non-CJK scripts.
+     *
+     * @param string $token Raw token from the Unicode tokenizer.
      * @return array<int,array{text:string,is_cjk:bool}>
      */
     private function split_script_runs(string $token): array
@@ -174,6 +239,13 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Build CJK tokens from a single CJK script run.
+     *
+     * Single-character runs are kept as-is. Longer runs become overlapping
+     * bigrams, which gives query-time matching more context without requiring a
+     * dictionary segmenter.
+     *
+     * @param string $run CJK-only text run.
      * @return string[]
      */
     private function cjk_tokens(string $run): array
@@ -193,6 +265,11 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Return UTF-8 characters as individual strings.
+     *
+     * Invalid UTF-8 yields an empty list so callers can safely drop the bad run.
+     *
+     * @param string $text UTF-8 text.
      * @return string[]
      */
     private function utf8_chars(string $text): array
@@ -204,11 +281,21 @@ final class WP_FTS_LanguagePipeline
         return $matches[0];
     }
 
+    /**
+     * Detect scripts handled by the CJK tokenizer path.
+     */
     private function is_cjk_char(string $char): bool
     {
         return (bool) preg_match('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]/u', $char);
     }
 
+    /**
+     * Route stemming to the language-specific adapter.
+     *
+     * Polish uses the conservative local stemmer. Other enabled languages go
+     * through the Snowball adapter, which returns the original term when the
+     * language is unsupported.
+     */
     private function stem_for_language(string $term, string $language): string
     {
         $base = $this->base_language($language);
@@ -219,6 +306,13 @@ final class WP_FTS_LanguagePipeline
         return $this->snowballStemmer->stem($term, $language);
     }
 
+    /**
+     * Normalize a caller-supplied stemmer option into a stemmer object.
+     *
+     * @param mixed $stemmer `WP_FTS_Stemmer`, callable, or null.
+     * @return WP_FTS_Stemmer|null Adapter object, or null when no custom stemmer
+     *         was supplied.
+     */
     private function normalize_custom_stemmer(mixed $stemmer): ?WP_FTS_Stemmer
     {
         if ($stemmer instanceof WP_FTS_Stemmer) {

@@ -1,6 +1,12 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Load the optional Composer dependencies first, then require source files in an
+ * order that satisfies interface and helper dependencies without relying on an
+ * autoloader. This keeps the plugin entrypoint usable in bare WordPress installs
+ * and the standalone test harness.
+ */
 $wp_fts_vendor_autoload = dirname(__DIR__) . '/vendor/autoload.php';
 if (is_file($wp_fts_vendor_autoload)) {
     require_once $wp_fts_vendor_autoload;
@@ -27,4 +33,8 @@ foreach ($wp_fts_files as $wp_fts_file) {
     require_once $wp_fts_file;
 }
 
+/**
+ * Avoid leaking bootstrap-only variables into the global namespace after the
+ * plugin file includes this script.
+ */
 unset($wp_fts_file, $wp_fts_files, $wp_fts_vendor_autoload);

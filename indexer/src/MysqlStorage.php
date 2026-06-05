@@ -1,6 +1,13 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * WordPress MySQL storage backend for the full-text index.
+ *
+ * Terms are stored in a binary-key table, documents keep a tombstone flag, and
+ * per-language lengths live in a separate table so BM25 can score inside one
+ * language partition without mixing collection statistics.
+ */
 final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
 {
     private object $wpdb;
@@ -9,6 +16,13 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
     private string $docLengthsTable;
     private string $metaTable;
 
+    /**
+     * Bind the backend to a WordPress database connection and table prefix.
+     *
+     * @param object $wpdb WordPress `$wpdb`-compatible object.
+     * @param string|null $prefix Optional table prefix; defaults to
+     *        `$wpdb->prefix`.
+     */
     public function __construct(object $wpdb, ?string $prefix = null)
     {
         $this->wpdb = $wpdb;
@@ -19,6 +33,14 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
         $this->metaTable = $prefix . 'fts_meta';
     }
 
+    /**
+     * Create or update the index tables.
+     *
+     * `dbDelta()` is used when available so WordPress installations can evolve
+     * schemas in place. Outside WordPress or without dbDelta, the raw CREATE
+     * statements are executed. `DEFAULT CHARSET=binary` keeps term keys and
+     * postings byte-stable.
+     */
     public function create_tables(): void
     {
         $charset = 'DEFAULT CHARSET=binary';
@@ -63,6 +85,12 @@ PRIMARY KEY  (lang,k)
         }
     }
 
+    /**
+     * Return existing term rows for the requested keys.
+     *
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array{df:int,postings:string}> Rows keyed by term.
+     */
     public function get_terms(array $terms): array
     {
         $terms = array_values(array_unique(array_map('strval', $terms)));
@@ -89,6 +117,14 @@ PRIMARY KEY  (lang,k)
         return $result;
     }
 
+    /**
+     * Insert, replace, or remove one term row.
+     *
+     * MySQL stores term keys in `varbinary(255)`, so namespaced keys longer than
+     * that are rejected before the database write.
+     *
+     * @throws InvalidArgumentException If the namespaced term exceeds 255 bytes.
+     */
     public function put_term(string $term, int $df, string $postings): void
     {
         if (strlen($term) > WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES) {
@@ -111,6 +147,9 @@ ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq), postings = VALUES(postings)
         $this->wpdb->query($sql);
     }
 
+    /**
+     * Delete one term row by its stored key.
+     */
     public function delete_term(string $term): void
     {
         $this->wpdb->query($this->wpdb->prepare(
@@ -119,6 +158,15 @@ ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq), postings = VALUES(postings)
         ));
     }
 
+    /**
+     * Return active document lengths, optionally for one language partition.
+     *
+     * Aggregate reads come from the document table. Language-specific reads join
+     * the per-language lengths table with active documents to exclude tombstones.
+     *
+     * @param int[] $doc_ids Document ids to inspect.
+     * @return array<int,int> Positive lengths keyed by document id.
+     */
     public function get_doc_lengths(array $doc_ids, ?string $lang = null): array
     {
         $doc_ids = array_values(array_unique(array_map('intval', $doc_ids)));
@@ -156,6 +204,14 @@ WHERE d.is_deleted = 0 AND dl.lang = %s AND dl.doc_id IN ({$placeholders})",
         return $lengths;
     }
 
+    /**
+     * Fetch one document metadata row and its per-language lengths.
+     *
+     * Older rows without length-table entries fall back to the aggregate
+     * document length under the primary language.
+     *
+     * @return array{doc_len:int,lang:string,primary_lang:string,lang_lengths:array<string,int>,content_hash:?string,deleted:bool}|null
+     */
     public function get_doc(int $doc_id): ?array
     {
         $row = $this->wpdb->get_row($this->wpdb->prepare(
@@ -194,6 +250,12 @@ WHERE d.is_deleted = 0 AND dl.lang = %s AND dl.doc_id IN ({$placeholders})",
         ];
     }
 
+    /**
+     * Store document metadata in either language-aware or legacy shape.
+     *
+     * New calls replace all per-language length rows for the document. Legacy
+     * calls store aggregate length under the default language partition.
+     */
     public function put_doc(int $doc_id, int|string $doc_len_or_primary_lang, string|array $hash_or_lang_lengths, ?string $hash = null): void
     {
         [$primaryLang, $langLengths, $contentHash] = $this->normalize_doc_payload(
@@ -229,6 +291,12 @@ ON DUPLICATE KEY UPDATE doc_len = VALUES(doc_len)",
         }
     }
 
+    /**
+     * Mark a document as deleted without immediately rewriting postings.
+     *
+     * Unknown ids create tombstones so repeated deletes stay idempotent until
+     * `optimize()` compacts tables.
+     */
     public function delete_doc(int $doc_id): void
     {
         $sql = $this->wpdb->prepare(
@@ -241,6 +309,14 @@ ON DUPLICATE KEY UPDATE is_deleted = 1",
         $this->wpdb->query($sql);
     }
 
+    /**
+     * Return aggregate or language-specific collection metadata.
+     *
+     * Aggregate reads sum all language rows by key. Language-specific reads use
+     * the canonical language partition.
+     *
+     * @return array{doc_count:int,len_sum:int}
+     */
     public function get_meta(?string $lang = null): array
     {
         if ($lang === null) {
@@ -262,6 +338,11 @@ ON DUPLICATE KEY UPDATE is_deleted = 1",
         return $meta;
     }
 
+    /**
+     * Add signed metadata deltas with zero-clamped storage totals.
+     *
+     * Supports both `($lang, $d_docs, $d_len)` and legacy `($d_docs, $d_len)`.
+     */
     public function add_meta(int|string $lang_or_d_docs, int $d_docs_or_d_len, ?int $d_len = null): void
     {
         [$lang, $dDocs, $lenDelta] = $this->normalize_meta_delta($lang_or_d_docs, $d_docs_or_d_len, $d_len);
@@ -279,6 +360,11 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
         }
     }
 
+    /**
+     * List all stored term keys in sorted order.
+     *
+     * @return string[]
+     */
     public function all_terms(): array
     {
         $terms = array_map('strval', $this->wpdb->get_col("SELECT term FROM {$this->termsTable} ORDER BY term ASC") ?: []);
@@ -287,6 +373,11 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
         return $terms;
     }
 
+    /**
+     * List document ids, optionally including tombstones.
+     *
+     * @return int[]
+     */
     public function all_doc_ids(bool $include_deleted = false): array
     {
         $where = $include_deleted ? '' : ' WHERE is_deleted = 0';
@@ -296,25 +387,44 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
         return $ids;
     }
 
+    /**
+     * Start a database transaction.
+     */
     public function begin_transaction(): void
     {
         $this->wpdb->query('START TRANSACTION');
     }
 
+    /**
+     * Commit the current database transaction.
+     */
     public function commit(): void
     {
         $this->wpdb->query('COMMIT');
     }
 
+    /**
+     * Roll back the current database transaction.
+     */
     public function rollback(): void
     {
         $this->wpdb->query('ROLLBACK');
     }
 
+    /**
+     * No-op for MySQL because writes are sent immediately.
+     */
     public function flush(): void
     {
     }
 
+    /**
+     * Compact tombstoned documents and rebuild collection metadata.
+     *
+     * Deleted ids are removed from every posting list, empty terms are deleted,
+     * document/length tombstones are purged, and metadata is rebuilt from active
+     * per-language length rows.
+     */
     public function optimize(): void
     {
         $deletedIds = array_map('intval', $this->wpdb->get_col(
@@ -354,7 +464,10 @@ GROUP BY dl.lang"
     }
 
     /**
-     * @param string[] $sql
+     * Run WordPress dbDelta for CREATE statements when available.
+     *
+     * @param string[] $sql CREATE TABLE statements.
+     * @return bool True when dbDelta was loaded and invoked.
      */
     private function run_db_delta(array $sql): bool
     {
@@ -374,9 +487,12 @@ GROUP BY dl.lang"
     }
 
     /**
+     * Normalize `put_doc()` overloads into primary language, lengths, and hash.
+     *
      * @param int|string $doc_len_or_primary_lang
      * @param string|array<string,int> $hash_or_lang_lengths
      * @return array{0:string,1:array<string,int>,2:string}
+     * @throws InvalidArgumentException If the language-aware shape is incomplete.
      */
     private function normalize_doc_payload(int|string $doc_len_or_primary_lang, string|array $hash_or_lang_lengths, ?string $hash): array
     {
@@ -401,6 +517,8 @@ GROUP BY dl.lang"
     }
 
     /**
+     * Normalize `add_meta()` overloads into language, doc delta, and length delta.
+     *
      * @return array{0:string,1:int,2:int}
      */
     private function normalize_meta_delta(int|string $lang_or_d_docs, int $d_docs_or_d_len, ?int $d_len): array

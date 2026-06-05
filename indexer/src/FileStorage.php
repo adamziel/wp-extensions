@@ -1,6 +1,12 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * JSON-file storage backend for small local indexes and tests.
+ *
+ * The backend stores binary postings as base64 in a versioned JSON payload,
+ * supports snapshot rollback, and persists immediately outside transactions.
+ */
 final class WP_FTS_Storage_File implements WP_FTS_Storage
 {
     private string $path;
@@ -19,6 +25,15 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
 
     private bool $dirty = false;
 
+    /**
+     * Open or create a file-backed index.
+     *
+     * The parent directory is created when missing. Existing JSON state is loaded
+     * and normalized to the current language-aware shape.
+     *
+     * @param string $path JSON file path for the index state.
+     * @throws JsonException If an existing state file contains invalid JSON.
+     */
     public function __construct(string $path)
     {
         $this->path = $path;
@@ -29,6 +44,12 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         $this->load();
     }
 
+    /**
+     * Return existing term rows for the requested keys.
+     *
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array{df:int,postings:string}> Rows keyed by term.
+     */
     public function get_terms(array $terms): array
     {
         $result = [];
@@ -41,6 +62,11 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         return $result;
     }
 
+    /**
+     * Store or remove one term row and mark the file dirty.
+     *
+     * A non-positive document frequency deletes the row.
+     */
     public function put_term(string $term, int $df, string $postings): void
     {
         if ($df <= 0) {
@@ -55,12 +81,23 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         $this->changed();
     }
 
+    /**
+     * Remove one term row if it exists.
+     */
     public function delete_term(string $term): void
     {
         unset($this->terms[$term]);
         $this->changed();
     }
 
+    /**
+     * Return active document lengths, optionally for one language partition.
+     *
+     * Deleted documents and missing language partitions are omitted.
+     *
+     * @param int[] $doc_ids Document ids to inspect.
+     * @return array<int,int> Positive lengths keyed by document id.
+     */
     public function get_doc_lengths(array $doc_ids, ?string $lang = null): array
     {
         $lang = $lang === null ? null : $this->normalize_lang($lang);
@@ -80,11 +117,22 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         return $lengths;
     }
 
+    /**
+     * Fetch one document metadata row or tombstone.
+     *
+     * @return array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}|null
+     */
     public function get_doc(int $doc_id): ?array
     {
         return $this->docs[$doc_id] ?? null;
     }
 
+    /**
+     * Store document metadata in either language-aware or legacy shape.
+     *
+     * New calls pass primary language, per-language lengths, and content hash.
+     * Legacy calls pass aggregate doc length and hash.
+     */
     public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void
     {
         [$primaryLang, $normalizedLengths, $contentHash] = $this->normalize_put_doc_args(
@@ -104,6 +152,9 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         $this->changed();
     }
 
+    /**
+     * Mark a document deleted, creating a tombstone for unknown ids.
+     */
     public function delete_doc(int $doc_id): void
     {
         if (!isset($this->docs[$doc_id])) {
@@ -121,6 +172,14 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         $this->changed();
     }
 
+    /**
+     * Return derived collection metadata for active documents.
+     *
+     * Metadata is rebuilt from document rows before every read so on-disk state
+     * cannot drift from document lengths.
+     *
+     * @return array{doc_count:int,len_sum:int}
+     */
     public function get_meta(?string $lang = null): array
     {
         $this->sync_meta_from_docs();
@@ -133,6 +192,11 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         return $this->meta[$lang] ?? ['doc_count' => 0, 'len_sum' => 0];
     }
 
+    /**
+     * Add signed deltas to stored metadata and mark the file dirty.
+     *
+     * Supports both `($lang, $d_docs, $d_len)` and legacy `($d_docs, $d_len)`.
+     */
     public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void
     {
         [$normalizedLang, $docDelta, $lenDelta] = $this->normalize_meta_args($lang, $d_docs, $d_len);
@@ -144,6 +208,11 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         $this->changed();
     }
 
+    /**
+     * List all stored term keys in sorted order.
+     *
+     * @return string[]
+     */
     public function all_terms(): array
     {
         $terms = array_keys($this->terms);
@@ -152,6 +221,11 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         return $terms;
     }
 
+    /**
+     * List document ids, optionally including tombstones.
+     *
+     * @return int[]
+     */
     public function all_doc_ids(bool $include_deleted = false): array
     {
         $ids = [];
@@ -165,6 +239,9 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         return $ids;
     }
 
+    /**
+     * Start a rollback scope by snapshotting loaded arrays.
+     */
     public function begin_transaction(): void
     {
         $this->snapshots[] = [
@@ -174,6 +251,9 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         ];
     }
 
+    /**
+     * Commit a rollback scope and persist when the outermost transaction closes.
+     */
     public function commit(): void
     {
         array_pop($this->snapshots);
@@ -183,6 +263,9 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         }
     }
 
+    /**
+     * Restore the latest snapshot and reload disk state after outer rollback.
+     */
     public function rollback(): void
     {
         $snapshot = array_pop($this->snapshots);
@@ -199,6 +282,9 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         }
     }
 
+    /**
+     * Persist dirty changes when not inside a transaction.
+     */
     public function flush(): void
     {
         if ($this->dirty && $this->snapshots === []) {
@@ -207,6 +293,9 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         }
     }
 
+    /**
+     * Remove tombstoned documents from postings and persist compacted state.
+     */
     public function optimize(): void
     {
         $deleted = [];
@@ -245,6 +334,14 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         $this->changed();
     }
 
+    /**
+     * Load and normalize JSON state from disk.
+     *
+     * Version 1 aggregate metadata is accepted and upgraded in memory. Invalid
+     * base64 postings are skipped instead of poisoning the whole index.
+     *
+     * @throws JsonException If the JSON document cannot be decoded.
+     */
     private function load(): void
     {
         $this->terms = [];
@@ -292,6 +389,13 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         ksort($this->docs, SORT_NUMERIC);
     }
 
+    /**
+     * Write the current state to disk using an atomic rename.
+     *
+     * Binary postings are base64-encoded because JSON cannot carry raw blobs.
+     *
+     * @throws JsonException If encoding fails.
+     */
     private function persist(): void
     {
         $terms = [];
@@ -321,6 +425,9 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         rename($tmp, $this->path);
     }
 
+    /**
+     * Mark state dirty and persist immediately outside transactions.
+     */
     private function changed(): void
     {
         $this->dirty = true;
@@ -331,6 +438,11 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
     }
 
     /**
+     * Normalize metadata loaded from current or legacy JSON state.
+     *
+     * Legacy aggregate payloads with top-level `doc_count`/`len_sum` are mapped
+     * to the empty-language partition until document rows rebuild metadata.
+     *
      * @param mixed $meta
      * @return array<string,array{doc_count:int,len_sum:int}>
      */
@@ -365,7 +477,14 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
     }
 
     /**
+     * Normalize `put_doc()` overloads into one internal payload.
+     *
+     * @param string|int $primary_lang Primary language or legacy document length.
+     * @param array<string,int>|string $lang_lengths Per-language lengths or
+     *        legacy content hash.
+     * @param string|null $hash New-shape content hash.
      * @return array{string,array<string,int>,string}
+     * @throws InvalidArgumentException For unsupported argument combinations.
      */
     private function normalize_put_doc_args(string|int $primary_lang, array|string $lang_lengths, ?string $hash): array
     {
@@ -389,6 +508,8 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
     }
 
     /**
+     * Drop non-positive lengths, normalize language keys, and sort them.
+     *
      * @param array<string,int> $lang_lengths
      * @return array<string,int>
      */
@@ -407,13 +528,22 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         return $normalized;
     }
 
+    /**
+     * Normalize a storage-local language key.
+     *
+     * File storage preserves the legacy empty-string aggregate partition and
+     * otherwise trims only; canonicalization happens in higher-level adapters.
+     */
     private function normalize_lang(string $lang): string
     {
         return trim($lang);
     }
 
     /**
+     * Normalize `add_meta()` overloads into language, doc delta, and length delta.
+     *
      * @return array{string,int,int}
+     * @throws InvalidArgumentException For unsupported argument combinations.
      */
     private function normalize_meta_args(string|int $lang, int $d_docs, ?int $d_len): array
     {
@@ -428,6 +558,9 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         return [$this->normalize_lang($lang), $d_docs, $d_len];
     }
 
+    /**
+     * Rebuild per-language metadata from active document rows.
+     */
     private function sync_meta_from_docs(): void
     {
         $meta = [];
@@ -450,6 +583,8 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
     }
 
     /**
+     * Compute aggregate metadata across active documents.
+     *
      * @return array{doc_count:int,len_sum:int}
      */
     private function aggregate_meta(): array

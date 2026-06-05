@@ -1,18 +1,39 @@
 <?php
 declare(strict_types=1);
 
+/**
+ * Canonicalizes language tags and normalizes token text before stemming.
+ *
+ * This class keeps token normalization deterministic across PHP installations.
+ * It uses mbstring when available, but ships explicit lowercase and folding
+ * maps so tests and indexing still work under `php -n`.
+ */
 final class WP_FTS_Normalizer
 {
     private bool $foldDiacritics;
 
     /**
-     * @param array{fold_diacritics?:bool} $options
+     * Configure token normalization.
+     *
+     * @param array{fold_diacritics?:bool} $options Set `fold_diacritics` false
+     *        when accents and language-specific letters must remain distinct in
+     *        the index.
      */
     public function __construct(array $options = [])
     {
         $this->foldDiacritics = (bool) ($options['fold_diacritics'] ?? true);
     }
 
+    /**
+     * Convert locale-style input into a stable language tag.
+     *
+     * The normalizer accepts underscores, lower/upper case mixtures, and common
+     * Chinese script/region hints. Empty input returns `und`.
+     *
+     * @param string $language User, locale, or HTML language value.
+     * @return string Canonical language tag such as `en`, `en-US`, `zh-Hans`,
+     *         or `und`.
+     */
     public function canonicalize_language(string $language): string
     {
         $language = trim(str_replace('_', '-', $language));
@@ -52,11 +73,20 @@ final class WP_FTS_Normalizer
         return implode('-', $canonical);
     }
 
+    /**
+     * Check whether a language subtag is made only of ASCII digits.
+     */
     private function is_ascii_digit(string $value): bool
     {
         return $value !== '' && preg_match('/^[0-9]+$/', $value) === 1;
     }
 
+    /**
+     * Return the primary language subtag after canonicalization.
+     *
+     * @param string $language Language tag or locale.
+     * @return string Primary language, or `und` for empty input.
+     */
     public function base_language(string $language): string
     {
         $language = $this->canonicalize_language($language);
@@ -65,6 +95,18 @@ final class WP_FTS_Normalizer
         return $separator === false ? $language : substr($language, 0, $separator);
     }
 
+    /**
+     * Normalize one token for the supplied language.
+     *
+     * The order is intentional: lowercase first, apply dialect maps second, then
+     * optionally fold diacritics. This lets dialect rules match their normalized
+     * lower-case spellings.
+     *
+     * @param string $token Raw token text from the tokenizer.
+     * @param string $language Language tag used for locale-sensitive casing and
+     *        folding.
+     * @return string Normalized token text.
+     */
     public function normalize_token(string $token, string $language): string
     {
         $language = $this->canonicalize_language($language);
@@ -79,8 +121,11 @@ final class WP_FTS_Normalizer
     }
 
     /**
-     * Turkish casing is locale-sensitive: ASCII I lowercases to dotless i.
-     * PHP has no per-call locale casing, so handle the two special letters first.
+     * Lowercase a token with Turkish special casing handled explicitly.
+     *
+     * Turkish casing is locale-sensitive: ASCII I lowercases to dotless i. PHP
+     * has no per-call locale casing, so the special letters are handled before
+     * `mb_strtolower()` or the bundled fallback map.
      */
     private function lowercase(string $token, string $language): string
     {
@@ -98,6 +143,12 @@ final class WP_FTS_Normalizer
         return $this->lowercase_without_mbstring($token, $language);
     }
 
+    /**
+     * Lowercase UTF-8 text without relying on mbstring.
+     *
+     * ASCII is handled by `strtolower()` and common non-ASCII uppercase letters
+     * are mapped explicitly so `php -n` keeps analyzer output stable.
+     */
     private function lowercase_without_mbstring(string $token, string $language): string
     {
         if ($this->base_language($language) === 'tr') {
@@ -110,6 +161,13 @@ final class WP_FTS_Normalizer
         return strtr(strtolower($token), $this->utf8_uppercase_lowercase_map());
     }
 
+    /**
+     * Apply language-specific dialect equivalence maps.
+     *
+     * English maps selected British spellings to American spellings. Chinese has
+     * placeholders for future script conversion but currently leaves tokens
+     * unchanged.
+     */
     private function normalize_dialect(string $token, string $language): string
     {
         $base = $this->base_language($language);
@@ -124,6 +182,12 @@ final class WP_FTS_Normalizer
         return $token;
     }
 
+    /**
+     * Normalize a small set of common English spelling variants.
+     *
+     * This is not a general spellchecker; it only keeps common search pairs such
+     * as color/colour in the same term bucket.
+     */
     private function normalize_english_dialect(string $token): string
     {
         $map = [
@@ -159,8 +223,10 @@ final class WP_FTS_Normalizer
     }
 
     /**
-     * Placeholder hook for a future Traditional/Simplified conversion table.
-     * The empty map keeps v1 deterministic without pretending to do full conversion.
+     * Return Chinese script-normalized token text when a conversion table exists.
+     *
+     * Placeholder hook for a future Traditional/Simplified conversion table. The
+     * empty map keeps v1 deterministic without pretending to do full conversion.
      */
     private function normalize_chinese_dialect(string $token, string $language): string
     {
@@ -172,6 +238,13 @@ final class WP_FTS_Normalizer
         return $maps[$language][$token] ?? $token;
     }
 
+    /**
+     * Fold diacritics with language-specific exceptions.
+     *
+     * German keeps umlaut equivalences such as ae/oe/ue, Turkish preserves its
+     * casing decisions before folding, and other Latin-script languages use the
+     * broad fallback map.
+     */
     private function fold_for_language(string $token, string $language): string
     {
         return match ($this->base_language($language)) {
@@ -183,6 +256,10 @@ final class WP_FTS_Normalizer
     }
 
     /**
+     * Return Polish-specific fold mappings.
+     *
+     * Kept separate for tests and future language-specific tuning.
+     *
      * @return array<string,string>
      */
     private function polish_fold_map(): array
@@ -201,6 +278,8 @@ final class WP_FTS_Normalizer
     }
 
     /**
+     * Return German fold mappings, including combining marks.
+     *
      * @return array<string,string>
      */
     private function german_fold_map(): array
@@ -229,6 +308,8 @@ final class WP_FTS_Normalizer
     }
 
     /**
+     * Return Turkish fold mappings after Turkish-aware lowercasing.
+     *
      * @return array<string,string>
      */
     private function turkish_fold_map(): array
@@ -255,6 +336,11 @@ final class WP_FTS_Normalizer
     }
 
     /**
+     * Return the broad Latin fallback fold map used by most languages.
+     *
+     * The map includes precomposed letters and common combining marks so the
+     * analyzer remains deterministic without intl Normalizer support.
+     *
      * @return array<string,string>
      */
     private function latin_fallback_fold_map(): array
@@ -337,6 +423,11 @@ final class WP_FTS_Normalizer
     }
 
     /**
+     * Return explicit uppercase-to-lowercase mappings for no-mbstring runs.
+     *
+     * This covers the same Latin letters the folding maps understand and keeps
+     * analyzer behavior stable in minimal PHP environments.
+     *
      * @return array<string,string>
      */
     private function utf8_uppercase_lowercase_map(): array
@@ -407,7 +498,13 @@ final class WP_FTS_Normalizer
     }
 
     /**
+     * Canonicalize Chinese language tags to generic, Simplified, or Traditional.
+     *
+     * Script subtags (`Hans`, `Hant`) win over regions. Without either hint the
+     * generic `zh` partition is used.
+     *
      * @param string[] $parts
+     * @return string `zh`, `zh-Hans`, or `zh-Hant`.
      */
     private function canonicalize_chinese(array $parts): string
     {
