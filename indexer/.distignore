@@ -1,0 +1,13 @@
+.git
+.gitignore
+.distignore
+.cao
+.phpunit.result.cache
+.DS_Store
+*.tmp
+*.log
+__pycache__
+tests
+goal.md
+composer.lock
+vendor/bin
