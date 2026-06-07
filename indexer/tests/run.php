@@ -1682,6 +1682,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_rest_routes'] = [];
     $GLOBALS['wp_fts_test_posts'] = [];
     $GLOBALS['wp_fts_test_get_post_callbacks'] = [];
+    $GLOBALS['wp_fts_test_do_blocks'] = [];
     $GLOBALS['wp_fts_test_post_types'] = [
         'post' => (object) ['public' => true, 'exclude_from_search' => false],
         'page' => (object) ['public' => true, 'exclude_from_search' => false],
@@ -1875,6 +1876,15 @@ if (!function_exists('apply_filters')) {
     }
 }
 
+if (!function_exists('do_blocks')) {
+    function do_blocks(string $content): string
+    {
+        $rendered = $GLOBALS['wp_fts_test_do_blocks'][$content] ?? null;
+
+        return is_string($rendered) ? $rendered : $content;
+    }
+}
+
 wp_fts_test_reset_wordpress_fakes();
 
 test_case('plugin bootstrap registers WordPress lifecycle hooks and preserves CLI-only bootstrap', function (): void {
@@ -2010,10 +2020,17 @@ test_case('runtime post hooks queue bounded indexing and tombstone invisible pos
         'ID' => 101,
         'post_title' => 'Needle',
         'post_content' => '<p>alpha beta alpha</p>',
+        'post_excerpt' => 'RuntimeExcerptSignal',
         'post_status' => 'publish',
         'post_type' => 'post',
+        'post_date_gmt' => '2026-06-07 00:00:00',
+        'custom_fields' => [
+            'subtitle' => 'RuntimeCustomSignal',
+        ],
     ];
     $GLOBALS['wp_fts_test_posts'][101] = $post;
+    $GLOBALS['wp_fts_test_options']['wp_fts_index_custom_fields'] = ['subtitle'];
+    $GLOBALS['wp_fts_test_do_blocks'][$post->post_content] = '<p>alpha beta alpha</p><p>RuntimeRenderedSignal</p>';
 
     try {
         WP_FTS_Plugin::handle_post_save(101, $post, true);
@@ -2026,6 +2043,18 @@ test_case('runtime post hooks queue bounded indexing and tombstone invisible pos
         assert_true(isset($fake->docs[101]) && $fake->docs[101]['is_deleted'] === 0, 'queue processing should write an active document');
         assert_true($fake->terms !== [], 'queue processing should write term postings');
         assert_same([101], array_column(WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'doc_id'), 'search helper should expose the indexed public post');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeExcerptSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include extracted excerpts');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeCustomSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include selected custom fields');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeRenderedSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include rendered-only block output');
+        $filtered = (new WP_FTS_Searcher(WP_FTS_Plugin::storage(false), new WP_FTS_Analyzer()))->search('Needle', [
+            'lang' => 'en',
+            'include_total' => true,
+            'post_status' => 'publish',
+        ]);
+        assert_same(1, $filtered['total'], 'queued indexing should write metadata usable by status filters');
+        assert_contains('RuntimeExcerptSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep excerpt text for snippets');
+        assert_contains('RuntimeCustomSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep custom field text for snippets');
+        assert_contains('RuntimeRenderedSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep rendered text for snippets');
 
         $post->post_status = 'draft';
         WP_FTS_Plugin::handle_status_transition('draft', 'publish', $post);
@@ -3114,6 +3143,56 @@ test_case('post content extractor indexes realistic WordPress fields and filters
     assert_same(['Taxonomy Beacon'], $metadata['terms']['category'], 'metadata should include taxonomy terms');
     assert_same(['Custom Orbit Signal'], $metadata['custom_fields']['subtitle'], 'metadata should include selected custom fields');
     assert_contains('Rendered Shortcode Signal', $metadata['search_text'], 'metadata search text should include rendered shortcode content');
+});
+
+test_case('index_post preserves extracted fields and metadata during runtime replacement', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer();
+    $extractor = new WP_FTS_PostContentExtractor();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer, $extractor);
+    $render = static fn(string $content, object $post, array $opts): string => '<p>Body Token</p><p>RenderedOnlyToken</p>';
+    $post = (object) [
+        'ID' => 7,
+        'post_title' => 'Title Token',
+        'post_content' => '<p>Body Token</p>',
+        'post_excerpt' => 'ExcerptOnlyToken',
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-06-07 00:00:00',
+        'custom_fields' => [
+            'subtitle' => 'CustomOnlyToken',
+        ],
+    ];
+    $extractOptions = [
+        'lang' => 'en',
+        'custom_fields' => ['subtitle'],
+        'render_content_callback' => $render,
+    ];
+    $extracted = $extractor->extract($post, $extractOptions);
+    $indexer->index_document_fields(7, $extracted['fields'], [
+        'lang' => 'en',
+        'metadata' => $extracted['metadata'],
+        'field_boosts' => $extracted['field_boosts'],
+    ]);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same(1, count($searcher->search('ExcerptOnlyToken', ['lang' => 'en'])), 'full extractor index should make excerpt text searchable');
+    assert_same(1, count($searcher->search('Title', ['lang' => 'en', 'post_status' => 'publish'])), 'full extractor index should write status metadata');
+
+    $runtimeOptions = $extractOptions;
+    $runtimeOptions['metadata'] = ['runtime_marker' => 'post-save'];
+    $indexer->index_post($post, $runtimeOptions);
+
+    assert_same(1, count($searcher->search('ExcerptOnlyToken', ['lang' => 'en'])), 'index_post replacement should preserve excerpt searchability');
+    assert_same(1, count($searcher->search('CustomOnlyToken', ['lang' => 'en'])), 'index_post replacement should preserve custom field searchability');
+    assert_same(1, count($searcher->search('RenderedOnlyToken', ['lang' => 'en'])), 'index_post replacement should preserve rendered-only searchability');
+    assert_same(1, count($searcher->search('Title', ['lang' => 'en', 'post_status' => 'publish'])), 'index_post replacement should preserve metadata filters');
+
+    $metadata = WP_FTS_StorageCompat::get_doc_metadata($storage, [7])[7] ?? [];
+    assert_same('publish', $metadata['post_status'] ?? null, 'index_post replacement should keep active post status metadata');
+    assert_same(['CustomOnlyToken'], $metadata['custom_fields']['subtitle'] ?? null, 'index_post replacement should keep custom field metadata');
+    assert_contains('RenderedOnlyToken', $metadata['search_text'] ?? '', 'index_post replacement should keep rendered text for snippets');
+    assert_same('post-save', $metadata['runtime_marker'] ?? null, 'index_post replacement should preserve caller metadata extras');
 });
 
 test_case('post content extractor does not double index static block visible text', function (): void {

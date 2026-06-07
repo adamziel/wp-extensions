@@ -1,26 +1,38 @@
 # Limitations
 
-This page documents the current branch, not the intended final production
-architecture.
+This page documents the current implementation and the remaining production
+caveats operators need to account for.
 
 ## Runtime Integration
 
 - The plugin exposes WP-CLI commands when `WP_CLI` is active.
+- It registers activation, deactivation, uninstall, post-save, status
+  transition, trash/delete, WP-Cron queue, and REST search hooks when WordPress
+  hook APIs are available.
 - It does not currently replace WordPress front-end search.
-- It does not register post-save, post-delete, transition, activation, or
-  deactivation hooks.
-- Activating the plugin does not create tables; the first `wp fts` command does.
-- There is no settings screen or persisted configuration.
+- There is no settings screen for analyzer, search, or extractor configuration;
+  operational options such as schema version and pending queue state are managed
+  internally.
+- Runtime saves are processed through a bounded option-backed queue. This keeps
+  hook work small, but it is not a durable external job queue.
+- Uninstall currently clears operational options and pending queue state but
+  intentionally retains index tables and data.
 
 ## Content Scope
 
-- `wp fts reindex` indexes `post_title` and `post_content`.
-- Custom fields, taxonomies, excerpts, rendered block output, comments, and
-  attachments are not indexed by the WP-CLI reindex path.
-- There is no public WordPress filter yet for extending the composed indexing
-  HTML.
-- Programmatic callers can index custom HTML with `WP_FTS_Indexer`, but that is
-  separate from the default CLI workflow.
+- Full WP-CLI reindexing and runtime post-save indexing share the same
+  `WP_FTS_PostContentExtractor` path.
+- The extractor indexes title, content, excerpt, rendered block deltas, taxonomy
+  terms, selected custom fields, field boosts, and bounded product metadata.
+- Custom fields must be selected through `custom_fields`, `custom_field_keys`,
+  the `wp_fts_index_custom_fields` option, or the `wp_fts_post_custom_fields`
+  filter.
+- Shortcode rendering is opt-in because shortcode callbacks can run arbitrary
+  site code.
+- Comments, media attachment contents, and complete template-rendered pages are
+  not indexed by the default workflow.
+- Programmatic callers can still index custom HTML with `WP_FTS_Indexer` when
+  they need a document shape outside the WordPress post extractor.
 
 ## Language Detection
 
@@ -59,14 +71,15 @@ not understand words, compounds, or language-specific segmentation rules.
 Current search supports:
 
 - `OR` and `AND` term matching;
-- `limit`;
+- `limit` and `offset`;
 - one query language;
+- post type, status, and GMT date filters when document metadata is present;
+- snippets and highlighting from bounded extracted metadata text;
 - BM25 scoring with configurable `k1` and `b` for programmatic callers.
 
 It does not support:
 
 - phrases or positions;
-- snippets or highlighting;
 - facets;
 - field-specific explanations;
 - typo tolerance;
@@ -76,20 +89,24 @@ It does not support:
 
 ## Storage And Concurrency
 
-Posting lists are stored as whole binary blobs per term. This has two major
-consequences:
+The MySQL backend stores postings as rows keyed by `(term, doc_id)` instead of
+whole per-term blobs. This avoids the previous lost-update pattern where two
+writers rewrote the same decoded term payload for different documents.
 
-- large or common terms are expensive to update because the full posting blob is
-  rewritten;
-- concurrent index writers can lose updates when they read the same term,
-  independently modify the decoded postings, and write the blob back.
+Important caveats remain:
 
-Use one writer at a time for reindex, delete, and optimize operations on this
-branch.
+- large or common terms still produce many posting rows;
+- bulk reindex, delete, and optimize do not have a distributed lock;
+- file and in-memory storage are not production concurrency backends;
+- live behavior depends on the site's database isolation level, object cache,
+  cron reliability, and hosting limits.
+
+Use one bulk writer at a time until the target environment has been validated.
 
 ## MySQL Error Handling
 
 The MySQL backend issues `$wpdb` queries directly. It uses transactions around
-document updates and `dbDelta()` when available, but it does not yet provide a
-complete schema version lifecycle, lock management, detailed operator-facing
-error reporting, or automatic retries for failed writes.
+document updates, `dbDelta()` when available, a stored schema version/repair
+path, and operation-specific exceptions for failed writes. It does not yet
+provide lock management, automatic retries, or broad live-site validation across
+hosting/database combinations.

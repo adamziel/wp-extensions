@@ -1,13 +1,14 @@
 # Pure PHP FTS Indexer
 
 Pure PHP FTS Indexer is an experimental WordPress plugin that builds a custom
-full-text index over WordPress posts and searches it through WP-CLI. The current
-operational surface is command-line driven: activate the plugin, run a reindex,
-then query the index with `wp fts search`.
+full-text index over WordPress posts. It can be managed through WP-CLI, updated
+incrementally by WordPress post lifecycle hooks, queried through `wp fts search`,
+and exposed through the plugin's REST/search helpers with WordPress visibility
+checks.
 
 The plugin stores its own MySQL tables. It does not use MySQL `FULLTEXT`, does
-not replace WordPress core search automatically, and does not yet register
-automatic post-save hooks.
+not replace WordPress core search automatically, and keeps the index as derived
+data that can be rebuilt from WordPress content.
 
 ## Quickstart
 
@@ -22,8 +23,8 @@ composer install --no-dev --optimize-autoloader
 wp plugin activate indexer
 ```
 
-Run the first reindex. This creates or upgrades the `fts_*` tables before it
-indexes matching posts.
+Activation creates or repairs the `fts_*` tables and schedules the bounded
+runtime queue processor. Run the first reindex to backfill existing posts:
 
 ```sh
 wp fts reindex --post_type=post,page --post_status=publish --batch_size=200
@@ -41,15 +42,16 @@ Run a search:
 wp fts search "example query" --lang=en --limit=5
 ```
 
-Search output is a table with WordPress post IDs and BM25 scores:
+Search output is a table with WordPress post IDs, BM25 scores, totals, and
+stored post metadata:
 
 ```text
-+--------+--------------------+
-| doc_id | score              |
-+--------+--------------------+
-| 123    | 1.742318907412998  |
-| 98     | 0.9146134028443131 |
-+--------+--------------------+
++--------+--------------------+-------+---------+-----------+-------------+---------------------+---------------+
+| doc_id | score              | total | post_id | post_type | post_status | post_date_gmt       | title         |
++--------+--------------------+-------+---------+-----------+-------------+---------------------+---------------+
+| 123    | 1.742318907412998  | 2     | 123     | post      | publish     | 2026-06-07 00:00:00 | Example Post  |
+| 98     | 0.9146134028443131 | 2     | 98      | page      | publish     | 2026-06-06 00:00:00 | Example Page  |
++--------+--------------------+-------+---------+-----------+-------------+---------------------+---------------+
 ```
 
 `doc_id` is the WordPress post ID. `score` is a relative BM25 score for that
@@ -78,6 +80,9 @@ wp fts search "fast durable search" --mode=AND --limit=10 --lang=en
 # Tombstone one document and later compact tombstones out of postings.
 wp fts delete 123
 wp fts optimize
+
+# Filter by stored product metadata and include snippets.
+wp fts search "fast durable search" --post_type=post,page --post_status=publish --snippet
 ```
 
 ## Documentation
@@ -98,6 +103,16 @@ wp fts optimize
 ## Current Caveats
 
 The current implementation is suitable for development and hardening work, not
-for an unattended large production rollout. Posting lists are stored as whole
-binary blobs per term, concurrent index writes can overwrite each other, schema
-creation is lazy, and WordPress runtime integration is limited to WP-CLI.
+for an unattended large production rollout. The plugin now registers activation,
+deactivation, uninstall, post-save/status/delete, cron, REST, and WP-CLI hooks;
+runtime saves queue bounded incremental indexing and tombstone invisible or
+protected posts. Full and incremental post indexing use the same extractor path
+for title, content, excerpt, rendered block deltas, terms, selected custom
+fields, field boosts, and stored metadata. MySQL postings are row based to avoid
+whole-blob term rewrites, and schema repair/version checks surface database
+write failures.
+
+Remaining caveats still matter: it does not replace core front-end search by
+itself, there is no settings screen, custom field indexing must be configured,
+shortcode rendering is opt-in, and live WordPress/MySQL behavior still needs
+environment-specific validation before production rollout.

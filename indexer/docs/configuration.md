@@ -1,9 +1,11 @@
 # Configuration
 
-This branch has no settings screen and no persisted WordPress options for the
-indexer. WP-CLI commands use the default analyzer and MySQL storage. More
-advanced configuration is available to PHP callers that instantiate
-`WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
+This branch has no settings screen for analyzer, search, or extractor
+configuration. WP-CLI commands use the default analyzer and MySQL storage.
+Operational options such as schema version and pending queue state are managed
+internally, and selected custom fields can be supplied through an option or
+filters. More advanced configuration is available to PHP callers that
+instantiate `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
 `WP_FTS_Storage_Mysql` directly.
 
 ## Languages
@@ -149,35 +151,57 @@ The WP-CLI default analyzer does not configure stopwords.
 
 ## Custom Fields And Content Extraction
 
-Bulk reindexing currently indexes only `post_title` and `post_content`. There is
-no public WordPress filter yet for adding custom fields, taxonomies, excerpts, or
-template-rendered content to the WP-CLI reindex payload.
+Bulk reindexing and runtime post-save indexing both use
+`WP_FTS_PostContentExtractor`. The extractor builds weighted fields for title,
+content, excerpt, rendered block deltas, taxonomy terms, selected custom fields,
+and product metadata used by filters, snippets, and CLI/REST enrichment.
 
-Programmatic callers can still compose their own HTML and index it directly:
+Custom fields can be selected with extractor options:
 
 ```php
-global $wpdb;
-
-$storage = new WP_FTS_Storage_Mysql($wpdb);
-$storage->create_tables();
-
-$indexer = new WP_FTS_Indexer($storage, new WP_FTS_Analyzer());
-$html = sprintf(
-    '<!doctype html><html><head><title>%s</title></head><body>%s<section>%s</section></body></html>',
-    esc_html(get_the_title($post_id)),
-    (string) get_post_field('post_content', $post_id),
-    esc_html((string) get_post_meta($post_id, 'subtitle', true))
-);
-
-$indexer->index_document($post_id, $html, [
-    'post_id' => $post_id,
+$indexer->index_post($post, [
     'lang' => 'en-US',
+    'custom_fields' => ['subtitle', 'sku'],
 ]);
 ```
 
-The expected future WordPress extension point is a filter around the composed
-post HTML before `index_document()` is called. That filter is not present on this
-branch.
+The default runtime plugin path also reads the `wp_fts_index_custom_fields`
+option when present:
+
+```sh
+wp option update wp_fts_index_custom_fields '["subtitle","sku"]' --format=json
+wp fts reindex --post_type=post,page --post_status=publish
+```
+
+Filters can adjust selected fields, metadata, terms, custom field values, and
+boosts:
+
+```php
+add_filter('wp_fts_post_index_fields', static function (array $fields, object $post, array $opts): array {
+    $fields[] = [
+        'name' => 'subtitle',
+        'text' => (string) get_post_meta((int) $post->ID, 'subtitle', true),
+        'boost' => 2.0,
+    ];
+
+    return $fields;
+}, 10, 3);
+```
+
+Rendered block output is included by default when `do_blocks()` is available,
+but only the rendered-only delta is added so static block text is not counted
+twice. Shortcode rendering is opt-in:
+
+```php
+$indexer->index_post($post, [
+    'render_shortcodes' => true,
+]);
+```
+
+Programmatic callers can still compose custom HTML and index it directly with
+`index_document()` when they need a non-post document shape. Direct document
+indexing is separate from the WordPress post extractor and should supply
+metadata explicitly if the result needs post filters or snippets.
 
 ## BM25 And Search Options
 

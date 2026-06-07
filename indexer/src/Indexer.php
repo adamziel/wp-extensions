@@ -231,10 +231,12 @@ final class WP_FTS_Indexer
     /**
      * Reindex published posts directly from WordPress. Defaults match the v1 spec.
      *
-     * This method pages through `$wpdb->posts` by ascending ID and indexes title
-     * plus content for each row. `post_status` and `post_type` accept comma
-     * separated strings or arrays. `limit => 0` means no limit. Language is
-     * resolved per post unless an explicit language option is supplied.
+     * This method pages through `$wpdb->posts` by ascending ID and indexes each
+     * row through the post content extractor so full reindexes and incremental
+     * post-save reindexes preserve the same fields and metadata. `post_status`
+     * and `post_type` accept comma separated strings or arrays. `limit => 0`
+     * means no limit. Language is resolved per post unless an explicit language
+     * option is supplied.
      *
      * @param array{post_status?:string|string[],post_type?:string|string[],batch_size?:int,limit?:int,lang?:string,language?:string} $opts
      *        WordPress query and language options.
@@ -282,14 +284,7 @@ LIMIT %d",
             $rows = $wpdb->get_results($sql);
             foreach ($rows ?: [] as $row) {
                 $last = (int) $row->ID;
-                $lang = $this->resolve_post_language($row, $opts);
-                $extracted = $this->postContentExtractor->extract($row, $opts);
-                $indexOptions = $opts;
-                $indexOptions['lang'] = $lang;
-                $indexOptions['post_id'] = $last;
-                $indexOptions['metadata'] = $extracted['metadata'];
-                $indexOptions['field_boosts'] = $extracted['field_boosts'];
-                $this->index_document_fields($last, $extracted['fields'], $indexOptions);
+                $this->index_post($row, $opts);
                 $count++;
             }
         } while (!empty($rows) && ($limit === 0 || $count < $limit));
@@ -305,9 +300,9 @@ LIMIT %d",
      * The runtime plugin adapter uses this for incremental hook processing,
      * while WP-CLI keeps `reindex_all()` as the manual full-control path.
      *
-     * @param object $post Object with `ID`, `post_title`, and `post_content`
-     *        properties matching WordPress post rows.
-     * @param array<string,mixed> $opts Optional language/indexing overrides.
+     * @param object $post Object with `ID` and WordPress post-like properties.
+     * @param array<string,mixed> $opts Optional language, extraction, field
+     *        boost, and metadata overrides.
      */
     public function index_post(object $post, array $opts = []): bool
     {
@@ -316,17 +311,21 @@ LIMIT %d",
             throw new InvalidArgumentException('Post object must provide a positive ID.');
         }
 
-        $html = $this->compose_post_html(
-            (string) ($post->post_title ?? ''),
-            (string) ($post->post_content ?? '')
-        );
         $indexOptions = $opts;
         $indexOptions['post_id'] = $postId;
         if (WP_FTS_TermNamespace::language_from_options($indexOptions, null, ['lang', 'language', 'primary_lang', 'document_lang']) === null) {
             $indexOptions['lang'] = $this->resolve_post_language($post, $opts);
         }
 
-        return $this->index_document($postId, $html, $indexOptions);
+        $extracted = $this->postContentExtractor->extract($post, $indexOptions);
+        $metadata = $extracted['metadata'];
+        if (isset($opts['metadata']) && is_array($opts['metadata'])) {
+            $metadata = array_replace($metadata, $opts['metadata']);
+        }
+        $indexOptions['metadata'] = $metadata;
+        $indexOptions['field_boosts'] = $extracted['field_boosts'];
+
+        return $this->index_document_fields($postId, $extracted['fields'], $indexOptions);
     }
 
     /**
@@ -666,16 +665,4 @@ LIMIT %d",
         return WP_FTS_TermNamespace::default_language($opts);
     }
 
-    /**
-     * Wrap a post title and content in minimal HTML for analyzer boosts.
-     *
-     * The title is escaped into a `<title>` element so it receives the analyzer's
-     * title boost. Post content is inserted as existing WordPress HTML.
-     */
-    private function compose_post_html(string $title, string $content): string
-    {
-        $title = htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
-
-        return "<!doctype html><html><head><title>{$title}</title></head><body>{$content}</body></html>";
-    }
 }
