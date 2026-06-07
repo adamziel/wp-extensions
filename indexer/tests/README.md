@@ -21,3 +21,39 @@ python3 tests/bm25_lucene_reference.py
 
 The reference harness requires `bm25s` in the active Python environment. It exits with
 status 2 when `bm25s` is not installed so CI can keep it as an explicit opt-in job.
+
+Run the optional real WordPress/MySQL integration harness:
+
+```sh
+WP_FTS_WP_PATH=/path/to/wordpress \
+WP_FTS_WP_CLI=wp \
+php tests/integration/real-wordpress-mysql.php
+```
+
+`WP_FTS_WP_PATH` must point at an installed disposable WordPress site backed by
+MySQL or MariaDB. `WP_FTS_WP_CLI` defaults to `wp`; set `WP_FTS_WP_URL` when the
+site is multisite or otherwise needs an explicit URL. When WordPress or WP-CLI
+is unavailable the command exits successfully with a `SKIP:` line so the normal
+suite remains dependency-light.
+
+The real harness creates generated temporary FTS tables, exercises `dbDelta()`
+creation/migration, binary `VARBINARY` terms and `LONGBLOB` postings through
+`$wpdb->prepare()`, MySQL commit/rollback behavior, a simulated activation
+schema-version write for the current baseline, and a real `wp fts reindex`
+process using `--require=tests/integration/wpcli-require.php`. It deletes its
+temporary post, option, and generated FTS tables in a cleanup block.
+
+Run the optional concurrent indexing diagnostic:
+
+```sh
+WP_FTS_WP_PATH=/path/to/wordpress \
+WP_FTS_CONCURRENT_WORKERS=4 \
+WP_FTS_CONCURRENT_POSTS_PER_WORKER=3 \
+php tests/integration/concurrent-indexing.php
+```
+
+This script creates worker-specific post types and starts concurrent `wp fts
+reindex` processes against one generated FTS table prefix. It verifies that the
+shared term postings contain every generated post. A failure here is evidence of
+lost concurrent writes and should be investigated with the storage/concurrency
+lane rather than hidden by weakening the test.
