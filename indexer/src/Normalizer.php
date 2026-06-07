@@ -11,17 +11,30 @@ declare(strict_types=1);
 final class WP_FTS_Normalizer
 {
     private bool $foldDiacritics;
+    /** @var callable|null */
+    private $tokenNormalizer;
+    /** @var array<string,array<string,string>> */
+    private array $chineseScriptMaps;
 
     /**
      * Configure token normalization.
      *
-     * @param array{fold_diacritics?:bool} $options Set `fold_diacritics` false
-     *        when accents and language-specific letters must remain distinct in
-     *        the index.
+     * @param array{
+     *   fold_diacritics?:bool,
+     *   token_normalizer?:callable|null,
+     *   chinese_script_map?:array<string,string>|array<string,array<string,string>>
+     * } $options Set `fold_diacritics` false when accents and
+     *        language-specific letters must remain distinct in the index.
+     *        `token_normalizer` may perform deterministic language-specific
+     *        rewrites after the built-in dialect maps. `chinese_script_map`
+     *        accepts either a flat character map or a language-keyed map.
      */
     public function __construct(array $options = [])
     {
         $this->foldDiacritics = (bool) ($options['fold_diacritics'] ?? true);
+        $normalizer = $options['token_normalizer'] ?? null;
+        $this->tokenNormalizer = is_callable($normalizer) ? $normalizer : null;
+        $this->chineseScriptMaps = $this->normalize_chinese_script_maps($options['chinese_script_map'] ?? []);
     }
 
     /**
@@ -112,6 +125,7 @@ final class WP_FTS_Normalizer
         $language = $this->canonicalize_language($language);
         $token = $this->lowercase($token, $language);
         $token = $this->normalize_dialect($token, $language);
+        $token = $this->apply_token_normalizer($token, $language);
 
         if (!$this->foldDiacritics) {
             return $token;
@@ -164,9 +178,9 @@ final class WP_FTS_Normalizer
     /**
      * Apply language-specific dialect equivalence maps.
      *
-     * English maps selected British spellings to American spellings. Chinese has
-     * placeholders for future script conversion but currently leaves tokens
-     * unchanged.
+     * English maps selected British spellings to American spellings. Chinese
+     * only applies caller-supplied script maps; there is no default broad script
+     * conversion.
      */
     private function normalize_dialect(string $token, string $language): string
     {
@@ -230,12 +244,91 @@ final class WP_FTS_Normalizer
      */
     private function normalize_chinese_dialect(string $token, string $language): string
     {
-        $maps = [
-            'zh-Hans' => [],
-            'zh-Hant' => [],
-        ];
+        foreach ([$language, $this->base_language($language)] as $key) {
+            if (isset($this->chineseScriptMaps[$key])) {
+                return strtr($token, $this->chineseScriptMaps[$key]);
+            }
+        }
 
-        return $maps[$language][$token] ?? $token;
+        return $token;
+    }
+
+    /**
+     * Normalize user-supplied Chinese script maps without implying broad
+     * Traditional/Simplified conversion support.
+     *
+     * @param mixed $maps
+     * @return array<string,array<string,string>>
+     */
+    private function normalize_chinese_script_maps(mixed $maps): array
+    {
+        if (!is_array($maps) || $maps === []) {
+            return [];
+        }
+
+        $isFlatMap = true;
+        foreach ($maps as $value) {
+            if (!is_scalar($value)) {
+                $isFlatMap = false;
+                break;
+            }
+        }
+
+        if ($isFlatMap) {
+            return ['zh' => $this->normalize_string_map($maps)];
+        }
+
+        $normalized = [];
+        foreach ($maps as $language => $map) {
+            $map = $this->normalize_string_map($map);
+            if ($map === []) {
+                continue;
+            }
+
+            $normalized[$this->canonicalize_language((string) $language)] = $map;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Keep only scalar-to-scalar entries in a normalization map.
+     *
+     * @param mixed $map
+     * @return array<string,string>
+     */
+    private function normalize_string_map(mixed $map): array
+    {
+        if (!is_array($map)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($map as $from => $to) {
+            if (is_scalar($from) && is_scalar($to) && (string) $from !== '') {
+                $normalized[(string) $from] = (string) $to;
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Apply an optional deterministic token-normalization callback.
+     */
+    private function apply_token_normalizer(string $token, string $language): string
+    {
+        if ($this->tokenNormalizer === null) {
+            return $token;
+        }
+
+        try {
+            $normalized = ($this->tokenNormalizer)($token, $language);
+        } catch (Throwable) {
+            return $token;
+        }
+
+        return is_scalar($normalized) ? (string) $normalized : $token;
     }
 
     /**

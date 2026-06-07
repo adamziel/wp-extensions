@@ -4,9 +4,9 @@ declare(strict_types=1);
 /**
  * Scores indexed documents for a query using language-aware BM25.
  *
- * The searcher analyzes query text, resolves one query language partition, reads
- * matching postings and active document lengths, then scores only documents that
- * are active in that partition.
+ * The searcher analyzes query text, builds a language-aware query plan, reads
+ * matching postings and active document lengths per partition, then scores
+ * matching documents with BM25 inside each term's language partition.
  */
 final class WP_FTS_Searcher
 {
@@ -28,12 +28,15 @@ final class WP_FTS_Searcher
     /**
      * Search the index for documents matching a query.
      *
-     * `mode` may be `OR` or `AND`; `AND` requires every query term to have a
-     * posting for a document. `limit` is clamped to at least 1. Language can be
-     * supplied with `query_lang`, `lang`, or `language`; otherwise the analyzer
-     * occurrence language or default language is used.
+     * `mode` may be `OR` or `AND`; `AND` requires every logical query term to
+     * have a posting for a document. `limit` is clamped to at least 1. Language
+     * can be supplied with `query_lang`, `lang`, or `language` for the legacy
+     * single-partition path. `langs` or `languages` accepts a list of exact
+     * language partitions. Fallback search is opt-in via `language_fallback`,
+     * `fallback_to_default_lang`, `fallback_lang`, or `fallback_languages`, and
+     * can be disabled with `disable_language_fallback`.
      *
-     * @param array{mode?:string,limit?:int,query_lang?:string,lang?:string,language?:string,default_lang?:string,locale?:string} $opts
+     * @param array{mode?:string,limit?:int,query_lang?:string,lang?:string,language?:string,languages?:mixed,langs?:mixed,default_lang?:string,locale?:string,language_fallback?:bool,fallback_to_default_lang?:bool,disable_language_fallback?:bool,fallback_lang?:mixed,fallback_languages?:mixed} $opts
      * @return array<int,array{doc_id:int,score:float}> Results sorted by
      *         descending score and ascending doc id for ties.
      * @throws InvalidArgumentException If `mode` is not `OR` or `AND`.
@@ -41,22 +44,83 @@ final class WP_FTS_Searcher
      */
     public function search(string $query, array $opts = []): array
     {
-        $queryOccurrences = $this->analyze_query($query, $opts);
-        $queryLang = $this->resolve_query_language($opts, $queryOccurrences);
-        $terms = $this->namespace_query_terms($queryOccurrences, $queryLang);
-        if ($terms === []) {
-            return [];
-        }
-
         $mode = strtoupper((string) ($opts['mode'] ?? 'OR'));
         if (!in_array($mode, ['OR', 'AND'], true)) {
             throw new InvalidArgumentException('Search mode must be OR or AND.');
         }
         $limit = max(1, (int) ($opts['limit'] ?? 10));
 
-        $termRows = $this->storage->get_terms($terms);
-        if ($termRows === [] || ($mode === 'AND' && count($termRows) < count($terms))) {
+        $groups = $this->build_query_groups($query, $opts);
+        if ($groups === []) {
             return [];
+        }
+
+        $results = $this->score_query_groups($groups, $mode);
+        usort($results, static function (array $a, array $b): int {
+            $rankOrder = ($a['_rank'] ?? 0) <=> ($b['_rank'] ?? 0);
+            if ($rankOrder !== 0) {
+                return $rankOrder;
+            }
+
+            $scoreOrder = $b['score'] <=> $a['score'];
+            return $scoreOrder !== 0 ? $scoreOrder : ($a['doc_id'] <=> $b['doc_id']);
+        });
+
+        $results = array_slice($results, 0, $limit);
+        foreach ($results as &$result) {
+            unset($result['_rank']);
+        }
+        unset($result);
+
+        return $results;
+    }
+
+    /**
+     * Score a language-aware query plan.
+     *
+     * Each group represents one logical query term. A group may contain multiple
+     * language alternatives, for example exact `fr` plus fallback `en`, or the
+     * same untagged query term expanded across explicit `langs`.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     * @return array<int,array{doc_id:int,score:float,_rank:int}>
+     */
+    private function score_query_groups(array $groups, string $mode): array
+    {
+        $termsByKey = [];
+        foreach ($groups as $groupId => $alternatives) {
+            foreach ($alternatives as $alternative) {
+                $key = $alternative['key'];
+                $termsByKey[$key]['lang'] = $alternative['lang'];
+                $termsByKey[$key]['groups'][$groupId] = min(
+                    $termsByKey[$key]['groups'][$groupId] ?? $alternative['rank'],
+                    $alternative['rank']
+                );
+            }
+        }
+
+        if ($termsByKey === []) {
+            return [];
+        }
+
+        $termRows = $this->storage->get_terms(array_keys($termsByKey));
+        if ($termRows === []) {
+            return [];
+        }
+
+        if ($mode === 'AND') {
+            foreach ($groups as $groupId => $alternatives) {
+                $hasAvailableTerm = false;
+                foreach ($alternatives as $alternative) {
+                    if (isset($termRows[$alternative['key']])) {
+                        $hasAvailableTerm = true;
+                        break;
+                    }
+                }
+                if (!$hasAvailableTerm) {
+                    return [];
+                }
+            }
         }
 
         /** @var array<int,array<string,int>> $candidateTermTfs */
@@ -64,12 +128,8 @@ final class WP_FTS_Searcher
         /** @var array<string,array<int,int>> $decodedByTerm */
         $decodedByTerm = [];
 
-        foreach ($terms as $term) {
-            if (!isset($termRows[$term])) {
-                continue;
-            }
-
-            $postings = WP_FTS_PostingsCodec::decode($termRows[$term]['postings']);
+        foreach ($termRows as $term => $row) {
+            $postings = WP_FTS_PostingsCodec::decode($row['postings']);
             $decodedByTerm[$term] = $postings;
             foreach ($postings as $docId => $tf) {
                 $candidateTermTfs[$docId][$term] = $tf;
@@ -80,52 +140,372 @@ final class WP_FTS_Searcher
             return [];
         }
 
-        $docLengths = WP_FTS_StorageCompat::get_doc_lengths($this->storage, array_keys($candidateTermTfs), $queryLang);
-        if ($docLengths === []) {
+        $candidateDocIds = array_keys($candidateTermTfs);
+        $languages = [];
+        foreach ($termsByKey as $termInfo) {
+            $languages[$termInfo['lang']] = true;
+        }
+
+        /** @var array<string,array<int,int>> $docLengthsByLang */
+        $docLengthsByLang = [];
+        /** @var array<string,array{doc_count:int,len_sum:int}> $metaByLang */
+        $metaByLang = [];
+        foreach (array_keys($languages) as $lang) {
+            $docLengths = WP_FTS_StorageCompat::get_doc_lengths($this->storage, $candidateDocIds, $lang);
+            if ($docLengths === []) {
+                continue;
+            }
+
+            $meta = WP_FTS_StorageCompat::get_meta($this->storage, $lang);
+            if ((int) $meta['doc_count'] <= 0) {
+                continue;
+            }
+
+            $docLengthsByLang[$lang] = $docLengths;
+            $metaByLang[$lang] = $meta;
+        }
+
+        if ($docLengthsByLang === []) {
             return [];
         }
 
-        $meta = WP_FTS_StorageCompat::get_meta($this->storage, $queryLang);
-        $docCount = max(0, (int) $meta['doc_count']);
-        if ($docCount === 0) {
-            return [];
+        $activeDf = [];
+        foreach ($decodedByTerm as $term => $postings) {
+            $lang = $termsByKey[$term]['lang'];
+            $activeDf[$term] = isset($docLengthsByLang[$lang])
+                ? $this->active_doc_freqs([$term => $postings], $docLengthsByLang[$lang])[$term]
+                : 0;
         }
-
-        $avgDocLen = $meta['len_sum'] > 0 ? $meta['len_sum'] / $docCount : 1.0;
-        $activeDf = $this->active_doc_freqs($decodedByTerm, $docLengths);
 
         $results = [];
         foreach ($candidateTermTfs as $docId => $termTfs) {
-            if (!isset($docLengths[$docId])) {
-                continue;
-            }
-            if ($mode === 'AND' && count($termTfs) < count($terms)) {
-                continue;
-            }
-
             $score = 0.0;
+            $matchedGroups = [];
             foreach ($termTfs as $term => $tf) {
+                $lang = $termsByKey[$term]['lang'];
+                if (!isset($docLengthsByLang[$lang][$docId], $metaByLang[$lang])) {
+                    continue;
+                }
+
                 $df = $activeDf[$term] ?? 0;
                 if ($df <= 0) {
                     continue;
                 }
-                $score += $this->bm25($tf, $docLengths[$docId], $docCount, $df, $avgDocLen);
+
+                $meta = $metaByLang[$lang];
+                $docCount = max(0, (int) $meta['doc_count']);
+                if ($docCount === 0) {
+                    continue;
+                }
+
+                $avgDocLen = $meta['len_sum'] > 0 ? $meta['len_sum'] / $docCount : 1.0;
+                $score += $this->bm25($tf, $docLengthsByLang[$lang][$docId], $docCount, $df, $avgDocLen);
+                foreach ($termsByKey[$term]['groups'] as $groupId => $rank) {
+                    $matchedGroups[$groupId] = min($matchedGroups[$groupId] ?? $rank, $rank);
+                }
             }
 
+            if ($mode === 'AND' && count($matchedGroups) < count($groups)) {
+                continue;
+            }
             if ($score > 0.0) {
                 $results[] = [
                     'doc_id' => (int) $docId,
                     'score' => $score,
+                    '_rank' => $mode === 'AND' ? max($matchedGroups) : min($matchedGroups),
                 ];
             }
         }
 
-        usort($results, static function (array $a, array $b): int {
-            $scoreOrder = $b['score'] <=> $a['score'];
-            return $scoreOrder !== 0 ? $scoreOrder : ($a['doc_id'] <=> $b['doc_id']);
-        });
+        return $results;
+    }
 
-        return array_slice($results, 0, $limit);
+    /**
+     * Build logical query term groups from explicit languages or analyzer output.
+     *
+     * The legacy path analyzes once and therefore preserves existing callers'
+     * single-language behavior. `langs` and `languages` intentionally analyze
+     * the same query under each requested language, adding those language terms
+     * as alternatives for each logical query term.
+     *
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
+     */
+    private function build_query_groups(string $query, array $opts): array
+    {
+        $requestedLangs = $this->languages_from_options($opts, ['langs', 'languages']);
+        if ($requestedLangs !== []) {
+            $groups = [];
+            foreach ($requestedLangs as $lang) {
+                $this->merge_language_groups($groups, $query, $opts, $lang, 0);
+            }
+
+            foreach ($this->fallback_languages($opts, $requestedLangs) as $fallbackLang) {
+                $this->merge_language_groups($groups, $query, $opts, $fallbackLang, 1);
+            }
+
+            return $this->dedupe_query_groups($groups);
+        }
+
+        $queryOccurrences = $this->analyze_query($query, $opts);
+        $queryLang = $this->resolve_query_language($opts, $queryOccurrences);
+        $groups = $this->groups_from_occurrences($queryOccurrences, $queryLang, 0);
+        $exactLangs = $groups === [] ? [$queryLang] : $this->languages_from_groups($groups, 0);
+
+        foreach ($this->fallback_languages($opts, $exactLangs) as $fallbackLang) {
+            $this->merge_language_groups($groups, $query, $opts, $fallbackLang, 1);
+        }
+
+        return $this->dedupe_query_groups($groups);
+    }
+
+    /**
+     * Analyze a query under one language and merge it by term position.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     */
+    private function merge_language_groups(array &$groups, string $query, array $opts, string $lang, int $rank): void
+    {
+        $occurrences = $this->analyze_query($query, $this->with_query_language($opts, $lang));
+        $newGroups = $this->groups_from_occurrences($occurrences, $lang, $rank);
+
+        foreach ($newGroups as $index => $newGroup) {
+            if (isset($groups[$index])) {
+                array_push($groups[$index], ...$newGroup);
+                continue;
+            }
+
+            $groups[$index] = $newGroup;
+        }
+    }
+
+    /**
+     * Force analyzer options to a specific query language.
+     *
+     * @return array<string,mixed>
+     */
+    private function with_query_language(array $opts, string $lang): array
+    {
+        $opts['query_lang'] = $lang;
+        $opts['lang'] = $lang;
+        $opts['language'] = $lang;
+
+        return $opts;
+    }
+
+    /**
+     * Convert analyzer occurrences into one-language alternatives.
+     *
+     * @param array<int,array<string,mixed>|string> $occurrences
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
+     */
+    private function groups_from_occurrences(array $occurrences, string $defaultLang, int $rank): array
+    {
+        $groups = [];
+        foreach ($occurrences as $occurrence) {
+            $candidate = $this->candidate_from_occurrence($occurrence, $defaultLang, $rank);
+            if ($candidate !== null) {
+                $groups[] = [$candidate];
+            }
+        }
+
+        return $groups;
+    }
+
+    /**
+     * Normalize one analyzer occurrence into a stored term-key candidate.
+     *
+     * @param array<string,mixed>|string $occurrence
+     * @return array{key:string,lang:string,term:string,rank:int}|null
+     */
+    private function candidate_from_occurrence(array|string $occurrence, string $defaultLang, int $rank): ?array
+    {
+        $term = is_array($occurrence)
+            ? trim((string) ($occurrence['term'] ?? ''))
+            : trim((string) $occurrence);
+        if ($term === '') {
+            return null;
+        }
+
+        $defaultLang = WP_FTS_TermNamespace::canonicalize_lang($defaultLang);
+        $split = WP_FTS_TermNamespace::split_term($term);
+        if ($split !== null) {
+            $lang = $split['lang'];
+            $term = $split['term'];
+        } else {
+            $lang = is_array($occurrence) && isset($occurrence['lang'])
+                ? WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang'], $defaultLang)
+                : $defaultLang;
+        }
+
+        if ($term === '') {
+            return null;
+        }
+
+        return [
+            'key' => WP_FTS_TermNamespace::namespace_term($lang, $term),
+            'lang' => $lang,
+            'term' => $term,
+            'rank' => $rank,
+        ];
+    }
+
+    /**
+     * Parse a list of exact query languages from public search options.
+     *
+     * @param string[] $keys
+     * @return string[]
+     */
+    private function languages_from_options(array $opts, array $keys): array
+    {
+        $languages = [];
+        foreach ($keys as $key) {
+            if (!array_key_exists($key, $opts)) {
+                continue;
+            }
+
+            foreach ($this->languages_from_value($opts[$key]) as $lang) {
+                $languages[$lang] = true;
+            }
+        }
+
+        return array_keys($languages);
+    }
+
+    /**
+     * Normalize one scalar or array language-list value.
+     *
+     * @return string[]
+     */
+    private function languages_from_value(mixed $value): array
+    {
+        if ($value === false || $value === null) {
+            return [];
+        }
+
+        $items = is_array($value) ? $value : [$value];
+        $languages = [];
+        foreach ($items as $item) {
+            if (!is_scalar($item)) {
+                continue;
+            }
+
+            foreach (preg_split('/[\s,|]+/', trim((string) $item)) ?: [] as $part) {
+                if ($part !== '') {
+                    $languages[] = WP_FTS_TermNamespace::canonicalize_lang($part);
+                }
+            }
+        }
+
+        return array_values(array_unique($languages));
+    }
+
+    /**
+     * Resolve opt-in fallback languages, excluding exact languages.
+     *
+     * @param string[] $exactLangs
+     * @return string[]
+     */
+    private function fallback_languages(array $opts, array $exactLangs): array
+    {
+        if ($this->truthy_option($opts['disable_language_fallback'] ?? false)) {
+            return [];
+        }
+
+        $fallbacks = $this->languages_from_options($opts, ['fallback_lang', 'fallback_language', 'fallback_languages']);
+        if ($fallbacks === [] && $this->truthy_option($opts['language_fallback'] ?? $opts['fallback_to_default_lang'] ?? false)) {
+            $fallbacks = [WP_FTS_TermNamespace::default_language($opts)];
+        }
+
+        $exact = array_fill_keys(array_map(
+            static fn(string $lang): string => WP_FTS_TermNamespace::canonicalize_lang($lang),
+            $exactLangs
+        ), true);
+
+        $result = [];
+        foreach ($fallbacks as $lang) {
+            $lang = WP_FTS_TermNamespace::canonicalize_lang($lang);
+            if (!isset($exact[$lang])) {
+                $result[$lang] = true;
+            }
+        }
+
+        return array_keys($result);
+    }
+
+    /**
+     * Interpret public boolean-ish options without treating arbitrary strings as false.
+     */
+    private function truthy_option(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return $value !== 0;
+        }
+
+        if (is_string($value)) {
+            return !in_array(strtolower(trim($value)), ['', '0', 'false', 'no', 'off'], true);
+        }
+
+        return false;
+    }
+
+    /**
+     * Return languages present in query groups at a given fallback rank.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     * @return string[]
+     */
+    private function languages_from_groups(array $groups, int $rank): array
+    {
+        $languages = [];
+        foreach ($groups as $group) {
+            foreach ($group as $candidate) {
+                if ($candidate['rank'] === $rank) {
+                    $languages[$candidate['lang']] = true;
+                }
+            }
+        }
+
+        return array_keys($languages);
+    }
+
+    /**
+     * Dedupe alternatives inside groups and duplicate logical groups.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
+     */
+    private function dedupe_query_groups(array $groups): array
+    {
+        $deduped = [];
+        $seenGroups = [];
+        foreach ($groups as $group) {
+            $byKey = [];
+            foreach ($group as $candidate) {
+                $key = $candidate['key'];
+                if (!isset($byKey[$key]) || $candidate['rank'] < $byKey[$key]['rank']) {
+                    $byKey[$key] = $candidate;
+                }
+            }
+
+            if ($byKey === []) {
+                continue;
+            }
+
+            ksort($byKey, SORT_STRING);
+            $signature = implode("\0", array_keys($byKey));
+            if (isset($seenGroups[$signature])) {
+                continue;
+            }
+
+            $seenGroups[$signature] = true;
+            $deduped[] = array_values($byKey);
+        }
+
+        return $deduped;
     }
 
     /**
@@ -222,12 +602,12 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Resolve the language partition for the whole query.
+     * Resolve the default language for untagged query occurrences.
      *
      * Explicit search options win. Otherwise the first structured occurrence
-     * language or first already-namespaced term decides the partition. This keeps
-     * mixed analyzer output from accidentally querying multiple language stats in
-     * one BM25 calculation.
+     * language or first already-namespaced term supplies the default used by
+     * legacy string-only analyzer output. Mixed occurrence rows still keep their
+     * own languages when query groups are built.
      *
      * @param array<int,array<string,mixed>|string> $queryOccurrences
      * @return string Canonical query language.
@@ -252,54 +632,6 @@ final class WP_FTS_Searcher
         }
 
         return WP_FTS_TermNamespace::default_language($opts);
-    }
-
-    /**
-     * Convert analyzer query terms into stored term keys for one language.
-     *
-     * Terms already namespaced for another language are ignored. Unnamespaced
-     * terms inherit either their occurrence language or `$queryLang`. The result
-     * is unique and sorted so storage reads and tests are deterministic.
-     *
-     * @param array<int,array<string,mixed>|string> $queryOccurrences
-     * @return string[]
-     */
-    private function namespace_query_terms(array $queryOccurrences, string $queryLang): array
-    {
-        $terms = [];
-        $queryLang = WP_FTS_TermNamespace::canonicalize_lang($queryLang);
-
-        foreach ($queryOccurrences as $occurrence) {
-            $term = is_array($occurrence)
-                ? trim((string) ($occurrence['term'] ?? ''))
-                : trim((string) $occurrence);
-            if ($term === '') {
-                continue;
-            }
-
-            $split = WP_FTS_TermNamespace::split_term($term);
-            if ($split !== null) {
-                if ($split['lang'] !== $queryLang || $split['term'] === '') {
-                    continue;
-                }
-                $terms[] = WP_FTS_TermNamespace::namespace_term($queryLang, $split['term']);
-                continue;
-            }
-
-            $termLang = is_array($occurrence) && isset($occurrence['lang'])
-                ? WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang'], $queryLang)
-                : $queryLang;
-            if ($termLang !== $queryLang) {
-                continue;
-            }
-
-            $terms[] = WP_FTS_TermNamespace::namespace_term($queryLang, $term);
-        }
-
-        $terms = array_values(array_unique($terms));
-        sort($terms, SORT_STRING);
-
-        return $terms;
     }
 
     /**

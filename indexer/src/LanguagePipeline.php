@@ -14,6 +14,10 @@ final class WP_FTS_LanguagePipeline
     private WP_FTS_SnowballStemmer $snowballStemmer;
     private WP_FTS_PolishStemmer $polishStemmer;
     private ?WP_FTS_Stemmer $customStemmer;
+    /** @var array<string,WP_FTS_Stemmer> */
+    private array $customStemmersByLanguage;
+    /** @var callable|null */
+    private $cjkTokenizer;
     private bool $enableStemming;
     private bool $namespaceTerms;
     private int $minTermLen;
@@ -24,14 +28,23 @@ final class WP_FTS_LanguagePipeline
      *
      * Use `normalizer`, `snowball_stemmer`, or `polish_stemmer` to inject test
      * doubles. Use `stemmer` for a custom stemmer; callables may accept either
-     * `($term)` or `($term, $language)`. `namespace_terms` is normally false for
-     * the high-level indexer, which namespaces after weighting.
+     * `($term)` or `($term, $language)`. Use `stemmers_by_lang` for verified
+     * language-specific custom stemmers. `cjk_tokenizer` may return dictionary
+     * segments for one CJK run; the built-in bigram path remains the fallback.
+     * `namespace_terms` is normally false for the high-level indexer, which
+     * namespaces after weighting.
      *
      * @param array{
      *   normalizer?:WP_FTS_Normalizer,
      *   snowball_stemmer?:WP_FTS_SnowballStemmer,
      *   polish_stemmer?:WP_FTS_PolishStemmer,
      *   stemmer?:WP_FTS_Stemmer|callable|null,
+     *   stemmers_by_lang?:array<string,WP_FTS_Stemmer|callable|null>,
+     *   stemmers?:array<string,WP_FTS_Stemmer|callable|null>,
+     *   cjk_tokenizer?:callable|null,
+     *   cjk_segmenter?:callable|null,
+     *   token_normalizer?:callable|null,
+     *   chinese_script_map?:array<string,string>|array<string,array<string,string>>,
      *   enable_stemming?:bool,
      *   namespace_terms?:bool,
      *   min_term_len?:int,
@@ -44,12 +57,19 @@ final class WP_FTS_LanguagePipeline
     {
         $this->normalizer = $options['normalizer'] ?? new WP_FTS_Normalizer([
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
+            'token_normalizer' => $options['token_normalizer'] ?? null,
+            'chinese_script_map' => $options['chinese_script_map'] ?? [],
         ]);
         $this->snowballStemmer = $options['snowball_stemmer'] ?? new WP_FTS_SnowballStemmer();
         $this->polishStemmer = $options['polish_stemmer'] ?? new WP_FTS_PolishStemmer(
             (string) ($options['polish_stemming'] ?? 'conservative')
         );
         $this->customStemmer = $this->normalize_custom_stemmer($options['stemmer'] ?? null);
+        $this->customStemmersByLanguage = $this->normalize_custom_stemmers_by_language(
+            $options['stemmers_by_lang'] ?? $options['stemmers'] ?? []
+        );
+        $tokenizer = $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null;
+        $this->cjkTokenizer = is_callable($tokenizer) ? $tokenizer : null;
         $this->enableStemming = (bool) ($options['enable_stemming'] ?? false);
         $this->namespaceTerms = (bool) ($options['namespace_terms'] ?? false);
         $this->minTermLen = max(1, (int) ($options['min_term_len'] ?? 2));
@@ -91,7 +111,7 @@ final class WP_FTS_LanguagePipeline
         $language = $this->canonicalize_language($language);
         $terms = [];
 
-        foreach ($this->tokenize($text) as $rawToken) {
+        foreach ($this->tokenize($text, $language) as $rawToken) {
             $term = $this->normalize_raw_token($rawToken['text'], $language, $rawToken['is_cjk']);
             if ($term === null) {
                 continue;
@@ -154,10 +174,15 @@ final class WP_FTS_LanguagePipeline
         if ($isCjk) {
             // CJK n-grams are already the lexical units; stemming and Latin
             // minimum-length pruning would damage recall for single characters.
-        } elseif ($this->customStemmer !== null) {
-            $term = $this->customStemmer->stem($term, $language);
-        } elseif ($this->enableStemming) {
-            $term = $this->stem_for_language($term, $language);
+        } else {
+            $customStemmer = $this->custom_stemmer_for_language($language);
+            if ($customStemmer !== null) {
+                $term = $customStemmer->stem($term, $language);
+            } elseif ($this->customStemmer !== null) {
+                $term = $this->customStemmer->stem($term, $language);
+            } elseif ($this->enableStemming) {
+                $term = $this->stem_for_language($term, $language);
+            }
         }
 
         $length = function_exists('mb_strlen') ? mb_strlen($term, 'UTF-8') : strlen($term);
@@ -178,7 +203,7 @@ final class WP_FTS_LanguagePipeline
      * @param string $text Plain visible text.
      * @return array<int,array{text:string,is_cjk:bool}>
      */
-    private function tokenize(string $text): array
+    private function tokenize(string $text, string $language): array
     {
         $matches = [];
         if (@preg_match_all('/[\p{L}\p{M}\p{N}_]+/u', $text, $matches) !== false) {
@@ -186,7 +211,7 @@ final class WP_FTS_LanguagePipeline
             foreach ($matches[0] ?? [] as $rawToken) {
                 foreach ($this->split_script_runs($rawToken) as $run) {
                     if ($run['is_cjk']) {
-                        foreach ($this->cjk_tokens($run['text']) as $cjkToken) {
+                        foreach ($this->cjk_tokens($run['text'], $language) as $cjkToken) {
                             $tokens[] = ['text' => $cjkToken, 'is_cjk' => true];
                         }
                         continue;
@@ -248,7 +273,61 @@ final class WP_FTS_LanguagePipeline
      * @param string $run CJK-only text run.
      * @return string[]
      */
-    private function cjk_tokens(string $run): array
+    private function cjk_tokens(string $run, string $language): array
+    {
+        if ($this->cjkTokenizer !== null) {
+            try {
+                $tokens = ($this->cjkTokenizer)($run, $this->canonicalize_language($language));
+                $tokens = $this->normalize_tokenizer_result($tokens);
+                if ($tokens !== []) {
+                    return $tokens;
+                }
+            } catch (Throwable) {
+                // Segmenters are optional extension points; fall through to the
+                // deterministic built-in bigram tokenizer on failures.
+            }
+        }
+
+        return $this->fallback_cjk_tokens($run);
+    }
+
+    /**
+     * Normalize custom CJK tokenizer output to non-empty token strings.
+     *
+     * @param mixed $tokens User segmenter result.
+     * @return string[]
+     */
+    private function normalize_tokenizer_result(mixed $tokens): array
+    {
+        if (!is_iterable($tokens)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($tokens as $token) {
+            if (is_array($token)) {
+                $token = $token['text'] ?? $token['term'] ?? null;
+            }
+            if (!is_scalar($token)) {
+                continue;
+            }
+
+            $token = trim((string) $token);
+            if ($token !== '') {
+                $normalized[] = $token;
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Built-in CJK fallback tokenizer using overlapping bigrams.
+     *
+     * @param string $run CJK-only text run.
+     * @return string[]
+     */
+    private function fallback_cjk_tokens(string $run): array
     {
         $chars = $this->utf8_chars($run);
         $count = count($chars);
@@ -324,5 +403,41 @@ final class WP_FTS_LanguagePipeline
         }
 
         return null;
+    }
+
+    /**
+     * Normalize a language-to-stemmer map.
+     *
+     * @param mixed $stemmers
+     * @return array<string,WP_FTS_Stemmer>
+     */
+    private function normalize_custom_stemmers_by_language(mixed $stemmers): array
+    {
+        if (!is_array($stemmers)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($stemmers as $language => $stemmer) {
+            $canonicalLanguage = $this->canonicalize_language((string) $language);
+            $stemmer = $this->normalize_custom_stemmer($stemmer);
+            if ($stemmer !== null) {
+                $normalized[$canonicalLanguage] = $stemmer;
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Return a custom stemmer for a full language tag or its base language.
+     */
+    private function custom_stemmer_for_language(string $language): ?WP_FTS_Stemmer
+    {
+        $language = $this->canonicalize_language($language);
+
+        return $this->customStemmersByLanguage[$language]
+            ?? $this->customStemmersByLanguage[$this->base_language($language)]
+            ?? null;
     }
 }
