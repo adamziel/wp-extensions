@@ -1,0 +1,33 @@
+{
+  "$schema": "https://playground.wordpress.net/blueprint-schema.json",
+  "meta": {
+    "title": "Pure PHP FTS Indexer Preview",
+    "description": "Installs and activates the Pure PHP FTS Indexer plugin from the indexer subdirectory.",
+    "author": "adamziel"
+  },
+  "preferredVersions": {
+    "php": "8.3",
+    "wp": "latest"
+  },
+  "landingPage": "/wp-admin/plugins.php",
+  "login": true,
+  "siteOptions": {
+    "blogname": "Pure PHP FTS Indexer Preview"
+  },
+  "steps": [
+    {
+      "step": "installPlugin",
+      "pluginData": {
+        "resource": "git:directory",
+        "url": "https://github.com/adamziel/wp-extensions",
+        "path": "indexer",
+        "ref": "main",
+        "refType": "branch"
+      },
+      "options": {
+        "activate": true,
+        "targetFolderName": "indexer"
+      }
+    }
+  ]
+}
