@@ -54,8 +54,8 @@ final class WP_FTS_Searcher
         }
         $limit = max(1, (int) ($opts['limit'] ?? 10));
 
-        $termRows = $this->storage->get_terms($terms);
-        if ($termRows === [] || ($mode === 'AND' && count($termRows) < count($terms))) {
+        $postingsByTerm = WP_FTS_StorageCompat::get_postings($this->storage, $terms);
+        if ($postingsByTerm === [] || ($mode === 'AND' && count($postingsByTerm) < count($terms))) {
             return [];
         }
 
@@ -65,11 +65,11 @@ final class WP_FTS_Searcher
         $decodedByTerm = [];
 
         foreach ($terms as $term) {
-            if (!isset($termRows[$term])) {
+            if (!isset($postingsByTerm[$term])) {
                 continue;
             }
 
-            $postings = WP_FTS_PostingsCodec::decode($termRows[$term]['postings']);
+            $postings = $postingsByTerm[$term];
             $decodedByTerm[$term] = $postings;
             foreach ($postings as $docId => $tf) {
                 $candidateTermTfs[$docId][$term] = $tf;

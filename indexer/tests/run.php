@@ -985,8 +985,11 @@ final class WP_FTS_Test_WPDB
     /** @var array<int,array{sql:string,args:array<int,mixed>}> */
     public array $prepared = [];
 
-    /** @var array<string,array{doc_freq:int,postings:string}> */
+    /** @var array<string,array{doc_freq:int}> */
     public array $terms = [];
+
+    /** @var array<string,array<int,int>> */
+    public array $postings = [];
 
     /** @var array<int,array{lang:string,doc_len:int,content_hash:?string,is_deleted:int}> */
     public array $docs = [];
@@ -1018,16 +1021,75 @@ final class WP_FTS_Test_WPDB
 
         if (str_starts_with($sql, 'INSERT INTO wp_fts_terms')) {
             $term = (string) $args[0];
-            $this->terms[$term] = [
-                'doc_freq' => (int) $args[1],
-                'postings' => (string) $args[2],
-            ];
+            $value = max(0, (int) $args[1]);
+            if (str_contains($sql, 'doc_freq = doc_freq + VALUES(doc_freq)')) {
+                $value += (int) ($this->terms[$term]['doc_freq'] ?? 0);
+            }
+            $this->terms[$term] = ['doc_freq' => $value];
             ksort($this->terms, SORT_STRING);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'UPDATE wp_fts_terms')) {
+            $term = (string) $args[1];
+            if (isset($this->terms[$term])) {
+                $this->terms[$term]['doc_freq'] = max(0, $this->terms[$term]['doc_freq'] - abs((int) $args[0]));
+            }
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_terms WHERE term = %s AND doc_freq = 0')) {
+            $term = (string) $args[0];
+            if (($this->terms[$term]['doc_freq'] ?? null) === 0) {
+                unset($this->terms[$term]);
+            }
             return 1;
         }
 
         if (str_starts_with($sql, 'DELETE FROM wp_fts_terms WHERE term = %s')) {
             unset($this->terms[(string) $args[0]]);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'INSERT INTO wp_fts_postings')) {
+            $term = (string) $args[0];
+            $docId = (int) $args[1];
+            $this->postings[$term][$docId] = max(1, (int) $args[2]);
+            ksort($this->postings[$term], SORT_NUMERIC);
+            ksort($this->postings, SORT_STRING);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_postings WHERE doc_id = %d')) {
+            $docId = (int) $args[0];
+            foreach ($this->postings as $term => $postings) {
+                unset($postings[$docId]);
+                if ($postings === []) {
+                    unset($this->postings[$term]);
+                    continue;
+                }
+                $this->postings[$term] = $postings;
+            }
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_postings WHERE term = %s')) {
+            unset($this->postings[(string) $args[0]]);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_postings WHERE doc_id IN')) {
+            $deleted = array_fill_keys(array_map('intval', $args), true);
+            foreach ($this->postings as $term => $postings) {
+                foreach ($deleted as $docId => $_) {
+                    unset($postings[$docId]);
+                }
+                if ($postings === []) {
+                    unset($this->postings[$term]);
+                    continue;
+                }
+                $this->postings[$term] = $postings;
+            }
             return 1;
         }
 
@@ -1106,7 +1168,7 @@ final class WP_FTS_Test_WPDB
     {
         [$sql, $args] = $this->statement_parts($statement);
 
-        if (str_starts_with($sql, 'SELECT term, doc_freq, postings FROM wp_fts_terms')) {
+        if (str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')) {
             $rows = [];
             foreach ($args as $term) {
                 $term = (string) $term;
@@ -1114,9 +1176,49 @@ final class WP_FTS_Test_WPDB
                     $rows[] = (object) [
                         'term' => $term,
                         'doc_freq' => $this->terms[$term]['doc_freq'],
-                        'postings' => $this->terms[$term]['postings'],
                     ];
                 }
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')) {
+            $rows = [];
+            foreach ($args as $term) {
+                $term = (string) $term;
+                foreach ($this->postings[$term] ?? [] as $docId => $tf) {
+                    $rows[] = (object) ['term' => $term, 'doc_id' => (int) $docId, 'tf' => (int) $tf];
+                }
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT term FROM wp_fts_postings WHERE doc_id = %d')) {
+            $docId = (int) $args[0];
+            $rows = [];
+            foreach ($this->postings as $term => $postings) {
+                if (isset($postings[$docId])) {
+                    $rows[] = (object) ['term' => $term];
+                }
+            }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT term, COUNT(*) AS c FROM wp_fts_postings')) {
+            $docIds = array_fill_keys(array_map('intval', $args), true);
+            $counts = [];
+            foreach ($this->postings as $term => $postings) {
+                foreach ($postings as $docId => $_) {
+                    if (isset($docIds[(int) $docId])) {
+                        $counts[$term] = ($counts[$term] ?? 0) + 1;
+                    }
+                }
+            }
+            ksort($counts, SORT_STRING);
+
+            $rows = [];
+            foreach ($counts as $term => $count) {
+                $rows[] = (object) ['term' => $term, 'c' => $count];
             }
             return $rows;
         }
@@ -2235,13 +2337,18 @@ test_case('mysql storage emits language-aware binary schema and stores per-langu
     $storage = new WP_FTS_Storage_Mysql($wpdb);
     $storage->create_tables();
 
-    assert_same(4, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create four tables');
+    assert_same(5, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create five tables');
     $schemaSql = implode("\n", $wpdb->queries);
     assert_contains('term varbinary(255) NOT NULL', $schemaSql, 'terms table should use exact binary term keys');
+    assert_contains('CREATE TABLE wp_fts_postings', $schemaSql, 'schema should include row postings table');
+    assert_contains('tf int unsigned NOT NULL', $schemaSql, 'postings table should store row term frequency');
+    assert_contains('PRIMARY KEY  (term,doc_id)', $schemaSql, 'postings should be keyed by term and document');
+    assert_contains('KEY doc_id (doc_id)', $schemaSql, 'postings should be indexed for document reindex/delete');
     assert_contains('CREATE TABLE wp_fts_doc_lengths', $schemaSql, 'schema should include doc-language lengths table');
     assert_contains('PRIMARY KEY  (doc_id,lang)', $schemaSql, 'doc lengths should be keyed by doc and language');
     assert_contains('PRIMARY KEY  (lang,k)', $schemaSql, 'meta should be keyed by language and key');
     assert_true(!str_contains(strtolower($schemaSql), 'fulltext'), 'schema must not use MySQL FULLTEXT');
+    assert_true(!str_contains($schemaSql, 'postings longblob'), 'terms table should not require postings blobs');
 
     $plTerm = WP_FTS_TermNamespace::term_key('zamek', 'pl');
     $enTerm = WP_FTS_TermNamespace::term_key('zamek', 'en');

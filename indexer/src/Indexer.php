@@ -68,8 +68,12 @@ final class WP_FTS_Indexer
 
         $this->storage->begin_transaction();
         try {
-            if ($existing !== null) {
+            $postingsReplaced = WP_FTS_StorageCompat::replace_doc_postings($this->storage, $doc_id, $termFrequencies);
+            if (!$postingsReplaced && $existing !== null) {
                 $this->remove_doc_from_all_terms($doc_id);
+            }
+
+            if ($existing !== null) {
                 if (!$existing['deleted']) {
                     $this->add_meta_deltas(
                         WP_FTS_StorageCompat::doc_lang_lengths($existing, $primaryLang),
@@ -78,7 +82,7 @@ final class WP_FTS_Indexer
                 }
             }
 
-            if ($termFrequencies !== []) {
+            if (!$postingsReplaced && $termFrequencies !== []) {
                 $rows = $this->storage->get_terms(array_keys($termFrequencies));
                 foreach ($termFrequencies as $term => $weightedTf) {
                     $postings = isset($rows[$term])
