@@ -2049,6 +2049,22 @@ test_case('multilingual query plan searches inline language-tagged terms', funct
     assert_same([], $searcher->search('zamek', ['lang' => 'en']), 'single-language search should still isolate language partitions');
 });
 
+test_case('explicit language constraints override inline query tags', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'token_normalizer' => static fn(string $term, string $lang): string => "{$lang}-{$term}",
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'pl']);
+    $indexer->index_document(2, '<p>zamek</p>', ['lang' => 'en']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([2], array_column($searcher->search('pl:zamek', ['lang' => 'en']), 'doc_id'), 'lang should keep inline tags inside the requested partition');
+    assert_same([2], array_column($searcher->search('pl:zamek', ['languages' => 'en']), 'doc_id'), 'languages should keep inline tags inside the requested partition');
+    assert_same([2], array_column($searcher->search('pl:zamek', ['langs' => ['en']]), 'doc_id'), 'langs should keep inline tags inside the requested partition');
+});
+
 test_case('multilingual query plan accepts explicit language lists', function (): void {
     $analyzer = new WP_FTS_Analyzer();
     $storage = new WP_FTS_Storage_InMemory();
@@ -2079,6 +2095,29 @@ test_case('language fallback is opt-in ordered and disableable', function (): vo
     assert_same([2, 1], array_column($searcher->search('shared', ['lang' => 'fr', 'default_lang' => 'en', 'language_fallback' => true, 'limit' => 10]), 'doc_id'), 'exact language results should sort before fallback results');
     assert_same([], $searcher->search('alpha', ['lang' => 'fr', 'default_lang' => 'en', 'language_fallback' => true, 'disable_language_fallback' => true]), 'disable flag should suppress fallback even when enabled');
     assert_same([1], array_column($searcher->search('alpha', ['lang' => 'fr', 'fallback_lang' => 'en']), 'doc_id'), 'explicit fallback_lang should opt in without the default-language flag');
+});
+
+test_case('inline language-tagged queries participate in opt-in fallback', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'token_normalizer' => static fn(string $term, string $lang): string => "{$lang}-{$term}",
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'en']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('pl:zamek', [
+        'default_lang' => 'en',
+        'language_fallback' => true,
+    ]), 'doc_id'), 'inline tags should fall back to the configured default language when opted in');
+
+    $indexer->index_document(2, '<p>zamek</p>', ['lang' => 'pl']);
+    assert_same([2, 1], array_column($searcher->search('pl:zamek', [
+        'default_lang' => 'en',
+        'language_fallback' => true,
+        'limit' => 10,
+    ]), 'doc_id'), 'exact inline language results should sort before fallback results');
 });
 
 test_case('query term language resolver can build bilingual plans deterministically', function (): void {

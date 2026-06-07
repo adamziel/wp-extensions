@@ -246,9 +246,12 @@ final class WP_FTS_Searcher
             return $this->dedupe_query_groups($groups);
         }
 
-        $queryOccurrences = $this->analyze_query($query, $opts);
-        $queryLang = $this->resolve_query_language($opts, $queryOccurrences);
-        $groups = $this->groups_from_occurrences($queryOccurrences, $queryLang, 0);
+        $explicitQueryLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']);
+        $queryOccurrences = $explicitQueryLang === null
+            ? $this->analyze_query($query, $opts)
+            : $this->analyze_query($query, $this->with_query_language($opts, $explicitQueryLang));
+        $queryLang = $explicitQueryLang ?? $this->resolve_query_language($opts, $queryOccurrences);
+        $groups = $this->groups_from_occurrences($queryOccurrences, $queryLang, 0, $explicitQueryLang);
         $exactLangs = $groups === [] ? [$queryLang] : $this->languages_from_groups($groups, 0);
 
         foreach ($this->fallback_languages($opts, $exactLangs) as $fallbackLang) {
@@ -266,7 +269,7 @@ final class WP_FTS_Searcher
     private function merge_language_groups(array &$groups, string $query, array $opts, string $lang, int $rank): void
     {
         $occurrences = $this->analyze_query($query, $this->with_query_language($opts, $lang));
-        $newGroups = $this->groups_from_occurrences($occurrences, $lang, $rank);
+        $newGroups = $this->groups_from_occurrences($occurrences, $lang, $rank, $lang);
 
         foreach ($newGroups as $index => $newGroup) {
             if (isset($groups[$index])) {
@@ -288,6 +291,7 @@ final class WP_FTS_Searcher
         $opts['query_lang'] = $lang;
         $opts['lang'] = $lang;
         $opts['language'] = $lang;
+        $opts['_force_query_lang'] = true;
 
         return $opts;
     }
@@ -296,13 +300,15 @@ final class WP_FTS_Searcher
      * Convert analyzer occurrences into one-language alternatives.
      *
      * @param array<int,array<string,mixed>|string> $occurrences
+     * @param string|null $authoritativeLang Language partition that overrides
+     *        inline or analyzer-selected languages for explicit/fallback passes.
      * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
      */
-    private function groups_from_occurrences(array $occurrences, string $defaultLang, int $rank): array
+    private function groups_from_occurrences(array $occurrences, string $defaultLang, int $rank, ?string $authoritativeLang = null): array
     {
         $groups = [];
         foreach ($occurrences as $occurrence) {
-            $candidate = $this->candidate_from_occurrence($occurrence, $defaultLang, $rank);
+            $candidate = $this->candidate_from_occurrence($occurrence, $defaultLang, $rank, $authoritativeLang);
             if ($candidate !== null) {
                 $groups[] = [$candidate];
             }
@@ -315,9 +321,11 @@ final class WP_FTS_Searcher
      * Normalize one analyzer occurrence into a stored term-key candidate.
      *
      * @param array<string,mixed>|string $occurrence
+     * @param string|null $authoritativeLang Language partition that must own the
+     *        candidate, regardless of inline tags or namespaced legacy terms.
      * @return array{key:string,lang:string,term:string,rank:int}|null
      */
-    private function candidate_from_occurrence(array|string $occurrence, string $defaultLang, int $rank): ?array
+    private function candidate_from_occurrence(array|string $occurrence, string $defaultLang, int $rank, ?string $authoritativeLang = null): ?array
     {
         $term = is_array($occurrence)
             ? trim((string) ($occurrence['term'] ?? ''))
@@ -327,14 +335,17 @@ final class WP_FTS_Searcher
         }
 
         $defaultLang = WP_FTS_TermNamespace::canonicalize_lang($defaultLang);
+        $authoritativeLang = $authoritativeLang === null
+            ? null
+            : WP_FTS_TermNamespace::canonicalize_lang($authoritativeLang, $defaultLang);
         $split = WP_FTS_TermNamespace::split_term($term);
         if ($split !== null) {
-            $lang = $split['lang'];
+            $lang = $authoritativeLang ?? $split['lang'];
             $term = $split['term'];
         } else {
-            $lang = is_array($occurrence) && isset($occurrence['lang'])
+            $lang = $authoritativeLang ?? (is_array($occurrence) && isset($occurrence['lang'])
                 ? WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang'], $defaultLang)
-                : $defaultLang;
+                : $defaultLang);
         }
 
         if ($term === '') {

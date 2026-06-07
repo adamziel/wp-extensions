@@ -225,7 +225,7 @@ final class WP_FTS_Analyzer
      * for legacy callers. Pass `return => occurrences`, `format => occurrences`,
      * `return => tokens`, or `return => objects` to receive `term/lang` rows.
      *
-     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,return?:string,format?:string}|string|null $options
+     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,return?:string,format?:string,_force_query_lang?:bool}|string|null $options
      *        Query language hints and optional output format. A legacy string is
      *        treated as `query_lang`.
      * @return string[]|array<int,array{term:string,lang:string}>
@@ -265,7 +265,7 @@ final class WP_FTS_Analyzer
      * Searcher uses this to decide the language partition before namespacing
      * query terms.
      *
-     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string}|string|null $options
+     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,_force_query_lang?:bool}|string|null $options
      * @return array<int,array{term:string,lang:string}>
      */
     public function analyze_query_occurrences(string $query, array|string|null $options = []): array
@@ -363,6 +363,7 @@ final class WP_FTS_Analyzer
     {
         $segments = [];
         $offset = 0;
+        $forceQueryLang = (bool) ($options['_force_query_lang'] ?? false);
         $pattern = '/(^|[\s,;]+)([A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,3}):("[^"]+"|\'[^\']+\'|[^\s,;]+)/u';
         $matched = @preg_match_all($pattern, $query, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
         if ($matched === false || $matched === 0) {
@@ -385,7 +386,7 @@ final class WP_FTS_Analyzer
                 );
             }
 
-            $tagLang = $this->canonicalLanguage($match[2][0]);
+            $tagLang = $forceQueryLang ? $defaultLang : $this->canonicalLanguage($match[2][0]);
             $tagText = $this->unquoteTaggedQueryText($match[3][0]);
             if ($tagLang !== null && trim($tagText) !== '') {
                 $segments[] = ['text' => $tagText, 'lang' => $tagLang];
