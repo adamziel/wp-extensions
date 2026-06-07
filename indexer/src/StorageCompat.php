@@ -87,6 +87,15 @@ final class WP_FTS_StorageCompat
     }
 
     /**
+     * Detect whether a backend can persist product-facing document metadata.
+     */
+    public static function supports_doc_metadata(WP_FTS_Storage $storage): bool
+    {
+        return $storage instanceof WP_FTS_DocumentMetadataStorage
+            || (is_callable([$storage, 'put_doc_metadata']) && is_callable([$storage, 'get_doc_metadata']));
+    }
+
+    /**
      * Fetch positive active document lengths for one language partition.
      *
      * Legacy backends ignore `$lang` and return aggregate lengths. New backends
@@ -171,6 +180,44 @@ final class WP_FTS_StorageCompat
     }
 
     /**
+     * Store document metadata when the backend supports the optional capability.
+     *
+     * @param array<string,mixed> $metadata
+     */
+    public static function put_doc_metadata(WP_FTS_Storage $storage, int $docId, array $metadata): void
+    {
+        if (!self::supports_doc_metadata($storage)) {
+            return;
+        }
+
+        $storage->put_doc_metadata($docId, self::normalize_doc_metadata($metadata));
+    }
+
+    /**
+     * Fetch normalized metadata for active documents.
+     *
+     * @param int[] $docIds
+     * @return array<int,array<string,mixed>>
+     */
+    public static function get_doc_metadata(WP_FTS_Storage $storage, array $docIds): array
+    {
+        if (!self::supports_doc_metadata($storage)) {
+            return [];
+        }
+
+        $rows = $storage->get_doc_metadata($docIds);
+        $normalized = [];
+        foreach ($rows as $docId => $metadata) {
+            if (is_array($metadata)) {
+                $normalized[(int) $docId] = self::normalize_doc_metadata($metadata);
+            }
+        }
+        ksort($normalized, SORT_NUMERIC);
+
+        return $normalized;
+    }
+
+    /**
      * Extract per-language lengths from a document row.
      *
      * New rows use `lang_lengths`. Older rows may expose `doc_lengths`,
@@ -240,6 +287,122 @@ final class WP_FTS_StorageCompat
             $normalized[$canonicalLang] = ($normalized[$canonicalLang] ?? 0) + $length;
         }
         ksort($normalized, SORT_STRING);
+
+        return $normalized;
+    }
+
+    /**
+     * Normalize product metadata used by storage filters, snippets, and CLI rows.
+     *
+     * @param array<string,mixed> $metadata
+     * @return array<string,mixed>
+     */
+    public static function normalize_doc_metadata(array $metadata): array
+    {
+        $normalized = [
+            'post_id' => max(0, (int) ($metadata['post_id'] ?? 0)),
+            'post_type' => self::metadata_text($metadata['post_type'] ?? ''),
+            'post_status' => self::metadata_text($metadata['post_status'] ?? ''),
+            'post_date_gmt' => self::metadata_text($metadata['post_date_gmt'] ?? ''),
+            'title' => self::metadata_text($metadata['title'] ?? ''),
+            'excerpt' => self::metadata_text($metadata['excerpt'] ?? ''),
+            'search_text' => self::metadata_text($metadata['search_text'] ?? ''),
+            'terms' => self::metadata_string_lists($metadata['terms'] ?? []),
+            'custom_fields' => self::metadata_string_lists($metadata['custom_fields'] ?? []),
+            'field_boosts' => [],
+        ];
+
+        foreach (($metadata['field_boosts'] ?? []) as $field => $boost) {
+            if (is_scalar($field) && is_numeric($boost)) {
+                $normalized['field_boosts'][(string) $field] = max(0.01, min(100.0, (float) $boost));
+            }
+        }
+        ksort($normalized['field_boosts'], SORT_STRING);
+
+        foreach ($metadata as $key => $value) {
+            $metadataKey = WP_FTS_Utf8::repair((string) $key);
+            if ($metadataKey !== '' && !array_key_exists($metadataKey, $normalized)) {
+                $normalized[$metadataKey] = self::metadata_extra($value);
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Normalize a scalar metadata string.
+     */
+    private static function metadata_text(mixed $value): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $text = (string) $value;
+        $text = WP_FTS_Utf8::repair($text);
+        $text = strip_tags($text);
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+        $text = WP_FTS_Utf8::repair($text);
+        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+
+        return trim($text);
+    }
+
+    /**
+     * Normalize taxonomy/custom-field metadata maps.
+     *
+     * @param mixed $lists
+     * @return array<string,string[]>
+     */
+    private static function metadata_string_lists(mixed $lists): array
+    {
+        $normalized = [];
+        foreach (is_array($lists) ? $lists : [] as $key => $values) {
+            $key = trim(WP_FTS_Utf8::repair((string) $key));
+            if ($key === '') {
+                continue;
+            }
+
+            $items = [];
+            foreach (is_array($values) ? $values : [$values] as $value) {
+                if (is_scalar($value)) {
+                    $text = self::metadata_text($value);
+                    if ($text !== '') {
+                        $items[$text] = true;
+                    }
+                }
+            }
+            if ($items !== []) {
+                $normalized[$key] = array_keys($items);
+                sort($normalized[$key], SORT_STRING);
+            }
+        }
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
+    }
+
+    /**
+     * Preserve only JSON-serializable metadata extras.
+     */
+    private static function metadata_extra(mixed $value): mixed
+    {
+        if (is_string($value)) {
+            return WP_FTS_Utf8::repair($value);
+        }
+
+        if (is_scalar($value) || $value === null) {
+            return $value;
+        }
+
+        if (!is_array($value)) {
+            return self::metadata_text((string) ($value->name ?? $value->value ?? ''));
+        }
+
+        $normalized = [];
+        foreach ($value as $key => $item) {
+            $normalized[WP_FTS_Utf8::repair((string) $key)] = self::metadata_extra($item);
+        }
 
         return $normalized;
     }

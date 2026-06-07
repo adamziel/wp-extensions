@@ -7,7 +7,7 @@ declare(strict_types=1);
  * The backend stores binary postings as base64 in a versioned JSON payload,
  * supports snapshot rollback, and persists immediately outside transactions.
  */
-final class WP_FTS_Storage_File implements WP_FTS_Storage
+final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage
 {
     private string $path;
 
@@ -17,10 +17,13 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
     /** @var array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}> */
     private array $docs = [];
 
+    /** @var array<int,array<string,mixed>> */
+    private array $docMetadata = [];
+
     /** @var array<string,array{doc_count:int,len_sum:int}> */
     private array $meta = [];
 
-    /** @var array<int,array{terms:array<string,array{df:int,postings:string}>,docs:array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}>,meta:array<string,array{doc_count:int,len_sum:int}>}> */
+    /** @var array<int,array{terms:array<string,array{df:int,postings:string}>,docs:array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}>,docMetadata:array<int,array<string,mixed>>,meta:array<string,array{doc_count:int,len_sum:int}>}> */
     private array $snapshots = [];
 
     private bool $dirty = false;
@@ -153,6 +156,37 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
     }
 
     /**
+     * Store product-facing document metadata and persist it with the index file.
+     *
+     * @param array<string,mixed> $metadata
+     */
+    public function put_doc_metadata(int $doc_id, array $metadata): void
+    {
+        $this->docMetadata[$doc_id] = WP_FTS_StorageCompat::normalize_doc_metadata($metadata);
+        ksort($this->docMetadata, SORT_NUMERIC);
+        $this->changed();
+    }
+
+    /**
+     * Return metadata only for active documents.
+     *
+     * @param int[] $doc_ids
+     * @return array<int,array<string,mixed>>
+     */
+    public function get_doc_metadata(array $doc_ids): array
+    {
+        $metadata = [];
+        foreach (array_unique(array_map('intval', $doc_ids)) as $docId) {
+            if (isset($this->docs[$docId], $this->docMetadata[$docId]) && !$this->docs[$docId]['deleted']) {
+                $metadata[$docId] = $this->docMetadata[$docId];
+            }
+        }
+        ksort($metadata, SORT_NUMERIC);
+
+        return $metadata;
+    }
+
+    /**
      * Mark a document deleted, creating a tombstone for unknown ids.
      */
     public function delete_doc(int $doc_id): void
@@ -247,6 +281,7 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
         $this->snapshots[] = [
             'terms' => $this->terms,
             'docs' => $this->docs,
+            'docMetadata' => $this->docMetadata,
             'meta' => $this->meta,
         ];
     }
@@ -275,6 +310,7 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
 
         $this->terms = $snapshot['terms'];
         $this->docs = $snapshot['docs'];
+        $this->docMetadata = $snapshot['docMetadata'];
         $this->meta = $snapshot['meta'];
         $this->dirty = $this->snapshots !== [];
         if ($this->snapshots === []) {
@@ -326,6 +362,7 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
 
         foreach ($deleted as $docId => $_) {
             unset($this->docs[$docId]);
+            unset($this->docMetadata[$docId]);
         }
 
         $this->sync_meta_from_docs();
@@ -346,6 +383,7 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
     {
         $this->terms = [];
         $this->docs = [];
+        $this->docMetadata = [];
         $this->meta = [];
 
         if (!is_file($this->path)) {
@@ -383,10 +421,17 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
             ];
         }
 
+        foreach (($state['doc_meta'] ?? []) as $docId => $metadata) {
+            if (is_array($metadata)) {
+                $this->docMetadata[(int) $docId] = WP_FTS_StorageCompat::normalize_doc_metadata($metadata);
+            }
+        }
+
         $this->meta = $this->load_meta($state['meta'] ?? []);
         $this->sync_meta_from_docs();
         ksort($this->terms, SORT_STRING);
         ksort($this->docs, SORT_NUMERIC);
+        ksort($this->docMetadata, SORT_NUMERIC);
     }
 
     /**
@@ -411,12 +456,18 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage
             $docs[(string) $docId] = $doc;
         }
 
+        $docMetadata = [];
+        foreach ($this->docMetadata as $docId => $metadata) {
+            $docMetadata[(string) $docId] = $metadata;
+        }
+
         $this->sync_meta_from_docs();
 
         $payload = json_encode([
             'version' => 2,
             'terms' => $terms,
             'docs' => $docs,
+            'doc_meta' => $docMetadata,
             'meta' => $this->meta,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 

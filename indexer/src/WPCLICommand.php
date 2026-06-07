@@ -81,6 +81,24 @@ final class WP_FTS_WPCLI_Command
      * [--lang=<language>]
      * : Query language partition. Defaults to site locale.
      *
+     * [--post_status=<status>]
+     * : Comma-separated post statuses to include when document metadata is available.
+     *
+     * [--post_type=<type>]
+     * : Comma-separated post types to include when document metadata is available.
+     *
+     * [--after=<date>]
+     * : Include posts on or after a GMT date or datetime.
+     *
+     * [--before=<date>]
+     * : Include posts on or before a GMT date or datetime.
+     *
+     * [--offset=<n>]
+     * : Offset into filtered results for pagination. Default: 0.
+     *
+     * [--snippet]
+     * : Include snippets from bounded extracted text.
+     *
      * @param string[] $args First positional argument is the query string.
      * @param array<string,mixed> $assoc_args Options for mode, limit, and
      *        language. Missing language falls back to site locale or `und`.
@@ -89,13 +107,53 @@ final class WP_FTS_WPCLI_Command
     {
         $query = (string) ($args[0] ?? '');
         $searcher = new WP_FTS_Searcher($this->storage(), new WP_FTS_Analyzer());
-        $results = $searcher->search($query, [
+        $searchOptions = [
             'mode' => (string) ($assoc_args['mode'] ?? 'OR'),
             'limit' => $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10),
+            'offset' => $this->non_negative_int_arg($this->assoc_arg($assoc_args, ['offset'], 0), 0),
             'lang' => $this->language_arg($this->assoc_arg($assoc_args, ['lang', 'language'], null)),
-        ]);
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => array_key_exists('snippet', $assoc_args) || array_key_exists('snippets', $assoc_args),
+        ];
 
-        WP_CLI\Utils\format_items('table', $results, ['doc_id', 'score']);
+        $postStatus = $this->assoc_arg($assoc_args, ['post_status', 'post-status'], null);
+        if ($postStatus !== null) {
+            $searchOptions['post_status'] = $this->csv_arg((string) $postStatus, '');
+        }
+        $postType = $this->assoc_arg($assoc_args, ['post_type', 'post-type'], null);
+        if ($postType !== null) {
+            $searchOptions['post_type'] = $this->csv_arg((string) $postType, '');
+        }
+        $after = $this->assoc_arg($assoc_args, ['after', 'date_after', 'date-after'], null);
+        if ($after !== null) {
+            $searchOptions['date_after'] = (string) $after;
+        }
+        $before = $this->assoc_arg($assoc_args, ['before', 'date_before', 'date-before'], null);
+        if ($before !== null) {
+            $searchOptions['date_before'] = (string) $before;
+        }
+
+        /** @var array{total:int,results:array<int,array<string,mixed>>} $payload */
+        $payload = $searcher->search($query, $searchOptions);
+        $results = $payload['results'];
+        foreach ($results as &$row) {
+            $row['total'] = $payload['total'];
+            foreach (['post_id', 'post_type', 'post_status', 'post_date_gmt', 'title'] as $field) {
+                $row[$field] ??= $field === 'post_id' ? 0 : '';
+            }
+            if ($searchOptions['include_snippets']) {
+                $row['snippet'] ??= '';
+            }
+        }
+        unset($row);
+
+        $fields = ['doc_id', 'score', 'total', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title'];
+        if ($searchOptions['include_snippets']) {
+            $fields[] = 'snippet';
+        }
+
+        WP_CLI\Utils\format_items('table', $results, $fields);
     }
 
     /**

@@ -29,23 +29,40 @@ final class WP_FTS_Searcher
      * Search the index for documents matching a query.
      *
      * `mode` may be `OR` or `AND`; `AND` requires every query term to have a
-     * posting for a document. `limit` is clamped to at least 1. Language can be
-     * supplied with `query_lang`, `lang`, or `language`; otherwise the analyzer
-     * occurrence language or default language is used.
+     * posting for a document. `limit` is clamped to at least 1 and `offset`
+     * enables pagination. Language can be supplied with `query_lang`, `lang`, or
+     * `language`; otherwise the analyzer occurrence language or default language
+     * is used.
      *
-     * @param array{mode?:string,limit?:int,query_lang?:string,lang?:string,language?:string,default_lang?:string,locale?:string} $opts
-     * @return array<int,array{doc_id:int,score:float}> Results sorted by
-     *         descending score and ascending doc id for ties.
+     * Product options are opt-in to preserve the legacy return shape:
+     * `include_total` returns a payload with `total`, `limit`, `offset`, and
+     * `results`; `include_metadata` adds WordPress result fields; and
+     * `include_snippets` builds bounded snippets from stored extracted text.
+     * `post_type`, `post_status`, `date_after`, and `date_before` filter only
+     * when the storage backend exposes document metadata. Prefix/phrase search is
+     * intentionally not emulated on whole-term postings; pass `search_extension`
+     * or use the `wp_fts_search_extension_results` filter to provide a backend
+     * that can do it honestly.
+     *
+     * @param array<string,mixed> $opts
+     * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>}
+     *         Results sorted by descending score and ascending doc id for ties,
+     *         or a pagination payload when `include_total` is true.
      * @throws InvalidArgumentException If `mode` is not `OR` or `AND`.
      * @throws LogicException If the analyzer does not provide a query analyzer.
      */
     public function search(string $query, array $opts = []): array
     {
+        $extensionResults = $this->extension_results($query, $opts);
+        if ($extensionResults !== null) {
+            return $extensionResults;
+        }
+
         $queryOccurrences = $this->analyze_query($query, $opts);
         $queryLang = $this->resolve_query_language($opts, $queryOccurrences);
         $terms = $this->namespace_query_terms($queryOccurrences, $queryLang);
         if ($terms === []) {
-            return [];
+            return $this->format_response([], 0, $opts, $queryLang);
         }
 
         $mode = strtoupper((string) ($opts['mode'] ?? 'OR'));
@@ -53,10 +70,11 @@ final class WP_FTS_Searcher
             throw new InvalidArgumentException('Search mode must be OR or AND.');
         }
         $limit = max(1, (int) ($opts['limit'] ?? 10));
+        $offset = max(0, (int) ($opts['offset'] ?? 0));
 
         $postingsByTerm = WP_FTS_StorageCompat::get_postings($this->storage, $terms);
         if ($postingsByTerm === [] || ($mode === 'AND' && count($postingsByTerm) < count($terms))) {
-            return [];
+            return $this->format_response([], 0, $opts, $queryLang);
         }
 
         /** @var array<int,array<string,int>> $candidateTermTfs */
@@ -82,13 +100,13 @@ final class WP_FTS_Searcher
 
         $docLengths = WP_FTS_StorageCompat::get_doc_lengths($this->storage, array_keys($candidateTermTfs), $queryLang);
         if ($docLengths === []) {
-            return [];
+            return $this->format_response([], 0, $opts, $queryLang);
         }
 
         $meta = WP_FTS_StorageCompat::get_meta($this->storage, $queryLang);
         $docCount = max(0, (int) $meta['doc_count']);
         if ($docCount === 0) {
-            return [];
+            return $this->format_response([], 0, $opts, $queryLang);
         }
 
         $avgDocLen = $meta['len_sum'] > 0 ? $meta['len_sum'] / $docCount : 1.0;
@@ -125,7 +143,268 @@ final class WP_FTS_Searcher
             return $scoreOrder !== 0 ? $scoreOrder : ($a['doc_id'] <=> $b['doc_id']);
         });
 
-        return array_slice($results, 0, $limit);
+        $metadata = [];
+        if ($this->has_metadata_filters($opts)) {
+            $metadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, array_column($results, 'doc_id'));
+            $results = array_values(array_filter(
+                $results,
+                fn(array $row): bool => $this->metadata_matches($metadata[(int) $row['doc_id']] ?? null, $opts)
+            ));
+        }
+
+        $total = count($results);
+        $page = array_slice($results, $offset, $limit);
+        if ($this->should_enrich_results($opts) && $page !== []) {
+            $pageIds = array_column($page, 'doc_id');
+            $pageMetadata = $metadata;
+            if ($pageMetadata === []) {
+                $pageMetadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, $pageIds);
+            }
+            $page = $this->enrich_results($page, $pageMetadata, $query, $opts);
+        }
+
+        return $this->format_response($page, $total, $opts, $queryLang);
+    }
+
+    /**
+     * Call a real prefix/phrase extension when requested.
+     *
+     * The built-in posting lists are whole-term only. Returning an empty or fuzzy
+     * approximation for prefix/phrase would be misleading, so these modes require
+     * an explicit extension callback/filter that owns the storage contract.
+     *
+     * @return array<string,mixed>|array<int,array<string,mixed>>|null
+     */
+    private function extension_results(string $query, array $opts): ?array
+    {
+        $requested = !empty($opts['prefix']) || !empty($opts['phrase']);
+        if (!$requested) {
+            return null;
+        }
+
+        if (isset($opts['search_extension']) && is_callable($opts['search_extension'])) {
+            $results = ($opts['search_extension'])($query, $opts, $this->storage, $this->analyzer);
+            return is_array($results) ? $results : [];
+        }
+
+        if (function_exists('apply_filters')) {
+            $results = apply_filters('wp_fts_search_extension_results', null, $query, $opts, $this->storage, $this->analyzer);
+            if ($results !== null) {
+                return is_array($results) ? $results : [];
+            }
+        }
+
+        throw new InvalidArgumentException('Prefix and phrase search require a search_extension callback or wp_fts_search_extension_results filter for the active storage backend.');
+    }
+
+    /**
+     * Preserve legacy list results unless callers request pagination metadata.
+     *
+     * @param array<int,array<string,mixed>> $results
+     * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>}
+     */
+    private function format_response(array $results, int $total, array $opts, string $queryLang): array
+    {
+        if (empty($opts['include_total'])) {
+            return $results;
+        }
+
+        return [
+            'total' => $total,
+            'limit' => max(1, (int) ($opts['limit'] ?? 10)),
+            'offset' => max(0, (int) ($opts['offset'] ?? 0)),
+            'query_lang' => WP_FTS_TermNamespace::canonicalize_lang($queryLang),
+            'results' => $results,
+        ];
+    }
+
+    /**
+     * Check whether result rows need metadata/snippet enrichment.
+     */
+    private function should_enrich_results(array $opts): bool
+    {
+        return !empty($opts['include_metadata']) || !empty($opts['include_snippets']) || !empty($opts['snippets']);
+    }
+
+    /**
+     * Add stored metadata and optional snippets to result rows.
+     *
+     * @param array<int,array<string,mixed>> $results
+     * @param array<int,array<string,mixed>> $metadata
+     * @return array<int,array<string,mixed>>
+     */
+    private function enrich_results(array $results, array $metadata, string $query, array $opts): array
+    {
+        $includeMetadata = !empty($opts['include_metadata']);
+        $includeSnippets = !empty($opts['include_snippets']) || !empty($opts['snippets']);
+        foreach ($results as &$row) {
+            $docId = (int) $row['doc_id'];
+            $meta = $metadata[$docId] ?? [];
+            if ($includeMetadata) {
+                foreach (['post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt'] as $key) {
+                    $row[$key] = $meta[$key] ?? ($key === 'post_id' ? 0 : '');
+                }
+            }
+            if ($includeSnippets) {
+                $row['snippet'] = $this->snippet(
+                    (string) ($meta['search_text'] ?? $meta['excerpt'] ?? $meta['title'] ?? ''),
+                    $query,
+                    max(40, (int) ($opts['snippet_length'] ?? 180)),
+                    !empty($opts['highlight'])
+                );
+            }
+        }
+        unset($row);
+
+        return $results;
+    }
+
+    /**
+     * Determine whether metadata filters are present.
+     */
+    private function has_metadata_filters(array $opts): bool
+    {
+        foreach (['post_type', 'post_types', 'post_status', 'post_statuses', 'date_after', 'after', 'post_date_after', 'date_before', 'before', 'post_date_before'] as $key) {
+            if (array_key_exists($key, $opts) && $this->normalize_filter_list($opts[$key]) !== []) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Apply post type/status/date filters to one metadata row.
+     *
+     * @param array<string,mixed>|null $metadata
+     */
+    private function metadata_matches(?array $metadata, array $opts): bool
+    {
+        if ($metadata === null) {
+            return false;
+        }
+
+        $postTypes = $this->normalize_filter_list($opts['post_type'] ?? $opts['post_types'] ?? []);
+        if ($postTypes !== [] && !in_array((string) ($metadata['post_type'] ?? ''), $postTypes, true)) {
+            return false;
+        }
+
+        $postStatuses = $this->normalize_filter_list($opts['post_status'] ?? $opts['post_statuses'] ?? []);
+        if ($postStatuses !== [] && !in_array((string) ($metadata['post_status'] ?? ''), $postStatuses, true)) {
+            return false;
+        }
+
+        $date = (string) ($metadata['post_date_gmt'] ?? '');
+        $after = $this->date_filter($opts['date_after'] ?? $opts['after'] ?? $opts['post_date_after'] ?? null, false);
+        if ($after !== null && ($date === '' || strcmp($date, $after) < 0)) {
+            return false;
+        }
+
+        $before = $this->date_filter($opts['date_before'] ?? $opts['before'] ?? $opts['post_date_before'] ?? null, true);
+        if ($before !== null && ($date === '' || strcmp($date, $before) > 0)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Normalize comma-separated or array filters.
+     *
+     * @return string[]
+     */
+    private function normalize_filter_list(mixed $value): array
+    {
+        $items = [];
+        foreach (is_array($value) ? $value : [$value] as $item) {
+            foreach (explode(',', (string) $item) as $part) {
+                $part = trim($part);
+                if ($part !== '') {
+                    $items[$part] = true;
+                }
+            }
+        }
+
+        $result = array_keys($items);
+        sort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * Normalize date-only filters to lexicographic SQL datetime boundaries.
+     */
+    private function date_filter(mixed $value, bool $endOfDay): ?string
+    {
+        if (!is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        $date = trim((string) $value);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1) {
+            return $date . ($endOfDay ? ' 23:59:59' : ' 00:00:00');
+        }
+
+        return $date;
+    }
+
+    /**
+     * Build a compact snippet from stored plain text.
+     */
+    private function snippet(string $text, string $query, int $length, bool $highlight): string
+    {
+        $text = trim(preg_replace('/\s+/u', ' ', strip_tags($text)) ?? $text);
+        if ($text === '') {
+            return '';
+        }
+
+        $terms = $this->snippet_terms($query);
+        $start = 0;
+        foreach ($terms as $term) {
+            $position = stripos($text, $term);
+            if ($position !== false) {
+                $start = max(0, $position - intdiv($length, 3));
+                break;
+            }
+        }
+
+        $snippet = trim(substr($text, $start, $length));
+        if ($start > 0) {
+            $snippet = '...' . ltrim($snippet);
+        }
+        if ($start + $length < strlen($text)) {
+            $snippet = rtrim($snippet) . '...';
+        }
+
+        if (!$highlight || $terms === []) {
+            return $snippet;
+        }
+
+        foreach ($terms as $term) {
+            $quoted = preg_quote($term, '/');
+            $snippet = preg_replace('/(' . $quoted . ')/i', '<mark>$1</mark>', $snippet) ?? $snippet;
+        }
+
+        return $snippet;
+    }
+
+    /**
+     * Extract raw query words for snippet positioning/highlighting.
+     *
+     * @return string[]
+     */
+    private function snippet_terms(string $query): array
+    {
+        preg_match_all('/[\p{L}\p{N}_-]+/u', $query, $matches);
+        $terms = [];
+        foreach ($matches[0] ?? [] as $term) {
+            $term = trim((string) $term);
+            if (strlen($term) >= 2) {
+                $terms[strtolower($term)] = true;
+            }
+        }
+
+        return array_keys($terms);
     }
 
     /**

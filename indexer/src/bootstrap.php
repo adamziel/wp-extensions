@@ -14,12 +14,15 @@ if (is_file($wp_fts_vendor_autoload)) {
 
 $wp_fts_files = [
     __DIR__ . '/StorageInterface.php',
+    __DIR__ . '/DocumentMetadataStorage.php',
     __DIR__ . '/TermNamespace.php',
+    __DIR__ . '/Utf8.php',
     __DIR__ . '/StorageCompat.php',
     __DIR__ . '/Normalizer.php',
     __DIR__ . '/Stemmer.php',
     __DIR__ . '/LanguagePipeline.php',
     __DIR__ . '/Analyzer.php',
+    __DIR__ . '/PostContentExtractor.php',
     __DIR__ . '/PostingsCodec.php',
     __DIR__ . '/InMemoryStorage.php',
     __DIR__ . '/FileStorage.php',
