@@ -7,7 +7,7 @@ declare(strict_types=1);
  * State lives in PHP arrays, supports rollback snapshots, and mirrors the
  * language-aware storage contract without any persistence layer.
  */
-final class WP_FTS_Storage_InMemory implements WP_FTS_Storage
+final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage
 {
     /** @var array<string,array{df:int,postings:string}> */
     private array $terms = [];
@@ -15,10 +15,13 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage
     /** @var array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}> */
     private array $docs = [];
 
+    /** @var array<int,array<string,mixed>> */
+    private array $docMetadata = [];
+
     /** @var array<string,array{doc_count:int,len_sum:int}> */
     private array $meta = [];
 
-    /** @var array<int,array{terms:array<string,array{df:int,postings:string}>,docs:array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}>,meta:array<string,array{doc_count:int,len_sum:int}>}> */
+    /** @var array<int,array{terms:array<string,array{df:int,postings:string}>,docs:array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}>,docMetadata:array<int,array<string,mixed>>,meta:array<string,array{doc_count:int,len_sum:int}>}> */
     private array $snapshots = [];
 
     /**
@@ -148,6 +151,36 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage
     }
 
     /**
+     * Store product-facing document metadata for filters and snippets.
+     *
+     * @param array<string,mixed> $metadata
+     */
+    public function put_doc_metadata(int $doc_id, array $metadata): void
+    {
+        $this->docMetadata[$doc_id] = WP_FTS_StorageCompat::normalize_doc_metadata($metadata);
+        ksort($this->docMetadata, SORT_NUMERIC);
+    }
+
+    /**
+     * Return metadata only for active documents.
+     *
+     * @param int[] $doc_ids
+     * @return array<int,array<string,mixed>>
+     */
+    public function get_doc_metadata(array $doc_ids): array
+    {
+        $metadata = [];
+        foreach (array_unique(array_map('intval', $doc_ids)) as $docId) {
+            if (isset($this->docs[$docId], $this->docMetadata[$docId]) && !$this->docs[$docId]['deleted']) {
+                $metadata[$docId] = $this->docMetadata[$docId];
+            }
+        }
+        ksort($metadata, SORT_NUMERIC);
+
+        return $metadata;
+    }
+
+    /**
      * Return derived collection metadata for active documents.
      *
      * Metadata is rebuilt from document rows before every read so test fixtures
@@ -221,6 +254,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage
         $this->snapshots[] = [
             'terms' => $this->terms,
             'docs' => $this->docs,
+            'docMetadata' => $this->docMetadata,
             'meta' => $this->meta,
         ];
     }
@@ -245,6 +279,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage
 
         $this->terms = $snapshot['terms'];
         $this->docs = $snapshot['docs'];
+        $this->docMetadata = $snapshot['docMetadata'];
         $this->meta = $snapshot['meta'];
     }
 
@@ -291,6 +326,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage
 
         foreach ($deleted as $docId => $_) {
             unset($this->docs[$docId]);
+            unset($this->docMetadata[$docId]);
         }
 
         $this->sync_meta_from_docs();

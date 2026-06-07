@@ -588,7 +588,7 @@ function assert_search_results_equal(array $expected, array $actual, string $mes
 }
 
 /**
- * @return array{terms:array<string,array{df:int,postings:array<int,int>}>,docs:array<int,array<string,mixed>>,meta:array<string,array{doc_count:int,len_sum:int}>}
+ * @return array{terms:array<string,array{df:int,postings:array<int,int>}>,docs:array<int,array<string,mixed>>,doc_meta:array<int,array<string,mixed>>,meta:array<string,array{doc_count:int,len_sum:int}>}
  */
 function storage_snapshot(WP_FTS_Storage $storage): array
 {
@@ -608,9 +608,12 @@ function storage_snapshot(WP_FTS_Storage $storage): array
     }
     ksort($docs, SORT_NUMERIC);
 
+    $docMeta = WP_FTS_StorageCompat::get_doc_metadata($storage, array_keys($docs));
+
     return [
         'terms' => $terms,
         'docs' => $docs,
+        'doc_meta' => $docMeta,
         'meta' => storage_meta_snapshot($storage, $docs),
     ];
 }
@@ -994,6 +997,9 @@ final class WP_FTS_Test_WPDB
     /** @var array<int,array<string,int>> */
     public array $docLengths = [];
 
+    /** @var array<int,array<string,mixed>> */
+    public array $docMeta = [];
+
     /** @var array<string,array<string,int>> */
     public array $meta = [];
 
@@ -1067,10 +1073,34 @@ final class WP_FTS_Test_WPDB
             return 1;
         }
 
+        if (str_starts_with($sql, 'DELETE FROM wp_fts_docmeta WHERE doc_id IN')) {
+            foreach ($args as $docId) {
+                unset($this->docMeta[(int) $docId]);
+            }
+            return 1;
+        }
+
         if (str_starts_with($sql, 'INSERT INTO wp_fts_doc_lengths')) {
             $docId = (int) $args[0];
             $this->docLengths[$docId][(string) $args[1]] = (int) $args[2];
             ksort($this->docLengths[$docId], SORT_STRING);
+            return 1;
+        }
+
+        if (str_starts_with($sql, 'INSERT INTO wp_fts_docmeta')) {
+            $docId = (int) $args[0];
+            $this->docMeta[$docId] = [
+                'doc_id' => $docId,
+                'post_id' => (int) $args[1],
+                'post_type' => (string) $args[2],
+                'post_status' => (string) $args[3],
+                'post_date_gmt' => (string) $args[4],
+                'title' => (string) $args[5],
+                'excerpt' => (string) $args[6],
+                'search_text' => (string) $args[7],
+                'data' => (string) $args[8],
+            ];
+            ksort($this->docMeta, SORT_NUMERIC);
             return 1;
         }
 
@@ -1092,6 +1122,7 @@ final class WP_FTS_Test_WPDB
         if (str_starts_with($sql, 'DELETE FROM wp_fts_docs WHERE doc_id IN')) {
             foreach ($args as $docId) {
                 unset($this->docs[(int) $docId]);
+                unset($this->docMeta[(int) $docId]);
             }
             return 1;
         }
@@ -1148,6 +1179,18 @@ final class WP_FTS_Test_WPDB
             foreach ($this->docLengths[(int) $args[0]] ?? [] as $lang => $docLen) {
                 $rows[] = (object) ['lang' => $lang, 'doc_len' => $docLen];
             }
+            return $rows;
+        }
+
+        if (str_starts_with($sql, 'SELECT m.doc_id, m.post_id, m.post_type')) {
+            $rows = [];
+            foreach (array_map('intval', $args) as $docId) {
+                if (($this->docs[$docId]['is_deleted'] ?? 1) === 0 && isset($this->docMeta[$docId])) {
+                    $rows[] = (object) $this->docMeta[$docId];
+                }
+            }
+            usort($rows, static fn(object $a, object $b): int => (int) $a->doc_id <=> (int) $b->doc_id);
+
             return $rows;
         }
 
@@ -2230,15 +2273,160 @@ test_case('search requests occurrence output through query fallback', function (
     assert_same('occurrences', $analyzer->queryOptions[0]['return'], 'query fallback should request occurrence output');
 });
 
+test_case('post content extractor indexes realistic WordPress fields and filters', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer();
+    $extractor = new WP_FTS_PostContentExtractor();
+    $post = (object) [
+        'ID' => 1001,
+        'post_title' => 'Title Aurora',
+        'post_content' => '<p>Body Nebula</p>[fts_widget]',
+        'post_excerpt' => 'Excerpt Comet',
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-02-03 04:05:06',
+        'terms' => [
+            'category' => ['Taxonomy Beacon'],
+            'post_tag' => [(object) ['name' => 'Fixture Tag']],
+        ],
+        'custom_fields' => [
+            'subtitle' => 'Custom Orbit Signal',
+            'secret' => 'Hidden Secret',
+        ],
+    ];
+    $extracted = $extractor->extract($post, [
+        'custom_fields' => ['subtitle'],
+        'render_content_callback' => static fn(string $content, object $post, array $opts): string => '<p>Rendered Shortcode Signal</p>',
+        'filters' => [
+            'wp_fts_post_index_fields' => static function (array $fields): array {
+                $fields[] = ['name' => 'filtered', 'text' => 'Filterword Contribution', 'boost' => 2.0];
+                return $fields;
+            },
+        ],
+    ]);
+
+    $indexer = new WP_FTS_Indexer($storage, $analyzer, $extractor);
+    $indexer->index_document_fields(1001, $extracted['fields'], [
+        'lang' => 'en',
+        'metadata' => $extracted['metadata'],
+        'field_boosts' => $extracted['field_boosts'],
+    ]);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    foreach (['aurora', 'nebula', 'comet', 'beacon', 'orbit', 'shortcode', 'filterword'] as $term) {
+        assert_same(1001, $searcher->search($term, ['lang' => 'en'])[0]['doc_id'] ?? null, "{$term} should come from extracted post fields");
+    }
+    assert_same([], $searcher->search('hidden', ['lang' => 'en']), 'unselected custom fields should not be indexed');
+
+    $metadata = $storage->get_doc_metadata([1001])[1001];
+    assert_same('post', $metadata['post_type'], 'metadata should include post type');
+    assert_same('publish', $metadata['post_status'], 'metadata should include post status');
+    assert_same('2026-02-03 04:05:06', $metadata['post_date_gmt'], 'metadata should include post date');
+    assert_same(['Taxonomy Beacon'], $metadata['terms']['category'], 'metadata should include taxonomy terms');
+    assert_same(['Custom Orbit Signal'], $metadata['custom_fields']['subtitle'], 'metadata should include selected custom fields');
+    assert_contains('Rendered Shortcode Signal', $metadata['search_text'], 'metadata search text should include rendered shortcode content');
+});
+
+test_case('search product options filter metadata and return pagination snippets', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document_fields(1, [['name' => 'content', 'text' => 'shared product alpha']], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 1,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-01-10 10:00:00',
+            'title' => 'Published Shared',
+            'search_text' => 'Published shared product alpha snippet source',
+        ],
+    ]);
+    $indexer->index_document_fields(2, [['name' => 'content', 'text' => 'shared product beta']], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 2,
+            'post_type' => 'page',
+            'post_status' => 'draft',
+            'post_date_gmt' => '2025-12-01 10:00:00',
+            'title' => 'Draft Shared',
+            'search_text' => 'Draft shared product beta snippet source',
+        ],
+    ]);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $filtered = $searcher->search('shared', [
+        'lang' => 'en',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'date_after' => '2026-01-01',
+        'date_before' => '2026-12-31',
+    ]);
+    assert_same(1, $filtered['total'], 'metadata filters should reduce total before pagination');
+    assert_same(1, $filtered['results'][0]['doc_id'], 'publish/post/date filters should keep only visible matching post');
+    assert_same('Published Shared', $filtered['results'][0]['title'], 'metadata fields should enrich result rows');
+    assert_contains('<mark>shared</mark>', $filtered['results'][0]['snippet'], 'highlighted snippets should come from stored extracted text');
+
+    $paged = $searcher->search('shared', [
+        'lang' => 'en',
+        'include_total' => true,
+        'limit' => 1,
+        'offset' => 1,
+    ]);
+    assert_same(2, $paged['total'], 'unfiltered total should include both matching posts');
+    assert_same(2, $paged['results'][0]['doc_id'], 'offset should page through ordered results');
+});
+
+test_case('field boosts are tunable for extracted fields', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+
+    $titleBoosted = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($titleBoosted, $analyzer);
+    $indexer->index_document_fields(1, [['name' => 'title', 'text' => 'needle', 'boost' => 5.0]], ['lang' => 'en']);
+    $indexer->index_document_fields(2, [['name' => 'content', 'text' => 'needle', 'boost' => 1.0]], ['lang' => 'en']);
+    assert_same([1, 2], array_column((new WP_FTS_Searcher($titleBoosted, $analyzer))->search('needle', ['lang' => 'en', 'limit' => 2]), 'doc_id'), 'higher title boost should affect ranking');
+
+    $contentBoosted = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($contentBoosted, $analyzer);
+    $indexer->index_document_fields(1, [['name' => 'title', 'text' => 'needle', 'boost' => 1.0]], ['lang' => 'en']);
+    $indexer->index_document_fields(2, [['name' => 'content', 'text' => 'needle', 'boost' => 5.0]], ['lang' => 'en']);
+    assert_same([2, 1], array_column((new WP_FTS_Searcher($contentBoosted, $analyzer))->search('needle', ['lang' => 'en', 'limit' => 2]), 'doc_id'), 'field boost tuning should be reversible');
+});
+
+test_case('prefix and phrase search require explicit extension point', function (): void {
+    $searcher = new WP_FTS_Searcher(new WP_FTS_Storage_InMemory(), new WP_FTS_Analyzer());
+    $extended = $searcher->search('pre', [
+        'prefix' => true,
+        'search_extension' => static fn(string $query, array $opts, WP_FTS_Storage $storage, object $analyzer): array => [
+            ['doc_id' => 77, 'score' => 1.0, 'mode' => !empty($opts['prefix']) ? 'prefix' : 'phrase'],
+        ],
+    ]);
+    assert_same(77, $extended[0]['doc_id'], 'prefix extension callback should own custom search results');
+
+    $thrown = false;
+    try {
+        $searcher->search('exact words', ['phrase' => true]);
+    } catch (InvalidArgumentException) {
+        $thrown = true;
+    }
+    assert_true($thrown, 'phrase search should not be silently emulated on whole-term postings');
+});
+
 test_case('mysql storage emits language-aware binary schema and stores per-language docs', function (): void {
     $wpdb = new WP_FTS_Test_WPDB();
     $storage = new WP_FTS_Storage_Mysql($wpdb);
     $storage->create_tables();
 
-    assert_same(4, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create four tables');
+    assert_same(5, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create five tables');
     $schemaSql = implode("\n", $wpdb->queries);
     assert_contains('term varbinary(255) NOT NULL', $schemaSql, 'terms table should use exact binary term keys');
     assert_contains('CREATE TABLE wp_fts_doc_lengths', $schemaSql, 'schema should include doc-language lengths table');
+    assert_contains('CREATE TABLE wp_fts_docmeta', $schemaSql, 'schema should include document metadata table');
+    assert_contains('KEY post_type_status_date (post_type,post_status,post_date_gmt)', $schemaSql, 'document metadata should support product filters');
     assert_contains('PRIMARY KEY  (doc_id,lang)', $schemaSql, 'doc lengths should be keyed by doc and language');
     assert_contains('PRIMARY KEY  (lang,k)', $schemaSql, 'meta should be keyed by language and key');
     assert_true(!str_contains(strtolower($schemaSql), 'fulltext'), 'schema must not use MySQL FULLTEXT');
@@ -2251,11 +2439,24 @@ test_case('mysql storage emits language-aware binary schema and stores per-langu
     assert_same([$enTerm, $plTerm], $storage->all_terms(), 'binary namespaced terms should remain separate rows');
 
     $storage->put_doc(7, 'pl_PL', ['pl_PL' => 4, 'en' => 2], 'abc123');
+    $storage->put_doc_metadata(7, [
+        'post_id' => 7,
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-01-02 03:04:05',
+        'title' => 'Zamek',
+        'search_text' => 'Zamek taxonomy custom',
+        'terms' => ['category' => ['Architecture']],
+    ]);
     $doc = $storage->get_doc(7);
     assert_same('pl-PL', $doc['primary_lang'], 'document primary language should be canonicalized');
     assert_same(['en' => 2, 'pl-PL' => 4], $doc['lang_lengths'], 'document should keep per-language lengths');
     assert_same([7 => 4], $storage->get_doc_lengths([7], 'pl_PL'), 'language length lookup should use doc-length table');
     assert_same([7 => 2], $storage->get_doc_lengths([7], 'en'), 'secondary language length should be queryable');
+    $metadata = $storage->get_doc_metadata([7]);
+    assert_same('post', $metadata[7]['post_type'], 'document metadata should round trip post type');
+    assert_same('publish', $metadata[7]['post_status'], 'document metadata should round trip post status');
+    assert_same(['Architecture'], $metadata[7]['terms']['category'], 'document metadata should preserve structured terms');
 
     $storage->add_meta('pl_PL', 1, 4);
     $storage->add_meta('en', 1, 2);
@@ -2269,8 +2470,24 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     $oldWpdb = $wpdb ?? null;
     $fake = new WP_FTS_Test_WPDB();
     $fake->postRows = [
-        (object) ['ID' => 10, 'post_title' => 'Pierwszy', 'post_content' => '<p>zamek alfa</p>'],
-        (object) ['ID' => 11, 'post_title' => 'Drugi', 'post_content' => '<p>zamek beta</p>'],
+        (object) [
+            'ID' => 10,
+            'post_title' => 'Pierwszy',
+            'post_content' => '<p>zamek alfa</p>',
+            'post_excerpt' => '',
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-03-04 05:06:07',
+        ],
+        (object) [
+            'ID' => 11,
+            'post_title' => 'Drugi',
+            'post_content' => '<p>zamek beta</p>',
+            'post_excerpt' => '',
+            'post_type' => 'page',
+            'post_status' => 'draft',
+            'post_date_gmt' => '2026-03-05 05:06:07',
+        ],
     ];
     $wpdb = $fake;
     WP_CLI::$successMessages = [];
@@ -2292,6 +2509,9 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_same([10], array_keys($fake->docs), 'CLI limit should restrict indexed posts');
     assert_same('pl-PL', $fake->docs[10]['lang'], 'CLI language option should reach MySQL docs');
     assert_same(['pl-PL' => 7], $fake->docLengths[10], 'CLI reindex should write boosted per-language doc length');
+    assert_same('post', $fake->docMeta[10]['post_type'], 'CLI reindex should store post type metadata');
+    assert_same('publish', $fake->docMeta[10]['post_status'], 'CLI reindex should store status metadata');
+    assert_same('2026-03-04 05:06:07', $fake->docMeta[10]['post_date_gmt'], 'CLI reindex should store date metadata');
 
     $postSelect = null;
     foreach ($fake->prepared as $prepared) {

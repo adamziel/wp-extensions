@@ -18,7 +18,9 @@ final class WP_FTS_Indexer
     public function __construct(
         private WP_FTS_Storage $storage,
         private object $analyzer,
+        private ?WP_FTS_PostContentExtractor $postContentExtractor = null,
     ) {
+        $this->postContentExtractor ??= new WP_FTS_PostContentExtractor();
     }
 
     /**
@@ -56,15 +58,83 @@ final class WP_FTS_Indexer
 
         $primaryLang = $this->resolve_document_language($opts);
         $hash = $this->content_hash($html, $primaryLang);
+        $metadata = isset($opts['metadata']) && is_array($opts['metadata'])
+            ? $opts['metadata']
+            : null;
+
+        return $this->index_occurrences(
+            $doc_id,
+            $primaryLang,
+            $hash,
+            $this->analyze_content($html, $opts, $primaryLang),
+            $metadata
+        );
+    }
+
+    /**
+     * Index weighted product fields as one document.
+     *
+     * Each field may include `name`, `text`, optional raw `html`, and `boost`.
+     * The analyzer still honors language scopes inside each field; the field
+     * boost multiplies analyzer weights before terms are rounded into integer
+     * frequencies. This keeps title/excerpt/term/custom-field contributions
+     * tunable without changing the postings format.
+     *
+     * @param int $doc_id Stable non-negative document identifier.
+     * @param array<int,array<string,mixed>|string> $fields Weighted fields or
+     *        legacy string fields.
+     * @param array<string,mixed> $opts Document options plus optional
+     *        `metadata` and `field_boosts`.
+     */
+    public function index_document_fields(int $doc_id, array $fields, array $opts = []): bool
+    {
+        if ($doc_id < 0) {
+            throw new InvalidArgumentException('Document id must be non-negative.');
+        }
+
+        $primaryLang = $this->resolve_document_language($opts);
+        $fields = $this->normalize_index_fields($fields, $opts);
+        $metadata = isset($opts['metadata']) && is_array($opts['metadata'])
+            ? $opts['metadata']
+            : null;
+        $hash = $this->content_hash($this->fields_hash_source($fields, $metadata), $primaryLang);
+
+        $occurrences = [];
+        foreach ($fields as $field) {
+            $fieldOpts = $opts;
+            $fieldOpts['field_name'] = $field['name'];
+            $html = isset($field['html'])
+                ? (string) $field['html']
+                : '<div>' . htmlspecialchars($field['text'], ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8') . '</div>';
+
+            foreach ($this->analyze_content($html, $fieldOpts, $primaryLang) as $occurrence) {
+                if (is_array($occurrence)) {
+                    $occurrence['weight'] = (float) ($occurrence['weight'] ?? 1.0) * $field['boost'];
+                }
+                $occurrences[] = $occurrence;
+            }
+        }
+
+        return $this->index_occurrences($doc_id, $primaryLang, $hash, $occurrences, $metadata);
+    }
+
+    /**
+     * Store analyzed occurrences, document lengths, and optional metadata.
+     *
+     * @param array<int,array<string,mixed>|string> $occurrences
+     * @param array<string,mixed>|null $metadata
+     */
+    private function index_occurrences(int $doc_id, string $primaryLang, string $hash, array $occurrences, ?array $metadata): bool
+    {
         $existing = $this->storage->get_doc($doc_id);
         if ($existing !== null && !$existing['deleted'] && $existing['content_hash'] === $hash) {
+            if ($metadata !== null) {
+                WP_FTS_StorageCompat::put_doc_metadata($this->storage, $doc_id, $metadata);
+            }
             return false;
         }
 
-        [$termFrequencies, $langLengths] = $this->weighted_term_frequencies_by_language(
-            $this->analyze_content($html, $opts, $primaryLang),
-            $primaryLang
-        );
+        [$termFrequencies, $langLengths] = $this->weighted_term_frequencies_by_language($occurrences, $primaryLang);
 
         $this->storage->begin_transaction();
         try {
@@ -95,6 +165,9 @@ final class WP_FTS_Indexer
             }
 
             WP_FTS_StorageCompat::put_doc($this->storage, $doc_id, $primaryLang, $langLengths, $hash);
+            if ($metadata !== null) {
+                WP_FTS_StorageCompat::put_doc_metadata($this->storage, $doc_id, $metadata);
+            }
             $this->add_meta_deltas($langLengths, 1);
             $this->storage->commit();
         } catch (Throwable $e) {
@@ -182,7 +255,7 @@ final class WP_FTS_Indexer
             $args = array_merge($postStatuses, $postTypes, [$last, $currentBatchSize]);
 
             $sql = $wpdb->prepare(
-                "SELECT ID, post_content, post_title
+                "SELECT ID, post_content, post_title, post_excerpt, post_type, post_status, post_date_gmt, post_date
 FROM {$wpdb->posts}
 WHERE post_status IN ({$statusPlaceholders})
   AND post_type IN ({$typePlaceholders})
@@ -195,11 +268,14 @@ LIMIT %d",
             $rows = $wpdb->get_results($sql);
             foreach ($rows ?: [] as $row) {
                 $last = (int) $row->ID;
-                $html = $this->compose_post_html((string) $row->post_title, (string) $row->post_content);
-                $this->index_document($last, $html, [
-                    'lang' => $this->resolve_post_language($row, $opts),
-                    'post_id' => $last,
-                ]);
+                $lang = $this->resolve_post_language($row, $opts);
+                $extracted = $this->postContentExtractor->extract($row, $opts);
+                $indexOptions = $opts;
+                $indexOptions['lang'] = $lang;
+                $indexOptions['post_id'] = $last;
+                $indexOptions['metadata'] = $extracted['metadata'];
+                $indexOptions['field_boosts'] = $extracted['field_boosts'];
+                $this->index_document_fields($last, $extracted['fields'], $indexOptions);
                 $count++;
             }
         } while (!empty($rows) && ($limit === 0 || $count < $limit));
@@ -315,6 +391,77 @@ LIMIT %d",
         }
 
         return $this->analyzer->analyze_content($html, $analysisOpts);
+    }
+
+    /**
+     * Normalize index fields supplied by the extractor or direct callers.
+     *
+     * @param array<int,array<string,mixed>|string> $fields
+     * @param array<string,mixed> $opts
+     * @return array<int,array{name:string,text:string,html?:string,boost:float}>
+     */
+    private function normalize_index_fields(array $fields, array $opts): array
+    {
+        $boosts = [];
+        foreach (($opts['field_boosts'] ?? []) as $field => $boost) {
+            if (is_scalar($field) && is_numeric($boost)) {
+                $boosts[(string) $field] = $this->normalize_field_boost((float) $boost);
+            }
+        }
+
+        $normalized = [];
+        foreach ($fields as $i => $field) {
+            if (is_string($field)) {
+                $field = ['name' => 'content', 'text' => $field];
+            }
+            if (!is_array($field)) {
+                continue;
+            }
+
+            $name = trim((string) ($field['name'] ?? 'field_' . $i));
+            $text = trim((string) ($field['text'] ?? ($field['html'] ?? '')));
+            $html = isset($field['html']) ? (string) $field['html'] : null;
+            if ($name === '' || ($text === '' && trim((string) $html) === '')) {
+                continue;
+            }
+
+            $row = [
+                'name' => $name,
+                'text' => $text,
+                'boost' => $this->normalize_field_boost((float) ($field['boost'] ?? ($boosts[$name] ?? 1.0))),
+            ];
+            if ($html !== null && trim($html) !== '') {
+                $row['html'] = $html;
+            }
+            $normalized[] = $row;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Clamp field boosts to a positive bounded range.
+     */
+    private function normalize_field_boost(float $boost): float
+    {
+        return $boost > 0.0 ? min(100.0, $boost) : 1.0;
+    }
+
+    /**
+     * Build a deterministic hash source for field-based indexing.
+     *
+     * Metadata is included so visibility/status/date changes refresh product
+     * filters even when the searchable text stays the same.
+     *
+     * @param array<int,array{name:string,text:string,html?:string,boost:float}> $fields
+     * @param array<string,mixed>|null $metadata
+     */
+    private function fields_hash_source(array $fields, ?array $metadata): string
+    {
+        return json_encode([
+            'fields' => $fields,
+            'metadata' => $metadata === null ? null : WP_FTS_StorageCompat::normalize_doc_metadata($metadata),
+        ], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
     }
 
     /**

@@ -118,13 +118,18 @@ namespace {
             'CREATE TABLE wp_fts_doc_lengths',
             'PRIMARY KEY  (doc_id,lang)',
             'KEY lang (lang)',
+            'CREATE TABLE wp_fts_docmeta',
+            'post_type varchar(32) NOT NULL DEFAULT',
+            'post_status varchar(20) NOT NULL DEFAULT',
+            'post_date_gmt varchar(19) NOT NULL DEFAULT',
+            'KEY post_type_status_date (post_type,post_status,post_date_gmt)',
             'CREATE TABLE wp_fts_meta',
             'k varchar(64) NOT NULL',
             'v bigint NOT NULL',
             'PRIMARY KEY  (lang,k)',
         ];
 
-        assert_same(4, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create exactly four FTS tables');
+        assert_same(5, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create exactly five FTS tables');
         foreach ($schemaNeedles as $needle) {
             assert_contains($needle, $schemaSql, "schema should contain {$needle}");
         }
@@ -137,7 +142,7 @@ namespace {
         $custom = new WP_FTS_Storage_Mysql($customWpdb, 'custom_');
         $custom->create_tables();
         $customSql = implode("\n", $customWpdb->queries);
-        foreach (['custom_fts_terms', 'custom_fts_docs', 'custom_fts_doc_lengths', 'custom_fts_meta'] as $table) {
+        foreach (['custom_fts_terms', 'custom_fts_docs', 'custom_fts_doc_lengths', 'custom_fts_docmeta', 'custom_fts_meta'] as $table) {
             assert_contains($table, $customSql, "custom prefix schema should create {$table}");
         }
     });
@@ -491,18 +496,82 @@ namespace {
         $fake->docLengths[903] = ['en' => 2];
         $fake->meta['pl-PL'] = ['doc_count' => 2, 'len_sum' => 10];
         $fake->meta['en'] = ['doc_count' => 1, 'len_sum' => 2];
+        $fake->docMeta[901] = [
+            'doc_id' => 901,
+            'post_id' => 901,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-04-01 00:00:00',
+            'title' => 'Zamek Published',
+            'excerpt' => '',
+            'search_text' => 'Zamek published snippet source',
+            'data' => json_encode([
+                'post_id' => 901,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-04-01 00:00:00',
+                'title' => 'Zamek Published',
+                'search_text' => 'Zamek published snippet source',
+            ], JSON_THROW_ON_ERROR),
+        ];
+        $fake->docMeta[902] = [
+            'doc_id' => 902,
+            'post_id' => 902,
+            'post_type' => 'page',
+            'post_status' => 'draft',
+            'post_date_gmt' => '2026-04-02 00:00:00',
+            'title' => 'Zamek Draft',
+            'excerpt' => '',
+            'search_text' => 'Zamek draft snippet source',
+            'data' => json_encode([
+                'post_id' => 902,
+                'post_type' => 'page',
+                'post_status' => 'draft',
+                'post_date_gmt' => '2026-04-02 00:00:00',
+                'title' => 'Zamek Draft',
+                'search_text' => 'Zamek draft snippet source',
+            ], JSON_THROW_ON_ERROR),
+        ];
+        $fake->docMeta[903] = [
+            'doc_id' => 903,
+            'post_id' => 903,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-04-03 00:00:00',
+            'title' => 'Castle Published',
+            'excerpt' => '',
+            'search_text' => 'Castle published snippet source',
+            'data' => json_encode([
+                'post_id' => 903,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-04-03 00:00:00',
+                'title' => 'Castle Published',
+                'search_text' => 'Castle published snippet source',
+            ], JSON_THROW_ON_ERROR),
+        ];
 
         wp_fts_quality_reset_cli();
         wp_fts_quality_with_wpdb($fake, static function (): void {
             $command = new WP_FTS_WPCLI_Command();
-            $command->search(['zamek'], ['language' => 'pl_PL', 'limit' => '1', 'mode' => 'OR']);
+            $command->search(['zamek'], [
+                'language' => 'pl_PL',
+                'limit' => '1',
+                'mode' => 'OR',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+                'snippet' => true,
+            ]);
         });
 
         $formats = $GLOBALS['wp_fts_quality_cli_format_items'] ?? [];
         assert_same(1, count($formats), 'search should format one result table');
         assert_same('table', $formats[0]['format'], 'search should request table output');
-        assert_same(['doc_id', 'score'], $formats[0]['fields'], 'search should expose doc_id and score fields');
-        assert_same([901], array_column($formats[0]['items'], 'doc_id'), 'search limit should trim to the highest-scoring Polish row');
+        assert_same(['doc_id', 'score', 'total', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'snippet'], $formats[0]['fields'], 'search should expose product metadata fields');
+        assert_same([901], array_column($formats[0]['items'], 'doc_id'), 'search filters should keep the published Polish post');
+        assert_same(1, $formats[0]['items'][0]['total'], 'search total should reflect metadata filters');
+        assert_same('Zamek Published', $formats[0]['items'][0]['title'], 'search rows should include stored title metadata');
+        assert_contains('Zamek published', $formats[0]['items'][0]['snippet'], 'search rows should include snippets when requested');
 
         $termSelect = wp_fts_quality_last_prepared_like($fake, 'SELECT term, doc_freq, postings FROM wp_fts_terms');
         assert_same([$plTerm], $termSelect['args'], 'search should prepare a language-namespaced term lookup');

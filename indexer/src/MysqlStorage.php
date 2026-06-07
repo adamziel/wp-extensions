@@ -8,12 +8,13 @@ declare(strict_types=1);
  * per-language lengths live in a separate table so BM25 can score inside one
  * language partition without mixing collection statistics.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage
 {
     private object $wpdb;
     private string $termsTable;
     private string $docsTable;
     private string $docLengthsTable;
+    private string $docMetaTable;
     private string $metaTable;
 
     /**
@@ -30,6 +31,7 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
         $this->termsTable = $prefix . 'fts_terms';
         $this->docsTable = $prefix . 'fts_docs';
         $this->docLengthsTable = $prefix . 'fts_doc_lengths';
+        $this->docMetaTable = $prefix . 'fts_docmeta';
         $this->metaTable = $prefix . 'fts_meta';
     }
 
@@ -68,6 +70,20 @@ doc_len int unsigned NOT NULL DEFAULT 0,
 PRIMARY KEY  (doc_id,lang),
 KEY lang (lang)
 ) ENGINE=InnoDB {$charset};",
+            "CREATE TABLE {$this->docMetaTable} (
+doc_id bigint unsigned NOT NULL,
+post_id bigint unsigned NOT NULL DEFAULT 0,
+post_type varchar(32) NOT NULL DEFAULT '',
+post_status varchar(20) NOT NULL DEFAULT '',
+post_date_gmt varchar(19) NOT NULL DEFAULT '',
+title text NULL,
+excerpt text NULL,
+search_text mediumtext NULL,
+data longtext NULL,
+PRIMARY KEY  (doc_id),
+KEY post_id (post_id),
+KEY post_type_status_date (post_type,post_status,post_date_gmt)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
             "CREATE TABLE {$this->metaTable} (
 lang varchar(16) NOT NULL,
 k varchar(64) NOT NULL,
@@ -292,6 +308,88 @@ ON DUPLICATE KEY UPDATE doc_len = VALUES(doc_len)",
     }
 
     /**
+     * Store bounded WordPress result metadata for filters, snippets, and CLI.
+     *
+     * Structured fields are preserved in JSON while common filters get indexed
+     * scalar columns. The extractor bounds `search_text`; storage normalizes
+     * again to keep direct callers predictable.
+     *
+     * @param array<string,mixed> $metadata
+     * @throws JsonException If metadata cannot be JSON encoded.
+     */
+    public function put_doc_metadata(int $doc_id, array $metadata): void
+    {
+        $metadata = WP_FTS_StorageCompat::normalize_doc_metadata($metadata);
+        $data = json_encode($metadata, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $sql = $this->wpdb->prepare(
+            "INSERT INTO {$this->docMetaTable} (doc_id, post_id, post_type, post_status, post_date_gmt, title, excerpt, search_text, data)
+VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s)
+ON DUPLICATE KEY UPDATE post_id = VALUES(post_id), post_type = VALUES(post_type), post_status = VALUES(post_status), post_date_gmt = VALUES(post_date_gmt), title = VALUES(title), excerpt = VALUES(excerpt), search_text = VALUES(search_text), data = VALUES(data)",
+            $doc_id,
+            (int) $metadata['post_id'],
+            (string) $metadata['post_type'],
+            (string) $metadata['post_status'],
+            (string) $metadata['post_date_gmt'],
+            (string) $metadata['title'],
+            (string) $metadata['excerpt'],
+            (string) $metadata['search_text'],
+            $data
+        );
+        $this->wpdb->query($sql);
+    }
+
+    /**
+     * Fetch metadata for active documents.
+     *
+     * @param int[] $doc_ids
+     * @return array<int,array<string,mixed>>
+     */
+    public function get_doc_metadata(array $doc_ids): array
+    {
+        $doc_ids = array_values(array_unique(array_map('intval', $doc_ids)));
+        if ($doc_ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($doc_ids), '%d'));
+        $sql = $this->wpdb->prepare(
+            "SELECT m.doc_id, m.post_id, m.post_type, m.post_status, m.post_date_gmt, m.title, m.excerpt, m.search_text, m.data
+FROM {$this->docMetaTable} m
+INNER JOIN {$this->docsTable} d ON d.doc_id = m.doc_id
+WHERE d.is_deleted = 0 AND m.doc_id IN ({$placeholders})
+ORDER BY m.doc_id ASC",
+            ...$doc_ids
+        );
+
+        $metadata = [];
+        foreach ($this->wpdb->get_results($sql) ?: [] as $row) {
+            $decoded = [];
+            if (isset($row->data) && is_string($row->data) && trim($row->data) !== '') {
+                try {
+                    $json = json_decode($row->data, true, flags: JSON_THROW_ON_ERROR);
+                    if (is_array($json)) {
+                        $decoded = $json;
+                    }
+                } catch (JsonException) {
+                    $decoded = [];
+                }
+            }
+
+            $decoded['post_id'] = (int) ($row->post_id ?? ($decoded['post_id'] ?? 0));
+            $decoded['post_type'] = (string) ($row->post_type ?? ($decoded['post_type'] ?? ''));
+            $decoded['post_status'] = (string) ($row->post_status ?? ($decoded['post_status'] ?? ''));
+            $decoded['post_date_gmt'] = (string) ($row->post_date_gmt ?? ($decoded['post_date_gmt'] ?? ''));
+            $decoded['title'] = (string) ($row->title ?? ($decoded['title'] ?? ''));
+            $decoded['excerpt'] = (string) ($row->excerpt ?? ($decoded['excerpt'] ?? ''));
+            $decoded['search_text'] = (string) ($row->search_text ?? ($decoded['search_text'] ?? ''));
+            $metadata[(int) $row->doc_id] = WP_FTS_StorageCompat::normalize_doc_metadata($decoded);
+        }
+        ksort($metadata, SORT_NUMERIC);
+
+        return $metadata;
+    }
+
+    /**
      * Mark a document as deleted without immediately rewriting postings.
      *
      * Unknown ids create tombstones so repeated deletes stay idempotent until
@@ -442,6 +540,10 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
             $placeholders = implode(',', array_fill(0, count($deletedIds), '%d'));
             $this->wpdb->query($this->wpdb->prepare(
                 "DELETE FROM {$this->docLengthsTable} WHERE doc_id IN ({$placeholders})",
+                ...$deletedIds
+            ));
+            $this->wpdb->query($this->wpdb->prepare(
+                "DELETE FROM {$this->docMetaTable} WHERE doc_id IN ({$placeholders})",
                 ...$deletedIds
             ));
             $this->wpdb->query($this->wpdb->prepare(
