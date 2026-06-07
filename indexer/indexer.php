@@ -17,6 +17,20 @@ declare(strict_types=1);
  */
 require_once __DIR__ . '/src/bootstrap.php';
 
+if (function_exists('register_activation_hook')) {
+    register_activation_hook(__FILE__, [WP_FTS_Plugin::class, 'activate']);
+}
+
+if (function_exists('register_deactivation_hook')) {
+    register_deactivation_hook(__FILE__, [WP_FTS_Plugin::class, 'deactivate']);
+}
+
+if (function_exists('register_uninstall_hook')) {
+    register_uninstall_hook(__FILE__, [WP_FTS_Plugin::class, 'uninstall']);
+}
+
+WP_FTS_Plugin::register_hooks();
+
 if (defined('WP_CLI') && WP_CLI && class_exists('WP_FTS_WPCLI_Command')) {
     WP_FTS_WPCLI_Command::register();
 }

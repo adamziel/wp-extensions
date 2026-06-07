@@ -978,6 +978,8 @@ final class WP_FTS_Test_WPDB
 {
     public string $prefix = 'wp_';
     public string $posts = 'wp_posts';
+    public string $last_error = '';
+    public ?string $failQueryPrefix = null;
 
     /** @var array<int,string> */
     public array $queries = [];
@@ -1014,6 +1016,11 @@ final class WP_FTS_Test_WPDB
     {
         [$sql, $args] = $this->statement_parts($statement);
         $this->queries[] = $sql;
+        if ($this->failQueryPrefix !== null && str_starts_with($sql, $this->failQueryPrefix)) {
+            $this->last_error = "simulated failure for {$this->failQueryPrefix}";
+            return false;
+        }
+        $this->last_error = '';
 
         if (str_starts_with($sql, 'CREATE TABLE') || in_array($sql, ['START TRANSACTION', 'COMMIT', 'ROLLBACK'], true)) {
             return true;
@@ -1601,8 +1608,12 @@ if (!class_exists('WP_CLI')) {
         /** @var string[] */
         public static array $successMessages = [];
 
+        /** @var array<string,string> */
+        public static array $commands = [];
+
         public static function add_command(string $name, string $class): void
         {
+            self::$commands[$name] = $class;
         }
 
         public static function success(string $message): void
@@ -1615,6 +1626,500 @@ if (!class_exists('WP_CLI')) {
         }
     }
 }
+
+function wp_fts_test_reset_wordpress_fakes(): void
+{
+    $GLOBALS['wp_fts_test_actions'] = [];
+    $GLOBALS['wp_fts_test_activation_hooks'] = [];
+    $GLOBALS['wp_fts_test_deactivation_hooks'] = [];
+    $GLOBALS['wp_fts_test_uninstall_hooks'] = [];
+    $GLOBALS['wp_fts_test_options'] = [];
+    $GLOBALS['wp_fts_test_scheduled'] = [];
+    $GLOBALS['wp_fts_test_cleared_hooks'] = [];
+    $GLOBALS['wp_fts_test_rest_routes'] = [];
+    $GLOBALS['wp_fts_test_posts'] = [];
+    $GLOBALS['wp_fts_test_get_post_callbacks'] = [];
+    $GLOBALS['wp_fts_test_post_types'] = [
+        'post' => (object) ['public' => true, 'exclude_from_search' => false],
+        'page' => (object) ['public' => true, 'exclude_from_search' => false],
+        'secret' => (object) ['public' => false, 'exclude_from_search' => true],
+    ];
+    $GLOBALS['wp_fts_test_caps'] = [];
+    $GLOBALS['wp_fts_test_revisions'] = [];
+    $GLOBALS['wp_fts_test_autosaves'] = [];
+    WP_CLI::$commands = [];
+    WP_CLI::$successMessages = [];
+}
+
+if (!function_exists('add_action')) {
+    function add_action(string $hook_name, mixed $callback, int $priority = 10, int $accepted_args = 1): bool
+    {
+        $entry = [
+            'hook' => $hook_name,
+            'callback' => $callback,
+            'priority' => $priority,
+            'accepted_args' => $accepted_args,
+        ];
+        $GLOBALS['wp_fts_test_actions'][] = $entry;
+        if (array_key_exists('wp_fts_quality_add_action_calls', $GLOBALS)) {
+            $GLOBALS['wp_fts_quality_add_action_calls'][] = $entry;
+        }
+
+        return true;
+    }
+}
+
+if (!function_exists('register_activation_hook')) {
+    function register_activation_hook(string $file, mixed $callback): void
+    {
+        $GLOBALS['wp_fts_test_activation_hooks'][] = ['file' => $file, 'callback' => $callback];
+    }
+}
+
+if (!function_exists('register_deactivation_hook')) {
+    function register_deactivation_hook(string $file, mixed $callback): void
+    {
+        $GLOBALS['wp_fts_test_deactivation_hooks'][] = ['file' => $file, 'callback' => $callback];
+    }
+}
+
+if (!function_exists('register_uninstall_hook')) {
+    function register_uninstall_hook(string $file, mixed $callback): void
+    {
+        $GLOBALS['wp_fts_test_uninstall_hooks'][] = ['file' => $file, 'callback' => $callback];
+    }
+}
+
+if (!function_exists('get_option')) {
+    function get_option(string $name, mixed $default = false): mixed
+    {
+        return array_key_exists($name, $GLOBALS['wp_fts_test_options'])
+            ? $GLOBALS['wp_fts_test_options'][$name]
+            : $default;
+    }
+}
+
+if (!function_exists('update_option')) {
+    function update_option(string $name, mixed $value): bool
+    {
+        $old = $GLOBALS['wp_fts_test_options'][$name] ?? null;
+        $GLOBALS['wp_fts_test_options'][$name] = $value;
+
+        return $old !== $value;
+    }
+}
+
+if (!function_exists('delete_option')) {
+    function delete_option(string $name): bool
+    {
+        $existed = array_key_exists($name, $GLOBALS['wp_fts_test_options']);
+        unset($GLOBALS['wp_fts_test_options'][$name]);
+
+        return $existed;
+    }
+}
+
+if (!function_exists('wp_next_scheduled')) {
+    function wp_next_scheduled(string $hook): int|false
+    {
+        return $GLOBALS['wp_fts_test_scheduled'][$hook]['timestamp'] ?? false;
+    }
+}
+
+if (!function_exists('wp_schedule_single_event')) {
+    function wp_schedule_single_event(int $timestamp, string $hook): bool
+    {
+        $GLOBALS['wp_fts_test_scheduled'][$hook] = [
+            'timestamp' => $timestamp,
+            'hook' => $hook,
+        ];
+
+        return true;
+    }
+}
+
+if (!function_exists('wp_clear_scheduled_hook')) {
+    function wp_clear_scheduled_hook(string $hook): int
+    {
+        $GLOBALS['wp_fts_test_cleared_hooks'][] = $hook;
+        unset($GLOBALS['wp_fts_test_scheduled'][$hook]);
+
+        return 1;
+    }
+}
+
+if (!function_exists('register_rest_route')) {
+    function register_rest_route(string $namespace, string $route, array $args = [], bool $override = false): bool
+    {
+        $GLOBALS['wp_fts_test_rest_routes'][] = [
+            'namespace' => $namespace,
+            'route' => $route,
+            'args' => $args,
+            'override' => $override,
+        ];
+
+        return true;
+    }
+}
+
+if (!function_exists('get_post')) {
+    function get_post(int|object $post): ?object
+    {
+        if (is_object($post)) {
+            return $post;
+        }
+
+        $post_id = (int) $post;
+        $callback = $GLOBALS['wp_fts_test_get_post_callbacks'][$post_id] ?? null;
+        if (is_callable($callback)) {
+            $callback($post_id);
+        }
+
+        return $GLOBALS['wp_fts_test_posts'][$post_id] ?? null;
+    }
+}
+
+if (!function_exists('get_post_status')) {
+    function get_post_status(int|object $post): string|false
+    {
+        $post = get_post($post);
+
+        return is_object($post) && isset($post->post_status) ? (string) $post->post_status : false;
+    }
+}
+
+if (!function_exists('get_post_type_object')) {
+    function get_post_type_object(string $post_type): ?object
+    {
+        return $GLOBALS['wp_fts_test_post_types'][$post_type] ?? null;
+    }
+}
+
+if (!function_exists('current_user_can')) {
+    function current_user_can(string $capability, mixed ...$args): bool
+    {
+        $post_id = isset($args[0]) ? (int) $args[0] : 0;
+
+        return (bool) ($GLOBALS['wp_fts_test_caps'][$capability][$post_id] ?? false);
+    }
+}
+
+if (!function_exists('wp_is_post_revision')) {
+    function wp_is_post_revision(int $post_id): int|false
+    {
+        return !empty($GLOBALS['wp_fts_test_revisions'][$post_id]) ? $post_id : false;
+    }
+}
+
+if (!function_exists('wp_is_post_autosave')) {
+    function wp_is_post_autosave(int $post_id): int|false
+    {
+        return !empty($GLOBALS['wp_fts_test_autosaves'][$post_id]) ? $post_id : false;
+    }
+}
+
+if (!function_exists('has_filter')) {
+    function has_filter(string $hook_name): bool
+    {
+        return false;
+    }
+}
+
+if (!function_exists('apply_filters')) {
+    function apply_filters(string $hook_name, mixed $value, mixed ...$args): mixed
+    {
+        return $value;
+    }
+}
+
+wp_fts_test_reset_wordpress_fakes();
+
+test_case('plugin bootstrap registers WordPress lifecycle hooks and preserves CLI-only bootstrap', function (): void {
+    $plugin = (string) realpath(__DIR__ . '/../indexer.php');
+
+    $noWordPress = test_run_php_without_extensions(
+        'require ' . var_export($plugin, true) . '; echo class_exists("WP_FTS_Plugin") ? "loaded" : "missing";'
+    );
+    assert_same(0, $noWordPress['exit'], 'plugin bootstrap should load without WordPress hook functions');
+    assert_contains('loaded', $noWordPress['stdout'], 'plugin bootstrap should expose plugin class outside WordPress');
+
+    $cliCode = <<<'PHP'
+define('WP_CLI', true);
+final class WP_CLI {
+    public static array $commands = [];
+    public static function add_command(string $name, string $class): void {
+        self::$commands[$name] = $class;
+    }
+}
+require __PLUGIN__;
+echo json_encode(WP_CLI::$commands);
+PHP;
+    $cliCode = str_replace('__PLUGIN__', var_export($plugin, true), $cliCode);
+    $cli = test_run_php_without_extensions($cliCode);
+    assert_same(0, $cli['exit'], 'plugin bootstrap should keep WP-CLI registration working');
+    assert_contains('"fts":"WP_FTS_WPCLI_Command"', $cli['stdout'], 'WP-CLI bootstrap should register the fts command');
+
+    wp_fts_test_reset_wordpress_fakes();
+    require_once $plugin;
+
+    $activation = $GLOBALS['wp_fts_test_activation_hooks'][0] ?? null;
+    $deactivation = $GLOBALS['wp_fts_test_deactivation_hooks'][0] ?? null;
+    $uninstall = $GLOBALS['wp_fts_test_uninstall_hooks'][0] ?? null;
+    assert_same([WP_FTS_Plugin::class, 'activate'], $activation['callback'] ?? null, 'bootstrap should register activation lifecycle hook');
+    assert_same([WP_FTS_Plugin::class, 'deactivate'], $deactivation['callback'] ?? null, 'bootstrap should register deactivation lifecycle hook');
+    assert_same([WP_FTS_Plugin::class, 'uninstall'], $uninstall['callback'] ?? null, 'bootstrap should register explicit uninstall hook');
+
+    $hooks = array_column($GLOBALS['wp_fts_test_actions'], 'hook');
+    sort($hooks, SORT_STRING);
+    $expectedHooks = [
+        WP_FTS_Plugin::CRON_HOOK,
+        'before_delete_post',
+        'rest_api_init',
+        'save_post',
+        'transition_post_status',
+        'trashed_post',
+        'wp_after_insert_post',
+    ];
+    sort($expectedHooks, SORT_STRING);
+    assert_same($expectedHooks, $hooks, 'bootstrap should register bounded runtime hooks in WordPress context');
+    assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
+});
+
+test_case('activation repairs schema stores version and surfaces database failures', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        WP_FTS_Plugin::activate();
+        assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'activation should store schema version option');
+        assert_same(4, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'activation should create or repair all FTS tables');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'activation should schedule the queue processor');
+
+        WP_FTS_Plugin::maybe_upgrade_schema();
+        assert_same(4, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'current schema version should avoid redundant runtime repair');
+
+        WP_FTS_Plugin::upgrade_schema();
+        assert_same(8, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'explicit repair routine should be idempotent and rerunnable');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $failing = new WP_FTS_Test_WPDB();
+    $failing->failQueryPrefix = 'CREATE TABLE';
+    $wpdb = $failing;
+    wp_fts_test_reset_wordpress_fakes();
+    $thrown = false;
+    try {
+        WP_FTS_Plugin::activate();
+    } catch (RuntimeException $e) {
+        $thrown = true;
+        assert_contains('create FTS tables', $e->getMessage(), 'activation failure should name the failed schema operation');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+    assert_true($thrown, 'activation should throw on schema write failure');
+});
+
+test_case('deactivation and uninstall keep index data while clearing operational state', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        WP_FTS_Plugin::activate();
+        $storage = WP_FTS_Plugin::storage(false);
+        $storage->put_doc(31, 'en', ['en' => 2], 'hash-31');
+        $storage->put_term(WP_FTS_TermNamespace::namespace_term('en', 'alpha'), 1, WP_FTS_PostingsCodec::encode([31 => 2]));
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [31, 32];
+
+        WP_FTS_Plugin::deactivate();
+        assert_true(isset($fake->docs[31]), 'deactivation should not destroy indexed documents');
+        assert_true($fake->terms !== [], 'deactivation should not destroy term rows');
+        assert_true(isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'deactivation should leave schema version option intact');
+        assert_true(in_array(WP_FTS_Plugin::CRON_HOOK, $GLOBALS['wp_fts_test_cleared_hooks'], true), 'deactivation should clear scheduled queue work');
+
+        WP_FTS_Plugin::uninstall();
+        assert_true(isset($fake->docs[31]), 'uninstall policy should retain index data until destructive cleanup is explicitly implemented');
+        assert_true($fake->terms !== [], 'uninstall policy should retain term data');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'uninstall should delete schema version option');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION]), 'uninstall should delete pending queue option');
+        assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'uninstall should not drop custom tables under the documented deferred cleanup policy');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('runtime post hooks queue bounded indexing and tombstone invisible posts', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $post = (object) [
+        'ID' => 101,
+        'post_title' => 'Needle',
+        'post_content' => '<p>alpha beta alpha</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+    $GLOBALS['wp_fts_test_posts'][101] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(101, $post, true);
+        WP_FTS_Plugin::handle_post_save(101, $post, true);
+        assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'save hooks should queue each post id only once');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'save hook should schedule background processing');
+
+        assert_same(1, WP_FTS_Plugin::process_queue(1), 'queue processor should process a bounded batch');
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'processed ids should leave the queue');
+        assert_true(isset($fake->docs[101]) && $fake->docs[101]['is_deleted'] === 0, 'queue processing should write an active document');
+        assert_true($fake->terms !== [], 'queue processing should write term postings');
+        assert_same([101], array_column(WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'doc_id'), 'search helper should expose the indexed public post');
+
+        $post->post_status = 'draft';
+        WP_FTS_Plugin::handle_status_transition('draft', 'publish', $post);
+        assert_true($fake->docs[101]['is_deleted'] === 1, 'leaving publish status should tombstone the indexed document');
+        assert_same([], WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'tombstoned documents should not be returned');
+
+        $GLOBALS['wp_fts_test_revisions'][102] = true;
+        WP_FTS_Plugin::handle_post_save(102, (object) ['ID' => 102, 'post_status' => 'publish', 'post_type' => 'post'], true);
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'revision saves should not enqueue indexing work');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('queue processing preserves posts queued during an active batch', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $post = (object) [
+        'ID' => 301,
+        'post_title' => 'Concurrent queue',
+        'post_content' => '<p>alpha concurrent</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+    $GLOBALS['wp_fts_test_posts'][301] = $post;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [301, 302];
+    $GLOBALS['wp_fts_test_get_post_callbacks'][301] = static function (): void {
+        unset($GLOBALS['wp_fts_test_get_post_callbacks'][301]);
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [301, 302, 303];
+    };
+
+    try {
+        assert_same(1, WP_FTS_Plugin::process_queue(1), 'queue processor should process only the claimed batch');
+        assert_same([302, 303], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'queue processor should preserve ids added after its initial snapshot');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'remaining concurrent queue work should schedule another processor run');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('password-protected published posts are not queued indexed or exposed', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $passworded = (object) [
+        'ID' => 311,
+        'post_title' => 'Protected shared',
+        'post_content' => '<p>alpha shared hidden</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_password' => 'secret',
+    ];
+    $public = (object) [
+        'ID' => 312,
+        'post_title' => 'Public shared',
+        'post_content' => '<p>alpha shared visible</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+    $GLOBALS['wp_fts_test_posts'][311] = $passworded;
+    $GLOBALS['wp_fts_test_posts'][312] = $public;
+
+    try {
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer());
+        $indexer->index_post($passworded, ['lang' => 'en']);
+        $indexer->index_post($public, ['lang' => 'en']);
+
+        $GLOBALS['wp_fts_test_caps']['read_post'][311] = true;
+        assert_same([312], array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id'), 'public search should hide password-protected posts even when stale indexed rows exist');
+
+        WP_FTS_Plugin::handle_post_save(311, $passworded, true);
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'password-protected publish saves should not enqueue indexing work');
+        assert_true(($fake->docs[311]['is_deleted'] ?? 0) === 1, 'password-protected publish saves should tombstone stale indexed rows');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('REST search surface filters private results by capability', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $public = (object) [
+        'ID' => 201,
+        'post_title' => 'Public shared',
+        'post_content' => '<p>alpha shared</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+    $private = (object) [
+        'ID' => 202,
+        'post_title' => 'Private shared',
+        'post_content' => '<p>alpha shared</p>',
+        'post_status' => 'private',
+        'post_type' => 'post',
+    ];
+    $GLOBALS['wp_fts_test_posts'][201] = $public;
+    $GLOBALS['wp_fts_test_posts'][202] = $private;
+
+    try {
+        WP_FTS_Plugin::register_rest_routes();
+        $route = $GLOBALS['wp_fts_test_rest_routes'][0] ?? null;
+        assert_same(WP_FTS_Plugin::REST_NAMESPACE, $route['namespace'] ?? null, 'REST registration should use the plugin namespace');
+        assert_same(WP_FTS_Plugin::REST_SEARCH_ROUTE, $route['route'] ?? null, 'REST registration should expose the search route');
+        assert_true(is_callable($route['args']['callback'] ?? null), 'REST search route should have a callable callback');
+        assert_true(is_callable($route['args']['permission_callback'] ?? null), 'REST search route should have a callable permission callback');
+
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer());
+        $indexer->index_post($public);
+        $indexer->index_post($private, ['lang' => 'en']);
+
+        assert_same([201], array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id'), 'public search should hide indexed private posts without read capability');
+
+        $GLOBALS['wp_fts_test_caps']['read_post'][202] = true;
+        $ids = array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id');
+        sort($ids, SORT_NUMERIC);
+        assert_same([201, 202], $ids, 'search should include private indexed posts when the visitor can read them');
+
+        $response = WP_FTS_Plugin::rest_search(['q' => 'shared', 'limit' => 1]);
+        assert_same(1, count($response['results']), 'REST search should honor the request limit');
+        assert_true(in_array($response['results'][0]['doc_id'], [201, 202], true), 'REST search should return ranked result rows');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
 
 test_case('analyzer skips unsafe regions and applies boosts', function (): void {
     $analyzer = new WP_FTS_Analyzer();

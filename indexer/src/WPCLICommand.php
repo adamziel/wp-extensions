@@ -155,10 +155,7 @@ final class WP_FTS_WPCLI_Command
             throw new RuntimeException('WP-CLI command requires $wpdb.');
         }
 
-        $storage = new WP_FTS_Storage_Mysql($wpdb);
-        $storage->create_tables();
-
-        return $storage;
+        return WP_FTS_Plugin::storage(true);
     }
 
     /**

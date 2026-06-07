@@ -214,6 +214,36 @@ LIMIT %d",
     }
 
     /**
+     * Index one WordPress post-like object.
+     *
+     * The runtime plugin adapter uses this for incremental hook processing,
+     * while WP-CLI keeps `reindex_all()` as the manual full-control path.
+     *
+     * @param object $post Object with `ID`, `post_title`, and `post_content`
+     *        properties matching WordPress post rows.
+     * @param array<string,mixed> $opts Optional language/indexing overrides.
+     */
+    public function index_post(object $post, array $opts = []): bool
+    {
+        $postId = isset($post->ID) ? (int) $post->ID : 0;
+        if ($postId <= 0) {
+            throw new InvalidArgumentException('Post object must provide a positive ID.');
+        }
+
+        $html = $this->compose_post_html(
+            (string) ($post->post_title ?? ''),
+            (string) ($post->post_content ?? '')
+        );
+        $indexOptions = $opts;
+        $indexOptions['post_id'] = $postId;
+        if (WP_FTS_TermNamespace::language_from_options($indexOptions, null, ['lang', 'language', 'primary_lang', 'document_lang']) === null) {
+            $indexOptions['lang'] = $this->resolve_post_language($post, $opts);
+        }
+
+        return $this->index_document($postId, $html, $indexOptions);
+    }
+
+    /**
      * Flush buffered storage changes, if the backend buffers writes.
      */
     public function flush(): void
