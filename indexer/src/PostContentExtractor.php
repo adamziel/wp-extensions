@@ -65,8 +65,9 @@ final class WP_FTS_PostContentExtractor
         $rendered = $this->render_content($content, $post, $opts);
         if ($rendered !== '' && $rendered !== $content) {
             $renderedText = $this->plain_text($rendered);
-            if ($renderedText !== $contentText) {
-                $fields[] = $this->field('rendered', $renderedText, $fieldBoosts['rendered'] ?? 1.0, $rendered);
+            $renderedDeltaText = $this->rendered_delta_text($contentText, $renderedText);
+            if ($renderedDeltaText !== '') {
+                $fields[] = $this->field('rendered', $renderedDeltaText, $fieldBoosts['rendered'] ?? 1.0);
             }
         }
 
@@ -438,6 +439,118 @@ final class WP_FTS_PostContentExtractor
     }
 
     /**
+     * Keep rendered-only visible text without re-indexing raw static block text.
+     */
+    private function rendered_delta_text(string $rawText, string $renderedText): string
+    {
+        $rawText = $this->plain_text($rawText);
+        $renderedText = $this->plain_text($renderedText);
+        if ($renderedText === '' || $renderedText === $rawText) {
+            return '';
+        }
+        if ($rawText === '') {
+            return $renderedText;
+        }
+        if (strpos($rawText, $renderedText) !== false) {
+            return '';
+        }
+
+        $position = strpos($renderedText, $rawText);
+        if ($position !== false) {
+            return $this->plain_text(
+                substr($renderedText, 0, $position) . ' ' . substr($renderedText, $position + strlen($rawText))
+            );
+        }
+
+        $tokenDelta = $this->remove_token_subsequence_once($renderedText, $rawText);
+        if ($tokenDelta === null) {
+            $tokenDelta = $this->remove_token_overlap_once($renderedText, $rawText);
+        }
+
+        return $tokenDelta ?? $renderedText;
+    }
+
+    /**
+     * Remove one ordered copy of raw visible tokens from rendered visible tokens.
+     */
+    private function remove_token_subsequence_once(string $renderedText, string $rawText): ?string
+    {
+        $renderedTokens = preg_split('/\s+/u', $renderedText, -1, PREG_SPLIT_NO_EMPTY);
+        $rawTokens = preg_split('/\s+/u', $rawText, -1, PREG_SPLIT_NO_EMPTY);
+        if ($renderedTokens === false || $rawTokens === false || $renderedTokens === [] || $rawTokens === []) {
+            return null;
+        }
+
+        $matchedIndexes = [];
+        $rawIndex = 0;
+        foreach ($renderedTokens as $renderedIndex => $token) {
+            if ($this->comparison_token($token) !== $this->comparison_token($rawTokens[$rawIndex])) {
+                continue;
+            }
+
+            $matchedIndexes[$renderedIndex] = true;
+            $rawIndex++;
+            if ($rawIndex === count($rawTokens)) {
+                break;
+            }
+        }
+
+        if ($rawIndex !== count($rawTokens)) {
+            return null;
+        }
+
+        $deltaTokens = [];
+        foreach ($renderedTokens as $renderedIndex => $token) {
+            if (!isset($matchedIndexes[$renderedIndex])) {
+                $deltaTokens[] = $token;
+            }
+        }
+
+        return $this->plain_text(implode(' ', $deltaTokens));
+    }
+
+    /**
+     * Remove raw-visible token overlaps when rendered text is not a clean superset.
+     */
+    private function remove_token_overlap_once(string $renderedText, string $rawText): ?string
+    {
+        $renderedTokens = preg_split('/\s+/u', $renderedText, -1, PREG_SPLIT_NO_EMPTY);
+        $rawTokens = preg_split('/\s+/u', $rawText, -1, PREG_SPLIT_NO_EMPTY);
+        if ($renderedTokens === false || $rawTokens === false || $renderedTokens === [] || $rawTokens === []) {
+            return null;
+        }
+
+        $rawCounts = [];
+        foreach ($rawTokens as $token) {
+            $key = $this->comparison_token($token);
+            $rawCounts[$key] = ($rawCounts[$key] ?? 0) + 1;
+        }
+
+        $deltaTokens = [];
+        $removedAny = false;
+        foreach ($renderedTokens as $token) {
+            $key = $this->comparison_token($token);
+            if (($rawCounts[$key] ?? 0) > 0) {
+                $rawCounts[$key]--;
+                $removedAny = true;
+                continue;
+            }
+
+            $deltaTokens[] = $token;
+        }
+
+        return $removedAny ? $this->plain_text(implode(' ', $deltaTokens)) : null;
+    }
+
+    /**
+     * Normalize token text for rendered/raw visible-text comparisons.
+     */
+    private function comparison_token(string $token): string
+    {
+        return strtolower(html_entity_decode($token, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8'));
+    }
+
+    /**
      * Strip markup, decode entities, and collapse whitespace.
      */
     private function plain_text(string $text): string
@@ -447,6 +560,11 @@ final class WP_FTS_PostContentExtractor
         }
 
         $text = WP_FTS_Utf8::repair($text);
+        $text = preg_replace(
+            '/<\s*\/?\s*(?:address|article|aside|blockquote|br|caption|dd|div|dl|dt|figcaption|figure|footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>/i',
+            ' ',
+            $text
+        ) ?? $text;
         if (function_exists('wp_strip_all_tags')) {
             $text = (string) wp_strip_all_tags($text, true);
         } else {

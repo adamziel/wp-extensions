@@ -2358,6 +2358,45 @@ test_case('post content extractor does not double index static block visible tex
     assert_same([1101 => 1], WP_FTS_PostingsCodec::decode($row['postings']), 'static block comments should not make visible text contribute twice');
 });
 
+test_case('post content extractor keeps rendered-only delta without static block duplicates', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer();
+    $extractor = new WP_FTS_PostContentExtractor();
+    $post = (object) [
+        'ID' => 1102,
+        'post_title' => '',
+        'post_content' => '<!-- wp:paragraph --><p>Body Nebula</p><!-- /wp:paragraph --><!-- wp:latest-posts /-->',
+        'post_excerpt' => '',
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-04-01 00:00:00',
+    ];
+
+    $extracted = $extractor->extract($post, [
+        'render_content_callback' => static fn(string $content, object $post, array $opts): string => '<p>Body Nebula</p><ul><li>Latest Signal</li></ul>',
+    ]);
+    $fieldsByName = [];
+    foreach ($extracted['fields'] as $field) {
+        $fieldsByName[$field['name']] = $field['text'];
+    }
+
+    assert_same('Body Nebula', $fieldsByName['content'] ?? null, 'raw static block text should remain the content field');
+    assert_same('Latest Signal', $fieldsByName['rendered'] ?? null, 'rendered field should contain only rendered-only dynamic text');
+
+    (new WP_FTS_Indexer($storage, $analyzer, $extractor))->index_document_fields(1102, $extracted['fields'], [
+        'lang' => 'en',
+        'metadata' => $extracted['metadata'],
+    ]);
+    $nebula = WP_FTS_TermNamespace::namespace_term('en', 'nebula');
+    $row = $storage->get_terms([$nebula])[$nebula] ?? null;
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_true($row !== null, 'static block term should be indexed once');
+    assert_same([1102 => 1], WP_FTS_PostingsCodec::decode($row['postings']), 'static block term should not be counted again through rendered content');
+    assert_same(1102, $searcher->search('latest', ['lang' => 'en'])[0]['doc_id'] ?? null, 'rendered-only latest term should remain searchable');
+    assert_same(1102, $searcher->search('signal', ['lang' => 'en'])[0]['doc_id'] ?? null, 'rendered-only signal term should remain searchable');
+});
+
 test_case('metadata text limit keeps UTF-8 valid for file storage JSON', function (): void {
     $extractor = new WP_FTS_PostContentExtractor();
     $emoji = "\xF0\x9F\x98\x80";
