@@ -252,10 +252,10 @@ final class WP_FTS_Searcher
             : $this->analyze_query($query, $this->with_query_language($opts, $explicitQueryLang));
         $queryLang = $explicitQueryLang ?? $this->resolve_query_language($opts, $queryOccurrences);
         $groups = $this->groups_from_occurrences($queryOccurrences, $queryLang, 0, $explicitQueryLang);
-        $exactLangs = $groups === [] ? [$queryLang] : $this->languages_from_groups($groups, 0);
+        $exactLangs = $explicitQueryLang === null ? [] : [$queryLang];
 
         foreach ($this->fallback_languages($opts, $exactLangs) as $fallbackLang) {
-            $this->merge_language_groups($groups, $query, $opts, $fallbackLang, 1);
+            $this->merge_fallback_language_groups($groups, $query, $opts, $fallbackLang);
         }
 
         return $this->dedupe_query_groups($groups);
@@ -278,6 +278,41 @@ final class WP_FTS_Searcher
             }
 
             $groups[$index] = $newGroup;
+        }
+    }
+
+    /**
+     * Add fallback-language alternatives without query-wide exact-language suppression.
+     *
+     * Inline tags and resolver-selected languages can mix partitions in one
+     * query. A fallback candidate is therefore skipped only when the same
+     * logical group already has the exact candidate key.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     */
+    private function merge_fallback_language_groups(array &$groups, string $query, array $opts, string $lang): void
+    {
+        $occurrences = $this->analyze_query($query, $this->with_query_language($opts, $lang));
+        $fallbackGroups = $this->groups_from_occurrences($occurrences, $lang, 1, $lang);
+
+        foreach ($fallbackGroups as $index => $fallbackGroup) {
+            if (!isset($groups[$index])) {
+                $groups[$index] = $fallbackGroup;
+                continue;
+            }
+
+            $exactKeys = [];
+            foreach ($groups[$index] as $candidate) {
+                if ($candidate['rank'] === 0) {
+                    $exactKeys[$candidate['key']] = true;
+                }
+            }
+
+            foreach ($fallbackGroup as $candidate) {
+                if (!isset($exactKeys[$candidate['key']])) {
+                    $groups[$index][] = $candidate;
+                }
+            }
         }
     }
 
@@ -461,26 +496,6 @@ final class WP_FTS_Searcher
         }
 
         return false;
-    }
-
-    /**
-     * Return languages present in query groups at a given fallback rank.
-     *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
-     * @return string[]
-     */
-    private function languages_from_groups(array $groups, int $rank): array
-    {
-        $languages = [];
-        foreach ($groups as $group) {
-            foreach ($group as $candidate) {
-                if ($candidate['rank'] === $rank) {
-                    $languages[$candidate['lang']] = true;
-                }
-            }
-        }
-
-        return array_keys($languages);
     }
 
     /**

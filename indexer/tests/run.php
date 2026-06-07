@@ -2104,13 +2104,19 @@ test_case('inline language-tagged queries participate in opt-in fallback', funct
     $storage = new WP_FTS_Storage_InMemory();
     $indexer = new WP_FTS_Indexer($storage, $analyzer);
 
-    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'en']);
+    $indexer->index_document(1, '<p>zamek castle</p>', ['lang' => 'en']);
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
 
     assert_same([1], array_column($searcher->search('pl:zamek', [
         'default_lang' => 'en',
         'language_fallback' => true,
     ]), 'doc_id'), 'inline tags should fall back to the configured default language when opted in');
+
+    assert_same([1], array_column($searcher->search('pl:zamek en:castle', [
+        'default_lang' => 'en',
+        'language_fallback' => true,
+        'mode' => 'AND',
+    ]), 'doc_id'), 'mixed inline AND queries should fall back per logical term group');
 
     $indexer->index_document(2, '<p>zamek</p>', ['lang' => 'pl']);
     assert_same([2, 1], array_column($searcher->search('pl:zamek', [
