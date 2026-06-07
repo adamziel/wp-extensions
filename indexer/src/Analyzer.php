@@ -32,6 +32,9 @@ final class WP_FTS_Analyzer
     /** @var callable|null */
     private $queryLanguageResolver;
 
+    /** @var callable|null */
+    private $queryTermLanguageResolver;
+
     private WP_FTS_LanguagePipeline $languagePipeline;
     private string $defaultLanguage;
     private ?string $documentLanguage;
@@ -47,6 +50,11 @@ final class WP_FTS_Analyzer
      *   content, options, and WordPress integrations do not provide one.
      * - `document_language_resolver` and `query_language_resolver`: callables
      *   receiving the options array and returning a language candidate.
+     * - `query_term_language_resolver`: deterministic per-query-token language
+     *   resolver. It may accept `($token)`, `($token, $options)`, or
+     *   `($token, $options, $defaultLang)`.
+     * - `cjk_tokenizer`: optional segmenter for one CJK script run; the
+     *   built-in bigram tokenizer remains the fallback.
      * - `html_processor_factory`: test hook that returns a `WP_HTML_Processor`
      *   compatible object for the given HTML.
      *
@@ -66,9 +74,17 @@ final class WP_FTS_Analyzer
      *   polish_stemming?:string,
      *   language_pipeline?:WP_FTS_LanguagePipeline,
      *   stemmer?:WP_FTS_Stemmer|callable|null,
+     *   stemmers_by_lang?:array<string,WP_FTS_Stemmer|callable|null>,
+     *   stemmers?:array<string,WP_FTS_Stemmer|callable|null>,
+     *   cjk_tokenizer?:callable|null,
+     *   cjk_segmenter?:callable|null,
+     *   token_normalizer?:callable|null,
+     *   chinese_script_map?:array<string,string>|array<string,array<string,string>>,
      *   stopwords_by_lang?:array<string,string[]>,
      *   document_language_resolver?:callable|null,
      *   query_language_resolver?:callable|null,
+     *   query_term_language_resolver?:callable|null,
+     *   term_language_resolver?:callable|null,
      *   html_processor_factory?:callable|null
      * } $options
      */
@@ -107,6 +123,8 @@ final class WP_FTS_Analyzer
         $this->htmlProcessorFactory = $options['html_processor_factory'] ?? null;
         $this->documentLanguageResolver = $options['document_language_resolver'] ?? null;
         $this->queryLanguageResolver = $options['query_language_resolver'] ?? null;
+        $termResolver = $options['query_term_language_resolver'] ?? $options['term_language_resolver'] ?? null;
+        $this->queryTermLanguageResolver = is_callable($termResolver) ? $termResolver : null;
         $this->languagePipeline = $options['language_pipeline'] ?? new WP_FTS_LanguagePipeline([
             'min_term_len' => (int) ($options['min_term_len'] ?? 2),
             'max_term_bytes' => (int) ($options['max_term_bytes'] ?? 255),
@@ -115,6 +133,10 @@ final class WP_FTS_Analyzer
             'enable_stemming' => (bool) ($options['enable_stemming'] ?? false),
             'polish_stemming' => (string) ($options['polish_stemming'] ?? 'conservative'),
             'stemmer' => $options['stemmer'] ?? null,
+            'stemmers_by_lang' => $options['stemmers_by_lang'] ?? $options['stemmers'] ?? [],
+            'cjk_tokenizer' => $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null,
+            'token_normalizer' => $options['token_normalizer'] ?? null,
+            'chinese_script_map' => $options['chinese_script_map'] ?? [],
         ]);
 
         $this->defaultLanguage = $this->canonicalLanguage($options['default_lang'] ?? $options['language'] ?? null) ?? 'en';
@@ -203,7 +225,7 @@ final class WP_FTS_Analyzer
      * for legacy callers. Pass `return => occurrences`, `format => occurrences`,
      * `return => tokens`, or `return => objects` to receive `term/lang` rows.
      *
-     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,return?:string,format?:string}|string|null $options
+     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,return?:string,format?:string,_force_query_lang?:bool}|string|null $options
      *        Query language hints and optional output format. A legacy string is
      *        treated as `query_lang`.
      * @return string[]|array<int,array{term:string,lang:string}>
@@ -243,7 +265,7 @@ final class WP_FTS_Analyzer
      * Searcher uses this to decide the language partition before namespacing
      * query terms.
      *
-     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string}|string|null $options
+     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,_force_query_lang?:bool}|string|null $options
      * @return array<int,array{term:string,lang:string}>
      */
     public function analyze_query_occurrences(string $query, array|string|null $options = []): array
@@ -252,12 +274,14 @@ final class WP_FTS_Analyzer
         $lang = $this->resolveQueryLanguage($options);
         $terms = [];
 
-        foreach ($this->analyzeText($query, $lang) as $term) {
-            if ($this->isStopword($term['term'], $term['lang'])) {
-                continue;
-            }
+        foreach ($this->queryTextSegments($query, $lang, $options) as $segment) {
+            foreach ($this->analyzeText($segment['text'], $segment['lang']) as $term) {
+                if ($this->isStopword($term['term'], $term['lang'])) {
+                    continue;
+                }
 
-            $terms[] = $term;
+                $terms[] = $term;
+            }
         }
 
         return $terms;
@@ -322,6 +346,157 @@ final class WP_FTS_Analyzer
         $lang = $this->canonicalLanguage($lang) ?? $this->defaultLanguage;
 
         return $this->languagePipeline->analyze_detailed($text, $lang);
+    }
+
+    /**
+     * Split a query into language-scoped text segments.
+     *
+     * Untagged queries use the resolved query language exactly as before.
+     * Inline tags such as `pl:zamek` or `en-US:"color search"` scope only the
+     * tagged term or quoted phrase. A resolver callback can deterministically
+     * assign languages to otherwise untagged tokens.
+     *
+     * @param array<string,mixed> $options
+     * @return array<int,array{text:string,lang:string}>
+     */
+    private function queryTextSegments(string $query, string $defaultLang, array $options): array
+    {
+        $segments = [];
+        $offset = 0;
+        $forceQueryLang = (bool) ($options['_force_query_lang'] ?? false);
+        $pattern = '/(^|[\s,;]+)([A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,3}):("[^"]+"|\'[^\']+\'|[^\s,;]+)/u';
+        $matched = @preg_match_all($pattern, $query, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+        if ($matched === false || $matched === 0) {
+            $this->appendUntaggedQuerySegments($segments, $query, $defaultLang, $options);
+            return $segments;
+        }
+
+        foreach ($matches as $match) {
+            $fullText = $match[0][0];
+            $fullStart = $match[0][1];
+            $prefixLength = strlen($match[1][0]);
+            $tagStart = $fullStart + $prefixLength;
+
+            if ($tagStart > $offset) {
+                $this->appendUntaggedQuerySegments(
+                    $segments,
+                    substr($query, $offset, $tagStart - $offset),
+                    $defaultLang,
+                    $options
+                );
+            }
+
+            $tagLang = $forceQueryLang ? $defaultLang : $this->canonicalLanguage($match[2][0]);
+            $tagText = $this->unquoteTaggedQueryText($match[3][0]);
+            if ($tagLang !== null && trim($tagText) !== '') {
+                $segments[] = ['text' => $tagText, 'lang' => $tagLang];
+            } else {
+                $this->appendUntaggedQuerySegments(
+                    $segments,
+                    substr($query, $tagStart, strlen($fullText) - $prefixLength),
+                    $defaultLang,
+                    $options
+                );
+            }
+
+            $offset = $fullStart + strlen($fullText);
+        }
+
+        if ($offset < strlen($query)) {
+            $this->appendUntaggedQuerySegments($segments, substr($query, $offset), $defaultLang, $options);
+        }
+
+        return $segments;
+    }
+
+    /**
+     * Add untagged query text either as one legacy segment or per resolver token.
+     *
+     * @param array<int,array{text:string,lang:string}> $segments
+     * @param array<string,mixed> $options
+     */
+    private function appendUntaggedQuerySegments(array &$segments, string $text, string $defaultLang, array $options): void
+    {
+        if (trim($text) === '') {
+            return;
+        }
+
+        if ($this->queryTermLanguageResolver === null) {
+            $segments[] = ['text' => $text, 'lang' => $defaultLang];
+            return;
+        }
+
+        foreach ($this->queryRawTokens($text) as $token) {
+            $lang = $this->callQueryTermLanguageResolver($token, $options, $defaultLang) ?? $defaultLang;
+            $segments[] = ['text' => $token, 'lang' => $lang];
+        }
+    }
+
+    /**
+     * Remove surrounding quotes from an inline language-tagged query phrase.
+     */
+    private function unquoteTaggedQueryText(string $text): string
+    {
+        $length = strlen($text);
+        if ($length >= 2) {
+            $first = $text[0];
+            $last = $text[$length - 1];
+            if (($first === '"' && $last === '"') || ($first === "'" && $last === "'")) {
+                return substr($text, 1, -1);
+            }
+        }
+
+        return $text;
+    }
+
+    /**
+     * Tokenize untagged query text for the deterministic language resolver.
+     *
+     * @return string[]
+     */
+    private function queryRawTokens(string $text): array
+    {
+        $matches = [];
+        if (@preg_match_all('/[\p{L}\p{M}\p{N}_]+/u', $text, $matches) !== false) {
+            return array_values(array_filter(
+                $matches[0] ?? [],
+                static fn(string $token): bool => $token !== ''
+            ));
+        }
+
+        $ascii = preg_replace('/[^\x20-\x7E]+/', ' ', $text) ?? '';
+        preg_match_all('/[A-Za-z0-9_]+/', $ascii, $matches);
+
+        return $matches[0] ?? [];
+    }
+
+    /**
+     * Call the optional per-token query language resolver.
+     *
+     * @param array<string,mixed> $options
+     */
+    private function callQueryTermLanguageResolver(string $token, array $options, string $defaultLang): ?string
+    {
+        if ($this->queryTermLanguageResolver === null) {
+            return null;
+        }
+
+        try {
+            $resolver = Closure::fromCallable($this->queryTermLanguageResolver);
+            $reflection = new ReflectionFunction($resolver);
+            $argc = $reflection->isVariadic() ? 3 : $reflection->getNumberOfParameters();
+            if ($argc >= 3) {
+                $resolved = $resolver($token, $options, $defaultLang);
+            } elseif ($argc === 2) {
+                $resolved = $resolver($token, $options);
+            } else {
+                $resolved = $resolver($token);
+            }
+        } catch (Throwable) {
+            return null;
+        }
+
+        return $this->canonicalLanguage($resolved);
     }
 
     /**

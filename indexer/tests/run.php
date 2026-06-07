@@ -2673,6 +2673,188 @@ test_case('searcher preserves analyzer-selected query language', function (): vo
     assert_same(1, $results[0]['doc_id'], 'unqualified query should hit the Polish partition selected by the analyzer');
 });
 
+test_case('multilingual query plan searches inline language-tagged terms', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>castle bridge</p>', ['lang' => 'en']);
+    $indexer->index_document(2, '<p>zamek most</p>', ['lang' => 'pl']);
+    $indexer->index_document(3, '<article lang="pl"><p>zamek most</p><p lang="en">castle bridge</p></article>', ['lang' => 'pl']);
+
+    assert_same(
+        [
+            ['term' => 'zamek', 'lang' => 'pl'],
+            ['term' => 'castle', 'lang' => 'en'],
+        ],
+        $analyzer->analyze_query_occurrences('pl:zamek en:castle'),
+        'inline query language tags should scope individual terms'
+    );
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $orIds = array_column($searcher->search('pl:zamek en:castle', ['limit' => 10]), 'doc_id');
+    sort($orIds, SORT_NUMERIC);
+    assert_same([1, 2, 3], $orIds, 'OR bilingual tagged query should search both language partitions');
+    assert_same([3], array_column($searcher->search('pl:zamek en:castle', ['mode' => 'AND']), 'doc_id'), 'AND bilingual tagged query should require both language-tagged terms');
+    assert_same([], $searcher->search('zamek', ['lang' => 'en']), 'single-language search should still isolate language partitions');
+});
+
+test_case('explicit language constraints override inline query tags', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'token_normalizer' => static fn(string $term, string $lang): string => "{$lang}-{$term}",
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>zamek</p>', ['lang' => 'pl']);
+    $indexer->index_document(2, '<p>zamek</p>', ['lang' => 'en']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([2], array_column($searcher->search('pl:zamek', ['lang' => 'en']), 'doc_id'), 'lang should keep inline tags inside the requested partition');
+    assert_same([2], array_column($searcher->search('pl:zamek', ['languages' => 'en']), 'doc_id'), 'languages should keep inline tags inside the requested partition');
+    assert_same([2], array_column($searcher->search('pl:zamek', ['langs' => ['en']]), 'doc_id'), 'langs should keep inline tags inside the requested partition');
+});
+
+test_case('multilingual query plan accepts explicit language lists', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>shared apple</p>', ['lang' => 'en']);
+    $indexer->index_document(2, '<p>shared jablko</p>', ['lang' => 'pl']);
+    $indexer->index_document(3, '<p>shared apfel</p>', ['lang' => 'de']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('shared', ['lang' => 'en']), 'doc_id'), 'legacy singular lang option should remain single partition');
+    assert_same([1, 2], array_column($searcher->search('shared', ['languages' => 'pl,en', 'limit' => 10]), 'doc_id'), 'languages option should search all requested partitions');
+    assert_same([1, 2], array_column($searcher->search('shared', ['langs' => ['en', 'pl'], 'limit' => 10]), 'doc_id'), 'langs array should search all requested partitions');
+    assert_same([], $searcher->search('shared', ['lang' => 'fr']), 'unrequested partitions should not be searched by default');
+});
+
+test_case('language fallback is opt-in ordered and disableable', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>shared alpha</p>', ['lang' => 'en']);
+    $indexer->index_document(2, '<p>shared</p>', ['lang' => 'fr']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([], $searcher->search('alpha', ['lang' => 'fr', 'default_lang' => 'en']), 'fallback should be disabled unless requested');
+    assert_same([1], array_column($searcher->search('alpha', ['lang' => 'fr', 'default_lang' => 'en', 'language_fallback' => true]), 'doc_id'), 'fallback should search the configured default language');
+    assert_same([2, 1], array_column($searcher->search('shared', ['lang' => 'fr', 'default_lang' => 'en', 'language_fallback' => true, 'limit' => 10]), 'doc_id'), 'exact language results should sort before fallback results');
+    assert_same([], $searcher->search('alpha', ['lang' => 'fr', 'default_lang' => 'en', 'language_fallback' => true, 'disable_language_fallback' => true]), 'disable flag should suppress fallback even when enabled');
+    assert_same([1], array_column($searcher->search('alpha', ['lang' => 'fr', 'fallback_lang' => 'en']), 'doc_id'), 'explicit fallback_lang should opt in without the default-language flag');
+});
+
+test_case('inline language-tagged queries participate in opt-in fallback', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'token_normalizer' => static fn(string $term, string $lang): string => "{$lang}-{$term}",
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>zamek castle</p>', ['lang' => 'en']);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('pl:zamek', [
+        'default_lang' => 'en',
+        'language_fallback' => true,
+    ]), 'doc_id'), 'inline tags should fall back to the configured default language when opted in');
+
+    assert_same([1], array_column($searcher->search('pl:zamek en:castle', [
+        'default_lang' => 'en',
+        'language_fallback' => true,
+        'mode' => 'AND',
+    ]), 'doc_id'), 'mixed inline AND queries should fall back per logical term group');
+
+    $indexer->index_document(2, '<p>zamek</p>', ['lang' => 'pl']);
+    assert_same([2, 1], array_column($searcher->search('pl:zamek', [
+        'default_lang' => 'en',
+        'language_fallback' => true,
+        'limit' => 10,
+    ]), 'doc_id'), 'exact inline language results should sort before fallback results');
+});
+
+test_case('query term language resolver can build bilingual plans deterministically', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'query_term_language_resolver' => static function (string $token): ?string {
+            return match ($token) {
+                'zamek', 'most' => 'pl',
+                'castle', 'bridge' => 'en',
+                default => null,
+            };
+        },
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<article lang="pl"><p>zamek most</p><p lang="en">castle bridge</p></article>', ['lang' => 'pl']);
+    $indexer->index_document(2, '<p>zamek most</p>', ['lang' => 'pl']);
+    $indexer->index_document(3, '<p>castle bridge</p>', ['lang' => 'en']);
+
+    assert_same(
+        [
+            ['term' => 'zamek', 'lang' => 'pl'],
+            ['term' => 'castle', 'lang' => 'en'],
+        ],
+        $analyzer->analyze_query_occurrences('zamek castle'),
+        'resolver should tag otherwise untagged query tokens'
+    );
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([1], array_column($searcher->search('zamek castle', ['mode' => 'AND']), 'doc_id'), 'resolver-driven AND query should require both resolved language partitions');
+});
+
+test_case('CJK tokenizer hooks override bigrams while preserving fallback', function (): void {
+    $calls = [];
+    $analyzer = new WP_FTS_Analyzer([
+        'cjk_tokenizer' => static function (string $run, string $lang) use (&$calls): array {
+            $calls[] = "{$lang}:{$run}";
+            return $run === '中文搜索' ? ['中文', '搜索'] : [];
+        },
+    ]);
+
+    assert_same(['中文', '搜索'], $analyzer->analyze_query('中文搜索', ['lang' => 'zh-Hans']), 'custom CJK tokenizer should provide dictionary-like segments');
+    assert_same(['zh-Hans:中文搜索'], $calls, 'custom CJK tokenizer should receive canonical language and raw CJK run');
+
+    $fallback = new WP_FTS_Analyzer([
+        'cjk_tokenizer' => static fn(string $run, string $lang): array => [],
+    ]);
+    assert_same(['中文', '文搜', '搜索'], $fallback->analyze_query('中文搜索', ['lang' => 'zh-Hans']), 'empty custom CJK tokenizer output should fall back to bigrams');
+});
+
+test_case('Chinese normalization hooks are explicit and default script behavior is unchanged', function (): void {
+    $default = new WP_FTS_Analyzer();
+    assert_same(['繁體', '體搜', '搜索'], $default->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'default Chinese script handling should not pretend broad conversion');
+
+    $mapped = new WP_FTS_Analyzer([
+        'chinese_script_map' => [
+            'zh-Hant' => ['體' => '体'],
+        ],
+    ]);
+    assert_same(['繁体', '体搜', '搜索'], $mapped->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'explicit Chinese script map should normalize configured characters');
+
+    $hooked = new WP_FTS_Analyzer([
+        'token_normalizer' => static fn(string $term, string $lang): string => $lang === 'zh-Hant' ? strtr($term, ['體' => '体']) : $term,
+    ]);
+    assert_same(['繁体', '体搜', '搜索'], $hooked->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'token_normalizer should provide a deterministic script-conversion hook');
+});
+
+test_case('custom stemmers can be verified per language', function (): void {
+    $pipeline = new WP_FTS_LanguagePipeline([
+        'stemmer' => static fn(string $term): string => 'global-' . $term,
+        'stemmers_by_lang' => [
+            'pl' => static fn(string $term): string => 'pl-' . $term,
+            'en-GB' => static fn(string $term, string $lang): string => $lang . '-' . $term,
+        ],
+    ]);
+
+    assert_same(['pl-kotami'], $pipeline->analyze('kotami', 'pl'), 'Polish custom stemmer should override the global custom stemmer');
+    assert_same(['en-GB-color'], $pipeline->analyze('colour', 'en-GB'), 'full-tag custom stemmer should receive canonical language');
+    assert_same(['global-strasse'], $pipeline->analyze('Straße', 'de'), 'global custom stemmer should remain the fallback for other languages');
+});
+
 test_case('indexer passes default document language to analyzer as document_lang', function (): void {
     $analyzer = new WP_FTS_Analyzer();
     $storage = new WP_FTS_Test_LanguageAwareStorage();
