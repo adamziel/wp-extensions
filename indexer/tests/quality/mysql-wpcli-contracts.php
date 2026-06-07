@@ -104,9 +104,13 @@ namespace {
             'CREATE TABLE wp_fts_terms',
             'term varbinary(255) NOT NULL',
             'doc_freq int unsigned NOT NULL',
-            'postings longblob NOT NULL',
             'PRIMARY KEY  (term)',
             'ROW_FORMAT=DYNAMIC DEFAULT CHARSET=binary',
+            'CREATE TABLE wp_fts_postings',
+            'doc_id bigint unsigned NOT NULL',
+            'tf int unsigned NOT NULL',
+            'PRIMARY KEY  (term,doc_id)',
+            'KEY doc_id (doc_id)',
             'CREATE TABLE wp_fts_docs',
             "lang varchar(16) NOT NULL DEFAULT 'und'",
             'doc_len int unsigned NOT NULL DEFAULT 0',
@@ -124,12 +128,12 @@ namespace {
             'PRIMARY KEY  (lang,k)',
         ];
 
-        assert_same(4, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create exactly four FTS tables');
+        assert_same(5, count(array_filter($wpdb->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schema should create exactly five FTS tables');
         foreach ($schemaNeedles as $needle) {
             assert_contains($needle, $schemaSql, "schema should contain {$needle}");
         }
 
-        foreach (['FULLTEXT', 'ENGINE=MyISAM', 'utf8mb4_general_ci'] as $forbidden) {
+        foreach (['postings longblob', 'FULLTEXT', 'ENGINE=MyISAM', 'utf8mb4_general_ci'] as $forbidden) {
             assert_true(!str_contains(strtoupper($schemaSql), strtoupper($forbidden)), "schema should not contain {$forbidden}");
         }
 
@@ -137,12 +141,12 @@ namespace {
         $custom = new WP_FTS_Storage_Mysql($customWpdb, 'custom_');
         $custom->create_tables();
         $customSql = implode("\n", $customWpdb->queries);
-        foreach (['custom_fts_terms', 'custom_fts_docs', 'custom_fts_doc_lengths', 'custom_fts_meta'] as $table) {
+        foreach (['custom_fts_terms', 'custom_fts_postings', 'custom_fts_docs', 'custom_fts_doc_lengths', 'custom_fts_meta'] as $table) {
             assert_contains($table, $customSql, "custom prefix schema should create {$table}");
         }
     });
 
-    test_case('quality mysql prepared terms preserve binary namespaces and upserts', function (): void {
+    test_case('quality mysql row postings preserve binary namespaces and compatibility upserts', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
         $storage = new WP_FTS_Storage_Mysql($wpdb);
         $terms = [
@@ -161,11 +165,17 @@ namespace {
             $encoded = WP_FTS_PostingsCodec::encode($postings);
             $storage->put_term($key, count($postings), $encoded);
 
-            $prepared = wp_fts_quality_last_prepared_like($wpdb, 'INSERT INTO wp_fts_terms');
-            assert_contains('ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq), postings = VALUES(postings)', $prepared['sql'], "{$language} term upsert should update df and postings");
-            assert_same($key, $prepared['args'][0], "{$language} prepared term arg should keep the binary namespace");
-            assert_same(count($postings), $prepared['args'][1], "{$language} prepared df arg should match postings");
-            assert_same($encoded, $prepared['args'][2], "{$language} prepared postings arg should keep binary payload");
+            $postingInsert = wp_fts_quality_last_prepared_like($wpdb, 'INSERT INTO wp_fts_postings');
+            assert_contains('ON DUPLICATE KEY UPDATE tf = VALUES(tf)', $postingInsert['sql'], "{$language} posting upsert should update only the row tf");
+            assert_same($key, $postingInsert['args'][0], "{$language} posting term arg should keep the binary namespace");
+            assert_same((int) array_key_first($postings), $postingInsert['args'][1], "{$language} posting doc arg should match the row doc");
+            assert_same(reset($postings), $postingInsert['args'][2], "{$language} posting tf arg should match the row tf");
+
+            $termUpsert = wp_fts_quality_last_prepared_like($wpdb, 'INSERT INTO wp_fts_terms');
+            assert_contains('ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq)', $termUpsert['sql'], "{$language} term upsert should update df only");
+            assert_true(!str_contains($termUpsert['sql'], 'postings'), "{$language} term upsert should not write a postings blob");
+            assert_same($key, $termUpsert['args'][0], "{$language} prepared term arg should keep the binary namespace");
+            assert_same(count($postings), $termUpsert['args'][1], "{$language} prepared df arg should match postings");
             assert_contains('1e', bin2hex($key), "{$language} term key should contain the byte-stable namespace separator");
 
             $row = $storage->get_terms([$key])[$key] ?? null;
@@ -180,9 +190,12 @@ namespace {
         assert_same([$enKey, $plKey], array_values(array_intersect($storage->all_terms(), [$enKey, $plKey])), 'binary namespaced keys should remain independently sorted');
 
         $storage->put_term($plKey, 0, '');
+        $postingsDelete = wp_fts_quality_last_prepared_like($wpdb, 'DELETE FROM wp_fts_postings WHERE term = %s');
+        assert_same($plKey, $postingsDelete['args'][0], 'zero-df term writes should delete postings rows for the exact namespaced key');
         $delete = wp_fts_quality_last_prepared_like($wpdb, 'DELETE FROM wp_fts_terms WHERE term = %s');
         assert_same($plKey, $delete['args'][0], 'zero-df term writes should prepare a delete for the exact namespaced key');
         assert_true(!isset($wpdb->terms[$plKey]), 'zero-df term should be removed from fake MySQL state');
+        assert_true(!isset($wpdb->postings[$plKey]), 'zero-df term should remove row postings from fake MySQL state');
 
         $tooLong = WP_FTS_TermNamespace::namespace_term('en', str_repeat('x', WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES));
         $thrown = false;
@@ -192,6 +205,46 @@ namespace {
             $thrown = true;
         }
         assert_true($thrown, 'terms exceeding the varbinary key limit should be rejected before SQL');
+    });
+
+    test_case('quality mysql replace_doc_postings keeps shared term rows without blob overwrite', function (): void {
+        $wpdb = new WP_FTS_Test_WPDB();
+        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $shared = WP_FTS_TermNamespace::namespace_term('en', 'shared');
+        $unique = WP_FTS_TermNamespace::namespace_term('en', 'unique');
+
+        $storage->begin_transaction();
+        $storage->replace_doc_postings(1001, [$shared => 2]);
+        $storage->replace_doc_postings(1002, [$shared => 3]);
+        $storage->commit();
+
+        $row = $storage->get_terms([$shared])[$shared] ?? null;
+        assert_true($row !== null, 'shared term should exist after two document posting replacements');
+        assert_same(2, $row['df'], 'shared term df should count both documents');
+        assert_same([1001 => 2, 1002 => 3], WP_FTS_PostingsCodec::decode($row['postings']), 'shared term should keep both row postings');
+
+        $postingDeletes = wp_fts_quality_prepared_like($wpdb, 'DELETE FROM wp_fts_postings WHERE doc_id = %d');
+        assert_same([1001], $postingDeletes[0]['args'], 'first replacement should delete old rows by doc id');
+        assert_same([1002], $postingDeletes[1]['args'], 'second replacement should delete old rows by doc id');
+
+        $postingInserts = wp_fts_quality_prepared_like($wpdb, 'INSERT INTO wp_fts_postings');
+        assert_same([$shared, 1001, 2], $postingInserts[0]['args'], 'first replacement should insert one row posting');
+        assert_same([$shared, 1002, 3], $postingInserts[1]['args'], 'second replacement should insert an independent row posting');
+        foreach ($postingInserts as $insert) {
+            assert_contains('ON DUPLICATE KEY UPDATE tf = VALUES(tf)', $insert['sql'], 'posting writes should upsert tf at row granularity');
+        }
+
+        $termIncrements = wp_fts_quality_prepared_like($wpdb, 'INSERT INTO wp_fts_terms');
+        assert_contains('doc_freq = doc_freq + VALUES(doc_freq)', $termIncrements[0]['sql'], 'doc frequency should use atomic increments');
+        assert_true(!str_contains(implode("\n", array_column($termIncrements, 'sql')), 'postings'), 'doc-frequency upserts should not include postings blobs');
+
+        $storage->replace_doc_postings(1001, [$unique => 4]);
+        assert_same([1002 => 3], WP_FTS_PostingsCodec::decode($storage->get_terms([$shared])[$shared]['postings']), 'replacing one doc should leave the other shared posting intact');
+        assert_same(1, $storage->get_terms([$shared])[$shared]['df'], 'shared df should decrement only the replaced document');
+        assert_same([1001 => 4], WP_FTS_PostingsCodec::decode($storage->get_terms([$unique])[$unique]['postings']), 'new term should receive the moved document posting');
+
+        $negativeUpdate = wp_fts_quality_last_prepared_like($wpdb, 'UPDATE wp_fts_terms');
+        assert_same([1, $shared], $negativeUpdate['args'], 'old shared term df should be decremented atomically');
     });
 
     test_case('quality mysql document and meta overloads preserve language partitions', function (): void {
@@ -277,6 +330,7 @@ namespace {
         assert_true(!isset($wpdb->docLengths[301]), 'optimize should delete doc-length rows for tombstones');
         assert_same([302 => 1], WP_FTS_PostingsCodec::decode($storage->get_terms([$plAlpha])[$plAlpha]['postings']), 'optimize should remove deleted postings from surviving terms');
         assert_true(!isset($wpdb->terms[$plBeta]), 'optimize should delete terms left with no postings');
+        assert_true(!isset($wpdb->postings[$plBeta]), 'optimize should delete postings rows left with no active docs');
         assert_same([302 => 1, 303 => 3], WP_FTS_PostingsCodec::decode($storage->get_terms([$enAlpha])[$enAlpha]['postings']), 'optimize should preserve active postings in other languages');
         assert_same(['doc_count' => 1, 'len_sum' => 2], $storage->get_meta('pl'), 'optimize should rebuild Polish meta from active doc lengths');
         assert_same(['doc_count' => 2, 'len_sum' => 5], $storage->get_meta('en'), 'optimize should rebuild English meta from active doc lengths');
@@ -288,6 +342,7 @@ namespace {
 
         $queryLog = implode("\n", $wpdb->queries);
         foreach ([
+            'DELETE FROM wp_fts_postings WHERE doc_id IN',
             'DELETE FROM wp_fts_doc_lengths WHERE doc_id IN',
             'DELETE FROM wp_fts_docs WHERE doc_id IN',
             'DELETE FROM wp_fts_meta',
@@ -475,14 +530,10 @@ namespace {
         $fake = new WP_FTS_Test_WPDB();
         $plTerm = WP_FTS_TermNamespace::namespace_term('pl-PL', 'zamek');
         $enTerm = WP_FTS_TermNamespace::namespace_term('en', 'castle');
-        $fake->terms[$plTerm] = [
-            'doc_freq' => 2,
-            'postings' => WP_FTS_PostingsCodec::encode([901 => 3, 902 => 1]),
-        ];
-        $fake->terms[$enTerm] = [
-            'doc_freq' => 1,
-            'postings' => WP_FTS_PostingsCodec::encode([903 => 2]),
-        ];
+        $fake->terms[$plTerm] = ['doc_freq' => 2];
+        $fake->terms[$enTerm] = ['doc_freq' => 1];
+        $fake->postings[$plTerm] = [901 => 3, 902 => 1];
+        $fake->postings[$enTerm] = [903 => 2];
         $fake->docs[901] = wp_fts_quality_doc_row('pl-PL', 3, 'hash-901');
         $fake->docs[902] = wp_fts_quality_doc_row('pl-PL', 7, 'hash-902');
         $fake->docs[903] = wp_fts_quality_doc_row('en', 2, 'hash-903');
@@ -504,8 +555,8 @@ namespace {
         assert_same(['doc_id', 'score'], $formats[0]['fields'], 'search should expose doc_id and score fields');
         assert_same([901], array_column($formats[0]['items'], 'doc_id'), 'search limit should trim to the highest-scoring Polish row');
 
-        $termSelect = wp_fts_quality_last_prepared_like($fake, 'SELECT term, doc_freq, postings FROM wp_fts_terms');
-        assert_same([$plTerm], $termSelect['args'], 'search should prepare a language-namespaced term lookup');
+        $postingSelect = wp_fts_quality_last_prepared_like($fake, 'SELECT term, doc_id, tf FROM wp_fts_postings');
+        assert_same([$plTerm], $postingSelect['args'], 'search should prepare a language-namespaced postings lookup');
         $lengthSelect = wp_fts_quality_last_prepared_like($fake, 'SELECT dl.doc_id, dl.doc_len FROM wp_fts_doc_lengths');
         assert_same('pl-PL', $lengthSelect['args'][0], 'search language alias should canonicalize before doc-length lookup');
 

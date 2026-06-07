@@ -12,6 +12,57 @@ declare(strict_types=1);
 final class WP_FTS_StorageCompat
 {
     /**
+     * Replace one document's postings through a row-postings backend when possible.
+     *
+     * @param array<string,int> $termFrequencies Stored term key => weighted tf.
+     * @return bool True when the storage handled the replacement natively.
+     */
+    public static function replace_doc_postings(WP_FTS_Storage $storage, int $docId, array $termFrequencies): bool
+    {
+        if (!$storage instanceof WP_FTS_Row_Postings_Storage) {
+            return false;
+        }
+
+        $storage->replace_doc_postings($docId, $termFrequencies);
+
+        return true;
+    }
+
+    /**
+     * Fetch decoded postings for requested terms.
+     *
+     * Row-postings backends return rows directly. Blob-backed implementations
+     * keep using `get_terms()` plus `WP_FTS_PostingsCodec` for compatibility.
+     *
+     * @param string[] $terms
+     * @return array<string,array<int,int>>
+     */
+    public static function get_postings(WP_FTS_Storage $storage, array $terms): array
+    {
+        $terms = array_values(array_unique(array_map('strval', $terms)));
+        if ($terms === []) {
+            return [];
+        }
+
+        if ($storage instanceof WP_FTS_Row_Postings_Storage) {
+            return $storage->get_postings($terms);
+        }
+
+        $postingsByTerm = [];
+        foreach ($storage->get_terms($terms) as $term => $row) {
+            $postings = WP_FTS_PostingsCodec::decode($row['postings']);
+            if ($postings === []) {
+                continue;
+            }
+
+            ksort($postings, SORT_NUMERIC);
+            $postingsByTerm[$term] = $postings;
+        }
+
+        return $postingsByTerm;
+    }
+
+    /**
      * Detect whether a backend accepts language-aware document payloads.
      *
      * @return bool True when `put_doc()` has the new four-argument shape and

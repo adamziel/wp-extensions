@@ -4,14 +4,17 @@ declare(strict_types=1);
 /**
  * WordPress MySQL storage backend for the full-text index.
  *
- * Terms are stored in a binary-key table, documents keep a tombstone flag, and
- * per-language lengths live in a separate table so BM25 can score inside one
- * language partition without mixing collection statistics.
+ * Terms keep document frequency only. Individual `(term, doc_id, tf)` postings
+ * live in a separate row table so concurrent writers can update different
+ * documents without overwriting whole term blobs. Documents keep a tombstone
+ * flag, and per-language lengths live in a separate table so BM25 can score
+ * inside one language partition without mixing collection statistics.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage
 {
     private object $wpdb;
     private string $termsTable;
+    private string $postingsTable;
     private string $docsTable;
     private string $docLengthsTable;
     private string $metaTable;
@@ -28,6 +31,7 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
         $this->wpdb = $wpdb;
         $prefix = $prefix ?? (string) ($wpdb->prefix ?? '');
         $this->termsTable = $prefix . 'fts_terms';
+        $this->postingsTable = $prefix . 'fts_postings';
         $this->docsTable = $prefix . 'fts_docs';
         $this->docLengthsTable = $prefix . 'fts_doc_lengths';
         $this->metaTable = $prefix . 'fts_meta';
@@ -38,8 +42,8 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
      *
      * `dbDelta()` is used when available so WordPress installations can evolve
      * schemas in place. Outside WordPress or without dbDelta, the raw CREATE
-     * statements are executed. `DEFAULT CHARSET=binary` keeps term keys and
-     * postings byte-stable.
+     * statements are executed. `DEFAULT CHARSET=binary` keeps term keys
+     * byte-stable.
      */
     public function create_tables(): void
     {
@@ -47,9 +51,15 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Storage
         $sql = [
             "CREATE TABLE {$this->termsTable} (
 term varbinary(255) NOT NULL,
-doc_freq int unsigned NOT NULL,
-postings longblob NOT NULL,
+doc_freq int unsigned NOT NULL DEFAULT 0,
 PRIMARY KEY  (term)
+) ENGINE=InnoDB ROW_FORMAT=DYNAMIC {$charset};",
+            "CREATE TABLE {$this->postingsTable} (
+term varbinary(255) NOT NULL,
+doc_id bigint unsigned NOT NULL,
+tf int unsigned NOT NULL,
+PRIMARY KEY  (term,doc_id),
+KEY doc_id (doc_id)
 ) ENGINE=InnoDB ROW_FORMAT=DYNAMIC {$charset};",
             "CREATE TABLE {$this->docsTable} (
 doc_id bigint unsigned NOT NULL,
@@ -86,31 +96,34 @@ PRIMARY KEY  (lang,k)
     }
 
     /**
-     * Return existing term rows for the requested keys.
+     * Return existing term rows for the requested keys in the legacy blob shape.
+     *
+     * MySQL stores postings as rows, but the public storage contract still
+     * exposes encoded blobs for compatibility with file, memory, and older
+     * callers. Only postings for the requested terms are read.
      *
      * @param string[] $terms Stored term keys.
      * @return array<string,array{df:int,postings:string}> Rows keyed by term.
      */
     public function get_terms(array $terms): array
     {
-        $terms = array_values(array_unique(array_map('strval', $terms)));
+        $terms = $this->normalize_terms($terms);
         if ($terms === []) {
             return [];
         }
 
-        $placeholders = implode(',', array_fill(0, count($terms), '%s'));
-        $sql = $this->wpdb->prepare(
-            "SELECT term, doc_freq, postings FROM {$this->termsTable} WHERE term IN ({$placeholders})",
-            ...$terms
-        );
-        $rows = $this->wpdb->get_results($sql);
+        $docFreqs = $this->get_doc_freqs($terms);
+        $postingsByTerm = $this->get_postings($terms);
 
         $result = [];
-        foreach ($rows ?: [] as $row) {
-            $term = (string) $row->term;
+        foreach ($terms as $term) {
+            if (!isset($postingsByTerm[$term])) {
+                continue;
+            }
+
             $result[$term] = [
-                'df' => (int) $row->doc_freq,
-                'postings' => (string) $row->postings,
+                'df' => $docFreqs[$term] ?? count($postingsByTerm[$term]),
+                'postings' => WP_FTS_PostingsCodec::encode($postingsByTerm[$term]),
             ];
         }
 
@@ -118,40 +131,121 @@ PRIMARY KEY  (lang,k)
     }
 
     /**
-     * Insert, replace, or remove one term row.
+     * Fetch row postings for requested term keys only.
      *
-     * MySQL stores term keys in `varbinary(255)`, so namespaced keys longer than
-     * that are rejected before the database write.
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array<int,int>> term => doc_id => weighted tf
+     */
+    public function get_postings(array $terms): array
+    {
+        $terms = $this->normalize_terms($terms);
+        if ($terms === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($terms), '%s'));
+        $sql = $this->wpdb->prepare(
+            "SELECT term, doc_id, tf FROM {$this->postingsTable}
+WHERE term IN ({$placeholders})
+ORDER BY term ASC, doc_id ASC",
+            ...$terms
+        );
+        $rows = $this->wpdb->get_results($sql);
+
+        $postingsByTerm = [];
+        foreach ($rows ?: [] as $row) {
+            $term = (string) $row->term;
+            $docId = (int) $row->doc_id;
+            $tf = max(1, (int) $row->tf);
+            $postingsByTerm[$term][$docId] = $tf;
+        }
+        foreach ($postingsByTerm as &$postings) {
+            ksort($postings, SORT_NUMERIC);
+        }
+        unset($postings);
+        ksort($postingsByTerm, SORT_STRING);
+
+        return $postingsByTerm;
+    }
+
+    /**
+     * Replace one document's postings with row deletes and row upserts.
+     *
+     * Document-frequency changes are applied as atomic deltas, so two writers
+     * adding different documents for the same term increment the shared term row
+     * instead of racing through a whole-blob overwrite.
+     *
+     * @param array<string,int> $term_frequencies Stored term key => weighted tf.
+     */
+    public function replace_doc_postings(int $doc_id, array $term_frequencies): void
+    {
+        $termFrequencies = $this->normalize_term_frequencies($term_frequencies);
+        $oldTerms = array_fill_keys($this->terms_for_doc($doc_id), true);
+        $newTerms = array_fill_keys(array_keys($termFrequencies), true);
+
+        $this->wpdb->query($this->wpdb->prepare(
+            "DELETE FROM {$this->postingsTable} WHERE doc_id = %d",
+            $doc_id
+        ));
+
+        foreach ($termFrequencies as $term => $tf) {
+            $this->insert_posting($term, $doc_id, $tf);
+        }
+
+        $deltas = [];
+        foreach ($oldTerms as $term => $_) {
+            if (!isset($newTerms[$term])) {
+                $deltas[$term] = ($deltas[$term] ?? 0) - 1;
+            }
+        }
+        foreach ($newTerms as $term => $_) {
+            if (!isset($oldTerms[$term])) {
+                $deltas[$term] = ($deltas[$term] ?? 0) + 1;
+            }
+        }
+        $this->adjust_doc_freqs($deltas);
+    }
+
+    /**
+     * Insert, replace, or remove one term row through the row-postings table.
+     *
+     * This method preserves the legacy storage contract by decoding the supplied
+     * blob into rows. The indexer bypasses it for MySQL through
+     * `replace_doc_postings()`, so normal indexing never reads and rewrites a
+     * whole MySQL term blob.
      *
      * @throws InvalidArgumentException If the namespaced term exceeds 255 bytes.
      */
     public function put_term(string $term, int $df, string $postings): void
     {
-        if (strlen($term) > WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES) {
-            throw new InvalidArgumentException('Namespaced term exceeds the MySQL term key byte limit.');
-        }
+        $this->assert_term_key_fits($term);
 
         if ($df <= 0) {
             $this->delete_term($term);
             return;
         }
 
-        $sql = $this->wpdb->prepare(
-            "INSERT INTO {$this->termsTable} (term, doc_freq, postings)
-VALUES (%s, %d, %s)
-ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq), postings = VALUES(postings)",
-            $term,
-            $df,
-            $postings
-        );
-        $this->wpdb->query($sql);
+        $decoded = WP_FTS_PostingsCodec::decode($postings);
+        $this->wpdb->query($this->wpdb->prepare(
+            "DELETE FROM {$this->postingsTable} WHERE term = %s",
+            $term
+        ));
+
+        foreach ($decoded as $docId => $tf) {
+            $this->insert_posting($term, (int) $docId, (int) $tf);
+        }
+        $this->set_doc_freq($term, count($decoded));
     }
 
     /**
-     * Delete one term row by its stored key.
+     * Delete one term row and all of its posting rows by stored key.
      */
     public function delete_term(string $term): void
     {
+        $this->wpdb->query($this->wpdb->prepare(
+            "DELETE FROM {$this->postingsTable} WHERE term = %s",
+            $term
+        ));
         $this->wpdb->query($this->wpdb->prepare(
             "DELETE FROM {$this->termsTable} WHERE term = %s",
             $term
@@ -421,9 +515,10 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
     /**
      * Compact tombstoned documents and rebuild collection metadata.
      *
-     * Deleted ids are removed from every posting list, empty terms are deleted,
-     * document/length tombstones are purged, and metadata is rebuilt from active
-     * per-language length rows.
+     * Deleted ids are removed with row deletes from the postings table, term
+     * document frequencies are decremented atomically, document/length
+     * tombstones are purged, and metadata is rebuilt from active per-language
+     * length rows.
      */
     public function optimize(): void
     {
@@ -431,15 +526,18 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
             "SELECT doc_id FROM {$this->docsTable} WHERE is_deleted = 1"
         ) ?: []);
         if ($deletedIds !== []) {
-            $deleted = array_fill_keys($deletedIds, true);
-            foreach ($this->get_terms($this->all_terms()) as $term => $row) {
-                $postings = WP_FTS_PostingsCodec::decode($row['postings']);
-                foreach ($deleted as $docId => $_) {
-                    unset($postings[$docId]);
-                }
-                $this->put_term($term, count($postings), WP_FTS_PostingsCodec::encode($postings));
-            }
             $placeholders = implode(',', array_fill(0, count($deletedIds), '%d'));
+            $termCounts = $this->posting_term_counts_for_docs($deletedIds);
+            $this->wpdb->query($this->wpdb->prepare(
+                "DELETE FROM {$this->postingsTable} WHERE doc_id IN ({$placeholders})",
+                ...$deletedIds
+            ));
+            $deltas = [];
+            foreach ($termCounts as $term => $count) {
+                $deltas[$term] = -$count;
+            }
+            $this->adjust_doc_freqs($deltas);
+
             $this->wpdb->query($this->wpdb->prepare(
                 "DELETE FROM {$this->docLengthsTable} WHERE doc_id IN ({$placeholders})",
                 ...$deletedIds
@@ -460,6 +558,219 @@ GROUP BY dl.lang"
         );
         foreach ($rows ?: [] as $row) {
             $this->add_meta((string) $row->lang, (int) $row->doc_count, (int) $row->len_sum);
+        }
+    }
+
+    /**
+     * Normalize a requested term list without validating length.
+     *
+     * Read paths accept arbitrary keys so callers can ask for missing or legacy
+     * terms without raising storage errors.
+     *
+     * @param string[] $terms
+     * @return string[]
+     */
+    private function normalize_terms(array $terms): array
+    {
+        $terms = array_values(array_unique(array_map('strval', $terms)));
+        sort($terms, SORT_STRING);
+
+        return $terms;
+    }
+
+    /**
+     * Normalize and validate term frequencies before row writes.
+     *
+     * @param array<string,int> $termFrequencies
+     * @return array<string,int>
+     */
+    private function normalize_term_frequencies(array $termFrequencies): array
+    {
+        $normalized = [];
+        foreach ($termFrequencies as $term => $tf) {
+            $term = (string) $term;
+            $tf = (int) $tf;
+            if ($term === '' || $tf <= 0) {
+                continue;
+            }
+
+            $this->assert_term_key_fits($term);
+            $normalized[$term] = max(1, $tf);
+        }
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
+    }
+
+    /**
+     * Reject terms that cannot fit the MySQL `varbinary(255)` key.
+     */
+    private function assert_term_key_fits(string $term): void
+    {
+        if (strlen($term) > WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES) {
+            throw new InvalidArgumentException('Namespaced term exceeds the MySQL term key byte limit.');
+        }
+    }
+
+    /**
+     * Read term keys currently posted by one document id.
+     *
+     * @return string[]
+     */
+    private function terms_for_doc(int $docId): array
+    {
+        $rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT term FROM {$this->postingsTable} WHERE doc_id = %d",
+            $docId
+        ));
+
+        $terms = [];
+        foreach ($rows ?: [] as $row) {
+            $terms[] = (string) $row->term;
+        }
+        $terms = array_values(array_unique($terms));
+        sort($terms, SORT_STRING);
+
+        return $terms;
+    }
+
+    /**
+     * Count posting rows by term for a document-id set.
+     *
+     * @param int[] $docIds
+     * @return array<string,int>
+     */
+    private function posting_term_counts_for_docs(array $docIds): array
+    {
+        $docIds = array_values(array_unique(array_map('intval', $docIds)));
+        if ($docIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($docIds), '%d'));
+        $rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT term, COUNT(*) AS c FROM {$this->postingsTable}
+WHERE doc_id IN ({$placeholders})
+GROUP BY term",
+            ...$docIds
+        ));
+
+        $counts = [];
+        foreach ($rows ?: [] as $row) {
+            $counts[(string) $row->term] = max(0, (int) $row->c);
+        }
+        ksort($counts, SORT_STRING);
+
+        return $counts;
+    }
+
+    /**
+     * Fetch stored document frequencies for requested terms.
+     *
+     * @param string[] $terms
+     * @return array<string,int>
+     */
+    private function get_doc_freqs(array $terms): array
+    {
+        $terms = $this->normalize_terms($terms);
+        if ($terms === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($terms), '%s'));
+        $rows = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT term, doc_freq FROM {$this->termsTable} WHERE term IN ({$placeholders})",
+            ...$terms
+        ));
+
+        $docFreqs = [];
+        foreach ($rows ?: [] as $row) {
+            $docFreqs[(string) $row->term] = max(0, (int) $row->doc_freq);
+        }
+
+        return $docFreqs;
+    }
+
+    /**
+     * Insert or update one row posting.
+     */
+    private function insert_posting(string $term, int $docId, int $tf): void
+    {
+        $this->assert_term_key_fits($term);
+        $sql = $this->wpdb->prepare(
+            "INSERT INTO {$this->postingsTable} (term, doc_id, tf)
+VALUES (%s, %d, %d)
+ON DUPLICATE KEY UPDATE tf = VALUES(tf)",
+            $term,
+            $docId,
+            max(1, $tf)
+        );
+        $this->wpdb->query($sql);
+    }
+
+    /**
+     * Set one term's document frequency exactly.
+     */
+    private function set_doc_freq(string $term, int $docFreq): void
+    {
+        if ($docFreq <= 0) {
+            $this->delete_term($term);
+            return;
+        }
+
+        $this->assert_term_key_fits($term);
+        $sql = $this->wpdb->prepare(
+            "INSERT INTO {$this->termsTable} (term, doc_freq)
+VALUES (%s, %d)
+ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq)",
+            $term,
+            $docFreq
+        );
+        $this->wpdb->query($sql);
+    }
+
+    /**
+     * Apply document-frequency deltas without overwriting concurrent writers.
+     *
+     * Positive deltas use an atomic upsert. Negative deltas subtract from the
+     * existing counter and remove rows that reach zero.
+     *
+     * @param array<string,int> $deltas term => signed document-frequency delta.
+     */
+    private function adjust_doc_freqs(array $deltas): void
+    {
+        ksort($deltas, SORT_STRING);
+        foreach ($deltas as $term => $delta) {
+            $term = (string) $term;
+            $delta = (int) $delta;
+            if ($term === '' || $delta === 0) {
+                continue;
+            }
+
+            $this->assert_term_key_fits($term);
+            if ($delta > 0) {
+                $this->wpdb->query($this->wpdb->prepare(
+                    "INSERT INTO {$this->termsTable} (term, doc_freq)
+VALUES (%s, %d)
+ON DUPLICATE KEY UPDATE doc_freq = doc_freq + VALUES(doc_freq)",
+                    $term,
+                    $delta
+                ));
+                continue;
+            }
+
+            $decrement = abs($delta);
+            $this->wpdb->query($this->wpdb->prepare(
+                "UPDATE {$this->termsTable}
+SET doc_freq = GREATEST(0, doc_freq - %d)
+WHERE term = %s",
+                $decrement,
+                $term
+            ));
+            $this->wpdb->query($this->wpdb->prepare(
+                "DELETE FROM {$this->termsTable} WHERE term = %s AND doc_freq = 0",
+                $term
+            ));
         }
     }
 

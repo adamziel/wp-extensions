@@ -143,3 +143,36 @@ interface WP_FTS_Storage
      */
     public function optimize(): void;
 }
+
+/**
+ * Optional storage extension for backends that store postings as individual rows.
+ *
+ * The base storage interface keeps the blob-shaped `get_terms()`/`put_term()`
+ * contract for file and in-memory compatibility. MySQL implements this
+ * extension so indexing can replace one document's postings with row deletes
+ * and upserts instead of read-decode-write cycles over whole term blobs.
+ */
+interface WP_FTS_Row_Postings_Storage extends WP_FTS_Storage
+{
+    /**
+     * Replace all postings for one document id.
+     *
+     * Implementations must remove existing rows for `$doc_id`, write the new
+     * `(term, doc_id, tf)` rows, and update document frequencies consistently
+     * inside the caller's transaction.
+     *
+     * @param array<string,int> $term_frequencies Stored term key => weighted tf.
+     */
+    public function replace_doc_postings(int $doc_id, array $term_frequencies): void;
+
+    /**
+     * Fetch postings for requested stored term keys only.
+     *
+     * Missing terms are omitted. Returned posting maps must be sorted by
+     * document id so scoring and tests remain deterministic.
+     *
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array<int,int>> term => doc_id => weighted tf
+     */
+    public function get_postings(array $terms): array;
+}
