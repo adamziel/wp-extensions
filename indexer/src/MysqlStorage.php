@@ -81,7 +81,7 @@ PRIMARY KEY  (lang,k)
         }
 
         foreach ($sql as $statement) {
-            $this->wpdb->query($statement);
+            $this->query($statement, 'create FTS tables');
         }
     }
 
@@ -103,7 +103,7 @@ PRIMARY KEY  (lang,k)
             "SELECT term, doc_freq, postings FROM {$this->termsTable} WHERE term IN ({$placeholders})",
             ...$terms
         );
-        $rows = $this->wpdb->get_results($sql);
+        $rows = $this->get_results($sql, 'read FTS terms');
 
         $result = [];
         foreach ($rows ?: [] as $row) {
@@ -144,7 +144,7 @@ ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq), postings = VALUES(postings)
             $df,
             $postings
         );
-        $this->wpdb->query($sql);
+        $this->query($sql, 'write FTS term');
     }
 
     /**
@@ -152,10 +152,10 @@ ON DUPLICATE KEY UPDATE doc_freq = VALUES(doc_freq), postings = VALUES(postings)
      */
     public function delete_term(string $term): void
     {
-        $this->wpdb->query($this->wpdb->prepare(
+        $this->query($this->wpdb->prepare(
             "DELETE FROM {$this->termsTable} WHERE term = %s",
             $term
-        ));
+        ), 'delete FTS term');
     }
 
     /**
@@ -190,7 +190,7 @@ WHERE d.is_deleted = 0 AND dl.lang = %s AND dl.doc_id IN ({$placeholders})",
                 ...$args
             );
         }
-        $rows = $this->wpdb->get_results($sql);
+        $rows = $this->get_results($sql, 'read FTS document lengths');
 
         $lengths = [];
         foreach ($rows ?: [] as $row) {
@@ -214,10 +214,10 @@ WHERE d.is_deleted = 0 AND dl.lang = %s AND dl.doc_id IN ({$placeholders})",
      */
     public function get_doc(int $doc_id): ?array
     {
-        $row = $this->wpdb->get_row($this->wpdb->prepare(
+        $row = $this->get_row($this->wpdb->prepare(
             "SELECT doc_id, lang, doc_len, content_hash, is_deleted FROM {$this->docsTable} WHERE doc_id = %d",
             $doc_id
-        ));
+        ), 'read FTS document');
 
         if (!$row) {
             return null;
@@ -225,10 +225,10 @@ WHERE d.is_deleted = 0 AND dl.lang = %s AND dl.doc_id IN ({$placeholders})",
 
         $primaryLang = WP_FTS_TermNamespace::canonicalize_lang((string) ($row->lang ?? WP_FTS_TermNamespace::DEFAULT_LANG));
         $langLengths = [];
-        $lengthRows = $this->wpdb->get_results($this->wpdb->prepare(
+        $lengthRows = $this->get_results($this->wpdb->prepare(
             "SELECT lang, doc_len FROM {$this->docLengthsTable} WHERE doc_id = %d ORDER BY lang ASC",
             $doc_id
-        ));
+        ), 'read FTS document language lengths');
         foreach ($lengthRows ?: [] as $lengthRow) {
             $length = (int) $lengthRow->doc_len;
             if ($length > 0) {
@@ -273,21 +273,21 @@ ON DUPLICATE KEY UPDATE lang = VALUES(lang), doc_len = VALUES(doc_len), content_
             array_sum($langLengths),
             $contentHash
         );
-        $this->wpdb->query($sql);
+        $this->query($sql, 'write FTS document');
 
-        $this->wpdb->query($this->wpdb->prepare(
+        $this->query($this->wpdb->prepare(
             "DELETE FROM {$this->docLengthsTable} WHERE doc_id = %d",
             $doc_id
-        ));
+        ), 'replace FTS document lengths');
         foreach ($langLengths as $lang => $docLen) {
-            $this->wpdb->query($this->wpdb->prepare(
+            $this->query($this->wpdb->prepare(
                 "INSERT INTO {$this->docLengthsTable} (doc_id, lang, doc_len)
 VALUES (%d, %s, %d)
 ON DUPLICATE KEY UPDATE doc_len = VALUES(doc_len)",
                 $doc_id,
                 $lang,
                 $docLen
-            ));
+            ), 'write FTS document length');
         }
     }
 
@@ -306,7 +306,7 @@ ON DUPLICATE KEY UPDATE is_deleted = 1",
             $doc_id,
             WP_FTS_TermNamespace::DEFAULT_LANG
         );
-        $this->wpdb->query($sql);
+        $this->query($sql, 'tombstone FTS document');
     }
 
     /**
@@ -320,12 +320,12 @@ ON DUPLICATE KEY UPDATE is_deleted = 1",
     public function get_meta(?string $lang = null): array
     {
         if ($lang === null) {
-            $rows = $this->wpdb->get_results("SELECT k, COALESCE(SUM(v), 0) AS v FROM {$this->metaTable} GROUP BY k");
+            $rows = $this->get_results("SELECT k, COALESCE(SUM(v), 0) AS v FROM {$this->metaTable} GROUP BY k", 'read FTS aggregate metadata');
         } else {
-            $rows = $this->wpdb->get_results($this->wpdb->prepare(
+            $rows = $this->get_results($this->wpdb->prepare(
                 "SELECT k, v FROM {$this->metaTable} WHERE lang = %s",
                 WP_FTS_TermNamespace::canonicalize_lang($lang)
-            ));
+            ), 'read FTS language metadata');
         }
 
         $meta = ['doc_count' => 0, 'len_sum' => 0];
@@ -356,7 +356,7 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
                 max(0, $delta),
                 $delta
             );
-            $this->wpdb->query($sql);
+            $this->query($sql, 'write FTS metadata');
         }
     }
 
@@ -367,7 +367,7 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
      */
     public function all_terms(): array
     {
-        $terms = array_map('strval', $this->wpdb->get_col("SELECT term FROM {$this->termsTable} ORDER BY term ASC") ?: []);
+        $terms = array_map('strval', $this->get_col("SELECT term FROM {$this->termsTable} ORDER BY term ASC", 'list FTS terms'));
         sort($terms, SORT_STRING);
 
         return $terms;
@@ -381,7 +381,7 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
     public function all_doc_ids(bool $include_deleted = false): array
     {
         $where = $include_deleted ? '' : ' WHERE is_deleted = 0';
-        $ids = array_map('intval', $this->wpdb->get_col("SELECT doc_id FROM {$this->docsTable}{$where} ORDER BY doc_id ASC") ?: []);
+        $ids = array_map('intval', $this->get_col("SELECT doc_id FROM {$this->docsTable}{$where} ORDER BY doc_id ASC", 'list FTS documents'));
         sort($ids, SORT_NUMERIC);
 
         return $ids;
@@ -392,7 +392,7 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
      */
     public function begin_transaction(): void
     {
-        $this->wpdb->query('START TRANSACTION');
+        $this->query('START TRANSACTION', 'start FTS transaction');
     }
 
     /**
@@ -400,7 +400,7 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
      */
     public function commit(): void
     {
-        $this->wpdb->query('COMMIT');
+        $this->query('COMMIT', 'commit FTS transaction');
     }
 
     /**
@@ -408,7 +408,7 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
      */
     public function rollback(): void
     {
-        $this->wpdb->query('ROLLBACK');
+        $this->query('ROLLBACK', 'roll back FTS transaction');
     }
 
     /**
@@ -427,9 +427,10 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
      */
     public function optimize(): void
     {
-        $deletedIds = array_map('intval', $this->wpdb->get_col(
-            "SELECT doc_id FROM {$this->docsTable} WHERE is_deleted = 1"
-        ) ?: []);
+        $deletedIds = array_map('intval', $this->get_col(
+            "SELECT doc_id FROM {$this->docsTable} WHERE is_deleted = 1",
+            'list FTS tombstones'
+        ));
         if ($deletedIds !== []) {
             $deleted = array_fill_keys($deletedIds, true);
             foreach ($this->get_terms($this->all_terms()) as $term => $row) {
@@ -440,23 +441,24 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
                 $this->put_term($term, count($postings), WP_FTS_PostingsCodec::encode($postings));
             }
             $placeholders = implode(',', array_fill(0, count($deletedIds), '%d'));
-            $this->wpdb->query($this->wpdb->prepare(
+            $this->query($this->wpdb->prepare(
                 "DELETE FROM {$this->docLengthsTable} WHERE doc_id IN ({$placeholders})",
                 ...$deletedIds
-            ));
-            $this->wpdb->query($this->wpdb->prepare(
+            ), 'purge FTS tombstone lengths');
+            $this->query($this->wpdb->prepare(
                 "DELETE FROM {$this->docsTable} WHERE doc_id IN ({$placeholders})",
                 ...$deletedIds
-            ));
+            ), 'purge FTS tombstone documents');
         }
 
-        $this->wpdb->query("DELETE FROM {$this->metaTable}");
-        $rows = $this->wpdb->get_results(
+        $this->query("DELETE FROM {$this->metaTable}", 'rebuild FTS metadata');
+        $rows = $this->get_results(
             "SELECT dl.lang, COUNT(*) AS doc_count, COALESCE(SUM(dl.doc_len), 0) AS len_sum
 FROM {$this->docLengthsTable} dl
 INNER JOIN {$this->docsTable} d ON d.doc_id = dl.doc_id
 WHERE d.is_deleted = 0 AND dl.doc_len > 0
-GROUP BY dl.lang"
+GROUP BY dl.lang",
+            'read FTS metadata rebuild rows'
         );
         foreach ($rows ?: [] as $row) {
             $this->add_meta((string) $row->lang, (int) $row->doc_count, (int) $row->len_sum);
@@ -481,9 +483,81 @@ GROUP BY dl.lang"
 
         foreach ($sql as $statement) {
             dbDelta($statement);
+            $this->assert_no_database_error('run dbDelta for FTS tables');
         }
 
         return true;
+    }
+
+    /**
+     * Run a write statement and throw when WordPress reports a database error.
+     */
+    private function query(mixed $statement, string $context): void
+    {
+        $result = $this->wpdb->query($statement);
+        if ($result === false) {
+            throw $this->database_exception($context);
+        }
+
+        $this->assert_no_database_error($context);
+    }
+
+    /**
+     * Run a result query with explicit database error visibility.
+     *
+     * @return object[]
+     */
+    private function get_results(mixed $statement, string $context): array
+    {
+        $rows = $this->wpdb->get_results($statement);
+        $this->assert_no_database_error($context);
+
+        return is_array($rows) ? $rows : [];
+    }
+
+    /**
+     * Run a single-row query with explicit database error visibility.
+     */
+    private function get_row(mixed $statement, string $context): ?object
+    {
+        $row = $this->wpdb->get_row($statement);
+        $this->assert_no_database_error($context);
+
+        return is_object($row) ? $row : null;
+    }
+
+    /**
+     * Run a column query with explicit database error visibility.
+     *
+     * @return array<int,mixed>
+     */
+    private function get_col(string $sql, string $context): array
+    {
+        $values = $this->wpdb->get_col($sql);
+        $this->assert_no_database_error($context);
+
+        return is_array($values) ? $values : [];
+    }
+
+    /**
+     * Throw when `$wpdb->last_error` contains a failed operation detail.
+     */
+    private function assert_no_database_error(string $context): void
+    {
+        if (isset($this->wpdb->last_error) && trim((string) $this->wpdb->last_error) !== '') {
+            throw $this->database_exception($context);
+        }
+    }
+
+    /**
+     * Build a context-rich exception for failed MySQL operations.
+     */
+    private function database_exception(string $context): RuntimeException
+    {
+        $error = isset($this->wpdb->last_error) ? trim((string) $this->wpdb->last_error) : '';
+        $suffix = $error !== '' ? ": {$error}" : '.';
+
+        return new RuntimeException("Failed to {$context}{$suffix}");
     }
 
     /**

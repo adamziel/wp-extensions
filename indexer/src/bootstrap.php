@@ -26,6 +26,7 @@ $wp_fts_files = [
     __DIR__ . '/MysqlStorage.php',
     __DIR__ . '/Indexer.php',
     __DIR__ . '/Searcher.php',
+    __DIR__ . '/Plugin.php',
     __DIR__ . '/WPCLICommand.php',
 ];
 

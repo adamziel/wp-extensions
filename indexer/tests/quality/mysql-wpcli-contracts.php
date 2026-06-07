@@ -59,6 +59,7 @@ namespace {
     {
         if (class_exists('WP_CLI')) {
             WP_CLI::$successMessages = [];
+            WP_CLI::$commands = [];
         }
 
         $GLOBALS['wp_fts_quality_cli_format_items'] = [];
@@ -537,14 +538,30 @@ namespace {
         assert_same([], $formats[0]['items'], 'missing search terms should format an empty result set');
     });
 
-    test_case('quality wp cli register is explicit and plugin bootstrap adds no hooks', function (): void {
+    test_case('quality wp cli register is explicit and plugin runtime hooks are WordPress scoped', function (): void {
         $GLOBALS['wp_fts_quality_add_action_calls'] = [];
         wp_fts_quality_reset_cli();
 
         require_once dirname(__DIR__, 2) . '/indexer.php';
-        assert_same([], $GLOBALS['wp_fts_quality_add_action_calls'], 'plugin bootstrap should not add automatic indexing hooks');
+        WP_FTS_Plugin::register_hooks();
+        $hooks = array_column($GLOBALS['wp_fts_quality_add_action_calls'], 'hook');
+        sort($hooks, SORT_STRING);
+        $expectedHooks = [
+            WP_FTS_Plugin::CRON_HOOK,
+            'before_delete_post',
+            'rest_api_init',
+            'save_post',
+            'transition_post_status',
+            'trashed_post',
+            'wp_after_insert_post',
+        ];
+        sort($expectedHooks, SORT_STRING);
+        assert_same($expectedHooks, $hooks, 'plugin runtime hooks should be registered through WordPress add_action');
 
         WP_FTS_WPCLI_Command::register();
-        assert_same([], $GLOBALS['wp_fts_quality_add_action_calls'], 'explicit WP-CLI registration should not add indexing hooks');
+        assert_same(['fts' => WP_FTS_WPCLI_Command::class], WP_CLI::$commands, 'explicit WP-CLI registration should keep the command control plane');
+        $afterCliHooks = array_column($GLOBALS['wp_fts_quality_add_action_calls'], 'hook');
+        sort($afterCliHooks, SORT_STRING);
+        assert_same($hooks, $afterCliHooks, 'explicit WP-CLI registration should not add indexing hooks');
     });
 }
