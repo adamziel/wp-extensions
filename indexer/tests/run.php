@@ -1536,6 +1536,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_cleared_hooks'] = [];
     $GLOBALS['wp_fts_test_rest_routes'] = [];
     $GLOBALS['wp_fts_test_posts'] = [];
+    $GLOBALS['wp_fts_test_get_post_callbacks'] = [];
     $GLOBALS['wp_fts_test_post_types'] = [
         'post' => (object) ['public' => true, 'exclude_from_search' => false],
         'page' => (object) ['public' => true, 'exclude_from_search' => false],
@@ -1666,7 +1667,13 @@ if (!function_exists('get_post')) {
             return $post;
         }
 
-        return $GLOBALS['wp_fts_test_posts'][(int) $post] ?? null;
+        $post_id = (int) $post;
+        $callback = $GLOBALS['wp_fts_test_get_post_callbacks'][$post_id] ?? null;
+        if (is_callable($callback)) {
+            $callback($post_id);
+        }
+
+        return $GLOBALS['wp_fts_test_posts'][$post_id] ?? null;
     }
 }
 
@@ -1883,6 +1890,78 @@ test_case('runtime post hooks queue bounded indexing and tombstone invisible pos
         $GLOBALS['wp_fts_test_revisions'][102] = true;
         WP_FTS_Plugin::handle_post_save(102, (object) ['ID' => 102, 'post_status' => 'publish', 'post_type' => 'post'], true);
         assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'revision saves should not enqueue indexing work');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('queue processing preserves posts queued during an active batch', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $post = (object) [
+        'ID' => 301,
+        'post_title' => 'Concurrent queue',
+        'post_content' => '<p>alpha concurrent</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+    $GLOBALS['wp_fts_test_posts'][301] = $post;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [301, 302];
+    $GLOBALS['wp_fts_test_get_post_callbacks'][301] = static function (): void {
+        unset($GLOBALS['wp_fts_test_get_post_callbacks'][301]);
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [301, 302, 303];
+    };
+
+    try {
+        assert_same(1, WP_FTS_Plugin::process_queue(1), 'queue processor should process only the claimed batch');
+        assert_same([302, 303], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'queue processor should preserve ids added after its initial snapshot');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'remaining concurrent queue work should schedule another processor run');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('password-protected published posts are not queued indexed or exposed', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $passworded = (object) [
+        'ID' => 311,
+        'post_title' => 'Protected shared',
+        'post_content' => '<p>alpha shared hidden</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_password' => 'secret',
+    ];
+    $public = (object) [
+        'ID' => 312,
+        'post_title' => 'Public shared',
+        'post_content' => '<p>alpha shared visible</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+    $GLOBALS['wp_fts_test_posts'][311] = $passworded;
+    $GLOBALS['wp_fts_test_posts'][312] = $public;
+
+    try {
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer());
+        $indexer->index_post($passworded, ['lang' => 'en']);
+        $indexer->index_post($public, ['lang' => 'en']);
+
+        $GLOBALS['wp_fts_test_caps']['read_post'][311] = true;
+        assert_same([312], array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id'), 'public search should hide password-protected posts even when stale indexed rows exist');
+
+        WP_FTS_Plugin::handle_post_save(311, $passworded, true);
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'password-protected publish saves should not enqueue indexing work');
+        assert_true(($fake->docs[311]['is_deleted'] ?? 0) === 1, 'password-protected publish saves should tombstone stale indexed rows');
     } finally {
         $wpdb = $oldWpdb;
     }

@@ -190,8 +190,8 @@ final class WP_FTS_Plugin
             $processed++;
         }
 
-        self::set_option(self::QUEUE_OPTION, $remaining);
-        if ($remaining !== []) {
+        $queue = self::finish_queue_batch($batch, $remaining);
+        if ($queue !== []) {
             self::schedule_queue_processor();
         }
 
@@ -309,6 +309,42 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Remove processed IDs from the latest queue state without losing later saves.
+     *
+     * The queue is stored in an option, so processing cannot claim rows
+     * atomically. Re-reading here preserves IDs enqueued after the initial
+     * snapshot while still dropping the batch this worker finished.
+     *
+     * @param int[] $processed
+     * @param int[] $snapshot_remaining
+     * @return int[]
+     */
+    private static function finish_queue_batch(array $processed, array $snapshot_remaining): array
+    {
+        $processed_lookup = [];
+        foreach ($processed as $post_id) {
+            $post_id = (int) $post_id;
+            if ($post_id > 0) {
+                $processed_lookup[$post_id] = true;
+            }
+        }
+
+        $next = [];
+        foreach (array_merge($snapshot_remaining, self::pending_queue()) as $post_id) {
+            $post_id = (int) $post_id;
+            if ($post_id > 0 && !isset($processed_lookup[$post_id])) {
+                $next[$post_id] = true;
+            }
+        }
+
+        $queue = array_keys($next);
+        sort($queue, SORT_NUMERIC);
+        self::set_option(self::QUEUE_OPTION, $queue);
+
+        return $queue;
+    }
+
+    /**
      * @return int[]
      */
     private static function pending_queue(): array
@@ -415,6 +451,10 @@ final class WP_FTS_Plugin
             return false;
         }
 
+        if (isset($post->post_password) && (string) $post->post_password !== '') {
+            return false;
+        }
+
         $type = isset($post->post_type) && is_scalar($post->post_type) ? (string) $post->post_type : 'post';
         if (!function_exists('get_post_type_object')) {
             return in_array($type, ['post', 'page'], true);
@@ -443,6 +483,10 @@ final class WP_FTS_Plugin
     {
         $post = self::post_object($post_id);
         if ($post === null) {
+            return false;
+        }
+
+        if (isset($post->post_password) && (string) $post->post_password !== '') {
             return false;
         }
 
