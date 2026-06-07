@@ -53,8 +53,10 @@ final class WP_FTS_PostContentExtractor
         if ($title !== '') {
             $fields[] = $this->field('title', $title, $fieldBoosts['title'] ?? 5.0);
         }
+        $contentText = '';
         if ($content !== '') {
-            $fields[] = $this->field('content', $this->plain_text($content), $fieldBoosts['content'] ?? 1.0, $content);
+            $contentText = $this->plain_text($content);
+            $fields[] = $this->field('content', $contentText, $fieldBoosts['content'] ?? 1.0, $content);
         }
         if ($excerpt !== '') {
             $fields[] = $this->field('excerpt', $excerpt, $fieldBoosts['excerpt'] ?? 2.0);
@@ -62,7 +64,10 @@ final class WP_FTS_PostContentExtractor
 
         $rendered = $this->render_content($content, $post, $opts);
         if ($rendered !== '' && $rendered !== $content) {
-            $fields[] = $this->field('rendered', $this->plain_text($rendered), $fieldBoosts['rendered'] ?? 1.0, $rendered);
+            $renderedText = $this->plain_text($rendered);
+            if ($renderedText !== $contentText) {
+                $fields[] = $this->field('rendered', $renderedText, $fieldBoosts['rendered'] ?? 1.0, $rendered);
+            }
         }
 
         $terms = $this->extract_terms($postId, $postType, $post, $opts);
@@ -441,6 +446,7 @@ final class WP_FTS_PostContentExtractor
             return '';
         }
 
+        $text = WP_FTS_Utf8::repair($text);
         if (function_exists('wp_strip_all_tags')) {
             $text = (string) wp_strip_all_tags($text, true);
         } else {
@@ -449,6 +455,7 @@ final class WP_FTS_PostContentExtractor
             $text = strip_tags($text);
         }
         $text = html_entity_decode($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+        $text = WP_FTS_Utf8::repair($text);
         $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
 
         return trim($text);
@@ -459,12 +466,7 @@ final class WP_FTS_PostContentExtractor
      */
     private function limit_text(string $text, int $limit): string
     {
-        $limit = max(0, $limit);
-        if ($limit === 0 || strlen($text) <= $limit) {
-            return $text;
-        }
-
-        return rtrim(substr($text, 0, $limit));
+        return rtrim(WP_FTS_Utf8::truncate_bytes($text, $limit));
     }
 
     /**

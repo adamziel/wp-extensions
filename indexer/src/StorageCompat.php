@@ -269,8 +269,9 @@ final class WP_FTS_StorageCompat
         ksort($normalized['field_boosts'], SORT_STRING);
 
         foreach ($metadata as $key => $value) {
-            if (!array_key_exists((string) $key, $normalized)) {
-                $normalized[(string) $key] = self::metadata_extra($value);
+            $metadataKey = WP_FTS_Utf8::repair((string) $key);
+            if ($metadataKey !== '' && !array_key_exists($metadataKey, $normalized)) {
+                $normalized[$metadataKey] = self::metadata_extra($value);
             }
         }
 
@@ -287,8 +288,10 @@ final class WP_FTS_StorageCompat
         }
 
         $text = (string) $value;
+        $text = WP_FTS_Utf8::repair($text);
         $text = strip_tags($text);
         $text = html_entity_decode($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+        $text = WP_FTS_Utf8::repair($text);
         $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
 
         return trim($text);
@@ -304,7 +307,7 @@ final class WP_FTS_StorageCompat
     {
         $normalized = [];
         foreach (is_array($lists) ? $lists : [] as $key => $values) {
-            $key = trim((string) $key);
+            $key = trim(WP_FTS_Utf8::repair((string) $key));
             if ($key === '') {
                 continue;
             }
@@ -333,6 +336,10 @@ final class WP_FTS_StorageCompat
      */
     private static function metadata_extra(mixed $value): mixed
     {
+        if (is_string($value)) {
+            return WP_FTS_Utf8::repair($value);
+        }
+
         if (is_scalar($value) || $value === null) {
             return $value;
         }
@@ -343,7 +350,7 @@ final class WP_FTS_StorageCompat
 
         $normalized = [];
         foreach ($value as $key => $item) {
-            $normalized[(string) $key] = self::metadata_extra($item);
+            $normalized[WP_FTS_Utf8::repair((string) $key)] = self::metadata_extra($item);
         }
 
         return $normalized;

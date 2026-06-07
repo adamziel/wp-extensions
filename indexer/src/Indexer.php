@@ -135,6 +135,12 @@ final class WP_FTS_Indexer
         }
 
         [$termFrequencies, $langLengths] = $this->weighted_term_frequencies_by_language($occurrences, $primaryLang);
+        $metadataToStore = $metadata;
+        if ($metadataToStore === null && $existing !== null && !$existing['deleted']) {
+            $metadataToStore = WP_FTS_StorageCompat::get_doc_metadata($this->storage, [$doc_id]) !== []
+                ? []
+                : null;
+        }
 
         $this->storage->begin_transaction();
         try {
@@ -165,8 +171,8 @@ final class WP_FTS_Indexer
             }
 
             WP_FTS_StorageCompat::put_doc($this->storage, $doc_id, $primaryLang, $langLengths, $hash);
-            if ($metadata !== null) {
-                WP_FTS_StorageCompat::put_doc_metadata($this->storage, $doc_id, $metadata);
+            if ($metadataToStore !== null) {
+                WP_FTS_StorageCompat::put_doc_metadata($this->storage, $doc_id, $metadataToStore);
             }
             $this->add_meta_deltas($langLengths, 1);
             $this->storage->commit();
@@ -197,10 +203,14 @@ final class WP_FTS_Indexer
         if ($existing === null || $existing['deleted']) {
             return false;
         }
+        $hadMetadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, [$doc_id]) !== [];
 
         $this->storage->begin_transaction();
         try {
             $this->storage->delete_doc($doc_id);
+            if ($hadMetadata) {
+                WP_FTS_StorageCompat::put_doc_metadata($this->storage, $doc_id, []);
+            }
             $this->add_meta_deltas(
                 WP_FTS_StorageCompat::doc_lang_lengths($existing, WP_FTS_StorageCompat::doc_primary_lang($existing, 'en')),
                 -1

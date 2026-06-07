@@ -2327,6 +2327,124 @@ test_case('post content extractor indexes realistic WordPress fields and filters
     assert_contains('Rendered Shortcode Signal', $metadata['search_text'], 'metadata search text should include rendered shortcode content');
 });
 
+test_case('post content extractor does not double index static block visible text', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer();
+    $extractor = new WP_FTS_PostContentExtractor();
+    $post = (object) [
+        'ID' => 1101,
+        'post_title' => '',
+        'post_content' => '<!-- wp:paragraph --><p>Body Nebula</p><!-- /wp:paragraph -->',
+        'post_excerpt' => '',
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-04-01 00:00:00',
+    ];
+
+    $extracted = $extractor->extract($post, [
+        'render_content_callback' => static fn(string $content, object $post, array $opts): string => '<p>Body Nebula</p>',
+    ]);
+
+    assert_true(!in_array('rendered', array_column($extracted['fields'], 'name'), true), 'same visible rendered block text should not add a second rendered field');
+
+    (new WP_FTS_Indexer($storage, $analyzer, $extractor))->index_document_fields(1101, $extracted['fields'], [
+        'lang' => 'en',
+        'metadata' => $extracted['metadata'],
+    ]);
+    $term = WP_FTS_TermNamespace::namespace_term('en', 'nebula');
+    $row = $storage->get_terms([$term])[$term] ?? null;
+
+    assert_true($row !== null, 'static block visible term should be indexed');
+    assert_same([1101 => 1], WP_FTS_PostingsCodec::decode($row['postings']), 'static block comments should not make visible text contribute twice');
+});
+
+test_case('metadata text limit keeps UTF-8 valid for file storage JSON', function (): void {
+    $extractor = new WP_FTS_PostContentExtractor();
+    $emoji = "\xF0\x9F\x98\x80";
+    $prefix = str_repeat('a', 9);
+    $post = (object) [
+        'ID' => 1201,
+        'post_title' => $prefix . $emoji,
+        'post_content' => '',
+        'post_excerpt' => '',
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-04-02 00:00:00',
+    ];
+    $extracted = $extractor->extract($post, ['metadata_text_limit' => 10]);
+
+    assert_same($prefix, $extracted['metadata']['search_text'], 'metadata text limit should stop before a split multibyte character');
+    assert_true(preg_match('//u', $extracted['metadata']['search_text']) === 1, 'truncated metadata search text should remain valid UTF-8');
+
+    $path = temp_index_path('utf8_metadata');
+    $storage = new WP_FTS_Storage_File($path);
+    try {
+        (new WP_FTS_Indexer($storage, new WP_FTS_Analyzer(), $extractor))->index_document_fields(1201, $extracted['fields'], [
+            'lang' => 'en',
+            'metadata' => $extracted['metadata'],
+        ]);
+        $storage->flush();
+
+        $reloaded = new WP_FTS_Storage_File($path);
+        $metadata = $reloaded->get_doc_metadata([1201])[1201] ?? [];
+
+        assert_same($prefix, $metadata['search_text'] ?? null, 'file storage should persist truncated metadata search text as JSON');
+        assert_same($prefix . $emoji, $metadata['title'] ?? null, 'file storage should preserve valid multibyte metadata outside the limit');
+    } finally {
+        if (is_file($path)) {
+            unlink($path);
+        }
+    }
+});
+
+test_case('metadata-less replacement clears stale product metadata', function (): void {
+    $replace = [
+        'legacy' => static function (WP_FTS_Indexer $indexer): void {
+            $indexer->index_document(1, '<p>needle new</p>', ['lang' => 'en']);
+        },
+        'fields' => static function (WP_FTS_Indexer $indexer): void {
+            $indexer->index_document_fields(1, [['name' => 'content', 'text' => 'needle new']], ['lang' => 'en']);
+        },
+    ];
+
+    foreach ($replace as $name => $replaceDoc) {
+        $storage = new WP_FTS_Storage_InMemory();
+        $analyzer = new WP_FTS_Analyzer();
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $indexer->index_document_fields(1, [['name' => 'content', 'text' => 'needle old']], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 1,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Old',
+                'search_text' => 'needle old',
+            ],
+        ]);
+
+        $replaceDoc($indexer);
+        $searcher = new WP_FTS_Searcher($storage, $analyzer);
+        $filtered = $searcher->search('needle', [
+            'lang' => 'en',
+            'include_total' => true,
+            'post_status' => 'publish',
+        ]);
+        $unfiltered = $searcher->search('needle', [
+            'lang' => 'en',
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+        ]);
+        $metadata = $storage->get_doc_metadata([1])[1] ?? [];
+
+        assert_same(0, $filtered['total'], "{$name} replacement without metadata should not match stale status filters");
+        assert_same(1, $unfiltered['total'], "{$name} replacement should keep the new postings searchable");
+        assert_same('', $unfiltered['results'][0]['title'] ?? null, "{$name} replacement should clear stale result title");
+        assert_same('', $unfiltered['results'][0]['snippet'] ?? null, "{$name} replacement should clear stale snippet text");
+        assert_same('', $metadata['post_status'] ?? null, "{$name} replacement should write normalized empty metadata");
+    }
+});
+
 test_case('search product options filter metadata and return pagination snippets', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $analyzer = new WP_FTS_Analyzer();
