@@ -339,7 +339,8 @@ function language_fts_import_wordnet_json(array $config, array &$state): void
         throw new Language_FTS_Playground_Lexical_Import_Exception('JSON decode failed for ' . $config['input_path'] . ': ' . json_last_error_msg());
     }
 
-    $records = language_fts_import_wordnet_records($data, (string) $config['input_path']);
+    $document = language_fts_import_wordnet_document($data, (string) $config['input_path']);
+    $records = $document['synsets'];
     if ($records === []) {
         throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json input did not contain any synset records.');
     }
@@ -356,10 +357,14 @@ function language_fts_import_wordnet_json(array $config, array &$state): void
         }
         $seen_ids[$concept_id] = true;
 
-        $weight = isset($record['weight'])
-            ? language_fts_import_validate_weight((string) $record['weight'], 'wordnet-json weight for ' . $concept_id)
-            : (string) $config['weight'];
-        $members = language_fts_import_wordnet_members($record, (string) $config['input_path'], $concept_id);
+        $weight = language_fts_import_wordnet_record_weight($record, (string) $config['weight'], $concept_id);
+        $members = language_fts_import_wordnet_members(
+            $record,
+            (string) $config['input_path'],
+            $concept_id,
+            $document['sense_terms'],
+            $document['member_ids_require_resolution']
+        );
         foreach ($members as $member) {
             language_fts_import_add_concept_term($state, $concept_id, $member['canonical'], $weight, (string) $config['input_path'], $record_number + 1);
             if ($member['observed'] !== null) {
@@ -519,31 +524,101 @@ function language_fts_import_write_file(string $path, string $contents): void
 
 /**
  * @param mixed $data
- * @return array<int,mixed>
+ * @return array{synsets:array<int,mixed>,sense_terms:array<string,string>,member_ids_require_resolution:bool}
  */
-function language_fts_import_wordnet_records(mixed $data, string $path): array
+function language_fts_import_wordnet_document(mixed $data, string $path): array
 {
     if (!is_array($data)) {
         throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json root must be an object or array: ' . $path);
     }
 
-    if (array_is_list($data)) {
-        return $data;
-    }
+    $entry_terms = [];
+    $sense_terms = [];
+    $synsets = [];
+    $member_ids_require_resolution = false;
 
-    if (isset($data['synsets'])) {
-        if (!is_array($data['synsets'])) {
-            throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json synsets must be an array or object: ' . $path);
+    if (!array_is_list($data) && isset($data['@graph'])) {
+        if (!is_array($data['@graph'])) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json @graph must be an array or object: ' . $path);
         }
 
-        return language_fts_import_record_list_from_map($data['synsets']);
+        foreach (language_fts_import_record_list_from_map($data['@graph']) as $graph_record) {
+            if (!is_array($graph_record)) {
+                throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json @graph records must be objects.');
+            }
+
+            language_fts_import_wordnet_collect_lexical_mappings($graph_record, $path, $entry_terms, $sense_terms);
+            array_push($synsets, ...language_fts_import_wordnet_synset_records_from_container($graph_record, $path));
+        }
+
+        return [
+            'synsets' => $synsets,
+            'sense_terms' => $sense_terms,
+            'member_ids_require_resolution' => true,
+        ];
     }
 
-    if (language_fts_import_wordnet_has_members($data)) {
-        return [$data];
+    if (array_is_list($data)) {
+        foreach ($data as $record) {
+            if (is_array($record) && language_fts_import_wordnet_has_structured_keys($record)) {
+                language_fts_import_wordnet_collect_lexical_mappings($record, $path, $entry_terms, $sense_terms);
+                $container_synsets = language_fts_import_wordnet_synset_records_from_container($record, $path);
+                if ($container_synsets !== []) {
+                    array_push($synsets, ...$container_synsets);
+                    $member_ids_require_resolution = true;
+                    continue;
+                }
+            }
+
+            $synsets[] = $record;
+        }
+
+        return [
+            'synsets' => $synsets,
+            'sense_terms' => $sense_terms,
+            'member_ids_require_resolution' => $member_ids_require_resolution || $sense_terms !== [],
+        ];
     }
 
-    return language_fts_import_record_list_from_map($data);
+    language_fts_import_wordnet_collect_lexical_mappings($data, $path, $entry_terms, $sense_terms);
+
+    $container_synsets = language_fts_import_wordnet_synset_records_from_container($data, $path);
+    if ($container_synsets !== []) {
+        array_push($synsets, ...$container_synsets);
+        $member_ids_require_resolution = isset($data['synset']) || $sense_terms !== [];
+    } elseif (language_fts_import_wordnet_has_members($data)) {
+        $synsets[] = $data;
+    } elseif (!language_fts_import_wordnet_has_structured_keys($data)) {
+        $synsets = language_fts_import_record_list_from_map($data);
+    }
+
+    return [
+        'synsets' => $synsets,
+        'sense_terms' => $sense_terms,
+        'member_ids_require_resolution' => $member_ids_require_resolution || $sense_terms !== [],
+    ];
+}
+
+/**
+ * @param array<mixed> $container
+ * @return array<int,mixed>
+ */
+function language_fts_import_wordnet_synset_records_from_container(array $container, string $path): array
+{
+    $records = [];
+    foreach (['synset', 'synsets'] as $key) {
+        if (!isset($container[$key])) {
+            continue;
+        }
+
+        if (!is_array($container[$key])) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json ' . $key . ' must be an array or object: ' . $path);
+        }
+
+        array_push($records, ...language_fts_import_wordnet_record_list_from_value($container[$key], 'wordnet-json ' . $key));
+    }
+
+    return $records;
 }
 
 /**
@@ -572,12 +647,36 @@ function language_fts_import_record_list_from_map(array $map): array
 }
 
 /**
+ * @param array<mixed> $value
+ * @return array<int,mixed>
+ */
+function language_fts_import_wordnet_record_list_from_value(array $value, string $label): array
+{
+    if (array_is_list($value)) {
+        return $value;
+    }
+
+    if (language_fts_import_wordnet_looks_like_record($value)) {
+        return [$value];
+    }
+
+    $records = language_fts_import_record_list_from_map($value);
+    foreach ($records as $record) {
+        if (!is_array($record)) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception($label . ' maps must contain object records.');
+        }
+    }
+
+    return $records;
+}
+
+/**
  * @param array<mixed> $record
  */
-function language_fts_import_wordnet_record_has_id(array $record): bool
+function language_fts_import_wordnet_looks_like_record(array $record): bool
 {
-    foreach (['id', 'synset_id', 'synsetId', 'ili', 'offset', '_source_id'] as $key) {
-        if (isset($record[$key]) && is_scalar($record[$key]) && trim((string) $record[$key]) !== '') {
+    foreach (['@id', 'id', 'synset_id', 'synsetId', '_source_id', 'members', 'words', 'lemmas', 'synonyms', 'lemma', 'writtenForm', 'sense', 'senses'] as $key) {
+        if (isset($record[$key])) {
             return true;
         }
     }
@@ -588,15 +687,211 @@ function language_fts_import_wordnet_record_has_id(array $record): bool
 /**
  * @param array<mixed> $record
  */
+function language_fts_import_wordnet_record_has_id(array $record): bool
+{
+    return language_fts_import_wordnet_optional_id($record) !== null;
+}
+
+/**
+ * @param array<mixed> $record
+ */
 function language_fts_import_wordnet_record_id(array $record, string $path, int $record_number): string
 {
-    foreach (['id', 'synset_id', 'synsetId', 'ili', 'offset', '_source_id'] as $key) {
-        if (isset($record[$key]) && is_scalar($record[$key]) && trim((string) $record[$key]) !== '') {
-            return language_fts_import_token((string) $record[$key], $path, $record_number, 'wordnet-json synset id');
-        }
+    $id = language_fts_import_wordnet_optional_id($record);
+    if ($id !== null) {
+        return language_fts_import_token($id, $path, $record_number, 'wordnet-json synset id');
     }
 
     throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json synset records must include a unique id.');
+}
+
+/**
+ * @param array<mixed> $record
+ */
+function language_fts_import_wordnet_optional_id(array $record): ?string
+{
+    foreach (['@id', 'id', 'synset_id', 'synsetId', 'sense_id', 'senseId', 'ili', 'offset', '_source_id'] as $key) {
+        if (isset($record[$key]) && is_scalar($record[$key]) && trim((string) $record[$key]) !== '') {
+            return trim((string) $record[$key]);
+        }
+    }
+
+    return null;
+}
+
+/**
+ * @param array<mixed> $record
+ */
+function language_fts_import_wordnet_record_weight(array $record, string $default_weight, string $concept_id): string
+{
+    foreach (['weight', 'confidenceScore'] as $key) {
+        if (isset($record[$key])) {
+            return language_fts_import_validate_weight((string) $record[$key], 'wordnet-json ' . $key . ' for ' . $concept_id);
+        }
+    }
+
+    return $default_weight;
+}
+
+/**
+ * @param array<mixed> $record
+ */
+function language_fts_import_wordnet_has_structured_keys(array $record): bool
+{
+    foreach (['@graph', 'entry', 'entries', 'word', 'words', 'lexicalEntry', 'lexicalEntries', 'lexical_entries', 'sense', 'senses', 'synset', 'synsets'] as $key) {
+        if (isset($record[$key])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * @param array<mixed> $container
+ * @param array<string,string> $entry_terms
+ * @param array<string,string> $sense_terms
+ */
+function language_fts_import_wordnet_collect_lexical_mappings(array $container, string $path, array &$entry_terms, array &$sense_terms): void
+{
+    $entry_records = language_fts_import_wordnet_records_for_keys(
+        $container,
+        ['entry', 'entries', 'word', 'words', 'lexicalEntry', 'lexicalEntries', 'lexical_entries'],
+        $path,
+        'wordnet-json lexical entries'
+    );
+
+    foreach ($entry_records as $entry) {
+        if (!is_array($entry)) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json lexical entry records must be objects.');
+        }
+
+        $entry_id = language_fts_import_wordnet_optional_id($entry);
+        $written_form = language_fts_import_wordnet_written_form($entry);
+        if ($entry_id !== null && $written_form !== null) {
+            language_fts_import_wordnet_add_id_term($entry_terms, $entry_id, $written_form, 'wordnet-json lexical entry id');
+        }
+
+        foreach (language_fts_import_wordnet_records_for_keys($entry, ['sense', 'senses'], $path, 'wordnet-json entry senses') as $sense) {
+            if (!is_array($sense)) {
+                throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json sense records must be objects.');
+            }
+
+            $sense_id = language_fts_import_wordnet_optional_id($sense);
+            if ($sense_id !== null && $written_form !== null) {
+                language_fts_import_wordnet_add_id_term($sense_terms, $sense_id, $written_form, 'wordnet-json sense id');
+            }
+        }
+    }
+
+    foreach (language_fts_import_wordnet_records_for_keys($container, ['sense', 'senses'], $path, 'wordnet-json senses') as $sense) {
+        if (!is_array($sense)) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json sense records must be objects.');
+        }
+
+        $sense_id = language_fts_import_wordnet_optional_id($sense);
+        if ($sense_id === null) {
+            continue;
+        }
+
+        $written_form = language_fts_import_wordnet_written_form($sense);
+        if ($written_form === null) {
+            $entry_ref = language_fts_import_first_member_field(
+                $sense,
+                ['entry', 'entryRef', 'entry_ref', 'word', 'wordRef', 'word_ref', 'lexicalEntry', 'lexicalEntryRef', 'lexical_entry']
+            );
+            if ($entry_ref !== null && isset($entry_terms[$entry_ref])) {
+                $written_form = $entry_terms[$entry_ref];
+            }
+        }
+
+        if ($written_form !== null) {
+            language_fts_import_wordnet_add_id_term($sense_terms, $sense_id, $written_form, 'wordnet-json sense id');
+        }
+    }
+}
+
+/**
+ * @param array<mixed> $container
+ * @param string[] $keys
+ * @return array<int,mixed>
+ */
+function language_fts_import_wordnet_records_for_keys(array $container, array $keys, string $path, string $label): array
+{
+    $records = [];
+    foreach ($keys as $key) {
+        if (!isset($container[$key])) {
+            continue;
+        }
+
+        if (!is_array($container[$key])) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception($label . ' must be an array or object: ' . $path);
+        }
+
+        array_push($records, ...language_fts_import_wordnet_record_list_from_value($container[$key], $label));
+    }
+
+    return $records;
+}
+
+/**
+ * @param array<string,string> $map
+ */
+function language_fts_import_wordnet_add_id_term(array &$map, string $id, string $term, string $label): void
+{
+    if (isset($map[$id]) && $map[$id] !== $term) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception($label . ' maps to conflicting lexical forms: ' . $id);
+    }
+
+    $map[$id] = $term;
+}
+
+/**
+ * @param array<mixed> $record
+ */
+function language_fts_import_wordnet_written_form(array $record): ?string
+{
+    foreach (['writtenForm', 'written_form', 'canonical', 'term', 'word'] as $key) {
+        if (isset($record[$key]) && is_scalar($record[$key]) && trim((string) $record[$key]) !== '') {
+            return (string) $record[$key];
+        }
+    }
+
+    if (isset($record['lemma'])) {
+        return language_fts_import_wordnet_written_form_value($record['lemma']);
+    }
+
+    return null;
+}
+
+function language_fts_import_wordnet_written_form_value(mixed $value): ?string
+{
+    if (is_scalar($value) && trim((string) $value) !== '') {
+        return (string) $value;
+    }
+
+    if (!is_array($value)) {
+        return null;
+    }
+
+    if (isset($value['writtenForm']) && is_scalar($value['writtenForm']) && trim((string) $value['writtenForm']) !== '') {
+        return (string) $value['writtenForm'];
+    }
+
+    if (isset($value['written_form']) && is_scalar($value['written_form']) && trim((string) $value['written_form']) !== '') {
+        return (string) $value['written_form'];
+    }
+
+    if (array_is_list($value)) {
+        foreach ($value as $item) {
+            $written_form = language_fts_import_wordnet_written_form_value($item);
+            if ($written_form !== null) {
+                return $written_form;
+            }
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -615,9 +910,10 @@ function language_fts_import_wordnet_has_members(array $record): bool
 
 /**
  * @param array<mixed> $record
+ * @param array<string,string> $sense_terms
  * @return array<int,array{canonical:string,observed:?string}>
  */
-function language_fts_import_wordnet_members(array $record, string $path, string $concept_id): array
+function language_fts_import_wordnet_members(array $record, string $path, string $concept_id, array $sense_terms = [], bool $member_ids_require_resolution = false): array
 {
     $members = null;
     foreach (['members', 'words', 'lemmas', 'synonyms'] as $key) {
@@ -639,6 +935,19 @@ function language_fts_import_wordnet_members(array $record, string $path, string
     foreach ($members as $index => $member) {
         $label = 'wordnet-json member ' . ((int) $index + 1) . ' for ' . $concept_id;
         if (is_string($member) || is_int($member) || is_float($member)) {
+            $member_id = trim((string) $member);
+            if (isset($sense_terms[$member_id])) {
+                $terms[] = [
+                    'canonical' => language_fts_import_term($sense_terms[$member_id], $path, (int) $index + 1, $label . ' lexical form'),
+                    'observed' => null,
+                ];
+                continue;
+            }
+
+            if ($member_ids_require_resolution || language_fts_import_wordnet_member_looks_like_reference($member_id)) {
+                throw language_fts_import_wordnet_unresolved_member_exception($concept_id, $member_id);
+            }
+
             $terms[] = [
                 'canonical' => language_fts_import_term((string) $member, $path, (int) $index + 1, $label),
                 'observed' => null,
@@ -652,7 +961,20 @@ function language_fts_import_wordnet_members(array $record, string $path, string
 
         $canonical_raw = language_fts_import_first_member_field($member, ['canonical', 'lemma', 'word', 'term', 'form', 'writtenForm']);
         if ($canonical_raw === null) {
-            throw new Language_FTS_Playground_Lexical_Import_Exception($label . ' must include canonical, lemma, word, term, form, or writtenForm.');
+            $member_id = language_fts_import_wordnet_member_reference($member);
+            if ($member_id !== null && isset($sense_terms[$member_id])) {
+                $terms[] = [
+                    'canonical' => language_fts_import_term($sense_terms[$member_id], $path, (int) $index + 1, $label . ' lexical form'),
+                    'observed' => null,
+                ];
+                continue;
+            }
+
+            if ($member_id !== null && ($member_ids_require_resolution || language_fts_import_wordnet_member_looks_like_reference($member_id))) {
+                throw language_fts_import_wordnet_unresolved_member_exception($concept_id, $member_id);
+            }
+
+            throw new Language_FTS_Playground_Lexical_Import_Exception($label . ' must include canonical, lemma, word, term, form, writtenForm, or a resolvable sense id.');
         }
 
         $observed_raw = language_fts_import_first_member_field($member, ['observed', 'surface', 'source_form', 'sourceForm']);
@@ -668,6 +990,30 @@ function language_fts_import_wordnet_members(array $record, string $path, string
     }
 
     return $terms;
+}
+
+/**
+ * @param array<mixed> $member
+ */
+function language_fts_import_wordnet_member_reference(array $member): ?string
+{
+    foreach (['@id', 'id', 'sense', 'senseRef', 'sense_ref', 'member', 'memberRef', 'member_ref', 'target'] as $key) {
+        if (isset($member[$key]) && is_scalar($member[$key]) && trim((string) $member[$key]) !== '') {
+            return trim((string) $member[$key]);
+        }
+    }
+
+    return null;
+}
+
+function language_fts_import_wordnet_member_looks_like_reference(string $value): bool
+{
+    return preg_match('/[-_:][anvrs][-_:]/i', $value) === 1 && preg_match('/[-_:]\d+$/', $value) === 1;
+}
+
+function language_fts_import_wordnet_unresolved_member_exception(string $concept_id, string $member_id): Language_FTS_Playground_Lexical_Import_Exception
+{
+    return new Language_FTS_Playground_Lexical_Import_Exception('wordnet-json synset ' . $concept_id . ' member ' . $member_id . ' could not be resolved to a lexical written form.');
 }
 
 /**

@@ -128,8 +128,11 @@ Supported formats:
 - `openthesaurus-text`: delimiter-separated synonym groups such as
   `suche;suchen;finden`. The default delimiter is `;`; use `--delimiter` for
   fixture variants.
-- `wordnet-json`: small JSON fixtures with synset objects that contain unique
-  ids and member arrays, for example Open English WordNet-style `members`.
+- `wordnet-json`: small, reviewed JSON fixtures. It supports Global Wordnet /
+  Open English WordNet JSON-LD excerpts with an `@graph`, lexical `entry`
+  records, `lemma.writtenForm` values, entry `sense` ids, and synset `members`
+  that reference those sense ids. It also supports a simple project fixture
+  shape where synset `members` are already literal canonical terms.
 
 The importer writes `synsets.tsv`, `pack.php`, and `lexemes.tsv` when source
 rows include observed/canonical form pairs. It validates malformed rows, empty
@@ -138,9 +141,12 @@ terms, invalid weights, duplicate JSON synset ids, and fixed output file paths
 inside the requested output directory.
 
 Line-oriented formats stream through the input file. The `wordnet-json` route
-uses PHP's core JSON decoder for small fixtures and reviewed excerpts; a future
-full Open English WordNet import may need a streaming JSON reader or a
-pre-extraction step before this repository commits comprehensive data.
+uses PHP's core JSON decoder for small fixtures and reviewed excerpts. It
+resolves Global Wordnet-style member ids through lexical entries before writing
+`synsets.tsv`, and rejects unresolved member ids instead of writing them as
+searchable terms. Full Open English WordNet imports may still need a streaming
+JSON reader or a pre-extraction step before this repository commits
+comprehensive data.
 
 Example maintainer flow for a reviewed German fixture:
 

@@ -1114,7 +1114,7 @@ test_case('OpenThesaurus text importer compiles a German synset row', function (
     }
 });
 
-test_case('WordNet JSON importer compiles an English synset row', function (): void {
+test_case('simple WordNet JSON fixture compiles an English synset row', function (): void {
     $output_dir = create_language_fts_temp_dir('language-fts-wordnet-import');
 
     try {
@@ -1124,10 +1124,10 @@ test_case('WordNet JSON importer compiles an English synset row', function (): v
             $output_dir,
             language_fts_import_options([
                 'language' => 'en',
-                'source_name' => 'Open English WordNet fixture',
-                'source_url' => 'https://github.com/globalwordnet/english-wordnet',
+                'source_name' => 'Simple WordNet-like fixture',
+                'source_url' => 'https://example.test/simple-wordnet-json',
                 'license_name' => 'CC-BY 4.0',
-                'attribution' => 'Open English WordNet-style fixture data.',
+                'attribution' => 'Simple WordNet-like fixture data.',
                 'provenance' => 'fixture-wordnet',
             ])
         );
@@ -1142,6 +1142,88 @@ test_case('WordNet JSON importer compiles an English synset row', function (): v
             file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv'),
             'WordNet-style observed forms become lexeme rows.'
         );
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('Global Wordnet JSON-LD importer resolves synset member IDs through lexical entries', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-wordnet-jsonld-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'wordnet-json',
+            language_fts_import_fixture_path('wordnet-jsonld.json'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'en',
+                'source_name' => 'Open English WordNet JSON-LD fixture',
+                'source_url' => 'https://globalwordnet.github.io/schemas/#json',
+                'license_name' => 'CC-BY 4.0',
+                'attribution' => 'Open English WordNet-shaped JSON-LD fixture data.',
+                'provenance' => 'fixture-wordnet-jsonld',
+            ])
+        );
+        assert_same(0, $result['exit_code'], 'wordnet-json JSON-LD importer exits successfully. Output: ' . $result['output']);
+
+        $synsets = file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synsets.tsv');
+        assert_same(
+            "# concept_id\tweight\tprovenance\tterms\noewn-search-v-0001\t0.71\tfixture-wordnet-jsonld\tlook search seek\n",
+            $synsets,
+            'Global Wordnet JSON-LD member IDs become deterministic lexical terms.'
+        );
+        assert_not_contains_text('oewn-search-v-0001-01', $synsets, 'Resolved JSON-LD synsets do not write member IDs as searchable terms.');
+        assert_not_contains_text('oewn-seek-v-0001-01', $synsets, 'Resolved JSON-LD synsets do not write sense IDs as searchable terms.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('Global Wordnet JSON-LD importer rejects unresolved member IDs', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-wordnet-jsonld-broken-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'wordnet-json',
+            language_fts_import_fixture_path('wordnet-jsonld-unresolved-member.json'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'en',
+                'source_name' => 'Broken Open English WordNet JSON-LD fixture',
+                'source_url' => 'https://globalwordnet.github.io/schemas/#json',
+                'license_name' => 'CC-BY 4.0',
+                'attribution' => 'Broken JSON-LD fixture data.',
+                'provenance' => 'fixture-wordnet-jsonld-broken',
+            ])
+        );
+
+        assert_true($result['exit_code'] !== 0, 'Unresolved JSON-LD member IDs exit nonzero.');
+        assert_contains_text('member oewn-missing-v-0001-01 could not be resolved to a lexical written form', $result['output'], 'Unresolved JSON-LD member IDs report the missing mapping.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('WordNet JSON importer rejects scalar sense IDs without lexical entries', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-wordnet-unresolved-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'wordnet-json',
+            language_fts_import_fixture_path('wordnet-unresolved-members.json'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'en',
+                'source_name' => 'Unresolved WordNet member fixture',
+                'source_url' => 'https://globalwordnet.github.io/schemas/#json',
+                'license_name' => 'CC-BY 4.0',
+                'attribution' => 'Broken scalar member fixture data.',
+                'provenance' => 'fixture-wordnet-unresolved',
+            ])
+        );
+
+        assert_true($result['exit_code'] !== 0, 'Unresolved scalar sense IDs exit nonzero.');
+        assert_contains_text('member example-en-10161911-n-1 could not be resolved to a lexical written form', $result['output'], 'Unresolved scalar sense IDs report the missing mapping.');
     } finally {
         remove_language_fts_temp_tree($output_dir);
     }
@@ -1249,6 +1331,8 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('curated seed', $docs, 'Lexical docs describe shipped resources as seed data.');
     assert_contains_text('not a comprehensive synonym database', $docs, 'Lexical docs do not imply comprehensive databases are shipped.');
     assert_contains_text('Open English WordNet', $docs, 'Lexical docs mention Open English WordNet source caveats.');
+    assert_contains_text('JSON-LD excerpts with an `@graph`', $docs, 'Lexical docs describe the supported WordNet JSON-LD shape.');
+    assert_contains_text('simple project fixture', $docs, 'Lexical docs distinguish simple WordNet-like fixtures from JSON-LD source excerpts.');
     assert_contains_text('OpenThesaurus', $docs, 'Lexical docs mention OpenThesaurus source caveats.');
     assert_contains_text('plWordNet', $docs, 'Lexical docs mention plWordNet source caveats.');
     assert_contains_text('seed data unless', $readme, 'README keeps the shipped-data limitation explicit.');

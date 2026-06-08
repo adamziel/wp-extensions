@@ -1,0 +1,33 @@
+{
+  "@context": "https://globalwordnet.github.io/schemas/wn-json-context-1.4.json",
+  "@graph": [
+    {
+      "@context": { "@language": "en" },
+      "@id": "oewn",
+      "@type": "lime:Lexicon",
+      "language": "en",
+      "entry": [
+        {
+          "@id": "oewn-search-v",
+          "lemma": { "writtenForm": "search" },
+          "sense": [
+            {
+              "@id": "oewn-search-v-0001-01",
+              "synsetRef": "oewn-search-v-0001"
+            }
+          ]
+        }
+      ],
+      "synset": [
+        {
+          "@id": "oewn-search-v-0001",
+          "partOfSpeech": "verb",
+          "members": [
+            "oewn-search-v-0001-01",
+            "oewn-missing-v-0001-01"
+          ]
+        }
+      ]
+    }
+  ]
+}
