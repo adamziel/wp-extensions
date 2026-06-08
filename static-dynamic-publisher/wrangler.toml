@@ -1,0 +1,24 @@
+"$schema" = "./node_modules/wrangler/config-schema.json"
+name = "static-dynamic-publisher"
+main = "src/worker.ts"
+compatibility_date = "2026-06-08"
+
+[assets]
+directory = "./dist/site"
+binding = "ASSETS"
+run_worker_first = [
+  "/wp-admin",
+  "/wp-admin/*",
+  "/_static-dynamic-admin",
+  "/_static-dynamic-admin/*",
+  "/_static-dynamic-source",
+  "/_static-dynamic-source/*",
+  "/_static-dynamic-api",
+  "/_static-dynamic-api/*"
+]
+
+[[rules]]
+type = "Text"
+globs = ["admin/**/*.html"]
+fallthrough = true
+
