@@ -77,17 +77,20 @@ The analyzer loads language behavior from plugin-local resources under
 resources/languages/
   en/
     profile.php
+    pack.php
     stopwords.txt
     lexemes.tsv
     synonyms.tsv
   pl/
     profile.php
+    pack.php
     stopwords.txt
     lexemes.tsv
     synonyms.tsv
     synsets.tsv
   de/
     profile.php
+    pack.php
     stopwords.txt
     lexemes.tsv
     synonyms.tsv
@@ -95,6 +98,10 @@ resources/languages/
 
 `profile.php` declares the language id, label, load order, optional character
 folds, optional language-detection signal regexes, and resource file names.
+`pack.php` records source, license, attribution, provenance, generated file
+list, pack version/date, and whether the resource pack is curated seed data or
+an imported comprehensive pack. The analyzer does not load `pack.php` during
+normal query analysis.
 `stopwords.txt` stores one normalized stopword per line. `lexemes.tsv` maps
 observed normalized forms to canonical keys, for example Polish `szukaj` to
 `szukac`, `wyszukiwania` to `wyszukiwac`, and `odnajdywanie` to `odnajdywac`.
@@ -116,13 +123,37 @@ declare the optional `synsets` resource in `profile.php` if that language does
 not already have one. Use `synonyms.tsv` only when an explicit pair should
 override or supplement concept-derived expansions.
 
+For build-time imports, use the PHP-only importer:
+
+```sh
+php language-fts-playground/tools/import-lexical-source.php \
+  <format> <input> <output-dir> \
+  --language=<id> \
+  --source-name=<name> \
+  --source-url=<url> \
+  --license-name=<name> \
+  --attribution=<text> \
+  --pack-version=<version> \
+  --pack-date=<YYYY-MM-DD> \
+  --provenance=<provenance-id>
+```
+
+Supported importer formats are `membership-tsv`, `wordnet-membership-tsv`,
+`openthesaurus-text`, and `wordnet-json`. The importer writes compact runtime
+`synsets.tsv`, generated `pack.php` metadata, and `lexemes.tsv` when source
+rows include observed/canonical forms. Runtime search remains pure PHP and fast
+because the plugin reads only compact local resource files, not source database
+formats.
+
 See `docs/lexical-resources.md` for the resource contract and
-`tools/compile-synsets.php` for a small PHP-only helper that compiles build-time
-`concept_id<TAB>canonical_term` membership rows into the runtime `synsets.tsv`
-format. Importing real WordNet/plWordNet-style databases later would require
-license review, source-specific normalization, canonical lexeme mapping,
-concept reduction, conservative weights, and generated resource files; the
-runtime plugin should continue to use local compiled resources only.
+`tools/import-lexical-source.php` for source import usage. Open English WordNet
+is CC-BY 4.0 according to its GitHub README, OpenThesaurus German publishes
+downloads under CC BY-SA 4.0 or LGPL, and plWordNet license information from
+CLARIN allows use, copying, modification, and distribution subject to preserving
+copyright and disclaimer notices. Those sources are not bundled here. Current
+shipped resources remain seed data unless a generated comprehensive pack is
+committed after source-specific normalization, license review, attribution
+review, pack-size review, and quality testing.
 
 ## Supported Analyzer Behavior
 

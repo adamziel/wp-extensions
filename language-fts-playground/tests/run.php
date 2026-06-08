@@ -799,6 +799,102 @@ function remove_language_fts_temp_tree(string $path): void
     rmdir($path);
 }
 
+function create_language_fts_temp_dir(string $prefix): string
+{
+    $path = sys_get_temp_dir() . '/' . $prefix . '-' . str_replace('.', '-', uniqid('', true));
+    assert_true(mkdir($path, 0777, true), 'Temporary directory is created.');
+
+    return $path;
+}
+
+/**
+ * @return array{root:string,language_dir:string}
+ */
+function create_language_fts_temp_import_profile(string $language): array
+{
+    $root = create_language_fts_temp_dir('language-fts-import-profile');
+    $language_dir = $root . DIRECTORY_SEPARATOR . $language;
+    assert_true(mkdir($language_dir, 0777, true), 'Temporary import language directory is created.');
+
+    file_put_contents(
+        $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
+        "<?php\nreturn [\n" .
+        "    'id' => '{$language}',\n" .
+        "    'label' => 'Imported Test',\n" .
+        "    'resources' => [\n" .
+        "        'stopwords' => 'stopwords.txt',\n" .
+        "        'lexemes' => 'lexemes.tsv',\n" .
+        "        'synonyms' => 'synonyms.tsv',\n" .
+        "        'synsets' => 'synsets.tsv',\n" .
+        "    ],\n" .
+        "];\n"
+    );
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'stopwords.txt', "\n");
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonyms.tsv', "# source\ttarget\tdirection\tweight\tprovenance\n");
+
+    return [
+        'root' => $root,
+        'language_dir' => $language_dir,
+    ];
+}
+
+function language_fts_import_fixture_path(string $name): string
+{
+    return __DIR__ . '/fixtures/lexical-imports/' . $name;
+}
+
+/**
+ * @param array<string,string> $options
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_importer(string $format, string $input_path, string $output_dir, array $options): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+        '-n',
+        escapeshellarg(__DIR__ . '/../tools/import-lexical-source.php'),
+        escapeshellarg($format),
+        escapeshellarg($input_path),
+        escapeshellarg($output_dir),
+    ];
+
+    foreach ($options as $key => $value) {
+        $command[] = escapeshellarg('--' . str_replace('_', '-', $key) . '=' . $value);
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @param array<string,string> $overrides
+ * @return array<string,string>
+ */
+function language_fts_import_options(array $overrides = []): array
+{
+    return array_merge(
+        [
+            'language' => 'en',
+            'source_name' => 'Fixture lexical source',
+            'source_url' => 'https://example.test/fixture-lexical-source',
+            'license_name' => 'Fixture license',
+            'attribution' => 'Fixture data for Language FTS Playground tests.',
+            'pack_version' => 'fixture-2026-06-08',
+            'pack_date' => '2026-06-08',
+            'provenance' => 'fixture-lexical-import',
+            'weight' => '0.62',
+            'data_kind' => 'curated_seed',
+        ],
+        $overrides
+    );
+}
+
 test_case('loads resource-backed lexical profiles for stopwords, lexemes, folds, and synonyms', function (): void {
     $repository = new Language_FTS_Playground_Lexical_Profile_Repository();
     $profile = $repository->profile('pl');
@@ -951,6 +1047,211 @@ test_case('pairwise synonyms remain compatible and override duplicate synset pai
     } finally {
         remove_language_fts_temp_tree($root);
     }
+});
+
+test_case('loads lexical pack provenance metadata explicitly', function (): void {
+    $repository = new Language_FTS_Playground_Lexical_Profile_Repository();
+    $metadata = $repository->pack_metadata('pl');
+
+    assert_same('pl', $metadata['language_id'], 'Pack metadata language matches the requested profile.');
+    assert_same('curated_seed', $metadata['data_kind'], 'The shipped Polish pack is marked as curated seed data.');
+    assert_same('GPL-2.0-or-later', $metadata['license_name'], 'Seed pack metadata declares the repository license.');
+    assert_same('language-fts-playground-polish-curated-seed', $metadata['provenance'], 'Seed pack metadata declares provenance.');
+    assert_true(in_array('synsets.tsv', $metadata['files'], true), 'Seed pack metadata lists its synset runtime file.');
+});
+
+test_case('membership importer compiles deterministic synsets and lexemes', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-membership-import');
+
+    try {
+        $options = language_fts_import_options([
+            'provenance' => 'fixture-membership',
+            'weight' => '0.5',
+        ]);
+        $result = run_language_fts_importer('membership-tsv', language_fts_import_fixture_path('membership.tsv'), $output_dir, $options);
+        assert_same(0, $result['exit_code'], 'membership-tsv importer exits successfully. Output: ' . $result['output']);
+
+        $first_synsets = file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synsets.tsv');
+        $first_lexemes = file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv');
+        assert_same("# concept_id\tweight\tprovenance\tterms\nconcept.lookup\t0.5\tfixture-membership\tfind lookup search\n", $first_synsets, 'membership-tsv writes deterministic synset rows.');
+        assert_same("# observed\tcanonical\tprovenance\nsearching\tsearch\tfixture-membership\n", $first_lexemes, 'membership-tsv writes observed/canonical lexeme rows when present.');
+
+        $second_result = run_language_fts_importer('membership-tsv', language_fts_import_fixture_path('membership.tsv'), $output_dir, $options);
+        assert_same(0, $second_result['exit_code'], 'membership-tsv importer can overwrite its fixed runtime outputs. Output: ' . $second_result['output']);
+        assert_same($first_synsets, file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synsets.tsv'), 'Repeated membership import keeps synsets deterministic.');
+        assert_same($first_lexemes, file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv'), 'Repeated membership import keeps lexemes deterministic.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('OpenThesaurus text importer compiles a German synset row', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-openthesaurus-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'openthesaurus-text',
+            language_fts_import_fixture_path('openthesaurus.txt'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'de',
+                'source_name' => 'OpenThesaurus German fixture',
+                'source_url' => 'https://www.openthesaurus.de/about/download',
+                'license_name' => 'CC BY-SA 4.0 or LGPL',
+                'attribution' => 'OpenThesaurus-style German fixture data.',
+                'provenance' => 'fixture-openthesaurus',
+                'weight' => '0.64',
+            ])
+        );
+        assert_same(0, $result['exit_code'], 'openthesaurus-text importer exits successfully. Output: ' . $result['output']);
+        assert_same(
+            "# concept_id\tweight\tprovenance\tterms\nopenthesaurus.line-000001\t0.64\tfixture-openthesaurus\tfinden suche suchen\n",
+            file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synsets.tsv'),
+            'OpenThesaurus-style groups become deterministic German synsets.'
+        );
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('WordNet JSON importer compiles an English synset row', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-wordnet-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'wordnet-json',
+            language_fts_import_fixture_path('wordnet.json'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'en',
+                'source_name' => 'Open English WordNet fixture',
+                'source_url' => 'https://github.com/globalwordnet/english-wordnet',
+                'license_name' => 'CC-BY 4.0',
+                'attribution' => 'Open English WordNet-style fixture data.',
+                'provenance' => 'fixture-wordnet',
+            ])
+        );
+        assert_same(0, $result['exit_code'], 'wordnet-json importer exits successfully. Output: ' . $result['output']);
+        assert_same(
+            "# concept_id\tweight\tprovenance\tterms\noewn-search-v-0001\t0.71\tfixture-wordnet\tlook search seek\n",
+            file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synsets.tsv'),
+            'WordNet-style member arrays become deterministic English synsets.'
+        );
+        assert_same(
+            "# observed\tcanonical\tprovenance\nsearching\tsearch\tfixture-wordnet\n",
+            file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv'),
+            'WordNet-style observed forms become lexeme rows.'
+        );
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('plWordNet membership importer compiles Polish synsets and metadata', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-plwordnet-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'wordnet-membership-tsv',
+            language_fts_import_fixture_path('plwordnet-membership.tsv'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'pl',
+                'source_name' => 'plWordNet fixture',
+                'source_url' => 'https://clarin-pl.eu/license/plwordnet',
+                'license_name' => 'plWordNet license',
+                'attribution' => 'plWordNet-style pre-extracted membership fixture data.',
+                'provenance' => 'fixture-plwordnet',
+            ])
+        );
+        assert_same(0, $result['exit_code'], 'wordnet-membership-tsv importer exits successfully. Output: ' . $result['output']);
+        assert_same(
+            "# concept_id\tweight\tprovenance\tterms\nplwn-szukac-1\t0.62\tfixture-plwordnet\todnajdywac szukac wyszukiwac\n",
+            file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synsets.tsv'),
+            'plWordNet-style membership rows become deterministic Polish synsets.'
+        );
+
+        $metadata = require $output_dir . DIRECTORY_SEPARATOR . 'pack.php';
+        assert_same('pl', $metadata['language_id'] ?? null, 'Generated plWordNet metadata declares the language.');
+        assert_same('plWordNet fixture', $metadata['source_name'] ?? null, 'Generated plWordNet metadata declares the source.');
+        assert_same('plWordNet license', $metadata['license_name'] ?? null, 'Generated plWordNet metadata declares the license.');
+        assert_same('fixture-plwordnet', $metadata['provenance'] ?? null, 'Generated plWordNet metadata declares provenance.');
+        assert_same('curated_seed', $metadata['data_kind'] ?? null, 'Fixture metadata does not claim comprehensive data.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('malformed lexical imports fail with clear nonzero CLI output', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-malformed-import');
+
+    try {
+        $malformed = run_language_fts_importer(
+            'membership-tsv',
+            language_fts_import_fixture_path('malformed-membership.tsv'),
+            $output_dir,
+            language_fts_import_options(['provenance' => 'fixture-malformed'])
+        );
+        assert_true($malformed['exit_code'] !== 0, 'Malformed membership input exits nonzero.');
+        assert_contains_text('membership rows must have 2 to 4 tab-separated columns', $malformed['output'], 'Malformed membership row reports the row shape problem.');
+
+        $invalid_weight = run_language_fts_importer(
+            'membership-tsv',
+            language_fts_import_fixture_path('membership.tsv'),
+            $output_dir,
+            language_fts_import_options([
+                'provenance' => 'fixture-invalid-weight',
+                'weight' => '1.25',
+            ])
+        );
+        assert_true($invalid_weight['exit_code'] !== 0, 'Invalid importer weight exits nonzero.');
+        assert_contains_text('weight must be greater than 0 and no more than 1', $invalid_weight['output'], 'Invalid importer weight reports its valid range.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('generated lexical imports can be consumed by the profile repository', function (): void {
+    $profile_tree = create_language_fts_temp_import_profile('xx');
+
+    try {
+        $result = run_language_fts_importer(
+            'membership-tsv',
+            language_fts_import_fixture_path('membership.tsv'),
+            $profile_tree['language_dir'],
+            language_fts_import_options([
+                'language' => 'xx',
+                'source_name' => 'Repository consumption fixture',
+                'provenance' => 'fixture-repository-consumption',
+                'weight' => '0.5',
+            ])
+        );
+        assert_same(0, $result['exit_code'], 'Generated profile import exits successfully. Output: ' . $result['output']);
+
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($profile_tree['root']);
+        $profile = $repository->profile('xx');
+        assert_same(['find', 'lookup'], array_column($profile['synonyms']['search'] ?? [], 'term'), 'Generated synsets.tsv loads into repository query expansions.');
+
+        $metadata = $repository->pack_metadata('xx');
+        assert_same('Repository consumption fixture', $metadata['source_name'], 'Generated pack metadata can be loaded by the repository accessor.');
+        assert_same('fixture-repository-consumption', $metadata['provenance'], 'Generated pack provenance can be loaded by the repository accessor.');
+    } finally {
+        remove_language_fts_temp_tree($profile_tree['root']);
+    }
+});
+
+test_case('lexical resource docs keep comprehensive source caveats explicit', function (): void {
+    $docs = file_get_contents(__DIR__ . '/../docs/lexical-resources.md');
+    $readme = file_get_contents(__DIR__ . '/../README.md');
+    assert_true(is_string($docs), 'Lexical resource docs can be read.');
+    assert_true(is_string($readme), 'Language FTS README can be read.');
+
+    assert_contains_text('curated seed', $docs, 'Lexical docs describe shipped resources as seed data.');
+    assert_contains_text('not a comprehensive synonym database', $docs, 'Lexical docs do not imply comprehensive databases are shipped.');
+    assert_contains_text('Open English WordNet', $docs, 'Lexical docs mention Open English WordNet source caveats.');
+    assert_contains_text('OpenThesaurus', $docs, 'Lexical docs mention OpenThesaurus source caveats.');
+    assert_contains_text('plWordNet', $docs, 'Lexical docs mention plWordNet source caveats.');
+    assert_contains_text('seed data unless', $readme, 'README keeps the shipped-data limitation explicit.');
 });
 
 test_case('analyzer no longer ships a hardcoded query synonym map property', function (): void {

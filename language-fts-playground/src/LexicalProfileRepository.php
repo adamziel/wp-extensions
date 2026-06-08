@@ -21,6 +21,8 @@ declare(strict_types=1);
  * - synsets.tsv contains "concept_id<TAB>weight<TAB>provenance<TAB>terms".
  *   Terms are single-space-separated normalized canonical keys. Each concept
  *   expands every listed key to every other listed key at query time.
+ * - pack.php optionally returns provenance metadata for repository tooling and
+ *   maintainers. Query-time profile loading does not read it.
  *
  * The repository parses each language lazily and caches the parsed profile for
  * the analyzer instance. Parsed stopwords, lexemes, and query expansions are
@@ -91,6 +93,31 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $this->profiles[$language];
+    }
+
+    /**
+     * Load optional pack provenance metadata for repository tooling.
+     *
+     * The analyzer does not call this during query-time profile loading. Keeping
+     * metadata behind an explicit accessor lets resource packs carry source and
+     * license details without adding work to every search request.
+     *
+     * @return array{language_id:string,pack_version:string,pack_date:string,source_name:string,source_url:string,license_name:string,attribution_text:string,provenance:string,files:string[],data_kind:string}
+     */
+    public function pack_metadata(string $language): array
+    {
+        $entry = $this->manifest_entry($language);
+        $path = $entry['directory'] . DIRECTORY_SEPARATOR . 'pack.php';
+        if (!is_file($path)) {
+            throw new RuntimeException('Language pack metadata does not exist: ' . $path);
+        }
+
+        $metadata = require $path;
+        if (!is_array($metadata)) {
+            throw new UnexpectedValueException('Language pack metadata must return an array: ' . $path);
+        }
+
+        return $this->validate_pack_metadata($metadata, (string) $entry['profile']['id'], $entry['directory'], $path);
     }
 
     /**
@@ -226,6 +253,77 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $profile;
+    }
+
+    /**
+     * @param array<mixed> $metadata
+     * @return array{language_id:string,pack_version:string,pack_date:string,source_name:string,source_url:string,license_name:string,attribution_text:string,provenance:string,files:string[],data_kind:string}
+     */
+    private function validate_pack_metadata(array $metadata, string $expected_language, string $directory, string $path): array
+    {
+        $required = [
+            'language_id',
+            'pack_version',
+            'pack_date',
+            'source_name',
+            'source_url',
+            'license_name',
+            'attribution_text',
+            'provenance',
+            'data_kind',
+        ];
+        $validated = [];
+        foreach ($required as $key) {
+            $value = $metadata[$key] ?? null;
+            if (!is_string($value) || trim($value) === '') {
+                throw new UnexpectedValueException("Language pack metadata {$key} must be a non-empty string in {$path}");
+            }
+            $validated[$key] = trim($value);
+        }
+
+        if ($validated['language_id'] !== $expected_language) {
+            throw new UnexpectedValueException('Language pack metadata language_id must match its profile in ' . $path);
+        }
+
+        if (!in_array($validated['data_kind'], ['curated_seed', 'imported_comprehensive'], true)) {
+            throw new UnexpectedValueException('Language pack metadata data_kind must be curated_seed or imported_comprehensive in ' . $path);
+        }
+
+        $files = $metadata['files'] ?? null;
+        if (!is_array($files) || $files === []) {
+            throw new UnexpectedValueException('Language pack metadata files must be a non-empty array in ' . $path);
+        }
+
+        $validated_files = [];
+        foreach ($files as $file) {
+            if (!is_string($file) || trim($file) === '') {
+                throw new UnexpectedValueException('Language pack metadata files must contain non-empty strings in ' . $path);
+            }
+
+            $file = trim($file);
+            if ($file !== basename($file) || str_contains($file, '..')) {
+                throw new UnexpectedValueException('Language pack metadata files must be local file names in ' . $path);
+            }
+
+            if (!is_file($directory . DIRECTORY_SEPARATOR . $file)) {
+                throw new RuntimeException('Language pack metadata file does not exist: ' . $directory . DIRECTORY_SEPARATOR . $file);
+            }
+
+            $validated_files[] = $file;
+        }
+
+        return [
+            'language_id' => $validated['language_id'],
+            'pack_version' => $validated['pack_version'],
+            'pack_date' => $validated['pack_date'],
+            'source_name' => $validated['source_name'],
+            'source_url' => $validated['source_url'],
+            'license_name' => $validated['license_name'],
+            'attribution_text' => $validated['attribution_text'],
+            'provenance' => $validated['provenance'],
+            'files' => $validated_files,
+            'data_kind' => $validated['data_kind'],
+        ];
     }
 
     /**
