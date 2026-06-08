@@ -17,6 +17,23 @@ final class Language_FTS_Playground_Analyzer
         'de' => true,
     ];
 
+    /**
+     * Query synonyms are expressed as analyzed keys, not raw UI text.
+     *
+     * @var array<string,array<int,array{source:string,targets:string[],direction:string,weight:float,provenance:string}>>
+     */
+    private array $query_synonyms = [
+        'pl' => [
+            [
+                'source' => 'szukan',
+                'targets' => ['wyszukiwan', 'wyszukiwani'],
+                'direction' => 'query_to_index',
+                'weight' => 0.55,
+                'provenance' => 'language-fts-playground-polish-demo',
+            ],
+        ],
+    ];
+
     /** @var array<string,bool> */
     private array $skipped_elements = [
         'script' => true,
@@ -156,6 +173,24 @@ final class Language_FTS_Playground_Analyzer
         return $this->canonical_language_or_null($language) ?? 'en';
     }
 
+    public function canonical_search_language(string|null $language): string
+    {
+        $candidate = strtolower(trim((string) $language));
+        if ($candidate === 'auto') {
+            return 'auto';
+        }
+
+        return $this->canonical_language_or_null($language) ?? 'auto';
+    }
+
+    /**
+     * @return string[]
+     */
+    public function enabled_languages(): array
+    {
+        return array_keys($this->supported_languages);
+    }
+
     public function resolve_post_language(object $post): string
     {
         foreach (['language', 'lang', 'post_language', 'post_lang'] as $property) {
@@ -245,6 +280,68 @@ final class Language_FTS_Playground_Analyzer
     public function analyze_query(string $query, string $language): array
     {
         return array_values(array_unique($this->analyze_text($query, $language)));
+    }
+
+    /**
+     * @param string[] $query_keys
+     * @return array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>
+     */
+    public function expand_query_synonyms(array $query_keys, string $language): array
+    {
+        $language = $this->canonical_language($language);
+        $query_lookup = array_fill_keys($this->unique_terms($query_keys), true);
+        if ($query_lookup === [] || !isset($this->query_synonyms[$language])) {
+            return [];
+        }
+
+        $expanded = [];
+        foreach ($this->query_synonyms[$language] as $rule) {
+            $source = (string) $rule['source'];
+            $targets = array_values(array_unique(array_map('strval', $rule['targets'])));
+            $direction = (string) $rule['direction'];
+            $weight = max(0.0, min(1.0, (float) $rule['weight']));
+            $provenance = (string) $rule['provenance'];
+
+            if (($direction === 'query_to_index' || $direction === 'bidirectional') && isset($query_lookup[$source])) {
+                foreach ($targets as $target) {
+                    if ($target === '' || isset($query_lookup[$target])) {
+                        continue;
+                    }
+
+                    $expanded[$source][$target] = [
+                        'term' => $target,
+                        'weight' => $weight,
+                        'source' => $source,
+                        'direction' => $direction,
+                        'provenance' => $provenance,
+                    ];
+                }
+            }
+
+            if ($direction !== 'bidirectional') {
+                continue;
+            }
+
+            foreach ($targets as $target) {
+                if (!isset($query_lookup[$target]) || $source === '' || isset($query_lookup[$source])) {
+                    continue;
+                }
+
+                $expanded[$target][$source] = [
+                    'term' => $source,
+                    'weight' => $weight,
+                    'source' => $target,
+                    'direction' => $direction,
+                    'provenance' => $provenance,
+                ];
+            }
+        }
+
+        foreach ($expanded as $source => $targets) {
+            $expanded[$source] = array_values($targets);
+        }
+
+        return $expanded;
     }
 
     /**
@@ -726,6 +823,23 @@ final class Language_FTS_Playground_Analyzer
 
         $singular = str_replace('aeu', 'au', $key);
         return strlen($singular) >= 4 ? [$singular] : [];
+    }
+
+    /**
+     * @param string[] $terms
+     * @return string[]
+     */
+    private function unique_terms(array $terms): array
+    {
+        $unique = [];
+        foreach ($terms as $term) {
+            $term = trim((string) $term);
+            if ($term !== '') {
+                $unique[$term] = true;
+            }
+        }
+
+        return array_keys($unique);
     }
 
     private function canonical_language_or_null(string|null $language): ?string

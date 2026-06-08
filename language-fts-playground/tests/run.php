@@ -893,6 +893,75 @@ test_case('covers visible, alt, markup, and partition behavior across supported 
     }
 });
 
+test_case('automatic search finds Polish synonym matches with matched language payloads', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(120, 'pl', 'Polski dokument', '<p>Partycja wyszukiwania pokazuje wynik.</p>'));
+
+    $results = $searcher->search('szukanie', 'auto');
+
+    assert_same([120], array_column($results, 'post_id'), 'Automatic mode searches the Polish partition for the synonym target.');
+    assert_same('pl', $results[0]['matched_language'], 'The result reports the matched Polish partition.');
+    assert_contains_text('szukan=>', implode(', ', $results[0]['matched_terms']), 'The synonym relationship is reported as a query-time match.');
+    assert_contains_text('<mark>wyszukiwania</mark>', $results[0]['snippet'], 'The synonym match highlights the indexed source token.');
+});
+
+test_case('explicit Polish search finds the demo synonym target', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(121, 'pl', 'Polski dokument', '<p>Widoczna partycja wyszukiwania.</p>'));
+
+    $results = $searcher->search('szukanie', 'pl');
+
+    assert_same([121], array_column($results, 'post_id'), 'Explicit Polish mode applies Polish query-time synonyms.');
+    assert_same('pl', $results[0]['matched_language'], 'Explicit Polish results still include the matched language payload.');
+});
+
+test_case('explicit English search does not search Polish synonym partitions', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(122, 'pl', 'Polski dokument', '<p>Widoczna partycja wyszukiwania.</p>'));
+
+    assert_same([], $searcher->search('szukanie', 'en'), 'Explicit English mode remains a precision filter and does not search Polish.');
+});
+
+test_case('exact Polish matches rank above synonym-only Polish matches', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(123, 'pl', 'Synonim', '<p>Partycja wyszukiwania ma tylko synonim.</p>'));
+    $indexer->index_post(fixture_post(124, 'pl', 'Dokladne szukanie', '<p>Szukanie pasuje bez synonimu.</p>'));
+
+    $results = $searcher->search('szukanie', 'pl');
+
+    assert_true(count($results) >= 2, 'Both exact and synonym-only Polish documents match.');
+    assert_same(124, $results[0]['post_id'], 'Exact/stem Polish matches rank above synonym-only matches.');
+    assert_same(123, $results[1]['post_id'], 'The synonym-only match remains available below the exact match.');
+});
+
+test_case('Polish synonym expansion does not create cross-language matches', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(125, 'en', 'English bait', '<p>wyszukiwania appears in an English partition.</p>'));
+    $indexer->index_post(fixture_post(126, 'de', 'German bait', '<p>wyszukiwania steht in einer deutschen Partition.</p>'));
+
+    assert_same([], $searcher->search('szukanie', 'auto'), 'Polish synonym targets do not match English or German partitions.');
+});
+
 test_case('ranks higher term frequency first', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
@@ -1443,6 +1512,36 @@ test_case('renders admin lifecycle controls and protects destructive actions', f
     }
 
     assert_same(0, $storage->clear_count, 'Clear index does not run without the required capability.');
+});
+
+test_case('admin search form defaults to automatic language mode', function (): void {
+    reset_language_fts_plugin_runtime();
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = ob_get_clean();
+
+    assert_contains_text('<option value="auto" selected="selected">Automatic</option>', $html, 'The admin language selector defaults to Automatic.');
+    assert_not_contains_text('<option value="en" selected="selected">English</option>', $html, 'The admin language selector no longer defaults to English.');
+});
+
+test_case('admin automatic results show matched language partition', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $post = fixture_post(403, 'pl', 'Admin Polish synonym', '<p>wyszukiwania w polskiej partycji.</p>');
+    $GLOBALS['language_fts_test_posts'][403] = $post;
+    $indexer = new Language_FTS_Playground_Indexer($storage, new Language_FTS_Playground_Analyzer());
+    $indexer->index_post($post);
+    $_GET['lft_query'] = 'szukanie';
+    $_GET['lft_language'] = 'auto';
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = ob_get_clean();
+
+    assert_contains_text('<option value="auto" selected="selected">Automatic</option>', $html, 'Automatic remains selected after an auto search.');
+    assert_contains_text('<th>Language</th>', $html, 'Admin search results include a matched-language column.');
+    assert_contains_text('<td><code>pl</code></td><td><mark>wyszukiwania</mark>', $html, 'Auto results show the Polish partition next to the highlighted synonym match.');
 });
 
 test_case('renders admin snippets and matched fields safely', function (): void {

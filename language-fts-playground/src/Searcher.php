@@ -34,9 +34,30 @@ final class Language_FTS_Playground_Searcher
     }
 
     /**
-     * @return array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string}>
+     * @return array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string}>
      */
     public function search(string $query, string $language, int $limit = 10): array
+    {
+        $language = $this->analyzer->canonical_search_language($language);
+        $limit = max(1, $limit);
+        if ($language !== 'auto') {
+            return $this->finalize_results($this->search_partition($query, $language), $limit);
+        }
+
+        $results = [];
+        foreach ($this->analyzer->enabled_languages() as $partition) {
+            foreach ($this->search_partition($query, $partition) as $result) {
+                $results[] = $result;
+            }
+        }
+
+        return $this->finalize_results($results, $limit);
+    }
+
+    /**
+     * @return array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string,_exact_match_count:int,_has_lower_priority_match:bool}>
+     */
+    private function search_partition(string $query, string $language): array
     {
         $language = $this->analyzer->canonical_language($language);
         $plan = $this->parse_query($query, $language);
@@ -48,7 +69,9 @@ final class Language_FTS_Playground_Searcher
             }
         }
 
-        $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms));
+        $synonym_expansions = $this->analyzer->expand_query_synonyms($plan['exact_terms'], $language);
+        $synonym_terms = $this->synonym_terms($synonym_expansions);
+        $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms, $synonym_terms));
         if ($terms === []) {
             return [];
         }
@@ -82,6 +105,7 @@ final class Language_FTS_Playground_Searcher
 
         $document_fields = $this->storage->fetch_document_fields($language, array_keys($candidate_ids));
         $average_length = array_sum($document_lengths) / max(1, count($document_lengths));
+        $has_lower_priority_match = $plan['fuzzy_terms'] !== [] || $synonym_expansions !== [];
         $results = [];
         foreach (array_keys($candidate_ids) as $post_id) {
             if (!isset($document_lengths[$post_id])) {
@@ -159,6 +183,47 @@ final class Language_FTS_Playground_Searcher
                 }
             }
 
+            foreach ($synonym_expansions as $query_term => $expansions) {
+                if (isset($matched_terms[$query_term])) {
+                    continue;
+                }
+
+                $best_score = 0.0;
+                $best_term = '';
+                $best_fields = [];
+                foreach ($expansions as $expansion) {
+                    $candidate = (string) $expansion['term'];
+                    $field_tfs = $postings[$candidate][$post_id] ?? [];
+                    if ($field_tfs === []) {
+                        continue;
+                    }
+
+                    $document_frequency = count($postings[$candidate] ?? []);
+                    $candidate_score = $this->bm25(
+                        $this->weighted_term_frequency($field_tfs),
+                        $document_lengths[$post_id],
+                        $document_count,
+                        $document_frequency,
+                        $average_length
+                    ) * (float) $expansion['weight'];
+                    if ($candidate_score > $best_score) {
+                        $best_score = $candidate_score;
+                        $best_term = $candidate;
+                        $best_fields = $field_tfs;
+                    }
+                }
+
+                if ($best_score > 0.0) {
+                    $score += $best_score;
+                    $matched_terms[$query_term . '=>' . $best_term] = true;
+                    foreach ($best_fields as $field => $tf) {
+                        if ((int) $tf > 0) {
+                            $matched_fields[(string) $field] = true;
+                        }
+                    }
+                }
+            }
+
             if ($score > 0.0) {
                 $matched_field_names = $this->sort_fields(array_keys($matched_fields));
                 $results[] = [
@@ -172,33 +237,69 @@ final class Language_FTS_Playground_Searcher
                         $terms,
                         $language
                     ),
+                    'matched_language' => $language,
                     '_exact_match_count' => $exact_match_count,
+                    '_has_lower_priority_match' => $has_lower_priority_match,
                 ];
             }
         }
 
-        $has_fuzzy = $plan['fuzzy_terms'] !== [];
+        return $results;
+    }
+
+    /**
+     * @param array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string,_exact_match_count:int,_has_lower_priority_match:bool}> $results
+     * @return array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string}>
+     */
+    private function finalize_results(array $results, int $limit): array
+    {
+        $has_lower_priority_match = false;
+        foreach ($results as $result) {
+            if (!empty($result['_has_lower_priority_match'])) {
+                $has_lower_priority_match = true;
+                break;
+            }
+        }
+
         usort(
             $results,
-            static function (array $a, array $b) use ($has_fuzzy): int {
-                if ($has_fuzzy) {
+            static function (array $a, array $b) use ($has_lower_priority_match): int {
+                if ($has_lower_priority_match) {
                     $exact_order = $b['_exact_match_count'] <=> $a['_exact_match_count'];
                     if ($exact_order !== 0) {
                         return $exact_order;
                     }
                 }
 
-                return ($b['score'] <=> $a['score']) ?: ($a['post_id'] <=> $b['post_id']);
+                return ($b['score'] <=> $a['score'])
+                    ?: (strcmp((string) $a['matched_language'], (string) $b['matched_language']))
+                    ?: ($a['post_id'] <=> $b['post_id']);
             }
         );
 
         $results = array_slice($results, 0, max(1, $limit));
         foreach ($results as &$result) {
-            unset($result['_exact_match_count']);
+            unset($result['_exact_match_count'], $result['_has_lower_priority_match']);
         }
         unset($result);
 
         return $results;
+    }
+
+    /**
+     * @param array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>> $expansions
+     * @return string[]
+     */
+    private function synonym_terms(array $expansions): array
+    {
+        $terms = [];
+        foreach ($expansions as $targets) {
+            foreach ($targets as $target) {
+                $terms[] = (string) $target['term'];
+            }
+        }
+
+        return $this->unique_terms($terms);
     }
 
     /**

@@ -25,6 +25,7 @@ is not emitted as raw markup.
 
 The seeded posts cover:
 
+- Automatic language routing: search `orchard`, `lodz`, `fuehrung`, or `szukanie` with `Automatic` selected and the searcher checks every enabled language partition.
 - English visible text: search `orchard` in English.
 - English excerpt text: search `summary` in English.
 - English demo inflection keys: search `search` in English for visible `searching`, `searched`, and `searches`; search `story` for image alt text containing `stories`.
@@ -34,10 +35,14 @@ The seeded posts cover:
 - Markup/CSS/script/comment noise: search `ghostmarkup` in English and expect no matches.
 - Polish folding: search `lodz` in Polish for content containing `Łódź`.
 - Polish inflection keys: search `polska` or `partycja` in Polish for `polskiej partycji`.
+- Polish query-time synonyms: search `szukanie` in Automatic or Polish mode to match indexed content containing `wyszukiwania`.
 - German folding: search `fuehrung` in German for content containing `Führung`.
 - German demo inflection keys: search `deutsch` for `deutschen` or `deutscher`, and `suche` for `Suchen`.
 
-The language selector searches only the selected language partition by default.
+The language selector defaults to `Automatic`, which searches all enabled
+language partitions and reports the partition that matched. Choosing English,
+Polish, or German keeps the previous precision-filter behavior and searches
+only that partition.
 
 ## Field-Aware Ranking And Snippets
 
@@ -54,6 +59,11 @@ Those defaults make title hits rank above equal body hits while keeping image
 alt text searchable with a lower boost. Snippet highlighting compares query
 analysis keys with each source token's analysis keys, so demo inflection keys
 can highlight raw source forms such as `stories` for the query `story`.
+
+Synonym expansion is also query-time analyzer behavior. The demo ships a
+language-scoped Polish rule from the analyzed query key for `szukanie` to the
+indexed keys for `wyszukiwania`; synonym-only matches are downweighted, stay in
+the same language partition, and highlight the matched source token normally.
 
 ## Supported Analyzer Behavior
 
@@ -76,8 +86,8 @@ content.
 
 One-edit typo tolerance is opt-in with a trailing `~`, such as `orchrd~`.
 Fuzzy matching is disabled for short terms, uses only same-language indexed
-candidate terms within one edit, and ranks exact matches ahead of fuzzy-only
-matches.
+candidate terms within one edit, and ranks exact matches ahead of fuzzy-only or
+synonym-only matches.
 
 ## Playground Blueprint
 
@@ -107,7 +117,8 @@ and portable, with no production indexing optimizations. Ranking is meant for
 relative ordering inside one query and one language partition, not for comparing
 scores across languages or unrelated queries. The analyzer folds only the
 language behavior needed for the demo, including conservative English, Polish,
-and German stem-key generators. It does not implement full stemming,
-lemmatization, synonyms, multi-edit fuzzy search, or multilingual fallback.
+and German stem-key generators plus a small language-scoped synonym map. It
+does not implement full stemming, lemmatization, multi-edit fuzzy search, or
+unconfigured cross-language fallback.
 Snippets are built from normalized field text, not from full-fidelity rendered
 HTML, and use a small fixed excerpt window for long fields.

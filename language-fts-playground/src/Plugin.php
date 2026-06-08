@@ -388,8 +388,8 @@ final class Language_FTS_Playground_Plugin
         }
 
         $query = isset($_GET['lft_query']) ? sanitize_text_field(wp_unslash((string) $_GET['lft_query'])) : 'orchard';
-        $language = self::analyzer()->canonical_language(
-            isset($_GET['lft_language']) ? sanitize_text_field(wp_unslash((string) $_GET['lft_language'])) : 'en'
+        $language = self::analyzer()->canonical_search_language(
+            isset($_GET['lft_language']) ? sanitize_text_field(wp_unslash((string) $_GET['lft_language'])) : 'auto'
         );
         $runtime_errors = [];
         $results = [];
@@ -511,7 +511,7 @@ final class Language_FTS_Playground_Plugin
         echo '<input id="lft-query" type="search" name="lft_query" value="' . esc_attr($query) . '" class="regular-text" />';
         echo ' <label for="lft-language" class="screen-reader-text">' . esc_html__('Language', 'language-fts-playground') . '</label>';
         echo '<select id="lft-language" name="lft_language">';
-        foreach (['en' => 'English', 'pl' => 'Polish', 'de' => 'German'] as $code => $label) {
+        foreach (['auto' => 'Automatic', 'en' => 'English', 'pl' => 'Polish', 'de' => 'German'] as $code => $label) {
             echo '<option value="' . esc_attr($code) . '"' . selected($language, $code, false) . '>' . esc_html($label) . '</option>';
         }
         echo '</select> ';
@@ -537,7 +537,7 @@ final class Language_FTS_Playground_Plugin
     }
 
     /**
-     * @param array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string}> $results
+     * @param array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string}> $results
      */
     private static function render_results(array $results, string $query, string $language): void
     {
@@ -555,6 +555,7 @@ final class Language_FTS_Playground_Plugin
         echo '<table class="widefat striped"><thead><tr>';
         echo '<th>' . esc_html__('Post', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Score', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Language', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Snippet', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Matched fields', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Matched terms', 'language-fts-playground') . '</th>';
@@ -572,6 +573,7 @@ final class Language_FTS_Playground_Plugin
             }
             echo '</td>';
             echo '<td>' . esc_html(number_format_i18n($result['score'], 6)) . '</td>';
+            echo '<td><code>' . esc_html((string) ($result['matched_language'] ?? $language)) . '</code></td>';
             echo '<td>' . self::safe_snippet_html((string) ($result['snippet'] ?? '')) . '</td>';
             echo '<td>' . esc_html(implode(', ', $result['matched_fields'] ?? [])) . '</td>';
             echo '<td>' . esc_html(implode(', ', $result['matched_terms'])) . '</td>';
