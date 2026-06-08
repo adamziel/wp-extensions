@@ -776,6 +776,59 @@ function create_language_fts_temp_profile_tree(
     return $root;
 }
 
+/**
+ * @param array<string,mixed> $overrides
+ */
+function write_language_fts_temp_pack_metadata(string $language_dir, array $overrides = []): void
+{
+    $files = [
+        'profile.php',
+        'stopwords.txt',
+        'lexemes.tsv',
+        'synonyms.tsv',
+    ];
+    if (is_file($language_dir . DIRECTORY_SEPARATOR . 'synsets.tsv')) {
+        $files[] = 'synsets.tsv';
+    }
+
+    $metadata = array_merge(
+        [
+            'language_id' => basename($language_dir),
+            'pack_version' => 'fixture-2026-06-08',
+            'pack_date' => '2026-06-08',
+            'source_name' => 'Fixture lexical pack',
+            'source_url' => 'https://example.test/fixture-lexical-pack',
+            'license_name' => 'Fixture license',
+            'attribution_text' => 'Fixture lexical pack data.',
+            'provenance' => 'fixture-lexical-pack',
+            'files' => $files,
+            'data_kind' => 'curated_seed',
+        ],
+        $overrides
+    );
+
+    file_put_contents(
+        $language_dir . DIRECTORY_SEPARATOR . 'pack.php',
+        "<?php\nreturn " . var_export($metadata, true) . ";\n"
+    );
+}
+
+/**
+ * @param array<string,mixed> $report
+ * @return array<string,array<string,mixed>>
+ */
+function language_fts_pack_status_by_id(array $report): array
+{
+    $by_id = [];
+    foreach ((array) ($report['languages'] ?? []) as $language) {
+        if (is_array($language) && isset($language['language_id'])) {
+            $by_id[(string) $language['language_id']] = $language;
+        }
+    }
+
+    return $by_id;
+}
+
 function remove_language_fts_temp_tree(string $path): void
 {
     if (!is_dir($path)) {
@@ -860,6 +913,37 @@ function run_language_fts_importer(string $format, string $input_path, string $o
 
     foreach ($options as $key => $value) {
         $command[] = escapeshellarg('--' . str_replace('_', '-', $key) . '=' . $value);
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_validator(array $options = []): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+        '-n',
+        escapeshellarg(__DIR__ . '/../tools/validate-lexical-packs.php'),
+    ];
+
+    foreach ($options as $key => $value) {
+        $option = '--' . str_replace('_', '-', (string) $key);
+        if ($value === true) {
+            $command[] = escapeshellarg($option);
+        } elseif ($value !== false && $value !== null) {
+            $command[] = escapeshellarg($option . '=' . (string) $value);
+        }
     }
 
     $lines = [];
@@ -1058,6 +1142,144 @@ test_case('loads lexical pack provenance metadata explicitly', function (): void
     assert_same('GPL-2.0-or-later', $metadata['license_name'], 'Seed pack metadata declares the repository license.');
     assert_same('language-fts-playground-polish-curated-seed', $metadata['provenance'], 'Seed pack metadata declares provenance.');
     assert_true(in_array('synsets.tsv', $metadata['files'], true), 'Seed pack metadata lists its synset runtime file.');
+});
+
+test_case('valid lexical packs produce deterministic validation stats', function (): void {
+    $report = (new Language_FTS_Playground_Lexical_Pack_Validator())->validate_all();
+    $by_id = language_fts_pack_status_by_id($report);
+
+    assert_same(true, $report['valid'], 'Current shipped lexical packs validate cleanly.');
+    assert_same([], $report['warnings'], 'Current shipped lexical packs have no top-level warnings.');
+    assert_same(['en', 'pl', 'de'], array_column($report['languages'], 'language_id'), 'Validator reports languages in profile order.');
+    assert_same('curated_seed', $by_id['en']['metadata']['data_kind'] ?? null, 'English pack is labeled as curated seed data.');
+    assert_same('curated_seed', $by_id['pl']['metadata']['data_kind'] ?? null, 'Polish pack is labeled as curated seed data.');
+    assert_same('curated_seed', $by_id['de']['metadata']['data_kind'] ?? null, 'German pack is labeled as curated seed data.');
+
+    assert_same(42, $by_id['en']['counts']['stopwords'] ?? null, 'English stopword count is deterministic.');
+    assert_same(22, $by_id['en']['counts']['lexeme_rows'] ?? null, 'English lexeme count is deterministic.');
+    assert_same(0, $by_id['en']['counts']['synset_rows'] ?? null, 'English does not ship synset rows yet.');
+    assert_same(33, $by_id['pl']['counts']['stopwords'] ?? null, 'Polish stopword count is deterministic.');
+    assert_same(34, $by_id['pl']['counts']['lexeme_rows'] ?? null, 'Polish lexeme count is deterministic.');
+    assert_same(1, $by_id['pl']['counts']['synset_rows'] ?? null, 'Polish seed pack has one concept synset row.');
+    assert_same(12, $by_id['pl']['counts']['concept_expansions'] ?? null, 'Polish concept-derived expansion count is deterministic.');
+    assert_same(4, $by_id['pl']['max_synset_size'] ?? null, 'Polish max synset size is deterministic.');
+    assert_same(3, $by_id['pl']['max_expansion_fanout'] ?? null, 'Polish max fanout is deterministic.');
+    assert_same(35, $by_id['de']['counts']['stopwords'] ?? null, 'German stopword count is deterministic.');
+    assert_same(26, $by_id['de']['counts']['lexeme_rows'] ?? null, 'German lexeme count is deterministic.');
+});
+
+test_case('lexical pack validator warns and fails for missing listed files', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'files' => [
+            'profile.php',
+            'stopwords.txt',
+            'lexemes.tsv',
+            'synonyms.tsv',
+            'missing-runtime.tsv',
+        ],
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+
+        assert_same(false, $report['valid'], 'A missing metadata-listed file makes validation fail.');
+        assert_same(false, $by_id['xx']['runtime_files_exist'] ?? null, 'Missing metadata-listed files are reflected in runtime_files_exist.');
+        assert_same(['missing-runtime.tsv'], $by_id['xx']['missing_files'] ?? null, 'The missing runtime file name is reported.');
+        assert_contains_text('missing-runtime.tsv', implode("\n", $by_id['xx']['warnings'] ?? []), 'The missing file warning names the file.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator warns and fails for malformed metadata', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'source_name' => '',
+        'pack_date' => 'not-a-date',
+        'data_kind' => 'unreviewed_full_dump',
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Malformed pack metadata makes validation fail.');
+        assert_same(false, $by_id['xx']['metadata_valid'] ?? null, 'Malformed metadata is reflected in metadata_valid.');
+        assert_contains_text('source_name', $warnings, 'Missing source name is reported.');
+        assert_contains_text('pack_date', $warnings, 'Invalid pack date is reported.');
+        assert_contains_text('data_kind', $warnings, 'Invalid data kind is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator fails too-large synsets and expansion fanout thresholds', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\nbeta\tbeta\tfixture\ngamma\tgamma\tfixture\ndelta\tdelta\tfixture\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        "# concept_id\tweight\tprovenance\tterms\nconcept.too-wide\t0.5\tfixture\talpha beta gamma delta\n"
+    );
+    write_language_fts_temp_pack_metadata($root . DIRECTORY_SEPARATOR . 'xx');
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root, 3, 2))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Threshold failures make validation fail.');
+        assert_same(4, $by_id['xx']['max_synset_size'] ?? null, 'The too-wide synset size is measured.');
+        assert_same(3, $by_id['xx']['max_expansion_fanout'] ?? null, 'The too-wide per-term expansion fanout is measured.');
+        assert_contains_text('max synset size 3', $warnings, 'Synset size threshold failure is reported.');
+        assert_contains_text('Maximum expansion fanout 3 exceeds threshold 2', $warnings, 'Fanout threshold failure is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator CLI emits deterministic parseable JSON', function (): void {
+    $first = run_language_fts_validator(['json' => true]);
+    $second = run_language_fts_validator(['json' => true]);
+
+    assert_same(0, $first['exit_code'], 'Validator JSON CLI exits successfully for current packs. Output: ' . $first['output']);
+    assert_same($first['output'], $second['output'], 'Validator JSON output is deterministic across runs.');
+
+    $decoded = json_decode($first['output'], true);
+    assert_true(is_array($decoded), 'Validator JSON output is parseable.');
+    assert_same(true, $decoded['valid'] ?? null, 'Validator JSON marks current packs valid.');
+    assert_same(['en', 'pl', 'de'], array_column($decoded['languages'] ?? [], 'language_id'), 'Validator JSON preserves deterministic language order.');
+});
+
+test_case('lexical pack validator CLI exits nonzero for a bad temp resource root', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+    write_language_fts_temp_pack_metadata($root . DIRECTORY_SEPARATOR . 'xx', [
+        'files' => [
+            'profile.php',
+            'stopwords.txt',
+            'lexemes.tsv',
+            'synonyms.tsv',
+            'missing-runtime.tsv',
+        ],
+    ]);
+
+    try {
+        $result = run_language_fts_validator([
+            'resource_root' => $root,
+            'json' => true,
+        ]);
+        $decoded = json_decode($result['output'], true);
+
+        assert_true($result['exit_code'] !== 0, 'Bad resource roots make the validator CLI exit nonzero.');
+        assert_true(is_array($decoded), 'Bad resource root JSON is still parseable.');
+        assert_same(false, $decoded['valid'] ?? null, 'Bad resource root JSON marks validation invalid.');
+        assert_contains_text('missing-runtime.tsv', $result['output'], 'Bad resource root output explains the missing file.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
 });
 
 test_case('membership importer compiles deterministic synsets and lexemes', function (): void {
@@ -1335,7 +1557,13 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('simple project fixture', $docs, 'Lexical docs distinguish simple WordNet-like fixtures from JSON-LD source excerpts.');
     assert_contains_text('OpenThesaurus', $docs, 'Lexical docs mention OpenThesaurus source caveats.');
     assert_contains_text('plWordNet', $docs, 'Lexical docs mention plWordNet source caveats.');
+    assert_contains_text('validate-lexical-packs.php', $docs, 'Lexical docs describe the validation CLI.');
+    assert_contains_text('--max-synset-size', $docs, 'Lexical docs describe synset size thresholds.');
+    assert_contains_text('Broad synsets are dangerous', $docs, 'Lexical docs explain broad synset search-quality risk.');
+    assert_contains_text('Lexical pack status', $docs, 'Lexical docs explain the admin pack status table.');
     assert_contains_text('seed data unless', $readme, 'README keeps the shipped-data limitation explicit.');
+    assert_contains_text('validate-lexical-packs.php', $readme, 'README documents the validation CLI.');
+    assert_contains_text('curated_seed', $readme, 'README confirms current shipped packs are curated seed data.');
 });
 
 test_case('analyzer no longer ships a hardcoded query synonym map property', function (): void {
@@ -2167,6 +2395,22 @@ test_case('admin search form defaults to automatic language mode', function (): 
 
     assert_contains_text('<option value="auto" selected="selected">Automatic</option>', $html, 'The admin language selector defaults to Automatic.');
     assert_not_contains_text('<option value="en" selected="selected">English</option>', $html, 'The admin language selector no longer defaults to English.');
+});
+
+test_case('admin page renders lexical pack status safely as curated seed data', function (): void {
+    reset_language_fts_plugin_runtime();
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = ob_get_clean();
+
+    assert_contains_text('Lexical pack status', $html, 'Admin page includes lexical pack status.');
+    assert_contains_text('<code>curated_seed</code>', $html, 'Admin page labels current packs as curated seed data.');
+    assert_contains_text('Language FTS Playground curated English seed data', $html, 'Admin page shows pack source names.');
+    assert_contains_text('GPL-2.0-or-later', $html, 'Admin page shows pack licenses.');
+    assert_contains_text('2026-06-08-seed 2026-06-08', $html, 'Admin page shows pack version/date.');
+    assert_contains_text('lexemes 34; synsets 1; expansions 12', $html, 'Admin page shows compact Polish pack counts.');
+    assert_not_contains_text('<script>', $html, 'Admin lexical pack status does not emit raw unsafe markup.');
 });
 
 test_case('admin automatic results show matched language partition', function (): void {

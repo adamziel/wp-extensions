@@ -99,6 +99,46 @@ Use it for targeted overrides or asymmetric relationships. `direction` is
 than `1`. If a pairwise row duplicates a concept-derived source/target pair,
 the explicit pairwise row wins.
 
+## Validation And Admin Status
+
+Run the pack validator before committing generated resources:
+
+```sh
+php language-fts-playground/tools/validate-lexical-packs.php
+php language-fts-playground/tools/validate-lexical-packs.php --json
+php language-fts-playground/tools/validate-lexical-packs.php --max-synset-size=64 --max-expansions-per-term=128
+```
+
+The default output is human-readable. `--json` emits deterministic JSON for CI
+or release checks, and the command exits nonzero when metadata is invalid,
+listed runtime files are missing, resource rows are malformed or duplicated, or
+thresholds are exceeded. The validator is pure PHP and is expected to work with
+`php -n`.
+
+The validator reports, per language:
+
+- language id and label,
+- `pack.php` source name, source URL, license, version/date, data kind, and provenance,
+- whether every runtime file listed in `pack.php` exists,
+- stopword rows, lexeme rows, pairwise synonym rows/expansions, synset rows, and concept-derived expansions,
+- max synset size and max unique expansion fanout for any one term,
+- warnings for invalid metadata, missing files, malformed rows, duplicate rows, and broad synsets.
+
+`--max-synset-size` limits how many canonical keys one concept can contain.
+`--max-expansions-per-term` limits how many unique targets any source term can
+expand to after pairwise rows and concept rows are considered.
+Broad synsets are dangerous for search quality.
+Each term expands to every other term in that concept; a large or vague concept
+can make precise searches match loosely related documents and push exact
+results down.
+
+The WordPress admin page at `Tools -> Language FTS` includes a compact
+Lexical pack status table with the language, `curated_seed` or
+`imported_comprehensive` data kind, source, license, version/date, lexeme/
+synset/expansion counts, and warnings. Read that table as a provenance and
+quality signal: current shipped packs are `curated_seed` demo data, not
+comprehensive WordNet, OpenThesaurus, or plWordNet databases.
+
 ## Build-Time Importer
 
 Use the canonical PHP importer to create compact runtime outputs from small

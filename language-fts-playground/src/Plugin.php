@@ -416,6 +416,7 @@ final class Language_FTS_Playground_Plugin
         self::render_notice($runtime_errors);
         self::render_actions();
         self::render_index_status($documents, self::index_status());
+        self::render_lexical_pack_status();
         self::render_search_form($query, $language);
         self::render_sample_searches();
         self::render_results($results, $query, $language);
@@ -500,6 +501,69 @@ final class Language_FTS_Playground_Plugin
         if ($last_error !== '') {
             echo '<tr><th scope="row">' . esc_html__('Last error', 'language-fts-playground') . '</th><td>' . esc_html($last_error) . '</td></tr>';
         }
+        echo '</tbody></table>';
+    }
+
+    private static function render_lexical_pack_status(): void
+    {
+        echo '<h2>' . esc_html__('Lexical pack status', 'language-fts-playground') . '</h2>';
+
+        try {
+            $report = (new Language_FTS_Playground_Lexical_Pack_Validator())->validate_all();
+        } catch (Throwable $throwable) {
+            echo '<p>' . esc_html(sprintf(__('Could not validate lexical packs: %s', 'language-fts-playground'), $throwable->getMessage())) . '</p>';
+
+            return;
+        }
+
+        $languages = isset($report['languages']) && is_array($report['languages']) ? $report['languages'] : [];
+        if ($languages === []) {
+            echo '<p>' . esc_html__('No lexical resource packs were found.', 'language-fts-playground') . '</p>';
+
+            return;
+        }
+
+        echo '<table class="widefat striped" style="max-width:1100px;"><thead><tr>';
+        echo '<th>' . esc_html__('Language', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Kind', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Source', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('License', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Version/date', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Counts', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Warnings', 'language-fts-playground') . '</th>';
+        echo '</tr></thead><tbody>';
+
+        foreach ($languages as $language) {
+            if (!is_array($language)) {
+                continue;
+            }
+
+            $metadata = isset($language['metadata']) && is_array($language['metadata']) ? $language['metadata'] : [];
+            $counts = isset($language['counts']) && is_array($language['counts']) ? $language['counts'] : [];
+            $warnings = array_values(array_map('strval', (array) ($language['warnings'] ?? [])));
+            $total_expansions = (int) ($counts['pairwise_synonym_expansions'] ?? 0) + (int) ($counts['concept_expansions'] ?? 0);
+            $count_text = sprintf(
+                /* translators: 1: lexeme rows, 2: synset rows, 3: synonym expansion rows */
+                __('lexemes %1$d; synsets %2$d; expansions %3$d', 'language-fts-playground'),
+                (int) ($counts['lexeme_rows'] ?? 0),
+                (int) ($counts['synset_rows'] ?? 0),
+                $total_expansions
+            );
+            $warning_text = $warnings === []
+                ? __('None', 'language-fts-playground')
+                : implode('; ', $warnings);
+
+            echo '<tr>';
+            echo '<td>' . esc_html((string) ($language['label'] ?? '')) . ' <code>' . esc_html((string) ($language['language_id'] ?? '')) . '</code></td>';
+            echo '<td><code>' . esc_html((string) ($metadata['data_kind'] ?? '')) . '</code></td>';
+            echo '<td>' . esc_html((string) ($metadata['source_name'] ?? '')) . '</td>';
+            echo '<td>' . esc_html((string) ($metadata['license_name'] ?? '')) . '</td>';
+            echo '<td>' . esc_html(trim((string) ($metadata['pack_version'] ?? '') . ' ' . (string) ($metadata['pack_date'] ?? ''))) . '</td>';
+            echo '<td>' . esc_html($count_text) . '</td>';
+            echo '<td>' . esc_html($warning_text) . '</td>';
+            echo '</tr>';
+        }
+
         echo '</tbody></table>';
     }
 

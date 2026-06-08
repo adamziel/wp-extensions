@@ -145,6 +145,27 @@ rows include observed/canonical forms. Runtime search remains pure PHP and fast
 because the plugin reads only compact local resource files, not source database
 formats.
 
+Validate lexical packs before committing generated resources:
+
+```sh
+php language-fts-playground/tools/validate-lexical-packs.php
+php language-fts-playground/tools/validate-lexical-packs.php --json
+php language-fts-playground/tools/validate-lexical-packs.php --max-synset-size=64 --max-expansions-per-term=128
+```
+
+The validator reports pack provenance, whether every file listed in `pack.php`
+exists, stopword/lexeme/synset/expansion counts, max synset size, max per-term
+expansion fanout, and warnings for invalid metadata or malformed resource rows.
+Broad synsets are dangerous for search quality because each term expands to
+every other term in the concept; a large or loosely related concept can turn a
+precise query into many weak matches. The threshold options make those cases
+fail in CI before they reach the admin UI or search tests.
+
+The `Tools -> Language FTS` admin page includes a compact lexical pack status
+table with language, data kind, source, license, version/date, counts, and
+warnings. The shipped English, Polish, and German packs are still labeled
+`curated_seed`; they are not comprehensive lexical databases.
+
 See `docs/lexical-resources.md` for the resource contract and
 `tools/import-lexical-source.php` for source import usage. Open English WordNet
 is CC-BY 4.0 according to its GitHub README, OpenThesaurus German publishes
@@ -197,6 +218,9 @@ and lands on the admin search page.
 ```sh
 php language-fts-playground/tests/run.php
 php -n language-fts-playground/tests/run.php
+php language-fts-playground/tools/validate-lexical-packs.php
+php -n language-fts-playground/tools/validate-lexical-packs.php
+php language-fts-playground/tools/validate-lexical-packs.php --json
 php -r "json_decode(file_get_contents('language-fts-playground/playground/blueprint.json')); if (json_last_error()) { fwrite(STDERR, json_last_error_msg() . PHP_EOL); exit(1); }"
 find language-fts-playground -name "*.php" -print0 | xargs -0 -n1 php -l
 ```
