@@ -217,6 +217,8 @@ function reset_language_fts_wp_state(): void
     $GLOBALS['language_fts_test_autosaves'] = [];
     $GLOBALS['language_fts_test_actions'] = [];
     $GLOBALS['language_fts_test_scheduled'] = [];
+    $GLOBALS['language_fts_test_option_reads'] = [];
+    $GLOBALS['language_fts_test_get_option_interceptor'] = null;
     $GLOBALS['language_fts_test_current_user_can'] = true;
     $GLOBALS['language_fts_test_last_redirect'] = null;
     $_GET = [];
@@ -246,6 +248,12 @@ function reset_language_fts_plugin_runtime(Language_FTS_Playground_Storage_Inter
 if (!function_exists('get_option')) {
     function get_option(string $name, mixed $default = false): mixed
     {
+        $GLOBALS['language_fts_test_option_reads'][$name] = (int) ($GLOBALS['language_fts_test_option_reads'][$name] ?? 0) + 1;
+        $interceptor = $GLOBALS['language_fts_test_get_option_interceptor'] ?? null;
+        if (is_callable($interceptor)) {
+            $interceptor($name, $GLOBALS['language_fts_test_option_reads'][$name]);
+        }
+
         return array_key_exists($name, $GLOBALS['language_fts_test_options'] ?? [])
             ? $GLOBALS['language_fts_test_options'][$name]
             : $default;
@@ -814,6 +822,131 @@ test_case('queues saved public posts and processes bounded batches', function ()
     assert_same(1, $second_batch['processed'], 'The remaining queued post is processed by a later batch.');
     assert_same(2, count($storage->all_documents()), 'Both documents are indexed after the second batch.');
     assert_same(0, Language_FTS_Playground_Plugin::queued_count(), 'The queue is empty after all items are processed.');
+});
+
+test_case('completion preserves queue IDs added between read and write', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $first = fixture_post(501, 'en', 'Interleaved orchard one', '<p>orchard one</p>');
+    $second = fixture_post(502, 'en', 'Interleaved orchard two', '<p>orchard two</p>');
+    $GLOBALS['language_fts_test_posts'][501] = $first;
+    $GLOBALS['language_fts_test_posts'][502] = $second;
+
+    Language_FTS_Playground_Plugin::index_saved_post(501, $first, true);
+    $queue_reads = 0;
+    $interleaved = false;
+    $GLOBALS['language_fts_test_get_option_interceptor'] = static function (string $name, int $read_count) use (&$queue_reads, &$interleaved): void {
+        unset($read_count);
+        if ($name !== 'language_fts_playground_index_queue') {
+            return;
+        }
+
+        $queue_reads++;
+        if ($queue_reads !== 3) {
+            return;
+        }
+
+        $interleaved = true;
+        $GLOBALS['language_fts_test_get_option_interceptor'] = null;
+        Language_FTS_Playground_Plugin::enqueue_posts([502]);
+    };
+
+    $result = Language_FTS_Playground_Plugin::process_index_queue(1);
+    $queue = get_option('language_fts_playground_index_queue', []);
+
+    assert_same(1, $result['processed'], 'The original queued post is processed.');
+    assert_same(true, $interleaved, 'The regression injected a queue write before completion wrote back.');
+    assert_true(!array_key_exists(501, $queue), 'The completed post is removed from the queue.');
+    assert_true(array_key_exists(502, $queue), 'The concurrently queued post remains queued.');
+    assert_same(1, Language_FTS_Playground_Plugin::queued_count(), 'Only the interleaved queue item remains.');
+});
+
+test_case('completion preserves same-post requeues with newer tokens', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $post = fixture_post(503, 'en', 'Retokened orchard', '<p>orchard token</p>');
+    $GLOBALS['language_fts_test_posts'][503] = $post;
+
+    Language_FTS_Playground_Plugin::index_saved_post(503, $post, true);
+    $queue_reads = 0;
+    $GLOBALS['language_fts_test_get_option_interceptor'] = static function (string $name, int $read_count) use (&$queue_reads): void {
+        unset($read_count);
+        if ($name !== 'language_fts_playground_index_queue') {
+            return;
+        }
+
+        $queue_reads++;
+        if ($queue_reads !== 3) {
+            return;
+        }
+
+        $GLOBALS['language_fts_test_get_option_interceptor'] = null;
+        $queue = get_option('language_fts_playground_index_queue', []);
+        $queue[503] = 'newer-token';
+        update_option('language_fts_playground_index_queue', $queue);
+    };
+
+    $result = Language_FTS_Playground_Plugin::process_index_queue(1);
+    $queue = get_option('language_fts_playground_index_queue', []);
+
+    assert_same(1, $result['processed'], 'The queued post is processed once.');
+    assert_same('newer-token', $queue[503] ?? null, 'A same-post requeue with a newer token is not completed by the stale token.');
+    assert_same(1, Language_FTS_Playground_Plugin::queued_count(), 'The requeued post remains queued.');
+});
+
+test_case('idle queue processing does not clear required rebuild before rebuild is queued', function (): void {
+    reset_language_fts_plugin_runtime();
+    update_option('language_fts_playground_rebuild_required', true);
+    update_option('language_fts_playground_rebuild_in_progress', false);
+
+    $result = Language_FTS_Playground_Plugin::process_index_queue(10);
+
+    assert_same(0, $result['processed'], 'No queue items are processed.');
+    assert_same(0, $result['remaining'], 'The queue remains empty.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'A version-required rebuild is not cleared before queue_rebuild() runs.');
+});
+
+test_case('version rebuild stays required until bounded queue drains', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $GLOBALS['language_fts_test_posts'][601] = fixture_post(601, 'en', 'Rebuild orchard one', '<p>orchard one</p>');
+    $GLOBALS['language_fts_test_posts'][602] = fixture_post(602, 'en', 'Rebuild orchard two', '<p>orchard two</p>');
+
+    $queued = Language_FTS_Playground_Plugin::queue_rebuild(true);
+    assert_same(2, $queued, 'Both published posts are queued for rebuild.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'A queued rebuild remains marked as required.');
+    assert_same(true, get_option('language_fts_playground_rebuild_in_progress'), 'A queued rebuild is tracked as in progress.');
+
+    $first_batch = Language_FTS_Playground_Plugin::process_index_queue(1);
+    assert_same(1, $first_batch['processed'], 'A bounded rebuild batch processes one item.');
+    assert_same(1, $first_batch['remaining'], 'One rebuild item remains after the bounded batch.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'The rebuild-required flag remains true while queued work remains.');
+    assert_same(true, get_option('language_fts_playground_rebuild_in_progress'), 'The rebuild remains in progress while queued work remains.');
+
+    $second_batch = Language_FTS_Playground_Plugin::process_index_queue(10);
+    assert_same(1, $second_batch['processed'], 'The final rebuild item is processed.');
+    assert_same(0, $second_batch['remaining'], 'The rebuild queue drains.');
+    assert_same(false, get_option('language_fts_playground_rebuild_required'), 'The rebuild-required flag clears only after a successful drain.');
+    assert_same(false, get_option('language_fts_playground_rebuild_in_progress'), 'The in-progress marker clears after a successful drain.');
+});
+
+test_case('version rebuild stays required when queue processing fails', function (): void {
+    reset_language_fts_plugin_runtime(new Language_FTS_Playground_Test_Failing_Storage('Index writes are temporarily unavailable.'));
+    $GLOBALS['language_fts_test_posts'][603] = fixture_post(603, 'en', 'Failing rebuild orchard', '<p>orchard failure</p>');
+
+    $queued = Language_FTS_Playground_Plugin::queue_rebuild(false);
+    assert_same(1, $queued, 'The published post is queued for rebuild without clearing storage.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'A queued rebuild starts as required.');
+    assert_same(true, get_option('language_fts_playground_rebuild_in_progress'), 'A queued rebuild starts in progress.');
+
+    $result = Language_FTS_Playground_Plugin::process_index_queue(1);
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same(1, $result['failed'], 'The failing storage path reports a failed queue item.');
+    assert_same(1, $result['remaining'], 'The failed queue item remains queued for retry.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'The rebuild-required flag stays true after a failed rebuild item.');
+    assert_same(true, get_option('language_fts_playground_rebuild_in_progress'), 'The in-progress marker stays true after a failed rebuild item.');
+    assert_contains_text('Index writes are temporarily unavailable.', (string) ($status['last_error'] ?? ''), 'The rebuild failure remains visible in status.');
 });
 
 test_case('removes non-public lifecycle states and ignores revisions and autosaves', function (): void {

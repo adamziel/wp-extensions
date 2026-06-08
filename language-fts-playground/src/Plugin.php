@@ -6,13 +6,20 @@ final class Language_FTS_Playground_Plugin
     private const SCHEMA_OPTION = 'language_fts_playground_schema_version';
     private const ANALYZER_OPTION = 'language_fts_playground_analyzer_version';
     private const QUEUE_OPTION = 'language_fts_playground_index_queue';
+    private const QUEUE_LOCK_OPTION = 'language_fts_playground_index_queue_lock';
+    private const QUEUE_LOCK_TTL_SECONDS = 15;
+    private const QUEUE_LOCK_WAIT_MICROSECONDS = 5000;
+    private const QUEUE_LOCK_MAX_ATTEMPTS = 20;
     private const STATUS_OPTION = 'language_fts_playground_index_status';
     private const REBUILD_REQUIRED_OPTION = 'language_fts_playground_rebuild_required';
+    private const REBUILD_IN_PROGRESS_OPTION = 'language_fts_playground_rebuild_in_progress';
     private const CRON_HOOK = 'language_fts_playground_process_queue';
     private const DEFAULT_PUBLIC_POST_TYPES = ['post', 'page'];
 
     private static ?Language_FTS_Playground_Storage_Interface $storage = null;
     private static ?Language_FTS_Playground_Analyzer $analyzer = null;
+    private static ?string $queue_lock_token = null;
+    private static int $queue_lock_depth = 0;
 
     public static function register_hooks(): void
     {
@@ -127,10 +134,18 @@ final class Language_FTS_Playground_Plugin
             self::storage()->clear();
         }
 
-        self::write_queue([]);
         $post_ids = self::public_published_post_ids();
-        self::enqueue_posts($post_ids);
-        self::set_rebuild_required(false);
+        if ($post_ids === []) {
+            self::replace_queue([]);
+            self::set_rebuild_in_progress(false);
+            self::set_rebuild_required(false);
+        } else {
+            $queued_at = sprintf('%.6f', microtime(true));
+            self::set_rebuild_required(true);
+            self::set_rebuild_in_progress(true);
+            self::replace_queue(array_fill_keys($post_ids, $queued_at));
+            self::schedule_queue_processing();
+        }
         self::record_status(
             sprintf(
                 /* translators: %d: number of posts queued for indexing */
@@ -246,6 +261,11 @@ final class Language_FTS_Playground_Plugin
         }
 
         $result['remaining'] = self::queued_count();
+        if (self::rebuild_in_progress() && $result['failed'] === 0 && $result['remaining'] === 0) {
+            self::set_rebuild_in_progress(false);
+            self::set_rebuild_required(false);
+        }
+
         if ($result['remaining'] > 0) {
             self::schedule_queue_processing();
         }
@@ -271,7 +291,8 @@ final class Language_FTS_Playground_Plugin
     public static function clear_index(): void
     {
         self::storage()->clear();
-        self::write_queue([]);
+        self::replace_queue([]);
+        self::set_rebuild_in_progress(false);
         self::set_rebuild_required(false);
         self::record_status(__('Language FTS index and queue were cleared.', 'language-fts-playground'), null, ['queued_count' => 0]);
     }
@@ -287,21 +308,19 @@ final class Language_FTS_Playground_Plugin
         }
 
         $queued_at = sprintf('%.6f', microtime(true));
-        for ($attempt = 0; $attempt < 3; $attempt++) {
-            $queue = self::read_queue();
-            foreach ($post_ids as $post_id) {
-                $queue[$post_id] = $queued_at;
-            }
+        $confirmed = self::mutate_queue(
+            static function (array $queue) use ($post_ids, $queued_at): array {
+                foreach ($post_ids as $post_id) {
+                    $queue[$post_id] = $queued_at;
+                }
 
-            self::write_queue($queue);
-            $confirmed = self::read_queue();
-            if (self::queue_contains_ids($confirmed, $post_ids)) {
-                self::schedule_queue_processing();
-                return;
+                return $queue;
             }
+        );
+
+        if (!self::queue_contains_ids($confirmed, $post_ids)) {
+            self::record_status(__('Could not confirm every Language FTS queue item after writing the option-backed queue.', 'language-fts-playground'));
         }
-
-        self::record_status(__('Could not confirm every Language FTS queue item after writing the option-backed queue.', 'language-fts-playground'));
         self::schedule_queue_processing();
     }
 
@@ -733,15 +752,127 @@ final class Language_FTS_Playground_Plugin
      */
     private static function write_queue(array $queue): void
     {
+        self::update_option_value(self::QUEUE_OPTION, self::normalize_queue($queue));
+    }
+
+    /**
+     * @param array<int,string> $queue
+     */
+    private static function replace_queue(array $queue): void
+    {
+        self::mutate_queue(static fn(array $current): array => $queue);
+    }
+
+    /**
+     * @param callable(array<int,string>):array<int,string> $mutation
+     * @return array<int,string>
+     */
+    private static function mutate_queue(callable $mutation): array
+    {
+        $lock_token = self::acquire_queue_lock();
+
+        try {
+            $initial_queue = self::read_queue();
+            $next_queue = self::normalize_queue($mutation($initial_queue));
+            $latest_queue = self::read_queue();
+
+            if ($latest_queue !== $initial_queue) {
+                $next_queue = self::normalize_queue($mutation($latest_queue));
+            }
+
+            self::write_queue($next_queue);
+
+            return self::read_queue();
+        } finally {
+            self::release_queue_lock($lock_token);
+        }
+    }
+
+    private static function acquire_queue_lock(): string|null
+    {
+        if (self::$queue_lock_token !== null) {
+            self::$queue_lock_depth++;
+
+            return self::$queue_lock_token;
+        }
+
+        if (!function_exists('add_option') || !function_exists('delete_option') || !function_exists('get_option')) {
+            return null;
+        }
+
+        $token = sprintf('%.6f:%d:%s', microtime(true), getmypid() ?: 0, self::class);
+        for ($attempt = 0; $attempt < self::QUEUE_LOCK_MAX_ATTEMPTS; $attempt++) {
+            if (add_option(self::QUEUE_LOCK_OPTION, self::queue_lock_value($token), '', false)) {
+                self::$queue_lock_token = $token;
+                self::$queue_lock_depth = 1;
+
+                return $token;
+            }
+
+            $lock = get_option(self::QUEUE_LOCK_OPTION, []);
+            $expires_at = is_array($lock) && isset($lock['expires_at']) && is_numeric($lock['expires_at'])
+                ? (float) $lock['expires_at']
+                : 0.0;
+            if ($expires_at > 0.0 && $expires_at < microtime(true)) {
+                delete_option(self::QUEUE_LOCK_OPTION);
+                continue;
+            }
+
+            usleep(self::QUEUE_LOCK_WAIT_MICROSECONDS);
+        }
+
+        self::record_status(__('Could not acquire the Language FTS queue lock; falling back to an unlocked queue update.', 'language-fts-playground'));
+
+        return null;
+    }
+
+    private static function release_queue_lock(string|null $token): void
+    {
+        if ($token === null || self::$queue_lock_token !== $token) {
+            return;
+        }
+
+        self::$queue_lock_depth = max(0, self::$queue_lock_depth - 1);
+        if (self::$queue_lock_depth > 0) {
+            return;
+        }
+
+        self::$queue_lock_token = null;
+        if (function_exists('get_option') && function_exists('delete_option')) {
+            $lock = get_option(self::QUEUE_LOCK_OPTION, []);
+            if (is_array($lock) && (string) ($lock['token'] ?? '') === $token) {
+                delete_option(self::QUEUE_LOCK_OPTION);
+            }
+        }
+    }
+
+    /**
+     * @return array{token:string,expires_at:float}
+     */
+    private static function queue_lock_value(string $token): array
+    {
+        return [
+            'token' => $token,
+            'expires_at' => microtime(true) + self::QUEUE_LOCK_TTL_SECONDS,
+        ];
+    }
+
+    /**
+     * @param array<int|string,mixed> $queue
+     * @return array<int,string>
+     */
+    private static function normalize_queue(array $queue): array
+    {
         $normalized = [];
         foreach ($queue as $post_id => $token) {
             $post_id = (int) $post_id;
             if ($post_id > 0) {
-                $normalized[$post_id] = (string) $token;
+                $normalized[$post_id] = is_scalar($token) && (string) $token !== '' ? (string) $token : '1';
             }
         }
         ksort($normalized, SORT_NUMERIC);
-        self::update_option_value(self::QUEUE_OPTION, $normalized);
+
+        return $normalized;
     }
 
     /**
@@ -754,11 +885,15 @@ final class Language_FTS_Playground_Plugin
             return;
         }
 
-        $queue = self::read_queue();
-        foreach ($post_ids as $post_id) {
-            unset($queue[$post_id]);
-        }
-        self::write_queue($queue);
+        self::mutate_queue(
+            static function (array $queue) use ($post_ids): array {
+                foreach ($post_ids as $post_id) {
+                    unset($queue[$post_id]);
+                }
+
+                return $queue;
+            }
+        );
     }
 
     /**
@@ -766,13 +901,17 @@ final class Language_FTS_Playground_Plugin
      */
     private static function complete_queue_items(array $completed): void
     {
-        $queue = self::read_queue();
-        foreach ($completed as $post_id => $token) {
-            if (isset($queue[$post_id]) && (string) $queue[$post_id] === (string) $token) {
-                unset($queue[$post_id]);
+        self::mutate_queue(
+            static function (array $queue) use ($completed): array {
+                foreach ($completed as $post_id => $token) {
+                    if (isset($queue[$post_id]) && (string) $queue[$post_id] === (string) $token) {
+                        unset($queue[$post_id]);
+                    }
+                }
+
+                return $queue;
             }
-        }
-        self::write_queue($queue);
+        );
     }
 
     /**
@@ -825,9 +964,19 @@ final class Language_FTS_Playground_Plugin
         self::update_option_value(self::REBUILD_REQUIRED_OPTION, $required);
     }
 
+    private static function set_rebuild_in_progress(bool $in_progress): void
+    {
+        self::update_option_value(self::REBUILD_IN_PROGRESS_OPTION, $in_progress);
+    }
+
     private static function rebuild_required(): bool
     {
-        return function_exists('get_option') && (bool) get_option(self::REBUILD_REQUIRED_OPTION, false);
+        return function_exists('get_option') && ((bool) get_option(self::REBUILD_REQUIRED_OPTION, false) || self::rebuild_in_progress());
+    }
+
+    private static function rebuild_in_progress(): bool
+    {
+        return function_exists('get_option') && (bool) get_option(self::REBUILD_IN_PROGRESS_OPTION, false);
     }
 
     /**
