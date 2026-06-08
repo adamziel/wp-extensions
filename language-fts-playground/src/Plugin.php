@@ -437,14 +437,30 @@ final class Language_FTS_Playground_Plugin
         }
 
         $query = isset($_GET['lft_query']) ? sanitize_text_field(wp_unslash((string) $_GET['lft_query'])) : 'orchard';
-        $language = self::analyzer()->canonical_search_language(
-            isset($_GET['lft_language']) ? sanitize_text_field(wp_unslash((string) $_GET['lft_language'])) : 'auto'
-        );
+        $requested_language = isset($_GET['lft_language']) ? sanitize_text_field(wp_unslash((string) $_GET['lft_language'])) : 'auto';
+        $language = 'auto';
         $runtime_errors = [];
         $results = [];
         $documents = [];
+        $search_error = null;
+        $language_options = ['auto' => __('Automatic', 'language-fts-playground')];
 
-        if ($query !== '') {
+        try {
+            $analyzer = self::analyzer();
+            $language = $analyzer->canonical_search_language($requested_language);
+            foreach ($analyzer->enabled_languages() as $code) {
+                $language_options[$code] = $analyzer->language_label($code);
+            }
+        } catch (Throwable $throwable) {
+            $search_error = sprintf(
+                __('Search is unavailable because lexical resources could not be loaded: %s', 'language-fts-playground'),
+                $throwable->getMessage()
+            );
+            $runtime_errors[] = $search_error;
+            self::record_error(__('Could not load Language FTS analyzer resources for admin search.', 'language-fts-playground'), $throwable);
+        }
+
+        if ($query !== '' && $search_error === null) {
             try {
                 $results = self::searcher()->search($query, $language, 10);
             } catch (Throwable $throwable) {
@@ -466,9 +482,13 @@ final class Language_FTS_Playground_Plugin
         self::render_actions();
         self::render_index_status($documents, self::index_status());
         self::render_lexical_pack_status();
-        self::render_search_form($query, $language);
-        self::render_sample_searches();
-        self::render_results($results, $query, $language);
+        self::render_search_form($query, $language, $language_options, $search_error);
+        if ($search_error === null) {
+            self::render_sample_searches();
+            self::render_results($results, $query, $language);
+        } else {
+            self::render_search_unavailable($search_error);
+        }
         self::render_documents($documents);
         echo '</div>';
     }
@@ -624,25 +644,40 @@ final class Language_FTS_Playground_Plugin
         echo '</tbody></table>';
     }
 
-    private static function render_search_form(string $query, string $language): void
+    /**
+     * @param array<string,string> $language_options
+     */
+    private static function render_search_form(string $query, string $language, array $language_options, string|null $disabled_reason = null): void
     {
+        $disabled = $disabled_reason !== null;
+        $disabled_attribute = $disabled ? ' disabled="disabled"' : '';
+
+        if ($disabled) {
+            echo '<p>' . esc_html($disabled_reason) . '</p>';
+        }
+
         echo '<form method="get" action="' . esc_url(admin_url('tools.php')) . '" style="margin:1em 0;">';
         echo '<input type="hidden" name="page" value="language-fts-playground" />';
         echo '<label for="lft-query" class="screen-reader-text">' . esc_html__('Query', 'language-fts-playground') . '</label>';
-        echo '<input id="lft-query" type="search" name="lft_query" value="' . esc_attr($query) . '" class="regular-text" />';
+        echo '<input id="lft-query" type="search" name="lft_query" value="' . esc_attr($query) . '" class="regular-text"' . $disabled_attribute . ' />';
         echo ' <label for="lft-language" class="screen-reader-text">' . esc_html__('Language', 'language-fts-playground') . '</label>';
-        echo '<select id="lft-language" name="lft_language">';
-        $language_options = ['auto' => 'Automatic'];
-        foreach (self::analyzer()->enabled_languages() as $code) {
-            $language_options[$code] = self::analyzer()->language_label($code);
-        }
-
+        echo '<select id="lft-language" name="lft_language"' . $disabled_attribute . '>';
         foreach ($language_options as $code => $label) {
             echo '<option value="' . esc_attr($code) . '"' . selected($language, $code, false) . '>' . esc_html($label) . '</option>';
         }
         echo '</select> ';
-        submit_button(__('Search', 'language-fts-playground'), 'secondary', '', false);
+        if ($disabled) {
+            echo '<button type="submit" disabled="disabled">' . esc_html__('Search', 'language-fts-playground') . '</button>';
+        } else {
+            submit_button(__('Search', 'language-fts-playground'), 'secondary', '', false);
+        }
         echo '</form>';
+    }
+
+    private static function render_search_unavailable(string $reason): void
+    {
+        echo '<h2>' . esc_html__('Search results', 'language-fts-playground') . '</h2>';
+        echo '<p>' . esc_html($reason) . '</p>';
     }
 
     private static function render_sample_searches(): void

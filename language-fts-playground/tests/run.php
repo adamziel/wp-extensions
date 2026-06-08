@@ -2600,6 +2600,33 @@ test_case('admin page renders lexical pack status safely as curated seed data', 
     assert_not_contains_text('<script>', $html, 'Admin lexical pack status does not emit raw unsafe markup.');
 });
 
+test_case('admin page renders lexical pack status and disables search when custom root is invalid', function (): void {
+    reset_language_fts_plugin_runtime();
+    $missing_root = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'language-fts-missing-root-' . str_replace('.', '', uniqid('', true));
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($missing_root);
+
+    add_filter(
+        'language_fts_playground_lexical_resource_root',
+        static fn(): string => $missing_root,
+        10,
+        1
+    );
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = ob_get_clean();
+
+    assert_contains_text('Language FTS Playground', $html, 'The admin page shell still renders when a custom lexical root is missing.');
+    assert_contains_text('Lexical pack status', $html, 'The lexical pack status section still renders when analyzer setup fails.');
+    assert_contains_text('Language profile resource root does not exist: ' . $normalized_root, $html, 'The missing custom root error is visible to admins.');
+    assert_contains_text('Search is unavailable because lexical resources could not be loaded', $html, 'Search setup failure is explained instead of hidden.');
+    assert_contains_text('name="lft_query" value="orchard" class="regular-text" disabled="disabled"', $html, 'The search query control is disabled while lexical resources are unavailable.');
+    assert_contains_text('<select id="lft-language" name="lft_language" disabled="disabled">', $html, 'The search language selector is disabled while lexical resources are unavailable.');
+    assert_contains_text('<button type="submit" disabled="disabled">Search</button>', $html, 'The search submit control is disabled while lexical resources are unavailable.');
+    assert_not_contains_text('English visible: orchard', $html, 'Sample search links are hidden while lexical resources are unavailable.');
+    assert_not_contains_text('No matches for', $html, 'The admin page does not present an empty result set as a successful search.');
+});
+
 test_case('admin automatic results show matched language partition', function (): void {
     $storage = reset_language_fts_plugin_runtime();
     assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
