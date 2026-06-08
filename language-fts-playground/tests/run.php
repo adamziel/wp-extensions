@@ -742,11 +742,16 @@ function fixture_post(
     ];
 }
 
-function create_language_fts_temp_profile_tree(string $lexemes, string $synonyms = "# source\ttarget\tdirection\tweight\tprovenance\n"): string
+function create_language_fts_temp_profile_tree(
+    string $lexemes,
+    string $synonyms = "# source\ttarget\tdirection\tweight\tprovenance\n",
+    string|null $synsets = null
+): string
 {
     $root = sys_get_temp_dir() . '/language-fts-profile-' . str_replace('.', '-', uniqid('', true));
     $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
     assert_true(mkdir($language_dir, 0777, true), 'Temporary language profile directory is created.');
+    $synset_resource = $synsets === null ? '' : "        'synsets' => 'synsets.tsv',\n";
 
     file_put_contents(
         $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
@@ -757,12 +762,16 @@ function create_language_fts_temp_profile_tree(string $lexemes, string $synonyms
         "        'stopwords' => 'stopwords.txt',\n" .
         "        'lexemes' => 'lexemes.tsv',\n" .
         "        'synonyms' => 'synonyms.tsv',\n" .
+        $synset_resource .
         "    ],\n" .
         "];\n"
     );
     file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'stopwords.txt', "and\n");
     file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv', $lexemes);
     file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonyms.tsv', $synonyms);
+    if ($synsets !== null) {
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synsets.tsv', $synsets);
+    }
 
     return $root;
 }
@@ -799,9 +808,11 @@ test_case('loads resource-backed lexical profiles for stopwords, lexemes, folds,
     assert_true(isset($profile['stopwords']['oraz']), 'Polish stopwords are loaded from a resource file.');
     assert_same(['szukac'], $profile['lexemes']['szukaj'] ?? [], 'Polish search commands map to a canonical resource key.');
     assert_same(['wyszukiwac'], $profile['lexemes']['wyszukiwania'] ?? [], 'Polish inflected search nouns map to a canonical resource key.');
+    assert_same(['odnajdywac'], $profile['lexemes']['odnajdywanie'] ?? [], 'Polish related search nouns map to a canonical resource key.');
     assert_same('lodz', $analyzer->normalize_term('Łódź', 'pl'), 'Polish character folds are loaded from the profile.');
     assert_same('fuehrung', $analyzer->normalize_term('Führung', 'de'), 'German character folds are loaded from the profile.');
     assert_true(in_array('wyszukiwac', array_column($profile['synonyms']['szukac'] ?? [], 'term'), true), 'Polish query expansion is keyed by canonical resource terms.');
+    assert_true(in_array('odnajdywac', array_column($profile['synonyms']['szukac'] ?? [], 'term'), true), 'Polish synset expansions are included in the profile expansion map.');
 });
 
 test_case('rejects malformed lexical resource rows deliberately', function (): void {
@@ -822,10 +833,133 @@ test_case('rejects malformed lexical resource rows deliberately', function (): v
     }
 });
 
+test_case('loads synset resource rows into keyed query expansions', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\ntwo\tbeta\nthree\tgamma\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        "# concept_id\tweight\tprovenance\tterms\nconcept.search\t0.62\ttest-concept-pack\talpha beta gamma\n"
+    );
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $profile = $repository->profile('xx');
+
+        assert_same(['beta', 'gamma'], array_column($profile['synonyms']['alpha'] ?? [], 'term'), 'One concept row expands one term to every other concept term.');
+        assert_same(['alpha', 'gamma'], array_column($profile['synonyms']['beta'] ?? [], 'term'), 'Synset expansion is keyed for each concept term.');
+        assert_same(0.62, $profile['synonyms']['alpha'][0]['weight'] ?? null, 'Synset expansion carries its configured weight.');
+        assert_same('test-concept-pack', $profile['synonyms']['alpha'][0]['provenance'] ?? null, 'Synset expansion carries provenance.');
+        assert_same('synset', $profile['synonyms']['alpha'][0]['direction'] ?? null, 'Synset expansion records concept provenance in the direction field.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('single synset row expands many terms without pairwise synonym rows', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nlookup\tlookup\nfind\tfind\nlocate\tlocate\nsearch\tsearch\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        "# concept_id\tweight\tprovenance\tterms\nconcept.lookup\t0.5\ttest-concept-pack\tlookup find locate search\n"
+    );
+
+    try {
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $query_terms = $analyzer->analyze_query('lookup', 'xx');
+        $expansions = $analyzer->expand_query_synonyms($query_terms, 'xx');
+
+        assert_same(['lookup'], $query_terms, 'The query remains a single canonical key.');
+        assert_same(['find', 'locate', 'search'], array_column($expansions['lookup'] ?? [], 'term'), 'The synset row creates all non-self query expansions.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('rejects malformed synset resource rows deliberately', function (): void {
+    $cases = [
+        'wrong columns' => [
+            "# concept_id\tweight\tprovenance\tterms\nbroken\t0.5\tmissing-terms\n",
+            'synset rows must have exactly 4 tab-separated columns',
+        ],
+        'invalid weight' => [
+            "# concept_id\tweight\tprovenance\tterms\nbroken\t1.5\ttest\talpha beta\n",
+            'synset weight must be greater than 0 and no more than 1',
+        ],
+        'missing terms' => [
+            "# concept_id\tweight\tprovenance\tterms\nbroken\t0.5\ttest\t\n",
+            'synset terms must be non-empty',
+        ],
+        'broken whitespace' => [
+            "# concept_id\tweight\tprovenance\tterms\nbroken\t0.5\ttest\talpha  beta\n",
+            'synset terms must be separated by single spaces',
+        ],
+        'non-normalized term' => [
+            "# concept_id\tweight\tprovenance\tterms\nbroken\t0.5\ttest\tAlpha beta\n",
+            'synset terms must be normalized lowercase resource tokens',
+        ],
+    ];
+
+    foreach ($cases as $label => [$synsets, $expected_message]) {
+        $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\n", "# source\ttarget\tdirection\tweight\tprovenance\n", $synsets);
+
+        try {
+            $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+            $throwable = assert_throws(
+                UnexpectedValueException::class,
+                static fn(): array => $repository->profile('xx'),
+                "Malformed synset rows fail profile loading for {$label}."
+            );
+            assert_contains_text($expected_message, $throwable->getMessage(), "The malformed synset reason is reported for {$label}.");
+        } finally {
+            remove_language_fts_temp_tree($root);
+        }
+    }
+});
+
+test_case('rejects duplicate synset concept IDs', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\nbeta\tbeta\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        "# concept_id\tweight\tprovenance\tterms\nconcept.duplicate\t0.5\ttest\talpha beta\nconcept.duplicate\t0.4\ttest\talpha beta\n"
+    );
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Duplicate synset concept IDs fail profile loading.'
+        );
+        assert_contains_text('duplicate synset concept id', $throwable->getMessage(), 'The duplicate concept id reason is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('pairwise synonyms remain compatible and override duplicate synset pairs', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\nbeta\tbeta\ngamma\tgamma\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\nalpha\tbeta\tquery_to_index\t0.91\texplicit-override\ngamma\tbeta\tquery_to_index\t0.33\texplicit-pair\n",
+        "# concept_id\tweight\tprovenance\tterms\nconcept.search\t0.42\ttest-concept-pack\talpha beta\n"
+    );
+
+    try {
+        $profile = (new Language_FTS_Playground_Lexical_Profile_Repository($root))->profile('xx');
+
+        assert_same(['beta'], array_column($profile['synonyms']['alpha'] ?? [], 'term'), 'Duplicate source/target expansions are deduplicated.');
+        assert_same(0.91, $profile['synonyms']['alpha'][0]['weight'] ?? null, 'Explicit pairwise rows override duplicate synset weights.');
+        assert_same('explicit-override', $profile['synonyms']['alpha'][0]['provenance'] ?? null, 'Explicit pairwise provenance wins for duplicate pairs.');
+        assert_same(['beta'], array_column($profile['synonyms']['gamma'] ?? [], 'term'), 'Existing pairwise synonym rows still work without a matching synset.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('analyzer no longer ships a hardcoded query synonym map property', function (): void {
     $source = file_get_contents(__DIR__ . '/../src/Analyzer.php');
     assert_true(is_string($source), 'Analyzer source can be read.');
     assert_not_contains_text('$query_synonyms', $source, 'Analyzer does not retain the old hardcoded synonym-map property.');
+    foreach (['wyszukiwac', 'szukac', 'wyszukiwarka', 'odnajdywac'] as $polish_synonym_literal) {
+        assert_not_contains_text($polish_synonym_literal, $source, "Analyzer does not hardcode Polish synonym literal {$polish_synonym_literal}.");
+    }
 });
 
 test_case('extracts visible text and image alt while excluding markup noise', function (): void {
@@ -1003,7 +1137,7 @@ test_case('Polish resource-backed profile covers search commands, nouns, and sea
 
     $indexer->index_post(fixture_post(119, 'pl', 'Polski dokument', '<p>Partycja wyszukiwania pokazuje wynik.</p>'));
 
-    foreach (['szukaj', 'szukanie', 'wyszukiwarka', 'wyszukiwanie', 'wyszukiwania'] as $query) {
+    foreach (['szukaj', 'szukanie', 'wyszukiwarka', 'wyszukiwanie', 'wyszukiwania', 'odnajdywanie'] as $query) {
         $results = $searcher->search($query, 'auto');
         assert_same([119], array_column($results, 'post_id'), "Automatic Polish search for {$query} reaches the resource-backed target.");
         assert_same('pl', $results[0]['matched_language'], "Automatic Polish search for {$query} reports the matched partition.");
@@ -1013,8 +1147,9 @@ test_case('Polish resource-backed profile covers search commands, nouns, and sea
     $query_terms = $analyzer->analyze_query('szukaj', 'pl');
     assert_true(in_array('szukac', $query_terms, true), 'The command form szukaj receives the canonical szukac key from lexemes.tsv.');
     $expansions = $analyzer->expand_query_synonyms($query_terms, 'pl');
-    assert_true(isset($expansions['szukac']), 'The szukac canonical key expands through synonyms.tsv.');
-    assert_same('wyszukiwac', $expansions['szukac'][0]['term'], 'The szukac synonym target is the canonical wyszukiwac key.');
+    assert_true(isset($expansions['szukac']), 'The szukac canonical key expands through synsets.tsv.');
+    assert_true(in_array('wyszukiwac', array_column($expansions['szukac'], 'term'), true), 'The szukac synonym target includes the canonical wyszukiwac key.');
+    assert_true(in_array('odnajdywac', array_column($expansions['szukac'], 'term'), true), 'The szukac concept includes the related odnajdywac key.');
 });
 
 test_case('automatic search finds Polish synonym matches with matched language payloads', function (): void {

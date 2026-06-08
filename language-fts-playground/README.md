@@ -35,7 +35,7 @@ The seeded posts cover:
 - Markup/CSS/script/comment noise: search `ghostmarkup` in English and expect no matches.
 - Polish folding: search `lodz` in Polish for content containing `Łódź`.
 - Polish inflection keys: search `polska` or `partycja` in Polish for `polskiej partycji`.
-- Polish query-time synonyms: search `szukaj`, `szukanie`, or `wyszukiwarka` in Automatic or Polish mode to match indexed content containing `wyszukiwania`.
+- Polish concept synonyms: search `szukaj`, `szukanie`, `wyszukiwarka`, or `odnajdywanie` in Automatic or Polish mode to match indexed content containing `wyszukiwania`.
 - German folding: search `fuehrung` in German for content containing `Führung`.
 - German demo inflection keys: search `deutsch` for `deutschen` or `deutscher`, and `suche` for `Suchen`.
 
@@ -60,11 +60,13 @@ alt text searchable with a lower boost. Snippet highlighting compares query
 analysis keys with each source token's analysis keys, so demo inflection keys
 can highlight raw source forms such as `stories` for the query `story`.
 
-Synonym expansion is also query-time analyzer behavior. The demo ships curated
-Polish resource rows that map command/search noun keys such as `szukac` and
-`wyszukiwarka` to the indexed `wyszukiwac` key used by forms such as
-`wyszukiwania`; synonym-only matches are downweighted, stay in the same
-language partition, and highlight the matched source token normally.
+Synonym expansion is also query-time analyzer behavior. The demo ships a small
+curated Polish concept pack that groups canonical keys such as `szukac`,
+`wyszukiwac`, `wyszukiwarka`, and `odnajdywac`. Query expansion derives the
+other keys from that concept map, so forms such as `szukaj`, `szukanie`,
+`wyszukiwarka`, and `odnajdywanie` can match indexed `wyszukiwania`.
+Synonym-only matches are downweighted, stay in the same language partition, and
+highlight the matched source token normally.
 
 ## Lexical Profiles
 
@@ -83,6 +85,7 @@ resources/languages/
     stopwords.txt
     lexemes.tsv
     synonyms.tsv
+    synsets.tsv
   de/
     profile.php
     stopwords.txt
@@ -94,13 +97,32 @@ resources/languages/
 folds, optional language-detection signal regexes, and resource file names.
 `stopwords.txt` stores one normalized stopword per line. `lexemes.tsv` maps
 observed normalized forms to canonical keys, for example Polish `szukaj` to
-`szukac` and `wyszukiwania` to `wyszukiwac`. `synonyms.tsv` maps canonical query
-keys to canonical index keys with a weight and provenance. The parser validates
-row shapes and malformed resources fail during profile loading.
+`szukac`, `wyszukiwania` to `wyszukiwac`, and `odnajdywanie` to `odnajdywac`.
+`synsets.tsv` groups canonical keys by concept with a weight and provenance,
+without enumerating every pair in the file. `synonyms.tsv` remains the pairwise
+override/escape hatch for asymmetric fixes or targeted compatibility rows. The
+parser validates row shapes and malformed resources fail during profile
+loading.
 
 Profiles are parsed lazily and cached on the analyzer's profile repository.
-Stopwords, lexeme aliases, and synonym expansions are stored as keyed maps, so
-the analyzer does not scan resource files while analyzing each token.
+Stopwords, lexeme aliases, and concept-derived synonym expansions are stored as
+keyed maps, so the analyzer does not scan resource files while analyzing each
+token or expanding each query.
+
+The included resources are a curated demo seed, not a comprehensive synonym
+database. To add demo synonyms without editing PHP, add normalized observed
+forms to `lexemes.tsv`, add canonical keys to a `synsets.tsv` concept row, and
+declare the optional `synsets` resource in `profile.php` if that language does
+not already have one. Use `synonyms.tsv` only when an explicit pair should
+override or supplement concept-derived expansions.
+
+See `docs/lexical-resources.md` for the resource contract and
+`tools/compile-synsets.php` for a small PHP-only helper that compiles build-time
+`concept_id<TAB>canonical_term` membership rows into the runtime `synsets.tsv`
+format. Importing real WordNet/plWordNet-style databases later would require
+license review, source-specific normalization, canonical lexeme mapping,
+concept reduction, conservative weights, and generated resource files; the
+runtime plugin should continue to use local compiled resources only.
 
 ## Supported Analyzer Behavior
 
@@ -110,7 +132,7 @@ small set of language-scoped conservative fallback stem keys:
 
 - English lowercases terms and includes resource rows plus conservative keys for regular forms and a few guarded irregulars: `search` matches `searching`, `searched`, and `searches`; `story` matches `stories`; `make` matches `making`; `run` matches `running`; `child` matches `children`.
 - English keeps sensitive terms such as `news`, `bus`, and `analysis` exact, and avoids broad noun-to-verb collapses such as `runner` to `run`.
-- Polish folds diacritics from profile data, uses curated resource keys for `szukaj`/`szukanie`/`wyszukiwarka`/`wyszukiwanie`/`wyszukiwania`, and keeps fallback suffix keys for forms such as `polska`/`polskiej`, `partycja`/`partycji`, and `lodz`/`Łódź`.
+- Polish folds diacritics from profile data, uses curated resource keys and the demo concept pack for `szukaj`/`szukanie`/`wyszukiwarka`/`wyszukiwanie`/`wyszukiwania`/`odnajdywanie`, and keeps fallback suffix keys for forms such as `polska`/`polskiej`, `partycja`/`partycji`, and `lodz`/`Łódź`.
 - German folds `ä`, `ö`, `ü`, and `ß` from profile data to `ae`, `oe`, `ue`, and `ss`, then uses resource rows and fallback keys for demo forms such as `deutsch`/`deutschen`/`deutscher`/`deutsche`, `fuehrung`/`Führungen`, `strasse`/`Straßen`, `baum`/`Bäume`, and `spiel`/`gespielt`.
 - Short/common terms stay exact in every language to reduce noisy matches.
 
@@ -153,11 +175,12 @@ find language-fts-playground -name "*.php" -print0 | xargs -0 -n1 php -l
 This is a demo-sized implementation. The custom tables are intentionally simple
 and portable, with no production indexing optimizations. Ranking is meant for
 relative ordering inside one query and one language partition, not for comparing
-scores across languages or unrelated queries. The lexical resources are curated
-for the demo and are not full dictionaries; they are intended to be expanded or
-replaced later by generated resources from canonical linguistic sources. The
-fallback suffix rules are still conservative handwritten heuristics. The plugin
-does not implement full stemming, full lemmatization, multi-edit fuzzy search,
-or unconfigured cross-language fallback.
+scores across languages or unrelated queries. The lexical resources and concept
+pack are curated for the demo and are not full dictionaries or a shipped
+WordNet/plWordNet database; they are intended to be expanded or replaced later
+by generated resources from licensed linguistic sources. The fallback suffix
+rules are still conservative handwritten heuristics. The plugin does not
+implement full stemming, full lemmatization, multi-edit fuzzy search, or
+unconfigured cross-language fallback.
 Snippets are built from normalized field text, not from full-fidelity rendered
 HTML, and use a small fixed excerpt window for long fields.

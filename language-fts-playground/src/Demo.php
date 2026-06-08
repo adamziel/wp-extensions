@@ -105,8 +105,9 @@ final class Language_FTS_Playground_Demo
     {
         return [
             ['query' => 'orchard', 'language' => 'en', 'label' => 'English visible: orchard'],
-            ['query' => 'szukaj', 'language' => 'auto', 'label' => 'Automatic Polish synonym: szukaj'],
-            ['query' => 'wyszukiwarka', 'language' => 'auto', 'label' => 'Automatic Polish synonym: wyszukiwarka'],
+            ['query' => 'szukaj', 'language' => 'auto', 'label' => 'Automatic Polish concept: szukaj'],
+            ['query' => 'wyszukiwarka', 'language' => 'auto', 'label' => 'Automatic Polish concept: wyszukiwarka'],
+            ['query' => 'odnajdywanie', 'language' => 'auto', 'label' => 'Automatic Polish concept: odnajdywanie'],
             ['query' => 'summary', 'language' => 'en', 'label' => 'English excerpt: summary'],
             ['query' => 'search', 'language' => 'en', 'label' => 'English inflection: search'],
             ['query' => '"search pages"', 'language' => 'en', 'label' => 'English phrase: "search pages"'],

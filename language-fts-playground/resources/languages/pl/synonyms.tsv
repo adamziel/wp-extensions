@@ -1,3 +1,1 @@
 # source	target	direction	weight	provenance
-szukac	wyszukiwac	query_to_index	0.55	language-fts-playground-polish-curated
-wyszukiwarka	wyszukiwac	query_to_index	0.45	language-fts-playground-polish-curated

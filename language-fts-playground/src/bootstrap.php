@@ -10,7 +10,7 @@ if (!defined('LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION')) {
 }
 
 if (!defined('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION')) {
-    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-08-resource-backed-lexical-profiles');
+    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-08-concept-synonym-packs');
 }
 
 if (!defined('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE')) {

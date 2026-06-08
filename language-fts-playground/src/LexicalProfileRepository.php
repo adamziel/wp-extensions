@@ -8,7 +8,7 @@ declare(strict_types=1);
  *
  * - profile.php returns an array with id, label, optional order, optional
  *   normalization.fold map, optional language_signals regexes, and resource
- *   file names for stopwords, lexemes, and synonyms.
+ *   file names for stopwords, lexemes, synonyms, and optional synsets.
  * - stopwords.txt contains one already-normalized stopword per line. Empty
  *   lines and full-line comments beginning with "#" are ignored.
  * - lexemes.tsv contains "observed<TAB>canonical<TAB>provenance". The third
@@ -16,11 +16,16 @@ declare(strict_types=1);
  *   whitespace-free normalized terms.
  * - synonyms.tsv contains
  *   "source<TAB>target<TAB>direction<TAB>weight<TAB>provenance". Direction is
- *   "query_to_index" or "bidirectional"; weight must be in (0, 1].
+ *   "query_to_index" or "bidirectional"; weight must be in (0, 1]. Pairwise
+ *   rows are an explicit compatibility/override layer for targeted fixes.
+ * - synsets.tsv contains "concept_id<TAB>weight<TAB>provenance<TAB>terms".
+ *   Terms are single-space-separated normalized canonical keys. Each concept
+ *   expands every listed key to every other listed key at query time.
  *
  * The repository parses each language lazily and caches the parsed profile for
- * the analyzer instance. Parsed stopwords, lexemes, and synonyms are keyed maps
- * so token lookup and query expansion do not scan whole resource files.
+ * the analyzer instance. Parsed stopwords, lexemes, and query expansions are
+ * keyed maps so token lookup and query expansion do not scan whole resource
+ * files.
  */
 final class Language_FTS_Playground_Lexical_Profile_Repository
 {
@@ -186,6 +191,11 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             throw new UnexpectedValueException('Language profile resources must be an array in ' . $profile_file);
         }
 
+        $synset_expansions = isset($resources['synsets'])
+            ? $this->parse_synsets($this->resource_path($directory, $resources, 'synsets', $profile_file))
+            : [];
+        $pairwise_synonyms = $this->parse_synonyms($this->resource_path($directory, $resources, 'synonyms', $profile_file));
+
         return [
             'id' => $language,
             'label' => $this->language_label($language),
@@ -193,7 +203,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'language_signals' => $this->language_signals($language),
             'stopwords' => $this->parse_stopwords($this->resource_path($directory, $resources, 'stopwords', $profile_file)),
             'lexemes' => $this->parse_lexemes($this->resource_path($directory, $resources, 'lexemes', $profile_file)),
-            'synonyms' => $this->parse_synonyms($this->resource_path($directory, $resources, 'synonyms', $profile_file)),
+            'synonyms' => $this->merge_expansion_maps($synset_expansions, $pairwise_synonyms),
         ];
     }
 
@@ -395,13 +405,57 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             }
         }
 
-        ksort($synonyms, SORT_STRING);
-        foreach ($synonyms as $source => $targets) {
-            ksort($targets, SORT_STRING);
-            $synonyms[$source] = array_values($targets);
+        return $this->finalize_expansion_map($synonyms);
+    }
+
+    /**
+     * @return array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>
+     */
+    private function parse_synsets(string $path): array
+    {
+        $synsets = [];
+        $concept_ids = [];
+        foreach ($this->resource_lines($path) as $line_number => $line) {
+            $trimmed_line = trim($line);
+            if ($trimmed_line === '' || str_starts_with($trimmed_line, '#')) {
+                continue;
+            }
+
+            $line_number++;
+            $columns = explode("\t", $line);
+            if (count($columns) !== 4) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset rows must have exactly 4 tab-separated columns'));
+            }
+
+            $concept_id = $this->resource_token($columns[0], $path, $line_number);
+            if (isset($concept_ids[$concept_id])) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate synset concept id'));
+            }
+            $concept_ids[$concept_id] = true;
+
+            $weight = $this->resource_weight($columns[1], $path, $line_number, 'synset');
+            $provenance = trim($columns[2]);
+            if ($provenance === '') {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset provenance must be non-empty'));
+            }
+
+            $terms = $this->parse_synset_terms($columns[3], $path, $line_number);
+            if (count($terms) < 2) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset rows must contain at least 2 terms'));
+            }
+
+            foreach ($terms as $source) {
+                foreach ($terms as $target) {
+                    if ($source === $target) {
+                        continue;
+                    }
+
+                    $this->add_synset_expansion($synsets, $source, $target, $weight, $provenance);
+                }
+            }
         }
 
-        return $synonyms;
+        return $this->finalize_expansion_map($synsets);
     }
 
     /**
@@ -431,6 +485,125 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
+     * @param array<string,array<string,array{term:string,weight:float,source:string,direction:string,provenance:string}>> $synsets
+     */
+    private function add_synset_expansion(
+        array &$synsets,
+        string $source,
+        string $target,
+        float $weight,
+        string $provenance
+    ): void {
+        $existing = $synsets[$source][$target] ?? null;
+        if (
+            is_array($existing) &&
+            (
+                (float) $existing['weight'] > $weight ||
+                ((float) $existing['weight'] === $weight && strcmp((string) $existing['provenance'], $provenance) <= 0)
+            )
+        ) {
+            return;
+        }
+
+        $synsets[$source][$target] = [
+            'term' => $target,
+            'weight' => $weight,
+            'source' => $source,
+            'direction' => 'synset',
+            'provenance' => $provenance,
+        ];
+    }
+
+    /**
+     * @param array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>> $base
+     * @param array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>> $overrides
+     * @return array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>
+     */
+    private function merge_expansion_maps(array $base, array $overrides): array
+    {
+        $merged = [];
+        foreach ([$base, $overrides] as $map) {
+            foreach ($map as $source => $expansions) {
+                foreach ($expansions as $expansion) {
+                    $target = (string) ($expansion['term'] ?? '');
+                    if ($source === '' || $target === '' || $source === $target) {
+                        continue;
+                    }
+
+                    $merged[(string) $source][$target] = [
+                        'term' => $target,
+                        'weight' => (float) $expansion['weight'],
+                        'source' => (string) $source,
+                        'direction' => (string) $expansion['direction'],
+                        'provenance' => (string) $expansion['provenance'],
+                    ];
+                }
+            }
+        }
+
+        return $this->finalize_expansion_map($merged);
+    }
+
+    /**
+     * @param array<string,array<string,array{term:string,weight:float,source:string,direction:string,provenance:string}>> $expansions
+     * @return array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>
+     */
+    private function finalize_expansion_map(array $expansions): array
+    {
+        ksort($expansions, SORT_STRING);
+        foreach ($expansions as $source => $targets) {
+            ksort($targets, SORT_STRING);
+            $expansions[$source] = array_values($targets);
+        }
+
+        return $expansions;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function parse_synset_terms(string $terms_column, string $path, int $line_number): array
+    {
+        if (trim($terms_column) === '') {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset terms must be non-empty'));
+        }
+
+        if ($terms_column !== trim($terms_column) || str_contains($terms_column, '  ')) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset terms must be separated by single spaces'));
+        }
+
+        $terms = [];
+        foreach (explode(' ', $terms_column) as $term) {
+            if ($term === '') {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset terms must be separated by single spaces'));
+            }
+
+            $term = $this->normalized_resource_token($term, $path, $line_number, 'synset terms');
+            if (isset($terms[$term])) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate synset term'));
+            }
+            $terms[$term] = true;
+        }
+
+        return array_keys($terms);
+    }
+
+    private function resource_weight(string $value, string $path, int $line_number, string $label): float
+    {
+        $weight_raw = trim($value);
+        if (!is_numeric($weight_raw)) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} weight must be numeric"));
+        }
+
+        $weight = (float) $weight_raw;
+        if ($weight <= 0.0 || $weight > 1.0) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} weight must be greater than 0 and no more than 1"));
+        }
+
+        return $weight;
+    }
+
+    /**
      * @return string[]
      */
     private function resource_lines(string $path): array
@@ -457,6 +630,17 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
         if (strlen($token) > 255) {
             throw new UnexpectedValueException($this->resource_error($path, $line_number, 'resource tokens must be 255 bytes or shorter'));
+        }
+
+        return $token;
+    }
+
+    private function normalized_resource_token(string $value, string $path, int $line_number, string $label): string
+    {
+        $token = $this->resource_token($value, $path, $line_number);
+        $lowercase = function_exists('mb_strtolower') ? mb_strtolower($token, 'UTF-8') : strtolower($token);
+        if ($token !== $lowercase) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} must be normalized lowercase resource tokens"));
         }
 
         return $token;

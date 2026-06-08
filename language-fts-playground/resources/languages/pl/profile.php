@@ -34,5 +34,6 @@ return [
         'stopwords' => 'stopwords.txt',
         'lexemes' => 'lexemes.tsv',
         'synonyms' => 'synonyms.tsv',
+        'synsets' => 'synsets.tsv',
     ],
 ];
