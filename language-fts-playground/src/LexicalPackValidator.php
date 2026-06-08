@@ -123,6 +123,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 'pairwise_synonym_expansions' => 0,
                 'synset_rows' => 0,
                 'concept_expansions' => 0,
+                'phrase_synonym_rows' => 0,
+                'phrase_synonym_expansions' => 0,
             ],
             'max_synset_size' => 0,
             'max_expansion_fanout' => 0,
@@ -204,6 +206,11 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $status['counts']['synset_rows'] = $synsets['rows'];
             $status['counts']['concept_expansions'] = $synsets['expansions'];
             $status['max_synset_size'] = $synsets['max_synset_size'];
+        }
+        if (isset($resource_paths['synonym_phrases'])) {
+            $phrase_synonyms = $this->validate_synonym_phrases($resource_paths['synonym_phrases'], $warnings, $expansion_targets);
+            $status['counts']['phrase_synonym_rows'] = $phrase_synonyms['rows'];
+            $status['counts']['phrase_synonym_expansions'] = $phrase_synonyms['expansions'];
         }
 
         $status['max_expansion_fanout'] = $this->max_expansion_fanout($expansion_targets);
@@ -362,9 +369,11 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             }
         }
 
-        $synsets = $this->resolve_resource_path($directory, $resources, 'synsets', $profile_file, $warnings, false);
-        if ($synsets !== null) {
-            $paths['synsets'] = $synsets;
+        foreach (['synsets', 'synonym_phrases'] as $optional_key) {
+            $path = $this->resolve_resource_path($directory, $resources, $optional_key, $profile_file, $warnings, false);
+            if ($path !== null) {
+                $paths[$optional_key] = $path;
+            }
         }
 
         return $paths;
@@ -629,6 +638,76 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
+     * @param array<string,array<string,bool>> $expansion_targets
+     * @return array{rows:int,expansions:int}
+     */
+    private function validate_synonym_phrases(string $path, array &$warnings, array &$expansion_targets): array
+    {
+        $rows = 0;
+        $expansions = 0;
+        $seen_expansions = [];
+
+        foreach ($this->resource_lines($path, $warnings) as $line_number => $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+
+            $columns = explode("\t", $line);
+            if (count($columns) !== 5) {
+                $warnings[] = $this->resource_error($path, $line_number + 1, 'synonym phrase rows must have exactly 5 tab-separated columns');
+                continue;
+            }
+
+            $source_terms = $this->parse_synonym_phrase_terms($columns[0], $path, $line_number + 1, 'synonym phrase source terms', $warnings);
+            $target_terms = $this->parse_synonym_phrase_terms($columns[1], $path, $line_number + 1, 'synonym phrase target terms', $warnings);
+            if ($source_terms === null || $target_terms === null) {
+                continue;
+            }
+
+            $source = implode(' ', $source_terms);
+            $target = implode(' ', $target_terms);
+            if ($source === $target) {
+                $warnings[] = $this->resource_error($path, $line_number + 1, 'synonym phrase source and target must differ');
+                continue;
+            }
+
+            $direction = trim($columns[2]);
+            if (!in_array($direction, ['query_to_index', 'bidirectional'], true)) {
+                $warnings[] = $this->resource_error($path, $line_number + 1, 'synonym phrase direction must be query_to_index or bidirectional');
+                continue;
+            }
+
+            if ($this->resource_weight($columns[3], $path, $line_number + 1, 'synonym phrase', $warnings) === null) {
+                continue;
+            }
+
+            if (trim($columns[4]) === '') {
+                $warnings[] = $this->resource_error($path, $line_number + 1, 'synonym phrase provenance must be non-empty');
+                continue;
+            }
+
+            $rows++;
+            foreach ($direction === 'bidirectional' ? [[$source, $target], [$target, $source]] : [[$source, $target]] as $pair) {
+                [$pair_source, $pair_target] = $pair;
+                if (isset($seen_expansions[$pair_source][$pair_target])) {
+                    $warnings[] = $this->resource_error($path, $line_number + 1, 'duplicate synonym phrase source/target pair');
+                    continue;
+                }
+
+                $seen_expansions[$pair_source][$pair_target] = true;
+                $expansion_targets[$pair_source][$pair_target] = true;
+                $expansions++;
+            }
+        }
+
+        return [
+            'rows' => $rows,
+            'expansions' => $expansions,
+        ];
+    }
+
+    /**
      * @return string[]|null
      */
     private function parse_synset_terms(string $terms_column, string $path, int $line_number, array &$warnings): array|null
@@ -667,6 +746,54 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
             if (isset($terms[$term])) {
                 $warnings[] = $this->resource_error($path, $line_number, 'duplicate synset term');
+
+                return null;
+            }
+            $terms[$term] = true;
+        }
+
+        return array_keys($terms);
+    }
+
+    /**
+     * @return string[]|null
+     */
+    private function parse_synonym_phrase_terms(string $terms_column, string $path, int $line_number, string $label, array &$warnings): array|null
+    {
+        if (trim($terms_column) === '') {
+            $warnings[] = $this->resource_error($path, $line_number, "{$label} must be non-empty");
+
+            return null;
+        }
+
+        if ($terms_column !== trim($terms_column) || str_contains($terms_column, '  ')) {
+            $warnings[] = $this->resource_error($path, $line_number, "{$label} must be separated by single spaces");
+
+            return null;
+        }
+
+        $terms = [];
+        foreach (explode(' ', $terms_column) as $term) {
+            if ($term === '') {
+                $warnings[] = $this->resource_error($path, $line_number, "{$label} must be separated by single spaces");
+
+                return null;
+            }
+
+            $term = $this->resource_token($term, $path, $line_number, rtrim($label, 's'), $warnings);
+            if ($term === null) {
+                return null;
+            }
+
+            $lowercase = function_exists('mb_strtolower') ? mb_strtolower($term, 'UTF-8') : strtolower($term);
+            if ($term !== $lowercase) {
+                $warnings[] = $this->resource_error($path, $line_number, "{$label} must be normalized lowercase resource tokens");
+
+                return null;
+            }
+
+            if (isset($terms[$term])) {
+                $warnings[] = $this->resource_error($path, $line_number, 'duplicate ' . rtrim($label, 's'));
 
                 return null;
             }

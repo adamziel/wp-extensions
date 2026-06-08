@@ -618,12 +618,15 @@ final class Language_FTS_Playground_Plugin
             $metadata = isset($language['metadata']) && is_array($language['metadata']) ? $language['metadata'] : [];
             $counts = isset($language['counts']) && is_array($language['counts']) ? $language['counts'] : [];
             $warnings = array_values(array_map('strval', (array) ($language['warnings'] ?? [])));
-            $total_expansions = (int) ($counts['pairwise_synonym_expansions'] ?? 0) + (int) ($counts['concept_expansions'] ?? 0);
+            $total_expansions = (int) ($counts['pairwise_synonym_expansions'] ?? 0)
+                + (int) ($counts['concept_expansions'] ?? 0)
+                + (int) ($counts['phrase_synonym_expansions'] ?? 0);
             $count_text = sprintf(
-                /* translators: 1: lexeme rows, 2: synset rows, 3: synonym expansion rows */
-                __('lexemes %1$d; synsets %2$d; expansions %3$d', 'language-fts-playground'),
+                /* translators: 1: lexeme rows, 2: synset rows, 3: phrase synonym rows, 4: synonym expansion rows */
+                __('lexemes %1$d; synsets %2$d; phrase rows %3$d; expansions %4$d', 'language-fts-playground'),
                 (int) ($counts['lexeme_rows'] ?? 0),
                 (int) ($counts['synset_rows'] ?? 0),
+                (int) ($counts['phrase_synonym_rows'] ?? 0),
                 $total_expansions
             );
             $warning_text = $warnings === []

@@ -8,7 +8,8 @@ declare(strict_types=1);
  *
  * - profile.php returns an array with id, label, optional order, optional
  *   normalization.fold map, optional language_signals regexes, and resource
- *   file names for stopwords, lexemes, synonyms, and optional synsets.
+ *   file names for stopwords, lexemes, synonyms, optional synsets, and
+ *   optional synonym phrase rows.
  * - stopwords.txt contains one already-normalized stopword per line. Empty
  *   lines and full-line comments beginning with "#" are ignored.
  * - lexemes.tsv contains "observed<TAB>canonical<TAB>provenance". The third
@@ -21,6 +22,10 @@ declare(strict_types=1);
  * - synsets.tsv contains "concept_id<TAB>weight<TAB>provenance<TAB>terms".
  *   Terms are single-space-separated normalized canonical keys. Each concept
  *   expands every listed key to every other listed key at query time.
+ * - synonym_phrases.tsv contains
+ *   "source_terms<TAB>target_terms<TAB>direction<TAB>weight<TAB>provenance".
+ *   Source and target terms are single-space-separated normalized canonical
+ *   key sequences. Phrase rows are matched over analyzed query token keys.
  * - pack.php optionally returns provenance metadata for repository tooling and
  *   maintainers. Query-time profile loading does not read it.
  *
@@ -39,7 +44,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     private ?array $manifest = null;
 
     /**
-     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}>
+     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}>
      */
     private array $profiles = [];
 
@@ -114,7 +119,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}
+     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     public function profile(string $language): array
     {
@@ -135,7 +140,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
      * query expansion. They intentionally do not read pack metadata or source
      * import files.
      *
-     * @return array{stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>}
+     * @return array{stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     public function query_language_evidence(string $language): array
     {
@@ -147,6 +152,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'lexeme_forms' => $profile['lexeme_forms'],
             'canonical_keys' => $profile['canonical_keys'],
             'synonym_sources' => $profile['synonym_sources'],
+            'synonym_phrases' => $profile['synonym_phrases'],
         ];
     }
 
@@ -293,7 +299,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     /**
      * @param array{directory:string,profile:array<string,mixed>,order:int} $manifest_entry
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}
+     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     private function load_language_profile(string $language, array $manifest_entry): array
     {
@@ -308,9 +314,13 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         $synset_expansions = isset($resources['synsets'])
             ? $this->parse_synsets($this->resource_path($directory, $resources, 'synsets', $profile_file))
             : [];
+        $synonym_phrases = isset($resources['synonym_phrases'])
+            ? $this->parse_synonym_phrases($this->resource_path($directory, $resources, 'synonym_phrases', $profile_file))
+            : [];
         $pairwise_synonyms = $this->parse_synonyms($this->resource_path($directory, $resources, 'synonyms', $profile_file));
         $lexemes = $this->parse_lexemes($this->resource_path($directory, $resources, 'lexemes', $profile_file));
         $synonyms = $this->merge_expansion_maps($synset_expansions, $pairwise_synonyms);
+        $synonym_sources = array_merge(array_keys($synonyms), $this->synonym_phrase_source_labels($synonym_phrases));
 
         return [
             'id' => $language,
@@ -321,8 +331,9 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'lexemes' => $lexemes,
             'lexeme_forms' => $this->lookup_from_keys(array_keys($lexemes)),
             'canonical_keys' => $this->canonical_key_lookup($lexemes),
-            'synonym_sources' => $this->lookup_from_keys(array_keys($synonyms)),
+            'synonym_sources' => $this->lookup_from_keys($synonym_sources),
             'synonyms' => $synonyms,
+            'synonym_phrases' => $synonym_phrases,
         ];
     }
 
@@ -649,6 +660,60 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
+     * @return array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>
+     */
+    private function parse_synonym_phrases(string $path): array
+    {
+        $phrases = [];
+        $seen_pairs = [];
+        foreach ($this->resource_lines($path) as $line_number => $line) {
+            $trimmed_line = trim($line);
+            if ($trimmed_line === '' || str_starts_with($trimmed_line, '#')) {
+                continue;
+            }
+
+            $line_number++;
+            $columns = explode("\t", $line);
+            if (count($columns) !== 5) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synonym phrase rows must have exactly 5 tab-separated columns'));
+            }
+
+            $source_terms = $this->parse_phrase_terms($columns[0], $path, $line_number, 'synonym phrase source terms');
+            $target_terms = $this->parse_phrase_terms($columns[1], $path, $line_number, 'synonym phrase target terms');
+            $source = implode(' ', $source_terms);
+            $target = implode(' ', $target_terms);
+            if ($source === $target) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synonym phrase source and target must differ'));
+            }
+
+            $direction = trim($columns[2]);
+            if (!in_array($direction, ['query_to_index', 'bidirectional'], true)) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synonym phrase direction must be query_to_index or bidirectional'));
+            }
+
+            $weight = $this->resource_weight($columns[3], $path, $line_number, 'synonym phrase');
+            $provenance = trim($columns[4]);
+            if ($provenance === '') {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synonym phrase provenance must be non-empty'));
+            }
+
+            $this->add_synonym_phrase($phrases, $seen_pairs, $source_terms, $target_terms, $direction, $weight, $provenance, $path, $line_number);
+            if ($direction === 'bidirectional') {
+                $this->add_synonym_phrase($phrases, $seen_pairs, $target_terms, $source_terms, $direction, $weight, $provenance, $path, $line_number);
+            }
+        }
+
+        usort(
+            $phrases,
+            static fn(array $a, array $b): int => strcmp((string) $a['source'], (string) $b['source'])
+                ?: strcmp((string) $a['target'], (string) $b['target'])
+                ?: strcmp((string) $a['provenance'], (string) $b['provenance'])
+        );
+
+        return $phrases;
+    }
+
+    /**
      * @param array<string,array<string,array{term:string,weight:float,source:string,direction:string,provenance:string}>> $synonyms
      */
     private function add_synonym(
@@ -700,6 +765,42 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'weight' => $weight,
             'source' => $source,
             'direction' => 'synset',
+            'provenance' => $provenance,
+        ];
+    }
+
+    /**
+     * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}> $phrases
+     * @param array<string,bool> $seen_pairs
+     * @param string[] $source_terms
+     * @param string[] $target_terms
+     */
+    private function add_synonym_phrase(
+        array &$phrases,
+        array &$seen_pairs,
+        array $source_terms,
+        array $target_terms,
+        string $direction,
+        float $weight,
+        string $provenance,
+        string $path,
+        int $line_number
+    ): void {
+        $source = implode(' ', $source_terms);
+        $target = implode(' ', $target_terms);
+        $pair_key = $source . "\t" . $target;
+        if (isset($seen_pairs[$pair_key])) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate synonym phrase source/target pair'));
+        }
+        $seen_pairs[$pair_key] = true;
+
+        $phrases[] = [
+            'source_terms' => $source_terms,
+            'target_terms' => $target_terms,
+            'source' => $source,
+            'target' => $target,
+            'weight' => $weight,
+            'direction' => $direction,
             'provenance' => $provenance,
         ];
     }
@@ -813,6 +914,52 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return array_keys($terms);
+    }
+
+    /**
+     * @return string[]
+     */
+    private function parse_phrase_terms(string $terms_column, string $path, int $line_number, string $label): array
+    {
+        if (trim($terms_column) === '') {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} must be non-empty"));
+        }
+
+        if ($terms_column !== trim($terms_column) || str_contains($terms_column, '  ')) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} must be separated by single spaces"));
+        }
+
+        $terms = [];
+        foreach (explode(' ', $terms_column) as $term) {
+            if ($term === '') {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} must be separated by single spaces"));
+            }
+
+            $term = $this->normalized_resource_token($term, $path, $line_number, $label);
+            if (isset($terms[$term])) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate ' . rtrim($label, 's')));
+            }
+            $terms[$term] = true;
+        }
+
+        return array_keys($terms);
+    }
+
+    /**
+     * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}> $synonym_phrases
+     * @return string[]
+     */
+    private function synonym_phrase_source_labels(array $synonym_phrases): array
+    {
+        $sources = [];
+        foreach ($synonym_phrases as $phrase) {
+            $source = (string) ($phrase['source'] ?? '');
+            if ($source !== '') {
+                $sources[] = $source;
+            }
+        }
+
+        return $sources;
     }
 
     private function resource_weight(string $value, string $path, int $line_number, string $label): float

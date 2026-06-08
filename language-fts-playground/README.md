@@ -70,8 +70,12 @@ curated Polish concept pack that groups canonical keys such as `szukac`,
 `wyszukiwac`, `wyszukiwarka`, and `odnajdywac`. Query expansion derives the
 other keys from that concept map, so forms such as `szukaj`, `szukanie`,
 `wyszukiwarka`, and `odnajdywanie` can match indexed `wyszukiwania`.
-Synonym-only matches are downweighted, stay in the same language partition, and
-highlight the matched source token normally.
+The English seed also includes a small `synonym_phrases.tsv` resource for
+multiword query phrases such as `full text search` to `fts`. Phrase synonym
+targets with one key score as weighted synonym candidates; targets with
+multiple keys must match adjacent indexed positions rather than loose terms.
+Synonym-only and phrase-synonym-only matches are downweighted, stay in the same
+language partition, and highlight the matched source token normally.
 
 ## Lexical Profiles
 
@@ -86,6 +90,7 @@ resources/languages/
     stopwords.txt
     lexemes.tsv
     synonyms.tsv
+    synonym_phrases.tsv
   pl/
     profile.php
     pack.php
@@ -112,7 +117,9 @@ observed normalized forms to canonical keys, for example Polish `szukaj` to
 `szukac`, `wyszukiwania` to `wyszukiwac`, and `odnajdywanie` to `odnajdywac`.
 `synsets.tsv` groups canonical keys by concept with a weight and provenance,
 without enumerating every pair in the file. `synonyms.tsv` remains the pairwise
-override/escape hatch for asymmetric fixes or targeted compatibility rows. The
+override/escape hatch for asymmetric fixes or targeted compatibility rows.
+`synonym_phrases.tsv` is optional and maps space-separated canonical key
+sequences to target key sequences with a direction, weight, and provenance. The
 parser validates row shapes and malformed resources fail during profile
 loading.
 
@@ -125,15 +132,19 @@ Automatic language routing uses those same compact runtime maps. It does not
 load validator metadata, generated source import files, or external services at
 query time, and it does not require PHP code changes for new language ids. Add
 profile `language_signals`, lexeme rows, and synonym/synset source keys to give
-the router confidence evidence for custom packs; stopwords are useful only as a
-tie-breaker/booster once that non-stopword evidence exists.
+the router confidence evidence for custom packs. Phrase synonym source
+sequences also contribute confidence when their analyzed non-stopword keys
+match the query. Stopwords are useful only as a tie-breaker/booster once that
+non-stopword evidence exists.
 
 The included resources are a curated demo seed, not a comprehensive synonym
 database. To add demo synonyms without editing PHP, add normalized observed
 forms to `lexemes.tsv`, add canonical keys to a `synsets.tsv` concept row, and
 declare the optional `synsets` resource in `profile.php` if that language does
 not already have one. Use `synonyms.tsv` only when an explicit pair should
-override or supplement concept-derived expansions.
+override or supplement concept-derived expansions. Use `synonym_phrases.tsv`
+when the relationship needs a source or target sequence such as an acronym,
+product alias, organization name, or phrase.
 
 For build-time imports, use the PHP-only importer:
 
@@ -166,8 +177,9 @@ php language-fts-playground/tools/validate-lexical-packs.php --max-synset-size=6
 ```
 
 The validator reports pack provenance, whether every file listed in `pack.php`
-exists, stopword/lexeme/synset/expansion counts, max synset size, max per-term
-expansion fanout, and warnings for invalid metadata or malformed resource rows.
+exists, stopword/lexeme/synset/phrase/expansion counts, max synset size, max
+per-term expansion fanout, and warnings for invalid metadata or malformed
+resource rows.
 Broad synsets are dangerous for search quality because each term expands to
 every other term in the concept; a large or loosely related concept can turn a
 precise query into many weak matches. The threshold options make those cases
@@ -196,6 +208,10 @@ Fixture queries include `query`, optional `language` (`auto` by default),
 and optional notes/provenance. The evaluator reports recall@5, precision@5,
 MRR, nDCG@5, misses, and unexpected top-5 hits, then exits nonzero when a
 configured threshold or guard fails.
+
+The committed `phrase-suite.json` fixture checks the bundled
+`full text search -> fts` phrase synonym and includes a false-positive guard for
+partial acronym/token matches.
 
 The `Tools -> Language FTS` admin page includes a compact lexical pack status
 table with language, data kind, source, license, version/date, counts, and

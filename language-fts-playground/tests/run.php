@@ -787,13 +787,15 @@ function fixture_post(
 function create_language_fts_temp_profile_tree(
     string $lexemes,
     string $synonyms = "# source\ttarget\tdirection\tweight\tprovenance\n",
-    string|null $synsets = null
+    string|null $synsets = null,
+    string|null $synonym_phrases = null
 ): string
 {
     $root = sys_get_temp_dir() . '/language-fts-profile-' . str_replace('.', '-', uniqid('', true));
     $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
     assert_true(mkdir($language_dir, 0777, true), 'Temporary language profile directory is created.');
     $synset_resource = $synsets === null ? '' : "        'synsets' => 'synsets.tsv',\n";
+    $synonym_phrase_resource = $synonym_phrases === null ? '' : "        'synonym_phrases' => 'synonym_phrases.tsv',\n";
 
     file_put_contents(
         $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
@@ -805,6 +807,7 @@ function create_language_fts_temp_profile_tree(
         "        'lexemes' => 'lexemes.tsv',\n" .
         "        'synonyms' => 'synonyms.tsv',\n" .
         $synset_resource .
+        $synonym_phrase_resource .
         "    ],\n" .
         "];\n"
     );
@@ -813,6 +816,9 @@ function create_language_fts_temp_profile_tree(
     file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonyms.tsv', $synonyms);
     if ($synsets !== null) {
         file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synsets.tsv', $synsets);
+    }
+    if ($synonym_phrases !== null) {
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonym_phrases.tsv', $synonym_phrases);
     }
 
     return $root;
@@ -839,6 +845,9 @@ function create_language_fts_temp_profile_set(array $profiles): string
         if (array_key_exists('synsets', $definition)) {
             $resources['synsets'] = 'synsets.tsv';
         }
+        if (array_key_exists('synonym_phrases', $definition)) {
+            $resources['synonym_phrases'] = 'synonym_phrases.tsv';
+        }
 
         $profile = [
             'id' => $language,
@@ -863,6 +872,9 @@ function create_language_fts_temp_profile_set(array $profiles): string
         if (array_key_exists('synsets', $definition)) {
             file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synsets.tsv', (string) $definition['synsets']);
         }
+        if (array_key_exists('synonym_phrases', $definition)) {
+            file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonym_phrases.tsv', (string) $definition['synonym_phrases']);
+        }
     }
 
     return $root;
@@ -881,6 +893,9 @@ function write_language_fts_temp_pack_metadata(string $language_dir, array $over
     ];
     if (is_file($language_dir . DIRECTORY_SEPARATOR . 'synsets.tsv')) {
         $files[] = 'synsets.tsv';
+    }
+    if (is_file($language_dir . DIRECTORY_SEPARATOR . 'synonym_phrases.tsv')) {
+        $files[] = 'synonym_phrases.tsv';
     }
 
     $metadata = array_merge(
@@ -1455,6 +1470,254 @@ test_case('pairwise synonyms remain compatible and override duplicate synset pai
     }
 });
 
+test_case('loads synonym phrase resource rows into analyzer phrase expansions', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nfull text search\tfts\tquery_to_index\t0.82\tfixture-phrases\nsite search\tsearch site\tbidirectional\t0.72\tfixture-phrases\n"
+    );
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $profile = $repository->profile('xx');
+        $analyzer = new Language_FTS_Playground_Analyzer($repository);
+        $query_tokens = $analyzer->analyze_text_token_keys('full text search', 'xx');
+        $expansions = $analyzer->expand_query_synonym_phrases($query_tokens, 'xx');
+
+        assert_same(3, count($profile['synonym_phrases'] ?? []), 'Bidirectional synonym phrase rows are materialized into two runtime expansions.');
+        assert_same(['full', 'text', 'search'], $expansions[0]['source_terms'] ?? [], 'The analyzer matches the source phrase over ordered query keys.');
+        assert_same(['fts'], $expansions[0]['target_terms'] ?? [], 'The analyzer returns the configured target key sequence.');
+        assert_same(0.82, $expansions[0]['weight'] ?? null, 'The phrase expansion carries the configured weight.');
+
+        $reverse_tokens = $analyzer->analyze_text_token_keys('search site', 'xx');
+        $reverse = $analyzer->expand_query_synonym_phrases($reverse_tokens, 'xx');
+        assert_same(['site', 'search'], $reverse[0]['target_terms'] ?? [], 'Bidirectional phrase rows expand in the reverse direction.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('bundled full text search phrase synonym finds FTS without PHP hardcoding', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(127, 'en', 'Acronym note', '<p>FTS handles compact indexing.</p>'));
+
+    $results = $searcher->search('full text search', 'en');
+
+    assert_same([127], array_column($results, 'post_id'), 'The bundled phrase resource lets a full text search query find an FTS document.');
+    assert_contains_text('full text search=>fts', implode(', ', $results[0]['matched_terms'] ?? []), 'Phrase synonym diagnostics include source and target key sequences.');
+    assert_contains_text('<mark>FTS</mark>', $results[0]['snippet'] ?? '', 'Phrase synonym snippets highlight the indexed target token.');
+
+    $analyzer_source = file_get_contents(__DIR__ . '/../src/Analyzer.php');
+    $searcher_source = file_get_contents(__DIR__ . '/../src/Searcher.php');
+    assert_true(is_string($analyzer_source) && is_string($searcher_source), 'Runtime source files are readable.');
+    foreach (['full text search', 'portal lookup', 'search site'] as $phrase_literal) {
+        assert_not_contains_text($phrase_literal, $analyzer_source, "Analyzer does not hardcode phrase synonym literal {$phrase_literal}.");
+        assert_not_contains_text($phrase_literal, $searcher_source, "Searcher does not hardcode phrase synonym literal {$phrase_literal}.");
+    }
+});
+
+test_case('exact English phrase matches outrank phrase-synonym-only matches', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(128, 'en', 'Acronym only', '<p>FTS handles compact indexing.</p>'));
+    $indexer->index_post(fixture_post(129, 'en', 'Full text search guide', '<p>A direct title and body match.</p>'));
+
+    $results = $searcher->search('full text search', 'en');
+
+    assert_true(count($results) >= 2, 'Both exact and phrase-synonym-only English documents match.');
+    assert_same(129, $results[0]['post_id'], 'Exact full text search matches rank above phrase-synonym-only FTS matches.');
+    assert_same(128, $results[1]['post_id'], 'The phrase-synonym-only FTS match remains available below the exact match.');
+});
+
+test_case('multiword phrase synonym targets require adjacent indexed positions', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nportal lookup\tsearch site\tquery_to_index\t0.74\tfixture-phrases\n"
+    );
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(130, 'xx', 'Adjacent target', '<p>The search site is visible.</p>'));
+        $indexer->index_post(fixture_post(131, 'xx', 'Skipped boundary target', '<p>search <script>ignored()</script> site</p>'));
+        $indexer->index_post(fixture_post(132, 'xx', 'Loose target', '<p>search notes mention a public site later.</p>'));
+
+        $results = $searcher->search('portal lookup', 'xx');
+
+        assert_same([130], array_column($results, 'post_id'), 'A multiword phrase target matches only adjacent indexed target positions.');
+        assert_contains_text('portal lookup=>search site', implode(', ', $results[0]['matched_terms'] ?? []), 'Multiword phrase target diagnostics keep the phrase label.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('bidirectional phrase synonym rows work in both search directions', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nalpha beta\tgamma delta\tbidirectional\t0.66\tfixture-phrases\n"
+    );
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(133, 'xx', 'Forward target', '<p>gamma delta appears together.</p>'));
+        $indexer->index_post(fixture_post(134, 'xx', 'Reverse target', '<p>alpha beta appears together.</p>'));
+
+        $forward = $searcher->search('alpha beta', 'xx');
+        $reverse = $searcher->search('gamma delta', 'xx');
+
+        assert_true(in_array(133, array_column($forward, 'post_id'), true), 'The declared phrase direction expands source to target.');
+        assert_true(in_array(134, array_column($reverse, 'post_id'), true), 'Bidirectional phrase rows also expand target to source.');
+        foreach ($forward as $result) {
+            if ((int) $result['post_id'] === 133) {
+                assert_contains_text('alpha beta=>gamma delta', implode(', ', $result['matched_terms'] ?? []), 'Forward phrase diagnostics are reported.');
+            }
+        }
+        foreach ($reverse as $result) {
+            if ((int) $result['post_id'] === 134) {
+                assert_contains_text('gamma delta=>alpha beta', implode(', ', $result['matched_terms'] ?? []), 'Reverse phrase diagnostics are reported.');
+            }
+        }
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('rejects malformed synonym phrase resource rows deliberately', function (): void {
+    $cases = [
+        'wrong columns' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nbroken\tfts\tquery_to_index\t0.8\n",
+            'synonym phrase rows must have exactly 5 tab-separated columns',
+        ],
+        'empty source' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\n\tfts\tquery_to_index\t0.8\tfixture\n",
+            'synonym phrase source terms must be non-empty',
+        ],
+        'broken whitespace' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nfull  text\tfts\tquery_to_index\t0.8\tfixture\n",
+            'synonym phrase source terms must be separated by single spaces',
+        ],
+        'non-normalized term' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nFull text\tfts\tquery_to_index\t0.8\tfixture\n",
+            'synonym phrase source terms must be normalized lowercase resource tokens',
+        ],
+        'duplicate source term' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nfull full\tfts\tquery_to_index\t0.8\tfixture\n",
+            'duplicate synonym phrase source term',
+        ],
+        'invalid direction' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nfull text\tfts\tindex_to_query\t0.8\tfixture\n",
+            'synonym phrase direction must be query_to_index or bidirectional',
+        ],
+        'invalid weight' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nfull text\tfts\tquery_to_index\t1.5\tfixture\n",
+            'synonym phrase weight must be greater than 0 and no more than 1',
+        ],
+        'empty provenance' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nfull text\tfts\tquery_to_index\t0.8\t\n",
+            'synonym phrase provenance must be non-empty',
+        ],
+        'duplicate pair' => [
+            "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nfull text\tfts\tquery_to_index\t0.8\tfixture\nfull text\tfts\tquery_to_index\t0.7\tfixture\n",
+            'duplicate synonym phrase source/target pair',
+        ],
+    ];
+
+    foreach ($cases as $label => [$synonym_phrases, $expected_message]) {
+        $root = create_language_fts_temp_profile_tree(
+            "# observed\tcanonical\tprovenance\n",
+            "# source\ttarget\tdirection\tweight\tprovenance\n",
+            null,
+            $synonym_phrases
+        );
+
+        try {
+            $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+            $throwable = assert_throws(
+                UnexpectedValueException::class,
+                static fn(): array => $repository->profile('xx'),
+                "Malformed synonym phrase rows fail profile loading for {$label}."
+            );
+            assert_contains_text($expected_message, $throwable->getMessage(), "The malformed synonym phrase reason is reported for {$label}.");
+        } finally {
+            remove_language_fts_temp_tree($root);
+        }
+    }
+});
+
+test_case('automatic language routing uses phrase synonym source evidence without stopword-only confidence', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'qa' => [
+            'label' => 'Phrase QA',
+            'order' => 10,
+            'synonym_phrases' => "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nportal lookup\tsearch site\tquery_to_index\t0.74\tfixture-router\n",
+        ],
+        'qb' => [
+            'label' => 'Phrase QB',
+            'order' => 20,
+        ],
+        'qc' => [
+            'label' => 'Phrase QC',
+            'order' => 30,
+        ],
+    ]);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $ranked = $analyzer->rank_query_languages('portal lookup');
+        assert_same('qa', $ranked[0]['language'] ?? null, 'Phrase source evidence ranks the fake language.');
+        assert_true(in_array('portal lookup', $ranked[0]['reasons']['synonym_sources'] ?? [], true), 'Phrase source evidence is reported with the synonym source reasons.');
+
+        $indexer->index_post(fixture_post(135, 'qa', 'Phrase target', '<p>search site appears together.</p>'));
+        $indexer->index_post(fixture_post(136, 'qb', 'Exact bait', '<p>portal lookup would match if QB were searched.</p>'));
+        $indexer->index_post(fixture_post(137, 'qc', 'Exact bait', '<p>portal lookup would match if QC were searched.</p>'));
+
+        $results = $searcher->search('portal lookup', 'auto');
+        assert_same(['qa'], $storage->fetch_postings_languages, 'Confident phrase evidence queries only the selected fake language partition.');
+        assert_same([135], array_column($results, 'post_id'), 'The routed phrase search returns the phrase-synonym target.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+
+    $stopword_root = create_language_fts_temp_profile_set([
+        'sw' => [
+            'label' => 'Stopword Phrase',
+            'order' => 10,
+            'stopwords' => "and\nor\n",
+            'synonym_phrases' => "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nand or\talpha\tquery_to_index\t0.8\tfixture-router\n",
+        ],
+    ]);
+
+    try {
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($stopword_root));
+        assert_same([], $analyzer->rank_query_languages('and or'), 'Stopword-only phrase sources do not create confident language evidence.');
+    } finally {
+        remove_language_fts_temp_tree($stopword_root);
+    }
+});
+
 test_case('loads lexical pack provenance metadata explicitly', function (): void {
     $repository = new Language_FTS_Playground_Lexical_Profile_Repository();
     $metadata = $repository->pack_metadata('pl');
@@ -1487,6 +1750,8 @@ test_case('valid lexical packs produce deterministic validation stats', function
     assert_same(42, $by_id['en']['counts']['stopwords'] ?? null, 'English stopword count is deterministic.');
     assert_same(22, $by_id['en']['counts']['lexeme_rows'] ?? null, 'English lexeme count is deterministic.');
     assert_same(0, $by_id['en']['counts']['synset_rows'] ?? null, 'English does not ship synset rows yet.');
+    assert_same(3, $by_id['en']['counts']['phrase_synonym_rows'] ?? null, 'English ships deterministic phrase synonym seed rows.');
+    assert_same(4, $by_id['en']['counts']['phrase_synonym_expansions'] ?? null, 'English bidirectional phrase rows produce deterministic phrase expansions.');
     assert_same(33, $by_id['pl']['counts']['stopwords'] ?? null, 'Polish stopword count is deterministic.');
     assert_same(34, $by_id['pl']['counts']['lexeme_rows'] ?? null, 'Polish lexeme count is deterministic.');
     assert_same(1, $by_id['pl']['counts']['synset_rows'] ?? null, 'Polish seed pack has one concept synset row.');
@@ -1544,6 +1809,27 @@ test_case('lexical pack validator warns and fails for malformed metadata', funct
         assert_contains_text('source_name', $warnings, 'Missing source name is reported.');
         assert_contains_text('pack_date', $warnings, 'Invalid pack date is reported.');
         assert_contains_text('data_kind', $warnings, 'Invalid data kind is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator warns and fails for malformed synonym phrase rows', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nalpha alpha\tbeta\tquery_to_index\t0.8\tfixture\n"
+    );
+    write_language_fts_temp_pack_metadata($root . DIRECTORY_SEPARATOR . 'xx');
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Malformed synonym phrase resources make validation fail.');
+        assert_contains_text('duplicate synonym phrase source term', $warnings, 'Validator reports malformed synonym phrase rows.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
@@ -1627,6 +1913,16 @@ test_case('lexical pack evaluator passes the committed fixture with quality gate
     assert_contains_text('precision@5: 0.2000', $result['output'], 'Human evaluator output includes precision@5.');
     assert_contains_text('MRR: 1.0000', $result['output'], 'Human evaluator output includes MRR.');
     assert_contains_text('nDCG@5: 1.0000', $result['output'], 'Human evaluator output includes nDCG@5.');
+});
+
+test_case('lexical pack evaluator passes the committed phrase synonym fixture', function (): void {
+    $result = run_language_fts_evaluator(language_fts_eval_fixture_path('phrase-suite.json'), ['json' => true]);
+    $decoded = json_decode($result['output'], true);
+
+    assert_same(0, $result['exit_code'], 'Committed phrase synonym relevance fixture passes. Output: ' . $result['output']);
+    assert_true(is_array($decoded), 'Phrase synonym evaluator JSON is parseable.');
+    assert_same(true, $decoded['passed'] ?? null, 'Phrase synonym evaluator output reports success.');
+    assert_contains_text('full text search=>fts', $result['output'], 'Phrase synonym evaluator output includes phrase diagnostics.');
 });
 
 test_case('lexical pack evaluator JSON is deterministic and parseable', function (): void {
@@ -2026,6 +2322,8 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('plWordNet', $docs, 'Lexical docs mention plWordNet source caveats.');
     assert_contains_text('validate-lexical-packs.php', $docs, 'Lexical docs describe the validation CLI.');
     assert_contains_text('evaluate-lexical-pack.php', $docs, 'Lexical docs describe the relevance evaluator CLI.');
+    assert_contains_text('synonym_phrases.tsv', $docs, 'Lexical docs describe synonym phrase resources.');
+    assert_contains_text('full text search -> fts', $docs, 'Lexical docs describe the committed phrase synonym smoke fixture.');
     assert_contains_text('--max-synset-size', $docs, 'Lexical docs describe synset size thresholds.');
     assert_contains_text('recall@5', $docs, 'Lexical docs describe evaluator relevance metrics.');
     assert_contains_text('Broad synsets are dangerous', $docs, 'Lexical docs explain broad synset search-quality risk.');
@@ -2033,6 +2331,7 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('seed data unless', $readme, 'README keeps the shipped-data limitation explicit.');
     assert_contains_text('validate-lexical-packs.php', $readme, 'README documents the validation CLI.');
     assert_contains_text('evaluate-lexical-pack.php', $readme, 'README documents the relevance evaluator CLI.');
+    assert_contains_text('synonym_phrases.tsv', $readme, 'README documents phrase synonym resources.');
     assert_contains_text('curated_seed', $readme, 'README confirms current shipped packs are curated seed data.');
 });
 
@@ -3057,7 +3356,7 @@ test_case('admin page renders lexical pack status safely as curated seed data', 
     assert_contains_text('Language FTS Playground curated English seed data', $html, 'Admin page shows pack source names.');
     assert_contains_text('GPL-2.0-or-later', $html, 'Admin page shows pack licenses.');
     assert_contains_text('2026-06-08-seed 2026-06-08', $html, 'Admin page shows pack version/date.');
-    assert_contains_text('lexemes 34; synsets 1; expansions 12', $html, 'Admin page shows compact Polish pack counts.');
+    assert_contains_text('lexemes 34; synsets 1; phrase rows 0; expansions 12', $html, 'Admin page shows compact Polish pack counts.');
     assert_not_contains_text('<script>', $html, 'Admin lexical pack status does not emit raw unsafe markup.');
 });
 

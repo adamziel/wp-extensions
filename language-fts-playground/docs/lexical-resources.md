@@ -8,7 +8,8 @@ expansion does not scan resource files.
 The repository separates two concerns:
 
 - Runtime packs are compact local files: `stopwords.txt`, `lexemes.tsv`,
-  `synonyms.tsv`, optional `synsets.tsv`, and `pack.php` provenance metadata.
+  `synonyms.tsv`, optional `synsets.tsv`, optional `synonym_phrases.tsv`, and
+  `pack.php` provenance metadata.
 - Build-time imports convert source-specific fixtures or pre-extracted lexical
   database exports into those compact runtime files.
 
@@ -27,11 +28,12 @@ normalization folds, optional language signal regexes, and resource file names:
     'lexemes' => 'lexemes.tsv',
     'synonyms' => 'synonyms.tsv',
     'synsets' => 'synsets.tsv',
+    'synonym_phrases' => 'synonym_phrases.tsv',
 ],
 ```
 
-`synsets` is optional. `synonyms.tsv` remains required for compatibility, even
-when it contains only the header.
+`synsets` and `synonym_phrases` are optional. `synonyms.tsv` remains required
+for compatibility, even when it contains only the header.
 
 `pack.php` returns provenance metadata for maintainers and tests. The runtime
 repository loads it only when `pack_metadata()` is called, not during normal
@@ -53,6 +55,7 @@ return [
         'lexemes.tsv',
         'synonyms.tsv',
         'synsets.tsv',
+        'synonym_phrases.tsv',
     ],
     'data_kind' => 'curated_seed',
 ];
@@ -99,6 +102,29 @@ Use it for targeted overrides or asymmetric relationships. `direction` is
 than `1`. If a pairwise row duplicates a concept-derived source/target pair,
 the explicit pairwise row wins.
 
+`synonym_phrases.tsv` maps analyzed query key sequences to one or more target
+key sequences:
+
+```text
+# source_terms<TAB>target_terms<TAB>direction<TAB>weight<TAB>provenance
+full text search	fts	query_to_index	0.82	language-fts-playground-english-curated_seed
+site search	search site	bidirectional	0.72	language-fts-playground-english-curated_seed
+```
+
+Both `source_terms` and `target_terms` are single-space-separated normalized
+canonical analyzer keys. Runtime search matches source sequences over the
+ordered query token-key sequence after tokenization, lexeme mapping, stemming,
+and stopword removal. A one-key target scores as a weighted phrase-synonym
+candidate. A multi-key target must match adjacent indexed positions; it is not
+treated as unrelated loose terms. Exact canonical matches still rank above
+phrase-synonym-only matches.
+
+The parser rejects malformed column counts, empty source or target sequences,
+broken spacing, duplicate terms inside one sequence, uppercase terms, invalid
+directions, invalid weights, empty provenance, no-op source/target pairs, and
+duplicate source/target phrase pairs. Bidirectional rows materialize both
+directions deterministically.
+
 ## Validation And Admin Status
 
 Run the pack validator before committing generated resources:
@@ -120,7 +146,8 @@ The validator reports, per language:
 - language id and label,
 - `pack.php` source name, source URL, license, version/date, data kind, and provenance,
 - whether every runtime file listed in `pack.php` exists,
-- stopword rows, lexeme rows, pairwise synonym rows/expansions, synset rows, and concept-derived expansions,
+- stopword rows, lexeme rows, pairwise synonym rows/expansions, synset rows,
+  concept-derived expansions, phrase synonym rows, and phrase synonym expansions,
 - max synset size and max unique expansion fanout for any one term,
 - warnings for invalid metadata, missing files, malformed rows, duplicate rows, and broad synsets.
 
@@ -210,6 +237,10 @@ to recall@5, precision@5, MRR, and nDCG@5. `irrelevant` ids are guard rails:
 if any of them appear in the top five, the evaluator reports an unexpected hit
 and exits nonzero. Human output lists misses and unexpected top-5 ids per
 query; `--json` emits deterministic machine-readable metrics for CI.
+
+The committed `phrase-suite.json` fixture is a small smoke test for
+resource-backed phrase synonyms. It checks `full text search -> fts` recall and
+guards against a separated partial-acronym bait document.
 
 ## Custom Resource Roots
 

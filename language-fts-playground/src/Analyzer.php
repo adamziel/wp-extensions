@@ -14,6 +14,7 @@ final class Language_FTS_Playground_Analyzer
     private const QUERY_LANGUAGE_LEXEME_FORM_WEIGHT = 3.0;
     private const QUERY_LANGUAGE_CANONICAL_KEY_WEIGHT = 2.0;
     private const QUERY_LANGUAGE_SYNONYM_SOURCE_WEIGHT = 2.5;
+    private const QUERY_LANGUAGE_PHRASE_SYNONYM_SOURCE_WEIGHT = 4.0;
     private const QUERY_LANGUAGE_STOPWORD_WEIGHT = 0.75;
 
     /** @var array<string,bool> */
@@ -181,6 +182,14 @@ final class Language_FTS_Playground_Analyzer
                         }
                     }
                 }
+
+                $query_token_keys = $this->analyze_text_token_keys($query, $language);
+                foreach ($this->expand_query_synonym_phrases($query_token_keys, $language) as $phrase_expansion) {
+                    $source = (string) ($phrase_expansion['source'] ?? '');
+                    if ($source !== '' && $this->add_query_language_reason($reasons, 'synonym_sources', $source)) {
+                        $score += self::QUERY_LANGUAGE_PHRASE_SYNONYM_SOURCE_WEIGHT;
+                    }
+                }
             }
 
             if ($score > 0.0) {
@@ -295,6 +304,64 @@ final class Language_FTS_Playground_Analyzer
         foreach ($expanded as $source => $targets) {
             $expanded[$source] = array_values($targets);
         }
+
+        return $expanded;
+    }
+
+    /**
+     * @param array<int,string[]> $query_token_keys
+     * @return array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string,offset:int}>
+     */
+    public function expand_query_synonym_phrases(array $query_token_keys, string $language): array
+    {
+        $language = $this->canonical_language($language);
+        if ($query_token_keys === []) {
+            return [];
+        }
+
+        $phrases = $this->profiles->profile($language)['synonym_phrases'];
+        if ($phrases === []) {
+            return [];
+        }
+
+        $expanded = [];
+        $query_length = count($query_token_keys);
+        foreach ($phrases as $phrase) {
+            $source_terms = array_values(array_map('strval', $phrase['source_terms'] ?? []));
+            $source_length = count($source_terms);
+            if ($source_length === 0 || $source_length > $query_length) {
+                continue;
+            }
+
+            for ($offset = 0; $offset <= $query_length - $source_length; $offset++) {
+                if (!$this->query_tokens_match_source($query_token_keys, $offset, $source_terms)) {
+                    continue;
+                }
+
+                $target_terms = array_values(array_map('strval', $phrase['target_terms'] ?? []));
+                $source = (string) ($phrase['source'] ?? implode(' ', $source_terms));
+                $target = (string) ($phrase['target'] ?? implode(' ', $target_terms));
+                $key = $offset . "\t" . $source . "\t" . $target;
+                $expanded[$key] = [
+                    'source_terms' => $source_terms,
+                    'target_terms' => $target_terms,
+                    'source' => $source,
+                    'target' => $target,
+                    'weight' => (float) $phrase['weight'],
+                    'direction' => (string) $phrase['direction'],
+                    'provenance' => (string) $phrase['provenance'],
+                    'offset' => $offset,
+                ];
+            }
+        }
+
+        $expanded = array_values($expanded);
+        usort(
+            $expanded,
+            static fn(array $a, array $b): int => ((int) $a['offset'] <=> (int) $b['offset'])
+                ?: strcmp((string) $a['source'], (string) $b['source'])
+                ?: strcmp((string) $a['target'], (string) $b['target'])
+        );
 
         return $expanded;
     }
@@ -764,6 +831,22 @@ final class Language_FTS_Playground_Analyzer
         }
 
         return array_keys($unique);
+    }
+
+    /**
+     * @param array<int,string[]> $query_token_keys
+     * @param string[] $source_terms
+     */
+    private function query_tokens_match_source(array $query_token_keys, int $offset, array $source_terms): bool
+    {
+        foreach ($source_terms as $index => $source_term) {
+            $token_keys = array_fill_keys(array_map('strval', $query_token_keys[$offset + $index] ?? []), true);
+            if (!isset($token_keys[$source_term])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function canonical_language_or_null(string|null $language): ?string

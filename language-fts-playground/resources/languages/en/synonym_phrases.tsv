@@ -1,0 +1,4 @@
+# source_terms	target_terms	direction	weight	provenance
+full text search	fts	query_to_index	0.82	language-fts-playground-english-curated_seed
+portal lookup	search site	query_to_index	0.74	language-fts-playground-english-curated_seed
+site search	search site	bidirectional	0.72	language-fts-playground-english-curated_seed

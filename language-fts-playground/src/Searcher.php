@@ -114,8 +114,10 @@ final class Language_FTS_Playground_Searcher
         }
 
         $synonym_expansions = $this->analyzer->expand_query_synonyms($plan['exact_terms'], $language);
+        $phrase_synonym_expansions = $this->analyzer->expand_query_synonym_phrases($plan['query_tokens'], $language);
         $synonym_terms = $this->synonym_terms($synonym_expansions);
-        $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms, $synonym_terms));
+        $phrase_synonym_terms = $this->phrase_synonym_terms($phrase_synonym_expansions);
+        $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms, $synonym_terms, $phrase_synonym_terms));
         if ($terms === []) {
             return [];
         }
@@ -143,13 +145,17 @@ final class Language_FTS_Playground_Searcher
         }
 
         $positions = [];
-        if ($plan['phrases'] !== []) {
-            $positions = $this->storage->fetch_positions($language, $this->phrase_terms($plan['phrases']), array_keys($candidate_ids));
+        $position_terms = $this->unique_terms(array_merge(
+            $this->phrase_terms($plan['phrases']),
+            $this->multiword_phrase_synonym_terms($phrase_synonym_expansions)
+        ));
+        if ($position_terms !== []) {
+            $positions = $this->storage->fetch_positions($language, $position_terms, array_keys($candidate_ids));
         }
 
         $document_fields = $this->storage->fetch_document_fields($language, array_keys($candidate_ids));
         $average_length = array_sum($document_lengths) / max(1, count($document_lengths));
-        $has_lower_priority_match = $plan['fuzzy_terms'] !== [] || $synonym_expansions !== [];
+        $has_lower_priority_match = $plan['fuzzy_terms'] !== [] || $synonym_expansions !== [] || $phrase_synonym_expansions !== [];
         $results = [];
         foreach (array_keys($candidate_ids) as $post_id) {
             if (!isset($document_lengths[$post_id])) {
@@ -268,6 +274,14 @@ final class Language_FTS_Playground_Searcher
                 }
             }
 
+            foreach ($this->best_phrase_synonym_scores($phrase_synonym_expansions, $postings, $positions, (int) $post_id, $document_lengths[$post_id], $document_count, $average_length) as $match) {
+                $score += (float) $match['score'];
+                $matched_terms[(string) $match['label']] = true;
+                foreach ($match['fields'] as $field) {
+                    $matched_fields[(string) $field] = true;
+                }
+            }
+
             if ($score > 0.0) {
                 $matched_field_names = $this->sort_fields(array_keys($matched_fields));
                 $results[] = [
@@ -347,7 +361,121 @@ final class Language_FTS_Playground_Searcher
     }
 
     /**
-     * @return array{exact_terms:string[],phrases:array<int,array<int,string[]>>,fuzzy_terms:string[]}
+     * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string,offset:int}> $expansions
+     * @return string[]
+     */
+    private function phrase_synonym_terms(array $expansions): array
+    {
+        $terms = [];
+        foreach ($expansions as $expansion) {
+            foreach ($expansion['target_terms'] as $term) {
+                $terms[] = (string) $term;
+            }
+        }
+
+        return $this->unique_terms($terms);
+    }
+
+    /**
+     * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string,offset:int}> $expansions
+     * @return string[]
+     */
+    private function multiword_phrase_synonym_terms(array $expansions): array
+    {
+        $terms = [];
+        foreach ($expansions as $expansion) {
+            if (count($expansion['target_terms']) < 2) {
+                continue;
+            }
+
+            foreach ($expansion['target_terms'] as $term) {
+                $terms[] = (string) $term;
+            }
+        }
+
+        return $this->unique_terms($terms);
+    }
+
+    /**
+     * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string,offset:int}> $expansions
+     * @param array<string,array<int,array<string,int>>> $postings
+     * @param array<string,array<int,int[]>> $positions
+     * @return array<int,array{score:float,label:string,fields:string[]}>
+     */
+    private function best_phrase_synonym_scores(
+        array $expansions,
+        array $postings,
+        array $positions,
+        int $post_id,
+        int $document_length,
+        int $document_count,
+        float $average_length
+    ): array {
+        $best_by_source = [];
+        foreach ($expansions as $expansion) {
+            $target_terms = $this->unique_terms($expansion['target_terms']);
+            if ($target_terms === []) {
+                continue;
+            }
+
+            if (count($target_terms) > 1 && !$this->document_matches_phrase($this->terms_to_phrase($target_terms), $positions, $post_id)) {
+                continue;
+            }
+
+            $score = 0.0;
+            $fields = [];
+            foreach ($target_terms as $target_term) {
+                $field_tfs = $postings[$target_term][$post_id] ?? [];
+                if ($field_tfs === []) {
+                    $score = 0.0;
+                    break;
+                }
+
+                $document_frequency = count($postings[$target_term] ?? []);
+                $score += $this->bm25(
+                    $this->weighted_term_frequency($field_tfs),
+                    $document_length,
+                    $document_count,
+                    $document_frequency,
+                    $average_length
+                );
+                foreach ($field_tfs as $field => $tf) {
+                    if ((int) $tf > 0) {
+                        $fields[(string) $field] = true;
+                    }
+                }
+            }
+
+            $score *= (float) $expansion['weight'];
+            if ($score <= 0.0) {
+                continue;
+            }
+
+            $source_key = (string) ($expansion['offset'] ?? 0) . "\t" . (string) $expansion['source'];
+            $label = (string) $expansion['source'] . '=>' . (string) $expansion['target'];
+            $candidate = [
+                'score' => $score,
+                'label' => $label,
+                'fields' => $this->sort_fields(array_keys($fields)),
+            ];
+
+            $existing = $best_by_source[$source_key] ?? null;
+            if (
+                !is_array($existing) ||
+                $candidate['score'] > (float) $existing['score'] ||
+                ($candidate['score'] === (float) $existing['score'] && strcmp($candidate['label'], (string) $existing['label']) < 0)
+            ) {
+                $best_by_source[$source_key] = $candidate;
+            }
+        }
+
+        ksort($best_by_source, SORT_STRING);
+
+        return array_values($best_by_source);
+    }
+
+    /**
+     * @return array{exact_terms:string[],phrases:array<int,array<int,string[]>>,fuzzy_terms:string[],query_tokens:array<int,string[]>}
      */
     private function parse_query(string $query, string $language): array
     {
@@ -358,12 +486,14 @@ final class Language_FTS_Playground_Searcher
                 'exact_terms' => [],
                 'phrases' => [],
                 'fuzzy_terms' => [],
+                'query_tokens' => [],
             ];
         }
 
         $exact_terms = [];
         $phrases = [];
         $fuzzy_terms = [];
+        $query_tokens = [];
         foreach ($matches as $match) {
             if (array_key_exists(1, $match) && trim((string) $match[1]) !== '') {
                 $phrase = $this->analyzer->analyze_text_token_keys((string) $match[1], $language);
@@ -372,6 +502,7 @@ final class Language_FTS_Playground_Searcher
                 }
 
                 $phrases[] = $phrase;
+                array_push($query_tokens, ...$phrase);
                 foreach ($phrase as $token_keys) {
                     foreach ($token_keys as $key) {
                         $exact_terms[$key] = true;
@@ -383,11 +514,14 @@ final class Language_FTS_Playground_Searcher
             $raw = (string) ($match[2] ?? $match[0]);
             $is_fuzzy = str_ends_with($raw, '~');
             $term_query = $is_fuzzy ? substr($raw, 0, -1) : $raw;
-            $terms = $this->analyzer->analyze_query($term_query, $language);
-            foreach ($terms as $term) {
-                $exact_terms[$term] = true;
-                if ($is_fuzzy && strlen($term) >= $this->fuzzy_min_length) {
-                    $fuzzy_terms[$term] = true;
+            $token_keys_list = $this->analyzer->analyze_text_token_keys($term_query, $language);
+            array_push($query_tokens, ...$token_keys_list);
+            foreach ($token_keys_list as $token_keys) {
+                foreach ($token_keys as $term) {
+                    $exact_terms[$term] = true;
+                    if ($is_fuzzy && strlen($term) >= $this->fuzzy_min_length) {
+                        $fuzzy_terms[$term] = true;
+                    }
                 }
             }
         }
@@ -396,6 +530,7 @@ final class Language_FTS_Playground_Searcher
             'exact_terms' => array_keys($exact_terms),
             'phrases' => $phrases,
             'fuzzy_terms' => array_keys($fuzzy_terms),
+            'query_tokens' => $query_tokens,
         ];
     }
 
@@ -446,6 +581,23 @@ final class Language_FTS_Playground_Searcher
         }
 
         return $this->unique_terms($terms);
+    }
+
+    /**
+     * @param string[] $terms
+     * @return array<int,string[]>
+     */
+    private function terms_to_phrase(array $terms): array
+    {
+        $phrase = [];
+        foreach ($terms as $term) {
+            $term = trim((string) $term);
+            if ($term !== '') {
+                $phrase[] = [$term];
+            }
+        }
+
+        return $phrase;
     }
 
     /**

@@ -9,5 +9,6 @@ return [
         'stopwords' => 'stopwords.txt',
         'lexemes' => 'lexemes.tsv',
         'synonyms' => 'synonyms.tsv',
+        'synonym_phrases' => 'synonym_phrases.tsv',
     ],
 ];

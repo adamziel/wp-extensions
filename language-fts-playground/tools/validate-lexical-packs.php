@@ -160,7 +160,9 @@ function language_fts_validate_packs_print_human(array $report): void
         $warnings = array_values(array_map('strval', (array) ($language['warnings'] ?? [])));
         $prefix = empty($language['valid']) ? 'FAIL' : 'OK';
         $version = trim((string) ($metadata['pack_version'] ?? '') . ' ' . (string) ($metadata['pack_date'] ?? ''));
-        $expansions = (int) ($counts['pairwise_synonym_expansions'] ?? 0) + (int) ($counts['concept_expansions'] ?? 0);
+        $expansions = (int) ($counts['pairwise_synonym_expansions'] ?? 0)
+            + (int) ($counts['concept_expansions'] ?? 0)
+            + (int) ($counts['phrase_synonym_expansions'] ?? 0);
 
         echo $prefix . ' ' . (string) ($language['label'] ?? '') . ' (' . (string) ($language['language_id'] ?? '') . ")\n";
         echo '  kind: ' . (string) ($metadata['data_kind'] ?? '') . "\n";
@@ -173,6 +175,8 @@ function language_fts_validate_packs_print_human(array $report): void
             . ', pairwise expansions ' . (int) ($counts['pairwise_synonym_expansions'] ?? 0)
             . ', synsets ' . (int) ($counts['synset_rows'] ?? 0)
             . ', concept expansions ' . (int) ($counts['concept_expansions'] ?? 0)
+            . ', phrase rows ' . (int) ($counts['phrase_synonym_rows'] ?? 0)
+            . ', phrase expansions ' . (int) ($counts['phrase_synonym_expansions'] ?? 0)
             . ', total expansions ' . $expansions . "\n";
         echo '  max synset size: ' . (int) ($language['max_synset_size'] ?? 0)
             . ', max expansion fanout: ' . (int) ($language['max_expansion_fanout'] ?? 0) . "\n";
