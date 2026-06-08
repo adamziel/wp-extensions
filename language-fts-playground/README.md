@@ -15,12 +15,13 @@ database-native ranking.
 
 Install and activate the `language-fts-playground/` directory as a WordPress
 plugin, then open `Tools -> Language FTS`. Activation seeds three published demo
-posts and rebuilds the index.
+posts, queues a rebuild, and processes the first bounded indexing batch.
 
 The seeded posts cover:
 
 - English visible text: search `orchard` in English.
 - English demo inflection keys: search `search` in English for visible `searching`, `searched`, and `searches`; search `story` for image alt text containing `stories`.
+- Lifecycle demo text: search `queue` in English for the production-style indexing copy.
 - English image alt text: search `falconalt` in English.
 - Markup/CSS/script/comment noise: search `ghostmarkup` in English and expect no matches.
 - Polish folding: search `lodz` in Polish for content containing `Łódź`.
@@ -29,6 +30,24 @@ The seeded posts cover:
 - German demo inflection keys: search `deutsch` for `deutschen` or `deutscher`, and `suche` for `Suchen`.
 
 The language selector searches only the selected language partition by default.
+
+## Index Lifecycle
+
+The plugin stores separate schema and analyzer versions. When either changes,
+the admin page marks the index as requiring a rebuild instead of silently
+serving stale analyzer output forever.
+
+Post saves do not rebuild the whole index. Published posts from public post
+types are added to an option-backed queue, and WP-Cron or the `Process queue`
+admin action processes that queue in bounded batches. Draft, private, trashed,
+password-protected, deleted, revision, and autosave states are removed from or
+ignored by the index as appropriate.
+
+`Tools -> Language FTS` includes controls to seed demo posts, rebuild the index,
+process one queue batch, and clear the index. Each action uses the standard
+admin capability and nonce checks. The status panel shows indexed document
+count, queued count, rebuild-required state, and the latest status or storage
+error when available.
 
 ## Supported Analyzer Behavior
 
@@ -50,7 +69,7 @@ https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.co
 
 The Blueprint installs this monorepo subdirectory with `installPlugin` using
 `git:directory`, activates the plugin, seeds demo posts, rebuilds the PHP index,
-and lands on the admin search page.
+processes the first bounded queue batch, and lands on the admin search page.
 
 ## Development Checks
 
@@ -63,10 +82,12 @@ find language-fts-playground -name "*.php" -print0 | xargs -0 -n1 php -l
 
 ## Limitations
 
-This is a demo-sized implementation. The custom tables are intentionally simple
-and portable, with no production indexing optimizations. Ranking is meant for
-relative ordering inside one query and one language partition, not for comparing
-scores across languages or unrelated queries. The analyzer folds only the
-language behavior needed for the demo, including conservative English, Polish,
-and German suffix-key generators. It does not implement full stemming,
+This is still a demo-sized implementation. The custom tables are intentionally
+simple and portable. The queue is backed by WordPress options with merge and
+completion-token checks to reduce lost updates, but it is not a substitute for a
+dedicated job table or external queue under heavy write concurrency. Ranking is
+meant for relative ordering inside one query and one language partition, not for
+comparing scores across languages or unrelated queries. The analyzer folds only
+the language behavior needed for the demo, including conservative English,
+Polish, and German suffix-key generators. It does not implement full stemming,
 lemmatization, synonyms, phrase search, typo tolerance, or multilingual fallback.

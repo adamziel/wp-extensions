@@ -15,12 +15,18 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     /** @var array<string,array<string,array<int,int>>> */
     private array $postings = [];
 
+    public int $install_count = 0;
+    public int $clear_count = 0;
+    public int $delete_count = 0;
+
     public function install(): void
     {
+        $this->install_count++;
     }
 
     public function clear(): void
     {
+        $this->clear_count++;
         $this->documents = [];
         $this->postings = [];
     }
@@ -50,6 +56,7 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
     public function delete_document(int $post_id): void
     {
+        $this->delete_count++;
         unset($this->documents[$post_id]);
         foreach ($this->postings as $language => $terms) {
             foreach ($terms as $term => $postings) {
@@ -107,6 +114,63 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     }
 }
 
+final class Language_FTS_Playground_Test_Failing_Storage implements Language_FTS_Playground_Storage_Interface
+{
+    public function __construct(private string $message = 'Simulated storage failure.')
+    {
+    }
+
+    public function install(): void
+    {
+    }
+
+    public function clear(): void
+    {
+        throw new RuntimeException($this->message);
+    }
+
+    public function replace_document(
+        int $post_id,
+        string $language,
+        string $title,
+        string $status,
+        int $document_length,
+        array $term_frequencies
+    ): void {
+        unset($post_id, $language, $title, $status, $document_length, $term_frequencies);
+        throw new RuntimeException($this->message);
+    }
+
+    public function delete_document(int $post_id): void
+    {
+        unset($post_id);
+        throw new RuntimeException($this->message);
+    }
+
+    public function fetch_postings(string $language, array $terms): array
+    {
+        unset($language, $terms);
+        throw new RuntimeException($this->message);
+    }
+
+    public function fetch_document_lengths(string $language, array $post_ids): array
+    {
+        unset($language, $post_ids);
+        throw new RuntimeException($this->message);
+    }
+
+    public function document_count(string $language): int
+    {
+        unset($language);
+        throw new RuntimeException($this->message);
+    }
+
+    public function all_documents(): array
+    {
+        throw new RuntimeException($this->message);
+    }
+}
+
 /**
  * @var array<int,array{name:string,fn:callable}>
  */
@@ -142,6 +206,357 @@ function assert_contains_text(string $needle, string $haystack, string $message)
 function assert_not_contains_text(string $needle, string $haystack, string $message): void
 {
     assert_true(!str_contains($haystack, $needle), $message . "\nUnexpected: {$needle}\nText: {$haystack}");
+}
+
+function reset_language_fts_wp_state(): void
+{
+    $GLOBALS['language_fts_test_options'] = [];
+    $GLOBALS['language_fts_test_posts'] = [];
+    $GLOBALS['language_fts_test_post_meta'] = [];
+    $GLOBALS['language_fts_test_revisions'] = [];
+    $GLOBALS['language_fts_test_autosaves'] = [];
+    $GLOBALS['language_fts_test_actions'] = [];
+    $GLOBALS['language_fts_test_scheduled'] = [];
+    $GLOBALS['language_fts_test_current_user_can'] = true;
+    $GLOBALS['language_fts_test_last_redirect'] = null;
+    $_GET = [];
+    $_POST = [];
+}
+
+function set_language_fts_plugin_runtime(Language_FTS_Playground_Storage_Interface $storage): void
+{
+    $storage_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'storage');
+    $storage_property->setAccessible(true);
+    $storage_property->setValue(null, $storage);
+
+    $analyzer_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'analyzer');
+    $analyzer_property->setAccessible(true);
+    $analyzer_property->setValue(null, new Language_FTS_Playground_Analyzer());
+}
+
+function reset_language_fts_plugin_runtime(Language_FTS_Playground_Storage_Interface|null $storage = null): Language_FTS_Playground_Storage_Interface
+{
+    reset_language_fts_wp_state();
+    $storage = $storage ?? new Language_FTS_Playground_Test_Storage();
+    set_language_fts_plugin_runtime($storage);
+
+    return $storage;
+}
+
+if (!function_exists('get_option')) {
+    function get_option(string $name, mixed $default = false): mixed
+    {
+        return array_key_exists($name, $GLOBALS['language_fts_test_options'] ?? [])
+            ? $GLOBALS['language_fts_test_options'][$name]
+            : $default;
+    }
+}
+
+if (!function_exists('update_option')) {
+    function update_option(string $name, mixed $value, mixed $autoload = null): bool
+    {
+        unset($autoload);
+        $old_value = get_option($name, null);
+        $GLOBALS['language_fts_test_options'][$name] = $value;
+
+        return $old_value !== $value;
+    }
+}
+
+if (!function_exists('add_option')) {
+    function add_option(string $name, mixed $value = '', mixed $deprecated = '', mixed $autoload = null): bool
+    {
+        unset($deprecated, $autoload);
+        if (array_key_exists($name, $GLOBALS['language_fts_test_options'] ?? [])) {
+            return false;
+        }
+
+        $GLOBALS['language_fts_test_options'][$name] = $value;
+
+        return true;
+    }
+}
+
+if (!function_exists('delete_option')) {
+    function delete_option(string $name): bool
+    {
+        $existed = array_key_exists($name, $GLOBALS['language_fts_test_options'] ?? []);
+        unset($GLOBALS['language_fts_test_options'][$name]);
+
+        return $existed;
+    }
+}
+
+if (!function_exists('add_action')) {
+    function add_action(string $hook, callable|array|string $callback, int $priority = 10, int $accepted_args = 1): bool
+    {
+        $GLOBALS['language_fts_test_actions'][$hook][] = [
+            'callback' => $callback,
+            'priority' => $priority,
+            'accepted_args' => $accepted_args,
+        ];
+
+        return true;
+    }
+}
+
+if (!function_exists('wp_next_scheduled')) {
+    function wp_next_scheduled(string $hook): int|false
+    {
+        return isset($GLOBALS['language_fts_test_scheduled'][$hook]) ? 1 : false;
+    }
+}
+
+if (!function_exists('wp_schedule_single_event')) {
+    function wp_schedule_single_event(int $timestamp, string $hook): bool
+    {
+        $GLOBALS['language_fts_test_scheduled'][$hook][] = $timestamp;
+
+        return true;
+    }
+}
+
+if (!function_exists('wp_is_post_revision')) {
+    function wp_is_post_revision(int $post_id): int|false
+    {
+        return !empty($GLOBALS['language_fts_test_revisions'][$post_id]) ? $post_id : false;
+    }
+}
+
+if (!function_exists('wp_is_post_autosave')) {
+    function wp_is_post_autosave(int $post_id): int|false
+    {
+        return !empty($GLOBALS['language_fts_test_autosaves'][$post_id]) ? $post_id : false;
+    }
+}
+
+if (!function_exists('get_post')) {
+    function get_post(int|object|null $post = null): object|null
+    {
+        if (is_object($post)) {
+            return $post;
+        }
+
+        $post_id = (int) $post;
+
+        return $GLOBALS['language_fts_test_posts'][$post_id] ?? null;
+    }
+}
+
+if (!function_exists('get_posts')) {
+    function get_posts(array $args = []): array
+    {
+        $posts = array_values($GLOBALS['language_fts_test_posts'] ?? []);
+        $statuses = array_map('strval', (array) ($args['post_status'] ?? []));
+        $types = array_map('strval', (array) ($args['post_type'] ?? []));
+
+        $posts = array_values(array_filter(
+            $posts,
+            static function (object $post) use ($statuses, $types): bool {
+                $status_matches = $statuses === [] || in_array((string) ($post->post_status ?? ''), $statuses, true);
+                $type_matches = $types === [] || in_array((string) ($post->post_type ?? 'post'), $types, true);
+
+                return $status_matches && $type_matches;
+            }
+        ));
+
+        usort($posts, static fn(object $a, object $b): int => ((int) ($a->ID ?? 0)) <=> ((int) ($b->ID ?? 0)));
+
+        if (($args['fields'] ?? '') === 'ids') {
+            return array_map(static fn(object $post): int => (int) $post->ID, $posts);
+        }
+
+        return $posts;
+    }
+}
+
+if (!function_exists('get_post_type')) {
+    function get_post_type(int|object|null $post = null): string|false
+    {
+        $post = is_object($post) ? $post : get_post((int) $post);
+
+        return is_object($post) ? (string) ($post->post_type ?? 'post') : false;
+    }
+}
+
+if (!function_exists('get_post_type_object')) {
+    function get_post_type_object(string $post_type): object|null
+    {
+        $public = !in_array($post_type, ['revision', 'nav_menu_item', 'private_type'], true);
+
+        return (object) [
+            'name' => $post_type,
+            'public' => $public,
+            'publicly_queryable' => $public,
+        ];
+    }
+}
+
+if (!function_exists('get_post_meta')) {
+    function get_post_meta(int $post_id, string $key = '', bool $single = false): mixed
+    {
+        unset($single);
+
+        return $GLOBALS['language_fts_test_post_meta'][$post_id][$key] ?? '';
+    }
+}
+
+if (!function_exists('current_user_can')) {
+    function current_user_can(string $capability): bool
+    {
+        unset($capability);
+
+        return (bool) ($GLOBALS['language_fts_test_current_user_can'] ?? false);
+    }
+}
+
+if (!function_exists('wp_die')) {
+    function wp_die(string $message): never
+    {
+        throw new RuntimeException($message);
+    }
+}
+
+if (!function_exists('check_admin_referer')) {
+    function check_admin_referer(string $action): bool
+    {
+        unset($action);
+
+        return true;
+    }
+}
+
+if (!function_exists('__')) {
+    function __(string $text, string $domain = 'default'): string
+    {
+        unset($domain);
+
+        return $text;
+    }
+}
+
+if (!function_exists('esc_html__')) {
+    function esc_html__(string $text, string $domain = 'default'): string
+    {
+        unset($domain);
+
+        return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+}
+
+if (!function_exists('esc_html')) {
+    function esc_html(string $text): string
+    {
+        return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+}
+
+if (!function_exists('esc_attr')) {
+    function esc_attr(string $text): string
+    {
+        return htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    }
+}
+
+if (!function_exists('esc_url')) {
+    function esc_url(string $url): string
+    {
+        return $url;
+    }
+}
+
+if (!function_exists('sanitize_text_field')) {
+    function sanitize_text_field(string $text): string
+    {
+        return trim(strip_tags($text));
+    }
+}
+
+if (!function_exists('sanitize_key')) {
+    function sanitize_key(string $key): string
+    {
+        return preg_replace('/[^a-z0-9_\-]/', '', strtolower($key)) ?? '';
+    }
+}
+
+if (!function_exists('wp_unslash')) {
+    function wp_unslash(string $value): string
+    {
+        return stripslashes($value);
+    }
+}
+
+if (!function_exists('admin_url')) {
+    function admin_url(string $path = ''): string
+    {
+        return '/wp-admin/' . ltrim($path, '/');
+    }
+}
+
+if (!function_exists('wp_nonce_url')) {
+    function wp_nonce_url(string $url, string $action): string
+    {
+        return $url . (str_contains($url, '?') ? '&' : '?') . '_wpnonce=' . rawurlencode($action);
+    }
+}
+
+if (!function_exists('add_query_arg')) {
+    function add_query_arg(array $args, string $url): string
+    {
+        return $url . (str_contains($url, '?') ? '&' : '?') . http_build_query($args);
+    }
+}
+
+if (!function_exists('selected')) {
+    function selected(mixed $selected, mixed $current = true, bool $display = true): string
+    {
+        $result = (string) $selected === (string) $current ? ' selected="selected"' : '';
+        if ($display) {
+            echo $result;
+        }
+
+        return $result;
+    }
+}
+
+if (!function_exists('submit_button')) {
+    function submit_button(string $text, string $type = 'primary', string $name = 'submit', bool $wrap = true): void
+    {
+        unset($type, $name, $wrap);
+        echo '<button type="submit">' . esc_html($text) . '</button>';
+    }
+}
+
+if (!function_exists('number_format_i18n')) {
+    function number_format_i18n(float $number, int $decimals = 0): string
+    {
+        return number_format($number, $decimals, '.', ',');
+    }
+}
+
+if (!function_exists('get_edit_post_link')) {
+    function get_edit_post_link(int $post_id): string
+    {
+        return '/wp-admin/post.php?post=' . $post_id . '&action=edit';
+    }
+}
+
+if (!function_exists('get_the_title')) {
+    function get_the_title(int|object $post): string
+    {
+        $post = is_object($post) ? $post : get_post((int) $post);
+
+        return is_object($post) ? (string) ($post->post_title ?? '') : '';
+    }
+}
+
+if (!function_exists('wp_safe_redirect')) {
+    function wp_safe_redirect(string $location): bool
+    {
+        $GLOBALS['language_fts_test_last_redirect'] = $location;
+
+        return true;
+    }
 }
 
 function assert_query_terms_overlap(
@@ -182,11 +597,21 @@ function assert_query_terms_do_not_overlap(
     );
 }
 
-function fixture_post(int $id, string $language, string $title, string $content): object
+function fixture_post(
+    int $id,
+    string $language,
+    string $title,
+    string $content,
+    string $status = 'publish',
+    string $post_type = 'post',
+    string $password = ''
+): object
 {
     return (object) [
         'ID' => $id,
-        'post_status' => 'publish',
+        'post_status' => $status,
+        'post_type' => $post_type,
+        'post_password' => $password,
         'post_title' => $title,
         'post_excerpt' => '',
         'post_content' => $content,
@@ -349,6 +774,126 @@ test_case('ranks higher term frequency first', function (): void {
     assert_true(count($results) >= 2, 'Both English documents match.');
     assert_same(10, $results[0]['post_id'], 'The denser document ranks first.');
     assert_true($results[0]['score'] > $results[1]['score'], 'BM25 score reflects term frequency.');
+});
+
+test_case('stores lifecycle versions and flags rebuilds on schema or analyzer change', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    update_option('language_fts_playground_schema_version', 'old-schema');
+    update_option('language_fts_playground_analyzer_version', 'old-analyzer');
+
+    Language_FTS_Playground_Plugin::ensure_schema();
+
+    assert_same(1, $storage->install_count, 'Upgrade installs schema idempotently once.');
+    assert_same(LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION, get_option('language_fts_playground_schema_version'), 'Schema version is stored separately.');
+    assert_same(LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION, get_option('language_fts_playground_analyzer_version'), 'Analyzer version is stored separately.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'Analyzer/schema changes mark a rebuild as required.');
+});
+
+test_case('queues saved public posts and processes bounded batches', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $first = fixture_post(201, 'en', 'Queued orchard one', '<p>orchard one</p>');
+    $second = fixture_post(202, 'en', 'Queued orchard two', '<p>orchard two</p>');
+    $GLOBALS['language_fts_test_posts'][201] = $first;
+    $GLOBALS['language_fts_test_posts'][202] = $second;
+
+    Language_FTS_Playground_Plugin::index_saved_post(201, $first, true);
+    Language_FTS_Playground_Plugin::index_saved_post(202, $second, true);
+
+    assert_same([], $storage->all_documents(), 'Save hooks queue work instead of indexing synchronously.');
+    assert_same(2, Language_FTS_Playground_Plugin::queued_count(), 'Both changed posts are queued.');
+    assert_true($GLOBALS['language_fts_test_scheduled'] !== [], 'Queueing schedules a cron processor.');
+
+    $first_batch = Language_FTS_Playground_Plugin::process_index_queue(1);
+    assert_same(1, $first_batch['processed'], 'Only one queued post is processed in a one-item batch.');
+    assert_same(1, count($storage->all_documents()), 'One document is indexed after the first bounded batch.');
+    assert_same(1, Language_FTS_Playground_Plugin::queued_count(), 'One queued post remains after the first bounded batch.');
+
+    $second_batch = Language_FTS_Playground_Plugin::process_index_queue(10);
+    assert_same(1, $second_batch['processed'], 'The remaining queued post is processed by a later batch.');
+    assert_same(2, count($storage->all_documents()), 'Both documents are indexed after the second batch.');
+    assert_same(0, Language_FTS_Playground_Plugin::queued_count(), 'The queue is empty after all items are processed.');
+});
+
+test_case('removes non-public lifecycle states and ignores revisions and autosaves', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $indexer = new Language_FTS_Playground_Indexer($storage, new Language_FTS_Playground_Analyzer());
+
+    foreach (['draft', 'private', 'trash'] as $status) {
+        $published = fixture_post(300, 'en', 'Published orchard', '<p>orchard visible</p>');
+        $indexer->index_post($published);
+        assert_same(1, count($storage->all_documents()), 'The fixture starts indexed.');
+
+        $non_public = fixture_post(300, 'en', 'Hidden orchard', '<p>orchard hidden</p>', $status);
+        Language_FTS_Playground_Plugin::transition_post_status($status, 'publish', $non_public);
+
+        assert_same([], $storage->all_documents(), "{$status} posts are removed from the index.");
+        assert_same(0, Language_FTS_Playground_Plugin::queued_count(), "{$status} posts are not left in the queue.");
+    }
+
+    $indexer->index_post(fixture_post(301, 'en', 'Password orchard', '<p>orchard protected</p>'));
+    $passworded = fixture_post(301, 'en', 'Password orchard', '<p>orchard protected</p>', 'publish', 'post', 'secret');
+    Language_FTS_Playground_Plugin::index_saved_post(301, $passworded, true);
+    assert_same([], $storage->all_documents(), 'Password-protected published posts are removed from the index.');
+
+    $revision = fixture_post(302, 'en', 'Revision orchard', '<p>orchard revision</p>');
+    $GLOBALS['language_fts_test_revisions'][302] = true;
+    Language_FTS_Playground_Plugin::index_saved_post(302, $revision, true);
+    assert_same(0, Language_FTS_Playground_Plugin::queued_count(), 'Revisions are ignored.');
+
+    $autosave = fixture_post(303, 'en', 'Autosave orchard', '<p>orchard autosave</p>');
+    $GLOBALS['language_fts_test_autosaves'][303] = true;
+    Language_FTS_Playground_Plugin::index_saved_post(303, $autosave, true);
+    assert_same(0, Language_FTS_Playground_Plugin::queued_count(), 'Autosaves are ignored.');
+
+    $indexer->index_post(fixture_post(304, 'en', 'Deleted orchard', '<p>orchard deleted</p>'));
+    Language_FTS_Playground_Plugin::delete_post(304);
+    assert_same([], $storage->all_documents(), 'Deleted posts are removed from the index.');
+});
+
+test_case('renders admin lifecycle controls and protects destructive actions', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    Language_FTS_Playground_Plugin::register_hooks();
+
+    assert_true(isset($GLOBALS['language_fts_test_actions']['language_fts_playground_process_queue']), 'Cron queue processor hook is registered.');
+    assert_true(isset($GLOBALS['language_fts_test_actions']['admin_post_language_fts_playground_process_queue']), 'Admin process queue action is registered.');
+    assert_true(isset($GLOBALS['language_fts_test_actions']['admin_post_language_fts_playground_clear_index']), 'Admin clear index action is registered.');
+
+    $post = fixture_post(401, 'en', 'Queued admin orchard', '<p>orchard admin</p>');
+    $GLOBALS['language_fts_test_posts'][401] = $post;
+    Language_FTS_Playground_Plugin::index_saved_post(401, $post, true);
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = ob_get_clean();
+
+    assert_contains_text('Queued posts', $html, 'Admin status shows queued count.');
+    assert_contains_text('Process queue', $html, 'Admin page exposes manual queue processing.');
+    assert_contains_text('Clear index', $html, 'Admin page exposes a clear-index control.');
+    assert_contains_text('Rebuild index', $html, 'Admin page keeps a rebuild control.');
+
+    $GLOBALS['language_fts_test_current_user_can'] = false;
+    try {
+        Language_FTS_Playground_Plugin::handle_clear_action();
+    } catch (RuntimeException $exception) {
+        assert_contains_text('permission', strtolower($exception->getMessage()), 'Capability failure is surfaced.');
+    }
+
+    assert_same(0, $storage->clear_count, 'Clear index does not run without the required capability.');
+});
+
+test_case('surfaces storage failures in admin without fataling the page', function (): void {
+    reset_language_fts_plugin_runtime(new Language_FTS_Playground_Test_Failing_Storage('Stored rows are temporarily unavailable.'));
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = ob_get_clean();
+
+    assert_contains_text('Language FTS Playground', $html, 'The admin page still renders its shell.');
+    assert_contains_text('Stored rows are temporarily unavailable.', $html, 'Storage errors are shown as admin notices.');
 });
 
 $failures = 0;

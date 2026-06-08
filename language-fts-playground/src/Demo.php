@@ -15,7 +15,7 @@ final class Language_FTS_Playground_Demo
                 'language' => 'en',
                 'content' =>
                     '<!-- wp:paragraph -->' .
-                    '<p class="ghostmarkup" id="ghostmarkup">The orchard path is visible content for the English partition. Searching searched pages and searches stay in the English demo.</p>' .
+                    '<p class="ghostmarkup" id="ghostmarkup">The orchard path is visible content for the English partition. Searching searched pages and searches stay in the English demo. Production-style saves now queue indexing work for bounded batches.</p>' .
                     '<!-- /wp:paragraph -->' .
                     '<!-- wp:image -->' .
                     '<figure class="wp-block-image"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="falconalt stories beside the orchard" /></figure>' .
@@ -102,6 +102,7 @@ final class Language_FTS_Playground_Demo
         return [
             ['query' => 'orchard', 'language' => 'en', 'label' => 'English visible: orchard'],
             ['query' => 'search', 'language' => 'en', 'label' => 'English inflection: search'],
+            ['query' => 'queue', 'language' => 'en', 'label' => 'Lifecycle text: queue'],
             ['query' => 'story', 'language' => 'en', 'label' => 'English alt inflection: story'],
             ['query' => 'falconalt', 'language' => 'en', 'label' => 'English alt: falconalt'],
             ['query' => 'ghostmarkup', 'language' => 'en', 'label' => 'Markup noise: ghostmarkup'],

@@ -1,6 +1,22 @@
 <?php
 declare(strict_types=1);
 
+if (!defined('LANGUAGE_FTS_PLAYGROUND_VERSION')) {
+    define('LANGUAGE_FTS_PLAYGROUND_VERSION', '0.2.0');
+}
+
+if (!defined('LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION')) {
+    define('LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION', '2');
+}
+
+if (!defined('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION')) {
+    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-08');
+}
+
+if (!defined('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE')) {
+    define('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE', 25);
+}
+
 require_once __DIR__ . '/StorageInterface.php';
 require_once __DIR__ . '/Analyzer.php';
 require_once __DIR__ . '/WpdbStorage.php';

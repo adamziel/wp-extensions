@@ -20,7 +20,7 @@ final class Language_FTS_Playground_Indexer
         }
 
         $status = $this->post_string($post, 'post_status');
-        if ($status !== 'publish') {
+        if ($status !== 'publish' || $this->post_string($post, 'post_password') !== '') {
             $this->storage->delete_document($post_id);
             return;
         }

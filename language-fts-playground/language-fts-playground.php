@@ -3,7 +3,7 @@
  * Plugin Name: Language FTS Playground
  * Plugin URI: https://github.com/adamziel/wp-extensions/tree/main/language-fts-playground
  * Description: SQLite-friendly language-partitioned full-text search demo for WordPress Playground.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Requires at least: 6.5
  * Requires PHP: 8.1
  * Author: Adam Zielinski
@@ -19,7 +19,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('LANGUAGE_FTS_PLAYGROUND_VERSION', '0.1.0');
+define('LANGUAGE_FTS_PLAYGROUND_VERSION', '0.2.0');
+define('LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION', '2');
+define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-08');
+define('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE', 25);
 define('LANGUAGE_FTS_PLAYGROUND_PLUGIN_FILE', __FILE__);
 define('LANGUAGE_FTS_PLAYGROUND_PLUGIN_DIR', __DIR__ . '/');
 

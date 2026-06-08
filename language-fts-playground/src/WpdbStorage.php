@@ -110,13 +110,16 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
 
         $placeholders = implode(',', array_fill(0, count($terms), '%s'));
         $sql = "SELECT term, post_id, tf FROM {$this->postings_table} WHERE language = %s AND term IN ({$placeholders})";
-        $rows = $this->wpdb->get_results(
-            $this->wpdb->prepare($sql, array_merge([$language], $terms)),
-            $this->array_a()
+        $rows = $this->result_rows(
+            $this->wpdb->get_results(
+                $this->wpdb->prepare($sql, array_merge([$language], $terms)),
+                $this->array_a()
+            ),
+            'Could not fetch postings.'
         );
 
         $postings = [];
-        foreach (is_array($rows) ? $rows : [] as $row) {
+        foreach ($rows as $row) {
             $term = (string) ($row['term'] ?? '');
             if ($term === '') {
                 continue;
@@ -136,13 +139,16 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
 
         $placeholders = implode(',', array_fill(0, count($post_ids), '%d'));
         $sql = "SELECT post_id, document_length FROM {$this->documents_table} WHERE language = %s AND post_id IN ({$placeholders})";
-        $rows = $this->wpdb->get_results(
-            $this->wpdb->prepare($sql, array_merge([$language], $post_ids)),
-            $this->array_a()
+        $rows = $this->result_rows(
+            $this->wpdb->get_results(
+                $this->wpdb->prepare($sql, array_merge([$language], $post_ids)),
+                $this->array_a()
+            ),
+            'Could not fetch document lengths.'
         );
 
         $lengths = [];
-        foreach (is_array($rows) ? $rows : [] as $row) {
+        foreach ($rows as $row) {
             $post_id = (int) ($row['post_id'] ?? 0);
             if ($post_id > 0) {
                 $lengths[$post_id] = max(1, (int) ($row['document_length'] ?? 0));
@@ -157,19 +163,25 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         $count = $this->wpdb->get_var(
             $this->wpdb->prepare("SELECT COUNT(*) FROM {$this->documents_table} WHERE language = %s", $language)
         );
+        if ($count === null && $this->last_error() !== '') {
+            $this->throw_last_error('Could not count indexed documents.');
+        }
 
         return max(0, (int) $count);
     }
 
     public function all_documents(): array
     {
-        $rows = $this->wpdb->get_results(
-            "SELECT post_id, language, title, status, document_length, updated_at FROM {$this->documents_table} ORDER BY language ASC, post_id ASC",
-            $this->array_a()
+        $rows = $this->result_rows(
+            $this->wpdb->get_results(
+                "SELECT post_id, language, title, status, document_length, updated_at FROM {$this->documents_table} ORDER BY language ASC, post_id ASC",
+                $this->array_a()
+            ),
+            'Could not fetch indexed documents.'
         );
 
         $documents = [];
-        foreach (is_array($rows) ? $rows : [] as $row) {
+        foreach ($rows as $row) {
             $documents[] = [
                 'post_id' => (int) ($row['post_id'] ?? 0),
                 'language' => (string) ($row['language'] ?? ''),
@@ -222,10 +234,31 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         }
     }
 
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private function result_rows(mixed $rows, string $message): array
+    {
+        if (is_array($rows)) {
+            return $rows;
+        }
+
+        if ($this->last_error() !== '') {
+            $this->throw_last_error($message);
+        }
+
+        return [];
+    }
+
     private function throw_last_error(string $message): never
     {
-        $last_error = isset($this->wpdb->last_error) ? (string) $this->wpdb->last_error : '';
+        $last_error = $this->last_error();
         throw new RuntimeException($last_error !== '' ? $message . ' ' . $last_error : $message);
+    }
+
+    private function last_error(): string
+    {
+        return isset($this->wpdb->last_error) ? (string) $this->wpdb->last_error : '';
     }
 
     private function array_a(): string

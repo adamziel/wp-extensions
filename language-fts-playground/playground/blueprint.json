@@ -2,7 +2,7 @@
   "$schema": "https://playground.wordpress.net/blueprint-schema.json",
   "meta": {
     "title": "Language FTS Playground",
-    "description": "Installs a SQLite-friendly PHP language FTS demo with seeded English, Polish, and German posts.",
+    "description": "Installs a SQLite-friendly PHP language FTS demo with seeded English, Polish, and German posts plus a bounded indexing queue.",
     "author": "adamziel",
     "categories": ["search", "sqlite", "playground"]
   },
