@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "allowArbitraryExtensions": true,
+    "allowJs": true,
     "lib": [
       "ES2022",
       "WebWorker"
@@ -20,6 +21,7 @@
   "include": [
     "src/**/*.d.ts",
     "src/**/*.ts",
+    "scripts/**/*.mjs",
     "tests/**/*.ts",
     "vitest.config.ts"
   ]
