@@ -25,7 +25,7 @@ is not emitted as raw markup.
 
 The seeded posts cover:
 
-- Automatic language routing: search `orchard`, `lodz`, `fuehrung`, or `szukanie` with `Automatic` selected and the searcher checks every enabled language partition.
+- Automatic language routing: search `orchard`, `lodz`, `fuehrung`, or `szukanie` with `Automatic` selected and the searcher ranks likely language partitions from profile-backed signals and lexical evidence before searching.
 - English visible text: search `orchard` in English.
 - English excerpt text: search `summary` in English.
 - English demo inflection keys: search `search` in English for visible `searching`, `searched`, and `searches`; search `story` for image alt text containing `stories`.
@@ -39,10 +39,14 @@ The seeded posts cover:
 - German folding: search `fuehrung` in German for content containing `Führung`.
 - German demo inflection keys: search `deutsch` for `deutschen` or `deutscher`, and `suche` for `Suchen`.
 
-The language selector defaults to `Automatic`, which searches all enabled
-language partitions and reports the partition that matched. Choosing English,
-Polish, or German keeps the previous precision-filter behavior and searches
-only that partition.
+The language selector defaults to `Automatic`, which ranks likely language
+partitions from profile-backed language signals, lexeme/canonical-key coverage,
+stopword evidence, and synonym/synset source keys. When that evidence produces
+confident candidates, the searcher queries only those selected partitions; when
+a query is ambiguous or has no profile evidence, it safely fans out to all
+enabled partitions. Results still report the partition that matched. Choosing
+English, Polish, German, or a custom language id keeps the previous
+precision-filter behavior and searches only that partition.
 
 ## Field-Aware Ranking And Snippets
 
@@ -115,6 +119,12 @@ Profiles are parsed lazily and cached on the analyzer's profile repository.
 Stopwords, lexeme aliases, and concept-derived synonym expansions are stored as
 keyed maps, so the analyzer does not scan resource files while analyzing each
 token or expanding each query.
+
+Automatic language routing uses those same compact runtime maps. It does not
+load validator metadata, generated source import files, or external services at
+query time, and it does not require PHP code changes for new language ids. Add
+profile `language_signals`, stopwords, lexeme rows, and synonym/synset source
+keys to give the router language evidence for custom packs.
 
 The included resources are a curated demo seed, not a comprehensive synonym
 database. To add demo synonyms without editing PHP, add normalized observed

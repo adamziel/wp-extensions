@@ -39,7 +39,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     private ?array $manifest = null;
 
     /**
-     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}>
+     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}>
      */
     private array $profiles = [];
 
@@ -114,7 +114,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}
+     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}
      */
     public function profile(string $language): array
     {
@@ -126,6 +126,28 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $this->profiles[$language];
+    }
+
+    /**
+     * Compact profile maps used for automatic query-language evidence.
+     *
+     * These maps are derived from the same runtime resources as analysis and
+     * query expansion. They intentionally do not read pack metadata or source
+     * import files.
+     *
+     * @return array{stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>}
+     */
+    public function query_language_evidence(string $language): array
+    {
+        $profile = $this->profile($language);
+
+        return [
+            'stopwords' => $profile['stopwords'],
+            'lexemes' => $profile['lexemes'],
+            'lexeme_forms' => $profile['lexeme_forms'],
+            'canonical_keys' => $profile['canonical_keys'],
+            'synonym_sources' => $profile['synonym_sources'],
+        ];
     }
 
     /**
@@ -271,7 +293,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     /**
      * @param array{directory:string,profile:array<string,mixed>,order:int} $manifest_entry
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}
+     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>}
      */
     private function load_language_profile(string $language, array $manifest_entry): array
     {
@@ -287,6 +309,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             ? $this->parse_synsets($this->resource_path($directory, $resources, 'synsets', $profile_file))
             : [];
         $pairwise_synonyms = $this->parse_synonyms($this->resource_path($directory, $resources, 'synonyms', $profile_file));
+        $lexemes = $this->parse_lexemes($this->resource_path($directory, $resources, 'lexemes', $profile_file));
+        $synonyms = $this->merge_expansion_maps($synset_expansions, $pairwise_synonyms);
 
         return [
             'id' => $language,
@@ -294,8 +318,11 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'folds' => $this->profile_string_map($profile['normalization']['fold'] ?? [], 'normalization.fold', $profile_file),
             'language_signals' => $this->language_signals($language),
             'stopwords' => $this->parse_stopwords($this->resource_path($directory, $resources, 'stopwords', $profile_file)),
-            'lexemes' => $this->parse_lexemes($this->resource_path($directory, $resources, 'lexemes', $profile_file)),
-            'synonyms' => $this->merge_expansion_maps($synset_expansions, $pairwise_synonyms),
+            'lexemes' => $lexemes,
+            'lexeme_forms' => $this->lookup_from_keys(array_keys($lexemes)),
+            'canonical_keys' => $this->canonical_key_lookup($lexemes),
+            'synonym_sources' => $this->lookup_from_keys(array_keys($synonyms)),
+            'synonyms' => $synonyms,
         ];
     }
 
@@ -705,6 +732,43 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $this->finalize_expansion_map($merged);
+    }
+
+    /**
+     * @param string[] $keys
+     * @return array<string,bool>
+     */
+    private function lookup_from_keys(array $keys): array
+    {
+        $lookup = [];
+        foreach ($keys as $key) {
+            $key = (string) $key;
+            if ($key !== '') {
+                $lookup[$key] = true;
+            }
+        }
+
+        ksort($lookup, SORT_STRING);
+
+        return $lookup;
+    }
+
+    /**
+     * @param array<string,string[]> $lexemes
+     * @return array<string,bool>
+     */
+    private function canonical_key_lookup(array $lexemes): array
+    {
+        $keys = [];
+        foreach ($lexemes as $canonical_terms) {
+            foreach ($canonical_terms as $canonical) {
+                $keys[(string) $canonical] = true;
+            }
+        }
+
+        ksort($keys, SORT_STRING);
+
+        return $keys;
     }
 
     /**

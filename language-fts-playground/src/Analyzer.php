@@ -10,6 +10,12 @@ declare(strict_types=1);
  */
 final class Language_FTS_Playground_Analyzer
 {
+    private const QUERY_LANGUAGE_SIGNAL_WEIGHT = 8.0;
+    private const QUERY_LANGUAGE_LEXEME_FORM_WEIGHT = 3.0;
+    private const QUERY_LANGUAGE_CANONICAL_KEY_WEIGHT = 2.0;
+    private const QUERY_LANGUAGE_SYNONYM_SOURCE_WEIGHT = 2.5;
+    private const QUERY_LANGUAGE_STOPWORD_WEIGHT = 0.75;
+
     /** @var array<string,bool> */
     private array $skipped_elements = [
         'script' => true,
@@ -90,6 +96,105 @@ final class Language_FTS_Playground_Analyzer
         return $this->infer_language_from_text(
             $this->post_string($post, 'post_title') . ' ' . $content . ' ' . $this->post_string($post, 'post_excerpt')
         );
+    }
+
+    /**
+     * Rank enabled language partitions that have profile-backed query evidence.
+     *
+     * Query routing uses the same compact runtime profile maps as analysis:
+     * language signal regexes, stopwords, lexeme observed forms, canonical
+     * keys, and synonym/synset source keys. Loading those maps is acceptable at
+     * query time because profiles are compact local PHP/TSV runtime packs, are
+     * parsed lazily, and are cached by the repository for the analyzer
+     * instance. Pack metadata and source import formats stay out of this path.
+     *
+     * @return array<int,array{language:string,score:float,reasons:array{language_signals:string[],lexeme_forms:string[],canonical_keys:string[],synonym_sources:string[],stopwords:string[]}}>
+     */
+    public function rank_query_languages(string $query, int $limit = 0): array
+    {
+        $query = $this->normalize_plain_text($query);
+        if ($query === '') {
+            return [];
+        }
+
+        $tokens = $this->query_language_tokens($query);
+        $candidates = [];
+        foreach ($this->enabled_languages() as $language) {
+            $score = 0.0;
+            $reasons = [
+                'language_signals' => [],
+                'lexeme_forms' => [],
+                'canonical_keys' => [],
+                'synonym_sources' => [],
+                'stopwords' => [],
+            ];
+
+            foreach ($this->profiles->language_signals($language) as $pattern) {
+                if (preg_match($pattern, $query) === 1) {
+                    $score += self::QUERY_LANGUAGE_SIGNAL_WEIGHT;
+                    $this->add_query_language_reason($reasons, 'language_signals', $pattern);
+                }
+            }
+
+            if ($tokens !== []) {
+                $evidence = $this->profiles->query_language_evidence($language);
+                $seen_terms = [];
+                foreach ($tokens as $token) {
+                    $term = $this->normalize_term($token, $language);
+                    if ($term === '' || strlen($term) > 255 || isset($seen_terms[$term])) {
+                        continue;
+                    }
+                    $seen_terms[$term] = true;
+
+                    if (isset($evidence['stopwords'][$term]) && $this->add_query_language_reason($reasons, 'stopwords', $term)) {
+                        $score += self::QUERY_LANGUAGE_STOPWORD_WEIGHT;
+                    }
+
+                    if (isset($evidence['lexeme_forms'][$term]) && $this->add_query_language_reason($reasons, 'lexeme_forms', $term)) {
+                        $score += self::QUERY_LANGUAGE_LEXEME_FORM_WEIGHT;
+                    }
+
+                    if (isset($evidence['canonical_keys'][$term]) && $this->add_query_language_reason($reasons, 'canonical_keys', $term)) {
+                        $score += self::QUERY_LANGUAGE_CANONICAL_KEY_WEIGHT;
+                    }
+
+                    if (isset($evidence['synonym_sources'][$term]) && $this->add_query_language_reason($reasons, 'synonym_sources', $term)) {
+                        $score += self::QUERY_LANGUAGE_SYNONYM_SOURCE_WEIGHT;
+                    }
+
+                    foreach ($evidence['lexemes'][$term] ?? [] as $canonical) {
+                        $canonical = (string) $canonical;
+                        if ($canonical === '') {
+                            continue;
+                        }
+
+                        if ($this->add_query_language_reason($reasons, 'canonical_keys', $canonical)) {
+                            $score += self::QUERY_LANGUAGE_CANONICAL_KEY_WEIGHT;
+                        }
+
+                        if (isset($evidence['synonym_sources'][$canonical]) && $this->add_query_language_reason($reasons, 'synonym_sources', $canonical)) {
+                            $score += self::QUERY_LANGUAGE_SYNONYM_SOURCE_WEIGHT;
+                        }
+                    }
+                }
+            }
+
+            if ($score > 0.0) {
+                $candidates[] = [
+                    'language' => $language,
+                    'score' => $score,
+                    'reasons' => $reasons,
+                ];
+            }
+        }
+
+        usort(
+            $candidates,
+            static fn(array $a, array $b): int => ($b['score'] <=> $a['score'])
+                ?: strcmp((string) $a['language'], (string) $b['language'])
+        );
+
+        return $limit > 0 ? array_slice($candidates, 0, $limit) : $candidates;
     }
 
     public function normalize_plain_text(string $text): string
@@ -677,6 +782,43 @@ final class Language_FTS_Playground_Analyzer
         }
 
         return 'en';
+    }
+
+    /**
+     * @return string[]
+     */
+    private function query_language_tokens(string $query): array
+    {
+        $matches = [];
+        $match_count = preg_match_all('/[\p{L}\p{N}]+/u', $query, $matches);
+        if ($match_count === false || $match_count === 0) {
+            return [];
+        }
+
+        $tokens = [];
+        foreach ($matches[0] as $token) {
+            $token = (string) $token;
+            if ($token !== '') {
+                $tokens[$token] = true;
+            }
+        }
+
+        return array_keys($tokens);
+    }
+
+    /**
+     * @param array{language_signals:string[],lexeme_forms:string[],canonical_keys:string[],synonym_sources:string[],stopwords:string[]} $reasons
+     * @param 'language_signals'|'lexeme_forms'|'canonical_keys'|'synonym_sources'|'stopwords' $type
+     */
+    private function add_query_language_reason(array &$reasons, string $type, string $value): bool
+    {
+        if (in_array($value, $reasons[$type], true)) {
+            return false;
+        }
+
+        $reasons[$type][] = $value;
+
+        return true;
     }
 
     /**

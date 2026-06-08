@@ -20,6 +20,9 @@ final class Language_FTS_Playground_Searcher
     ];
 
     private const SNIPPET_MAX_LENGTH = 280;
+    private const AUTO_LANGUAGE_MIN_SCORE = 3.0;
+    private const AUTO_LANGUAGE_MIN_LEAD = 1.5;
+    private const AUTO_LANGUAGE_MIN_RATIO = 1.35;
 
     public function __construct(
         private Language_FTS_Playground_Storage_Interface $storage,
@@ -45,13 +48,54 @@ final class Language_FTS_Playground_Searcher
         }
 
         $results = [];
-        foreach ($this->analyzer->enabled_languages() as $partition) {
+        foreach ($this->automatic_search_partitions($query) as $partition) {
             foreach ($this->search_partition($query, $partition) as $result) {
                 $results[] = $result;
             }
         }
 
         return $this->finalize_results($results, $limit);
+    }
+
+    /**
+     * @return string[]
+     */
+    private function automatic_search_partitions(string $query): array
+    {
+        $enabled = $this->analyzer->enabled_languages();
+        $ranked = $this->analyzer->rank_query_languages($query);
+        if ($ranked === []) {
+            return $enabled;
+        }
+
+        $top_score = (float) $ranked[0]['score'];
+        if ($top_score < self::AUTO_LANGUAGE_MIN_SCORE) {
+            return $enabled;
+        }
+
+        $runner_up_score = isset($ranked[1]) ? (float) $ranked[1]['score'] : 0.0;
+        $has_clear_lead = $runner_up_score <= 0.0
+            || ($top_score - $runner_up_score) >= self::AUTO_LANGUAGE_MIN_LEAD
+            || $top_score >= ($runner_up_score * self::AUTO_LANGUAGE_MIN_RATIO);
+
+        if (!$has_clear_lead) {
+            return $enabled;
+        }
+
+        $enabled_lookup = array_fill_keys($enabled, true);
+        $partitions = [];
+        foreach ($ranked as $candidate) {
+            if ((float) $candidate['score'] < self::AUTO_LANGUAGE_MIN_SCORE) {
+                continue;
+            }
+
+            $language = (string) $candidate['language'];
+            if (isset($enabled_lookup[$language])) {
+                $partitions[] = $language;
+            }
+        }
+
+        return $partitions !== [] ? $partitions : $enabled;
     }
 
     /**

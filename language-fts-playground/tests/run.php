@@ -22,6 +22,8 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public int $install_count = 0;
     public int $clear_count = 0;
     public int $delete_count = 0;
+    /** @var string[] */
+    public array $fetch_postings_languages = [];
 
     public function install(): void
     {
@@ -87,6 +89,7 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
     public function fetch_postings(string $language, array $terms): array
     {
+        $this->fetch_postings_languages[] = $language;
         $result = [];
         foreach ($terms as $term) {
             $term = (string) $term;
@@ -816,6 +819,56 @@ function create_language_fts_temp_profile_tree(
 }
 
 /**
+ * @param array<string,array<string,mixed>> $profiles
+ */
+function create_language_fts_temp_profile_set(array $profiles): string
+{
+    $root = sys_get_temp_dir() . '/language-fts-profile-set-' . str_replace('.', '-', uniqid('', true));
+    assert_true(mkdir($root, 0777, true), 'Temporary language profile set root is created.');
+
+    foreach ($profiles as $language => $definition) {
+        $language = (string) $language;
+        $language_dir = $root . DIRECTORY_SEPARATOR . $language;
+        assert_true(mkdir($language_dir, 0777, true), "Temporary {$language} profile directory is created.");
+
+        $resources = [
+            'stopwords' => 'stopwords.txt',
+            'lexemes' => 'lexemes.tsv',
+            'synonyms' => 'synonyms.tsv',
+        ];
+        if (array_key_exists('synsets', $definition)) {
+            $resources['synsets'] = 'synsets.tsv';
+        }
+
+        $profile = [
+            'id' => $language,
+            'label' => (string) ($definition['label'] ?? strtoupper($language)),
+            'order' => (int) ($definition['order'] ?? 100),
+            'resources' => $resources,
+        ];
+        if (isset($definition['folds']) && is_array($definition['folds'])) {
+            $profile['normalization'] = ['fold' => $definition['folds']];
+        }
+        if (isset($definition['signals']) && is_array($definition['signals'])) {
+            $profile['language_signals'] = array_values(array_map('strval', $definition['signals']));
+        }
+
+        file_put_contents(
+            $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
+            "<?php\nreturn " . var_export($profile, true) . ";\n"
+        );
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'stopwords.txt', (string) ($definition['stopwords'] ?? "\n"));
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv', (string) ($definition['lexemes'] ?? "# observed\tcanonical\tprovenance\n"));
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonyms.tsv', (string) ($definition['synonyms'] ?? "# source\ttarget\tdirection\tweight\tprovenance\n"));
+        if (array_key_exists('synsets', $definition)) {
+            file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synsets.tsv', (string) $definition['synsets']);
+        }
+    }
+
+    return $root;
+}
+
+/**
  * @param array<string,mixed> $overrides
  */
 function write_language_fts_temp_pack_metadata(string $language_dir, array $overrides = []): void
@@ -1171,6 +1224,38 @@ test_case('loads resource-backed lexical profiles for stopwords, lexemes, folds,
     assert_same('fuehrung', $analyzer->normalize_term('Führung', 'de'), 'German character folds are loaded from the profile.');
     assert_true(in_array('wyszukiwac', array_column($profile['synonyms']['szukac'] ?? [], 'term'), true), 'Polish query expansion is keyed by canonical resource terms.');
     assert_true(in_array('odnajdywac', array_column($profile['synonyms']['szukac'] ?? [], 'term'), true), 'Polish synset expansions are included in the profile expansion map.');
+});
+
+test_case('ranks automatic query languages from bundled profile evidence', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+
+    $ranked = $analyzer->rank_query_languages('szukaj');
+    assert_same('pl', $ranked[0]['language'] ?? null, 'A no-diacritic Polish command ranks Polish from lexical resources.');
+    assert_same([], $ranked[0]['reasons']['language_signals'] ?? [], 'The no-diacritic Polish command does not rely on profile regex signals.');
+    assert_true(in_array('szukaj', $ranked[0]['reasons']['lexeme_forms'] ?? [], true), 'The Polish command form is detected as a profile lexeme form.');
+    assert_true(in_array('szukac', $ranked[0]['reasons']['canonical_keys'] ?? [], true), 'The Polish command contributes its canonical resource key.');
+    assert_true(in_array('szukac', $ranked[0]['reasons']['synonym_sources'] ?? [], true), 'The Polish canonical key is recognized as a synset/synonym source.');
+
+    $ranked = $analyzer->rank_query_languages('szukanie');
+    assert_same('pl', $ranked[0]['language'] ?? null, 'A no-diacritic Polish noun ranks Polish from lexeme/synset evidence.');
+    assert_true(in_array('szukanie', $ranked[0]['reasons']['lexeme_forms'] ?? [], true), 'The Polish noun form is detected as a profile lexeme form.');
+
+    $ranked = $analyzer->rank_query_languages('Łódź');
+    assert_same('pl', $ranked[0]['language'] ?? null, 'A Polish diacritic query ranks Polish from language_signals.');
+    assert_true(($ranked[0]['reasons']['language_signals'] ?? []) !== [], 'The Polish diacritic query records the matching signal regex.');
+
+    $ranked = $analyzer->rank_query_languages('Führung');
+    assert_same('de', $ranked[0]['language'] ?? null, 'A German diacritic query ranks German from language_signals.');
+    assert_true(($ranked[0]['reasons']['language_signals'] ?? []) !== [], 'The German diacritic query records the matching signal regex.');
+
+    $ranked = $analyzer->rank_query_languages('searching');
+    assert_same('en', $ranked[0]['language'] ?? null, 'An English resource form ranks English through profile lexemes.');
+    assert_true(in_array('searching', $ranked[0]['reasons']['lexeme_forms'] ?? [], true), 'The English observed form is detected as a profile lexeme form.');
+    assert_true(in_array('search', $ranked[0]['reasons']['canonical_keys'] ?? [], true), 'The English observed form contributes its canonical resource key.');
+
+    $ranked = $analyzer->rank_query_languages('the searching');
+    assert_same('en', $ranked[0]['language'] ?? null, 'Stopword evidence can contribute to an otherwise lexical English query.');
+    assert_true(in_array('the', $ranked[0]['reasons']['stopwords'] ?? [], true), 'Stopwords are exposed as language evidence without becoming index terms.');
 });
 
 test_case('rejects malformed lexical resource rows deliberately', function (): void {
@@ -1929,6 +2014,36 @@ test_case('covers visible, alt, markup, and partition behavior across supported 
     }
 });
 
+test_case('automatic search selects bundled profile-backed language candidates', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(110, 'en', 'English target', '<p>Searching pages are indexed in English.</p>'));
+    $indexer->index_post(fixture_post(111, 'pl', 'Polski cel', '<p>Łódź jest indeksowana po polsku.</p>'));
+    $indexer->index_post(fixture_post(112, 'de', 'Deutsches Ziel', '<p>Führung wird auf Deutsch indexiert.</p>'));
+    $indexer->index_post(fixture_post(113, 'pl', 'Polish bait', '<p>Searching exact bait would match if Polish were searched.</p>'));
+    $indexer->index_post(fixture_post(114, 'en', 'English bait', '<p>Łódź and Führung exact bait would match if English were queried.</p>'));
+
+    $results = $searcher->search('searching', 'auto');
+    assert_same(['en'], $storage->fetch_postings_languages, 'English lexical evidence routes auto search to the English partition.');
+    assert_same([110], array_column($results, 'post_id'), 'The routed English query returns the English target.');
+    assert_same('en', $results[0]['matched_language'] ?? null, 'The routed English query reports the English partition.');
+
+    $storage->fetch_postings_languages = [];
+    $results = $searcher->search('Łódź', 'auto');
+    assert_same(['pl'], $storage->fetch_postings_languages, 'Polish language_signals route auto search to the Polish partition.');
+    assert_same([111], array_column($results, 'post_id'), 'The routed Polish signal query returns the Polish target.');
+    assert_same('pl', $results[0]['matched_language'] ?? null, 'The routed Polish signal query reports the Polish partition.');
+
+    $storage->fetch_postings_languages = [];
+    $results = $searcher->search('Führung', 'auto');
+    assert_same(['de'], $storage->fetch_postings_languages, 'German language_signals route auto search to the German partition.');
+    assert_same([112], array_column($results, 'post_id'), 'The routed German signal query returns the German target.');
+    assert_same('de', $results[0]['matched_language'] ?? null, 'The routed German signal query reports the German partition.');
+});
+
 test_case('Polish resource-backed profile covers search commands, nouns, and searcher terms in automatic mode', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
@@ -2019,6 +2134,124 @@ test_case('Polish synonym expansion does not create cross-language matches', fun
     $indexer->index_post(fixture_post(126, 'de', 'German bait', '<p>wyszukiwania steht in einer deutschen Partition.</p>'));
 
     assert_same([], $searcher->search('szukanie', 'auto'), 'Polish synonym targets do not match English or German partitions.');
+});
+
+test_case('automatic search routes strong custom profile evidence to one fake language partition', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'qa' => [
+            'label' => 'Fake QA',
+            'order' => 10,
+            'lexemes' => "# observed\tcanonical\tprovenance\nglimmering\tglimmer\tfixture\nglimmercore\tglimmer\tfixture\n",
+            'synsets' => "# concept_id\tweight\tprovenance\tterms\nconcept.glimmer\t0.7\tfixture-custom-router\tglimmer glow\n",
+        ],
+        'qb' => [
+            'label' => 'Fake QB',
+            'order' => 20,
+            'lexemes' => "# observed\tcanonical\tprovenance\nrippling\tripple\tfixture\nripplecore\tripple\tfixture\n",
+        ],
+        'qc' => [
+            'label' => 'Fake QC',
+            'order' => 30,
+            'lexemes' => "# observed\tcanonical\tprovenance\nembering\tember\tfixture\nembercore\tember\tfixture\n",
+        ],
+    ]);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        assert_same(['qa', 'qb', 'qc'], $analyzer->enabled_languages(), 'The custom resource root exposes arbitrary fake languages in profile order.');
+        $ranked = $analyzer->rank_query_languages('glimmering');
+        assert_same('qa', $ranked[0]['language'] ?? null, 'The fake language ranks from its own profile-backed lexeme evidence.');
+        assert_true(in_array('glimmer', $ranked[0]['reasons']['synonym_sources'] ?? [], true), 'The fake language canonical key is recognized as a synset source.');
+
+        $indexer->index_post(fixture_post(301, 'qa', 'QA target', '<p>glimmercore is indexed in the QA partition.</p>'));
+        $indexer->index_post(fixture_post(302, 'qb', 'QB bait', '<p>glimmering exact bait would match if QB were searched.</p>'));
+        $indexer->index_post(fixture_post(303, 'qc', 'QC bait', '<p>glimmering exact bait would match if QC were searched.</p>'));
+
+        $results = $searcher->search('glimmering', 'auto');
+
+        assert_same(['qa'], $storage->fetch_postings_languages, 'Confident automatic routing queries only the ranked fake language partition.');
+        assert_same([301], array_column($results, 'post_id'), 'The routed fake-language search returns the selected partition result.');
+        assert_same('qa', $results[0]['matched_language'] ?? null, 'The custom routed result reports its matched fake language.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('automatic search falls back to every custom partition when query has no profile evidence', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'qa' => [
+            'order' => 10,
+            'lexemes' => "# observed\tcanonical\tprovenance\nalphaform\talpha\tfixture\n",
+        ],
+        'qb' => [
+            'order' => 20,
+            'lexemes' => "# observed\tcanonical\tprovenance\nbetaform\tbeta\tfixture\n",
+        ],
+        'qc' => [
+            'order' => 30,
+            'lexemes' => "# observed\tcanonical\tprovenance\ngammaform\tgamma\tfixture\n",
+        ],
+    ]);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(304, 'qb', 'Fallback target', '<p>novelterm appears only in QB.</p>'));
+
+        assert_same([], $analyzer->rank_query_languages('novelterm'), 'A query with no profile evidence has no ranked candidates.');
+        $results = $searcher->search('novelterm', 'auto');
+
+        assert_same(['qa', 'qb', 'qc'], $storage->fetch_postings_languages, 'No-evidence automatic routing searches every enabled fake partition.');
+        assert_same([304], array_column($results, 'post_id'), 'Fallback fan-out preserves recall for the no-evidence query.');
+        assert_same('qb', $results[0]['matched_language'] ?? null, 'The fallback result still reports the matched fake language.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('automatic search falls back when custom profile evidence is ambiguous', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'qa' => [
+            'order' => 10,
+            'lexemes' => "# observed\tcanonical\tprovenance\nsharedform\tshared\tfixture\n",
+        ],
+        'qb' => [
+            'order' => 20,
+            'lexemes' => "# observed\tcanonical\tprovenance\nsharedform\tshared\tfixture\n",
+        ],
+        'qc' => [
+            'order' => 30,
+            'lexemes' => "# observed\tcanonical\tprovenance\notherform\tother\tfixture\n",
+        ],
+    ]);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $ranked = $analyzer->rank_query_languages('sharedform', 2);
+        assert_same('qa', $ranked[0]['language'] ?? null, 'Tied evidence remains deterministically ordered by language id.');
+        assert_same('qb', $ranked[1]['language'] ?? null, 'The second tied fake language remains visible to the router.');
+        assert_same($ranked[0]['score'] ?? null, $ranked[1]['score'] ?? null, 'The fake language evidence is intentionally tied.');
+
+        $indexer->index_post(fixture_post(305, 'qb', 'Ambiguous target', '<p>sharedform appears only in QB.</p>'));
+        $results = $searcher->search('sharedform', 'auto');
+
+        assert_same(['qa', 'qb', 'qc'], $storage->fetch_postings_languages, 'Ambiguous automatic routing searches every enabled fake partition.');
+        assert_same([305], array_column($results, 'post_id'), 'Ambiguous fallback preserves recall outside the first ranked fake language.');
+        assert_same('qb', $results[0]['matched_language'] ?? null, 'The ambiguous fallback result reports the matched fake language.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
 });
 
 test_case('ranks higher term frequency first', function (): void {
