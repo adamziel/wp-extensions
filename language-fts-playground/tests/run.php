@@ -144,6 +144,19 @@ function assert_not_contains_text(string $needle, string $haystack, string $mess
     assert_true(!str_contains($haystack, $needle), $message . "\nUnexpected: {$needle}\nText: {$haystack}");
 }
 
+function assert_query_terms_overlap(Language_FTS_Playground_Analyzer $analyzer, string $document_text, string $query, string $message): void
+{
+    $document_terms = $analyzer->analyze_text($document_text, 'pl');
+    $query_terms = $analyzer->analyze_query($query, 'pl');
+
+    assert_true(
+        array_values(array_intersect($document_terms, $query_terms)) !== [],
+        $message .
+        "\nDocument terms: " . var_export($document_terms, true) .
+        "\nQuery terms: " . var_export($query_terms, true)
+    );
+}
+
 function fixture_post(int $id, string $language, string $title, string $content): object
 {
     return (object) [
@@ -182,6 +195,16 @@ test_case('normalizes supported languages deterministically', function (): void 
     assert_same(['fuer', 'fuehrung', 'strasse'], $analyzer->analyze_text('für Führung Straße', 'de'), 'German umlauts are folded.');
 });
 
+test_case('adds conservative Polish inflection keys without broad short-token stems', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $document_text = 'polskiej partycji wyszukiwania';
+
+    assert_query_terms_overlap($analyzer, $document_text, 'polska', 'Polish adjective form shares a key with its inflected form.');
+    assert_query_terms_overlap($analyzer, $document_text, 'partycja', 'Polish noun form shares a key with its inflected form.');
+    assert_query_terms_overlap($analyzer, $document_text, 'wyszukiwanie', 'Polish verbal noun form shares a key with its inflected form.');
+    assert_same(['ma', 'w', 'do'], $analyzer->analyze_text('ma w do', 'pl'), 'Very short Polish tokens are not broadened into noisy stems.');
+});
+
 test_case('indexes alt text and searches only the requested language partition', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
@@ -195,6 +218,59 @@ test_case('indexes alt text and searches only the requested language partition',
     assert_same([2], array_column($searcher->search('lodz', 'pl'), 'post_id'), 'Folded Polish query matches Polish content.');
     assert_same([], $searcher->search('lodz', 'en'), 'English partition does not return Polish content.');
     assert_same([], $searcher->search('orchard', 'pl'), 'Polish partition does not return English content.');
+});
+
+test_case('matches Polish demo inflections only inside the Polish language partition', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(
+        fixture_post(20, 'pl', 'Polish demo', '<p>Łódź ma widoczny akapit w polskiej partycji wyszukiwania.</p>')
+    );
+
+    foreach (['polska', 'partycja', 'wyszukiwanie', 'lodz'] as $query) {
+        assert_same([20], array_column($searcher->search($query, 'pl'), 'post_id'), "{$query} matches the Polish demo post.");
+        assert_same([], $searcher->search($query, 'en'), "{$query} does not leak into the English partition.");
+    }
+});
+
+test_case('applies Polish inflection keys to image alt text', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(30, 'pl', 'Polish alt text', '<figure><img alt="polskiej fotografii" /></figure>'));
+
+    assert_same([30], array_column($searcher->search('polska', 'pl'), 'post_id'), 'Inflected Polish alt adjective is searchable by base query.');
+    assert_same([30], array_column($searcher->search('fotografia', 'pl'), 'post_id'), 'Inflected Polish alt noun is searchable by base query.');
+    assert_same([], $searcher->search('fotografia', 'en'), 'Alt-text Polish inflection keys remain language-partitioned.');
+});
+
+test_case('does not match Polish inflections that appear only in markup noise', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(
+        fixture_post(
+            40,
+            'pl',
+            'Markup noise',
+            '<article class="partycji" id="polskiej">' .
+            '<p>Neutralny widoczny tekst.</p>' .
+            '<style>.partycji{content:"polskiej";}</style>' .
+            '<script>const partycji = "polskiej";</script>' .
+            '<!-- wyszukiwania partycji polskiej -->' .
+            '</article>'
+        )
+    );
+
+    assert_same([], $searcher->search('partycja', 'pl'), 'Class, id, CSS, script, and comment text are not searchable.');
+    assert_same([], $searcher->search('polska', 'pl'), 'Polish normalization does not reintroduce excluded markup noise.');
 });
 
 test_case('ranks higher term frequency first', function (): void {

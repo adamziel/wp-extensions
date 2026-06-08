@@ -23,6 +23,7 @@ The seeded posts cover:
 - English image alt text: search `falconalt` in English.
 - Markup/CSS/script/comment noise: search `ghostmarkup` in English and expect no matches.
 - Polish folding: search `lodz` in Polish for content containing `Łódź`.
+- Polish inflection keys: search `polska` or `partycja` in Polish for `polskiej partycji`.
 - German folding: search `fuer` or `fuehrung` in German for content containing `für` and `Führung`.
 
 The language selector searches only the selected language partition by default.
@@ -53,5 +54,6 @@ This is a demo-sized implementation. The custom tables are intentionally simple
 and portable, with no production indexing optimizations. Ranking is meant for
 relative ordering inside one query and one language partition, not for comparing
 scores across languages or unrelated queries. The analyzer folds only the
-language behavior needed for the demo and does not implement stemming,
-synonyms, phrase search, typo tolerance, or multilingual fallback.
+language behavior needed for the demo, including a conservative Polish suffix
+normalizer, and does not implement full stemming, synonyms, phrase search, typo
+tolerance, or multilingual fallback.

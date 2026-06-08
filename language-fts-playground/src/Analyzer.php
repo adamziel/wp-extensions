@@ -121,10 +121,17 @@ final class Language_FTS_Playground_Analyzer
         $terms = [];
         foreach ($matches[0] as $token) {
             $term = $this->normalize_term($token, $language);
-            if ($term === '' || strlen($term) > 255) {
+            if ($term === '') {
                 continue;
             }
-            $terms[] = $term;
+
+            foreach ($this->term_keys($term, $language) as $key) {
+                if ($key === '' || strlen($key) > 255) {
+                    continue;
+                }
+
+                $terms[] = $key;
+            }
         }
 
         return $terms;
@@ -138,27 +145,112 @@ final class Language_FTS_Playground_Analyzer
         if ($language === 'pl') {
             return strtr($term, [
                 'ą' => 'a',
+                'Ą' => 'a',
                 'ć' => 'c',
+                'Ć' => 'c',
                 'ę' => 'e',
+                'Ę' => 'e',
                 'ł' => 'l',
+                'Ł' => 'l',
                 'ń' => 'n',
+                'Ń' => 'n',
                 'ó' => 'o',
+                'Ó' => 'o',
                 'ś' => 's',
+                'Ś' => 's',
                 'ź' => 'z',
+                'Ź' => 'z',
                 'ż' => 'z',
+                'Ż' => 'z',
             ]);
         }
 
         if ($language === 'de') {
             return strtr($term, [
                 'ä' => 'ae',
+                'Ä' => 'ae',
                 'ö' => 'oe',
+                'Ö' => 'oe',
                 'ü' => 'ue',
+                'Ü' => 'ue',
                 'ß' => 'ss',
             ]);
         }
 
         return $term;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function term_keys(string $term, string $language): array
+    {
+        $keys = [$term];
+
+        if ($language === 'pl') {
+            foreach ($this->polish_suffix_keys($term) as $key) {
+                $keys[] = $key;
+            }
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    /**
+     * Adds demo-sized Polish inflection keys after diacritic folding.
+     *
+     * This is intentionally not a full stemmer. It only trims common long-word
+     * endings so pairs such as polska/polskiej, partycja/partycji, and
+     * wyszukiwanie/wyszukiwania share a key while short words remain exact.
+     *
+     * @return string[]
+     */
+    private function polish_suffix_keys(string $term): array
+    {
+        if (strlen($term) < 6 || preg_match('/^[a-z]+$/', $term) !== 1) {
+            return [];
+        }
+
+        $suffixes = [
+            'iego',
+            'iej',
+            'iem',
+            'imi',
+            'ami',
+            'ach',
+            'ych',
+            'ich',
+            'ego',
+            'emu',
+            'ym',
+            'im',
+            'om',
+            'ow',
+            'ii',
+            'ia',
+            'ie',
+            'iu',
+            'a',
+            'i',
+            'e',
+            'y',
+            'u',
+            'o',
+        ];
+
+        $keys = [];
+        foreach ($suffixes as $suffix) {
+            if (substr($term, -strlen($suffix)) !== $suffix) {
+                continue;
+            }
+
+            $key = substr($term, 0, -strlen($suffix));
+            if (strlen($key) >= 5) {
+                $keys[] = $key;
+            }
+        }
+
+        return array_values(array_unique($keys));
     }
 
     private function canonical_language_or_null(string|null $language): ?string
@@ -338,9 +430,19 @@ final class Language_FTS_Playground_Analyzer
         // Fallback for unusual PHP builds. Normal Playground/PHP test runs use DOM.
         $text = preg_replace('/<(script|style|template|noscript|svg|math)\b[^>]*>.*?<\/\1>/is', ' ', $html);
         $text = preg_replace('/<!--.*?-->/s', ' ', is_string($text) ? $text : $html);
-        $text = strip_tags(is_string($text) ? $text : $html);
+        $text = is_string($text) ? $text : $html;
 
-        return $this->normalize_plain_text($text);
+        $parts = [];
+        $alt_matches = [];
+        if (preg_match_all('/<img\b[^>]*\salt\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))/iu', $text, $alt_matches, PREG_SET_ORDER)) {
+            foreach ($alt_matches as $match) {
+                $parts[] = $match[1] !== '' ? $match[1] : ($match[2] !== '' ? $match[2] : ($match[3] ?? ''));
+            }
+        }
+
+        array_unshift($parts, strip_tags($text));
+
+        return $this->normalize_plain_text(implode(' ', $parts));
     }
 
     private function post_id(object $post): int
