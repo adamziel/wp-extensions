@@ -102,11 +102,14 @@ final class Language_FTS_Playground_Analyzer
      * Rank enabled language partitions that have profile-backed query evidence.
      *
      * Query routing uses the same compact runtime profile maps as analysis:
-     * language signal regexes, stopwords, lexeme observed forms, canonical
-     * keys, and synonym/synset source keys. Loading those maps is acceptable at
-     * query time because profiles are compact local PHP/TSV runtime packs, are
-     * parsed lazily, and are cached by the repository for the analyzer
-     * instance. Pack metadata and source import formats stay out of this path.
+     * language signal regexes, lexeme observed forms, canonical keys,
+     * synonym/synset source keys, and stopwords. Stopwords are retained as a
+     * weak ordering signal only after a language has non-stopword evidence,
+     * because stopwords are removed from searchable query terms. Loading those
+     * maps is acceptable at query time because profiles are compact local
+     * PHP/TSV runtime packs, are parsed lazily, and are cached by the
+     * repository for the analyzer instance. Pack metadata and source import
+     * formats stay out of this path.
      *
      * @return array<int,array{language:string,score:float,reasons:array{language_signals:string[],lexeme_forms:string[],canonical_keys:string[],synonym_sources:string[],stopwords:string[]}}>
      */
@@ -121,6 +124,7 @@ final class Language_FTS_Playground_Analyzer
         $candidates = [];
         foreach ($this->enabled_languages() as $language) {
             $score = 0.0;
+            $stopword_score = 0.0;
             $reasons = [
                 'language_signals' => [],
                 'lexeme_forms' => [],
@@ -147,7 +151,7 @@ final class Language_FTS_Playground_Analyzer
                     $seen_terms[$term] = true;
 
                     if (isset($evidence['stopwords'][$term]) && $this->add_query_language_reason($reasons, 'stopwords', $term)) {
-                        $score += self::QUERY_LANGUAGE_STOPWORD_WEIGHT;
+                        $stopword_score += self::QUERY_LANGUAGE_STOPWORD_WEIGHT;
                     }
 
                     if (isset($evidence['lexeme_forms'][$term]) && $this->add_query_language_reason($reasons, 'lexeme_forms', $term)) {
@@ -177,6 +181,10 @@ final class Language_FTS_Playground_Analyzer
                         }
                     }
                 }
+            }
+
+            if ($score > 0.0) {
+                $score += $stopword_score;
             }
 
             if ($score > 0.0) {

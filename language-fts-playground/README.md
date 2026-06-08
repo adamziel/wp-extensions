@@ -41,12 +41,13 @@ The seeded posts cover:
 
 The language selector defaults to `Automatic`, which ranks likely language
 partitions from profile-backed language signals, lexeme/canonical-key coverage,
-stopword evidence, and synonym/synset source keys. When that evidence produces
-confident candidates, the searcher queries only those selected partitions; when
-a query is ambiguous or has no profile evidence, it safely fans out to all
-enabled partitions. Results still report the partition that matched. Choosing
-English, Polish, German, or a custom language id keeps the previous
-precision-filter behavior and searches only that partition.
+synonym/synset source keys, and stopword evidence that only boosts candidates
+after non-stopword evidence exists. When that evidence produces confident
+candidates, the searcher queries only those selected partitions; when a query
+is ambiguous or has no profile evidence, it safely fans out to all enabled
+partitions. Results still report the partition that matched. Choosing English,
+Polish, German, or a custom language id keeps the previous precision-filter
+behavior and searches only that partition.
 
 ## Field-Aware Ranking And Snippets
 
@@ -123,8 +124,9 @@ token or expanding each query.
 Automatic language routing uses those same compact runtime maps. It does not
 load validator metadata, generated source import files, or external services at
 query time, and it does not require PHP code changes for new language ids. Add
-profile `language_signals`, stopwords, lexeme rows, and synonym/synset source
-keys to give the router language evidence for custom packs.
+profile `language_signals`, lexeme rows, and synonym/synset source keys to give
+the router confidence evidence for custom packs; stopwords are useful only as a
+tie-breaker/booster once that non-stopword evidence exists.
 
 The included resources are a curated demo seed, not a comprehensive synonym
 database. To add demo synonyms without editing PHP, add normalized observed

@@ -2216,6 +2216,36 @@ test_case('automatic search falls back to every custom partition when query has 
     }
 });
 
+test_case('automatic search falls back when candidate evidence is stopword-only', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'en' => [
+            'order' => 10,
+            'stopwords' => "the\nand\nof\nto\n",
+        ],
+        'xx' => [
+            'order' => 20,
+        ],
+    ]);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(306, 'xx', 'Stopword fallback target', '<p>novelterm appears only in XX.</p>'));
+
+        assert_same([], $analyzer->rank_query_languages('the and of to novelterm'), 'Stopword-only evidence does not create a confident ranked candidate.');
+        $results = $searcher->search('the and of to novelterm', 'auto');
+
+        assert_same(['en', 'xx'], $storage->fetch_postings_languages, 'Stopword-only automatic routing searches every enabled partition.');
+        assert_same([306], array_column($results, 'post_id'), 'Fallback fan-out preserves recall for an unknown term outside the stopword-matched partition.');
+        assert_same('xx', $results[0]['matched_language'] ?? null, 'The stopword-only fallback result reports the matched fake language.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('automatic search falls back when custom profile evidence is ambiguous', function (): void {
     $root = create_language_fts_temp_profile_set([
         'qa' => [
