@@ -77,19 +77,29 @@ final class Language_FTS_Playground_Analyzer
 
     public function extract_searchable_text(string $html): string
     {
+        $fields = $this->extract_searchable_fields($html);
+
+        return $this->normalize_plain_text(trim($fields['content'] . ' ' . $fields['alt']));
+    }
+
+    /**
+     * @return array{content:string,alt:string}
+     */
+    public function extract_searchable_fields(string $html): array
+    {
         if (trim($html) === '') {
-            return '';
+            return ['content' => '', 'alt' => ''];
         }
 
         if (class_exists(DOMDocument::class)) {
-            return $this->extract_searchable_text_with_dom($html);
+            return $this->extract_searchable_fields_with_dom($html);
         }
 
         if (class_exists('WP_HTML_Processor')) {
-            return $this->extract_searchable_text_with_wp_processor($html);
+            return $this->extract_searchable_fields_with_wp_processor($html);
         }
 
-        return $this->extract_searchable_text_without_dom($html);
+        return $this->extract_searchable_fields_without_dom($html);
     }
 
     /**
@@ -391,7 +401,10 @@ final class Language_FTS_Playground_Analyzer
         return 'en';
     }
 
-    private function extract_searchable_text_with_dom(string $html): string
+    /**
+     * @return array{content:string,alt:string}
+     */
+    private function extract_searchable_fields_with_dom(string $html): array
     {
         $document = new DOMDocument('1.0', 'UTF-8');
         $previous = libxml_use_internal_errors(true);
@@ -409,19 +422,24 @@ final class Language_FTS_Playground_Analyzer
         libxml_use_internal_errors($previous);
 
         $root = $document->getElementById('language-fts-playground-root') ?? $document;
-        $parts = [];
-        $this->collect_visible_text($root, $parts);
+        $content_parts = [];
+        $alt_parts = [];
+        $this->collect_searchable_field_text($root, $content_parts, $alt_parts);
 
-        return $this->normalize_plain_text(implode(' ', $parts));
+        return [
+            'content' => $this->normalize_plain_text(implode(' ', $content_parts)),
+            'alt' => $this->normalize_plain_text(implode(' ', $alt_parts)),
+        ];
     }
 
     /**
-     * @param string[] $parts
+     * @param string[] $content_parts
+     * @param string[] $alt_parts
      */
-    private function collect_visible_text(DOMNode $node, array &$parts): void
+    private function collect_searchable_field_text(DOMNode $node, array &$content_parts, array &$alt_parts): void
     {
         if ($node->nodeType === XML_TEXT_NODE || $node->nodeType === XML_CDATA_SECTION_NODE) {
-            $parts[] = (string) $node->nodeValue;
+            $content_parts[] = (string) $node->nodeValue;
             return;
         }
 
@@ -436,12 +454,12 @@ final class Language_FTS_Playground_Analyzer
             }
 
             if ($tag === 'img' && $node->hasAttribute('alt')) {
-                $parts[] = $node->getAttribute('alt');
+                $alt_parts[] = $node->getAttribute('alt');
             }
         }
 
         foreach ($node->childNodes as $child) {
-            $this->collect_visible_text($child, $parts);
+            $this->collect_searchable_field_text($child, $content_parts, $alt_parts);
         }
     }
 
@@ -483,7 +501,10 @@ final class Language_FTS_Playground_Analyzer
         return null;
     }
 
-    private function extract_searchable_text_with_wp_processor(string $html): string
+    /**
+     * @return array{content:string,alt:string}
+     */
+    private function extract_searchable_fields_with_wp_processor(string $html): array
     {
         try {
             $processor = method_exists('WP_HTML_Processor', 'create_fragment')
@@ -494,10 +515,11 @@ final class Language_FTS_Playground_Analyzer
         }
 
         if (!is_object($processor) || !method_exists($processor, 'next_token')) {
-            return $this->extract_searchable_text_without_dom($html);
+            return $this->extract_searchable_fields_without_dom($html);
         }
 
-        $parts = [];
+        $content_parts = [];
+        $alt_parts = [];
         while ($processor->next_token()) {
             $breadcrumbs = method_exists($processor, 'get_breadcrumbs') ? (array) ($processor->get_breadcrumbs() ?? []) : [];
             $breadcrumbs = array_map(static fn($tag): string => strtolower((string) $tag), $breadcrumbs);
@@ -507,7 +529,7 @@ final class Language_FTS_Playground_Analyzer
 
             $token_type = method_exists($processor, 'get_token_type') ? $processor->get_token_type() : null;
             if ($token_type === '#text' && method_exists($processor, 'get_modifiable_text')) {
-                $parts[] = (string) $processor->get_modifiable_text();
+                $content_parts[] = (string) $processor->get_modifiable_text();
                 continue;
             }
 
@@ -515,12 +537,15 @@ final class Language_FTS_Playground_Analyzer
             if ($tag === 'img' && method_exists($processor, 'get_attribute')) {
                 $alt = $processor->get_attribute('alt');
                 if (is_scalar($alt)) {
-                    $parts[] = (string) $alt;
+                    $alt_parts[] = (string) $alt;
                 }
             }
         }
 
-        return $this->normalize_plain_text(implode(' ', $parts));
+        return [
+            'content' => $this->normalize_plain_text(implode(' ', $content_parts)),
+            'alt' => $this->normalize_plain_text(implode(' ', $alt_parts)),
+        ];
     }
 
     /**
@@ -537,7 +562,10 @@ final class Language_FTS_Playground_Analyzer
         return false;
     }
 
-    private function extract_searchable_text_without_dom(string $html): string
+    /**
+     * @return array{content:string,alt:string}
+     */
+    private function extract_searchable_fields_without_dom(string $html): array
     {
         // Fallback for unusual PHP builds. Normal Playground/PHP test runs use DOM.
         $text = preg_replace('/<(script|style|template|noscript|svg|math)\b[^>]*>.*?<\/\1>/is', ' ', $html);
@@ -552,9 +580,10 @@ final class Language_FTS_Playground_Analyzer
             }
         }
 
-        array_unshift($parts, strip_tags($text));
-
-        return $this->normalize_plain_text(implode(' ', $parts));
+        return [
+            'content' => $this->normalize_plain_text(strip_tags($text)),
+            'alt' => $this->normalize_plain_text(implode(' ', $parts)),
+        ];
     }
 
     private function post_id(object $post): int

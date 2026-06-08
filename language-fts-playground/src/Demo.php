@@ -4,7 +4,7 @@ declare(strict_types=1);
 final class Language_FTS_Playground_Demo
 {
     /**
-     * @return array<int,array{slug:string,title:string,language:string,content:string}>
+     * @return array<int,array{slug:string,title:string,language:string,excerpt:string,content:string}>
      */
     public static function demo_posts(): array
     {
@@ -13,6 +13,7 @@ final class Language_FTS_Playground_Demo
                 'slug' => 'language-fts-english-orchard',
                 'title' => 'Language FTS demo: English orchard',
                 'language' => 'en',
+                'excerpt' => 'Orchard summary text demonstrates the indexed excerpt field.',
                 'content' =>
                     '<!-- wp:paragraph -->' .
                     '<p class="ghostmarkup" id="ghostmarkup">The orchard path is visible content for the English partition. Searching searched pages and searches stay in the English demo.</p>' .
@@ -29,6 +30,7 @@ final class Language_FTS_Playground_Demo
                 'slug' => 'language-fts-polish-lodz',
                 'title' => 'Language FTS demo: Polish Lodz',
                 'language' => 'pl',
+                'excerpt' => 'Polski opis demo dla partycji wyszukiwania.',
                 'content' =>
                     '<!-- wp:paragraph -->' .
                     '<p>Łódź ma widoczny akapit w polskiej partycji wyszukiwania.</p>' .
@@ -41,6 +43,7 @@ final class Language_FTS_Playground_Demo
                 'slug' => 'language-fts-german-fuer',
                 'title' => 'Language FTS demo: German fuer',
                 'language' => 'de',
+                'excerpt' => 'Deutscher Demo-Auszug fuer die Suche.',
                 'content' =>
                     '<!-- wp:paragraph -->' .
                     '<p>Dieses Beispiel ist für die deutschen Führungen gedacht und hilft beim Suchen in der deutschen Partition.</p>' .
@@ -69,6 +72,7 @@ final class Language_FTS_Playground_Demo
                 'post_status' => 'publish',
                 'post_title' => $demo_post['title'],
                 'post_name' => $demo_post['slug'],
+                'post_excerpt' => $demo_post['excerpt'],
                 'post_content' => $demo_post['content'],
             ];
 
@@ -101,6 +105,7 @@ final class Language_FTS_Playground_Demo
     {
         return [
             ['query' => 'orchard', 'language' => 'en', 'label' => 'English visible: orchard'],
+            ['query' => 'summary', 'language' => 'en', 'label' => 'English excerpt: summary'],
             ['query' => 'search', 'language' => 'en', 'label' => 'English inflection: search'],
             ['query' => 'story', 'language' => 'en', 'label' => 'English alt inflection: story'],
             ['query' => 'falconalt', 'language' => 'en', 'label' => 'English alt: falconalt'],

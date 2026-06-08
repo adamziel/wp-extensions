@@ -31,6 +31,7 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
             'title TEXT NOT NULL, ' .
             'status TEXT NOT NULL, ' .
             'document_length INTEGER NOT NULL, ' .
+            'field_texts TEXT NOT NULL, ' .
             'updated_at TEXT NOT NULL' .
             ')'
         );
@@ -40,9 +41,12 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
             'language TEXT NOT NULL, ' .
             'term TEXT NOT NULL, ' .
             'post_id INTEGER NOT NULL, ' .
+            'field VARCHAR(32) NOT NULL, ' .
             'tf INTEGER NOT NULL' .
             ')'
         );
+
+        $this->ensure_schema_columns();
     }
 
     public function clear(): void
@@ -57,7 +61,8 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         string $title,
         string $status,
         int $document_length,
-        array $term_frequencies
+        array $field_term_frequencies,
+        array $field_texts
     ): void {
         $this->delete_document($post_id);
 
@@ -69,28 +74,33 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
                 'title' => $title,
                 'status' => $status,
                 'document_length' => max(0, $document_length),
+                'field_texts' => $this->encode_json_object($field_texts),
                 'updated_at' => gmdate('Y-m-d H:i:s'),
             ],
-            ['%d', '%s', '%s', '%s', '%d', '%s']
+            ['%d', '%s', '%s', '%s', '%d', '%s', '%s']
         );
         if ($inserted === false) {
             $this->throw_last_error('Could not insert indexed document.');
         }
 
-        foreach ($term_frequencies as $term => $tf) {
-            $tf = max(1, (int) $tf);
-            $inserted = $this->wpdb->insert(
-                $this->postings_table,
-                [
-                    'language' => $language,
-                    'term' => (string) $term,
-                    'post_id' => $post_id,
-                    'tf' => $tf,
-                ],
-                ['%s', '%s', '%d', '%d']
-            );
-            if ($inserted === false) {
-                $this->throw_last_error('Could not insert posting.');
+        foreach ($field_term_frequencies as $field => $term_frequencies) {
+            $field = $this->normalize_field((string) $field);
+            foreach ($term_frequencies as $term => $tf) {
+                $tf = max(1, (int) $tf);
+                $inserted = $this->wpdb->insert(
+                    $this->postings_table,
+                    [
+                        'language' => $language,
+                        'term' => (string) $term,
+                        'post_id' => $post_id,
+                        'field' => $field,
+                        'tf' => $tf,
+                    ],
+                    ['%s', '%s', '%d', '%s', '%d']
+                );
+                if ($inserted === false) {
+                    $this->throw_last_error('Could not insert posting.');
+                }
             }
         }
     }
@@ -109,7 +119,7 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         }
 
         $placeholders = implode(',', array_fill(0, count($terms), '%s'));
-        $sql = "SELECT term, post_id, tf FROM {$this->postings_table} WHERE language = %s AND term IN ({$placeholders})";
+        $sql = "SELECT term, post_id, field, tf FROM {$this->postings_table} WHERE language = %s AND term IN ({$placeholders})";
         $rows = $this->wpdb->get_results(
             $this->wpdb->prepare($sql, array_merge([$language], $terms)),
             $this->array_a()
@@ -121,7 +131,13 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
             if ($term === '') {
                 continue;
             }
-            $postings[$term][(int) ($row['post_id'] ?? 0)] = max(1, (int) ($row['tf'] ?? 0));
+            $post_id = (int) ($row['post_id'] ?? 0);
+            if ($post_id <= 0) {
+                continue;
+            }
+
+            $field = $this->normalize_field((string) ($row['field'] ?? 'content'));
+            $postings[$term][$post_id][$field] = ($postings[$term][$post_id][$field] ?? 0) + max(1, (int) ($row['tf'] ?? 0));
         }
 
         return $postings;
@@ -150,6 +166,31 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         }
 
         return $lengths;
+    }
+
+    public function fetch_document_fields(string $language, array $post_ids): array
+    {
+        $post_ids = array_values(array_unique(array_filter(array_map('intval', $post_ids), static fn(int $id): bool => $id > 0)));
+        if ($post_ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($post_ids), '%d'));
+        $sql = "SELECT post_id, field_texts FROM {$this->documents_table} WHERE language = %s AND post_id IN ({$placeholders})";
+        $rows = $this->wpdb->get_results(
+            $this->wpdb->prepare($sql, array_merge([$language], $post_ids)),
+            $this->array_a()
+        );
+
+        $documents = [];
+        foreach (is_array($rows) ? $rows : [] as $row) {
+            $post_id = (int) ($row['post_id'] ?? 0);
+            if ($post_id > 0) {
+                $documents[$post_id] = $this->decode_json_object((string) ($row['field_texts'] ?? ''));
+            }
+        }
+
+        return $documents;
     }
 
     public function document_count(string $language): int
@@ -193,9 +234,82 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         return $this->postings_table;
     }
 
+    private function ensure_schema_columns(): void
+    {
+        if (!$this->column_exists($this->documents_table, 'field_texts')) {
+            $this->query("ALTER TABLE {$this->documents_table} ADD COLUMN field_texts TEXT");
+        }
+
+        if (!$this->column_exists($this->postings_table, 'field')) {
+            $this->query("ALTER TABLE {$this->postings_table} ADD COLUMN field VARCHAR(32) NOT NULL DEFAULT 'content'");
+        }
+    }
+
+    private function column_exists(string $table, string $column): bool
+    {
+        $this->wpdb->get_results("SELECT * FROM {$table} WHERE 1 = 0", $this->array_a());
+        if (method_exists($this->wpdb, 'get_col_info')) {
+            $columns = $this->wpdb->get_col_info('name');
+            if (is_array($columns) && $columns !== []) {
+                return in_array($column, array_map('strval', $columns), true);
+            }
+        }
+
+        $sqlite_rows = $this->wpdb->get_results("PRAGMA table_info({$table})", $this->array_a());
+        foreach (is_array($sqlite_rows) ? $sqlite_rows : [] as $row) {
+            if ((string) ($row['name'] ?? '') === $column) {
+                return true;
+            }
+        }
+
+        $mysql_rows = $this->wpdb->get_results("SHOW COLUMNS FROM {$table}", $this->array_a());
+        foreach (is_array($mysql_rows) ? $mysql_rows : [] as $row) {
+            if ((string) ($row['Field'] ?? '') === $column) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function table_name(string $candidate): string
     {
         return preg_replace('/[^A-Za-z0-9_]/', '', $candidate) ?: 'wp_language_fts_storage';
+    }
+
+    /**
+     * @param array<string,string> $value
+     */
+    private function encode_json_object(array $value): string
+    {
+        $encoded = function_exists('wp_json_encode') ? wp_json_encode($value) : json_encode($value);
+
+        return is_string($encoded) ? $encoded : '{}';
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function decode_json_object(string $value): array
+    {
+        $decoded = json_decode($value, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        $object = [];
+        foreach ($decoded as $field => $text) {
+            if (is_scalar($text)) {
+                $object[$this->normalize_field((string) $field)] = (string) $text;
+            }
+        }
+
+        return $object;
+    }
+
+    private function normalize_field(string $field): string
+    {
+        return in_array($field, ['title', 'excerpt', 'content', 'alt'], true) ? $field : 'content';
     }
 
     /**

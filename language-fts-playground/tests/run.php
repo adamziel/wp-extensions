@@ -9,10 +9,10 @@ final class Language_FTS_Playground_Test_Failure extends RuntimeException
 
 final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playground_Storage_Interface
 {
-    /** @var array<int,array{post_id:int,language:string,title:string,status:string,document_length:int,updated_at:string}> */
+    /** @var array<int,array{post_id:int,language:string,title:string,status:string,document_length:int,field_texts:array<string,string>,updated_at:string}> */
     private array $documents = [];
 
-    /** @var array<string,array<string,array<int,int>>> */
+    /** @var array<string,array<string,array<int,array<string,int>>>> */
     private array $postings = [];
 
     public function install(): void
@@ -31,7 +31,8 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         string $title,
         string $status,
         int $document_length,
-        array $term_frequencies
+        array $field_term_frequencies,
+        array $field_texts
     ): void {
         $this->delete_document($post_id);
         $this->documents[$post_id] = [
@@ -40,11 +41,16 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
             'title' => $title,
             'status' => $status,
             'document_length' => max(1, $document_length),
+            'field_texts' => $field_texts,
             'updated_at' => 'test',
         ];
 
-        foreach ($term_frequencies as $term => $tf) {
-            $this->postings[$language][(string) $term][$post_id] = max(1, (int) $tf);
+        foreach ($field_term_frequencies as $field => $term_frequencies) {
+            foreach ($term_frequencies as $term => $tf) {
+                $term = (string) $term;
+                $field = (string) $field;
+                $this->postings[$language][$term][$post_id][$field] = max(1, (int) $tf);
+            }
         }
     }
 
@@ -87,6 +93,19 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         }
 
         return $lengths;
+    }
+
+    public function fetch_document_fields(string $language, array $post_ids): array
+    {
+        $fields = [];
+        foreach ($post_ids as $post_id) {
+            $post_id = (int) $post_id;
+            if (($this->documents[$post_id]['language'] ?? null) === $language) {
+                $fields[$post_id] = $this->documents[$post_id]['field_texts'];
+            }
+        }
+
+        return $fields;
     }
 
     public function document_count(string $language): int
@@ -182,13 +201,13 @@ function assert_query_terms_do_not_overlap(
     );
 }
 
-function fixture_post(int $id, string $language, string $title, string $content): object
+function fixture_post(int $id, string $language, string $title, string $content, string $excerpt = ''): object
 {
     return (object) [
         'ID' => $id,
         'post_status' => 'publish',
         'post_title' => $title,
-        'post_excerpt' => '',
+        'post_excerpt' => $excerpt,
         'post_content' => $content,
         'language' => $language,
     ];
@@ -349,6 +368,74 @@ test_case('ranks higher term frequency first', function (): void {
     assert_true(count($results) >= 2, 'Both English documents match.');
     assert_same(10, $results[0]['post_id'], 'The denser document ranks first.');
     assert_true($results[0]['score'] > $results[1]['score'], 'BM25 score reflects term frequency.');
+});
+
+test_case('ranks title hits above equal content hits', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(41, 'en', 'Body match', '<p>orchard plain visible text</p>'));
+    $indexer->index_post(fixture_post(42, 'en', 'Orchard title', '<p>plain visible text only</p>'));
+
+    $results = $searcher->search('orchard', 'en');
+
+    assert_true(count($results) >= 2, 'Both English documents match.');
+    assert_same(42, $results[0]['post_id'], 'A title hit outranks an equal content hit even with the higher post ID.');
+    assert_same(['title'], $results[0]['matched_fields'], 'The top result reports the title field.');
+    assert_same(['content'], $results[1]['matched_fields'], 'The second result reports the content field.');
+});
+
+test_case('reports excerpt field matches with highlighted excerpt snippets', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(45, 'en', 'Excerpt match', '<p>Visible meadow only</p>', 'Orchard summary text'));
+
+    $results = $searcher->search('orchard', 'en');
+
+    assert_same(45, $results[0]['post_id'], 'The query matches the indexed excerpt field.');
+    assert_same(['excerpt'], $results[0]['matched_fields'], 'The result reports the excerpt field.');
+    assert_contains_text('<mark>Orchard</mark>', $results[0]['snippet'], 'The excerpt snippet highlights the matched term.');
+});
+
+test_case('returns escaped highlighted snippets for stem-key matches', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(
+        50,
+        'en',
+        'Safe snippet',
+        '<p>Stories keep unsafe &lt;script&gt;alert(1)&lt;/script&gt; text visible.</p>'
+    ));
+
+    $results = $searcher->search('story', 'en');
+
+    assert_same(50, $results[0]['post_id'], 'The English suffix key matches an inflected visible term.');
+    assert_contains_text('<mark>Stories</mark>', $results[0]['snippet'], 'The snippet highlights the raw inflected source term.');
+    assert_contains_text('&lt;script&gt;alert(1)&lt;/script&gt;', $results[0]['snippet'], 'Unsafe-looking source text is escaped in snippets.');
+    assert_not_contains_text('<script>', $results[0]['snippet'], 'Snippets do not emit unsafe raw HTML from post content.');
+});
+
+test_case('reports alt field matches with highlighted alt snippets', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(60, 'en', 'Alt only', '<p>Visible meadow</p><img alt="falcon stories beside the image" />'));
+
+    $results = $searcher->search('story', 'en');
+
+    assert_same(60, $results[0]['post_id'], 'The English suffix key matches image alt text.');
+    assert_same(['alt'], $results[0]['matched_fields'], 'The result reports the alt field.');
+    assert_contains_text('<mark>stories</mark>', $results[0]['snippet'], 'The alt snippet highlights the inflected alt term.');
 });
 
 $failures = 0;

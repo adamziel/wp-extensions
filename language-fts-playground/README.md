@@ -5,8 +5,8 @@
 Language FTS Playground is a small WordPress plugin that demonstrates
 language-partitioned full-text search in WordPress Playground. It works with
 Playground's SQLite-backed database because the database stores only simple
-document and posting rows; extraction, language normalization, indexing, and
-BM25-style ranking all run in PHP.
+document and posting rows; extraction, language normalization, field-aware
+indexing, snippets, highlighting, and BM25-style ranking all run in PHP.
 
 The plugin does not use MySQL `FULLTEXT`, SQLite FTS tables, SQL `MATCH`, or
 database-native ranking.
@@ -17,9 +17,15 @@ Install and activate the `language-fts-playground/` directory as a WordPress
 plugin, then open `Tools -> Language FTS`. Activation seeds three published demo
 posts and rebuilds the index.
 
+Search results show the score, matched fields, matched normalized terms, and a
+safe snippet with matched source terms highlighted with `<mark>`. Snippet text
+is escaped before marks are inserted, so visible post text that looks like HTML
+is not emitted as raw markup.
+
 The seeded posts cover:
 
 - English visible text: search `orchard` in English.
+- English excerpt text: search `summary` in English.
 - English demo inflection keys: search `search` in English for visible `searching`, `searched`, and `searches`; search `story` for image alt text containing `stories`.
 - English image alt text: search `falconalt` in English.
 - Markup/CSS/script/comment noise: search `ghostmarkup` in English and expect no matches.
@@ -29,6 +35,22 @@ The seeded posts cover:
 - German demo inflection keys: search `deutsch` for `deutschen` or `deutscher`, and `suche` for `Suchen`.
 
 The language selector searches only the selected language partition by default.
+
+## Field-Aware Ranking And Snippets
+
+The index stores normalized source text and term frequencies separately for
+`title`, `excerpt`, `content`, and `alt` fields. Query scoring uses these
+default field boosts:
+
+- `title`: `4.0`
+- `excerpt`: `2.0`
+- `content`: `2.0`
+- `alt`: `1.0`
+
+Those defaults make title hits rank above equal body hits while keeping image
+alt text searchable with a lower boost. Snippet highlighting compares query
+analysis keys with each source token's analysis keys, so demo inflection keys
+can highlight raw source forms such as `stories` for the query `story`.
 
 ## Supported Analyzer Behavior
 
@@ -70,3 +92,5 @@ scores across languages or unrelated queries. The analyzer folds only the
 language behavior needed for the demo, including conservative English, Polish,
 and German suffix-key generators. It does not implement full stemming,
 lemmatization, synonyms, phrase search, typo tolerance, or multilingual fallback.
+Snippets are built from normalized field text, not from full-fidelity rendered
+HTML, and use a small fixed excerpt window for long fields.
