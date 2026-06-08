@@ -180,7 +180,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $metadata = $this->validate_pack_metadata($directory, (string) $status['language_id'], $warnings);
         $status['metadata'] = $metadata['metadata'];
         $status['metadata_valid'] = $metadata['valid'];
-        $status['runtime_files_exist'] = $metadata['valid'] && $metadata['missing_files'] === [];
+        $status['runtime_files_exist'] = $metadata['runtime_files_exist'];
         $status['missing_files'] = $metadata['missing_files'];
 
         $resource_paths = $this->resolve_profile_resources($directory, $profile_file, $resources, $warnings);
@@ -239,7 +239,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
-     * @return array{metadata:array<string,mixed>,valid:bool,missing_files:string[]}
+     * @return array{metadata:array<string,mixed>,valid:bool,runtime_files_exist:bool,missing_files:string[]}
      */
     private function validate_pack_metadata(string $directory, string $expected_language, array &$warnings): array
     {
@@ -247,6 +247,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $metadata = $this->empty_metadata();
         $missing_files = [];
         $valid = true;
+        $runtime_files_exist = false;
 
         if (!is_file($path)) {
             $warnings[] = 'Missing language pack metadata file: ' . $path;
@@ -254,6 +255,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             return [
                 'metadata' => $metadata,
                 'valid' => false,
+                'runtime_files_exist' => false,
                 'missing_files' => [],
             ];
         }
@@ -263,6 +265,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             return [
                 'metadata' => $metadata,
                 'valid' => false,
+                'runtime_files_exist' => false,
                 'missing_files' => [],
             ];
         }
@@ -296,10 +299,12 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $valid = false;
             $warnings[] = 'Language pack metadata files must be a non-empty array in ' . $path;
         } else {
+            $runtime_files_exist = true;
             $seen_files = [];
             foreach ($files as $file) {
                 if (!is_string($file) || trim($file) === '') {
                     $valid = false;
+                    $runtime_files_exist = false;
                     $warnings[] = 'Language pack metadata files must contain non-empty strings in ' . $path;
                     continue;
                 }
@@ -307,6 +312,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 $file = trim($file);
                 if (!$this->is_local_file_name($file)) {
                     $valid = false;
+                    $runtime_files_exist = false;
                     $warnings[] = 'Language pack metadata files must be local file names in ' . $path;
                     continue;
                 }
@@ -322,6 +328,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 $listed_path = $directory . DIRECTORY_SEPARATOR . $file;
                 if (!is_file($listed_path)) {
                     $valid = false;
+                    $runtime_files_exist = false;
                     $missing_files[] = $file;
                     $warnings[] = 'Language pack metadata file does not exist: ' . $listed_path;
                 }
@@ -334,6 +341,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         return [
             'metadata' => $metadata,
             'valid' => $valid,
+            'runtime_files_exist' => $runtime_files_exist,
             'missing_files' => $missing_files,
         ];
     }

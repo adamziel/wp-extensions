@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/../src/LexicalPackValidator.php';
 
 final class Language_FTS_Playground_Test_Failure extends RuntimeException
 {
@@ -1144,6 +1145,13 @@ test_case('loads lexical pack provenance metadata explicitly', function (): void
     assert_true(in_array('synsets.tsv', $metadata['files'], true), 'Seed pack metadata lists its synset runtime file.');
 });
 
+test_case('shared bootstrap does not load lexical pack validator', function (): void {
+    $source = file_get_contents(__DIR__ . '/../src/bootstrap.php');
+
+    assert_true(is_string($source), 'Shared bootstrap source is readable.');
+    assert_not_contains_text('LexicalPackValidator.php', $source, 'Shared bootstrap keeps the lexical pack validator out of normal plugin requests.');
+});
+
 test_case('valid lexical packs produce deterministic validation stats', function (): void {
     $report = (new Language_FTS_Playground_Lexical_Pack_Validator())->validate_all();
     $by_id = language_fts_pack_status_by_id($report);
@@ -1210,6 +1218,8 @@ test_case('lexical pack validator warns and fails for malformed metadata', funct
 
         assert_same(false, $report['valid'], 'Malformed pack metadata makes validation fail.');
         assert_same(false, $by_id['xx']['metadata_valid'] ?? null, 'Malformed metadata is reflected in metadata_valid.');
+        assert_same(true, $by_id['xx']['runtime_files_exist'] ?? null, 'Malformed metadata does not make existing runtime files look missing.');
+        assert_same([], $by_id['xx']['missing_files'] ?? null, 'Malformed metadata with present runtime files has no missing file report.');
         assert_contains_text('source_name', $warnings, 'Missing source name is reported.');
         assert_contains_text('pack_date', $warnings, 'Invalid pack date is reported.');
         assert_contains_text('data_kind', $warnings, 'Invalid data kind is reported.');

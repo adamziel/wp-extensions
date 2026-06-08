@@ -19,7 +19,6 @@ if (!defined('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE')) {
 
 require_once __DIR__ . '/StorageInterface.php';
 require_once __DIR__ . '/LexicalProfileRepository.php';
-require_once __DIR__ . '/LexicalPackValidator.php';
 require_once __DIR__ . '/Analyzer.php';
 require_once __DIR__ . '/WpdbStorage.php';
 require_once __DIR__ . '/Indexer.php';

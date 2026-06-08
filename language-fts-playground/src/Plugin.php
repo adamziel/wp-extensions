@@ -509,6 +509,7 @@ final class Language_FTS_Playground_Plugin
         echo '<h2>' . esc_html__('Lexical pack status', 'language-fts-playground') . '</h2>';
 
         try {
+            require_once __DIR__ . '/LexicalPackValidator.php';
             $report = (new Language_FTS_Playground_Lexical_Pack_Validator())->validate_all();
         } catch (Throwable $throwable) {
             echo '<p>' . esc_html(sprintf(__('Could not validate lexical packs: %s', 'language-fts-playground'), $throwable->getMessage())) . '</p>';
