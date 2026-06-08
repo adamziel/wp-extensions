@@ -234,6 +234,14 @@ function set_language_fts_plugin_runtime(Language_FTS_Playground_Storage_Interfa
     $analyzer_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'analyzer');
     $analyzer_property->setAccessible(true);
     $analyzer_property->setValue(null, new Language_FTS_Playground_Analyzer());
+
+    $queue_lock_token_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'queue_lock_token');
+    $queue_lock_token_property->setAccessible(true);
+    $queue_lock_token_property->setValue(null, null);
+
+    $queue_lock_depth_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'queue_lock_depth');
+    $queue_lock_depth_property->setAccessible(true);
+    $queue_lock_depth_property->setValue(null, 0);
 }
 
 function reset_language_fts_plugin_runtime(Language_FTS_Playground_Storage_Interface|null $storage = null): Language_FTS_Playground_Storage_Interface
@@ -892,6 +900,68 @@ test_case('completion preserves same-post requeues with newer tokens', function 
     assert_same(1, $result['processed'], 'The queued post is processed once.');
     assert_same('newer-token', $queue[503] ?? null, 'A same-post requeue with a newer token is not completed by the stale token.');
     assert_same(1, Language_FTS_Playground_Plugin::queued_count(), 'The requeued post remains queued.');
+});
+
+test_case('completion skips queue writes when the queue lock is contended', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $processed = fixture_post(701, 'en', 'Contended orchard one', '<p>orchard one</p>');
+    $interleaved = fixture_post(702, 'en', 'Contended orchard two', '<p>orchard two</p>');
+    $GLOBALS['language_fts_test_posts'][701] = $processed;
+    $GLOBALS['language_fts_test_posts'][702] = $interleaved;
+
+    Language_FTS_Playground_Plugin::enqueue_posts([701]);
+    update_option(
+        'language_fts_playground_index_queue_lock',
+        [
+            'token' => 'external-lock-token',
+            'expires_at' => microtime(true) + 10,
+        ]
+    );
+    $GLOBALS['language_fts_test_scheduled'] = [];
+
+    $lock_reads = 0;
+    $interleaved_enqueue = false;
+    $GLOBALS['language_fts_test_get_option_interceptor'] = static function (string $name, int $read_count) use (&$lock_reads, &$interleaved_enqueue): void {
+        unset($read_count);
+        if ($name !== 'language_fts_playground_index_queue_lock') {
+            return;
+        }
+
+        $lock_reads++;
+        if ($lock_reads !== 2) {
+            return;
+        }
+
+        $interleaved_enqueue = true;
+        $GLOBALS['language_fts_test_get_option_interceptor'] = null;
+
+        // Simulate the external lock owner committing a queue append while this completion waits.
+        $queue_lock_token_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'queue_lock_token');
+        $queue_lock_token_property->setAccessible(true);
+        $queue_lock_depth_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'queue_lock_depth');
+        $queue_lock_depth_property->setAccessible(true);
+        $queue_lock_token_property->setValue(null, 'external-lock-token');
+        $queue_lock_depth_property->setValue(null, 1);
+        try {
+            Language_FTS_Playground_Plugin::enqueue_posts([702]);
+        } finally {
+            $queue_lock_token_property->setValue(null, null);
+            $queue_lock_depth_property->setValue(null, 0);
+        }
+    };
+
+    $result = Language_FTS_Playground_Plugin::process_index_queue(1);
+    $queue = get_option('language_fts_playground_index_queue', []);
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same(1, $result['processed'], 'The original queued post is processed.');
+    assert_same(true, $interleaved_enqueue, 'The regression injected a queue write while completion was blocked by the active lock.');
+    assert_true(array_key_exists(701, $queue), 'The completed post remains queued because completion could not acquire the queue lock.');
+    assert_true(array_key_exists(702, $queue), 'The externally queued post remains queued after the skipped completion attempt.');
+    assert_same(2, $result['remaining'], 'Processing reports the remaining locked work instead of clearing the queue.');
+    assert_same(2, $status['last_result']['remaining'] ?? null, 'Status records the remaining queue count for retry.');
+    assert_true($GLOBALS['language_fts_test_scheduled'] !== [], 'Remaining work is scheduled for a later retry.');
 });
 
 test_case('idle queue processing does not clear required rebuild before rebuild is queued', function (): void {

@@ -769,7 +769,12 @@ final class Language_FTS_Playground_Plugin
      */
     private static function mutate_queue(callable $mutation): array
     {
-        $lock_token = self::acquire_queue_lock();
+        $lock = self::acquire_queue_lock();
+        if (!$lock['acquired']) {
+            self::record_status(__('Could not acquire the Language FTS queue lock; queued work will be retried later.', 'language-fts-playground'));
+
+            return self::read_queue();
+        }
 
         try {
             $initial_queue = self::read_queue();
@@ -784,20 +789,29 @@ final class Language_FTS_Playground_Plugin
 
             return self::read_queue();
         } finally {
-            self::release_queue_lock($lock_token);
+            self::release_queue_lock($lock['token']);
         }
     }
 
-    private static function acquire_queue_lock(): string|null
+    /**
+     * @return array{acquired:bool,token:string|null}
+     */
+    private static function acquire_queue_lock(): array
     {
         if (self::$queue_lock_token !== null) {
             self::$queue_lock_depth++;
 
-            return self::$queue_lock_token;
+            return [
+                'acquired' => true,
+                'token' => self::$queue_lock_token,
+            ];
         }
 
         if (!function_exists('add_option') || !function_exists('delete_option') || !function_exists('get_option')) {
-            return null;
+            return [
+                'acquired' => true,
+                'token' => null,
+            ];
         }
 
         $token = sprintf('%.6f:%d:%s', microtime(true), getmypid() ?: 0, self::class);
@@ -806,7 +820,10 @@ final class Language_FTS_Playground_Plugin
                 self::$queue_lock_token = $token;
                 self::$queue_lock_depth = 1;
 
-                return $token;
+                return [
+                    'acquired' => true,
+                    'token' => $token,
+                ];
             }
 
             $lock = get_option(self::QUEUE_LOCK_OPTION, []);
@@ -821,9 +838,10 @@ final class Language_FTS_Playground_Plugin
             usleep(self::QUEUE_LOCK_WAIT_MICROSECONDS);
         }
 
-        self::record_status(__('Could not acquire the Language FTS queue lock; falling back to an unlocked queue update.', 'language-fts-playground'));
-
-        return null;
+        return [
+            'acquired' => false,
+            'token' => null,
+        ];
     }
 
     private static function release_queue_lock(string|null $token): void
