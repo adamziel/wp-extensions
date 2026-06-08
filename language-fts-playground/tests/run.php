@@ -144,13 +144,38 @@ function assert_not_contains_text(string $needle, string $haystack, string $mess
     assert_true(!str_contains($haystack, $needle), $message . "\nUnexpected: {$needle}\nText: {$haystack}");
 }
 
-function assert_query_terms_overlap(Language_FTS_Playground_Analyzer $analyzer, string $document_text, string $query, string $message): void
+function assert_query_terms_overlap(
+    Language_FTS_Playground_Analyzer $analyzer,
+    string $language,
+    string $document_text,
+    string $query,
+    string $message
+): void
 {
-    $document_terms = $analyzer->analyze_text($document_text, 'pl');
-    $query_terms = $analyzer->analyze_query($query, 'pl');
+    $document_terms = $analyzer->analyze_text($document_text, $language);
+    $query_terms = $analyzer->analyze_query($query, $language);
 
     assert_true(
         array_values(array_intersect($document_terms, $query_terms)) !== [],
+        $message .
+        "\nDocument terms: " . var_export($document_terms, true) .
+        "\nQuery terms: " . var_export($query_terms, true)
+    );
+}
+
+function assert_query_terms_do_not_overlap(
+    Language_FTS_Playground_Analyzer $analyzer,
+    string $language,
+    string $document_text,
+    string $query,
+    string $message
+): void {
+    $document_terms = $analyzer->analyze_text($document_text, $language);
+    $query_terms = $analyzer->analyze_query($query, $language);
+
+    assert_same(
+        [],
+        array_values(array_intersect($document_terms, $query_terms)),
         $message .
         "\nDocument terms: " . var_export($document_terms, true) .
         "\nQuery terms: " . var_export($query_terms, true)
@@ -195,82 +220,119 @@ test_case('normalizes supported languages deterministically', function (): void 
     assert_same(['fuer', 'fuehrung', 'strasse'], $analyzer->analyze_text('für Führung Straße', 'de'), 'German umlauts are folded.');
 });
 
+test_case('adds conservative English inflection keys without noisy stems', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+
+    assert_query_terms_overlap($analyzer, 'en', 'searching searched searches', 'search', 'English search forms share a demo suffix key.');
+    assert_query_terms_overlap($analyzer, 'en', 'stories', 'story', 'English y/ies plural forms share a demo suffix key.');
+    assert_query_terms_overlap($analyzer, 'en', 'opening opened', 'open', 'English long regular verb forms share a demo suffix key.');
+    assert_query_terms_do_not_overlap($analyzer, 'en', 'running runner', 'run', 'Doubled-consonant run forms stay exact without a stem lexicon.');
+    assert_same(['news', 'bus', 'analysis'], $analyzer->analyze_text('news bus analysis', 'en'), 'Sensitive English words remain exact.');
+});
+
+test_case('adds conservative German inflection keys without broad short-token stems', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+
+    assert_query_terms_overlap($analyzer, 'de', 'deutschen deutscher deutsche', 'deutsch', 'German adjective forms share a demo suffix key.');
+    assert_query_terms_overlap($analyzer, 'de', 'Führungen', 'fuehrung', 'German plural after umlaut folding shares a demo suffix key.');
+    assert_query_terms_overlap($analyzer, 'de', 'suchen', 'suche', 'German safe n-suffix form shares a demo suffix key.');
+    assert_same(['der', 'die', 'das', 'im', 'zu', 'am'], $analyzer->analyze_text('der die das im zu am', 'de'), 'Short German function words remain exact.');
+});
+
 test_case('adds conservative Polish inflection keys without broad short-token stems', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
     $document_text = 'polskiej partycji wyszukiwania';
 
-    assert_query_terms_overlap($analyzer, $document_text, 'polska', 'Polish adjective form shares a key with its inflected form.');
-    assert_query_terms_overlap($analyzer, $document_text, 'partycja', 'Polish noun form shares a key with its inflected form.');
-    assert_query_terms_overlap($analyzer, $document_text, 'wyszukiwanie', 'Polish verbal noun form shares a key with its inflected form.');
+    assert_query_terms_overlap($analyzer, 'pl', $document_text, 'polska', 'Polish adjective form shares a key with its inflected form.');
+    assert_query_terms_overlap($analyzer, 'pl', $document_text, 'partycja', 'Polish noun form shares a key with its inflected form.');
+    assert_query_terms_overlap($analyzer, 'pl', $document_text, 'wyszukiwanie', 'Polish verbal noun form shares a key with its inflected form.');
     assert_same(['ma', 'w', 'do'], $analyzer->analyze_text('ma w do', 'pl'), 'Very short Polish tokens are not broadened into noisy stems.');
 });
 
-test_case('indexes alt text and searches only the requested language partition', function (): void {
+test_case('covers visible, alt, markup, and partition behavior across supported languages', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
     $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
     $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
 
-    $indexer->index_post(fixture_post(1, 'en', 'English', '<p>The orchard is visible.</p><img alt="falconalt" />'));
-    $indexer->index_post(fixture_post(2, 'pl', 'Polish', '<p>Łódź jest widoczna.</p>'));
+    $matrix = [
+        'en' => [
+            'post_id' => 101,
+            'title' => 'English matrix',
+            'visible_query' => 'search',
+            'alt_query' => 'story',
+            'fold_query' => null,
+            'noise_query' => 'ghostenglish',
+            'content' =>
+                '<article class="ghostenglish" id="ghostenglish">' .
+                '<p>Searching through visible content shows searched and searches forms. Foreign bait: polskiej deutschen.</p>' .
+                '<img alt="stories in an English image" />' .
+                '<style>.ghostenglish{content:"ghostenglish";}</style>' .
+                '<script>const ghostenglish = true;</script>' .
+                '<!-- ghostenglish -->' .
+                '<template>ghostenglish</template>' .
+                '</article>',
+        ],
+        'pl' => [
+            'post_id' => 102,
+            'title' => 'Polish matrix',
+            'visible_query' => 'polska',
+            'alt_query' => 'fotografia',
+            'fold_query' => 'lodz',
+            'noise_query' => 'ghostpolish',
+            'content' =>
+                '<article class="ghostpolish" id="ghostpolish">' .
+                '<p>Łódź ma widoczny akapit w polskiej partycji wyszukiwania. Foreign bait: searching deutschen.</p>' .
+                '<img alt="polskiej fotografii" />' .
+                '<style>.ghostpolish{content:"ghostpolish";}</style>' .
+                '<script>const ghostpolish = true;</script>' .
+                '<!-- ghostpolish -->' .
+                '<template>ghostpolish</template>' .
+                '</article>',
+        ],
+        'de' => [
+            'post_id' => 103,
+            'title' => 'German matrix',
+            'visible_query' => 'deutsch',
+            'alt_query' => 'fuehrung',
+            'fold_query' => 'fuer',
+            'noise_query' => 'ghostgerman',
+            'content' =>
+                '<article class="ghostgerman" id="ghostgerman">' .
+                '<p>Die deutschen Beispiele zeigen Führungen und suchen nach sichtbaren Treffern. Foreign bait: searching polskiej.</p>' .
+                '<img alt="deutscher Hinweis für Führung" />' .
+                '<style>.ghostgerman{content:"ghostgerman";}</style>' .
+                '<script>const ghostgerman = true;</script>' .
+                '<!-- ghostgerman -->' .
+                '<template>ghostgerman</template>' .
+                '</article>',
+        ],
+    ];
 
-    assert_same([1], array_column($searcher->search('falconalt', 'en'), 'post_id'), 'Image alt text is searchable.');
-    assert_same([2], array_column($searcher->search('lodz', 'pl'), 'post_id'), 'Folded Polish query matches Polish content.');
-    assert_same([], $searcher->search('lodz', 'en'), 'English partition does not return Polish content.');
-    assert_same([], $searcher->search('orchard', 'pl'), 'Polish partition does not return English content.');
-});
-
-test_case('matches Polish demo inflections only inside the Polish language partition', function (): void {
-    $storage = new Language_FTS_Playground_Test_Storage();
-    $analyzer = new Language_FTS_Playground_Analyzer();
-    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
-    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
-
-    $indexer->index_post(
-        fixture_post(20, 'pl', 'Polish demo', '<p>Łódź ma widoczny akapit w polskiej partycji wyszukiwania.</p>')
-    );
-
-    foreach (['polska', 'partycja', 'wyszukiwanie', 'lodz'] as $query) {
-        assert_same([20], array_column($searcher->search($query, 'pl'), 'post_id'), "{$query} matches the Polish demo post.");
-        assert_same([], $searcher->search($query, 'en'), "{$query} does not leak into the English partition.");
+    foreach ($matrix as $language => $case) {
+        $indexer->index_post(fixture_post($case['post_id'], $language, $case['title'], $case['content']));
     }
-});
 
-test_case('applies Polish inflection keys to image alt text', function (): void {
-    $storage = new Language_FTS_Playground_Test_Storage();
-    $analyzer = new Language_FTS_Playground_Analyzer();
-    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
-    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+    foreach ($matrix as $language => $case) {
+        assert_same([$case['post_id']], array_column($searcher->search($case['visible_query'], $language), 'post_id'), "{$language} visible content query matches its document.");
+        assert_same([$case['post_id']], array_column($searcher->search($case['alt_query'], $language), 'post_id'), "{$language} image alt query matches its document.");
+        if ($case['fold_query'] !== null) {
+            assert_same([$case['post_id']], array_column($searcher->search($case['fold_query'], $language), 'post_id'), "{$language} folded query matches its document.");
+        }
 
-    $indexer->index_post(fixture_post(30, 'pl', 'Polish alt text', '<figure><img alt="polskiej fotografii" /></figure>'));
+        foreach (array_keys($matrix) as $partition) {
+            assert_same([], $searcher->search($case['noise_query'], $partition), "{$case['noise_query']} markup noise does not match in {$partition}.");
+        }
 
-    assert_same([30], array_column($searcher->search('polska', 'pl'), 'post_id'), 'Inflected Polish alt adjective is searchable by base query.');
-    assert_same([30], array_column($searcher->search('fotografia', 'pl'), 'post_id'), 'Inflected Polish alt noun is searchable by base query.');
-    assert_same([], $searcher->search('fotografia', 'en'), 'Alt-text Polish inflection keys remain language-partitioned.');
-});
+        foreach (array_keys($matrix) as $partition) {
+            if ($partition === $language) {
+                continue;
+            }
 
-test_case('does not match Polish inflections that appear only in markup noise', function (): void {
-    $storage = new Language_FTS_Playground_Test_Storage();
-    $analyzer = new Language_FTS_Playground_Analyzer();
-    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
-    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
-
-    $indexer->index_post(
-        fixture_post(
-            40,
-            'pl',
-            'Markup noise',
-            '<article class="partycji" id="polskiej">' .
-            '<p>Neutralny widoczny tekst.</p>' .
-            '<style>.partycji{content:"polskiej";}</style>' .
-            '<script>const partycji = "polskiej";</script>' .
-            '<!-- wyszukiwania partycji polskiej -->' .
-            '</article>'
-        )
-    );
-
-    assert_same([], $searcher->search('partycja', 'pl'), 'Class, id, CSS, script, and comment text are not searchable.');
-    assert_same([], $searcher->search('polska', 'pl'), 'Polish normalization does not reintroduce excluded markup noise.');
+            assert_same([], $searcher->search($case['visible_query'], $partition), "{$language} visible query does not leak into {$partition}.");
+            assert_same([], $searcher->search($case['alt_query'], $partition), "{$language} alt query does not leak into {$partition}.");
+        }
+    }
 });
 
 test_case('ranks higher term frequency first', function (): void {

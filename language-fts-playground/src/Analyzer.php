@@ -191,6 +191,104 @@ final class Language_FTS_Playground_Analyzer
             foreach ($this->polish_suffix_keys($term) as $key) {
                 $keys[] = $key;
             }
+        } elseif ($language === 'en') {
+            foreach ($this->english_suffix_keys($term) as $key) {
+                $keys[] = $key;
+            }
+        } elseif ($language === 'de') {
+            foreach ($this->german_suffix_keys($term) as $key) {
+                $keys[] = $key;
+            }
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    /**
+     * Adds demo-sized English suffix keys after lowercasing.
+     *
+     * This is not a stemmer. It covers long regular forms used by the demo
+     * such as search/searching/searched/searches and story/stories while
+     * avoiding plain -s trimming and doubled-consonant guesses such as runn/run.
+     *
+     * @return string[]
+     */
+    private function english_suffix_keys(string $term): array
+    {
+        if (strlen($term) < 5 || preg_match('/^[a-z]+$/', $term) !== 1) {
+            return [];
+        }
+
+        $keys = [];
+        if (str_ends_with($term, 'ies')) {
+            $key = substr($term, 0, -3) . 'y';
+            if (strlen($key) >= 5) {
+                $keys[] = $key;
+            }
+
+            return array_values(array_unique($keys));
+        }
+
+        if (str_ends_with($term, 'ing')) {
+            $key = substr($term, 0, -3);
+            if (strlen($key) >= 4 && !$this->ends_with_doubled_consonant($key)) {
+                $keys[] = $key;
+            }
+        }
+
+        foreach (['ed', 'es'] as $suffix) {
+            if (!str_ends_with($term, $suffix)) {
+                continue;
+            }
+
+            $key = substr($term, 0, -strlen($suffix));
+            if (strlen($key) >= 4) {
+                $keys[] = $key;
+            }
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    /**
+     * Adds demo-sized German suffix keys after umlaut/ß folding.
+     *
+     * This is intentionally conservative. It covers common long adjective,
+     * plural, and safe final-n forms used by the demo without broad stemming
+     * for short function words.
+     *
+     * @return string[]
+     */
+    private function german_suffix_keys(string $term): array
+    {
+        if (strlen($term) < 6 || preg_match('/^[a-z]+$/', $term) !== 1) {
+            return [];
+        }
+
+        $keys = [];
+        foreach (['en', 'er', 'em', 'es'] as $suffix) {
+            if (!str_ends_with($term, $suffix)) {
+                continue;
+            }
+
+            $key = substr($term, 0, -strlen($suffix));
+            if (strlen($key) >= 5) {
+                $keys[] = $key;
+            }
+        }
+
+        if (str_ends_with($term, 'sche')) {
+            $key = substr($term, 0, -1);
+            if (strlen($key) >= 5) {
+                $keys[] = $key;
+            }
+        }
+
+        if (str_ends_with($term, 'en') && !str_ends_with($term, 'ungen')) {
+            $key = substr($term, 0, -1);
+            if (strlen($key) >= 5 && str_ends_with($key, 'e')) {
+                $keys[] = $key;
+            }
         }
 
         return array_values(array_unique($keys));
@@ -251,6 +349,20 @@ final class Language_FTS_Playground_Analyzer
         }
 
         return array_values(array_unique($keys));
+    }
+
+    private function ends_with_doubled_consonant(string $term): bool
+    {
+        if (strlen($term) < 2) {
+            return false;
+        }
+
+        $last = substr($term, -1);
+        if ($last !== substr($term, -2, 1)) {
+            return false;
+        }
+
+        return str_contains('bcdfghjklmnpqrstvwxyz', $last);
     }
 
     private function canonical_language_or_null(string|null $language): ?string
