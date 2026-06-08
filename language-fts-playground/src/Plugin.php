@@ -511,7 +511,12 @@ final class Language_FTS_Playground_Plugin
         echo '<input id="lft-query" type="search" name="lft_query" value="' . esc_attr($query) . '" class="regular-text" />';
         echo ' <label for="lft-language" class="screen-reader-text">' . esc_html__('Language', 'language-fts-playground') . '</label>';
         echo '<select id="lft-language" name="lft_language">';
-        foreach (['auto' => 'Automatic', 'en' => 'English', 'pl' => 'Polish', 'de' => 'German'] as $code => $label) {
+        $language_options = ['auto' => 'Automatic'];
+        foreach (self::analyzer()->enabled_languages() as $code) {
+            $language_options[$code] = self::analyzer()->language_label($code);
+        }
+
+        foreach ($language_options as $code => $label) {
             echo '<option value="' . esc_attr($code) . '"' . selected($language, $code, false) . '>' . esc_html($label) . '</option>';
         }
         echo '</select> ';

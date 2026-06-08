@@ -11,30 +11,6 @@ declare(strict_types=1);
 final class Language_FTS_Playground_Analyzer
 {
     /** @var array<string,bool> */
-    private array $supported_languages = [
-        'en' => true,
-        'pl' => true,
-        'de' => true,
-    ];
-
-    /**
-     * Query synonyms are expressed as analyzed keys, not raw UI text.
-     *
-     * @var array<string,array<int,array{source:string,targets:string[],direction:string,weight:float,provenance:string}>>
-     */
-    private array $query_synonyms = [
-        'pl' => [
-            [
-                'source' => 'szukan',
-                'targets' => ['wyszukiwan', 'wyszukiwani'],
-                'direction' => 'query_to_index',
-                'weight' => 0.55,
-                'provenance' => 'language-fts-playground-polish-demo',
-            ],
-        ],
-    ];
-
-    /** @var array<string,bool> */
     private array $skipped_elements = [
         'script' => true,
         'style' => true,
@@ -44,129 +20,12 @@ final class Language_FTS_Playground_Analyzer
         'math' => true,
     ];
 
-    /**
-     * Stopwords are stored after each language's case and diacritic folding.
-     *
-     * @var array<string,array<string,bool>>
-     */
-    private array $stopwords = [
-        'en' => [
-            'a' => true,
-            'an' => true,
-            'and' => true,
-            'are' => true,
-            'as' => true,
-            'at' => true,
-            'be' => true,
-            'been' => true,
-            'being' => true,
-            'but' => true,
-            'by' => true,
-            'for' => true,
-            'from' => true,
-            'has' => true,
-            'have' => true,
-            'had' => true,
-            'he' => true,
-            'her' => true,
-            'his' => true,
-            'i' => true,
-            'in' => true,
-            'is' => true,
-            'it' => true,
-            'its' => true,
-            'of' => true,
-            'on' => true,
-            'or' => true,
-            'our' => true,
-            's' => true,
-            'she' => true,
-            'that' => true,
-            'the' => true,
-            'their' => true,
-            'them' => true,
-            'this' => true,
-            'to' => true,
-            'was' => true,
-            'we' => true,
-            'were' => true,
-            'with' => true,
-            'you' => true,
-            'your' => true,
-        ],
-        'pl' => [
-            'a' => true,
-            'aby' => true,
-            'ale' => true,
-            'bo' => true,
-            'byc' => true,
-            'byl' => true,
-            'byla' => true,
-            'bylo' => true,
-            'czy' => true,
-            'dla' => true,
-            'do' => true,
-            'i' => true,
-            'ich' => true,
-            'jak' => true,
-            'jest' => true,
-            'ma' => true,
-            'na' => true,
-            'nie' => true,
-            'o' => true,
-            'od' => true,
-            'oraz' => true,
-            'po' => true,
-            'pod' => true,
-            'przez' => true,
-            'sie' => true,
-            'ta' => true,
-            'ten' => true,
-            'to' => true,
-            'w' => true,
-            'we' => true,
-            'z' => true,
-            'za' => true,
-            'ze' => true,
-        ],
-        'de' => [
-            'aber' => true,
-            'am' => true,
-            'an' => true,
-            'auf' => true,
-            'aus' => true,
-            'bei' => true,
-            'das' => true,
-            'dem' => true,
-            'den' => true,
-            'der' => true,
-            'des' => true,
-            'die' => true,
-            'ein' => true,
-            'eine' => true,
-            'einem' => true,
-            'einen' => true,
-            'einer' => true,
-            'eines' => true,
-            'er' => true,
-            'es' => true,
-            'fuer' => true,
-            'hat' => true,
-            'im' => true,
-            'in' => true,
-            'ist' => true,
-            'mit' => true,
-            'nicht' => true,
-            'sie' => true,
-            'und' => true,
-            'von' => true,
-            'war' => true,
-            'wir' => true,
-            'zu' => true,
-            'zum' => true,
-            'zur' => true,
-        ],
-    ];
+    private Language_FTS_Playground_Lexical_Profile_Repository $profiles;
+
+    public function __construct(Language_FTS_Playground_Lexical_Profile_Repository|null $profiles = null)
+    {
+        $this->profiles = $profiles ?? new Language_FTS_Playground_Lexical_Profile_Repository();
+    }
 
     public function canonical_language(string|null $language): string
     {
@@ -188,7 +47,14 @@ final class Language_FTS_Playground_Analyzer
      */
     public function enabled_languages(): array
     {
-        return array_keys($this->supported_languages);
+        return $this->profiles->language_ids();
+    }
+
+    public function language_label(string $language): string
+    {
+        $language = $this->canonical_language($language);
+
+        return $this->profiles->language_label($language);
     }
 
     public function resolve_post_language(object $post): string
@@ -290,49 +156,25 @@ final class Language_FTS_Playground_Analyzer
     {
         $language = $this->canonical_language($language);
         $query_lookup = array_fill_keys($this->unique_terms($query_keys), true);
-        if ($query_lookup === [] || !isset($this->query_synonyms[$language])) {
+        if ($query_lookup === []) {
             return [];
         }
 
+        $synonyms = $this->profiles->profile($language)['synonyms'];
         $expanded = [];
-        foreach ($this->query_synonyms[$language] as $rule) {
-            $source = (string) $rule['source'];
-            $targets = array_values(array_unique(array_map('strval', $rule['targets'])));
-            $direction = (string) $rule['direction'];
-            $weight = max(0.0, min(1.0, (float) $rule['weight']));
-            $provenance = (string) $rule['provenance'];
-
-            if (($direction === 'query_to_index' || $direction === 'bidirectional') && isset($query_lookup[$source])) {
-                foreach ($targets as $target) {
-                    if ($target === '' || isset($query_lookup[$target])) {
-                        continue;
-                    }
-
-                    $expanded[$source][$target] = [
-                        'term' => $target,
-                        'weight' => $weight,
-                        'source' => $source,
-                        'direction' => $direction,
-                        'provenance' => $provenance,
-                    ];
-                }
-            }
-
-            if ($direction !== 'bidirectional') {
-                continue;
-            }
-
-            foreach ($targets as $target) {
-                if (!isset($query_lookup[$target]) || $source === '' || isset($query_lookup[$source])) {
+        foreach (array_keys($query_lookup) as $source) {
+            foreach ($synonyms[$source] ?? [] as $expansion) {
+                $target = (string) $expansion['term'];
+                if ($target === '' || isset($query_lookup[$target])) {
                     continue;
                 }
 
-                $expanded[$target][$source] = [
-                    'term' => $source,
-                    'weight' => $weight,
-                    'source' => $target,
-                    'direction' => $direction,
-                    'provenance' => $provenance,
+                $expanded[$source][$target] = [
+                    'term' => $target,
+                    'weight' => (float) $expansion['weight'],
+                    'source' => $source,
+                    'direction' => (string) $expansion['direction'],
+                    'provenance' => (string) $expansion['provenance'],
                 ];
             }
         }
@@ -445,43 +287,9 @@ final class Language_FTS_Playground_Analyzer
     {
         $language = $this->canonical_language($language);
         $term = function_exists('mb_strtolower') ? mb_strtolower($term, 'UTF-8') : strtolower($term);
+        $folds = $this->profiles->profile($language)['folds'];
 
-        if ($language === 'pl') {
-            return strtr($term, [
-                'ą' => 'a',
-                'Ą' => 'a',
-                'ć' => 'c',
-                'Ć' => 'c',
-                'ę' => 'e',
-                'Ę' => 'e',
-                'ł' => 'l',
-                'Ł' => 'l',
-                'ń' => 'n',
-                'Ń' => 'n',
-                'ó' => 'o',
-                'Ó' => 'o',
-                'ś' => 's',
-                'Ś' => 's',
-                'ź' => 'z',
-                'Ź' => 'z',
-                'ż' => 'z',
-                'Ż' => 'z',
-            ]);
-        }
-
-        if ($language === 'de') {
-            return strtr($term, [
-                'ä' => 'ae',
-                'Ä' => 'ae',
-                'ö' => 'oe',
-                'Ö' => 'oe',
-                'ü' => 'ue',
-                'Ü' => 'ue',
-                'ß' => 'ss',
-            ]);
-        }
-
-        return $term;
+        return $folds === [] ? $term : strtr($term, $folds);
     }
 
     /**
@@ -490,6 +298,9 @@ final class Language_FTS_Playground_Analyzer
     private function term_keys(string $term, string $language): array
     {
         $keys = [$term];
+        foreach ($this->profiles->profile($language)['lexemes'][$term] ?? [] as $key) {
+            $keys[] = $key;
+        }
 
         if ($language === 'pl') {
             foreach ($this->polish_stem_keys($term) as $key) {
@@ -759,7 +570,7 @@ final class Language_FTS_Playground_Analyzer
 
     private function is_stopword(string $term, string $language): bool
     {
-        return isset($this->stopwords[$language][$term]);
+        return isset($this->profiles->profile($language)['stopwords'][$term]);
     }
 
     private function english_ed_ing_key(string $base): ?string
@@ -852,17 +663,17 @@ final class Language_FTS_Playground_Analyzer
         $candidate = str_replace('_', '-', $candidate);
         $primary = explode('-', $candidate, 2)[0];
 
-        return isset($this->supported_languages[$primary]) ? $primary : null;
+        return $this->profiles->has_language($primary) ? $primary : null;
     }
 
     private function infer_language_from_text(string $text): string
     {
-        if (preg_match('/[ąćęłńóśźż]/iu', $text) === 1) {
-            return 'pl';
-        }
-
-        if (preg_match('/[äöüß]/iu', $text) === 1) {
-            return 'de';
+        foreach ($this->profiles->language_ids() as $language) {
+            foreach ($this->profiles->language_signals($language) as $pattern) {
+                if (preg_match($pattern, $text) === 1) {
+                    return $language;
+                }
+            }
         }
 
         return 'en';

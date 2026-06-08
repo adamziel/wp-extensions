@@ -10,7 +10,7 @@ if (!defined('LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION')) {
 }
 
 if (!defined('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION')) {
-    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-08-auto-lang-synonyms');
+    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-08-resource-backed-lexical-profiles');
 }
 
 if (!defined('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE')) {
@@ -18,6 +18,7 @@ if (!defined('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE')) {
 }
 
 require_once __DIR__ . '/StorageInterface.php';
+require_once __DIR__ . '/LexicalProfileRepository.php';
 require_once __DIR__ . '/Analyzer.php';
 require_once __DIR__ . '/WpdbStorage.php';
 require_once __DIR__ . '/Indexer.php';

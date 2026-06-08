@@ -299,6 +299,22 @@ function assert_not_contains_text(string $needle, string $haystack, string $mess
     assert_true(!str_contains($haystack, $needle), $message . "\nUnexpected: {$needle}\nText: {$haystack}");
 }
 
+function assert_throws(string $expected_class, callable $fn, string $message): Throwable
+{
+    try {
+        $fn();
+    } catch (Throwable $throwable) {
+        assert_true(
+            $throwable instanceof $expected_class,
+            $message . "\nExpected exception: {$expected_class}\nActual exception: " . get_class($throwable)
+        );
+
+        return $throwable;
+    }
+
+    throw new Language_FTS_Playground_Test_Failure($message . "\nExpected exception: {$expected_class}\nNo exception was thrown.");
+}
+
 function reset_language_fts_wp_state(): void
 {
     $GLOBALS['language_fts_test_options'] = [];
@@ -726,6 +742,92 @@ function fixture_post(
     ];
 }
 
+function create_language_fts_temp_profile_tree(string $lexemes, string $synonyms = "# source\ttarget\tdirection\tweight\tprovenance\n"): string
+{
+    $root = sys_get_temp_dir() . '/language-fts-profile-' . str_replace('.', '-', uniqid('', true));
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    assert_true(mkdir($language_dir, 0777, true), 'Temporary language profile directory is created.');
+
+    file_put_contents(
+        $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
+        "<?php\nreturn [\n" .
+        "    'id' => 'xx',\n" .
+        "    'label' => 'Test',\n" .
+        "    'resources' => [\n" .
+        "        'stopwords' => 'stopwords.txt',\n" .
+        "        'lexemes' => 'lexemes.tsv',\n" .
+        "        'synonyms' => 'synonyms.tsv',\n" .
+        "    ],\n" .
+        "];\n"
+    );
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'stopwords.txt', "and\n");
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv', $lexemes);
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonyms.tsv', $synonyms);
+
+    return $root;
+}
+
+function remove_language_fts_temp_tree(string $path): void
+{
+    if (!is_dir($path)) {
+        return;
+    }
+
+    $entries = scandir($path);
+    foreach ($entries === false ? [] : $entries as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+
+        $child = $path . DIRECTORY_SEPARATOR . $entry;
+        if (is_dir($child)) {
+            remove_language_fts_temp_tree($child);
+        } else {
+            unlink($child);
+        }
+    }
+
+    rmdir($path);
+}
+
+test_case('loads resource-backed lexical profiles for stopwords, lexemes, folds, and synonyms', function (): void {
+    $repository = new Language_FTS_Playground_Lexical_Profile_Repository();
+    $profile = $repository->profile('pl');
+    $analyzer = new Language_FTS_Playground_Analyzer($repository);
+
+    assert_same(['en', 'pl', 'de'], $repository->language_ids(), 'Lexical profile order comes from resource profile declarations.');
+    assert_true(isset($profile['stopwords']['oraz']), 'Polish stopwords are loaded from a resource file.');
+    assert_same(['szukac'], $profile['lexemes']['szukaj'] ?? [], 'Polish search commands map to a canonical resource key.');
+    assert_same(['wyszukiwac'], $profile['lexemes']['wyszukiwania'] ?? [], 'Polish inflected search nouns map to a canonical resource key.');
+    assert_same('lodz', $analyzer->normalize_term('Łódź', 'pl'), 'Polish character folds are loaded from the profile.');
+    assert_same('fuehrung', $analyzer->normalize_term('Führung', 'de'), 'German character folds are loaded from the profile.');
+    assert_true(in_array('wyszukiwac', array_column($profile['synonyms']['szukac'] ?? [], 'term'), true), 'Polish query expansion is keyed by canonical resource terms.');
+});
+
+test_case('rejects malformed lexical resource rows deliberately', function (): void {
+    $root = create_language_fts_temp_profile_tree("valid\tcanonical\nmalformed-row\n");
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        assert_same(['xx'], $repository->language_ids(), 'Manifest-only profile discovery does not parse malformed resources.');
+        assert_same('Test', $repository->language_label('xx'), 'Profile labels load without parsing malformed resources.');
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Malformed lexeme rows fail profile loading.'
+        );
+        assert_contains_text('lexeme rows must have 2 or 3 tab-separated columns', $throwable->getMessage(), 'The malformed row reason is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('analyzer no longer ships a hardcoded query synonym map property', function (): void {
+    $source = file_get_contents(__DIR__ . '/../src/Analyzer.php');
+    assert_true(is_string($source), 'Analyzer source can be read.');
+    assert_not_contains_text('$query_synonyms', $source, 'Analyzer does not retain the old hardcoded synonym-map property.');
+});
+
 test_case('extracts visible text and image alt while excluding markup noise', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
     $text = $analyzer->extract_searchable_text(
@@ -893,6 +995,28 @@ test_case('covers visible, alt, markup, and partition behavior across supported 
     }
 });
 
+test_case('Polish resource-backed profile covers search commands, nouns, and searcher terms in automatic mode', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(119, 'pl', 'Polski dokument', '<p>Partycja wyszukiwania pokazuje wynik.</p>'));
+
+    foreach (['szukaj', 'szukanie', 'wyszukiwarka', 'wyszukiwanie', 'wyszukiwania'] as $query) {
+        $results = $searcher->search($query, 'auto');
+        assert_same([119], array_column($results, 'post_id'), "Automatic Polish search for {$query} reaches the resource-backed target.");
+        assert_same('pl', $results[0]['matched_language'], "Automatic Polish search for {$query} reports the matched partition.");
+        assert_contains_text('<mark>wyszukiwania</mark>', $results[0]['snippet'], "Automatic Polish search for {$query} highlights the indexed source token.");
+    }
+
+    $query_terms = $analyzer->analyze_query('szukaj', 'pl');
+    assert_true(in_array('szukac', $query_terms, true), 'The command form szukaj receives the canonical szukac key from lexemes.tsv.');
+    $expansions = $analyzer->expand_query_synonyms($query_terms, 'pl');
+    assert_true(isset($expansions['szukac']), 'The szukac canonical key expands through synonyms.tsv.');
+    assert_same('wyszukiwac', $expansions['szukac'][0]['term'], 'The szukac synonym target is the canonical wyszukiwac key.');
+});
+
 test_case('automatic search finds Polish synonym matches with matched language payloads', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
@@ -905,7 +1029,7 @@ test_case('automatic search finds Polish synonym matches with matched language p
 
     assert_same([120], array_column($results, 'post_id'), 'Automatic mode searches the Polish partition for the synonym target.');
     assert_same('pl', $results[0]['matched_language'], 'The result reports the matched Polish partition.');
-    assert_contains_text('szukan=>', implode(', ', $results[0]['matched_terms']), 'The synonym relationship is reported as a query-time match.');
+    assert_contains_text('szukac=>', implode(', ', $results[0]['matched_terms']), 'The resource-backed synonym relationship is reported as a query-time match.');
     assert_contains_text('<mark>wyszukiwania</mark>', $results[0]['snippet'], 'The synonym match highlights the indexed source token.');
 });
 

@@ -35,7 +35,7 @@ The seeded posts cover:
 - Markup/CSS/script/comment noise: search `ghostmarkup` in English and expect no matches.
 - Polish folding: search `lodz` in Polish for content containing `Łódź`.
 - Polish inflection keys: search `polska` or `partycja` in Polish for `polskiej partycji`.
-- Polish query-time synonyms: search `szukanie` in Automatic or Polish mode to match indexed content containing `wyszukiwania`.
+- Polish query-time synonyms: search `szukaj`, `szukanie`, or `wyszukiwarka` in Automatic or Polish mode to match indexed content containing `wyszukiwania`.
 - German folding: search `fuehrung` in German for content containing `Führung`.
 - German demo inflection keys: search `deutsch` for `deutschen` or `deutscher`, and `suche` for `Suchen`.
 
@@ -60,20 +60,58 @@ alt text searchable with a lower boost. Snippet highlighting compares query
 analysis keys with each source token's analysis keys, so demo inflection keys
 can highlight raw source forms such as `stories` for the query `story`.
 
-Synonym expansion is also query-time analyzer behavior. The demo ships a
-language-scoped Polish rule from the analyzed query key for `szukanie` to the
-indexed keys for `wyszukiwania`; synonym-only matches are downweighted, stay in
-the same language partition, and highlight the matched source token normally.
+Synonym expansion is also query-time analyzer behavior. The demo ships curated
+Polish resource rows that map command/search noun keys such as `szukac` and
+`wyszukiwarka` to the indexed `wyszukiwac` key used by forms such as
+`wyszukiwania`; synonym-only matches are downweighted, stay in the same
+language partition, and highlight the matched source token normally.
+
+## Lexical Profiles
+
+The analyzer loads language behavior from plugin-local resources under
+`language-fts-playground/resources/languages/`:
+
+```text
+resources/languages/
+  en/
+    profile.php
+    stopwords.txt
+    lexemes.tsv
+    synonyms.tsv
+  pl/
+    profile.php
+    stopwords.txt
+    lexemes.tsv
+    synonyms.tsv
+  de/
+    profile.php
+    stopwords.txt
+    lexemes.tsv
+    synonyms.tsv
+```
+
+`profile.php` declares the language id, label, load order, optional character
+folds, optional language-detection signal regexes, and resource file names.
+`stopwords.txt` stores one normalized stopword per line. `lexemes.tsv` maps
+observed normalized forms to canonical keys, for example Polish `szukaj` to
+`szukac` and `wyszukiwania` to `wyszukiwac`. `synonyms.tsv` maps canonical query
+keys to canonical index keys with a weight and provenance. The parser validates
+row shapes and malformed resources fail during profile loading.
+
+Profiles are parsed lazily and cached on the analyzer's profile repository.
+Stopwords, lexeme aliases, and synonym expansions are stored as keyed maps, so
+the analyzer does not scan resource files while analyzing each token.
 
 ## Supported Analyzer Behavior
 
-The analyzer removes common English, Polish, and German stopwords, keeps exact
-terms, and adds a small set of language-scoped conservative stem keys:
+The analyzer removes profile-backed English, Polish, and German stopwords,
+keeps exact terms, applies profile-backed lexeme aliases first, and then adds a
+small set of language-scoped conservative fallback stem keys:
 
-- English lowercases terms and adds conservative keys for regular forms and a few guarded irregulars: `search` matches `searching`, `searched`, and `searches`; `story` matches `stories`; `make` matches `making`; `run` matches `running`; `child` matches `children`.
+- English lowercases terms and includes resource rows plus conservative keys for regular forms and a few guarded irregulars: `search` matches `searching`, `searched`, and `searches`; `story` matches `stories`; `make` matches `making`; `run` matches `running`; `child` matches `children`.
 - English keeps sensitive terms such as `news`, `bus`, and `analysis` exact, and avoids broad noun-to-verb collapses such as `runner` to `run`.
-- Polish folds diacritics and adds the existing conservative long-word suffix keys, including `polska`/`polskiej`, `partycja`/`partycji`, `wyszukiwanie`/`wyszukiwania`, and `lodz`/`Łódź`.
-- German folds `ä`, `ö`, `ü`, and `ß` to `ae`, `oe`, `ue`, and `ss`, then adds conservative keys for demo forms such as `deutsch`/`deutschen`/`deutscher`/`deutsche`, `fuehrung`/`Führungen`, `strasse`/`Straßen`, `baum`/`Bäume`, and `spiel`/`gespielt`.
+- Polish folds diacritics from profile data, uses curated resource keys for `szukaj`/`szukanie`/`wyszukiwarka`/`wyszukiwanie`/`wyszukiwania`, and keeps fallback suffix keys for forms such as `polska`/`polskiej`, `partycja`/`partycji`, and `lodz`/`Łódź`.
+- German folds `ä`, `ö`, `ü`, and `ß` from profile data to `ae`, `oe`, `ue`, and `ss`, then uses resource rows and fallback keys for demo forms such as `deutsch`/`deutschen`/`deutscher`/`deutsche`, `fuehrung`/`Führungen`, `strasse`/`Straßen`, `baum`/`Bäume`, and `spiel`/`gespielt`.
 - Short/common terms stay exact in every language to reduce noisy matches.
 
 ## Phrase And Fuzzy Search
@@ -115,10 +153,11 @@ find language-fts-playground -name "*.php" -print0 | xargs -0 -n1 php -l
 This is a demo-sized implementation. The custom tables are intentionally simple
 and portable, with no production indexing optimizations. Ranking is meant for
 relative ordering inside one query and one language partition, not for comparing
-scores across languages or unrelated queries. The analyzer folds only the
-language behavior needed for the demo, including conservative English, Polish,
-and German stem-key generators plus a small language-scoped synonym map. It
-does not implement full stemming, lemmatization, multi-edit fuzzy search, or
-unconfigured cross-language fallback.
+scores across languages or unrelated queries. The lexical resources are curated
+for the demo and are not full dictionaries; they are intended to be expanded or
+replaced later by generated resources from canonical linguistic sources. The
+fallback suffix rules are still conservative handwritten heuristics. The plugin
+does not implement full stemming, full lemmatization, multi-edit fuzzy search,
+or unconfigured cross-language fallback.
 Snippets are built from normalized field text, not from full-fidelity rendered
 HTML, and use a small fixed excerpt window for long fields.
