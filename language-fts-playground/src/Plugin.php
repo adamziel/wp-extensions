@@ -537,7 +537,7 @@ final class Language_FTS_Playground_Plugin
     }
 
     /**
-     * @param array<int,array{post_id:int,score:float,matched_terms:string[]}> $results
+     * @param array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string}> $results
      */
     private static function render_results(array $results, string $query, string $language): void
     {
@@ -555,6 +555,8 @@ final class Language_FTS_Playground_Plugin
         echo '<table class="widefat striped"><thead><tr>';
         echo '<th>' . esc_html__('Post', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Score', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Snippet', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Matched fields', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Matched terms', 'language-fts-playground') . '</th>';
         echo '</tr></thead><tbody>';
         foreach ($results as $result) {
@@ -570,6 +572,8 @@ final class Language_FTS_Playground_Plugin
             }
             echo '</td>';
             echo '<td>' . esc_html(number_format_i18n($result['score'], 6)) . '</td>';
+            echo '<td>' . self::safe_snippet_html((string) ($result['snippet'] ?? '')) . '</td>';
+            echo '<td>' . esc_html(implode(', ', $result['matched_fields'] ?? [])) . '</td>';
             echo '<td>' . esc_html(implode(', ', $result['matched_terms'])) . '</td>';
             echo '</tr>';
         }
@@ -1108,6 +1112,19 @@ final class Language_FTS_Playground_Plugin
             )
         );
         exit;
+    }
+
+    private static function safe_snippet_html(string $snippet): string
+    {
+        if ($snippet === '') {
+            return '';
+        }
+
+        if (function_exists('wp_kses')) {
+            return wp_kses($snippet, ['mark' => []]);
+        }
+
+        return $snippet;
     }
 
     private static function update_option_value(string $name, mixed $value): void

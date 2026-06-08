@@ -1445,6 +1445,32 @@ test_case('renders admin lifecycle controls and protects destructive actions', f
     assert_same(0, $storage->clear_count, 'Clear index does not run without the required capability.');
 });
 
+test_case('renders admin snippets and matched fields safely', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $post = fixture_post(
+        402,
+        'en',
+        'Admin safe snippet',
+        '<p>Stories keep unsafe &lt;script&gt;alert(1)&lt;/script&gt; text visible.</p>'
+    );
+    $GLOBALS['language_fts_test_posts'][402] = $post;
+    $indexer = new Language_FTS_Playground_Indexer($storage, new Language_FTS_Playground_Analyzer());
+    $indexer->index_post($post);
+    $_GET['lft_query'] = 'story';
+    $_GET['lft_language'] = 'en';
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = ob_get_clean();
+
+    assert_contains_text('Snippet', $html, 'Admin search results include a snippet column.');
+    assert_contains_text('Matched fields', $html, 'Admin search results include a matched-fields column.');
+    assert_contains_text('<mark>Stories</mark>', $html, 'Admin snippets preserve generated highlighted stem-match markup.');
+    assert_contains_text('&lt;script&gt;alert(1)&lt;/script&gt;', $html, 'Admin snippets preserve escaped unsafe-looking source text.');
+    assert_not_contains_text('<script>', $html, 'Admin snippets do not emit raw unsafe source HTML.');
+});
+
 test_case('surfaces storage failures in admin without fataling the page', function (): void {
     reset_language_fts_plugin_runtime(new Language_FTS_Playground_Test_Failing_Storage('Stored rows are temporarily unavailable.'));
 
