@@ -319,7 +319,7 @@ final class Language_FTS_Playground_Plugin
         );
 
         if (!self::queue_contains_ids($confirmed, $post_ids)) {
-            self::record_status(__('Could not confirm every Language FTS queue item after writing the option-backed queue.', 'language-fts-playground'));
+            throw new RuntimeException(__('Could not confirm every Language FTS queue item after writing the option-backed queue.', 'language-fts-playground'));
         }
         self::schedule_queue_processing();
     }
@@ -765,13 +765,19 @@ final class Language_FTS_Playground_Plugin
 
     /**
      * @param callable(array<int,string>):array<int,string> $mutation
+     * @param bool $required Whether the mutation must be durably applied before returning.
      * @return array<int,string>
      */
-    private static function mutate_queue(callable $mutation): array
+    private static function mutate_queue(callable $mutation, bool $required = true): array
     {
         $lock = self::acquire_queue_lock();
         if (!$lock['acquired']) {
-            self::record_status(__('Could not acquire the Language FTS queue lock; queued work will be retried later.', 'language-fts-playground'));
+            $message = __('Could not acquire the Language FTS queue lock; queued work will be retried later.', 'language-fts-playground');
+            if ($required) {
+                throw new RuntimeException($message);
+            }
+
+            self::record_status($message);
 
             return self::read_queue();
         }
@@ -928,7 +934,8 @@ final class Language_FTS_Playground_Plugin
                 }
 
                 return $queue;
-            }
+            },
+            false
         );
     }
 

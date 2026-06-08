@@ -832,6 +832,30 @@ test_case('queues saved public posts and processes bounded batches', function ()
     assert_same(0, Language_FTS_Playground_Plugin::queued_count(), 'The queue is empty after all items are processed.');
 });
 
+test_case('contended public-post enqueue reports failure instead of claiming success', function (): void {
+    reset_language_fts_plugin_runtime();
+    $post = fixture_post(801, 'en', 'Contended public orchard', '<p>orchard queue contention</p>');
+    $GLOBALS['language_fts_test_posts'][801] = $post;
+    update_option(
+        'language_fts_playground_index_queue_lock',
+        [
+            'token' => 'external-lock-token',
+            'expires_at' => microtime(true) + 10,
+        ]
+    );
+
+    Language_FTS_Playground_Plugin::index_saved_post(801, $post, true);
+    $queue = get_option('language_fts_playground_index_queue', []);
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same([], $queue, 'The active lock prevents an unlocked queue write.');
+    assert_same(0, Language_FTS_Playground_Plugin::queued_count(), 'No queue item is falsely counted after the failed enqueue.');
+    assert_contains_text('Could not update the Language FTS queue for a saved post.', (string) ($status['last_status'] ?? ''), 'The failed enqueue is reported in status.');
+    assert_contains_text('Could not acquire the Language FTS queue lock', (string) ($status['last_error'] ?? ''), 'The lock contention reason remains visible.');
+    assert_not_contains_text('Queued a changed post for Language FTS indexing.', (string) ($status['last_status'] ?? ''), 'Status does not claim the post was queued.');
+    assert_same([], $GLOBALS['language_fts_test_scheduled'], 'A failed enqueue does not schedule an empty queue.');
+});
+
 test_case('completion preserves queue IDs added between read and write', function (): void {
     $storage = reset_language_fts_plugin_runtime();
     assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
