@@ -25,4 +25,3 @@ describe("wrangler static assets configuration", () => {
     expect(wranglerConfig.assets?.run_worker_first).toEqual([...RESERVED_WORKER_FIRST_ROUTES]);
   });
 });
-
