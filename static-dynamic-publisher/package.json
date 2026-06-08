@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "export:playground": "node ./scripts/export-playground-static.mjs",
     "test": "vitest run",
+    "test:export-pipeline": "vitest run tests/export-pipeline.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

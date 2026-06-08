@@ -1,0 +1,26 @@
+{
+  "$schema": "https://playground.wordpress.net/blueprint-schema.json",
+  "preferredVersions": {
+    "wp": "latest",
+    "php": "8.3"
+  },
+  "extraLibraries": ["wp-cli"],
+  "steps": [
+    {
+      "step": "activatePlugin",
+      "pluginPath": "static-site-generator/static-site-generator.php"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp rewrite structure '/%postname%/'"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp post create --post_type=post --post_status=publish --post_title='Playground Export Fixture' --post_name=playground-export-fixture --post_content='This deterministic post proves the Playground static export can crawl linked WordPress content.'"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp static-site export --output=/exports/static-site.zip --fetch-mode=internal"
+    }
+  ]
+}
