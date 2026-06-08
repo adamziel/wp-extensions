@@ -9,11 +9,14 @@ final class Language_FTS_Playground_Test_Failure extends RuntimeException
 
 final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playground_Storage_Interface
 {
-    /** @var array<int,array{post_id:int,language:string,title:string,status:string,document_length:int,updated_at:string}> */
+    /** @var array<int,array{post_id:int,language:string,title:string,status:string,document_length:int,field_texts:array<string,string>,updated_at:string}> */
     private array $documents = [];
 
-    /** @var array<string,array<string,array<int,int>>> */
+    /** @var array<string,array<string,array<int,array<string,int>>>> */
     private array $postings = [];
+
+    /** @var array<string,array<string,array<int,int[]>>> */
+    private array $positions = [];
 
     public int $install_count = 0;
     public int $clear_count = 0;
@@ -29,6 +32,7 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         $this->clear_count++;
         $this->documents = [];
         $this->postings = [];
+        $this->positions = [];
     }
 
     public function replace_document(
@@ -37,7 +41,9 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         string $title,
         string $status,
         int $document_length,
-        array $term_frequencies
+        array $field_term_frequencies,
+        array $field_texts,
+        array $term_positions
     ): void {
         $this->delete_document($post_id);
         $this->documents[$post_id] = [
@@ -46,11 +52,17 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
             'title' => $title,
             'status' => $status,
             'document_length' => max(1, $document_length),
+            'field_texts' => $field_texts,
             'updated_at' => 'test',
         ];
 
-        foreach ($term_frequencies as $term => $tf) {
-            $this->postings[$language][(string) $term][$post_id] = max(1, (int) $tf);
+        foreach ($field_term_frequencies as $field => $term_frequencies) {
+            foreach ($term_frequencies as $term => $tf) {
+                $term = (string) $term;
+                $field = (string) $field;
+                $this->postings[$language][$term][$post_id][$field] = max(1, (int) $tf);
+                $this->positions[$language][$term][$post_id] = array_values(array_map('intval', $term_positions[$term] ?? []));
+            }
         }
     }
 
@@ -61,8 +73,10 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         foreach ($this->postings as $language => $terms) {
             foreach ($terms as $term => $postings) {
                 unset($postings[$post_id]);
+                unset($this->positions[$language][$term][$post_id]);
                 if ($postings === []) {
                     unset($this->postings[$language][$term]);
+                    unset($this->positions[$language][$term]);
                 } else {
                     $this->postings[$language][$term] = $postings;
                 }
@@ -83,6 +97,50 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         return $result;
     }
 
+    public function fetch_positions(string $language, array $terms, array $post_ids): array
+    {
+        $post_id_lookup = [];
+        foreach ($post_ids as $post_id) {
+            $post_id_lookup[(int) $post_id] = true;
+        }
+
+        $result = [];
+        foreach ($terms as $term) {
+            $term = (string) $term;
+            foreach ($this->positions[$language][$term] ?? [] as $post_id => $positions) {
+                if (isset($post_id_lookup[(int) $post_id])) {
+                    $result[$term][(int) $post_id] = $positions;
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array
+    {
+        $min_length = max(1, strlen($term) - max(0, $max_distance));
+        $max_length = strlen($term) + max(0, $max_distance);
+        $limit = max(1, $limit);
+        $terms = array_keys($this->postings[$language] ?? []);
+        sort($terms, SORT_STRING);
+
+        $candidates = [];
+        foreach ($terms as $candidate) {
+            $length = strlen($candidate);
+            if ($length < $min_length || $length > $max_length) {
+                continue;
+            }
+
+            $candidates[] = $candidate;
+            if (count($candidates) >= $limit) {
+                break;
+            }
+        }
+
+        return $candidates;
+    }
+
     public function fetch_document_lengths(string $language, array $post_ids): array
     {
         $lengths = [];
@@ -94,6 +152,19 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         }
 
         return $lengths;
+    }
+
+    public function fetch_document_fields(string $language, array $post_ids): array
+    {
+        $fields = [];
+        foreach ($post_ids as $post_id) {
+            $post_id = (int) $post_id;
+            if (($this->documents[$post_id]['language'] ?? null) === $language) {
+                $fields[$post_id] = $this->documents[$post_id]['field_texts'];
+            }
+        }
+
+        return $fields;
     }
 
     public function document_count(string $language): int
@@ -135,9 +206,11 @@ final class Language_FTS_Playground_Test_Failing_Storage implements Language_FTS
         string $title,
         string $status,
         int $document_length,
-        array $term_frequencies
+        array $field_term_frequencies,
+        array $field_texts,
+        array $term_positions
     ): void {
-        unset($post_id, $language, $title, $status, $document_length, $term_frequencies);
+        unset($post_id, $language, $title, $status, $document_length, $field_term_frequencies, $field_texts, $term_positions);
         throw new RuntimeException($this->message);
     }
 
@@ -153,7 +226,25 @@ final class Language_FTS_Playground_Test_Failing_Storage implements Language_FTS
         throw new RuntimeException($this->message);
     }
 
+    public function fetch_positions(string $language, array $terms, array $post_ids): array
+    {
+        unset($language, $terms, $post_ids);
+        throw new RuntimeException($this->message);
+    }
+
+    public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array
+    {
+        unset($language, $term, $max_distance, $limit);
+        throw new RuntimeException($this->message);
+    }
+
     public function fetch_document_lengths(string $language, array $post_ids): array
+    {
+        unset($language, $post_ids);
+        throw new RuntimeException($this->message);
+    }
+
+    public function fetch_document_fields(string $language, array $post_ids): array
     {
         unset($language, $post_ids);
         throw new RuntimeException($this->message);
@@ -658,36 +749,62 @@ test_case('normalizes supported languages deterministically', function (): void 
 
     assert_same(['orchard'], $analyzer->analyze_text('ORCHARD', 'en'), 'English terms are lowercased.');
     assert_same(['lodz'], $analyzer->analyze_text('Łódź', 'pl'), 'Polish diacritics are folded.');
-    assert_same(['fuer', 'fuehrung', 'strasse'], $analyzer->analyze_text('für Führung Straße', 'de'), 'German umlauts are folded.');
+    assert_same(['fuehrung', 'strasse', 'strass'], $analyzer->analyze_text('für Führung Straße', 'de'), 'German umlauts are folded and stopwords are removed.');
 });
 
-test_case('adds conservative English inflection keys without noisy stems', function (): void {
+test_case('removes English stopwords and stems common English forms conservatively', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
 
-    assert_query_terms_overlap($analyzer, 'en', 'searching searched searches', 'search', 'English search forms share a demo suffix key.');
-    assert_query_terms_overlap($analyzer, 'en', 'stories', 'story', 'English y/ies plural forms share a demo suffix key.');
-    assert_query_terms_overlap($analyzer, 'en', 'opening opened', 'open', 'English long regular verb forms share a demo suffix key.');
-    assert_query_terms_do_not_overlap($analyzer, 'en', 'running runner', 'run', 'Doubled-consonant run forms stay exact without a stem lexicon.');
+    assert_same([], $analyzer->analyze_text('the and of to in a an is are was were by for with', 'en'), 'Common English stopwords are not indexed.');
+    assert_same(['runner'], $analyzer->analyze_text("the runner's and of", 'en'), 'English possessive noise and stopwords are removed.');
+    assert_query_terms_overlap($analyzer, 'en', 'searching searched searches', 'search', 'English regular verb forms share a stem key.');
+    assert_query_terms_overlap($analyzer, 'en', 'stories skies', 'story sky', 'English y/ies plural forms share stem keys.');
+    assert_query_terms_overlap($analyzer, 'en', 'making baked boxes buses', 'make bake box bus', 'English dropped-e and es plural forms share stem keys.');
+    assert_query_terms_overlap($analyzer, 'en', 'running stopped', 'run stop', 'English doubled-consonant verb forms are guarded and stemmed.');
+    assert_query_terms_overlap($analyzer, 'en', 'children people', 'child person', 'Guarded English irregular examples share stem keys.');
+    assert_query_terms_do_not_overlap($analyzer, 'en', 'runner', 'run', 'Agent nouns do not collapse to short verb stems.');
+    assert_query_terms_do_not_overlap($analyzer, 'en', 'university', 'universe', 'English y-ending words are not broadly conflated.');
     assert_same(['news', 'bus', 'analysis'], $analyzer->analyze_text('news bus analysis', 'en'), 'Sensitive English words remain exact.');
 });
 
-test_case('adds conservative German inflection keys without broad short-token stems', function (): void {
+test_case('removes German stopwords and stems German forms conservatively', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
 
-    assert_query_terms_overlap($analyzer, 'de', 'deutschen deutscher deutsche', 'deutsch', 'German adjective forms share a demo suffix key.');
-    assert_query_terms_overlap($analyzer, 'de', 'Führungen', 'fuehrung', 'German plural after umlaut folding shares a demo suffix key.');
-    assert_query_terms_overlap($analyzer, 'de', 'suchen', 'suche', 'German safe n-suffix form shares a demo suffix key.');
-    assert_same(['der', 'die', 'das', 'im', 'zu', 'am'], $analyzer->analyze_text('der die das im zu am', 'de'), 'Short German function words remain exact.');
+    assert_same([], $analyzer->analyze_text('der die das und in im zu am fuer von mit ein eine einer', 'de'), 'Common German stopwords are not indexed.');
+    assert_query_terms_overlap($analyzer, 'de', 'deutschen deutscher deutsche deutsches', 'deutsch', 'German adjective forms share a stem key.');
+    assert_query_terms_overlap($analyzer, 'de', 'schnelle schnellen schneller schnellem', 'schnell', 'German adjective suffixes are normalized.');
+    assert_query_terms_overlap($analyzer, 'de', 'Führungen Straßen Kindern', 'fuehrung strasse kind', 'German noun plurals after folding share stem keys.');
+    assert_query_terms_overlap($analyzer, 'de', 'Bäume Häuser', 'baum haus', 'German umlauted noun plurals share conservative singular keys.');
+    assert_query_terms_overlap($analyzer, 'de', 'spielen spielte gespielt', 'spiel', 'German common verb endings and ge- participles share stem keys.');
+    assert_query_terms_do_not_overlap($analyzer, 'de', 'gespielt', 'gespiel', 'German ge-participles do not add noisy intermediate stems.');
+    assert_query_terms_do_not_overlap($analyzer, 'de', 'artig', 'art', 'German ig-adjectives do not collapse to short nouns.');
+    assert_same(['arm', 'arme'], $analyzer->analyze_text('arm arme', 'de'), 'Short German tokens stay guarded from broad stemming.');
 });
 
-test_case('adds conservative Polish inflection keys without broad short-token stems', function (): void {
+test_case('removes Polish stopwords and stems Polish forms conservatively', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
-    $document_text = 'polskiej partycji wyszukiwania';
+    $document_text = 'polskiej polskimi partycji partiami wyszukiwania wyszukiwarkach fotografiami';
 
+    assert_same([], $analyzer->analyze_text('w i oraz na do z ze ma pod po dla', 'pl'), 'Common Polish stopwords are not indexed.');
     assert_query_terms_overlap($analyzer, 'pl', $document_text, 'polska', 'Polish adjective form shares a key with its inflected form.');
     assert_query_terms_overlap($analyzer, 'pl', $document_text, 'partycja', 'Polish noun form shares a key with its inflected form.');
     assert_query_terms_overlap($analyzer, 'pl', $document_text, 'wyszukiwanie', 'Polish verbal noun form shares a key with its inflected form.');
-    assert_same(['ma', 'w', 'do'], $analyzer->analyze_text('ma w do', 'pl'), 'Very short Polish tokens are not broadened into noisy stems.');
+    assert_query_terms_overlap($analyzer, 'pl', 'domami domach domem domu', 'dom', 'Short but meaningful Polish nouns keep guarded stems.');
+    assert_query_terms_overlap($analyzer, 'pl', 'zielonymi zielonego zielonych', 'zielony', 'Polish adjective endings share conservative stem keys.');
+    assert_same(['ul', 'rok'], $analyzer->analyze_text('ul w rok i', 'pl'), 'Short non-stopword Polish tokens remain exact.');
+    assert_query_terms_do_not_overlap($analyzer, 'pl', 'rama', 'ram', 'Polish short stems are guarded from broad final-vowel trimming.');
+});
+
+test_case('uses one analyzer path for indexed documents and queries with stopwords', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(20, 'en', 'Stopword path', '<p>The orchard and the running paths are visible.</p>'));
+
+    assert_same([], $searcher->search('the and of', 'en'), 'Stopword-only English queries produce no matches.');
+    assert_same([20], array_column($searcher->search('the run and orchard', 'en'), 'post_id'), 'Mixed English queries use the same stem and stopword keys as indexing.');
 });
 
 test_case('covers visible, alt, markup, and partition behavior across supported languages', function (): void {
@@ -735,8 +852,8 @@ test_case('covers visible, alt, markup, and partition behavior across supported 
             'post_id' => 103,
             'title' => 'German matrix',
             'visible_query' => 'deutsch',
-            'alt_query' => 'fuehrung',
-            'fold_query' => 'fuer',
+            'alt_query' => 'hinweis',
+            'fold_query' => 'fuehrung',
             'noise_query' => 'ghostgerman',
             'content' =>
                 '<article class="ghostgerman" id="ghostgerman">' .
@@ -790,6 +907,146 @@ test_case('ranks higher term frequency first', function (): void {
     assert_true(count($results) >= 2, 'Both English documents match.');
     assert_same(10, $results[0]['post_id'], 'The denser document ranks first.');
     assert_true($results[0]['score'] > $results[1]['score'], 'BM25 score reflects term frequency.');
+});
+
+test_case('quoted phrase search requires adjacent ordered analyzer positions', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(20, 'en', 'Adjacent', '<p>Searching pages stay adjacent.</p>'));
+    $indexer->index_post(fixture_post(21, 'en', 'Reversed', '<p>Pages stay searching in reverse order.</p>'));
+    $indexer->index_post(fixture_post(22, 'en', 'Separated', '<p>Searching useful pages are separated.</p>'));
+
+    assert_same([20], array_column($searcher->search('"search pages"', 'en'), 'post_id'), 'Quoted phrases require adjacent ordered analyzer keys.');
+});
+
+test_case('quoted phrase search covers alt text without crossing excluded markup noise', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(30, 'en', 'Alt phrase', '<p>Visible prelude.</p><img alt="silver falcon" />'));
+    $indexer->index_post(fixture_post(31, 'en', 'Markup gap', '<p>silver</p><script>ignored markup</script><p>falcon</p>'));
+
+    assert_same([30], array_column($searcher->search('"silver falcon"', 'en'), 'post_id'), 'Phrases can match inside image alt text but not across skipped script/style/comment/template noise.');
+});
+
+test_case('fuzzy suffix matches one edit typo only when opted in', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(40, 'en', 'Orchard', '<p>orchard meadow</p>'));
+
+    assert_same([], $searcher->search('orchrd', 'en'), 'Typo tolerance is opt-in and plain typos stay exact.');
+    assert_same([40], array_column($searcher->search('orchrd~', 'en'), 'post_id'), 'A one-edit typo matches with the fuzzy suffix.');
+});
+
+test_case('fuzzy suffix rejects short noisy terms and ranks below exact matches', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(50, 'en', 'Exact orchard', '<p>orchard trail</p>'));
+    $indexer->index_post(fixture_post(51, 'en', 'Fuzzy neighbor', '<p>orchart trail trail trail trail</p>'));
+    $indexer->index_post(fixture_post(52, 'en', 'Short bait', '<p>bus stop</p>'));
+
+    assert_same([], $searcher->search('bis~', 'en'), 'Short fuzzy terms are rejected to avoid noisy matches.');
+    assert_same([50, 51], array_column($searcher->search('orchard~', 'en'), 'post_id'), 'Exact matches rank ahead of fuzzy one-edit neighbors.');
+});
+
+test_case('ranks title hits above equal content hits', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(41, 'en', 'Body match', '<p>orchard plain visible text</p>'));
+    $indexer->index_post(fixture_post(42, 'en', 'Orchard title', '<p>plain visible text only</p>'));
+
+    $results = $searcher->search('orchard', 'en');
+
+    assert_true(count($results) >= 2, 'Both English documents match.');
+    assert_same(42, $results[0]['post_id'], 'A title hit outranks an equal content hit even with the higher post ID.');
+    assert_same(['title'], $results[0]['matched_fields'], 'The top result reports the title field.');
+    assert_same(['content'], $results[1]['matched_fields'], 'The second result reports the content field.');
+});
+
+test_case('reports excerpt field matches with highlighted excerpt snippets', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+    $post = fixture_post(45, 'en', 'Excerpt match', '<p>Visible meadow only</p>');
+    $post->post_excerpt = 'Orchard summary text';
+
+    $indexer->index_post($post);
+    $results = $searcher->search('orchard', 'en');
+
+    assert_same(45, $results[0]['post_id'], 'The query matches the indexed excerpt field.');
+    assert_same(['excerpt'], $results[0]['matched_fields'], 'The result reports the excerpt field.');
+    assert_contains_text('<mark>Orchard</mark>', $results[0]['snippet'], 'The excerpt snippet highlights the matched term.');
+});
+
+test_case('returns escaped highlighted snippets for stem-key matches', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(
+        53,
+        'en',
+        'Safe snippet',
+        '<p>Stories keep unsafe &lt;script&gt;alert(1)&lt;/script&gt; text visible.</p>'
+    ));
+
+    $results = $searcher->search('story', 'en');
+
+    assert_same(53, $results[0]['post_id'], 'The English stem key matches an inflected visible term.');
+    assert_contains_text('<mark>Stories</mark>', $results[0]['snippet'], 'The snippet highlights the raw inflected source term.');
+    assert_contains_text('&lt;script&gt;alert(1)&lt;/script&gt;', $results[0]['snippet'], 'Unsafe-looking source text is escaped in snippets.');
+    assert_not_contains_text('<script>', $results[0]['snippet'], 'Snippets do not emit unsafe raw HTML from post content.');
+});
+
+test_case('keeps long UTF-8 snippets valid and highlighted', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(
+        55,
+        'pl',
+        'Dlugi opis',
+        '<p>' . str_repeat('ą', 160) . ' Łódź końcówka</p>'
+    ));
+
+    $results = $searcher->search('lodz', 'pl');
+
+    assert_same(55, $results[0]['post_id'], 'The folded Polish query matches the long UTF-8 content field.');
+    assert_contains_text('<mark>Łódź</mark>', $results[0]['snippet'], 'The excerpt keeps the Polish match highlight after UTF-8 truncation.');
+    assert_not_contains_text('�', $results[0]['snippet'], 'The excerpt is not cut inside a UTF-8 codepoint.');
+});
+
+test_case('reports alt field matches with highlighted alt snippets', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(60, 'en', 'Alt only', '<p>Visible meadow</p><img alt="falcon stories beside the image" />'));
+
+    $results = $searcher->search('story', 'en');
+
+    assert_same(60, $results[0]['post_id'], 'The query matches the indexed alt field.');
+    assert_same(['alt'], $results[0]['matched_fields'], 'The result reports the alt field.');
+    assert_contains_text('<mark>stories</mark>', $results[0]['snippet'], 'The alt snippet highlights the matched term.');
 });
 
 test_case('stores lifecycle versions and flags rebuilds on schema or analyzer change', function (): void {

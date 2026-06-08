@@ -6,6 +6,9 @@ declare(strict_types=1);
  */
 final class Language_FTS_Playground_Indexer
 {
+    /** @var array<int,string> */
+    private const INDEXED_FIELDS = ['title', 'excerpt', 'content', 'alt'];
+
     public function __construct(
         private Language_FTS_Playground_Storage_Interface $storage,
         private Language_FTS_Playground_Analyzer $analyzer
@@ -28,13 +31,27 @@ final class Language_FTS_Playground_Indexer
         $language = $this->analyzer->resolve_post_language($post);
         $title = $this->analyzer->normalize_plain_text($this->post_string($post, 'post_title'));
         $excerpt = $this->analyzer->normalize_plain_text($this->post_string($post, 'post_excerpt'));
-        $content = $this->analyzer->extract_searchable_text($this->post_string($post, 'post_content'));
-        $document_text = trim($title . ' ' . $excerpt . ' ' . $content);
-        $terms = $this->analyzer->analyze_text($document_text, $language);
+        $content_html = $this->post_string($post, 'post_content');
+        $content_fields = $this->analyzer->extract_searchable_fields($content_html);
+        $content_segments = $this->analyzer->extract_searchable_field_segments($content_html);
+        $field_texts = [
+            'title' => $title,
+            'excerpt' => $excerpt,
+            'content' => $content_fields['content'],
+            'alt' => $content_fields['alt'],
+        ];
+        $position_segments = array_merge([$title, $excerpt], $content_segments['content'], $content_segments['alt']);
+        $analyzed_document = $this->analyzer->analyze_segments_with_positions($position_segments, $language);
 
-        $term_frequencies = [];
-        foreach ($terms as $term) {
-            $term_frequencies[$term] = ($term_frequencies[$term] ?? 0) + 1;
+        $document_length = 0;
+        $field_term_frequencies = [];
+        foreach (self::INDEXED_FIELDS as $field) {
+            $terms = $this->analyzer->analyze_text($field_texts[$field], $language);
+            $document_length += count($terms);
+            $field_term_frequencies[$field] = [];
+            foreach ($terms as $term) {
+                $field_term_frequencies[$field][$term] = ($field_term_frequencies[$field][$term] ?? 0) + 1;
+            }
         }
 
         $this->storage->replace_document(
@@ -42,8 +59,10 @@ final class Language_FTS_Playground_Indexer
             $language,
             $title,
             $status,
-            count($terms),
-            $term_frequencies
+            $document_length,
+            $field_term_frequencies,
+            $field_texts,
+            $analyzed_document['positions']
         );
     }
 

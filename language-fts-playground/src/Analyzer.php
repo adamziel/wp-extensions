@@ -27,6 +27,130 @@ final class Language_FTS_Playground_Analyzer
         'math' => true,
     ];
 
+    /**
+     * Stopwords are stored after each language's case and diacritic folding.
+     *
+     * @var array<string,array<string,bool>>
+     */
+    private array $stopwords = [
+        'en' => [
+            'a' => true,
+            'an' => true,
+            'and' => true,
+            'are' => true,
+            'as' => true,
+            'at' => true,
+            'be' => true,
+            'been' => true,
+            'being' => true,
+            'but' => true,
+            'by' => true,
+            'for' => true,
+            'from' => true,
+            'has' => true,
+            'have' => true,
+            'had' => true,
+            'he' => true,
+            'her' => true,
+            'his' => true,
+            'i' => true,
+            'in' => true,
+            'is' => true,
+            'it' => true,
+            'its' => true,
+            'of' => true,
+            'on' => true,
+            'or' => true,
+            'our' => true,
+            's' => true,
+            'she' => true,
+            'that' => true,
+            'the' => true,
+            'their' => true,
+            'them' => true,
+            'this' => true,
+            'to' => true,
+            'was' => true,
+            'we' => true,
+            'were' => true,
+            'with' => true,
+            'you' => true,
+            'your' => true,
+        ],
+        'pl' => [
+            'a' => true,
+            'aby' => true,
+            'ale' => true,
+            'bo' => true,
+            'byc' => true,
+            'byl' => true,
+            'byla' => true,
+            'bylo' => true,
+            'czy' => true,
+            'dla' => true,
+            'do' => true,
+            'i' => true,
+            'ich' => true,
+            'jak' => true,
+            'jest' => true,
+            'ma' => true,
+            'na' => true,
+            'nie' => true,
+            'o' => true,
+            'od' => true,
+            'oraz' => true,
+            'po' => true,
+            'pod' => true,
+            'przez' => true,
+            'sie' => true,
+            'ta' => true,
+            'ten' => true,
+            'to' => true,
+            'w' => true,
+            'we' => true,
+            'z' => true,
+            'za' => true,
+            'ze' => true,
+        ],
+        'de' => [
+            'aber' => true,
+            'am' => true,
+            'an' => true,
+            'auf' => true,
+            'aus' => true,
+            'bei' => true,
+            'das' => true,
+            'dem' => true,
+            'den' => true,
+            'der' => true,
+            'des' => true,
+            'die' => true,
+            'ein' => true,
+            'eine' => true,
+            'einem' => true,
+            'einen' => true,
+            'einer' => true,
+            'eines' => true,
+            'er' => true,
+            'es' => true,
+            'fuer' => true,
+            'hat' => true,
+            'im' => true,
+            'in' => true,
+            'ist' => true,
+            'mit' => true,
+            'nicht' => true,
+            'sie' => true,
+            'und' => true,
+            'von' => true,
+            'war' => true,
+            'wir' => true,
+            'zu' => true,
+            'zum' => true,
+            'zur' => true,
+        ],
+    ];
+
     public function canonical_language(string|null $language): string
     {
         return $this->canonical_language_or_null($language) ?? 'en';
@@ -77,19 +201,42 @@ final class Language_FTS_Playground_Analyzer
 
     public function extract_searchable_text(string $html): string
     {
+        $fields = $this->extract_searchable_fields($html);
+
+        return $this->normalize_plain_text(trim($fields['content'] . ' ' . $fields['alt']));
+    }
+
+    /**
+     * @return array{content:string,alt:string}
+     */
+    public function extract_searchable_fields(string $html): array
+    {
+        $segments = $this->extract_searchable_field_segments($html);
+
+        return [
+            'content' => $this->normalize_plain_text(implode(' ', $segments['content'])),
+            'alt' => $this->normalize_plain_text(implode(' ', $segments['alt'])),
+        ];
+    }
+
+    /**
+     * @return array{content:string[],alt:string[]}
+     */
+    public function extract_searchable_field_segments(string $html): array
+    {
         if (trim($html) === '') {
-            return '';
+            return ['content' => [], 'alt' => []];
         }
 
         if (class_exists(DOMDocument::class)) {
-            return $this->extract_searchable_text_with_dom($html);
+            return $this->extract_searchable_field_segments_with_dom($html);
         }
 
         if (class_exists('WP_HTML_Processor')) {
-            return $this->extract_searchable_text_with_wp_processor($html);
+            return $this->extract_searchable_field_segments_with_wp_processor($html);
         }
 
-        return $this->extract_searchable_text_without_dom($html);
+        return $this->extract_searchable_field_segments_without_dom($html);
     }
 
     /**
@@ -105,6 +252,61 @@ final class Language_FTS_Playground_Analyzer
      */
     public function analyze_text(string $text, string $language): array
     {
+        return $this->analyze_text_with_positions($text, $language)['terms'];
+    }
+
+    /**
+     * @return array{terms:string[],positions:array<string,int[]>}
+     */
+    public function analyze_text_with_positions(string $text, string $language): array
+    {
+        return $this->analyze_segments_with_positions([$text], $language);
+    }
+
+    /**
+     * @param string[] $segments
+     * @return array{terms:string[],positions:array<string,int[]>}
+     */
+    public function analyze_segments_with_positions(array $segments, string $language): array
+    {
+        $language = $this->canonical_language($language);
+
+        $terms = [];
+        $positions = [];
+        $position = 0;
+        $has_previous_tokens = false;
+
+        foreach ($segments as $segment) {
+            $token_keys = $this->analyze_text_token_keys((string) $segment, $language);
+            if ($token_keys === []) {
+                continue;
+            }
+
+            if ($has_previous_tokens) {
+                $position++;
+            }
+
+            foreach ($token_keys as $keys) {
+                foreach ($keys as $key) {
+                    $terms[] = $key;
+                    $positions[$key][] = $position;
+                }
+                $position++;
+                $has_previous_tokens = true;
+            }
+        }
+
+        return [
+            'terms' => $terms,
+            'positions' => $positions,
+        ];
+    }
+
+    /**
+     * @return array<int,string[]>
+     */
+    public function analyze_text_token_keys(string $text, string $language): array
+    {
         $language = $this->canonical_language($language);
         $text = $this->normalize_plain_text($text);
 
@@ -118,23 +320,28 @@ final class Language_FTS_Playground_Analyzer
             return [];
         }
 
-        $terms = [];
+        $token_keys = [];
         foreach ($matches[0] as $token) {
             $term = $this->normalize_term($token, $language);
-            if ($term === '') {
+            if ($term === '' || $this->is_stopword($term, $language)) {
                 continue;
             }
 
+            $keys = [];
             foreach ($this->term_keys($term, $language) as $key) {
                 if ($key === '' || strlen($key) > 255) {
                     continue;
                 }
 
-                $terms[] = $key;
+                $keys[] = $key;
+            }
+
+            if ($keys !== []) {
+                $token_keys[] = array_values(array_unique($keys));
             }
         }
 
-        return $terms;
+        return $token_keys;
     }
 
     public function normalize_term(string $term, string $language): string
@@ -188,15 +395,15 @@ final class Language_FTS_Playground_Analyzer
         $keys = [$term];
 
         if ($language === 'pl') {
-            foreach ($this->polish_suffix_keys($term) as $key) {
+            foreach ($this->polish_stem_keys($term) as $key) {
                 $keys[] = $key;
             }
         } elseif ($language === 'en') {
-            foreach ($this->english_suffix_keys($term) as $key) {
+            foreach ($this->english_stem_keys($term) as $key) {
                 $keys[] = $key;
             }
         } elseif ($language === 'de') {
-            foreach ($this->german_suffix_keys($term) as $key) {
+            foreach ($this->german_stem_keys($term) as $key) {
                 $keys[] = $key;
             }
         }
@@ -205,44 +412,95 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
-     * Adds demo-sized English suffix keys after lowercasing.
+     * Adds conservative English stem keys after lowercasing.
      *
-     * This is not a stemmer. It covers long regular forms used by the demo
-     * such as search/searching/searched/searches and story/stories while
-     * avoiding plain -s trimming and doubled-consonant guesses such as runn/run.
+     * This deliberately stays rule-based and small: common plural/verb endings,
+     * y/ies, possessive fallout, and a few high-signal irregular plurals.
      *
      * @return string[]
      */
-    private function english_suffix_keys(string $term): array
+    private function english_stem_keys(string $term): array
     {
-        if (strlen($term) < 5 || preg_match('/^[a-z]+$/', $term) !== 1) {
+        if (strlen($term) < 3 || preg_match('/^[a-z]+$/', $term) !== 1) {
             return [];
         }
 
         $keys = [];
-        if (str_ends_with($term, 'ies')) {
-            $key = substr($term, 0, -3) . 'y';
-            if (strlen($key) >= 5) {
-                $keys[] = $key;
-            }
+        $irregulars = [
+            'children' => 'child',
+            'feet' => 'foot',
+            'geese' => 'goose',
+            'men' => 'man',
+            'mice' => 'mouse',
+            'people' => 'person',
+            'teeth' => 'tooth',
+            'women' => 'woman',
+        ];
+        if (isset($irregulars[$term])) {
+            $keys[] = $irregulars[$term];
+        }
 
+        $exact_only = [
+            'analysis' => true,
+            'basis' => true,
+            'bus' => true,
+            'news' => true,
+            'series' => true,
+            'species' => true,
+        ];
+        if (isset($exact_only[$term])) {
             return array_values(array_unique($keys));
         }
 
-        if (str_ends_with($term, 'ing')) {
-            $key = substr($term, 0, -3);
-            if (strlen($key) >= 4 && !$this->ends_with_doubled_consonant($key)) {
+        if (str_ends_with($term, 'ies')) {
+            $key = strlen($term) > 4 ? substr($term, 0, -3) . 'y' : substr($term, 0, -1);
+            if (strlen($key) >= 3) {
                 $keys[] = $key;
             }
         }
 
-        foreach (['ed', 'es'] as $suffix) {
-            if (!str_ends_with($term, $suffix)) {
-                continue;
+        if (str_ends_with($term, 'ves') && strlen($term) >= 5) {
+            $base = substr($term, 0, -3);
+            if (str_ends_with($term, 'ives') && strlen($base) >= 2) {
+                $keys[] = $base . 'fe';
+            } elseif (strlen($base) >= 3) {
+                $keys[] = $base . 'f';
             }
+        }
 
-            $key = substr($term, 0, -strlen($suffix));
-            if (strlen($key) >= 4) {
+        if (str_ends_with($term, 'ing') && strlen($term) >= 6) {
+            $key = $this->english_ed_ing_key(substr($term, 0, -3));
+            if ($key !== null) {
+                $keys[] = $key;
+            }
+        }
+
+        if (str_ends_with($term, 'ied') && strlen($term) >= 4) {
+            $keys[] = strlen($term) > 4 ? substr($term, 0, -3) . 'y' : substr($term, 0, -1);
+        } elseif (str_ends_with($term, 'eed') && strlen($term) >= 5) {
+            $keys[] = substr($term, 0, -1);
+        } elseif (str_ends_with($term, 'ed') && strlen($term) >= 5) {
+            $key = $this->english_ed_ing_key(substr($term, 0, -2));
+            if ($key !== null) {
+                $keys[] = $key;
+            }
+        }
+
+        if (preg_match('/(?:ches|shes|sses|xes|zes|ses|oes)$/', $term) === 1) {
+            $key = substr($term, 0, -2);
+            if (strlen($key) >= 3) {
+                $keys[] = $key;
+            }
+        } elseif (
+            str_ends_with($term, 's') &&
+            strlen($term) >= 4 &&
+            !str_ends_with($term, 'ss') &&
+            !str_ends_with($term, 'us') &&
+            !str_ends_with($term, 'is') &&
+            !str_ends_with($term, 'ies')
+        ) {
+            $key = substr($term, 0, -1);
+            if (strlen($key) >= 3) {
                 $keys[] = $key;
             }
         }
@@ -251,40 +509,73 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
-     * Adds demo-sized German suffix keys after umlaut/ß folding.
+     * Adds conservative German stem keys after umlaut/ß folding.
      *
-     * This is intentionally conservative. It covers common long adjective,
-     * plural, and safe final-n forms used by the demo without broad stemming
-     * for short function words.
+     * Rules cover common adjective endings, noun plurals, and regular verb
+     * forms, with short-token guards to avoid collapsing compact nouns.
      *
      * @return string[]
      */
-    private function german_suffix_keys(string $term): array
+    private function german_stem_keys(string $term): array
     {
-        if (strlen($term) < 6 || preg_match('/^[a-z]+$/', $term) !== 1) {
+        if (strlen($term) < 4 || preg_match('/^[a-z]+$/', $term) !== 1) {
             return [];
         }
 
         $keys = [];
-        foreach (['en', 'er', 'em', 'es'] as $suffix) {
+        $handled_ge_participle = false;
+        if (str_starts_with($term, 'ge') && strlen($term) >= 7) {
+            $participle = substr($term, 2);
+            if (str_ends_with($participle, 't')) {
+                $key = substr($participle, 0, -1);
+                if (strlen($key) >= 5) {
+                    $keys[] = $key;
+                    $handled_ge_participle = true;
+                }
+            }
+
+            if (str_ends_with($participle, 'et')) {
+                $key = substr($participle, 0, -2);
+                if (strlen($key) >= 5) {
+                    $keys[] = $key;
+                    $handled_ge_participle = true;
+                }
+            }
+        }
+
+        foreach (
+            [
+                'ern' => 4,
+                'ten' => 5,
+                'en' => 4,
+                'er' => 4,
+                'em' => 5,
+                'es' => 5,
+                'te' => 5,
+                'est' => 5,
+                'st' => 5,
+                't' => 5,
+                'e' => 5,
+            ] as $suffix => $minimum_length
+        ) {
+            if ($handled_ge_participle && in_array($suffix, ['ten', 'te', 'est', 'st', 't'], true)) {
+                continue;
+            }
+
             if (!str_ends_with($term, $suffix)) {
                 continue;
             }
 
             $key = substr($term, 0, -strlen($suffix));
-            if (strlen($key) >= 5) {
+            if (strlen($key) >= $minimum_length) {
                 $keys[] = $key;
+                foreach ($this->german_umlaut_plural_keys($key) as $umlaut_key) {
+                    $keys[] = $umlaut_key;
+                }
             }
         }
 
-        if (str_ends_with($term, 'sche')) {
-            $key = substr($term, 0, -1);
-            if (strlen($key) >= 5) {
-                $keys[] = $key;
-            }
-        }
-
-        if (str_ends_with($term, 'en') && !str_ends_with($term, 'ungen')) {
+        if (str_ends_with($term, 'n')) {
             $key = substr($term, 0, -1);
             if (strlen($key) >= 5 && str_ends_with($key, 'e')) {
                 $keys[] = $key;
@@ -295,54 +586,72 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
-     * Adds demo-sized Polish inflection keys after diacritic folding.
+     * Adds conservative Polish stem keys after diacritic folding.
      *
-     * This is intentionally not a full stemmer. It only trims common long-word
-     * endings so pairs such as polska/polskiej, partycja/partycji, and
-     * wyszukiwanie/wyszukiwania share a key while short words remain exact.
+     * The normalizer trims common case/adjective endings. Multi-letter endings
+     * may produce three-letter noun stems, but broad final-vowel trimming stays
+     * limited to longer stems to avoid noisy short matches.
      *
      * @return string[]
      */
-    private function polish_suffix_keys(string $term): array
+    private function polish_stem_keys(string $term): array
     {
-        if (strlen($term) < 6 || preg_match('/^[a-z]+$/', $term) !== 1) {
+        if (strlen($term) < 4 || preg_match('/^[a-z]+$/', $term) !== 1) {
             return [];
         }
 
-        $suffixes = [
-            'iego',
-            'iej',
-            'iem',
-            'imi',
-            'ami',
-            'ach',
-            'ych',
-            'ich',
-            'ego',
-            'emu',
-            'ym',
-            'im',
-            'om',
-            'ow',
-            'ii',
-            'ia',
-            'ie',
-            'iu',
-            'a',
-            'i',
-            'e',
-            'y',
-            'u',
-            'o',
+        $rules = [
+            'owaniach' => 5,
+            'owaniami' => 5,
+            'owania' => 5,
+            'owanie' => 5,
+            'owaniu' => 5,
+            'skiego' => 4,
+            'skiej' => 4,
+            'skich' => 4,
+            'skimi' => 4,
+            'iego' => 4,
+            'ymi' => 4,
+            'imi' => 4,
+            'ami' => 3,
+            'ach' => 3,
+            'ych' => 4,
+            'ich' => 4,
+            'ego' => 4,
+            'emu' => 4,
+            'iej' => 4,
+            'owi' => 3,
+            'iem' => 4,
+            'ym' => 4,
+            'im' => 4,
+            'om' => 3,
+            'ow' => 3,
+            'em' => 3,
+            'ej' => 4,
+            'ii' => 4,
+            'ia' => 4,
+            'ie' => 4,
+            'iu' => 4,
         ];
 
         $keys = [];
-        foreach ($suffixes as $suffix) {
+        foreach ($rules as $suffix => $minimum_length) {
             if (substr($term, -strlen($suffix)) !== $suffix) {
                 continue;
             }
 
             $key = substr($term, 0, -strlen($suffix));
+            if (strlen($key) >= $minimum_length) {
+                $keys[] = $key;
+            }
+        }
+
+        foreach (['a', 'i', 'e', 'y', 'u', 'o'] as $suffix) {
+            if (!str_ends_with($term, $suffix)) {
+                continue;
+            }
+
+            $key = substr($term, 0, -1);
             if (strlen($key) >= 5) {
                 $keys[] = $key;
             }
@@ -351,7 +660,48 @@ final class Language_FTS_Playground_Analyzer
         return array_values(array_unique($keys));
     }
 
-    private function ends_with_doubled_consonant(string $term): bool
+    private function is_stopword(string $term, string $language): bool
+    {
+        return isset($this->stopwords[$language][$term]);
+    }
+
+    private function english_ed_ing_key(string $base): ?string
+    {
+        if (strlen($base) < 3 || !$this->contains_english_vowel($base)) {
+            return null;
+        }
+
+        if ($this->ends_with_trimmed_english_doubled_consonant($base)) {
+            return substr($base, 0, -1);
+        }
+
+        if (strlen($base) === 3 && $this->is_english_cvc($base)) {
+            return $base . 'e';
+        }
+
+        return $base;
+    }
+
+    private function contains_english_vowel(string $term): bool
+    {
+        return preg_match('/[aeiouy]/', $term) === 1;
+    }
+
+    private function is_english_cvc(string $term): bool
+    {
+        if (strlen($term) < 3) {
+            return false;
+        }
+
+        $last_three = substr($term, -3);
+        if (preg_match('/^[^aeiou][aeiou][^aeiouwxy]$/', $last_three) !== 1) {
+            return false;
+        }
+
+        return preg_match('/^[a-z]+$/', $last_three) === 1;
+    }
+
+    private function ends_with_trimmed_english_doubled_consonant(string $term): bool
     {
         if (strlen($term) < 2) {
             return false;
@@ -362,7 +712,20 @@ final class Language_FTS_Playground_Analyzer
             return false;
         }
 
-        return str_contains('bcdfghjklmnpqrstvwxyz', $last);
+        return str_contains('bcdfghjkmnpqrtvwxyz', $last);
+    }
+
+    /**
+     * @return string[]
+     */
+    private function german_umlaut_plural_keys(string $key): array
+    {
+        if (!str_contains($key, 'aeu')) {
+            return [];
+        }
+
+        $singular = str_replace('aeu', 'au', $key);
+        return strlen($singular) >= 4 ? [$singular] : [];
     }
 
     private function canonical_language_or_null(string|null $language): ?string
@@ -391,7 +754,10 @@ final class Language_FTS_Playground_Analyzer
         return 'en';
     }
 
-    private function extract_searchable_text_with_dom(string $html): string
+    /**
+     * @return array{content:string[],alt:string[]}
+     */
+    private function extract_searchable_field_segments_with_dom(string $html): array
     {
         $document = new DOMDocument('1.0', 'UTF-8');
         $previous = libxml_use_internal_errors(true);
@@ -409,40 +775,66 @@ final class Language_FTS_Playground_Analyzer
         libxml_use_internal_errors($previous);
 
         $root = $document->getElementById('language-fts-playground-root') ?? $document;
-        $parts = [];
-        $this->collect_visible_text($root, $parts);
+        $content_segments = [];
+        $alt_segments = [];
+        $current_content = '';
+        $this->collect_searchable_field_segments($root, $content_segments, $alt_segments, $current_content);
+        $this->flush_segment($content_segments, $current_content);
 
-        return $this->normalize_plain_text(implode(' ', $parts));
+        return [
+            'content' => $content_segments,
+            'alt' => $alt_segments,
+        ];
     }
 
     /**
-     * @param string[] $parts
+     * @param string[] $content_segments
+     * @param string[] $alt_segments
      */
-    private function collect_visible_text(DOMNode $node, array &$parts): void
+    private function collect_searchable_field_segments(DOMNode $node, array &$content_segments, array &$alt_segments, string &$current_content): void
     {
         if ($node->nodeType === XML_TEXT_NODE || $node->nodeType === XML_CDATA_SECTION_NODE) {
-            $parts[] = (string) $node->nodeValue;
+            $current_content .= ' ' . (string) $node->nodeValue;
             return;
         }
 
         if ($node->nodeType === XML_COMMENT_NODE) {
+            $this->flush_segment($content_segments, $current_content);
             return;
         }
 
         if ($node instanceof DOMElement) {
             $tag = strtolower($node->tagName);
             if (isset($this->skipped_elements[$tag])) {
+                $this->flush_segment($content_segments, $current_content);
                 return;
             }
 
             if ($tag === 'img' && $node->hasAttribute('alt')) {
-                $parts[] = $node->getAttribute('alt');
+                $this->flush_segment($content_segments, $current_content);
+                $alt = $this->normalize_plain_text($node->getAttribute('alt'));
+                if ($alt !== '') {
+                    $alt_segments[] = $alt;
+                }
+                return;
             }
         }
 
         foreach ($node->childNodes as $child) {
-            $this->collect_visible_text($child, $parts);
+            $this->collect_searchable_field_segments($child, $content_segments, $alt_segments, $current_content);
         }
+    }
+
+    /**
+     * @param string[] $segments
+     */
+    private function flush_segment(array &$segments, string &$current): void
+    {
+        $segment = $this->normalize_plain_text($current);
+        if ($segment !== '') {
+            $segments[] = $segment;
+        }
+        $current = '';
     }
 
     private function first_html_language(string $html): ?string
@@ -483,7 +875,10 @@ final class Language_FTS_Playground_Analyzer
         return null;
     }
 
-    private function extract_searchable_text_with_wp_processor(string $html): string
+    /**
+     * @return array{content:string[],alt:string[]}
+     */
+    private function extract_searchable_field_segments_with_wp_processor(string $html): array
     {
         try {
             $processor = method_exists('WP_HTML_Processor', 'create_fragment')
@@ -494,33 +889,44 @@ final class Language_FTS_Playground_Analyzer
         }
 
         if (!is_object($processor) || !method_exists($processor, 'next_token')) {
-            return $this->extract_searchable_text_without_dom($html);
+            return $this->extract_searchable_field_segments_without_dom($html);
         }
 
-        $parts = [];
+        $content_segments = [];
+        $alt_segments = [];
+        $current_content = '';
         while ($processor->next_token()) {
             $breadcrumbs = method_exists($processor, 'get_breadcrumbs') ? (array) ($processor->get_breadcrumbs() ?? []) : [];
             $breadcrumbs = array_map(static fn($tag): string => strtolower((string) $tag), $breadcrumbs);
             if ($this->has_skipped_breadcrumb($breadcrumbs)) {
+                $this->flush_segment($content_segments, $current_content);
                 continue;
             }
 
             $token_type = method_exists($processor, 'get_token_type') ? $processor->get_token_type() : null;
             if ($token_type === '#text' && method_exists($processor, 'get_modifiable_text')) {
-                $parts[] = (string) $processor->get_modifiable_text();
+                $current_content .= ' ' . (string) $processor->get_modifiable_text();
                 continue;
             }
 
             $tag = method_exists($processor, 'get_tag') ? strtolower((string) $processor->get_tag()) : '';
             if ($tag === 'img' && method_exists($processor, 'get_attribute')) {
+                $this->flush_segment($content_segments, $current_content);
                 $alt = $processor->get_attribute('alt');
                 if (is_scalar($alt)) {
-                    $parts[] = (string) $alt;
+                    $alt = $this->normalize_plain_text((string) $alt);
+                    if ($alt !== '') {
+                        $alt_segments[] = $alt;
+                    }
                 }
             }
         }
+        $this->flush_segment($content_segments, $current_content);
 
-        return $this->normalize_plain_text(implode(' ', $parts));
+        return [
+            'content' => $content_segments,
+            'alt' => $alt_segments,
+        ];
     }
 
     /**
@@ -537,24 +943,43 @@ final class Language_FTS_Playground_Analyzer
         return false;
     }
 
-    private function extract_searchable_text_without_dom(string $html): string
+    /**
+     * @return array{content:string[],alt:string[]}
+     */
+    private function extract_searchable_field_segments_without_dom(string $html): array
     {
-        // Fallback for unusual PHP builds. Normal Playground/PHP test runs use DOM.
-        $text = preg_replace('/<(script|style|template|noscript|svg|math)\b[^>]*>.*?<\/\1>/is', ' ', $html);
-        $text = preg_replace('/<!--.*?-->/s', ' ', is_string($text) ? $text : $html);
+        // Fallback for PHP builds without DOM, including the php -n test path.
+        $boundary = "\n__LANGUAGE_FTS_PLAYGROUND_BOUNDARY__\n";
+        $text = preg_replace('/<(script|style|template|noscript|svg|math)\b[^>]*>.*?<\/\1>/is', $boundary, $html);
+        $text = preg_replace('/<!--.*?-->/s', $boundary, is_string($text) ? $text : $html);
         $text = is_string($text) ? $text : $html;
 
-        $parts = [];
-        $alt_matches = [];
-        if (preg_match_all('/<img\b[^>]*\salt\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))/iu', $text, $alt_matches, PREG_SET_ORDER)) {
-            foreach ($alt_matches as $match) {
-                $parts[] = $match[1] !== '' ? $match[1] : ($match[2] !== '' ? $match[2] : ($match[3] ?? ''));
+        $content_segments = [];
+        $alt_segments = [];
+        $chunks = preg_split('/' . preg_quote($boundary, '/') . '/u', $text);
+        foreach (is_array($chunks) ? $chunks : [$text] as $chunk) {
+            $chunk = (string) $chunk;
+            $alt_matches = [];
+            if (preg_match_all('/<img\b[^>]*\salt\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))[^>]*>/iu', $chunk, $alt_matches, PREG_SET_ORDER)) {
+                foreach ($alt_matches as $match) {
+                    $alt = $match[1] !== '' ? $match[1] : ($match[2] !== '' ? $match[2] : ($match[3] ?? ''));
+                    $alt = $this->normalize_plain_text($alt);
+                    if ($alt !== '') {
+                        $alt_segments[] = $alt;
+                    }
+                }
+            }
+
+            $content = $this->normalize_plain_text(strip_tags($chunk));
+            if ($content !== '') {
+                $content_segments[] = $content;
             }
         }
 
-        array_unshift($parts, strip_tags($text));
-
-        return $this->normalize_plain_text(implode(' ', $parts));
+        return [
+            'content' => $content_segments,
+            'alt' => $alt_segments,
+        ];
     }
 
     private function post_id(object $post): int
