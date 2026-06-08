@@ -423,6 +423,26 @@ test_case('returns escaped highlighted snippets for stem-key matches', function 
     assert_not_contains_text('<script>', $results[0]['snippet'], 'Snippets do not emit unsafe raw HTML from post content.');
 });
 
+test_case('keeps long UTF-8 snippets valid and highlighted', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(
+        55,
+        'pl',
+        'Długi opis',
+        '<p>' . str_repeat('ą', 160) . ' Łódź końcówka</p>'
+    ));
+
+    $results = $searcher->search('lodz', 'pl');
+
+    assert_same(55, $results[0]['post_id'], 'The folded Polish query matches the long UTF-8 content field.');
+    assert_contains_text('<mark>Łódź</mark>', $results[0]['snippet'], 'The excerpt keeps the Polish match highlight after UTF-8 truncation.');
+    assert_not_contains_text('�', $results[0]['snippet'], 'The excerpt is not cut inside a UTF-8 codepoint.');
+});
+
 test_case('reports alt field matches with highlighted alt snippets', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();

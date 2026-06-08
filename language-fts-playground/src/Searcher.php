@@ -187,19 +187,113 @@ final class Language_FTS_Playground_Searcher
      */
     private function excerpt_around_first_match(string $source, array $query_terms, string $language): string
     {
-        if (strlen($source) <= self::SNIPPET_MAX_LENGTH) {
+        $source_length = strlen($source);
+        if ($source_length <= self::SNIPPET_MAX_LENGTH) {
             return $source;
         }
 
         $offset = $this->first_match_offset($source, $query_terms, $language) ?? 0;
         $radius = intdiv(self::SNIPPET_MAX_LENGTH, 2);
-        $start = max(0, $offset - $radius);
-        $excerpt = substr($source, $start, self::SNIPPET_MAX_LENGTH);
+        // Preserve the byte-sized snippet window while moving cuts to valid UTF-8 codepoint boundaries.
+        $start = $this->utf8_boundary_at_or_after($source, max(0, $offset - $radius));
+        if ($start === null) {
+            return $source;
+        }
+
+        $end = $this->utf8_boundary_at_or_before($source, min($source_length, $start + self::SNIPPET_MAX_LENGTH));
+        if ($end === null || $end <= $start) {
+            return $source;
+        }
+
+        $excerpt = substr($source, $start, $end - $start);
         if (!is_string($excerpt)) {
             return $source;
         }
 
-        return ($start > 0 ? '... ' : '') . $excerpt . ($start + self::SNIPPET_MAX_LENGTH < strlen($source) ? ' ...' : '');
+        return ($start > 0 ? '... ' : '') . $excerpt . ($end < $source_length ? ' ...' : '');
+    }
+
+    private function utf8_boundary_at_or_after(string $source, int $offset): ?int
+    {
+        $source_length = strlen($source);
+        if ($offset <= 0) {
+            return 0;
+        }
+
+        if ($offset >= $source_length) {
+            return $source_length;
+        }
+
+        $characters = $this->utf8_characters_with_offsets($source);
+        if ($characters === null) {
+            return null;
+        }
+
+        foreach ($characters as $character) {
+            $start = (int) ($character[1] ?? 0);
+            $end = $start + strlen((string) ($character[0] ?? ''));
+            if ($start >= $offset) {
+                return $start;
+            }
+
+            if ($end >= $offset) {
+                return $end;
+            }
+        }
+
+        return $source_length;
+    }
+
+    private function utf8_boundary_at_or_before(string $source, int $offset): ?int
+    {
+        $source_length = strlen($source);
+        if ($offset <= 0) {
+            return 0;
+        }
+
+        if ($offset >= $source_length) {
+            return $source_length;
+        }
+
+        $characters = $this->utf8_characters_with_offsets($source);
+        if ($characters === null) {
+            return null;
+        }
+
+        $boundary = 0;
+        foreach ($characters as $character) {
+            $start = (int) ($character[1] ?? 0);
+            $end = $start + strlen((string) ($character[0] ?? ''));
+            if ($start > $offset) {
+                return $boundary;
+            }
+
+            if ($start === $offset) {
+                return $start;
+            }
+
+            if ($end > $offset) {
+                return $start;
+            }
+
+            $boundary = $end;
+        }
+
+        return $source_length;
+    }
+
+    /**
+     * @return array<int,array{0:string,1:int}>|null
+     */
+    private function utf8_characters_with_offsets(string $source): ?array
+    {
+        $matches = [];
+        $match_count = preg_match_all('/./us', $source, $matches, PREG_OFFSET_CAPTURE);
+        if ($match_count === false) {
+            return null;
+        }
+
+        return $matches[0];
     }
 
     /**
