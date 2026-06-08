@@ -626,7 +626,7 @@ final class SourceItemDocumentProcessor {
 		$metadata  = $item->get_metadata();
 		$extension = isset( $metadata['extension'] ) ? strtolower( (string) $metadata['extension'] ) : strtolower( pathinfo( $item->get_source_uri(), PATHINFO_EXTENSION ) );
 
-		if ( in_array( $extension, array( 'md', 'markdown', 'mdown' ), true ) ) {
+		if ( in_array( $extension, array( 'md', 'markdown', 'mdown', 'mdx' ), true ) ) {
 			return 'markdown';
 		}
 
@@ -1910,27 +1910,11 @@ final class SourceItemDocumentProcessor {
 		$content = $this->strip_script_chunk( $raw_chunk, $script_carry, $in_script, $is_complete );
 		$content = trim( $content );
 
-		$chunk_metadata      = array();
-		$markdown_title      = '';
-		$markdown_references = array();
-		if ( 0 === $chunk_index ) {
-			$markdown_document = $this->extract_markdown_front_matter( $content );
-			$content           = trim( $markdown_document['content'] );
-			if ( '' !== $markdown_document['title'] ) {
-				$markdown_title                                = $markdown_document['title'];
-				$chunk_metadata['markdown_front_matter_title'] = $markdown_title;
-			}
-			if ( $markdown_document['detected'] ) {
-				$chunk_metadata['markdown_front_matter'] = true;
-			}
-		}
-
-		$markdown_reference_document = $this->extract_markdown_reference_definitions( $content );
-		$content                     = $markdown_reference_document['content'];
-		$markdown_references         = $markdown_reference_document['references'];
-		if ( ! empty( $markdown_references ) ) {
-			$chunk_metadata['markdown_reference_count'] = count( $markdown_references );
-		}
+		$markdown_document   = $this->prepare_markdown_source_document( $item, $content, 0 === $chunk_index );
+		$content             = trim( $markdown_document['content'] );
+		$markdown_title      = $markdown_document['title'];
+		$markdown_references = $markdown_document['references'];
+		$chunk_metadata      = $markdown_document['metadata'];
 
 		$prepared = false;
 		if ( '' !== trim( $content ) ) {
@@ -3577,22 +3561,11 @@ final class SourceItemDocumentProcessor {
 		$markdown_title      = '';
 		$markdown_references = array();
 		if ( 'markdown' === $format ) {
-			$markdown_document = $this->extract_markdown_front_matter( $content );
-			$content           = $markdown_document['content'];
-			if ( '' !== $markdown_document['title'] ) {
-				$markdown_title                          = $markdown_document['title'];
-				$metadata['markdown_front_matter_title'] = $markdown_title;
-			}
-			if ( $markdown_document['detected'] ) {
-				$metadata['markdown_front_matter'] = true;
-			}
-
-			$markdown_reference_document = $this->extract_markdown_reference_definitions( $content );
-			$content                     = $markdown_reference_document['content'];
-			$markdown_references         = $markdown_reference_document['references'];
-			if ( ! empty( $markdown_references ) ) {
-				$metadata['markdown_reference_count'] = count( $markdown_references );
-			}
+			$markdown_document   = $this->prepare_markdown_source_document( $item, $content, true );
+			$content             = $markdown_document['content'];
+			$markdown_title      = $markdown_document['title'];
+			$markdown_references = $markdown_document['references'];
+			$metadata            = array_merge( $metadata, $markdown_document['metadata'] );
 		}
 
 		$url_domains = $this->extract_absolute_url_domains( $content );
@@ -4876,7 +4849,7 @@ final class SourceItemDocumentProcessor {
 		$base_offset = max( 0, (int) $base_offset );
 		$complete    = true;
 
-		while ( preg_match( '/(\d+)\s+\d+\s+obj\s*<<(.*?)>>\s*stream(?:\r\n|\n|\r)?/s', $pdf, $match, PREG_OFFSET_CAPTURE, $offset ) ) {
+		while ( preg_match( $this->pdf_indirect_object_stream_pattern(), $pdf, $match, PREG_OFFSET_CAPTURE, $offset ) ) {
 			if ( null !== $limit && count( $images ) >= $limit ) {
 				$complete = false;
 				break;
@@ -4902,7 +4875,7 @@ final class SourceItemDocumentProcessor {
 				break;
 			}
 
-			if ( ! $uses_length && preg_match( '/\n\s*\d+\s+\d+\s+obj\s*<</', $pdf, $next_object, PREG_OFFSET_CAPTURE, $stream_start ) && $next_object[0][1] < $stream_end ) {
+			if ( ! $uses_length && preg_match( $this->pdf_next_indirect_object_pattern(), $pdf, $next_object, PREG_OFFSET_CAPTURE, $stream_start ) && $next_object[0][1] < $stream_end ) {
 				$offset = $next_object[0][1] + 1;
 				if ( $is_image ) {
 					$images[] = $this->pdf_image_stream_entry( $object, $dictionary, '', true, $image_index, $base_offset + $offset );
@@ -5081,6 +5054,33 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return 0 === strncmp( substr( $pdf, $terminator_offset, strlen( 'endstream' ) ), 'endstream', strlen( 'endstream' ) ) ? $stream_end : null;
+	}
+
+	/**
+	 * Returns a bounded indirect object stream marker pattern.
+	 *
+	 * @return string
+	 */
+	private function pdf_indirect_object_stream_pattern() {
+		return '/(?<!\d)(\d{1,10}+)\s++\d{1,10}+\s++obj\b\s*+<<((?:(?!\bendobj\b).)*?)>>\s*+stream(?:\r\n|\n|\r)?/s';
+	}
+
+	/**
+	 * Returns a bounded next-object marker pattern for malformed stream recovery.
+	 *
+	 * @return string
+	 */
+	private function pdf_next_indirect_object_pattern() {
+		return '/\n\s*+\d{1,10}+\s++\d{1,10}+\s++obj\s*+<</';
+	}
+
+	/**
+	 * Returns a bounded indirect object body pattern.
+	 *
+	 * @return string
+	 */
+	private function pdf_indirect_object_pattern() {
+		return '/(?<!\d)(\d{1,10}+)\s++\d{1,10}+\s++obj\b(.*?)endobj/s';
 	}
 
 	/**
@@ -6189,7 +6189,7 @@ final class SourceItemDocumentProcessor {
 
 		$text_operator_pattern = '/(?:\[[^\]]*\]\s*TJ|(?:\((?:\\\\.|[^\\\\\)])*\)|<[\da-fA-F\s]+>)\s*(?:Tj|\'|"))/s';
 		$stream_count          = count( $streams );
-		$stream_pattern        = '/(\d+)\s+\d+\s+obj\s*<<((?:(?!\bendobj\b).)*?)>>\s*stream(?:\r\n|\n|\r)?/s';
+		$stream_pattern        = $this->pdf_indirect_object_stream_pattern();
 		while ( $stream_count < $limit && preg_match( $stream_pattern, $pdf, $match, PREG_OFFSET_CAPTURE, $offset ) ) {
 			$object_id    = (int) $match[1][0];
 			$dictionary   = (string) $match[2][0];
@@ -6209,7 +6209,7 @@ final class SourceItemDocumentProcessor {
 				break;
 			}
 
-			if ( ! $uses_length && preg_match( '/\n\s*\d+\s+\d+\s+obj\s*<</', $pdf, $next_object, PREG_OFFSET_CAPTURE, $stream_start ) && $next_object[0][1] < $stream_end ) {
+			if ( ! $uses_length && preg_match( $this->pdf_next_indirect_object_pattern(), $pdf, $next_object, PREG_OFFSET_CAPTURE, $stream_start ) && $next_object[0][1] < $stream_end ) {
 				++$malformed;
 				$offset = $next_object[0][1] + 1;
 				++$stream_index;
@@ -6340,7 +6340,7 @@ final class SourceItemDocumentProcessor {
 				break;
 			}
 
-			if ( ! $uses_length && preg_match( '/\n\s*\d+\s+\d+\s+obj\s*<</', $pdf, $next_object, PREG_OFFSET_CAPTURE, $stream_start ) && $next_object[0][1] < $stream_end ) {
+			if ( ! $uses_length && preg_match( $this->pdf_next_indirect_object_pattern(), $pdf, $next_object, PREG_OFFSET_CAPTURE, $stream_start ) && $next_object[0][1] < $stream_end ) {
 				++$malformed;
 				$offset = $next_object[0][1] + 1;
 				++$stream_index;
@@ -6470,7 +6470,7 @@ final class SourceItemDocumentProcessor {
 				break;
 			}
 
-			if ( ! $uses_length && preg_match( '/\n\s*\d+\s+\d+\s+obj\s*<</', $pdf, $next_object, PREG_OFFSET_CAPTURE, $stream_start ) && $next_object[0][1] < $stream_end ) {
+			if ( ! $uses_length && preg_match( $this->pdf_next_indirect_object_pattern(), $pdf, $next_object, PREG_OFFSET_CAPTURE, $stream_start ) && $next_object[0][1] < $stream_end ) {
 				++$malformed;
 				$offset = $next_object[0][1] + 1;
 				continue;
@@ -7264,7 +7264,7 @@ final class SourceItemDocumentProcessor {
 	private function extract_pdf_indirect_objects( $pdf ) {
 		$objects = array();
 
-		if ( ! preg_match_all( '/(\d+)\s+\d+\s+obj\b(.*?)endobj/s', (string) $pdf, $matches, PREG_SET_ORDER ) ) {
+		if ( ! preg_match_all( $this->pdf_indirect_object_pattern(), (string) $pdf, $matches, PREG_SET_ORDER ) ) {
 			return $objects;
 		}
 
@@ -8425,10 +8425,80 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
+	 * Normalizes Markdown source content and records documentation profile metadata.
+	 *
+	 * @param ImportSourceItem $item                 Source item.
+	 * @param string           $content              Markdown content.
+	 * @param bool             $include_front_matter Whether front matter should be consumed.
+	 * @return array{content:string,title:string,references:array<string,array{url:string,title:string}>,metadata:array<string,mixed>}
+	 */
+	private function prepare_markdown_source_document( ImportSourceItem $item, $content, $include_front_matter ) {
+		$content      = (string) $content;
+		$metadata     = array();
+		$title        = '';
+		$front_matter = array(
+			'content'  => $content,
+			'title'    => '',
+			'detected' => false,
+			'fields'   => array(),
+		);
+
+		if ( $include_front_matter ) {
+			$front_matter = $this->extract_markdown_front_matter( $content );
+			$content      = $front_matter['content'];
+			$title        = $front_matter['title'];
+
+			if ( '' !== $title ) {
+				$metadata['markdown_front_matter_title'] = $title;
+			}
+			if ( $front_matter['detected'] ) {
+				$metadata['markdown_front_matter']        = true;
+				$metadata['markdown_front_matter_fields'] = $front_matter['fields'];
+			}
+		}
+
+		$metadata = array_merge( $metadata, $this->markdown_docs_profile_metadata( $item, $front_matter['fields'] ) );
+
+		if ( $this->should_normalize_mdx_components( $item, $metadata ) ) {
+			$mdx     = $this->replace_mdx_component_lines( $content );
+			$content = $mdx['content'];
+
+			if ( 0 < $mdx['component_count'] ) {
+				$metadata['markdown_mdx_unsupported_component_count'] = $mdx['component_count'];
+				$metadata['markdown_mdx_unsupported_components']      = $mdx['components'];
+			}
+			if ( 0 < $mdx['import_export_count'] ) {
+				$metadata['markdown_mdx_import_export_count'] = $mdx['import_export_count'];
+			}
+		}
+
+		$wiki    = $this->rewrite_obsidian_wiki_links( $content );
+		$content = $wiki['content'];
+		if ( 0 < $wiki['count'] ) {
+			$metadata['markdown_wiki_link_count'] = $wiki['count'];
+			$metadata['markdown_wiki_links']      = $wiki['links'];
+		}
+
+		$markdown_reference_document = $this->extract_markdown_reference_definitions( $content );
+		$content                     = $markdown_reference_document['content'];
+		$references                  = $markdown_reference_document['references'];
+		if ( ! empty( $references ) ) {
+			$metadata['markdown_reference_count'] = count( $references );
+		}
+
+		return array(
+			'content'    => $content,
+			'title'      => $title,
+			'references' => $references,
+			'metadata'   => $metadata,
+		);
+	}
+
+	/**
 	 * Extracts conservative leading Markdown front matter metadata.
 	 *
 	 * @param string $content Markdown content.
-	 * @return array{content:string,title:string,detected:bool}
+	 * @return array{content:string,title:string,detected:bool,fields:array<string,mixed>}
 	 */
 	private function extract_markdown_front_matter( $content ) {
 		$content = (string) $content;
@@ -8441,6 +8511,7 @@ final class SourceItemDocumentProcessor {
 				'content'  => $content,
 				'title'    => '',
 				'detected' => false,
+				'fields'   => array(),
 			);
 		}
 
@@ -8450,6 +8521,7 @@ final class SourceItemDocumentProcessor {
 				'content'  => $content,
 				'title'    => '',
 				'detected' => false,
+				'fields'   => array(),
 			);
 		}
 
@@ -8467,22 +8539,99 @@ final class SourceItemDocumentProcessor {
 				'content'  => $content,
 				'title'    => '',
 				'detected' => false,
+				'fields'   => array(),
 			);
 		}
 
-		$title = '';
-		for ( $i = 1; $i < $closing_index; ++$i ) {
-			if ( preg_match( '/^\s*title\s*:\s*(.+?)\s*$/i', (string) $lines[ $i ], $matches ) ) {
-				$title = $this->normalize_markdown_front_matter_scalar( $matches[1] );
-				break;
-			}
-		}
+		$fields = $this->parse_markdown_front_matter_fields( array_slice( $lines, 1, $closing_index - 1 ) );
+		$title  = isset( $fields['title'] ) && is_string( $fields['title'] ) ? $fields['title'] : '';
 
 		return array(
 			'content'  => ltrim( implode( "\n", array_slice( $lines, $closing_index + 1 ) ) ),
 			'title'    => $title,
 			'detected' => true,
+			'fields'   => $fields,
 		);
+	}
+
+	/**
+	 * Parses a conservative subset of YAML front matter fields.
+	 *
+	 * @param array<int,string> $lines Front matter lines.
+	 * @return array<string,mixed>
+	 */
+	private function parse_markdown_front_matter_fields( array $lines ) {
+		$fields      = array();
+		$current_key = null;
+
+		foreach ( $lines as $line ) {
+			$line = rtrim( (string) $line );
+
+			if ( '' === trim( $line ) || preg_match( '/^\s*#/', $line ) ) {
+				continue;
+			}
+
+			if ( null !== $current_key && preg_match( '/^\s*-\s*(.+?)\s*$/', $line, $matches ) ) {
+				if ( ! isset( $fields[ $current_key ] ) || ! is_array( $fields[ $current_key ] ) ) {
+					$fields[ $current_key ] = array();
+				}
+				$fields[ $current_key ][] = $this->normalize_markdown_front_matter_scalar( $matches[1] );
+				continue;
+			}
+
+			if ( preg_match( '/^\s*([A-Za-z0-9_.-]+)\s*:\s*(.*?)\s*$/', $line, $matches ) ) {
+				$key            = strtolower( str_replace( '-', '_', (string) $matches[1] ) );
+				$value          = (string) $matches[2];
+				$current_key    = '' === trim( $value ) ? $key : null;
+				$fields[ $key ] = '' === trim( $value ) ? array() : $this->normalize_markdown_front_matter_value( $value );
+			}
+		}
+
+		foreach ( $fields as $key => $value ) {
+			if ( is_array( $value ) ) {
+				$fields[ $key ] = array_values(
+					array_filter(
+						array_unique(
+							array_map(
+								function ( $item ) {
+									return trim( (string) $item );
+								},
+								$value
+							)
+						),
+						function ( $item ) {
+							return '' !== $item;
+						}
+					)
+				);
+			}
+		}
+
+		return $fields;
+	}
+
+	/**
+	 * Normalizes one simple Markdown front matter value.
+	 *
+	 * @param string $value Raw value.
+	 * @return string|array<int,string>
+	 */
+	private function normalize_markdown_front_matter_value( $value ) {
+		$value = trim( (string) $value );
+
+		if ( '[' === substr( $value, 0, 1 ) && ']' === substr( $value, -1 ) ) {
+			$inner = trim( substr( $value, 1, -1 ) );
+			if ( '' === $inner ) {
+				return array();
+			}
+
+			return array_map(
+				array( $this, 'normalize_markdown_front_matter_scalar' ),
+				str_getcsv( $inner )
+			);
+		}
+
+		return $this->normalize_markdown_front_matter_scalar( $value );
 	}
 
 	/**
@@ -8504,6 +8653,454 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return trim( html_entity_decode( $this->html_text( $value ), ENT_QUOTES, 'UTF-8' ) );
+	}
+
+	/**
+	 * Builds WordPress-oriented metadata for common Markdown documentation sources.
+	 *
+	 * @param ImportSourceItem    $item   Source item.
+	 * @param array<string,mixed> $fields Front matter fields.
+	 * @return array<string,mixed>
+	 */
+	private function markdown_docs_profile_metadata( ImportSourceItem $item, array $fields ) {
+		$relative = $this->normalized_markdown_relative_path( $item );
+		$root     = $this->markdown_source_root( $item, $relative );
+		$profile  = $this->detect_markdown_docs_profile( $relative, $root );
+
+		if ( '' === $profile ) {
+			return array();
+		}
+
+		$source_path = $this->markdown_profile_source_path( $profile, $relative );
+		$post_type   = 'page';
+		$post_name   = $this->markdown_post_name_from_fields_or_path( $fields, $source_path );
+		$metadata    = array(
+			'markdown_docs_profile' => $profile,
+			'markdown_source_path'  => $source_path,
+			'wp_post_type'          => $post_type,
+		);
+
+		if ( 'jekyll' === $profile && preg_match( '#(?:^|/)_posts/(\d{4}-\d{2}-\d{2})-(.+?)\.(?:md|markdown|mdown|mdx)$#i', $relative, $matches ) ) {
+			$post_type                       = 'post';
+			$post_name                       = $this->markdown_post_name_from_fields_or_path( $fields, $matches[2] );
+			$metadata['wp_post_type']        = 'post';
+			$metadata['markdown_entry_kind'] = 'post';
+			$metadata['wp_post_date']        = $this->markdown_post_date( $fields, $matches[1] );
+		} else {
+			$metadata['markdown_entry_kind'] = 'page';
+			$date                            = $this->markdown_post_date( $fields, '' );
+			if ( '' !== $date ) {
+				$metadata['wp_post_date'] = $date;
+			}
+		}
+
+		if ( '' !== $post_name ) {
+			$metadata['wp_post_name'] = $post_name;
+		}
+
+		if ( 'docusaurus' === $profile && isset( $fields['sidebar_position'] ) && is_string( $fields['sidebar_position'] ) && is_numeric( $fields['sidebar_position'] ) ) {
+			$metadata['markdown_sidebar_position'] = (int) $fields['sidebar_position'];
+			$metadata['menu_order']                = (int) $fields['sidebar_position'];
+		}
+
+		$remote_terms = $this->markdown_remote_terms_from_front_matter( $fields );
+		if ( ! empty( $remote_terms ) ) {
+			$metadata['remote_terms'] = $remote_terms;
+		}
+
+		return $metadata;
+	}
+
+	/**
+	 * Returns the normalized source-relative Markdown path.
+	 *
+	 * @param ImportSourceItem $item Source item.
+	 * @return string
+	 */
+	private function normalized_markdown_relative_path( ImportSourceItem $item ) {
+		$relative = str_replace( '\\', '/', $item->get_relative_path() );
+
+		if ( '' === trim( $relative ) ) {
+			$relative = basename( $item->get_source_uri() );
+		}
+
+		return ltrim( preg_replace( '#/+#', '/', (string) $relative ), '/' );
+	}
+
+	/**
+	 * Returns the local source root when it can be inferred from relative path metadata.
+	 *
+	 * @param ImportSourceItem $item     Source item.
+	 * @param string           $relative Source-relative path.
+	 * @return string
+	 */
+	private function markdown_source_root( ImportSourceItem $item, $relative ) {
+		$source   = str_replace( '\\', '/', $item->get_source_uri() );
+		$relative = ltrim( str_replace( '\\', '/', (string) $relative ), '/' );
+
+		if ( '' === $source || '' === $relative || substr( $source, -strlen( $relative ) ) !== $relative ) {
+			return is_file( $item->get_source_uri() ) ? dirname( $item->get_source_uri() ) : '';
+		}
+
+		return rtrim( substr( $source, 0, -strlen( $relative ) ), '/\\' );
+	}
+
+	/**
+	 * Detects a supported Markdown documentation source profile.
+	 *
+	 * @param string $relative Source-relative path.
+	 * @param string $root     Local source root.
+	 * @return string
+	 */
+	private function detect_markdown_docs_profile( $relative, $root ) {
+		$relative = ltrim( str_replace( '\\', '/', (string) $relative ), '/' );
+
+		if ( preg_match( '#(?:^|/)_posts/#', $relative ) || ( '' !== $root && is_file( $root . '/_config.yml' ) ) ) {
+			return 'jekyll';
+		}
+
+		if ( preg_match( '#^src/(?:content|pages)/#', $relative ) || ( '' !== $root && is_file( $root . '/astro.config.mjs' ) ) ) {
+			return 'astro';
+		}
+
+		if ( '' !== $root && ( is_file( $root . '/docusaurus.config.js' ) || is_file( $root . '/docusaurus.config.ts' ) ) ) {
+			return 'docusaurus';
+		}
+
+		if ( '' !== $root && is_dir( $root . '/.obsidian' ) ) {
+			return 'obsidian';
+		}
+
+		if ( preg_match( '#^docs/#', $relative ) ) {
+			return 'docusaurus';
+		}
+
+		return '';
+	}
+
+	/**
+	 * Removes common source-profile directory prefixes before slugging.
+	 *
+	 * @param string $profile  Source profile.
+	 * @param string $relative Source-relative path.
+	 * @return string
+	 */
+	private function markdown_profile_source_path( $profile, $relative ) {
+		$path = ltrim( str_replace( '\\', '/', (string) $relative ), '/' );
+
+		if ( 'astro' === $profile ) {
+			$path = preg_replace( '#^src/(?:content|pages)/#', '', $path );
+		} elseif ( 'docusaurus' === $profile ) {
+			$path = preg_replace( '#^docs/#', '', $path );
+		} elseif ( 'jekyll' === $profile ) {
+			$path = preg_replace( '#^_posts/#', '', $path );
+		}
+
+		$path = preg_replace( '/\.(?:md|markdown|mdown|mdx)$/i', '', is_string( $path ) ? $path : '' );
+
+		return trim( is_string( $path ) ? $path : '', '/' );
+	}
+
+	/**
+	 * Chooses a post slug from front matter or profile path.
+	 *
+	 * @param array<string,mixed> $fields Front matter fields.
+	 * @param string              $path   Source-profile path.
+	 * @return string
+	 */
+	private function markdown_post_name_from_fields_or_path( array $fields, $path ) {
+		foreach ( array( 'slug', 'permalink' ) as $key ) {
+			if ( isset( $fields[ $key ] ) && is_string( $fields[ $key ] ) && '' !== trim( $fields[ $key ] ) ) {
+				return $this->sanitize_markdown_post_name( $fields[ $key ] );
+			}
+		}
+
+		$path = preg_replace( '#(^|/)index$#i', '$1', trim( (string) $path, '/' ) );
+
+		return $this->sanitize_markdown_post_name( is_string( $path ) ? $path : '' );
+	}
+
+	/**
+	 * Sanitizes a source path or slug into a WordPress post_name candidate.
+	 *
+	 * @param string $value Raw value.
+	 * @return string
+	 */
+	private function sanitize_markdown_post_name( $value ) {
+		$value = trim( (string) $value );
+		$value = preg_replace( '#^https?://[^/]+#i', '', $value );
+		$value = trim( is_string( $value ) ? $value : '', '/' );
+		$value = preg_replace( '/\.(?:html?|md|markdown|mdown|mdx)$/i', '', $value );
+		$value = strtolower( preg_replace( '/[^a-z0-9]+/i', '-', is_string( $value ) ? $value : '' ) );
+		$value = trim( is_string( $value ) ? $value : '', '-' );
+
+		return $value;
+	}
+
+	/**
+	 * Normalizes front matter or filename date into WordPress local date format.
+	 *
+	 * @param array<string,mixed> $fields        Front matter fields.
+	 * @param string              $fallback_date Date inferred from path.
+	 * @return string
+	 */
+	private function markdown_post_date( array $fields, $fallback_date ) {
+		$date = isset( $fields['date'] ) && is_string( $fields['date'] ) ? trim( $fields['date'] ) : trim( (string) $fallback_date );
+
+		if ( '' === $date ) {
+			return '';
+		}
+
+		if ( preg_match( '/^(\d{4}-\d{2}-\d{2})(?:[T\s]+(\d{2}:\d{2}(?::\d{2})?))?/', $date, $matches ) ) {
+			$time = isset( $matches[2] ) && '' !== $matches[2] ? $matches[2] : '00:00:00';
+			if ( 5 === strlen( $time ) ) {
+				$time .= ':00';
+			}
+
+			return $matches[1] . ' ' . $time;
+		}
+
+		return '';
+	}
+
+	/**
+	 * Builds staged category and tag relationships from front matter.
+	 *
+	 * @param array<string,mixed> $fields Front matter fields.
+	 * @return array<string,array<int,array<string,mixed>>>
+	 */
+	private function markdown_remote_terms_from_front_matter( array $fields ) {
+		$terms = array();
+
+		$categories = $this->markdown_front_matter_terms( $fields, array( 'categories', 'category' ) );
+		if ( ! empty( $categories ) ) {
+			$terms['category'] = $this->markdown_term_entries( 'category', $categories );
+		}
+
+		$tags = $this->markdown_front_matter_terms( $fields, array( 'tags', 'tag' ) );
+		if ( ! empty( $tags ) ) {
+			$terms['post_tag'] = $this->markdown_term_entries( 'post_tag', $tags );
+		}
+
+		return $terms;
+	}
+
+	/**
+	 * Returns normalized terms from any matching front matter key.
+	 *
+	 * @param array<string,mixed> $fields Front matter fields.
+	 * @param array<int,string>   $keys   Candidate keys.
+	 * @return array<int,string>
+	 */
+	private function markdown_front_matter_terms( array $fields, array $keys ) {
+		$terms = array();
+
+		foreach ( $keys as $key ) {
+			if ( ! array_key_exists( $key, $fields ) ) {
+				continue;
+			}
+
+			$value  = $fields[ $key ];
+			$values = is_array( $value ) ? $value : preg_split( '/\s*,\s*|\s+/', (string) $value );
+			if ( ! is_array( $values ) ) {
+				continue;
+			}
+
+			foreach ( $values as $term ) {
+				$term = trim( (string) $term );
+				if ( '' !== $term ) {
+					$terms[] = $term;
+				}
+			}
+		}
+
+		return array_values( array_unique( $terms ) );
+	}
+
+	/**
+	 * Converts term labels into remote term metadata entries.
+	 *
+	 * @param string            $taxonomy Taxonomy.
+	 * @param array<int,string> $terms    Term labels.
+	 * @return array<int,array<string,mixed>>
+	 */
+	private function markdown_term_entries( $taxonomy, array $terms ) {
+		$entries = array();
+
+		foreach ( $terms as $term ) {
+			$slug = $this->sanitize_markdown_post_name( $term );
+			if ( '' === $slug ) {
+				continue;
+			}
+
+			$entries[] = array(
+				'id'       => null,
+				'taxonomy' => (string) $taxonomy,
+				'slug'     => $slug,
+				'name'     => (string) $term,
+				'source'   => 'markdown-front-matter',
+			);
+		}
+
+		return $entries;
+	}
+
+	/**
+	 * Returns whether MDX component placeholdering should run for a source.
+	 *
+	 * @param ImportSourceItem    $item     Source item.
+	 * @param array<string,mixed> $metadata Prepared metadata.
+	 * @return bool
+	 */
+	private function should_normalize_mdx_components( ImportSourceItem $item, array $metadata ) {
+		$extension = strtolower( pathinfo( $item->get_source_uri(), PATHINFO_EXTENSION ) );
+
+		return 'mdx' === $extension || ( isset( $metadata['markdown_docs_profile'] ) && 'docusaurus' === $metadata['markdown_docs_profile'] );
+	}
+
+	/**
+	 * Replaces simple MDX imports and React component blocks with safe text placeholders.
+	 *
+	 * @param string $content Markdown/MDX content.
+	 * @return array{content:string,component_count:int,components:array<int,string>,import_export_count:int}
+	 */
+	private function replace_mdx_component_lines( $content ) {
+		$lines               = preg_split( '/\R/', (string) $content );
+		$output              = array();
+		$components          = array();
+		$import_export_count = 0;
+		$skipping_component  = '';
+
+		if ( ! is_array( $lines ) ) {
+			return array(
+				'content'             => (string) $content,
+				'component_count'     => 0,
+				'components'          => array(),
+				'import_export_count' => 0,
+			);
+		}
+
+		foreach ( $lines as $line ) {
+			$line    = (string) $line;
+			$trimmed = trim( $line );
+
+			if ( '' !== $skipping_component ) {
+				if ( preg_match( '#</' . preg_quote( $skipping_component, '#' ) . '\s*>#', $trimmed ) ) {
+					$skipping_component = '';
+				}
+				continue;
+			}
+
+			if ( preg_match( '/^(?:import|export)\s+/', $trimmed ) ) {
+				++$import_export_count;
+				continue;
+			}
+
+			if ( preg_match( '#^<([A-Z][A-Za-z0-9_.]*)\b[^>]*>\s*$#', $trimmed, $matches ) ) {
+				$name            = (string) $matches[1];
+				$is_self_closing = (bool) preg_match( '#/>\s*$#', $trimmed );
+				$components[]    = $name;
+				$output[]        = 'Unsupported MDX component: ' . $name;
+				if ( ! $is_self_closing && false === strpos( $trimmed, '</' . $name . '>' ) ) {
+					$skipping_component = $name;
+				}
+				continue;
+			}
+
+			$output[] = $line;
+		}
+
+		$components = array_values( array_unique( $components ) );
+
+		return array(
+			'content'             => trim( implode( "\n", $output ) ),
+			'component_count'     => count( $components ),
+			'components'          => $components,
+			'import_export_count' => $import_export_count,
+		);
+	}
+
+	/**
+	 * Converts Obsidian-style wiki links into regular Markdown links.
+	 *
+	 * @param string $content Markdown content.
+	 * @return array{content:string,count:int,links:array<int,array{target:string,label:string,href:string}>}
+	 */
+	private function rewrite_obsidian_wiki_links( $content ) {
+		$links = array();
+
+		$content = preg_replace_callback(
+			'/\[\[([^\]\r\n|]+)(?:\|([^\]\r\n]+))?\]\]/',
+			function ( $matches ) use ( &$links ) {
+				$target = trim( (string) $matches[1] );
+				$label  = isset( $matches[2] ) && '' !== trim( (string) $matches[2] ) ? trim( (string) $matches[2] ) : $this->obsidian_wiki_link_label( $target );
+				$href   = $this->obsidian_wiki_link_href( $target );
+
+				if ( '' === $href ) {
+					return $this->escape_html( '' === $label ? $target : $label );
+				}
+
+				$links[] = array(
+					'target' => $target,
+					'label'  => $label,
+					'href'   => $href,
+				);
+
+				return '[' . str_replace( array( '[', ']' ), '', $label ) . '](' . $href . ')';
+			},
+			(string) $content
+		);
+
+		return array(
+			'content' => is_string( $content ) ? $content : '',
+			'count'   => count( $links ),
+			'links'   => $links,
+		);
+	}
+
+	/**
+	 * Builds a display label for an Obsidian wiki link.
+	 *
+	 * @param string $target Wiki target.
+	 * @return string
+	 */
+	private function obsidian_wiki_link_label( $target ) {
+		$target = explode( '#', (string) $target, 2 )[0];
+		$target = basename( str_replace( '\\', '/', $target ) );
+		$target = preg_replace( '/\.(?:md|markdown|mdown|mdx)$/i', '', $target );
+
+		return trim( is_string( $target ) ? $target : '' );
+	}
+
+	/**
+	 * Builds a safe Markdown href for an Obsidian wiki target.
+	 *
+	 * @param string $target Wiki target.
+	 * @return string
+	 */
+	private function obsidian_wiki_link_href( $target ) {
+		$target = trim( str_replace( '\\', '/', (string) $target ) );
+
+		if ( '' === $target || false !== strpos( $target, "\0" ) || preg_match( '#^[a-z][a-z0-9+.-]*:#i', $target ) || 0 === strpos( $target, '/' ) || false !== strpos( $target, '..' ) ) {
+			return '';
+		}
+
+		$parts    = explode( '#', $target, 2 );
+		$path     = $parts[0];
+		$fragment = isset( $parts[1] ) ? trim( $parts[1] ) : '';
+
+		if ( ! preg_match( '/\.(?:md|markdown|mdown|mdx)$/i', $path ) ) {
+			$path .= '.md';
+		}
+
+		$segments = array_map( 'rawurlencode', explode( '/', $path ) );
+		$href     = implode( '/', $segments );
+
+		if ( '' !== $fragment ) {
+			$href .= '#' . rawurlencode( $fragment );
+		}
+
+		return $href;
 	}
 
 	/**

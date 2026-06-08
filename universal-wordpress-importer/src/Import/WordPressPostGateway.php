@@ -52,7 +52,7 @@ final class WordPressPostGateway implements ImportPostGatewayInterface {
 
 		$ids = get_posts(
 			array(
-				'post_type'              => 'page',
+				'post_type'              => array( 'page', 'post' ),
 				'post_status'            => 'any',
 				'posts_per_page'         => 1,
 				'fields'                 => 'ids',
@@ -113,12 +113,22 @@ final class WordPressPostGateway implements ImportPostGatewayInterface {
 		$post_status                         = 'draft' === (string) $post_status ? 'draft' : 'publish';
 
 		$post = array(
-			'post_type'    => 'page',
+			'post_type'    => $this->post_type_for_document( $document ),
 			'post_status'  => $post_status,
 			'post_title'   => $document->get_title(),
 			'post_content' => $document->get_block_markup(),
 			'post_name'    => $this->slug_for_document( $document ),
 		);
+
+		$post_date = $this->post_date_for_document( $document );
+		if ( '' !== $post_date ) {
+			$post['post_date'] = $post_date;
+		}
+
+		$menu_order = $this->menu_order_for_document( $document );
+		if ( null !== $menu_order ) {
+			$post['menu_order'] = $menu_order;
+		}
 
 		$author_id = $this->resolve_remote_author_id( $document );
 
@@ -538,7 +548,12 @@ final class WordPressPostGateway implements ImportPostGatewayInterface {
 	 */
 	private function slug_for_document( ImportPreparedDocument $document ) {
 		$metadata = $document->get_metadata();
-		$seed     = isset( $metadata['relative_path'] ) && '' !== trim( (string) $metadata['relative_path'] )
+
+		if ( isset( $metadata['wp_post_name'] ) && '' !== trim( (string) $metadata['wp_post_name'] ) ) {
+			return trim( (string) $metadata['wp_post_name'] );
+		}
+
+		$seed = isset( $metadata['relative_path'] ) && '' !== trim( (string) $metadata['relative_path'] )
 			? (string) $metadata['relative_path']
 			: $document->get_title();
 
@@ -550,6 +565,48 @@ final class WordPressPostGateway implements ImportPostGatewayInterface {
 		$slug = trim( (string) $slug, '-' );
 
 		return '' === $slug ? 'imported-document' : $slug;
+	}
+
+	/**
+	 * Returns the WordPress post type for a prepared document.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return string
+	 */
+	private function post_type_for_document( ImportPreparedDocument $document ) {
+		$metadata  = $document->get_metadata();
+		$post_type = isset( $metadata['wp_post_type'] ) ? trim( (string) $metadata['wp_post_type'] ) : '';
+
+		return 'post' === $post_type ? 'post' : 'page';
+	}
+
+	/**
+	 * Returns a safe local post date for a prepared document.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return string
+	 */
+	private function post_date_for_document( ImportPreparedDocument $document ) {
+		$metadata  = $document->get_metadata();
+		$post_date = isset( $metadata['wp_post_date'] ) ? trim( (string) $metadata['wp_post_date'] ) : '';
+
+		return preg_match( '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $post_date ) ? $post_date : '';
+	}
+
+	/**
+	 * Returns an optional menu order for a prepared document.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return int|null
+	 */
+	private function menu_order_for_document( ImportPreparedDocument $document ) {
+		$metadata = $document->get_metadata();
+
+		if ( ! isset( $metadata['menu_order'] ) || ! is_numeric( $metadata['menu_order'] ) ) {
+			return null;
+		}
+
+		return (int) $metadata['menu_order'];
 	}
 
 	/**
@@ -677,6 +734,10 @@ final class WordPressPostGateway implements ImportPostGatewayInterface {
 
 		if ( isset( $metadata['remote_terms'] ) && is_array( $metadata['remote_terms'] ) ) {
 			update_post_meta( $post_id, '_universal_importer_remote_terms', $metadata['remote_terms'] );
+		}
+
+		if ( isset( $metadata['markdown_docs_profile'] ) && '' !== trim( (string) $metadata['markdown_docs_profile'] ) ) {
+			update_post_meta( $post_id, '_universal_importer_source_profile', trim( (string) $metadata['markdown_docs_profile'] ) );
 		}
 	}
 

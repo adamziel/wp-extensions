@@ -287,7 +287,7 @@ final class ImportMarkdownInternalLinkResolver {
 			return false;
 		}
 
-		return (bool) preg_match( '/\.(?:md|markdown|mdown)$/i', $path );
+		return (bool) preg_match( '/\.(?:md|markdown|mdown|mdx)$/i', $path );
 	}
 
 	/**
@@ -314,7 +314,7 @@ final class ImportMarkdownInternalLinkResolver {
 		$target_base = '/' === substr( $link['path'], 0, 1 )
 			? $this->local_import_root( $source, $metadata )
 			: dirname( $source );
-		$target_path = str_replace( '/', DIRECTORY_SEPARATOR, ltrim( $link['path'], '/' ) );
+		$target_path = str_replace( '/', DIRECTORY_SEPARATOR, rawurldecode( ltrim( $link['path'], '/' ) ) );
 		$target      = $this->normalize_local_path( $target_base . DIRECTORY_SEPARATOR . $target_path );
 		$real        = realpath( $target );
 
@@ -343,7 +343,7 @@ final class ImportMarkdownInternalLinkResolver {
 		}
 
 		$current_path = $this->normalize_repository_path( (string) $metadata['github_tree_path'] );
-		$link_path    = (string) $link['path'];
+		$link_path    = rawurldecode( (string) $link['path'] );
 		$target_path  = '/' === substr( $link_path, 0, 1 )
 			? $this->normalize_repository_path( ltrim( $link_path, '/' ) )
 			: $this->normalize_repository_path( dirname( $current_path ) . '/' . $link_path );
