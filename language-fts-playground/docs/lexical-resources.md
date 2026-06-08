@@ -135,9 +135,55 @@ results down.
 The WordPress admin page at `Tools -> Language FTS` includes a compact
 Lexical pack status table with the language, `curated_seed` or
 `imported_comprehensive` data kind, source, license, version/date, lexeme/
-synset/expansion counts, and warnings. Read that table as a provenance and
-quality signal: current shipped packs are `curated_seed` demo data, not
-comprehensive WordNet, OpenThesaurus, or plWordNet databases.
+synset/expansion counts, warnings, and the effective local resource root.
+Read that table as a provenance and quality signal: current shipped packs are
+`curated_seed` demo data, not comprehensive WordNet, OpenThesaurus, or
+plWordNet databases.
+
+## Custom Resource Roots
+
+Generated packs do not need to be committed into the plugin directory. Create a
+complete `resources/languages`-style root, validate it, install it anywhere PHP
+can read locally, and then configure the plugin to use that root.
+
+Validate the external root before activating it:
+
+```sh
+php language-fts-playground/tools/validate-lexical-packs.php --resource-root=/srv/language-packs
+php language-fts-playground/tools/validate-lexical-packs.php --resource-root=/srv/language-packs --json
+```
+
+Use a constant when the path is deployment configuration:
+
+```php
+define('LANGUAGE_FTS_PLAYGROUND_LEXICAL_RESOURCE_ROOT', '/srv/language-packs');
+```
+
+Use the filter when another plugin or environment layer owns the path decision:
+
+```php
+add_filter(
+    'language_fts_playground_lexical_resource_root',
+    static fn(string $root, string $default_root): string => '/srv/language-packs',
+    10,
+    2
+);
+```
+
+The value must be a string local filesystem path. URL-like roots are rejected;
+lexical packs are never downloaded at indexing or query time. The filter runs
+after the constant/default selection, so it can replace either path. Non-string
+filter returns are ignored.
+
+The analyzer fingerprint includes the effective root plus per-language
+`pack.php` metadata such as `language_id`, `pack_version`, `pack_date`,
+`provenance`, `data_kind`, source/license fields, attribution text, and listed
+file names. It does not hash full TSV contents on normal requests. When the
+fingerprint changes, `ensure_schema()` stores the new fingerprint, marks the
+index as requiring a rebuild, and records the root/fingerprint in admin-visible
+status. If the custom root is missing or pack metadata cannot be read, the
+schema check records an error instead of silently accepting stale analyzer
+assumptions.
 
 ## Build-Time Importer
 
@@ -204,9 +250,10 @@ php language-fts-playground/tools/import-lexical-source.php \
   --data-kind=curated_seed
 ```
 
-Copy the generated runtime files into
-`resources/languages/<language>/` only after checking license obligations,
-attribution text, pack size, analyzer quality, and deterministic test output.
+Copy the generated runtime files into either the bundled
+`resources/languages/<language>/` directory or a validated custom resource root
+only after checking license obligations, attribution text, pack size, analyzer
+quality, and deterministic test output.
 
 ## Source And License Caveats
 

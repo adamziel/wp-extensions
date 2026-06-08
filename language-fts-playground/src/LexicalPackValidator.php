@@ -23,7 +23,9 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         int $max_synset_size = self::DEFAULT_MAX_SYNSET_SIZE,
         int $max_expansions_per_term = self::DEFAULT_MAX_EXPANSIONS_PER_TERM
     ) {
-        $this->resource_root = rtrim($resource_root ?? dirname(__DIR__) . '/resources/languages', DIRECTORY_SEPARATOR);
+        $this->resource_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root(
+            $resource_root ?? Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root()
+        );
         $this->max_synset_size = max(1, $max_synset_size);
         $this->max_expansions_per_term = max(1, $max_expansions_per_term);
     }

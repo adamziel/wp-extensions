@@ -163,8 +163,32 @@ fail in CI before they reach the admin UI or search tests.
 
 The `Tools -> Language FTS` admin page includes a compact lexical pack status
 table with language, data kind, source, license, version/date, counts, and
-warnings. The shipped English, Polish, and German packs are still labeled
-`curated_seed`; they are not comprehensive lexical databases.
+warnings. It also shows the effective local resource root being validated.
+The shipped English, Polish, and German packs are still labeled `curated_seed`;
+they are not comprehensive lexical databases.
+
+Generated packs can live outside this plugin. Install a complete
+`resources/languages`-style directory anywhere readable by PHP, validate it
+first, then point the plugin at that local path:
+
+```sh
+php language-fts-playground/tools/validate-lexical-packs.php --resource-root=/srv/language-packs
+```
+
+```php
+define('LANGUAGE_FTS_PLAYGROUND_LEXICAL_RESOURCE_ROOT', '/srv/language-packs');
+
+add_filter(
+    'language_fts_playground_lexical_resource_root',
+    static fn(string $root): string => '/srv/language-packs'
+);
+```
+
+The root must be a local filesystem path, not a URL or runtime download source.
+Changing pack metadata such as `pack_version`, `pack_date`, provenance, data
+kind, or listed files changes the analyzer fingerprint. The next schema check
+marks the index as requiring a rebuild so stored terms can be regenerated with
+the new resources.
 
 See `docs/lexical-resources.md` for the resource contract and
 `tools/import-lexical-source.php` for source import usage. Open English WordNet

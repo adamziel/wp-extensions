@@ -36,12 +36,18 @@ function language_fts_validate_packs_main(array $argv): int
         return 0;
     }
 
-    $validator = new Language_FTS_Playground_Lexical_Pack_Validator(
-        $options['resource_root'],
-        $options['max_synset_size'],
-        $options['max_expansions_per_term']
-    );
-    $report = $validator->validate_all();
+    try {
+        $validator = new Language_FTS_Playground_Lexical_Pack_Validator(
+            $options['resource_root'],
+            $options['max_synset_size'],
+            $options['max_expansions_per_term']
+        );
+        $report = $validator->validate_all();
+    } catch (Throwable $throwable) {
+        fwrite(STDERR, $throwable->getMessage() . "\n");
+
+        return 1;
+    }
 
     if ($options['json']) {
         echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";

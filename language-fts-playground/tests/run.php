@@ -324,6 +324,7 @@ function reset_language_fts_wp_state(): void
     $GLOBALS['language_fts_test_revisions'] = [];
     $GLOBALS['language_fts_test_autosaves'] = [];
     $GLOBALS['language_fts_test_actions'] = [];
+    $GLOBALS['language_fts_test_filters'] = [];
     $GLOBALS['language_fts_test_scheduled'] = [];
     $GLOBALS['language_fts_test_option_reads'] = [];
     $GLOBALS['language_fts_test_get_option_interceptor'] = null;
@@ -341,7 +342,7 @@ function set_language_fts_plugin_runtime(Language_FTS_Playground_Storage_Interfa
 
     $analyzer_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'analyzer');
     $analyzer_property->setAccessible(true);
-    $analyzer_property->setValue(null, new Language_FTS_Playground_Analyzer());
+    $analyzer_property->setValue(null, null);
 
     $queue_lock_token_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'queue_lock_token');
     $queue_lock_token_property->setAccessible(true);
@@ -421,6 +422,43 @@ if (!function_exists('add_action')) {
         ];
 
         return true;
+    }
+}
+
+if (!function_exists('add_filter')) {
+    function add_filter(string $hook, callable|array|string $callback, int $priority = 10, int $accepted_args = 1): bool
+    {
+        $GLOBALS['language_fts_test_filters'][$hook][] = [
+            'callback' => $callback,
+            'priority' => $priority,
+            'accepted_args' => $accepted_args,
+        ];
+
+        return true;
+    }
+}
+
+if (!function_exists('apply_filters')) {
+    function apply_filters(string $hook, mixed $value, mixed ...$args): mixed
+    {
+        $filters = $GLOBALS['language_fts_test_filters'][$hook] ?? [];
+        usort(
+            $filters,
+            static fn(array $a, array $b): int => ((int) ($a['priority'] ?? 10)) <=> ((int) ($b['priority'] ?? 10))
+        );
+
+        foreach ($filters as $filter) {
+            $callback = $filter['callback'] ?? null;
+            if (!is_callable($callback)) {
+                continue;
+            }
+
+            $accepted_args = max(1, (int) ($filter['accepted_args'] ?? 1));
+            $call_args = array_slice(array_merge([$value], $args), 0, $accepted_args);
+            $value = $callback(...$call_args);
+        }
+
+        return $value;
     }
 }
 
@@ -979,6 +1017,145 @@ function language_fts_import_options(array $overrides = []): array
         $overrides
     );
 }
+
+test_case('lexical resource root defaults to bundled resources and handles invalid filters safely', function (): void {
+    reset_language_fts_plugin_runtime();
+    $default_root = Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root();
+
+    assert_same($default_root, Language_FTS_Playground_Plugin::default_lexical_resource_root(), 'The plugin exposes the bundled lexical resource root.');
+    assert_same($default_root, Language_FTS_Playground_Plugin::lexical_resource_root(), 'The effective lexical root defaults to bundled resources.');
+
+    add_filter(
+        'language_fts_playground_lexical_resource_root',
+        static fn(): array => ['not-a-string-path'],
+        10,
+        1
+    );
+    assert_same($default_root, Language_FTS_Playground_Plugin::lexical_resource_root(), 'A non-string filter value is ignored safely.');
+
+    reset_language_fts_plugin_runtime();
+    add_filter(
+        'language_fts_playground_lexical_resource_root',
+        static fn(): string => 'https://example.test/lexical-packs',
+        10,
+        1
+    );
+    $throwable = assert_throws(
+        InvalidArgumentException::class,
+        static fn(): string => Language_FTS_Playground_Plugin::lexical_resource_root(),
+        'URL-like lexical roots are rejected before any runtime download behavior is possible.'
+    );
+    assert_contains_text('local filesystem path', $throwable->getMessage(), 'The URL rejection explains that roots must be local paths.');
+});
+
+test_case('filter lexical root is used by plugin analyzer and admin validator', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\nbeta\tbeta\tfixture\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\nalpha\tbeta\tbidirectional\t0.77\tfixture-custom-root\n"
+    );
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'source_name' => 'Fixture <script> source',
+        'provenance' => 'fixture-filter-custom-root',
+    ]);
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        reset_language_fts_plugin_runtime();
+        add_filter(
+            'language_fts_playground_lexical_resource_root',
+            static fn(string $current, string $default): string => $normalized_root . DIRECTORY_SEPARATOR,
+            10,
+            2
+        );
+
+        assert_same($normalized_root, Language_FTS_Playground_Plugin::lexical_resource_root(), 'The filter overrides the default lexical root and normalizes trailing slashes.');
+        $analyzer = Language_FTS_Playground_Plugin::analyzer();
+        assert_same(['xx'], $analyzer->enabled_languages(), 'The plugin analyzer is built from the filtered lexical root.');
+        $query_terms = $analyzer->analyze_query('alpha', 'xx');
+        $expansions = $analyzer->expand_query_synonyms($query_terms, 'xx');
+        assert_same(['beta'], array_column($expansions['alpha'] ?? [], 'term'), 'A filtered custom pack changes analyzer synonym behavior without editing bundled resources.');
+
+        ob_start();
+        Language_FTS_Playground_Plugin::render_admin_page();
+        $html = ob_get_clean();
+
+        assert_contains_text('<code>' . esc_html($normalized_root) . '</code>', $html, 'Admin lexical status shows the filtered resource root.');
+        assert_contains_text('Fixture &lt;script&gt; source', $html, 'Admin lexical status escapes custom pack source names.');
+        assert_not_contains_text('<script>', $html, 'Admin lexical status does not emit raw custom pack source markup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack fingerprint changes when pack metadata changes', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'pack_version' => 'fixture-v1',
+        'pack_date' => '2026-06-08',
+        'provenance' => 'fixture-provenance-v1',
+    ]);
+
+    try {
+        $first = (new Language_FTS_Playground_Lexical_Profile_Repository($root))->pack_fingerprint();
+        write_language_fts_temp_pack_metadata($language_dir, [
+            'pack_version' => 'fixture-v2',
+            'pack_date' => '2026-06-09',
+            'provenance' => 'fixture-provenance-v2',
+        ]);
+        $second = (new Language_FTS_Playground_Lexical_Profile_Repository($root))->pack_fingerprint();
+
+        assert_true($first !== $second, 'Changing pack version/date/provenance changes the lightweight lexical fingerprint.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('ensure_schema marks rebuild required when lexical pack fingerprint changes', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'pack_version' => 'fixture-v1',
+        'pack_date' => '2026-06-08',
+        'provenance' => 'fixture-provenance-v1',
+    ]);
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        $storage = reset_language_fts_plugin_runtime();
+        assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+        add_filter(
+            'language_fts_playground_lexical_resource_root',
+            static fn(): string => $normalized_root,
+            10,
+            1
+        );
+        $initial_fingerprint = Language_FTS_Playground_Plugin::lexical_pack_fingerprint();
+        update_option('language_fts_playground_schema_version', LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION);
+        update_option('language_fts_playground_analyzer_version', LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION);
+        update_option('language_fts_playground_lexical_pack_fingerprint', $initial_fingerprint);
+        update_option('language_fts_playground_rebuild_required', false);
+
+        write_language_fts_temp_pack_metadata($language_dir, [
+            'pack_version' => 'fixture-v2',
+            'pack_date' => '2026-06-09',
+            'provenance' => 'fixture-provenance-v2',
+        ]);
+        $next_fingerprint = Language_FTS_Playground_Plugin::lexical_pack_fingerprint();
+
+        Language_FTS_Playground_Plugin::ensure_schema();
+        $status = Language_FTS_Playground_Plugin::index_status();
+
+        assert_same(1, $storage->install_count, 'A lexical fingerprint change still runs the idempotent schema installer.');
+        assert_same($next_fingerprint, get_option('language_fts_playground_lexical_pack_fingerprint'), 'The changed lexical fingerprint is stored.');
+        assert_same(true, get_option('language_fts_playground_rebuild_required'), 'A lexical fingerprint change marks the index for rebuild.');
+        assert_same($normalized_root, $status['lexical_resource_root'] ?? null, 'Status records the resource root that triggered the rebuild check.');
+        assert_contains_text('lexical resource packs changed', (string) ($status['last_status'] ?? ''), 'Status explains that lexical packs can require a rebuild.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
 
 test_case('loads resource-backed lexical profiles for stopwords, lexemes, folds, and synonyms', function (): void {
     $repository = new Language_FTS_Playground_Lexical_Profile_Repository();
@@ -2477,6 +2654,43 @@ test_case('surfaces storage failures in admin without fataling the page', functi
 
     assert_contains_text('Language FTS Playground', $html, 'The admin page still renders its shell.');
     assert_contains_text('Stored rows are temporarily unavailable.', $html, 'Storage errors are shown as admin notices.');
+});
+
+test_case('constant lexical root is used by plugin analyzer and admin validator', function (): void {
+    assert_true(!defined('LANGUAGE_FTS_PLAYGROUND_LEXICAL_RESOURCE_ROOT'), 'The lexical root constant is not defined before the constant override test.');
+
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nconstant\tconstant\tfixture\nreplacement\treplacement\tfixture\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\nconstant\treplacement\tquery_to_index\t0.7\tfixture-constant-root\n"
+    );
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'source_name' => 'Constant <script> source',
+        'provenance' => 'fixture-constant-custom-root',
+    ]);
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        define('LANGUAGE_FTS_PLAYGROUND_LEXICAL_RESOURCE_ROOT', $normalized_root . DIRECTORY_SEPARATOR);
+        reset_language_fts_plugin_runtime();
+
+        assert_same($normalized_root, Language_FTS_Playground_Plugin::lexical_resource_root(), 'The lexical root constant overrides the bundled root and normalizes trailing slashes.');
+        $analyzer = Language_FTS_Playground_Plugin::analyzer();
+        assert_same(['xx'], $analyzer->enabled_languages(), 'The plugin analyzer is built from the constant lexical root.');
+        $query_terms = $analyzer->analyze_query('constant', 'xx');
+        $expansions = $analyzer->expand_query_synonyms($query_terms, 'xx');
+        assert_same(['replacement'], array_column($expansions['constant'] ?? [], 'term'), 'The constant custom pack changes analyzer synonym behavior.');
+
+        ob_start();
+        Language_FTS_Playground_Plugin::render_admin_page();
+        $html = ob_get_clean();
+
+        assert_contains_text('<code>' . esc_html($normalized_root) . '</code>', $html, 'Admin lexical status validates the constant resource root.');
+        assert_contains_text('Constant &lt;script&gt; source', $html, 'Admin lexical status escapes constant-pack source names.');
+        assert_not_contains_text('<script>', $html, 'Admin lexical status does not emit raw constant-pack source markup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
 });
 
 $failures = 0;

@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /**
- * Loads curated language analyzer profiles from plugin-local resource files.
+ * Loads curated language analyzer profiles from local resource files.
  *
  * File formats:
  *
@@ -45,7 +45,40 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     public function __construct(string|null $resource_root = null)
     {
-        $this->resource_root = rtrim($resource_root ?? dirname(__DIR__) . '/resources/languages', DIRECTORY_SEPARATOR);
+        $this->resource_root = self::normalize_resource_root($resource_root ?? self::default_resource_root());
+    }
+
+    public static function default_resource_root(): string
+    {
+        return self::normalize_resource_root(dirname(__DIR__) . '/resources/languages');
+    }
+
+    public static function normalize_resource_root(string $resource_root): string
+    {
+        $resource_root = trim($resource_root);
+        if ($resource_root === '') {
+            throw new InvalidArgumentException('Language profile resource root must be a non-empty local path.');
+        }
+
+        if (preg_match('/^[a-z][a-z0-9+.-]*:\/\//i', $resource_root) === 1) {
+            throw new InvalidArgumentException('Language profile resource root must be a local filesystem path, not a URL.');
+        }
+
+        $normalized = rtrim($resource_root, "/\\");
+        if ($normalized === '' && $resource_root !== '') {
+            return DIRECTORY_SEPARATOR;
+        }
+
+        if (preg_match('/^[A-Za-z]:$/', $normalized) === 1 && preg_match('/^[A-Za-z]:[\/\\\\]+$/', $resource_root) === 1) {
+            return $normalized . DIRECTORY_SEPARATOR;
+        }
+
+        return $normalized;
+    }
+
+    public function resource_root(): string
+    {
+        return $this->resource_root;
     }
 
     /**
@@ -118,6 +151,38 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $this->validate_pack_metadata($metadata, (string) $entry['profile']['id'], $entry['directory'], $path);
+    }
+
+    public function pack_fingerprint(): string
+    {
+        $payload = [
+            'schema' => 'language-fts-playground-lexical-pack-fingerprint-v1',
+            'resource_root' => $this->resource_root,
+            'languages' => [],
+        ];
+
+        foreach ($this->language_ids() as $language) {
+            $metadata = $this->pack_metadata($language);
+            $payload['languages'][] = [
+                'language_id' => $metadata['language_id'],
+                'pack_version' => $metadata['pack_version'],
+                'pack_date' => $metadata['pack_date'],
+                'provenance' => $metadata['provenance'],
+                'data_kind' => $metadata['data_kind'],
+                'source_name' => $metadata['source_name'],
+                'source_url' => $metadata['source_url'],
+                'license_name' => $metadata['license_name'],
+                'attribution_text' => $metadata['attribution_text'],
+                'files' => array_values($metadata['files']),
+            ];
+        }
+
+        $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        if (!is_string($json)) {
+            throw new RuntimeException('Could not encode lexical pack fingerprint payload.');
+        }
+
+        return hash('sha256', $json);
     }
 
     /**

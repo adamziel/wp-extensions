@@ -5,6 +5,7 @@ final class Language_FTS_Playground_Plugin
 {
     private const SCHEMA_OPTION = 'language_fts_playground_schema_version';
     private const ANALYZER_OPTION = 'language_fts_playground_analyzer_version';
+    private const LEXICAL_PACK_FINGERPRINT_OPTION = 'language_fts_playground_lexical_pack_fingerprint';
     private const QUEUE_OPTION = 'language_fts_playground_index_queue';
     private const QUEUE_LOCK_OPTION = 'language_fts_playground_index_queue_lock';
     private const QUEUE_LOCK_TTL_SECONDS = 15;
@@ -15,6 +16,8 @@ final class Language_FTS_Playground_Plugin
     private const REBUILD_IN_PROGRESS_OPTION = 'language_fts_playground_rebuild_in_progress';
     private const CRON_HOOK = 'language_fts_playground_process_queue';
     private const DEFAULT_PUBLIC_POST_TYPES = ['post', 'page'];
+    private const LEXICAL_RESOURCE_ROOT_CONSTANT = 'LANGUAGE_FTS_PLAYGROUND_LEXICAL_RESOURCE_ROOT';
+    private const LEXICAL_RESOURCE_ROOT_FILTER = 'language_fts_playground_lexical_resource_root';
 
     private static ?Language_FTS_Playground_Storage_Interface $storage = null;
     private static ?Language_FTS_Playground_Analyzer $analyzer = null;
@@ -62,23 +65,35 @@ final class Language_FTS_Playground_Plugin
             return;
         }
 
-        $stored_schema = (string) get_option(self::SCHEMA_OPTION, '');
-        $stored_analyzer = (string) get_option(self::ANALYZER_OPTION, '');
-        $schema_changed = $stored_schema !== self::schema_version();
-        $analyzer_changed = $stored_analyzer !== self::analyzer_version();
-
-        if (!$schema_changed && !$analyzer_changed) {
-            return;
-        }
-
         try {
+            $lexical_resource_root = self::lexical_resource_root();
+            $lexical_pack_fingerprint = (new Language_FTS_Playground_Lexical_Profile_Repository($lexical_resource_root))->pack_fingerprint();
+            $stored_schema = (string) get_option(self::SCHEMA_OPTION, '');
+            $stored_analyzer = (string) get_option(self::ANALYZER_OPTION, '');
+            $stored_lexical_pack_fingerprint = (string) get_option(self::LEXICAL_PACK_FINGERPRINT_OPTION, '');
+            $schema_changed = $stored_schema !== self::schema_version();
+            $analyzer_changed = $stored_analyzer !== self::analyzer_version();
+            $lexical_pack_changed = $stored_lexical_pack_fingerprint !== $lexical_pack_fingerprint;
+
+            if (!$schema_changed && !$analyzer_changed && !$lexical_pack_changed) {
+                return;
+            }
+
             self::storage()->install();
             self::update_option_value(self::SCHEMA_OPTION, self::schema_version());
             self::update_option_value(self::ANALYZER_OPTION, self::analyzer_version());
+            self::update_option_value(self::LEXICAL_PACK_FINGERPRINT_OPTION, $lexical_pack_fingerprint);
             self::set_rebuild_required(true);
-            self::record_status(__('Index schema or analyzer changed; rebuild required.', 'language-fts-playground'));
+            self::record_status(
+                __('Index schema, analyzer, or lexical resource packs changed; rebuild required.', 'language-fts-playground'),
+                null,
+                [
+                    'lexical_resource_root' => $lexical_resource_root,
+                    'lexical_pack_fingerprint' => $lexical_pack_fingerprint,
+                ]
+            );
         } catch (Throwable $throwable) {
-            self::record_error(__('Could not install or upgrade the Language FTS index schema.', 'language-fts-playground'), $throwable);
+            self::record_error(__('Could not inspect or upgrade the Language FTS analyzer resources.', 'language-fts-playground'), $throwable);
         }
     }
 
@@ -98,10 +113,44 @@ final class Language_FTS_Playground_Plugin
     public static function analyzer(): Language_FTS_Playground_Analyzer
     {
         if (self::$analyzer === null) {
-            self::$analyzer = new Language_FTS_Playground_Analyzer();
+            self::$analyzer = new Language_FTS_Playground_Analyzer(
+                new Language_FTS_Playground_Lexical_Profile_Repository(self::lexical_resource_root())
+            );
         }
 
         return self::$analyzer;
+    }
+
+    public static function default_lexical_resource_root(): string
+    {
+        return Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root();
+    }
+
+    public static function lexical_resource_root(): string
+    {
+        $default_root = self::default_lexical_resource_root();
+        $root = $default_root;
+        $constant_value = defined(self::LEXICAL_RESOURCE_ROOT_CONSTANT)
+            ? constant(self::LEXICAL_RESOURCE_ROOT_CONSTANT)
+            : null;
+
+        if (is_string($constant_value) && trim($constant_value) !== '') {
+            $root = $constant_value;
+        }
+
+        if (function_exists('apply_filters')) {
+            $filtered = apply_filters(self::LEXICAL_RESOURCE_ROOT_FILTER, $root, $default_root);
+            if (is_string($filtered) && trim($filtered) !== '') {
+                $root = $filtered;
+            }
+        }
+
+        return Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+    }
+
+    public static function lexical_pack_fingerprint(): string
+    {
+        return (new Language_FTS_Playground_Lexical_Profile_Repository(self::lexical_resource_root()))->pack_fingerprint();
     }
 
     public static function indexer(): Language_FTS_Playground_Indexer
@@ -509,12 +558,19 @@ final class Language_FTS_Playground_Plugin
         echo '<h2>' . esc_html__('Lexical pack status', 'language-fts-playground') . '</h2>';
 
         try {
+            $resource_root = self::lexical_resource_root();
+            echo '<p>' . esc_html__('Resource root:', 'language-fts-playground') . ' <code>' . esc_html($resource_root) . '</code></p>';
+
             require_once __DIR__ . '/LexicalPackValidator.php';
-            $report = (new Language_FTS_Playground_Lexical_Pack_Validator())->validate_all();
+            $report = (new Language_FTS_Playground_Lexical_Pack_Validator($resource_root))->validate_all();
         } catch (Throwable $throwable) {
             echo '<p>' . esc_html(sprintf(__('Could not validate lexical packs: %s', 'language-fts-playground'), $throwable->getMessage())) . '</p>';
 
             return;
+        }
+
+        foreach (array_values(array_map('strval', (array) ($report['warnings'] ?? []))) as $warning) {
+            echo '<p><strong>' . esc_html__('Warning:', 'language-fts-playground') . '</strong> ' . esc_html($warning) . '</p>';
         }
 
         $languages = isset($report['languages']) && is_array($report['languages']) ? $report['languages'] : [];
