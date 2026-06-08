@@ -15,6 +15,9 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     /** @var array<string,array<string,array<int,int>>> */
     private array $postings = [];
 
+    /** @var array<string,array<string,array<int,int[]>>> */
+    private array $positions = [];
+
     public function install(): void
     {
     }
@@ -23,6 +26,7 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     {
         $this->documents = [];
         $this->postings = [];
+        $this->positions = [];
     }
 
     public function replace_document(
@@ -31,7 +35,8 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         string $title,
         string $status,
         int $document_length,
-        array $term_frequencies
+        array $term_frequencies,
+        array $term_positions
     ): void {
         $this->delete_document($post_id);
         $this->documents[$post_id] = [
@@ -44,7 +49,9 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         ];
 
         foreach ($term_frequencies as $term => $tf) {
-            $this->postings[$language][(string) $term][$post_id] = max(1, (int) $tf);
+            $term = (string) $term;
+            $this->postings[$language][$term][$post_id] = max(1, (int) $tf);
+            $this->positions[$language][$term][$post_id] = array_values(array_map('intval', $term_positions[$term] ?? []));
         }
     }
 
@@ -54,8 +61,10 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         foreach ($this->postings as $language => $terms) {
             foreach ($terms as $term => $postings) {
                 unset($postings[$post_id]);
+                unset($this->positions[$language][$term][$post_id]);
                 if ($postings === []) {
                     unset($this->postings[$language][$term]);
+                    unset($this->positions[$language][$term]);
                 } else {
                     $this->postings[$language][$term] = $postings;
                 }
@@ -74,6 +83,50 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         }
 
         return $result;
+    }
+
+    public function fetch_positions(string $language, array $terms, array $post_ids): array
+    {
+        $post_id_lookup = [];
+        foreach ($post_ids as $post_id) {
+            $post_id_lookup[(int) $post_id] = true;
+        }
+
+        $result = [];
+        foreach ($terms as $term) {
+            $term = (string) $term;
+            foreach ($this->positions[$language][$term] ?? [] as $post_id => $positions) {
+                if (isset($post_id_lookup[(int) $post_id])) {
+                    $result[$term][(int) $post_id] = $positions;
+                }
+            }
+        }
+
+        return $result;
+    }
+
+    public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array
+    {
+        $min_length = max(1, strlen($term) - max(0, $max_distance));
+        $max_length = strlen($term) + max(0, $max_distance);
+        $limit = max(1, $limit);
+        $terms = array_keys($this->postings[$language] ?? []);
+        sort($terms, SORT_STRING);
+
+        $candidates = [];
+        foreach ($terms as $candidate) {
+            $length = strlen($candidate);
+            if ($length < $min_length || $length > $max_length) {
+                continue;
+            }
+
+            $candidates[] = $candidate;
+            if (count($candidates) >= $limit) {
+                break;
+            }
+        }
+
+        return $candidates;
     }
 
     public function fetch_document_lengths(string $language, array $post_ids): array
@@ -349,6 +402,57 @@ test_case('ranks higher term frequency first', function (): void {
     assert_true(count($results) >= 2, 'Both English documents match.');
     assert_same(10, $results[0]['post_id'], 'The denser document ranks first.');
     assert_true($results[0]['score'] > $results[1]['score'], 'BM25 score reflects term frequency.');
+});
+
+test_case('quoted phrase search requires adjacent ordered analyzer positions', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(20, 'en', 'Adjacent', '<p>Searching pages stay adjacent.</p>'));
+    $indexer->index_post(fixture_post(21, 'en', 'Reversed', '<p>Pages stay searching in reverse order.</p>'));
+    $indexer->index_post(fixture_post(22, 'en', 'Separated', '<p>Searching useful pages are separated.</p>'));
+
+    assert_same([20], array_column($searcher->search('"search pages"', 'en'), 'post_id'), 'Quoted phrases require adjacent ordered analyzer keys.');
+});
+
+test_case('quoted phrase search covers alt text without crossing excluded markup noise', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(30, 'en', 'Alt phrase', '<p>Visible prelude.</p><img alt="silver falcon" />'));
+    $indexer->index_post(fixture_post(31, 'en', 'Markup gap', '<p>silver</p><script>ignored markup</script><p>falcon</p>'));
+
+    assert_same([30], array_column($searcher->search('"silver falcon"', 'en'), 'post_id'), 'Phrases can match inside image alt text but not across skipped script/style/comment/template noise.');
+});
+
+test_case('fuzzy suffix matches one edit typo only when opted in', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(40, 'en', 'Orchard', '<p>orchard meadow</p>'));
+
+    assert_same([], $searcher->search('orchrd', 'en'), 'Typo tolerance is opt-in and plain typos stay exact.');
+    assert_same([40], array_column($searcher->search('orchrd~', 'en'), 'post_id'), 'A one-edit typo matches with the fuzzy suffix.');
+});
+
+test_case('fuzzy suffix rejects short noisy terms and ranks below exact matches', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(50, 'en', 'Exact orchard', '<p>orchard trail</p>'));
+    $indexer->index_post(fixture_post(51, 'en', 'Fuzzy neighbor', '<p>orchart trail trail trail trail</p>'));
+    $indexer->index_post(fixture_post(52, 'en', 'Short bait', '<p>bus stop</p>'));
+
+    assert_same([], $searcher->search('bis~', 'en'), 'Short fuzzy terms are rejected to avoid noisy matches.');
+    assert_same([50, 51], array_column($searcher->search('orchard~', 'en'), 'post_id'), 'Exact matches rank ahead of fuzzy one-edit neighbors.');
 });
 
 $failures = 0;

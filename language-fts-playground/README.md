@@ -20,8 +20,11 @@ posts and rebuilds the index.
 The seeded posts cover:
 
 - English visible text: search `orchard` in English.
+- English phrase search: search `"orchard path"` in English for adjacent visible terms.
+- English fuzzy search: search `orchrd~` in English to match the one-edit typo against `orchard`.
 - English demo inflection keys: search `search` in English for visible `searching`, `searched`, and `searches`; search `story` for image alt text containing `stories`.
 - English image alt text: search `falconalt` in English.
+- English image alt phrase search: search `"falconalt stories"` in English.
 - Markup/CSS/script/comment noise: search `ghostmarkup` in English and expect no matches.
 - Polish folding: search `lodz` in Polish for content containing `Łódź`.
 - Polish inflection keys: search `polska` or `partycja` in Polish for `polskiej partycji`.
@@ -39,6 +42,12 @@ The analyzer keeps exact terms and adds a small set of language-scoped demo keys
 - Polish folds diacritics and adds the existing conservative long-word suffix keys, including `polska`/`polskiej`, `partycja`/`partycji`, `wyszukiwanie`/`wyszukiwania`, and `lodz`/`Łódź`.
 - German folds `ä`, `ö`, `ü`, and `ß` to `ae`, `oe`, `ue`, and `ss`, then adds conservative keys for long demo forms such as `deutsch`/`deutschen`/`deutscher`/`deutsche`, `fuehrung`/`Führungen`, and `suche`/`suchen`.
 - Short/common terms stay exact in every language to reduce noisy matches.
+
+## Query Behavior
+
+- Quoted phrases such as `"orchard path"` require adjacent ordered analyzer keys. Phrase positions are stored on ordinary posting rows as JSON and keep gaps between title, excerpt, content segments, image alt text, and skipped markup/script/style/comment/template noise.
+- A trailing `~` enables fuzzy matching for a single term, such as `orchrd~`. Fuzzy matching uses PHP `levenshtein()` with one edit, a minimum analyzed term length of four characters, and a bounded candidate set of 128 terms loaded by language and term length.
+- Exact matches keep the normal BM25 score path. Fuzzy-only matches receive a score multiplier and sort below exact matches for the same fuzzy query.
 
 ## Playground Blueprint
 
@@ -69,4 +78,5 @@ relative ordering inside one query and one language partition, not for comparing
 scores across languages or unrelated queries. The analyzer folds only the
 language behavior needed for the demo, including conservative English, Polish,
 and German suffix-key generators. It does not implement full stemming,
-lemmatization, synonyms, phrase search, typo tolerance, or multilingual fallback.
+lemmatization, synonyms, Damerau transposition matching, configurable fuzzy
+limits, or multilingual fallback.

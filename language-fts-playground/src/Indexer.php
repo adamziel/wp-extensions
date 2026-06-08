@@ -28,9 +28,12 @@ final class Language_FTS_Playground_Indexer
         $language = $this->analyzer->resolve_post_language($post);
         $title = $this->analyzer->normalize_plain_text($this->post_string($post, 'post_title'));
         $excerpt = $this->analyzer->normalize_plain_text($this->post_string($post, 'post_excerpt'));
-        $content = $this->analyzer->extract_searchable_text($this->post_string($post, 'post_content'));
-        $document_text = trim($title . ' ' . $excerpt . ' ' . $content);
-        $terms = $this->analyzer->analyze_text($document_text, $language);
+        $content_segments = $this->analyzer->extract_searchable_segments($this->post_string($post, 'post_content'));
+        $analysis = $this->analyzer->analyze_segments_with_positions(
+            array_merge([$title, $excerpt], $content_segments),
+            $language
+        );
+        $terms = $analysis['terms'];
 
         $term_frequencies = [];
         foreach ($terms as $term) {
@@ -43,7 +46,8 @@ final class Language_FTS_Playground_Indexer
             $title,
             $status,
             count($terms),
-            $term_frequencies
+            $term_frequencies,
+            $analysis['positions']
         );
     }
 

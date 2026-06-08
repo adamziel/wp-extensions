@@ -77,19 +77,23 @@ final class Language_FTS_Playground_Analyzer
 
     public function extract_searchable_text(string $html): string
     {
+        return $this->normalize_plain_text(implode(' ', $this->extract_searchable_segments($html)));
+    }
+
+    /**
+     * @return string[]
+     */
+    public function extract_searchable_segments(string $html): array
+    {
         if (trim($html) === '') {
-            return '';
+            return [];
         }
 
         if (class_exists(DOMDocument::class)) {
-            return $this->extract_searchable_text_with_dom($html);
+            return $this->extract_searchable_segments_with_dom($html);
         }
 
-        if (class_exists('WP_HTML_Processor')) {
-            return $this->extract_searchable_text_with_wp_processor($html);
-        }
-
-        return $this->extract_searchable_text_without_dom($html);
+        return $this->extract_searchable_segments_without_dom($html);
     }
 
     /**
@@ -105,6 +109,61 @@ final class Language_FTS_Playground_Analyzer
      */
     public function analyze_text(string $text, string $language): array
     {
+        return $this->analyze_text_with_positions($text, $language)['terms'];
+    }
+
+    /**
+     * @return array{terms:string[],positions:array<string,int[]>}
+     */
+    public function analyze_text_with_positions(string $text, string $language): array
+    {
+        return $this->analyze_segments_with_positions([$text], $language);
+    }
+
+    /**
+     * @param string[] $segments
+     * @return array{terms:string[],positions:array<string,int[]>}
+     */
+    public function analyze_segments_with_positions(array $segments, string $language): array
+    {
+        $language = $this->canonical_language($language);
+
+        $terms = [];
+        $positions = [];
+        $position = 0;
+        $has_previous_tokens = false;
+
+        foreach ($segments as $segment) {
+            $token_keys = $this->analyze_text_token_keys((string) $segment, $language);
+            if ($token_keys === []) {
+                continue;
+            }
+
+            if ($has_previous_tokens) {
+                $position++;
+            }
+
+            foreach ($token_keys as $keys) {
+                foreach ($keys as $key) {
+                    $terms[] = $key;
+                    $positions[$key][] = $position;
+                }
+                $position++;
+                $has_previous_tokens = true;
+            }
+        }
+
+        return [
+            'terms' => $terms,
+            'positions' => $positions,
+        ];
+    }
+
+    /**
+     * @return array<int,string[]>
+     */
+    public function analyze_text_token_keys(string $text, string $language): array
+    {
         $language = $this->canonical_language($language);
         $text = $this->normalize_plain_text($text);
 
@@ -118,23 +177,28 @@ final class Language_FTS_Playground_Analyzer
             return [];
         }
 
-        $terms = [];
+        $token_keys = [];
         foreach ($matches[0] as $token) {
             $term = $this->normalize_term($token, $language);
             if ($term === '') {
                 continue;
             }
 
+            $keys = [];
             foreach ($this->term_keys($term, $language) as $key) {
                 if ($key === '' || strlen($key) > 255) {
                     continue;
                 }
 
-                $terms[] = $key;
+                $keys[] = $key;
+            }
+
+            if ($keys !== []) {
+                $token_keys[] = array_values(array_unique($keys));
             }
         }
 
-        return $terms;
+        return $token_keys;
     }
 
     public function normalize_term(string $term, string $language): string
@@ -393,6 +457,14 @@ final class Language_FTS_Playground_Analyzer
 
     private function extract_searchable_text_with_dom(string $html): string
     {
+        return $this->normalize_plain_text(implode(' ', $this->extract_searchable_segments_with_dom($html)));
+    }
+
+    /**
+     * @return string[]
+     */
+    private function extract_searchable_segments_with_dom(string $html): array
+    {
         $document = new DOMDocument('1.0', 'UTF-8');
         $previous = libxml_use_internal_errors(true);
         $flags = 0;
@@ -409,10 +481,12 @@ final class Language_FTS_Playground_Analyzer
         libxml_use_internal_errors($previous);
 
         $root = $document->getElementById('language-fts-playground-root') ?? $document;
-        $parts = [];
-        $this->collect_visible_text($root, $parts);
+        $segments = [];
+        $current = '';
+        $this->collect_visible_segments($root, $segments, $current);
+        $this->flush_segment($segments, $current);
 
-        return $this->normalize_plain_text(implode(' ', $parts));
+        return $segments;
     }
 
     /**
@@ -443,6 +517,55 @@ final class Language_FTS_Playground_Analyzer
         foreach ($node->childNodes as $child) {
             $this->collect_visible_text($child, $parts);
         }
+    }
+
+    /**
+     * @param string[] $segments
+     */
+    private function collect_visible_segments(DOMNode $node, array &$segments, string &$current): void
+    {
+        if ($node->nodeType === XML_TEXT_NODE || $node->nodeType === XML_CDATA_SECTION_NODE) {
+            $current .= ' ' . (string) $node->nodeValue;
+            return;
+        }
+
+        if ($node->nodeType === XML_COMMENT_NODE) {
+            $this->flush_segment($segments, $current);
+            return;
+        }
+
+        if ($node instanceof DOMElement) {
+            $tag = strtolower($node->tagName);
+            if (isset($this->skipped_elements[$tag])) {
+                $this->flush_segment($segments, $current);
+                return;
+            }
+
+            if ($tag === 'img' && $node->hasAttribute('alt')) {
+                $this->flush_segment($segments, $current);
+                $alt = $this->normalize_plain_text($node->getAttribute('alt'));
+                if ($alt !== '') {
+                    $segments[] = $alt;
+                }
+                return;
+            }
+        }
+
+        foreach ($node->childNodes as $child) {
+            $this->collect_visible_segments($child, $segments, $current);
+        }
+    }
+
+    /**
+     * @param string[] $segments
+     */
+    private function flush_segment(array &$segments, string &$current): void
+    {
+        $segment = $this->normalize_plain_text($current);
+        if ($segment !== '') {
+            $segments[] = $segment;
+        }
+        $current = '';
     }
 
     private function first_html_language(string $html): ?string
@@ -539,22 +662,45 @@ final class Language_FTS_Playground_Analyzer
 
     private function extract_searchable_text_without_dom(string $html): string
     {
-        // Fallback for unusual PHP builds. Normal Playground/PHP test runs use DOM.
-        $text = preg_replace('/<(script|style|template|noscript|svg|math)\b[^>]*>.*?<\/\1>/is', ' ', $html);
-        $text = preg_replace('/<!--.*?-->/s', ' ', is_string($text) ? $text : $html);
+        return $this->normalize_plain_text(implode(' ', $this->extract_searchable_segments_without_dom($html)));
+    }
+
+    /**
+     * @return string[]
+     */
+    private function extract_searchable_segments_without_dom(string $html): array
+    {
+        // Fallback for PHP builds without DOM, including the php -n test path.
+        $boundary = "\n__LANGUAGE_FTS_PLAYGROUND_BOUNDARY__\n";
+        $text = preg_replace('/<(script|style|template|noscript|svg|math)\b[^>]*>.*?<\/\1>/is', $boundary, $html);
+        $text = preg_replace('/<!--.*?-->/s', $boundary, is_string($text) ? $text : $html);
         $text = is_string($text) ? $text : $html;
 
-        $parts = [];
-        $alt_matches = [];
-        if (preg_match_all('/<img\b[^>]*\salt\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))/iu', $text, $alt_matches, PREG_SET_ORDER)) {
-            foreach ($alt_matches as $match) {
-                $parts[] = $match[1] !== '' ? $match[1] : ($match[2] !== '' ? $match[2] : ($match[3] ?? ''));
+        $chunks = preg_split('/' . preg_quote($boundary, '/') . '/u', $text);
+        $segments = [];
+        foreach (is_array($chunks) ? $chunks : [$text] as $chunk) {
+            $chunk = $this->replace_img_tags_with_alt_text((string) $chunk);
+            $segment = $this->normalize_plain_text(strip_tags($chunk));
+            if ($segment !== '') {
+                $segments[] = $segment;
             }
         }
 
-        array_unshift($parts, strip_tags($text));
+        return $segments;
+    }
 
-        return $this->normalize_plain_text(implode(' ', $parts));
+    private function replace_img_tags_with_alt_text(string $html): string
+    {
+        $replaced = preg_replace_callback(
+            '/<img\b[^>]*\salt\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))[^>]*>/iu',
+            static function (array $match): string {
+                $alt = $match[1] !== '' ? $match[1] : ($match[2] !== '' ? $match[2] : ($match[3] ?? ''));
+                return ' ' . $alt . ' ';
+            },
+            $html
+        );
+
+        return is_string($replaced) ? $replaced : $html;
     }
 
     private function post_id(object $post): int

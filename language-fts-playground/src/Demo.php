@@ -101,9 +101,12 @@ final class Language_FTS_Playground_Demo
     {
         return [
             ['query' => 'orchard', 'language' => 'en', 'label' => 'English visible: orchard'],
+            ['query' => '"orchard path"', 'language' => 'en', 'label' => 'English phrase: orchard path'],
+            ['query' => 'orchrd~', 'language' => 'en', 'label' => 'English fuzzy: orchrd~'],
             ['query' => 'search', 'language' => 'en', 'label' => 'English inflection: search'],
             ['query' => 'story', 'language' => 'en', 'label' => 'English alt inflection: story'],
             ['query' => 'falconalt', 'language' => 'en', 'label' => 'English alt: falconalt'],
+            ['query' => '"falconalt stories"', 'language' => 'en', 'label' => 'English alt phrase: falconalt stories'],
             ['query' => 'ghostmarkup', 'language' => 'en', 'label' => 'Markup noise: ghostmarkup'],
             ['query' => 'lodz', 'language' => 'pl', 'label' => 'Polish fold: lodz'],
             ['query' => 'polska', 'language' => 'pl', 'label' => 'Polish inflection: polska'],

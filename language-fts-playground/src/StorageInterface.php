@@ -9,6 +9,7 @@ interface Language_FTS_Playground_Storage_Interface
 
     /**
      * @param array<string,int> $term_frequencies
+     * @param array<string,int[]> $term_positions
      */
     public function replace_document(
         int $post_id,
@@ -16,7 +17,8 @@ interface Language_FTS_Playground_Storage_Interface
         string $title,
         string $status,
         int $document_length,
-        array $term_frequencies
+        array $term_frequencies,
+        array $term_positions
     ): void;
 
     public function delete_document(int $post_id): void;
@@ -26,6 +28,18 @@ interface Language_FTS_Playground_Storage_Interface
      * @return array<string,array<int,int>>
      */
     public function fetch_postings(string $language, array $terms): array;
+
+    /**
+     * @param string[] $terms
+     * @param int[] $post_ids
+     * @return array<string,array<int,int[]>>
+     */
+    public function fetch_positions(string $language, array $terms, array $post_ids): array;
+
+    /**
+     * @return string[]
+     */
+    public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array;
 
     /**
      * @param int[] $post_ids

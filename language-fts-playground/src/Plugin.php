@@ -47,6 +47,7 @@ final class Language_FTS_Playground_Plugin
         if ((string) get_option('language_fts_playground_schema_version', '') !== LANGUAGE_FTS_PLAYGROUND_VERSION) {
             self::storage()->install();
             update_option('language_fts_playground_schema_version', LANGUAGE_FTS_PLAYGROUND_VERSION);
+            self::rebuild_index();
         }
     }
 
