@@ -1,0 +1,46 @@
+{
+  "manifestVersion": 1,
+  "createdAt": "2026-06-08T10:20:00.000Z",
+  "wordpressVersion": "6.8.1",
+  "phpTarget": "8.3",
+  "enabledPlugins": [
+    {
+      "slug": "static-site-generator",
+      "version": "0.1.0",
+      "entry": "static-site-generator/static-site-generator.php",
+      "name": "Static Site Generator"
+    },
+    {
+      "slug": "universal-wordpress-importer",
+      "version": "0.1.0",
+      "entry": "universal-wordpress-importer/universal-wordpress-importer.php",
+      "name": "Universal WordPress Importer"
+    }
+  ],
+  "staticExportVersion": "0.1.0",
+  "contentSnapshotHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "sourceArchive": {
+    "path": "/_static-dynamic-source/source-2026-06-08T102000Z.zip",
+    "sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "bytes": 7340032,
+    "mediaType": "application/zip",
+    "restoreStrategy": "playground-site-archive"
+  },
+  "site": {
+    "title": "Static Dynamic Fixture",
+    "homeUrl": "https://example.com/"
+  },
+  "sourceProfile": {
+    "type": "wordpress",
+    "originalSourcePath": "/wordpress"
+  },
+  "adminChecks": {
+    "seededContentTitles": [
+      "About the Static Demo"
+    ],
+    "pluginSlugs": [
+      "static-site-generator",
+      "universal-wordpress-importer"
+    ]
+  }
+}
