@@ -217,36 +217,63 @@ test_case('normalizes supported languages deterministically', function (): void 
 
     assert_same(['orchard'], $analyzer->analyze_text('ORCHARD', 'en'), 'English terms are lowercased.');
     assert_same(['lodz'], $analyzer->analyze_text('Łódź', 'pl'), 'Polish diacritics are folded.');
-    assert_same(['fuer', 'fuehrung', 'strasse'], $analyzer->analyze_text('für Führung Straße', 'de'), 'German umlauts are folded.');
+    assert_same('mueller', $analyzer->normalize_term('Müller', 'de'), 'German umlauts are folded.');
+    assert_same('strasse', $analyzer->normalize_term('Straße', 'de'), 'German sharp s is folded.');
 });
 
-test_case('adds conservative English inflection keys without noisy stems', function (): void {
+test_case('removes English stopwords and stems common English forms conservatively', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
 
-    assert_query_terms_overlap($analyzer, 'en', 'searching searched searches', 'search', 'English search forms share a demo suffix key.');
-    assert_query_terms_overlap($analyzer, 'en', 'stories', 'story', 'English y/ies plural forms share a demo suffix key.');
-    assert_query_terms_overlap($analyzer, 'en', 'opening opened', 'open', 'English long regular verb forms share a demo suffix key.');
-    assert_query_terms_do_not_overlap($analyzer, 'en', 'running runner', 'run', 'Doubled-consonant run forms stay exact without a stem lexicon.');
+    assert_same([], $analyzer->analyze_text('the and of to in a an is are was were by for with', 'en'), 'Common English stopwords are not indexed.');
+    assert_same(['runner'], $analyzer->analyze_text("the runner's and of", 'en'), 'English possessive noise and stopwords are removed.');
+    assert_query_terms_overlap($analyzer, 'en', 'searching searched searches', 'search', 'English regular verb forms share a stem key.');
+    assert_query_terms_overlap($analyzer, 'en', 'stories skies', 'story sky', 'English y/ies plural forms share stem keys.');
+    assert_query_terms_overlap($analyzer, 'en', 'making baked boxes buses', 'make bake box bus', 'English dropped-e and es plural forms share stem keys.');
+    assert_query_terms_overlap($analyzer, 'en', 'running stopped', 'run stop', 'English doubled-consonant verb forms are guarded and stemmed.');
+    assert_query_terms_overlap($analyzer, 'en', 'children people', 'child person', 'Guarded English irregular examples share stem keys.');
+    assert_query_terms_do_not_overlap($analyzer, 'en', 'runner', 'run', 'Agent nouns do not collapse to short verb stems.');
+    assert_query_terms_do_not_overlap($analyzer, 'en', 'university', 'universe', 'English y-ending words are not broadly conflated.');
     assert_same(['news', 'bus', 'analysis'], $analyzer->analyze_text('news bus analysis', 'en'), 'Sensitive English words remain exact.');
 });
 
-test_case('adds conservative German inflection keys without broad short-token stems', function (): void {
+test_case('removes German stopwords and stems German forms conservatively', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
 
-    assert_query_terms_overlap($analyzer, 'de', 'deutschen deutscher deutsche', 'deutsch', 'German adjective forms share a demo suffix key.');
-    assert_query_terms_overlap($analyzer, 'de', 'Führungen', 'fuehrung', 'German plural after umlaut folding shares a demo suffix key.');
-    assert_query_terms_overlap($analyzer, 'de', 'suchen', 'suche', 'German safe n-suffix form shares a demo suffix key.');
-    assert_same(['der', 'die', 'das', 'im', 'zu', 'am'], $analyzer->analyze_text('der die das im zu am', 'de'), 'Short German function words remain exact.');
+    assert_same([], $analyzer->analyze_text('der die das und in im zu am fuer von mit ein eine einer', 'de'), 'Common German stopwords are not indexed.');
+    assert_query_terms_overlap($analyzer, 'de', 'deutschen deutscher deutsche deutsches', 'deutsch', 'German adjective forms share a stem key.');
+    assert_query_terms_overlap($analyzer, 'de', 'schnelle schnellen schneller schnellem', 'schnell', 'German adjective suffixes are normalized.');
+    assert_query_terms_overlap($analyzer, 'de', 'Führungen Straßen Kindern', 'fuehrung strasse kind', 'German noun plurals after folding share stem keys.');
+    assert_query_terms_overlap($analyzer, 'de', 'Bäume Häuser', 'baum haus', 'German umlauted noun plurals share conservative singular keys.');
+    assert_query_terms_overlap($analyzer, 'de', 'spielen spielte gespielt', 'spiel', 'German common verb endings and ge- participles share stem keys.');
+    assert_query_terms_do_not_overlap($analyzer, 'de', 'gespielt', 'gespiel', 'German ge-participles do not add noisy intermediate stems.');
+    assert_query_terms_do_not_overlap($analyzer, 'de', 'artig', 'art', 'German ig-adjectives do not collapse to short nouns.');
+    assert_same(['arm', 'arme'], $analyzer->analyze_text('arm arme', 'de'), 'Short German tokens stay guarded from broad stemming.');
 });
 
-test_case('adds conservative Polish inflection keys without broad short-token stems', function (): void {
+test_case('removes Polish stopwords and stems Polish forms conservatively', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
-    $document_text = 'polskiej partycji wyszukiwania';
+    $document_text = 'polskiej polskimi partycji partiami wyszukiwania wyszukiwarkach fotografiami';
 
+    assert_same([], $analyzer->analyze_text('w i oraz na do z ze ma pod po dla', 'pl'), 'Common Polish stopwords are not indexed.');
     assert_query_terms_overlap($analyzer, 'pl', $document_text, 'polska', 'Polish adjective form shares a key with its inflected form.');
     assert_query_terms_overlap($analyzer, 'pl', $document_text, 'partycja', 'Polish noun form shares a key with its inflected form.');
     assert_query_terms_overlap($analyzer, 'pl', $document_text, 'wyszukiwanie', 'Polish verbal noun form shares a key with its inflected form.');
-    assert_same(['ma', 'w', 'do'], $analyzer->analyze_text('ma w do', 'pl'), 'Very short Polish tokens are not broadened into noisy stems.');
+    assert_query_terms_overlap($analyzer, 'pl', 'domami domach domem domu', 'dom', 'Short but meaningful Polish nouns keep guarded stems.');
+    assert_query_terms_overlap($analyzer, 'pl', 'zielonymi zielonego zielonych', 'zielony', 'Polish adjective endings share conservative stem keys.');
+    assert_same(['ul', 'rok'], $analyzer->analyze_text('ul w rok i', 'pl'), 'Short non-stopword Polish tokens remain exact.');
+    assert_query_terms_do_not_overlap($analyzer, 'pl', 'rama', 'ram', 'Polish short stems are guarded from broad final-vowel trimming.');
+});
+
+test_case('uses one analyzer path for indexed documents and queries with stopwords', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(20, 'en', 'Stopword path', '<p>The orchard and the running paths are visible.</p>'));
+
+    assert_same([], $searcher->search('the and of', 'en'), 'Stopword-only English queries produce no matches.');
+    assert_same([20], array_column($searcher->search('the run and orchard', 'en'), 'post_id'), 'Mixed English queries use the same stem and stopword keys as indexing.');
 });
 
 test_case('covers visible, alt, markup, and partition behavior across supported languages', function (): void {
@@ -295,11 +322,11 @@ test_case('covers visible, alt, markup, and partition behavior across supported 
             'title' => 'German matrix',
             'visible_query' => 'deutsch',
             'alt_query' => 'fuehrung',
-            'fold_query' => 'fuer',
+            'fold_query' => 'strasse',
             'noise_query' => 'ghostgerman',
             'content' =>
                 '<article class="ghostgerman" id="ghostgerman">' .
-                '<p>Die deutschen Beispiele zeigen Führungen und suchen nach sichtbaren Treffern. Foreign bait: searching polskiej.</p>' .
+                '<p>Die deutschen Beispiele zeigen Führungen und Straßen beim Suchen nach sichtbaren Treffern. Foreign bait: searching polskiej.</p>' .
                 '<img alt="deutscher Hinweis für Führung" />' .
                 '<style>.ghostgerman{content:"ghostgerman";}</style>' .
                 '<script>const ghostgerman = true;</script>' .
@@ -332,6 +359,32 @@ test_case('covers visible, alt, markup, and partition behavior across supported 
             assert_same([], $searcher->search($case['visible_query'], $partition), "{$language} visible query does not leak into {$partition}.");
             assert_same([], $searcher->search($case['alt_query'], $partition), "{$language} alt query does not leak into {$partition}.");
         }
+    }
+});
+
+test_case('keeps seeded demo sample searches aligned with analyzer behavior', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    foreach (Language_FTS_Playground_Demo::demo_posts() as $offset => $demo_post) {
+        $indexer->index_post(fixture_post(
+            300 + $offset,
+            $demo_post['language'],
+            $demo_post['title'],
+            $demo_post['content']
+        ));
+    }
+
+    foreach (Language_FTS_Playground_Demo::sample_searches() as $sample) {
+        $results = $searcher->search($sample['query'], $sample['language']);
+        if ($sample['query'] === 'ghostmarkup') {
+            assert_same([], $results, 'The markup-noise sample remains a negative example.');
+            continue;
+        }
+
+        assert_true($results !== [], "Sample search {$sample['label']} returns at least one seeded demo result.");
     }
 });
 

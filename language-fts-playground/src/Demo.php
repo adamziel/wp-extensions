@@ -15,7 +15,7 @@ final class Language_FTS_Playground_Demo
                 'language' => 'en',
                 'content' =>
                     '<!-- wp:paragraph -->' .
-                    '<p class="ghostmarkup" id="ghostmarkup">The orchard path is visible content for the English partition. Searching searched pages and searches stay in the English demo.</p>' .
+                    '<p class="ghostmarkup" id="ghostmarkup">The orchard path is visible content for the English partition. Searching searched pages and searches stay in the English demo. Making baked boxes buses, running stopped examples, and children people exercise the analyzer.</p>' .
                     '<!-- /wp:paragraph -->' .
                     '<!-- wp:image -->' .
                     '<figure class="wp-block-image"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="falconalt stories beside the orchard" /></figure>' .
@@ -31,7 +31,7 @@ final class Language_FTS_Playground_Demo
                 'language' => 'pl',
                 'content' =>
                     '<!-- wp:paragraph -->' .
-                    '<p>Łódź ma widoczny akapit w polskiej partycji wyszukiwania.</p>' .
+                    '<p>Łódź ma widoczny akapit w polskiej partycji wyszukiwania, w domach i z domem, zielonymi fotografiami oraz wyszukiwarkach.</p>' .
                     '<!-- /wp:paragraph -->' .
                     '<!-- wp:image -->' .
                     '<figure class="wp-block-image"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="Łódź na mapie" /></figure>' .
@@ -43,7 +43,7 @@ final class Language_FTS_Playground_Demo
                 'language' => 'de',
                 'content' =>
                     '<!-- wp:paragraph -->' .
-                    '<p>Dieses Beispiel ist für die deutschen Führungen gedacht und hilft beim Suchen in der deutschen Partition.</p>' .
+                    '<p>Dieses Beispiel ist für die deutschen Führungen gedacht und zeigt Straßen, schnelle Hinweise, Bäume, Häuser, Kindern, spielen, spielte und gespielt in der deutschen Partition.</p>' .
                     '<!-- /wp:paragraph -->' .
                     '<!-- wp:image -->' .
                     '<figure class="wp-block-image"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" alt="deutscher Hinweis für Führung" /></figure>' .
@@ -101,16 +101,23 @@ final class Language_FTS_Playground_Demo
     {
         return [
             ['query' => 'orchard', 'language' => 'en', 'label' => 'English visible: orchard'],
-            ['query' => 'search', 'language' => 'en', 'label' => 'English inflection: search'],
-            ['query' => 'story', 'language' => 'en', 'label' => 'English alt inflection: story'],
+            ['query' => 'search', 'language' => 'en', 'label' => 'English stem: search'],
+            ['query' => 'make', 'language' => 'en', 'label' => 'English stem: make'],
+            ['query' => 'run', 'language' => 'en', 'label' => 'English stem: run'],
+            ['query' => 'child', 'language' => 'en', 'label' => 'English irregular: child'],
+            ['query' => 'story', 'language' => 'en', 'label' => 'English alt stem: story'],
             ['query' => 'falconalt', 'language' => 'en', 'label' => 'English alt: falconalt'],
             ['query' => 'ghostmarkup', 'language' => 'en', 'label' => 'Markup noise: ghostmarkup'],
             ['query' => 'lodz', 'language' => 'pl', 'label' => 'Polish fold: lodz'],
-            ['query' => 'polska', 'language' => 'pl', 'label' => 'Polish inflection: polska'],
-            ['query' => 'fuer', 'language' => 'de', 'label' => 'German fold: fuer'],
+            ['query' => 'polska', 'language' => 'pl', 'label' => 'Polish stem: polska'],
+            ['query' => 'dom', 'language' => 'pl', 'label' => 'Polish stem: dom'],
+            ['query' => 'zielony', 'language' => 'pl', 'label' => 'Polish stem: zielony'],
+            ['query' => 'strasse', 'language' => 'de', 'label' => 'German fold: strasse'],
             ['query' => 'fuehrung', 'language' => 'de', 'label' => 'German fold: fuehrung'],
-            ['query' => 'deutsch', 'language' => 'de', 'label' => 'German inflection: deutsch'],
-            ['query' => 'suche', 'language' => 'de', 'label' => 'German inflection: suche'],
+            ['query' => 'deutsch', 'language' => 'de', 'label' => 'German stem: deutsch'],
+            ['query' => 'schnell', 'language' => 'de', 'label' => 'German stem: schnell'],
+            ['query' => 'baum', 'language' => 'de', 'label' => 'German stem: baum'],
+            ['query' => 'spiel', 'language' => 'de', 'label' => 'German stem: spiel'],
         ];
     }
 }
