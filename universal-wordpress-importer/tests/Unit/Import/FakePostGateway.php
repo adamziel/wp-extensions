@@ -377,10 +377,13 @@ final class FakePostGateway implements ImportPostGatewayInterface {
 
 		$this->posts[ $post_id ] = array(
 			'ID'              => $post_id,
-			'post_type'       => 'page',
+			'post_type'       => $this->post_type_for_document( $document ),
 			'post_status'     => $post_status,
 			'post_title'      => $document->get_title(),
 			'post_content'    => $document->get_block_markup(),
+			'post_name'       => $this->slug_for_document( $document ),
+			'post_date'       => $this->post_date_for_document( $document ),
+			'menu_order'      => $this->menu_order_for_document( $document ),
 			'source_item_key' => $document->get_source_item_key(),
 			'content_hash'    => $document->get_content_hash(),
 		);
@@ -835,6 +838,66 @@ final class FakePostGateway implements ImportPostGatewayInterface {
 		$value = preg_replace( '/[^a-z0-9]+/', '-', $value );
 
 		return trim( is_string( $value ) ? $value : '', '-' );
+	}
+
+	/**
+	 * Returns the fake WordPress post type for a prepared document.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return string
+	 */
+	private function post_type_for_document( ImportPreparedDocument $document ) {
+		$metadata  = $document->get_metadata();
+		$post_type = isset( $metadata['wp_post_type'] ) ? trim( (string) $metadata['wp_post_type'] ) : '';
+
+		return 'post' === $post_type ? 'post' : 'page';
+	}
+
+	/**
+	 * Returns a stable fake post slug for a prepared document.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return string
+	 */
+	private function slug_for_document( ImportPreparedDocument $document ) {
+		$metadata = $document->get_metadata();
+
+		if ( isset( $metadata['wp_post_name'] ) && '' !== trim( (string) $metadata['wp_post_name'] ) ) {
+			return trim( (string) $metadata['wp_post_name'] );
+		}
+
+		$seed = isset( $metadata['relative_path'] ) && '' !== trim( (string) $metadata['relative_path'] )
+			? (string) $metadata['relative_path']
+			: $document->get_title();
+		$slug = strtolower( preg_replace( '/[^a-z0-9]+/i', '-', $seed ) );
+		$slug = trim( (string) $slug, '-' );
+
+		return '' === $slug ? 'imported-document' : $slug;
+	}
+
+	/**
+	 * Returns a fake post date for a prepared document.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return string
+	 */
+	private function post_date_for_document( ImportPreparedDocument $document ) {
+		$metadata  = $document->get_metadata();
+		$post_date = isset( $metadata['wp_post_date'] ) ? trim( (string) $metadata['wp_post_date'] ) : '';
+
+		return preg_match( '/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $post_date ) ? $post_date : '';
+	}
+
+	/**
+	 * Returns a fake menu order for a prepared document.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return int
+	 */
+	private function menu_order_for_document( ImportPreparedDocument $document ) {
+		$metadata = $document->get_metadata();
+
+		return isset( $metadata['menu_order'] ) && is_numeric( $metadata['menu_order'] ) ? (int) $metadata['menu_order'] : 0;
 	}
 
 	/**

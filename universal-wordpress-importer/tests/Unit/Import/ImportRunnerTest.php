@@ -5758,6 +5758,208 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Jekyll Markdown posts and pages preserve front matter post metadata.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_jekyll_markdown_posts_and_pages_with_front_matter() {
+		$root = $this->temporary_directory();
+		mkdir( $root . '/_posts' );
+		file_put_contents( $root . '/_config.yml', "title: Static Docs\n" );
+		file_put_contents(
+			$root . '/_posts/2026-06-01-static-dynamic.md',
+			"---\n"
+				. "title: Static Dynamic Release\n"
+				. "date: 2026-06-01 09:30:00\n"
+				. "categories: [Docs, Release]\n"
+				. "tags:\n"
+				. "  - static\n"
+				. "  - cloudflare\n"
+				. "---\n\n"
+				. "# Static Dynamic Release\n\nBody."
+		);
+		file_put_contents(
+			$root . '/about.md',
+			"---\n"
+				. "title: About Docs\n"
+				. "permalink: /about/\n"
+				. "---\n\n"
+				. "# About Docs\n\nAbout page."
+		);
+
+		$session = ImportSession::start_for_source( $root );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts );
+		$this->run_import_until_done( $runner, $session, 10 );
+
+		$posts_by_title = $this->posts_by_title( $posts );
+		$release        = $posts_by_title['Static Dynamic Release'];
+		$about          = $posts_by_title['About Docs'];
+		$release_meta   = $this->store->find_prepared_document( $session->get_id(), $release['source_item_key'] )->get_metadata();
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 'post', $release['post_type'] );
+		$this->assertSame( 'static-dynamic', $release['post_name'] );
+		$this->assertSame( '2026-06-01 09:30:00', $release['post_date'] );
+		$this->assertSame( 'page', $about['post_type'] );
+		$this->assertSame( 'about', $about['post_name'] );
+		$this->assertSame( 'jekyll', $release_meta['markdown_docs_profile'] );
+		$this->assertSame( 'post', $release_meta['markdown_entry_kind'] );
+		$this->assertCount( 2, $release['terms']['category'] );
+		$this->assertCount( 2, $release['terms']['post_tag'] );
+		$this->assertSame( 'docs', $release_meta['remote_terms']['category'][0]['slug'] );
+		$this->assertSame( 'static', $release_meta['remote_terms']['post_tag'][0]['slug'] );
+	}
+
+	/**
+	 * Astro Markdown content and pages import as editable WordPress pages.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_astro_markdown_docs_and_pages_with_profile_slugs() {
+		$root = $this->temporary_directory();
+		mkdir( $root . '/src/content/docs', 0777, true );
+		mkdir( $root . '/src/pages', 0777, true );
+		file_put_contents( $root . '/astro.config.mjs', "export default {};\n" );
+		file_put_contents(
+			$root . '/src/content/docs/getting-started.md',
+			"---\n"
+				. "title: Getting Started\n"
+				. "slug: getting-started\n"
+				. "---\n\n"
+				. "# Getting Started\n\nUse **Markdown** docs."
+		);
+		file_put_contents(
+			$root . '/src/pages/about.md',
+			"---\n"
+				. "title: About Site\n"
+				. "---\n\n"
+				. "# About Site\n\nAstro page."
+		);
+
+		$session = ImportSession::start_for_source( $root );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts );
+		$this->run_import_until_done( $runner, $session, 10 );
+
+		$posts_by_title = $this->posts_by_title( $posts );
+		$doc            = $posts_by_title['Getting Started'];
+		$page           = $posts_by_title['About Site'];
+		$doc_meta       = $this->store->find_prepared_document( $session->get_id(), $doc['source_item_key'] )->get_metadata();
+		$page_meta      = $this->store->find_prepared_document( $session->get_id(), $page['source_item_key'] )->get_metadata();
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 'page', $doc['post_type'] );
+		$this->assertSame( 'getting-started', $doc['post_name'] );
+		$this->assertSame( 'astro', $doc_meta['markdown_docs_profile'] );
+		$this->assertSame( 'docs/getting-started', $doc_meta['markdown_source_path'] );
+		$this->assertSame( 'page', $page['post_type'] );
+		$this->assertSame( 'about', $page_meta['markdown_source_path'] );
+		$this->assertStringContainsString( '<strong>Markdown</strong>', $doc['post_content'] );
+	}
+
+	/**
+	 * Docusaurus MDX imports supported Markdown and placeholders unsupported React components.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_docusaurus_mdx_with_safe_component_placeholders() {
+		$root = $this->temporary_directory();
+		mkdir( $root . '/docs' );
+		file_put_contents( $root . '/docusaurus.config.js', "module.exports = {};\n" );
+		file_put_contents(
+			$root . '/docs/intro.mdx',
+			"---\n"
+				. "title: Intro Docs\n"
+				. "slug: /intro\n"
+				. "sidebar_position: 2\n"
+				. "---\n\n"
+				. "import ApiDemo from '../src/ApiDemo';\n\n"
+				. "# Intro Docs\n\n"
+				. "<ApiDemo endpoint=\"/v1\" />\n\n"
+				. "<Tabs>\n"
+				. "<TabItem value=\"one\">One</TabItem>\n"
+				. "</Tabs>\n\n"
+				. 'Regular **Markdown** stays editable.'
+		);
+
+		$session = ImportSession::start_for_source( $root );
+		$posts   = new FakePostGateway();
+		$this->store->save( $session );
+
+		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts );
+		$this->run_import_until_done( $runner, $session, 10 );
+
+		$posts_by_title = $this->posts_by_title( $posts );
+		$intro          = $posts_by_title['Intro Docs'];
+		$meta           = $this->store->find_prepared_document( $session->get_id(), $intro['source_item_key'] )->get_metadata();
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 'page', $intro['post_type'] );
+		$this->assertSame( 'intro', $intro['post_name'] );
+		$this->assertSame( 2, $intro['menu_order'] );
+		$this->assertSame( 'docusaurus', $meta['markdown_docs_profile'] );
+		$this->assertSame( 2, $meta['markdown_mdx_unsupported_component_count'] );
+		$this->assertContains( 'ApiDemo', $meta['markdown_mdx_unsupported_components'] );
+		$this->assertContains( 'Tabs', $meta['markdown_mdx_unsupported_components'] );
+		$this->assertSame( 1, $meta['markdown_mdx_import_export_count'] );
+		$this->assertStringContainsString( 'Unsupported MDX component: ApiDemo', $intro['post_content'] );
+		$this->assertStringContainsString( 'Unsupported MDX component: Tabs', $intro['post_content'] );
+		$this->assertStringContainsString( '<strong>Markdown</strong>', $intro['post_content'] );
+		$this->assertStringNotContainsString( '<ApiDemo', $intro['post_content'] );
+		$this->assertStringNotContainsString( 'import ApiDemo', $intro['post_content'] );
+	}
+
+	/**
+	 * Obsidian vault Markdown wiki links and local assets import through existing pipelines.
+	 *
+	 * @return void
+	 */
+	public function test_runner_imports_obsidian_vault_wiki_links_and_attachments() {
+		$root = $this->temporary_directory();
+		mkdir( $root . '/.obsidian' );
+		mkdir( $root . '/assets' );
+		mkdir( $root . '/docs' );
+		file_put_contents( $root . '/assets/diagram.png', 'image-bytes' );
+		file_put_contents(
+			$root . '/docs/Getting Started.md',
+			"# Getting Started\n\nSee [[Install Guide|install guide]].\n\n![Diagram](../assets/diagram.png)"
+		);
+		file_put_contents(
+			$root . '/docs/Install Guide.md',
+			"# Install Guide\n\nInstall body."
+		);
+
+		$session = ImportSession::start_for_source( $root );
+		$posts   = new FakePostGateway();
+		$media   = new FakeMediaGateway();
+		$this->store->save( $session );
+
+		$runner = new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/', $media );
+		$this->run_import_until_done( $runner, $session, 12 );
+
+		$posts_by_title = $this->posts_by_title( $posts );
+		$getting        = $posts_by_title['Getting Started'];
+		$install        = $posts_by_title['Install Guide'];
+		$meta           = $this->store->find_prepared_document( $session->get_id(), $getting['source_item_key'] )->get_metadata();
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertSame( 2, $posts->count_posts() );
+		$this->assertSame( 1, $media->count_attachments() );
+		$this->assertSame( 'obsidian', $meta['markdown_docs_profile'] );
+		$this->assertSame( 1, $meta['markdown_wiki_link_count'] );
+		$this->assertSame( 'Install Guide', $meta['markdown_wiki_links'][0]['target'] );
+		$this->assertStringContainsString( $posts->get_permalink( $install['ID'] ), $getting['post_content'] );
+		$this->assertStringContainsString( 'https://local.example.test/wp-content/uploads/diagram.png', $getting['post_content'] );
+		$this->assertStringNotContainsString( '[[Install Guide', $getting['post_content'] );
+		$this->assertStringNotContainsString( 'Install%20Guide.md', $getting['post_content'] );
+	}
+
+	/**
 	 * Unsafe direct Markdown image URLs are not emitted as Image blocks.
 	 *
 	 * @return void
@@ -7636,6 +7838,24 @@ exit( 99 );
 		}
 
 		return $posts_by_title;
+	}
+
+	/**
+	 * Runs a session until completion or a deterministic tick limit.
+	 *
+	 * @param ImportRunner  $runner    Runner under test.
+	 * @param ImportSession $session   Session under test.
+	 * @param int           $max_ticks Maximum ticks.
+	 * @return void
+	 */
+	private function run_import_until_done( ImportRunner $runner, ImportSession $session, $max_ticks ) {
+		for ( $tick = 0; $tick < (int) $max_ticks; ++$tick ) {
+			$runner->run( $session->get_id() );
+
+			if ( ImportSession::STATUS_DONE === $this->store->find( $session->get_id() )->get_status() ) {
+				return;
+			}
+		}
 	}
 
 	/**
