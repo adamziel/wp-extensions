@@ -988,6 +988,11 @@ function language_fts_import_fixture_path(string $name): string
     return __DIR__ . '/fixtures/lexical-imports/' . $name;
 }
 
+function language_fts_eval_fixture_path(string $name): string
+{
+    return __DIR__ . '/fixtures/lexical-eval/' . $name;
+}
+
 /**
  * @param array<string,string> $options
  * @return array{exit_code:int,output:string}
@@ -1046,6 +1051,60 @@ function run_language_fts_validator(array $options = []): array
         'exit_code' => $exit_code,
         'output' => implode("\n", $lines),
     ];
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_evaluator(string $fixture_path, array $options = [], bool $no_ini = false): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+    ];
+    if ($no_ini) {
+        $command[] = '-n';
+    }
+    $command[] = escapeshellarg(__DIR__ . '/../tools/evaluate-lexical-pack.php');
+    $command[] = escapeshellarg($fixture_path);
+
+    foreach ($options as $key => $value) {
+        $option = '--' . str_replace('_', '-', (string) $key);
+        if ($value === true) {
+            $command[] = escapeshellarg($option);
+        } elseif ($value !== false && $value !== null) {
+            $command[] = escapeshellarg($option . '=' . (string) $value);
+        }
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @param array<string,mixed> $fixture
+ */
+function write_language_fts_temp_eval_fixture(array $fixture): string
+{
+    $path = sys_get_temp_dir() . '/language-fts-eval-fixture-' . str_replace('.', '-', uniqid('', true)) . '.json';
+    $json = json_encode($fixture, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    assert_true(is_string($json), 'Temporary evaluator fixture JSON is encoded.');
+    file_put_contents($path, $json . "\n");
+
+    return $path;
+}
+
+function remove_language_fts_temp_file(string $path): void
+{
+    if (is_file($path)) {
+        unlink($path);
+    }
 }
 
 /**
@@ -1554,6 +1613,142 @@ test_case('lexical pack validator CLI exits nonzero for a bad temp resource root
     }
 });
 
+test_case('lexical pack evaluator passes the committed fixture with quality gates', function (): void {
+    $result = run_language_fts_evaluator(language_fts_eval_fixture_path('demo-suite.json'), [
+        'min_recall_at_5' => '1.0',
+        'min_precision_at_5' => '0.2',
+        'min_mrr' => '1.0',
+        'min_ndcg_at_5' => '1.0',
+    ]);
+
+    assert_same(0, $result['exit_code'], 'Committed lexical relevance fixture passes. Output: ' . $result['output']);
+    assert_contains_text('Evaluation passed.', $result['output'], 'Human evaluator output reports success.');
+    assert_contains_text('recall@5: 1.0000', $result['output'], 'Human evaluator output includes recall@5.');
+    assert_contains_text('precision@5: 0.2000', $result['output'], 'Human evaluator output includes precision@5.');
+    assert_contains_text('MRR: 1.0000', $result['output'], 'Human evaluator output includes MRR.');
+    assert_contains_text('nDCG@5: 1.0000', $result['output'], 'Human evaluator output includes nDCG@5.');
+});
+
+test_case('lexical pack evaluator JSON is deterministic and parseable', function (): void {
+    $fixture = language_fts_eval_fixture_path('demo-suite.json');
+    $first = run_language_fts_evaluator($fixture, ['json' => true]);
+    $second = run_language_fts_evaluator($fixture, ['json' => true]);
+
+    assert_same(0, $first['exit_code'], 'Evaluator JSON CLI exits successfully. Output: ' . $first['output']);
+    assert_same($first['output'], $second['output'], 'Evaluator JSON output is deterministic across runs.');
+
+    $decoded = json_decode($first['output'], true);
+    assert_true(is_array($decoded), 'Evaluator JSON output is parseable.');
+    assert_same(true, $decoded['passed'] ?? null, 'Evaluator JSON marks the committed fixture as passing.');
+    assert_same(6, $decoded['query_count'] ?? null, 'Evaluator JSON reports the committed fixture query count.');
+    assert_same(1, $decoded['metrics']['recall_at_5'] ?? null, 'Evaluator JSON reports deterministic recall@5.');
+    assert_same(['en', 'pl', 'de'], $decoded['enabled_languages'] ?? null, 'Evaluator JSON reports enabled bundled languages in profile order.');
+});
+
+test_case('lexical pack evaluator fails too-strict metric thresholds clearly', function (): void {
+    $result = run_language_fts_evaluator(language_fts_eval_fixture_path('demo-suite.json'), [
+        'min_precision_at_5' => '0.21',
+    ]);
+
+    assert_true($result['exit_code'] !== 0, 'Too-strict evaluator thresholds exit nonzero.');
+    assert_contains_text('precision@5', $result['output'], 'Threshold failure names the failing metric.');
+    assert_contains_text('below minimum 0.2100', $result['output'], 'Threshold failure reports the configured minimum.');
+    assert_contains_text('Evaluation failed:', $result['output'], 'Human evaluator output reports failure.');
+});
+
+test_case('lexical pack evaluator reports misses and unexpected top-k hits', function (): void {
+    $fixture_path = write_language_fts_temp_eval_fixture([
+        'name' => 'Miss and unexpected hit fixture',
+        'thresholds' => [
+            'recall_at_5' => 1.0,
+        ],
+        'documents' => [
+            [
+                'id' => 'expected',
+                'language' => 'en',
+                'title' => 'Expected document',
+                'content' => '<p>This document deliberately lacks the query term.</p>',
+            ],
+            [
+                'id' => 'bait',
+                'language' => 'en',
+                'title' => 'Orchard bait',
+                'content' => '<p>orchard appears in the wrong document.</p>',
+            ],
+        ],
+        'queries' => [
+            [
+                'query' => 'orchard',
+                'language' => 'en',
+                'relevant' => ['expected'],
+                'irrelevant' => ['bait'],
+            ],
+        ],
+    ]);
+
+    try {
+        $result = run_language_fts_evaluator($fixture_path);
+
+        assert_true($result['exit_code'] !== 0, 'Misses plus unexpected hits fail when recall is gated.');
+        assert_contains_text('missing relevant ids: expected', $result['output'], 'Evaluator human output lists missed relevant ids.');
+        assert_contains_text('unexpected top-5 ids: bait', $result['output'], 'Evaluator human output lists unexpected top-k ids.');
+        assert_contains_text('Unexpected top-5 hit for query "orchard": bait', $result['output'], 'Evaluator failure summary names the unexpected hit.');
+    } finally {
+        remove_language_fts_temp_file($fixture_path);
+    }
+});
+
+test_case('lexical pack evaluator uses a custom resource root', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\nbeta\tbeta\tfixture\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\nalpha\tbeta\tquery_to_index\t0.8\tfixture-evaluator-custom-root\n"
+    );
+    $fixture_path = write_language_fts_temp_eval_fixture([
+        'name' => 'Custom evaluator root fixture',
+        'documents' => [
+            [
+                'id' => 'custom-target',
+                'language' => 'xx',
+                'title' => 'Custom target',
+                'content' => '<p>beta appears only through the custom lexical pack.</p>',
+            ],
+        ],
+        'queries' => [
+            [
+                'query' => 'alpha',
+                'language' => 'xx',
+                'relevant' => ['custom-target'],
+            ],
+        ],
+    ]);
+
+    try {
+        $without_custom_root = run_language_fts_evaluator($fixture_path, [
+            'min_recall_at_5' => '1.0',
+        ]);
+        assert_true($without_custom_root['exit_code'] !== 0, 'The custom-root fixture does not pass against bundled resources.');
+        assert_contains_text('missing relevant ids: custom-target', $without_custom_root['output'], 'Bundled resources miss the custom synonym target.');
+
+        $with_custom_root = run_language_fts_evaluator($fixture_path, [
+            'resource_root' => $root,
+            'min_recall_at_5' => '1.0',
+        ]);
+        assert_same(0, $with_custom_root['exit_code'], 'The evaluator consumes the custom resource root. Output: ' . $with_custom_root['output']);
+        assert_contains_text('Resource root: ' . Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root), $with_custom_root['output'], 'Human output reports the custom resource root.');
+        assert_contains_text('Evaluation passed.', $with_custom_root['output'], 'The custom resource root changes analyzer synonym behavior for the fixture.');
+    } finally {
+        remove_language_fts_temp_file($fixture_path);
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack evaluator works under php -n', function (): void {
+    $result = run_language_fts_evaluator(language_fts_eval_fixture_path('demo-suite.json'), [], true);
+
+    assert_same(0, $result['exit_code'], 'Evaluator runs under php -n. Output: ' . $result['output']);
+    assert_contains_text('Evaluation passed.', $result['output'], 'php -n evaluator output reports success.');
+});
+
 test_case('membership importer compiles deterministic synsets and lexemes', function (): void {
     $output_dir = create_language_fts_temp_dir('language-fts-membership-import');
 
@@ -1830,11 +2025,14 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('OpenThesaurus', $docs, 'Lexical docs mention OpenThesaurus source caveats.');
     assert_contains_text('plWordNet', $docs, 'Lexical docs mention plWordNet source caveats.');
     assert_contains_text('validate-lexical-packs.php', $docs, 'Lexical docs describe the validation CLI.');
+    assert_contains_text('evaluate-lexical-pack.php', $docs, 'Lexical docs describe the relevance evaluator CLI.');
     assert_contains_text('--max-synset-size', $docs, 'Lexical docs describe synset size thresholds.');
+    assert_contains_text('recall@5', $docs, 'Lexical docs describe evaluator relevance metrics.');
     assert_contains_text('Broad synsets are dangerous', $docs, 'Lexical docs explain broad synset search-quality risk.');
     assert_contains_text('Lexical pack status', $docs, 'Lexical docs explain the admin pack status table.');
     assert_contains_text('seed data unless', $readme, 'README keeps the shipped-data limitation explicit.');
     assert_contains_text('validate-lexical-packs.php', $readme, 'README documents the validation CLI.');
+    assert_contains_text('evaluate-lexical-pack.php', $readme, 'README documents the relevance evaluator CLI.');
     assert_contains_text('curated_seed', $readme, 'README confirms current shipped packs are curated seed data.');
 });
 

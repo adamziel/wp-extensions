@@ -1,0 +1,128 @@
+{
+  "name": "Bundled lexical seed relevance demo",
+  "source": "Language FTS Playground committed CI fixture for compact runtime packs.",
+  "language_pack_expectations": {
+    "en": "English seed lexemes should preserve exact and profile-backed morphology recall.",
+    "pl": "Polish seed lexemes and synsets should recover search-intent documents without broad false positives.",
+    "de": "German seed folds and lexemes should route auto queries to the German partition."
+  },
+  "thresholds": {
+    "recall_at_5": 1.0,
+    "precision_at_5": 0.2,
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0
+  },
+  "documents": [
+    {
+      "id": "en-orchard",
+      "language": "en",
+      "title": "English orchard guide",
+      "excerpt": "A compact summary for exact English matching.",
+      "content": "<article><p>The orchard guide explains a visible meadow trail.</p></article>",
+      "notes": "Exact English match target."
+    },
+    {
+      "id": "en-story",
+      "language": "en",
+      "title": "English story archive",
+      "content": "<article><p>Searching pages collect careful notes.</p></article>",
+      "image_alt": "historic stories index",
+      "notes": "English profile-backed morphology through stories/story and searchable image alt text."
+    },
+    {
+      "id": "pl-search",
+      "language": "pl",
+      "title": "Polska partycja wyszukiwania",
+      "content": "<article><p>Widoczna polskiej partycji wyszukiwania pokazuje wynik.</p></article>",
+      "notes": "Polish morphology plus search-action synset target."
+    },
+    {
+      "id": "pl-photo",
+      "language": "pl",
+      "title": "Galeria fotografii",
+      "content": "<article><p>Zielonego domu i fotografii nie wolno laczyc z katalogiem informacji.</p></article>",
+      "notes": "False-positive guard document for broad Polish concepts."
+    },
+    {
+      "id": "de-fuehrung",
+      "language": "de",
+      "title": "Deutsche Fuehrung",
+      "content": "<article><p>Die deutschen Beispiele zeigen Führung und schnelle Suche.</p></article>",
+      "notes": "German fold and automatic language routing target."
+    },
+    {
+      "id": "en-polish-bait",
+      "language": "en",
+      "title": "English partition bait",
+      "content": "<article><p>wyszukiwania appears here as literal foreign text and should not satisfy Polish auto routing.</p></article>",
+      "notes": "Cross-language isolation bait."
+    },
+    {
+      "id": "en-german-bait",
+      "language": "en",
+      "title": "English German-signal bait",
+      "content": "<article><p>Führung appears here as literal foreign text and should not satisfy German auto routing.</p></article>",
+      "notes": "Auto-language routing bait."
+    }
+  ],
+  "queries": [
+    {
+      "query": "orchard",
+      "language": "en",
+      "relevant": [
+        "en-orchard"
+      ],
+      "notes": "Exact English recall."
+    },
+    {
+      "query": "story",
+      "language": "en",
+      "relevant": [
+        "en-story"
+      ],
+      "notes": "Profile-backed English morphology and searchable image alt text."
+    },
+    {
+      "query": "polska",
+      "language": "pl",
+      "relevant": [
+        "pl-search"
+      ],
+      "notes": "Polish profile-backed morphology should prefer the search partition and avoid the unrelated photo document."
+    },
+    {
+      "query": "szukanie",
+      "language": "auto",
+      "relevant": [
+        "pl-search"
+      ],
+      "irrelevant": [
+        "pl-photo",
+        "en-polish-bait"
+      ],
+      "notes": "Polish synset recall through szukac -> wyszukiwac with false-positive and cross-language guards."
+    },
+    {
+      "query": "wyszukiwania",
+      "language": "auto",
+      "relevant": [
+        "pl-search"
+      ],
+      "irrelevant": [
+        "en-polish-bait"
+      ],
+      "notes": "Automatic language routing should keep a Polish lexical-form query in the Polish partition."
+    },
+    {
+      "query": "Führung",
+      "language": "auto",
+      "relevant": [
+        "de-fuehrung"
+      ],
+      "irrelevant": [
+        "en-german-bait"
+      ],
+      "notes": "German signal routing and fold-backed matching should avoid the English bait partition."
+    }
+  ]
+}

@@ -140,6 +140,77 @@ Read that table as a provenance and quality signal: current shipped packs are
 `curated_seed` demo data, not comprehensive WordNet, OpenThesaurus, or
 plWordNet databases.
 
+## Relevance Evaluation
+
+Validation proves the compact files are well-formed. Relevance evaluation
+proves a generated pack improves search behavior on a reviewed corpus/query
+fixture before it ships or becomes a custom production root:
+
+```sh
+php language-fts-playground/tools/evaluate-lexical-pack.php \
+  language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json
+
+php language-fts-playground/tools/evaluate-lexical-pack.php \
+  language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json \
+  --json \
+  --min-recall-at-5=1.0 \
+  --min-precision-at-5=0.2 \
+  --min-mrr=1.0 \
+  --min-ndcg-at-5=1.0
+```
+
+Use `--resource-root=/srv/language-packs` to evaluate an external generated
+root. The evaluator is pure PHP, builds an in-memory index with the normal
+analyzer, indexer, and searcher classes, and is expected to run under `php -n`.
+It does not use WordPress runtime functions, database-native FTS, external
+services, or source database formats.
+
+The fixture root is a JSON object:
+
+```json
+{
+  "name": "Reviewed English WordNet smoke suite",
+  "source": "Maintainer-reviewed query set",
+  "language_pack_expectations": {
+    "en": "Imported synsets should recover search-intent documents."
+  },
+  "thresholds": {
+    "recall_at_5": 0.95,
+    "precision_at_5": 0.2,
+    "mrr": 0.9,
+    "ndcg_at_5": 0.9
+  },
+  "documents": [
+    {
+      "id": "doc-search",
+      "language": "en",
+      "title": "Search guide",
+      "excerpt": "Optional summary text.",
+      "content": "<p>Visible searchable HTML.</p>",
+      "image_alt": ["optional image alt text"],
+      "notes": "Optional maintainer notes."
+    }
+  ],
+  "queries": [
+    {
+      "query": "lookup",
+      "language": "auto",
+      "relevant": ["doc-search"],
+      "irrelevant": ["doc-broad-synset-bait"],
+      "notes": "Optional query provenance."
+    }
+  ]
+}
+```
+
+`language` on queries defaults to `auto`. `image_alt` may be a string or an
+array of strings. `searchable_html` can be used when fixture authors want to
+append extra HTML separately from `content`. `relevant` document ids contribute
+to recall@5, precision@5, MRR, and nDCG@5. `irrelevant` ids are guard rails:
+if any of them appear in the top five, the evaluator reports an unexpected hit
+and exits nonzero. Human output lists misses and unexpected top-5 ids per
+query; `--json` emits deterministic machine-readable metrics for CI.
+
 ## Custom Resource Roots
 
 Generated packs do not need to be committed into the plugin directory. Create a
@@ -293,7 +364,11 @@ A real import should happen at build time, not at runtime:
 5. Reduce source synsets or related lexical concepts to canonical-key groups.
 6. Assign conservative query-expansion weights and provenance ids.
 7. Compile groups to `synsets.tsv` with `import-lexical-source.php`.
-8. Run the PHP test harness under normal PHP and `php -n`.
+8. Run `validate-lexical-packs.php` against the generated runtime root.
+9. Run `evaluate-lexical-pack.php` against a relevance fixture with explicit
+   quality gates.
+10. Install the validated root as a custom resource root and rebuild the index.
+11. Run the PHP test harness under normal PHP and `php -n`.
 
 The runtime stays pure PHP and fast because none of this source-specific work
 happens during indexing or search. Queries load only compact local resource

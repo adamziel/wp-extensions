@@ -173,6 +173,30 @@ every other term in the concept; a large or loosely related concept can turn a
 precise query into many weak matches. The threshold options make those cases
 fail in CI before they reach the admin UI or search tests.
 
+Evaluate relevance before installing or committing a larger generated pack:
+
+```sh
+php language-fts-playground/tools/evaluate-lexical-pack.php \
+  language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json
+php language-fts-playground/tools/evaluate-lexical-pack.php \
+  language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json \
+  --json \
+  --min-recall-at-5=1.0 \
+  --min-precision-at-5=0.2 \
+  --min-mrr=1.0 \
+  --min-ndcg-at-5=1.0
+```
+
+The evaluator is pure PHP, builds an in-memory index with the normal analyzer,
+indexer, and searcher, and works with bundled or custom `--resource-root`
+packs. Fixture documents include `id`, `language`, `title`, optional `excerpt`,
+`content`, optional searchable HTML or image alt text, and optional notes.
+Fixture queries include `query`, optional `language` (`auto` by default),
+`relevant` ids, optional `irrelevant` ids that must not appear in the top five,
+and optional notes/provenance. The evaluator reports recall@5, precision@5,
+MRR, nDCG@5, misses, and unexpected top-5 hits, then exits nonzero when a
+configured threshold or guard fails.
+
 The `Tools -> Language FTS` admin page includes a compact lexical pack status
 table with language, data kind, source, license, version/date, counts, and
 warnings. It also shows the effective local resource root being validated.
@@ -185,6 +209,7 @@ first, then point the plugin at that local path:
 
 ```sh
 php language-fts-playground/tools/validate-lexical-packs.php --resource-root=/srv/language-packs
+php language-fts-playground/tools/evaluate-lexical-pack.php path/to/relevance-fixture.json --resource-root=/srv/language-packs
 ```
 
 ```php
@@ -203,14 +228,16 @@ marks the index as requiring a rebuild so stored terms can be regenerated with
 the new resources.
 
 See `docs/lexical-resources.md` for the resource contract and
-`tools/import-lexical-source.php` for source import usage. Open English WordNet
-is CC-BY 4.0 according to its GitHub README, OpenThesaurus German publishes
-downloads under CC BY-SA 4.0 or LGPL, and plWordNet license information from
-CLARIN allows use, copying, modification, and distribution subject to preserving
+`tools/import-lexical-source.php` for source import usage. The maintainer flow
+for comprehensive packs is import, validate, evaluate a relevance fixture,
+install the custom root, and rebuild the index. Open English WordNet is CC-BY
+4.0 according to its GitHub README, OpenThesaurus German publishes downloads
+under CC BY-SA 4.0 or LGPL, and plWordNet license information from CLARIN
+allows use, copying, modification, and distribution subject to preserving
 copyright and disclaimer notices. Those sources are not bundled here. Current
 shipped resources remain seed data unless a generated comprehensive pack is
 committed after source-specific normalization, license review, attribution
-review, pack-size review, and quality testing.
+review, pack-size review, and relevance testing.
 
 ## Supported Analyzer Behavior
 
@@ -257,6 +284,9 @@ php -n language-fts-playground/tests/run.php
 php language-fts-playground/tools/validate-lexical-packs.php
 php -n language-fts-playground/tools/validate-lexical-packs.php
 php language-fts-playground/tools/validate-lexical-packs.php --json
+php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json
+php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json --json
+php -n language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json
 php -r "json_decode(file_get_contents('language-fts-playground/playground/blueprint.json')); if (json_last_error()) { fwrite(STDERR, json_last_error_msg() . PHP_EOL); exit(1); }"
 find language-fts-playground -name "*.php" -print0 | xargs -0 -n1 php -l
 ```
