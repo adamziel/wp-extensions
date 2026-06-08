@@ -130,20 +130,16 @@ final class Language_FTS_Playground_Plugin
             return 0;
         }
 
-        if ($clear_index) {
-            self::storage()->clear();
-        }
-
         $post_ids = self::public_published_post_ids();
+        self::set_rebuild_required(true);
         if ($post_ids === []) {
-            self::replace_queue([]);
+            self::replace_rebuild_queue([], $clear_index);
             self::set_rebuild_in_progress(false);
             self::set_rebuild_required(false);
         } else {
             $queued_at = sprintf('%.6f', microtime(true));
-            self::set_rebuild_required(true);
+            self::replace_rebuild_queue(array_fill_keys($post_ids, $queued_at), $clear_index);
             self::set_rebuild_in_progress(true);
-            self::replace_queue(array_fill_keys($post_ids, $queued_at));
             self::schedule_queue_processing();
         }
         self::record_status(
@@ -169,8 +165,7 @@ final class Language_FTS_Playground_Plugin
 
         try {
             if (!self::is_indexable_post($post)) {
-                self::dequeue_posts([$post_id]);
-                self::storage()->delete_document($post_id);
+                self::remove_post_from_index($post_id);
                 self::record_status(__('Removed a non-public post from the Language FTS index.', 'language-fts-playground'));
                 return;
             }
@@ -197,8 +192,7 @@ final class Language_FTS_Playground_Plugin
                 return;
             }
 
-            self::dequeue_posts([$post_id]);
-            self::storage()->delete_document($post_id);
+            self::remove_post_from_index($post_id);
             self::record_status(__('Removed a non-public post from the Language FTS index.', 'language-fts-playground'));
         } catch (Throwable $throwable) {
             self::record_error(__('Could not update the Language FTS index for a post status change.', 'language-fts-playground'), $throwable);
@@ -208,8 +202,7 @@ final class Language_FTS_Playground_Plugin
     public static function delete_post(int $post_id): void
     {
         try {
-            self::dequeue_posts([$post_id]);
-            self::storage()->delete_document($post_id);
+            self::remove_post_from_index($post_id);
             self::record_status(__('Removed a deleted post from the Language FTS index.', 'language-fts-playground'));
         } catch (Throwable $throwable) {
             self::record_error(__('Could not remove a deleted post from the Language FTS index.', 'language-fts-playground'), $throwable);
@@ -261,7 +254,7 @@ final class Language_FTS_Playground_Plugin
         }
 
         $result['remaining'] = self::queued_count();
-        if (self::rebuild_in_progress() && $result['failed'] === 0 && $result['remaining'] === 0) {
+        if (self::rebuild_in_progress() && $result['processed'] > 0 && $result['failed'] === 0 && $result['remaining'] === 0) {
             self::set_rebuild_in_progress(false);
             self::set_rebuild_required(false);
         }
@@ -764,6 +757,27 @@ final class Language_FTS_Playground_Plugin
     }
 
     /**
+     * @param array<int,string> $queue
+     */
+    private static function replace_rebuild_queue(array $queue, bool $clear_index): void
+    {
+        $lock = self::acquire_queue_lock();
+        if (!$lock['acquired']) {
+            throw new RuntimeException(self::queue_lock_contention_message());
+        }
+
+        try {
+            if ($clear_index) {
+                self::storage()->clear();
+            }
+
+            self::write_queue($queue);
+        } finally {
+            self::release_queue_lock($lock['token']);
+        }
+    }
+
+    /**
      * @param callable(array<int,string>):array<int,string> $mutation
      * @param bool $required Whether the mutation must be durably applied before returning.
      * @return array<int,string>
@@ -772,7 +786,7 @@ final class Language_FTS_Playground_Plugin
     {
         $lock = self::acquire_queue_lock();
         if (!$lock['acquired']) {
-            $message = __('Could not acquire the Language FTS queue lock; queued work will be retried later.', 'language-fts-playground');
+            $message = self::queue_lock_contention_message();
             if ($required) {
                 throw new RuntimeException($message);
             }
@@ -881,6 +895,11 @@ final class Language_FTS_Playground_Plugin
         ];
     }
 
+    private static function queue_lock_contention_message(): string
+    {
+        return __('Could not acquire the Language FTS queue lock; queued work will be retried later.', 'language-fts-playground');
+    }
+
     /**
      * @param array<int|string,mixed> $queue
      * @return array<int,string>
@@ -902,7 +921,7 @@ final class Language_FTS_Playground_Plugin
     /**
      * @param int[] $post_ids
      */
-    private static function dequeue_posts(array $post_ids): void
+    private static function dequeue_posts(array $post_ids, bool $required = true): void
     {
         $post_ids = self::normalize_post_ids($post_ids);
         if ($post_ids === []) {
@@ -916,8 +935,19 @@ final class Language_FTS_Playground_Plugin
                 }
 
                 return $queue;
-            }
+            },
+            $required
         );
+    }
+
+    private static function remove_post_from_index(int $post_id): void
+    {
+        self::storage()->delete_document($post_id);
+        self::dequeue_posts([$post_id], false);
+
+        if (self::queued_count() > 0) {
+            self::schedule_queue_processing();
+        }
     }
 
     /**

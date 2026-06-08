@@ -856,6 +856,49 @@ test_case('contended public-post enqueue reports failure instead of claiming suc
     assert_same([], $GLOBALS['language_fts_test_scheduled'], 'A failed enqueue does not schedule an empty queue.');
 });
 
+test_case('contended private save removes a previously indexed document', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $indexer = new Language_FTS_Playground_Indexer($storage, new Language_FTS_Playground_Analyzer());
+    $indexer->index_post(fixture_post(900, 'en', 'Published orchard', '<p>orchard public</p>'));
+    update_option(
+        'language_fts_playground_index_queue_lock',
+        [
+            'token' => 'external-lock-token',
+            'expires_at' => microtime(true) + 10,
+        ]
+    );
+
+    $private = fixture_post(900, 'en', 'Private orchard', '<p>orchard hidden</p>', 'private');
+    Language_FTS_Playground_Plugin::index_saved_post(900, $private, true);
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same([], $storage->all_documents(), 'A contended queue cleanup does not leave the private post indexed.');
+    assert_same([], get_option('language_fts_playground_index_queue', []), 'The contended private save does not perform an unlocked queue write.');
+    assert_contains_text('Removed a non-public post from the Language FTS index.', (string) ($status['last_status'] ?? ''), 'The storage removal remains visible in status.');
+});
+
+test_case('contended delete removes a previously indexed document', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $indexer = new Language_FTS_Playground_Indexer($storage, new Language_FTS_Playground_Analyzer());
+    $indexer->index_post(fixture_post(901, 'en', 'Deleted orchard', '<p>orchard deleted</p>'));
+    update_option(
+        'language_fts_playground_index_queue_lock',
+        [
+            'token' => 'external-lock-token',
+            'expires_at' => microtime(true) + 10,
+        ]
+    );
+
+    Language_FTS_Playground_Plugin::delete_post(901);
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same([], $storage->all_documents(), 'A contended queue cleanup does not leave the deleted post indexed.');
+    assert_same([], get_option('language_fts_playground_index_queue', []), 'The contended delete does not perform an unlocked queue write.');
+    assert_contains_text('Removed a deleted post from the Language FTS index.', (string) ($status['last_status'] ?? ''), 'The storage removal remains visible in status.');
+});
+
 test_case('completion preserves queue IDs added between read and write', function (): void {
     $storage = reset_language_fts_plugin_runtime();
     assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
@@ -998,6 +1041,39 @@ test_case('idle queue processing does not clear required rebuild before rebuild 
     assert_same(0, $result['processed'], 'No queue items are processed.');
     assert_same(0, $result['remaining'], 'The queue remains empty.');
     assert_same(true, get_option('language_fts_playground_rebuild_required'), 'A version-required rebuild is not cleared before queue_rebuild() runs.');
+});
+
+test_case('contended rebuild stays required after empty queue processing', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $post = fixture_post(902, 'en', 'Rebuild contention orchard', '<p>orchard rebuild lock</p>');
+    $GLOBALS['language_fts_test_posts'][902] = $post;
+    $indexer = new Language_FTS_Playground_Indexer($storage, new Language_FTS_Playground_Analyzer());
+    $indexer->index_post($post);
+    update_option(
+        'language_fts_playground_index_queue_lock',
+        [
+            'token' => 'external-lock-token',
+            'expires_at' => microtime(true) + 10,
+        ]
+    );
+
+    Language_FTS_Playground_Plugin::rebuild_index();
+
+    assert_same(0, $storage->clear_count, 'The index is not cleared until rebuild queue replacement can acquire the lock.');
+    assert_same(1, count($storage->all_documents()), 'Existing indexed documents remain active until a rebuild queue is durably written.');
+    assert_same([], get_option('language_fts_playground_index_queue', []), 'The contended rebuild does not perform an unlocked queue replacement.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'The failed rebuild queue replacement remains visibly required.');
+    assert_same(false, get_option('language_fts_playground_rebuild_in_progress', false), 'A rebuild is not marked in progress before its queue is written.');
+    assert_same([], $GLOBALS['language_fts_test_scheduled'], 'A contended rebuild does not schedule an empty queue.');
+
+    delete_option('language_fts_playground_index_queue_lock');
+    $result = Language_FTS_Playground_Plugin::process_index_queue(10);
+
+    assert_same(0, $result['processed'], 'No queue items are processed after the contended rebuild failed to queue work.');
+    assert_same(0, $result['indexed'], 'No posts are falsely indexed by empty queue processing.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'Empty queue processing does not clear the required rebuild.');
+    assert_same(false, get_option('language_fts_playground_rebuild_in_progress', false), 'Empty queue processing does not fabricate or complete an in-progress rebuild.');
 });
 
 test_case('version rebuild stays required until bounded queue drains', function (): void {
