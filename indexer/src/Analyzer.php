@@ -557,7 +557,7 @@ final class WP_FTS_Analyzer
      * deterministic for tests and non-WordPress use.
      *
      * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int} $options
-     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}>
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
     private function extractHtmlSegments(string $html, array $options): array
     {
@@ -573,6 +573,7 @@ final class WP_FTS_Analyzer
                     'weight' => 1.0,
                     'lang' => $autoDetect ? $this->detectSegmentLanguage($plain, $documentLang) : $documentLang,
                     'explicit_lang' => false,
+                    'detect_group' => 0,
                 ]];
             }
 
@@ -583,8 +584,8 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * @param array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}> $segments
-     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}>
+     * @param array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}> $segments
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
     private function maybeDetectSegmentLanguages(array $segments, string $documentLang, bool $autoDetect): array
     {
@@ -592,12 +593,28 @@ final class WP_FTS_Analyzer
             return $segments;
         }
 
-        foreach ($segments as &$segment) {
-            if (empty($segment['explicit_lang']) && ($segment['lang'] ?? '') === $documentLang) {
-                $segment['lang'] = $this->detectSegmentLanguage($segment['text'], $documentLang);
+        $groups = [];
+        foreach ($segments as $index => $segment) {
+            if (!empty($segment['explicit_lang']) || ($segment['lang'] ?? '') !== $documentLang) {
+                continue;
+            }
+
+            $group = isset($segment['detect_group']) ? (int) $segment['detect_group'] : $index;
+            $groups[$group]['indexes'][] = $index;
+            $groups[$group]['text'][] = (string) ($segment['text'] ?? '');
+        }
+
+        foreach ($groups as $group) {
+            $text = implode('', $group['text'] ?? []);
+            if (trim($text) === '') {
+                continue;
+            }
+
+            $lang = $this->detectSegmentLanguage($text, $documentLang);
+            foreach ($group['indexes'] ?? [] as $index) {
+                $segments[$index]['lang'] = $lang;
             }
         }
-        unset($segment);
 
         return $segments;
     }
@@ -662,12 +679,14 @@ final class WP_FTS_Analyzer
      * processor moves through breadcrumbs, deeper scopes are pruned so optional
      * end tags and implicit closes do not leak a language into following text.
      *
-     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}>
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
     private function extractWithProcessor(mixed $processor, string $documentLang): array
     {
         $segments = [];
         $langByDepth = [0 => ['lang' => $documentLang, 'explicit' => false]];
+        $textGroupByDepth = [0 => 0];
+        $textGroupCounter = 0;
 
         while ($processor->next_token()) {
             $breadcrumbs = method_exists($processor, 'get_breadcrumbs')
@@ -678,19 +697,27 @@ final class WP_FTS_Analyzer
                 $breadcrumbs
             );
             $this->pruneLanguageStack($langByDepth, count($breadcrumbs));
+            $this->pruneTextGroupStack($textGroupByDepth, count($breadcrumbs));
 
             if ($processor->get_token_type() === '#tag') {
                 $isCloser = method_exists($processor, 'is_tag_closer') && $processor->is_tag_closer();
                 $depth = count($breadcrumbs);
+                $tag = $this->processorCurrentTag($processor, $breadcrumbs);
                 if ($isCloser) {
                     unset($langByDepth[$depth]);
+                    unset($textGroupByDepth[$depth]);
                     continue;
                 }
 
                 unset($langByDepth[$depth]);
+                unset($textGroupByDepth[$depth]);
                 $lang = $this->processorLangAttribute($processor);
                 if ($lang !== null) {
                     $langByDepth[$depth] = ['lang' => $lang, 'explicit' => true];
+                }
+                if ($tag !== null && $this->isTextGroupBoundaryTag($tag)) {
+                    $textGroupCounter++;
+                    $textGroupByDepth[$depth] = $textGroupCounter;
                 }
                 continue;
             }
@@ -714,6 +741,7 @@ final class WP_FTS_Analyzer
                 'weight' => $this->boostForAncestors($breadcrumbs),
                 'lang' => $scope['lang'],
                 'explicit_lang' => $scope['explicit'],
+                'detect_group' => $this->currentTextGroup($textGroupByDepth),
             ];
         }
 
@@ -730,7 +758,7 @@ final class WP_FTS_Analyzer
      *
      * @param string $html HTML document or fragment.
      * @param string $documentLang Fallback language for text outside scoped tags.
-     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}>
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
      */
     private function extractWithFallbackParser(string $html, string $documentLang): array
     {
@@ -747,11 +775,13 @@ final class WP_FTS_Analyzer
                 'weight' => 1.0,
                 'lang' => $documentLang,
                 'explicit_lang' => false,
+                'detect_group' => 0,
             ]];
         }
 
         $stack = [];
         $segments = [];
+        $textGroupCounter = 0;
         $voidTags = array_fill_keys([
             'AREA',
             'BASE',
@@ -795,9 +825,15 @@ final class WP_FTS_Analyzer
                     $selfClosing = (bool) preg_match('/\/\s*>$/', $part);
                     $this->closeFallbackOptionalEndTags($stack, $opening);
                     if (!isset($voidTags[$opening]) && !$selfClosing) {
+                        $detectGroup = null;
+                        if ($this->isTextGroupBoundaryTag($opening)) {
+                            $textGroupCounter++;
+                            $detectGroup = $textGroupCounter;
+                        }
                         $stack[] = [
                             'tag' => $opening,
                             'lang' => $this->tagLangAttribute($part),
+                            'detect_group' => $detectGroup,
                         ];
                     }
                 }
@@ -823,6 +859,7 @@ final class WP_FTS_Analyzer
                 'weight' => $this->boostForAncestors($ancestors),
                 'lang' => $scope['lang'],
                 'explicit_lang' => $scope['explicit'],
+                'detect_group' => $this->fallbackCurrentTextGroup($stack),
             ];
         }
 
@@ -1260,6 +1297,116 @@ final class WP_FTS_Analyzer
     }
 
     /**
+     * Remove text-detection groups deeper than the processor's current depth.
+     *
+     * @param array<int,int> $textGroupByDepth
+     */
+    private function pruneTextGroupStack(array &$textGroupByDepth, int $depth): void
+    {
+        foreach (array_keys($textGroupByDepth) as $scopeDepth) {
+            if ($scopeDepth > $depth) {
+                unset($textGroupByDepth[$scopeDepth]);
+            }
+        }
+    }
+
+    /**
+     * Return the nearest active visible-text detection group.
+     *
+     * Inline markup inherits the surrounding block group's language context, so
+     * weak connector words split into their own text node can still be detected
+     * with the phrase around them.
+     *
+     * @param array<int,int> $textGroupByDepth
+     */
+    private function currentTextGroup(array $textGroupByDepth): int
+    {
+        krsort($textGroupByDepth, SORT_NUMERIC);
+
+        $group = reset($textGroupByDepth);
+        return is_int($group) ? $group : 0;
+    }
+
+    /**
+     * Return the current processor tag name when available.
+     *
+     * @param string[] $breadcrumbs
+     */
+    private function processorCurrentTag(mixed $processor, array $breadcrumbs): ?string
+    {
+        if (method_exists($processor, 'get_tag')) {
+            try {
+                $tag = $processor->get_tag();
+                if (is_scalar($tag) && trim((string) $tag) !== '') {
+                    return strtoupper((string) $tag);
+                }
+            } catch (Throwable) {
+                // Fall back to breadcrumbs below.
+            }
+        }
+
+        if ($breadcrumbs === []) {
+            return null;
+        }
+
+        $tag = end($breadcrumbs);
+        return is_string($tag) && $tag !== '' ? strtoupper($tag) : null;
+    }
+
+    /**
+     * Decide whether an element starts a new visible-text detection group.
+     */
+    private function isTextGroupBoundaryTag(string $tag): bool
+    {
+        static $boundaryTags = [
+            'ADDRESS' => true,
+            'ARTICLE' => true,
+            'ASIDE' => true,
+            'BLOCKQUOTE' => true,
+            'BODY' => true,
+            'DD' => true,
+            'DETAILS' => true,
+            'DIALOG' => true,
+            'DIV' => true,
+            'DL' => true,
+            'DT' => true,
+            'FIELDSET' => true,
+            'FIGCAPTION' => true,
+            'FIGURE' => true,
+            'FOOTER' => true,
+            'FORM' => true,
+            'H1' => true,
+            'H2' => true,
+            'H3' => true,
+            'H4' => true,
+            'H5' => true,
+            'H6' => true,
+            'HEADER' => true,
+            'HGROUP' => true,
+            'LI' => true,
+            'MAIN' => true,
+            'MENU' => true,
+            'NAV' => true,
+            'OL' => true,
+            'OPTION' => true,
+            'P' => true,
+            'PRE' => true,
+            'SECTION' => true,
+            'TABLE' => true,
+            'TBODY' => true,
+            'TD' => true,
+            'TFOOT' => true,
+            'TH' => true,
+            'THEAD' => true,
+            'TITLE' => true,
+            'TR' => true,
+            'UL' => true,
+        ];
+
+        return isset($boundaryTags[strtoupper($tag)]);
+    }
+
+    /**
      * Return the nearest active language scope.
      *
      * @param array<int,array{lang:string,explicit:bool}> $langByDepth Map of
@@ -1341,7 +1488,7 @@ final class WP_FTS_Analyzer
      * explicit end tag. The fallback parser models the common cases so language
      * and boost scopes do not leak across sibling elements.
      *
-     * @param array<int,array{tag:string,lang:?string}> $stack
+     * @param array<int,array{tag:string,lang:?string,detect_group:?int}> $stack
      */
     private function closeFallbackOptionalEndTags(array &$stack, string $opening): void
     {
@@ -1411,7 +1558,7 @@ final class WP_FTS_Analyzer
     /**
      * Return the nearest language scope in the fallback parser stack.
      *
-     * @param array<int,array{tag:string,lang:?string}> $stack
+     * @param array<int,array{tag:string,lang:?string,detect_group:?int}> $stack
      * @param string $documentLang Fallback language outside any scoped tag.
      * @return array{lang:string,explicit:bool} Effective language for the
      *         current text node and whether it came from an HTML attribute.
@@ -1425,6 +1572,22 @@ final class WP_FTS_Analyzer
         }
 
         return ['lang' => $documentLang, 'explicit' => false];
+    }
+
+    /**
+     * Return the nearest visible-text detection group in the fallback parser.
+     *
+     * @param array<int,array{tag:string,lang:?string,detect_group:?int}> $stack
+     */
+    private function fallbackCurrentTextGroup(array $stack): int
+    {
+        for ($i = count($stack) - 1; $i >= 0; $i--) {
+            if (isset($stack[$i]['detect_group']) && $stack[$i]['detect_group'] !== null) {
+                return (int) $stack[$i]['detect_group'];
+            }
+        }
+
+        return 0;
     }
 
     /**
@@ -1459,7 +1622,7 @@ final class WP_FTS_Analyzer
 
         $payload = [
             'contract' => 'wp-fts-analyzer',
-            'version' => 2,
+            'version' => 3,
             'skip_ancestors' => $skipAncestors,
             'boosts' => $boosts,
             'stopwords' => $stopwords,
@@ -1477,7 +1640,7 @@ final class WP_FTS_Analyzer
             'html_processor_available' => class_exists('WP_HTML_Processor'),
         ];
 
-        return 'wp-fts-analyzer-v2:' . sha1($this->stableJson($payload));
+        return 'wp-fts-analyzer-v3:' . sha1($this->stableJson($payload));
     }
 
     /**

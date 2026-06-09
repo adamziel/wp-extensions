@@ -2401,6 +2401,12 @@ test_case('analyzer auto-detects untagged document and query language gaps', fun
     assert_same('de', $germanLangs['fuehrung'] ?? null, 'untagged German query term should be detected as de');
     assert_same('de', $germanLangs['strasse'] ?? null, 'second German query term should keep detected de');
 
+    $inlineGerman = $analyzer->analyze_content('<p>Führung <em>und</em> Straße</p>');
+    $inlineGermanLangs = test_lang_by_term($inlineGerman);
+    assert_same('de', $inlineGermanLangs['fuehrung'] ?? null, 'inline-split German content should detect the surrounding text as de');
+    assert_same('de', $inlineGermanLangs['und'] ?? null, 'inline-split German connector should inherit the detected visible phrase language');
+    assert_same('de', $inlineGermanLangs['strasse'] ?? null, 'inline-split German suffix text should keep the detected visible phrase language');
+
     $explicit = $analyzer->analyze_query_occurrences('Führung und Straße', ['lang' => 'en']);
     $explicitLangs = array_values(array_unique(array_column($explicit, 'lang')));
     assert_same(['en'], $explicitLangs, 'explicit query language should override detector evidence');
@@ -2875,6 +2881,22 @@ test_case('untagged query spans use document-parity language detection for AND r
     assert_same([2], array_column($searcher->search('Führung und Straße', ['mode' => 'AND', 'limit' => 10]), 'doc_id'), 'untagged German AND query should keep weak tokens in the detected German span');
     assert_same([3], array_column($searcher->search('oraz jest', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10]), 'doc_id'), 'explicit query language should still isolate the requested partition');
     assert_same([], $searcher->search('Führung und Straße', ['lang' => 'en', 'mode' => 'AND']), 'explicit English query should not leak into detected German postings');
+});
+
+test_case('inline markup document spans share detected language for AND recall', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>Führung <em>und</em> Straße</p>');
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('Führung und Straße', ['mode' => 'AND', 'limit' => 10]), 'doc_id'), 'German AND query should find an untagged document phrase split by inline markup');
+    assert_same([], $searcher->search('Führung und Straße', ['lang' => 'en', 'mode' => 'AND']), 'explicit English query should not match the detected German inline phrase');
+
+    $terms = $storage->all_terms();
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('de', 'und'), $terms, true), 'weak connector from inline markup should be stored in the detected German namespace');
+    assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('en', 'und'), $terms, true), 'weak connector from inline markup should not drift to the fallback namespace');
 });
 
 test_case('custom query term resolver overrides detected untagged query spans', function (): void {
