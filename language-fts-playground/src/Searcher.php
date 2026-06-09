@@ -105,7 +105,7 @@ final class Language_FTS_Playground_Searcher
     }
 
     /**
-     * @return array{requested_language:string,resolved_language:string,enabled_languages:string[],ranked_candidates:array<int,array{language:string,score:float,reasons:array<string,string[]>}>,selected_partitions:string[],strategy:string,thresholds:array{min_score:float,min_lead:float,min_ratio:float,max_partitions:int},preflight:array<string,mixed>}
+     * @return array{requested_language:string,resolved_language:string,enabled_languages:string[],ranked_candidates:array<int,array{language:string,score:float,reasons:array<string,string[]>}>,selected_partitions:string[],selected_tokenizers:array<string,string>,strategy:string,thresholds:array{min_score:float,min_lead:float,min_ratio:float,max_partitions:int},preflight:array<string,mixed>}
      */
     private function search_language_plan(string $query, string $language, bool $include_explicit_ranking = true): array
     {
@@ -129,6 +129,7 @@ final class Language_FTS_Playground_Searcher
                 'enabled_languages' => $enabled,
                 'ranked_candidates' => $ranked,
                 'selected_partitions' => [$language],
+                'selected_tokenizers' => $this->tokenizer_ids_by_language([$language]),
                 'strategy' => 'explicit_language',
                 'thresholds' => $thresholds,
                 'preflight' => [],
@@ -187,10 +188,29 @@ final class Language_FTS_Playground_Searcher
             'enabled_languages' => $enabled,
             'ranked_candidates' => $ranked,
             'selected_partitions' => $selected,
+            'selected_tokenizers' => $this->tokenizer_ids_by_language($selected),
             'strategy' => $strategy,
             'thresholds' => $thresholds,
             'preflight' => $preflight,
         ];
+    }
+
+    /**
+     * @param string[] $languages
+     * @return array<string,string>
+     */
+    private function tokenizer_ids_by_language(array $languages): array
+    {
+        $tokenizers = [];
+        foreach ($languages as $language) {
+            $language = $this->analyzer->canonical_language((string) $language);
+            $contract = $this->analyzer->tokenizer_contract($language);
+            $tokenizers[$language] = (string) ($contract['id'] ?? '');
+        }
+
+        ksort($tokenizers, SORT_STRING);
+
+        return $tokenizers;
     }
 
     /**
@@ -364,6 +384,7 @@ final class Language_FTS_Playground_Searcher
     {
         $language = $this->analyzer->canonical_language($language);
         $plan = $this->parse_query($query, $language);
+        $tokenizer = $this->analyzer->tokenizer_contract($language);
         $fuzzy_candidates = $this->resolve_fuzzy_candidates($plan['fuzzy_terms'], $language);
         $fuzzy_terms = [];
         foreach ($fuzzy_candidates as $candidates) {
@@ -379,6 +400,12 @@ final class Language_FTS_Playground_Searcher
         $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms, $synonym_terms, $phrase_synonym_terms));
         $diagnostics = [
             'language' => $language,
+            'tokenizer' => [
+                'id' => (string) ($tokenizer['id'] ?? ''),
+                'type' => (string) ($tokenizer['type'] ?? ''),
+                'version' => (string) ($tokenizer['version'] ?? ''),
+                'capabilities' => (array) ($tokenizer['capabilities'] ?? []),
+            ],
             'analyzed_query' => [
                 'tokens' => $plan['query_tokens'],
                 'exact_terms' => $plan['exact_terms'],

@@ -1389,6 +1389,33 @@ function remove_language_fts_temp_tree(string $path): void
     rmdir($path);
 }
 
+function copy_language_fts_fixture_tree(string $source): string
+{
+    $target = create_language_fts_temp_dir('language-fts-fixture-copy');
+    copy_language_fts_tree_contents($source, $target);
+
+    return $target;
+}
+
+function copy_language_fts_tree_contents(string $source, string $target): void
+{
+    $entries = scandir($source);
+    foreach ($entries === false ? [] : $entries as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+
+        $source_path = $source . DIRECTORY_SEPARATOR . $entry;
+        $target_path = $target . DIRECTORY_SEPARATOR . $entry;
+        if (is_dir($source_path)) {
+            assert_true(mkdir($target_path, 0777, true), 'Temporary fixture copy directory is created.');
+            copy_language_fts_tree_contents($source_path, $target_path);
+        } else {
+            assert_true(copy($source_path, $target_path), 'Temporary fixture file is copied.');
+        }
+    }
+}
+
 function create_language_fts_temp_dir(string $prefix): string
 {
     $path = sys_get_temp_dir() . '/' . $prefix . '-' . str_replace('.', '-', uniqid('', true));
@@ -2463,12 +2490,12 @@ test_case('tokenizer profile contract defaults and rejects unsupported declarati
             static fn(): array => $repository->profile('xx'),
             'Unsupported tokenizer declarations fail profile loading.'
         );
-        assert_contains_text('supported unicode_words_v1/unicode_words', $throwable->getMessage(), 'Unsupported tokenizer failures explain the supported baseline.');
+        assert_contains_text('supported registry adapter', $throwable->getMessage(), 'Unsupported tokenizer failures explain registry-backed selection.');
 
         $report = (new Language_FTS_Playground_Lexical_Pack_Validator($unsupported_root))->validate_all();
         $warnings = implode("\n", language_fts_pack_status_by_id($report)['xx']['warnings'] ?? []);
         assert_same(false, $report['valid'], 'Unsupported tokenizer declarations fail validator checks.');
-        assert_contains_text('supported unicode_words_v1/unicode_words', $warnings, 'Validator reports unsupported tokenizer declarations.');
+        assert_contains_text('supported registry adapter', $warnings, 'Validator reports unsupported tokenizer declarations.');
     } finally {
         remove_language_fts_temp_tree($unsupported_root);
     }
@@ -2507,6 +2534,133 @@ test_case('tokenizer profile contract validates declaration shape', function ():
         assert_contains_text('capability supports_fuzzy must be a boolean', $warnings, 'Validator reports malformed tokenizer capabilities.');
     } finally {
         remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('synthetic non-space tokenizer fixtures emit multibyte offsets and logical positions', function (): void {
+    $root = __DIR__ . '/fixtures/tokenizer-readiness-languages';
+    $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+    $analyzer = new Language_FTS_Playground_Analyzer($repository);
+    $cjk_run = "\u{4E00}\u{4E8C}\u{4E09}\u{56DB}";
+    $thai_run = "\u{0E01}\u{0E02}\u{0E04}\u{0E07}";
+
+    $cjk_stream = $analyzer->analyze_token_stream($cjk_run, 'qj');
+    assert_same(["\u{4E00}\u{4E8C}", "\u{4E09}\u{56DB}"], array_column($cjk_stream, 'surface'), 'Synthetic CJK-style fixture segments an unspaced multibyte run.');
+    assert_same([0, 6], array_column($cjk_stream, 'start_byte'), 'Synthetic CJK-style fixture reports byte starts inside the run.');
+    assert_same([6, 12], array_column($cjk_stream, 'end_byte'), 'Synthetic CJK-style fixture reports byte ends inside the run.');
+    assert_same([0, 1], array_column($cjk_stream, 'position'), 'Synthetic CJK-style fixture emits adjacent logical positions.');
+    assert_same([1, 1], array_column($cjk_stream, 'position_increment'), 'Synthetic CJK-style fixture keeps positive position increments.');
+    assert_same(['ideograph_run', 'ideograph_run'], array_column($cjk_stream, 'type'), 'Synthetic CJK-style fixture labels token types without claiming real CJK support.');
+    assert_same([true, true], array_column($cjk_stream, 'searchable'), 'Synthetic CJK-style fixture emits searchable readiness tokens.');
+    assert_same([["\u{4E00}\u{4E8C}"], ["\u{4E09}\u{56DB}"]], array_column($cjk_stream, 'keys'), 'Synthetic CJK-style fixture preserves normalized segment keys.');
+
+    $thai_stream = $analyzer->analyze_token_stream($thai_run, 'qt');
+    assert_same(["\u{0E01}\u{0E02}", "\u{0E04}\u{0E07}"], array_column($thai_stream, 'surface'), 'Synthetic Thai-style fixture segments an unspaced multibyte run.');
+    assert_same([0, 6], array_column($thai_stream, 'start_byte'), 'Synthetic Thai-style fixture reports byte starts inside the run.');
+    assert_same([6, 12], array_column($thai_stream, 'end_byte'), 'Synthetic Thai-style fixture reports byte ends inside the run.');
+    assert_same([0, 1], array_column($thai_stream, 'position'), 'Synthetic Thai-style fixture emits adjacent logical positions.');
+    assert_same(['thai_syllable_run', 'thai_syllable_run'], array_column($thai_stream, 'type'), 'Synthetic Thai-style fixture labels token types without claiming real Thai support.');
+});
+
+test_case('synthetic non-space tokenizer supports phrase search and segment highlighting', function (): void {
+    $root = __DIR__ . '/fixtures/tokenizer-readiness-languages';
+    $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+    $analyzer = new Language_FTS_Playground_Analyzer($repository);
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+    $first = "\u{4E00}\u{4E8C}";
+    $second = "\u{4E09}\u{56DB}";
+    $run = $first . $second;
+
+    $indexer->index_post(fixture_post(701, 'qj', 'Synthetic adjacent', '<p>' . $run . '</p>'));
+    $indexer->index_post(fixture_post(702, 'qj', 'Synthetic separated', '<p>' . $first . '</p><!-- boundary --><p>' . $second . '</p>'));
+
+    assert_same([701], array_column($searcher->search('"' . $run . '"', 'qj'), 'post_id'), 'Quoted synthetic run matches adjacent tokenizer positions only.');
+    assert_same([], $searcher->search('"' . $second . $first . '"', 'qj'), 'Reversed synthetic phrase does not match.');
+
+    $explain = $searcher->explain('"' . $run . '"', 'qj');
+    $phrase_documents = $explain['partitions'][0]['phrase_filters'][0]['documents'] ?? [];
+    $passed = [];
+    foreach ($phrase_documents as $document) {
+        $passed[(int) ($document['post_id'] ?? 0)] = (bool) ($document['passed'] ?? false);
+    }
+    assert_same(true, $passed[701] ?? null, 'Adjacent synthetic document passes the phrase filter.');
+    assert_same(false, $passed[702] ?? null, 'Separated synthetic segments fail the phrase filter.');
+
+    $results = $searcher->search($second, 'qj');
+    assert_same([701, 702], array_column($results, 'post_id'), 'Single synthetic segment search can match both adjacent and separated documents.');
+    assert_contains_text('<mark>' . $second . '</mark>', $results[0]['snippet'] ?? '', 'Synthetic snippets highlight the matched segment inside the unspaced run.');
+    assert_not_contains_text('<mark>' . $run . '</mark>', $results[0]['snippet'] ?? '', 'Synthetic snippets do not highlight the entire unspaced run for a segment query.');
+});
+
+test_case('synthetic non-space tokenizer diagnostics expose routing and disable fuzzy', function (): void {
+    $root = __DIR__ . '/fixtures/tokenizer-readiness-languages';
+    $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+    $analyzer = new Language_FTS_Playground_Analyzer($repository);
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+    $run = "\u{4E00}\u{4E8C}\u{4E09}\u{56DB}";
+
+    $indexer->index_post(fixture_post(703, 'qj', 'Synthetic routed', '<p>' . $run . '</p>'));
+
+    $explicit = $searcher->explain($run . '~', 'qj');
+    assert_same(['qj'], $explicit['language_routing']['selected_partitions'] ?? null, 'Explicit synthetic search narrows to qj.');
+    assert_same(Language_FTS_Playground_Synthetic_Dictionary_Tokenizer::ID, $explicit['language_routing']['selected_tokenizers']['qj'] ?? null, 'Explicit diagnostics report the synthetic tokenizer id.');
+    assert_same(Language_FTS_Playground_Synthetic_Dictionary_Tokenizer::ID, $explicit['partitions'][0]['tokenizer']['id'] ?? null, 'Partition diagnostics report the synthetic tokenizer id.');
+    assert_same(false, $explicit['partitions'][0]['tokenizer']['capabilities']['supports_fuzzy'] ?? null, 'Partition diagnostics report fuzzy disabled.');
+    assert_same([], $explicit['partitions'][0]['analyzed_query']['fuzzy_terms'] ?? null, 'Synthetic fuzzy suffix does not opt into fuzzy terms.');
+    assert_same([], $explicit['partitions'][0]['fuzzy_expansions'] ?? null, 'Synthetic fuzzy suffix produces no fuzzy expansions.');
+
+    $automatic = $searcher->explain($run, 'auto');
+    assert_same('auto_confident_profile_evidence', $automatic['language_routing']['strategy'] ?? null, 'Synthetic signal evidence can route automatic search confidently.');
+    assert_same(['qj'], $automatic['language_routing']['selected_partitions'] ?? null, 'Automatic diagnostics report the selected synthetic partition.');
+    assert_same(Language_FTS_Playground_Synthetic_Dictionary_Tokenizer::ID, $automatic['language_routing']['selected_tokenizers']['qj'] ?? null, 'Automatic diagnostics report the selected tokenizer id.');
+    assert_true(($automatic['language_routing']['ranked_candidates'][0]['reasons']['language_signals'] ?? []) !== [], 'Automatic diagnostics expose the profile signal evidence source.');
+    assert_same([703], array_column($automatic['results'] ?? [], 'post_id'), 'Automatic synthetic routing returns the indexed document.');
+});
+
+test_case('synthetic tokenizer fixtures validate metadata resources and fingerprints', function (): void {
+    $root = __DIR__ . '/fixtures/tokenizer-readiness-languages';
+    $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+    $by_id = language_fts_pack_status_by_id($report);
+
+    assert_same(true, $report['valid'], 'Synthetic tokenizer readiness fixture packs validate cleanly.');
+    foreach (['qj', 'qt'] as $language) {
+        assert_same('synthetic_readiness_fixture', $by_id[$language]['metadata']['data_kind'] ?? null, "Synthetic {$language} metadata uses the readiness data kind.");
+        assert_contains_text('Synthetic', $by_id[$language]['label'] ?? '', "Synthetic {$language} label is explicit.");
+        assert_same(Language_FTS_Playground_Synthetic_Dictionary_Tokenizer::ID, $by_id[$language]['tokenizer']['id'] ?? null, "Synthetic {$language} validator reports the tokenizer id.");
+        assert_same(false, $by_id[$language]['tokenizer']['capabilities']['supports_fuzzy'] ?? null, "Synthetic {$language} validator reports fuzzy disabled.");
+        assert_same(2, $by_id[$language]['counts']['tokenizer_rows'] ?? null, "Synthetic {$language} validator counts tokenizer dictionary rows.");
+        assert_true((int) ($by_id[$language]['counts']['tokenizer_resource_bytes'] ?? 0) > 0, "Synthetic {$language} validator counts tokenizer resource bytes.");
+        assert_true(in_array('tokenizer_dictionary.tsv', $by_id[$language]['metadata']['files'] ?? [], true), "Synthetic {$language} metadata lists the tokenizer resource.");
+        assert_true(in_array('tokenizer.dictionary', array_column($by_id[$language]['resource_digests'] ?? [], 'resource'), true), "Synthetic {$language} validator reports the tokenizer digest.");
+    }
+
+    $copy = copy_language_fts_fixture_tree($root);
+    try {
+        $first = (new Language_FTS_Playground_Lexical_Profile_Repository($copy))->pack_fingerprint();
+        file_put_contents(
+            $copy . DIRECTORY_SEPARATOR . 'qj' . DIRECTORY_SEPARATOR . 'tokenizer_dictionary.tsv',
+            "\\u{4E03}\tdictionary_word\tlanguage-fts-playground-synthetic-tokenizer-readiness\n",
+            FILE_APPEND
+        );
+        $second = (new Language_FTS_Playground_Lexical_Profile_Repository($copy))->pack_fingerprint();
+        assert_true($first !== $second, 'Changing tokenizer resource content changes the pack fingerprint.');
+    } finally {
+        remove_language_fts_temp_tree($copy);
+    }
+});
+
+test_case('public docs do not claim real non-space language tokenizer support', function (): void {
+    $docs = (string) file_get_contents(__DIR__ . '/../README.md')
+        . "\n"
+        . (string) file_get_contents(__DIR__ . '/../docs/lexical-resources.md');
+
+    assert_contains_text('No dictionary segmenter or non-space language tokenizer is shipped or supported', $docs, 'Public docs keep the non-space tokenizer disclaimer.');
+    foreach (['supports Chinese', 'supports Japanese', 'supports Thai', 'CJK support', 'Thai support'] as $claim) {
+        assert_not_contains_text($claim, $docs, "Public docs do not claim {$claim}.");
     }
 });
 

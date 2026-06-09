@@ -179,9 +179,13 @@ function language_fts_validate_packs_print_human(array $report): void
             . ', phrase expansions ' . (int) ($counts['phrase_synonym_expansions'] ?? 0)
             . ', term rules ' . (int) ($counts['term_rule_rows'] ?? 0)
             . ', protected terms ' . (int) ($counts['protected_term_rows'] ?? 0)
+            . ', tokenizer rows ' . (int) ($counts['tokenizer_rows'] ?? 0)
+            . ', tokenizer bytes ' . (int) ($counts['tokenizer_resource_bytes'] ?? 0)
             . ', total expansions ' . $expansions . "\n";
         echo '  max synset size: ' . (int) ($language['max_synset_size'] ?? 0)
-            . ', max expansion fanout: ' . (int) ($language['max_expansion_fanout'] ?? 0) . "\n";
+            . ', max expansion fanout: ' . (int) ($language['max_expansion_fanout'] ?? 0)
+            . ', max tokenizer input bytes: ' . (int) ($counts['tokenizer_max_input_run_bytes'] ?? 0)
+            . ', max tokenizer output bytes: ' . (int) ($counts['tokenizer_max_output_token_bytes'] ?? 0) . "\n";
 
         if ($warnings === []) {
             echo "  warnings: none\n";

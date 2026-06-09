@@ -117,6 +117,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             'metadata_valid' => false,
             'runtime_files_exist' => false,
             'missing_files' => [],
+            'resource_digests' => [],
             'counts' => [
                 'stopwords' => 0,
                 'lexeme_rows' => 0,
@@ -128,6 +129,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 'phrase_synonym_expansions' => 0,
                 'term_rule_rows' => 0,
                 'protected_term_rows' => 0,
+                'tokenizer_rows' => 0,
+                'tokenizer_resource_bytes' => 0,
+                'tokenizer_max_input_run_bytes' => 0,
+                'tokenizer_max_output_token_bytes' => 0,
             ],
             'max_synset_size' => 0,
             'max_expansion_fanout' => 0,
@@ -187,22 +192,27 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             }
         }
 
-        $metadata = $this->validate_pack_metadata($directory, (string) $status['language_id'], $warnings);
+        $metadata = $this->validate_pack_metadata($directory, (string) $status['language_id'], (array) $status['tokenizer'], $warnings);
         $status['metadata'] = $metadata['metadata'];
         $status['metadata_valid'] = $metadata['valid'];
         $status['runtime_files_exist'] = $metadata['runtime_files_exist'];
         $status['missing_files'] = $metadata['missing_files'];
 
         $resource_paths = $this->resolve_profile_resources($directory, $profile_file, $resources, $warnings);
+        $tokenizer_resource_paths = $this->resolve_tokenizer_resources($directory, $profile_file, (array) $status['tokenizer'], $warnings);
         if ($metadata['metadata']['files'] !== []) {
             $status['metadata_valid'] = $status['metadata_valid'] && $this->validate_pack_files_include_profile_resources(
                 $metadata['metadata']['files'],
-                $resources,
+                array_merge($resources, (array) ($status['tokenizer']['resources'] ?? [])),
                 $profile_file,
                 $directory . DIRECTORY_SEPARATOR . 'pack.php',
                 $warnings
             );
         }
+        $status['resource_digests'] = array_merge(
+            $this->resource_digests($resource_paths, ''),
+            $this->resource_digests($tokenizer_resource_paths, 'tokenizer.')
+        );
         $expansion_targets = [];
 
         if (isset($resource_paths['stopwords'])) {
@@ -232,6 +242,13 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         }
         if (isset($resource_paths['protected_terms'])) {
             $status['counts']['protected_term_rows'] = $this->validate_protected_terms($resource_paths['protected_terms'], $warnings, $normalization_folds);
+        }
+        if (isset($tokenizer_resource_paths['dictionary'])) {
+            $tokenizer_stats = $this->validate_synthetic_tokenizer_dictionary($tokenizer_resource_paths['dictionary'], $warnings);
+            $status['counts']['tokenizer_rows'] = $tokenizer_stats['rows'];
+            $status['counts']['tokenizer_resource_bytes'] = $tokenizer_stats['resource_bytes'];
+            $status['counts']['tokenizer_max_input_run_bytes'] = $tokenizer_stats['max_input_run_bytes'];
+            $status['counts']['tokenizer_max_output_token_bytes'] = $tokenizer_stats['max_output_token_bytes'];
         }
 
         $status['max_expansion_fanout'] = $this->max_expansion_fanout($expansion_targets);
@@ -271,7 +288,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     /**
      * @return array{metadata:array<string,mixed>,valid:bool,runtime_files_exist:bool,missing_files:string[]}
      */
-    private function validate_pack_metadata(string $directory, string $expected_language, array &$warnings): array
+    private function validate_pack_metadata(string $directory, string $expected_language, array $tokenizer, array &$warnings): array
     {
         $path = $directory . DIRECTORY_SEPARATOR . 'pack.php';
         $metadata = $this->empty_metadata();
@@ -319,9 +336,9 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $warnings[] = 'Language pack metadata pack_date must be a valid YYYY-MM-DD date in ' . $path;
         }
 
-        if ($metadata['data_kind'] !== '' && !in_array($metadata['data_kind'], ['curated_seed', 'imported_comprehensive'], true)) {
+        if ($metadata['data_kind'] !== '' && !$this->metadata_data_kind_is_allowed($metadata, $expected_language, $tokenizer, $path, $warnings)) {
             $valid = false;
-            $warnings[] = 'Language pack metadata data_kind must be curated_seed or imported_comprehensive in ' . $path;
+            $warnings[] = 'Language pack metadata data_kind must be curated_seed, imported_comprehensive, or synthetic_readiness_fixture with synthetic tokenizer provenance in ' . $path;
         }
 
         $files = $raw['files'] ?? null;
@@ -377,6 +394,47 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,mixed> $tokenizer
+     */
+    private function metadata_data_kind_is_allowed(array $metadata, string $expected_language, array $tokenizer, string $path, array &$warnings): bool
+    {
+        $data_kind = (string) ($metadata['data_kind'] ?? '');
+        if (in_array($data_kind, ['curated_seed', 'imported_comprehensive'], true)) {
+            return true;
+        }
+
+        if ($data_kind !== 'synthetic_readiness_fixture') {
+            return false;
+        }
+
+        $valid = true;
+        if (!Language_FTS_Playground_Tokenizer_Registry::is_synthetic_readiness_contract($tokenizer)) {
+            $warnings[] = 'Synthetic readiness fixture metadata requires the synthetic_dictionary_v1 tokenizer in ' . $path;
+            $valid = false;
+        }
+
+        if (preg_match('/^q[a-z0-9]*$/', $expected_language) !== 1) {
+            $warnings[] = 'Synthetic tokenizer readiness fixtures must use private q* language ids in ' . $path;
+            $valid = false;
+        }
+
+        $combined = strtolower(
+            (string) ($metadata['source_name'] ?? '')
+            . ' '
+            . (string) ($metadata['attribution_text'] ?? '')
+            . ' '
+            . (string) ($metadata['provenance'] ?? '')
+        );
+        if (!str_contains($combined, 'synthetic') || !str_contains($combined, 'readiness')) {
+            $warnings[] = 'Synthetic tokenizer readiness metadata must clearly say synthetic readiness in ' . $path;
+            $valid = false;
+        }
+
+        return $valid;
+    }
+
+    /**
      * @param array<mixed> $resources
      * @return array<string,string>
      */
@@ -398,6 +456,93 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         }
 
         return $paths;
+    }
+
+    /**
+     * @param array<string,mixed> $tokenizer
+     * @return array<string,string>
+     */
+    private function resolve_tokenizer_resources(string $directory, string $profile_file, array $tokenizer, array &$warnings): array
+    {
+        $resources = $tokenizer['resources'] ?? [];
+        if (!is_array($resources)) {
+            return [];
+        }
+
+        $paths = [];
+        foreach ($resources as $key => $name) {
+            $key = (string) $key;
+            if (!is_string($name) || trim($name) === '') {
+                $warnings[] = "Language profile tokenizer resource {$key} must be a non-empty string in {$profile_file}";
+                continue;
+            }
+
+            $name = trim($name);
+            if (!$this->is_local_file_name($name)) {
+                $warnings[] = "Language profile tokenizer resource {$key} must be a local file name in {$profile_file}";
+                continue;
+            }
+
+            $path = $directory . DIRECTORY_SEPARATOR . $name;
+            if (!is_file($path)) {
+                $warnings[] = "Language profile tokenizer resource {$key} does not exist: {$path}";
+                continue;
+            }
+
+            $paths[$key] = $path;
+        }
+
+        ksort($paths, SORT_STRING);
+
+        return $paths;
+    }
+
+    /**
+     * @param array<string,string> $paths
+     * @return array<int,array{resource:string,file:string,sha256:string}>
+     */
+    private function resource_digests(array $paths, string $prefix): array
+    {
+        $digests = [];
+        foreach ($paths as $resource => $path) {
+            $digest = hash_file('sha256', $path);
+            if (!is_string($digest)) {
+                continue;
+            }
+
+            $digests[] = [
+                'resource' => $prefix . (string) $resource,
+                'file' => basename($path),
+                'sha256' => $digest,
+            ];
+        }
+
+        usort(
+            $digests,
+            static fn(array $a, array $b): int => strcmp($a['resource'], $b['resource'])
+                ?: strcmp($a['file'], $b['file'])
+        );
+
+        return $digests;
+    }
+
+    /**
+     * @return array{rows:int,resource_bytes:int,max_input_run_bytes:int,max_output_token_bytes:int}
+     */
+    private function validate_synthetic_tokenizer_dictionary(string $path, array &$warnings): array
+    {
+        try {
+            return Language_FTS_Playground_Synthetic_Dictionary_Tokenizer::load_dictionary($path)['stats'];
+        } catch (Throwable $throwable) {
+            $warnings[] = $throwable->getMessage();
+
+            return [
+                'rows' => 0,
+                'resource_bytes' => 0,
+                'max_input_run_bytes' => 0,
+                'max_output_token_bytes' => 0,
+            ];
+        }
     }
 
     /**
@@ -1192,7 +1337,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
-     * @return array{id:string,type:string,resources:array<string,string>,capabilities:array{emits_offsets:bool,emits_positions:bool,supports_fuzzy:bool,supports_overlaps:bool}}
+     * @return array<string,mixed>
      */
     private function validate_tokenizer_contract(mixed $value, string $path, array &$warnings): array
     {
@@ -1211,25 +1356,27 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $type = $this->validate_tokenizer_string($value['type'] ?? null, 'type', $path, $warnings);
         $resources = $this->validate_tokenizer_resources($value['resources'] ?? [], $path, $warnings);
         $capabilities = $this->validate_tokenizer_capabilities($value['capabilities'] ?? null, $path, $warnings);
+        $version = array_key_exists('version', $value)
+            ? $this->validate_tokenizer_version($value['version'], $path, $warnings)
+            : null;
 
-        if ($id !== null && $type !== null && ($id !== $default['id'] || $type !== $default['type'])) {
-            $warnings[] = 'Language profile tokenizer must use supported unicode_words_v1/unicode_words in ' . $path;
-        }
-
-        if ($resources !== []) {
-            $warnings[] = 'Language profile tokenizer unicode_words_v1 resources must be empty in ' . $path;
-        }
-
-        if ($capabilities !== null && (!$capabilities['emits_offsets'] || !$capabilities['emits_positions'] || $capabilities['supports_overlaps'])) {
-            $warnings[] = 'Language profile tokenizer unicode_words_v1 capabilities must emit offsets and positions without overlaps in ' . $path;
-        }
-
-        return [
+        $contract = [
             'id' => $id ?? $default['id'],
             'type' => $type ?? $default['type'],
             'resources' => $resources,
             'capabilities' => $capabilities ?? $default['capabilities'],
         ];
+        if ($version !== null) {
+            $contract['version'] = $version;
+        }
+
+        try {
+            Language_FTS_Playground_Tokenizer_Registry::validate_contract($contract, $path);
+        } catch (Throwable $throwable) {
+            $warnings[] = $throwable->getMessage();
+        }
+
+        return $contract;
     }
 
     private function validate_tokenizer_string(mixed $value, string $key, string $path, array &$warnings): string|null
@@ -1243,6 +1390,24 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $value = trim($value);
         if (preg_match('/^[a-z][a-z0-9_]*(?:_v[0-9]+)?$/', $value) !== 1) {
             $warnings[] = "Language profile tokenizer {$key} has an invalid identifier in {$path}";
+
+            return null;
+        }
+
+        return $value;
+    }
+
+    private function validate_tokenizer_version(mixed $value, string $path, array &$warnings): string|null
+    {
+        if (!is_string($value) || trim($value) === '') {
+            $warnings[] = 'Language profile tokenizer version must be a non-empty string in ' . $path;
+
+            return null;
+        }
+
+        $value = trim($value);
+        if (preg_match('/^[A-Za-z0-9_.-]+$/', $value) !== 1) {
+            $warnings[] = 'Language profile tokenizer version has an invalid identifier in ' . $path;
 
             return null;
         }
