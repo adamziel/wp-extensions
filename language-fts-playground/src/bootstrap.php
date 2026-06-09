@@ -10,7 +10,7 @@ if (!defined('LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION')) {
 }
 
 if (!defined('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION')) {
-    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-09-resource-backed-term-rules');
+    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-09-tokenizer-contract-baseline');
 }
 
 if (!defined('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE')) {
@@ -18,11 +18,13 @@ if (!defined('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE')) {
 }
 
 require_once __DIR__ . '/StorageInterface.php';
+require_once __DIR__ . '/Tokenizer.php';
 require_once __DIR__ . '/LexicalProfileRepository.php';
 require_once __DIR__ . '/Analyzer.php';
 require_once __DIR__ . '/InMemoryStorage.php';
 require_once __DIR__ . '/WpdbStorage.php';
 require_once __DIR__ . '/Indexer.php';
 require_once __DIR__ . '/Searcher.php';
+require_once __DIR__ . '/SearchBenchmarkCounters.php';
 require_once __DIR__ . '/Demo.php';
 require_once __DIR__ . '/Plugin.php';

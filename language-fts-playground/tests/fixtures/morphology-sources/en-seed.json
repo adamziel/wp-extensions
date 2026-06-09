@@ -1,0 +1,197 @@
+{
+  "schema": "language-fts-playground-morphology-fixture-v1",
+  "language": "en",
+  "label": "English Morphology Fixture",
+  "order": 10,
+  "pack_version": "fixture-2026-06-09-en-morphology",
+  "pack_date": "2026-06-09",
+  "source": {
+    "name": "Language FTS Playground synthetic English morphology fixture",
+    "reference_kind": "synthetic_project_fixture",
+    "source_url": "https://example.test/language-fts-playground/synthetic-morphology/en",
+    "license_name": "GPL-2.0-or-later",
+    "attribution": "Synthetic English morphology smoke fixture maintained with the test suite."
+  },
+  "provenance": "fixture-english-morphology",
+  "normalization": {
+    "profile": "en"
+  },
+  "term_rule_behaviors": [
+    {
+      "id": "en-010-ed-double",
+      "source_stage": "synthetic-past-doubled-consonant",
+      "min_term_length": 5,
+      "surface_pattern": "^[a-z]*([bcdfghjkmnpqrtvwxyz])\\1ed$",
+      "strip_prefix": "",
+      "strip_suffix": "ed",
+      "append": "",
+      "min_key_length": 3,
+      "flags": ["trim_doubled_final_consonant", "require_vowel_or_y", "stop_after_match"],
+      "alternate": null
+    },
+    {
+      "id": "en-020-ed-base",
+      "source_stage": "synthetic-past-base",
+      "min_term_length": 5,
+      "surface_pattern": "^[a-z]+ed$",
+      "strip_prefix": "",
+      "strip_suffix": "ed",
+      "append": "",
+      "min_key_length": 3,
+      "flags": ["require_vowel_or_y"],
+      "alternate": null
+    },
+    {
+      "id": "en-030-ing-double",
+      "source_stage": "synthetic-progressive-doubled-consonant",
+      "min_term_length": 6,
+      "surface_pattern": "^[a-z]*([bcdfghjkmnpqrtvwxyz])\\1ing$",
+      "strip_prefix": "",
+      "strip_suffix": "ing",
+      "append": "",
+      "min_key_length": 3,
+      "flags": ["trim_doubled_final_consonant", "require_vowel_or_y", "stop_after_match"],
+      "alternate": null
+    },
+    {
+      "id": "en-040-ing-base",
+      "source_stage": "synthetic-progressive-base",
+      "min_term_length": 6,
+      "surface_pattern": "^[a-z]+ing$",
+      "strip_prefix": "",
+      "strip_suffix": "ing",
+      "append": "",
+      "min_key_length": 3,
+      "flags": ["require_vowel_or_y"],
+      "alternate": null
+    },
+    {
+      "id": "en-050-es",
+      "source_stage": "synthetic-es-plural",
+      "min_term_length": 4,
+      "surface_pattern": "^[a-z]+(?:ches|shes|sses|xes|zes|ses|oes)$",
+      "strip_prefix": "",
+      "strip_suffix": "es",
+      "append": "",
+      "min_key_length": 3,
+      "flags": ["stop_after_match"],
+      "alternate": null
+    },
+    {
+      "id": "en-060-final-s",
+      "source_stage": "synthetic-final-s",
+      "min_term_length": 4,
+      "surface_pattern": "^[a-z]+s$",
+      "strip_prefix": "",
+      "strip_suffix": "s",
+      "append": "",
+      "min_key_length": 3,
+      "flags": [],
+      "alternate": null
+    }
+  ],
+  "stemmer_sample_pairs": [
+    {
+      "id": "running-to-run",
+      "surface": "running",
+      "reference_key": "run",
+      "policy": "must_emit",
+      "rule_id": "en-030-ing-double"
+    },
+    {
+      "id": "stopped-to-stop",
+      "surface": "stopped",
+      "reference_key": "stop",
+      "policy": "must_emit",
+      "rule_id": "en-010-ed-double"
+    },
+    {
+      "id": "searched-to-search",
+      "surface": "searched",
+      "reference_key": "search",
+      "policy": "must_emit",
+      "rule_id": "en-020-ed-base"
+    },
+    {
+      "id": "runner-not-run",
+      "surface": "runner",
+      "reference_key": "run",
+      "policy": "must_not_emit",
+      "reason": "synthetic over-stemming bait"
+    },
+    {
+      "id": "university-not-universe",
+      "surface": "university",
+      "reference_key": "universe",
+      "policy": "must_not_emit",
+      "reason": "synthetic y-ending bait"
+    }
+  ],
+  "protected_terms": [
+    {
+      "term": "analysis",
+      "would_emit_without_protection": ["analysi"],
+      "reason": "final-s stripping is too broad for this fixture word"
+    },
+    {
+      "term": "bus",
+      "would_emit_without_protection": [],
+      "reason": "short word reserved as exact bait"
+    },
+    {
+      "term": "news",
+      "would_emit_without_protection": ["new"],
+      "reason": "final-s stripping would create an unrelated key"
+    }
+  ],
+  "stopword_excerpt": [
+    {
+      "term": "the",
+      "source_note": "synthetic determiner"
+    },
+    {
+      "term": "and",
+      "source_note": "synthetic conjunction"
+    }
+  ],
+  "analyzer_expectations": [
+    {
+      "id": "running-keys",
+      "text": "running",
+      "keys_include": ["running", "run"],
+      "keys_exclude": ["runn"]
+    },
+    {
+      "id": "stopped-keys",
+      "text": "stopped",
+      "keys_include": ["stopped", "stop"],
+      "keys_exclude": ["stopp"]
+    },
+    {
+      "id": "searched-searches-share-search",
+      "text": "searched searches",
+      "keys_include": ["searched", "searches", "search"],
+      "keys_exclude": ["searche"]
+    },
+    {
+      "id": "overstemming-bait",
+      "text": "runner",
+      "keys_exact": ["runner"]
+    },
+    {
+      "id": "protected-sensitive-words",
+      "text": "news bus analysis",
+      "keys_exact": ["news", "bus", "analysis"]
+    },
+    {
+      "id": "stopword-removal",
+      "text": "the and",
+      "keys_exact": []
+    },
+    {
+      "id": "mixed-stopword-query",
+      "text": "the searching and",
+      "keys_exact": ["searching", "search"]
+    }
+  ]
+}

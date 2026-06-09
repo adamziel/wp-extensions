@@ -1,0 +1,129 @@
+{
+  "schema": "language-fts-playground-morphology-fixture-v1",
+  "language": "pl",
+  "label": "Polish Morphology Fixture",
+  "order": 20,
+  "pack_version": "fixture-2026-06-09-pl-morphology",
+  "pack_date": "2026-06-09",
+  "source": {
+    "name": "Language FTS Playground synthetic Polish morphology fixture",
+    "reference_kind": "synthetic_project_fixture",
+    "source_url": "https://example.test/language-fts-playground/synthetic-morphology/pl",
+    "license_name": "GPL-2.0-or-later",
+    "attribution": "Synthetic Polish morphology conservative suffix fixture maintained with the test suite."
+  },
+  "provenance": "fixture-polish-morphology",
+  "normalization": {
+    "profile": "pl",
+    "fold": {
+      "ą": "a",
+      "Ą": "a",
+      "ć": "c",
+      "Ć": "c",
+      "ę": "e",
+      "Ę": "e",
+      "ł": "l",
+      "Ł": "l",
+      "ń": "n",
+      "Ń": "n",
+      "ó": "o",
+      "Ó": "o",
+      "ś": "s",
+      "Ś": "s",
+      "ź": "z",
+      "Ź": "z",
+      "ż": "z",
+      "Ż": "z"
+    }
+  },
+  "term_rule_behaviors": [
+    {
+      "id": "pl-010-ania",
+      "source_stage": "synthetic-ania-suffix",
+      "min_term_length": 8,
+      "surface_pattern": "^[a-z]+ania$",
+      "strip_prefix": "",
+      "strip_suffix": "ania",
+      "append": "",
+      "min_key_length": 5,
+      "flags": ["require_vowel"],
+      "alternate": null
+    },
+    {
+      "id": "pl-020-ami",
+      "source_stage": "synthetic-ami-suffix",
+      "min_term_length": 7,
+      "surface_pattern": "^[a-z]+ami$",
+      "strip_prefix": "",
+      "strip_suffix": "ami",
+      "append": "",
+      "min_key_length": 5,
+      "flags": ["require_vowel"],
+      "alternate": null
+    }
+  ],
+  "stemmer_sample_pairs": [
+    {
+      "id": "wyszukiwania-to-wyszukiw",
+      "surface": "wyszukiwania",
+      "reference_key": "wyszukiw",
+      "policy": "must_emit",
+      "rule_id": "pl-010-ania"
+    },
+    {
+      "id": "ksiazkami-to-ksiazk",
+      "surface": "ksiazkami",
+      "reference_key": "ksiazk",
+      "policy": "must_emit",
+      "rule_id": "pl-020-ami"
+    },
+    {
+      "id": "ramami-not-ram",
+      "surface": "ramami",
+      "reference_key": "ram",
+      "policy": "must_not_emit",
+      "reason": "short synthetic stem bait"
+    },
+    {
+      "id": "rama-not-ram",
+      "surface": "rama",
+      "reference_key": "ram",
+      "policy": "must_not_emit",
+      "reason": "short bare noun bait"
+    }
+  ],
+  "protected_terms": [],
+  "stopword_excerpt": [
+    {
+      "term": "i",
+      "source_note": "synthetic conjunction"
+    },
+    {
+      "term": "oraz",
+      "source_note": "synthetic conjunction"
+    }
+  ],
+  "analyzer_expectations": [
+    {
+      "id": "positive-ania",
+      "text": "wyszukiwania",
+      "keys_include": ["wyszukiwania", "wyszukiw"]
+    },
+    {
+      "id": "positive-ami",
+      "text": "ksiazkami",
+      "keys_include": ["ksiazkami", "ksiazk"]
+    },
+    {
+      "id": "short-stem-bait",
+      "text": "ramami rama",
+      "keys_include": ["ramami", "rama"],
+      "keys_exclude": ["ram"]
+    },
+    {
+      "id": "stopwords-removed",
+      "text": "i oraz",
+      "keys_exact": []
+    }
+  ]
+}

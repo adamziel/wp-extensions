@@ -87,6 +87,28 @@ no-result query stopped. This is a debugging aid for maintainers and lexical
 pack authors; it is not a replacement for offline relevance evaluation with a
 representative query suite.
 
+## Search Benchmark Counters
+
+The repository includes a pure-PHP synthetic benchmark fixture for search
+materialization counters. It builds a small in-memory `bm` language profile and
+documents with controlled common terms, quoted phrases, fuzzy typo candidates,
+single-token synonyms, and phrase synonyms. The command reports lookup terms by
+class plus candidate, postings, document length, position, field text, field
+metadata, and peak-memory counters without MySQL, database-native FTS, or large
+corpora.
+
+Run the common-term, phrase, and fuzzy probes under `php -n`:
+
+```sh
+php -n language-fts-playground/tools/search-benchmark-counters.php --scenario=common-term --documents=64 --limit=5 --json
+php -n language-fts-playground/tools/search-benchmark-counters.php --scenario=phrase --documents=64 --limit=5
+php -n language-fts-playground/tools/search-benchmark-counters.php --scenario=fuzzy --documents=64 --limit=5 --json
+```
+
+Use `--scenario=all` to print every committed probe, including the synonym and
+phrase-synonym fixtures. Public-search probes are gated so field text rows stay
+within the final result count and field metadata rows remain zero.
+
 ## Field-Aware Ranking And Snippets
 
 The index stores normalized source text and term frequencies separately for
@@ -148,8 +170,12 @@ resources/languages/
     term_rules.tsv
 ```
 
-`profile.php` declares the language id, label, load order, optional character
-folds, optional language signal regexes, and resource file names.
+`profile.php` declares the language id, label, load order, optional tokenizer
+contract, optional character folds, optional language signal regexes, and
+resource file names. Profiles may omit the tokenizer declaration; the runtime
+defaults to `unicode_words_v1`, which preserves the current Unicode
+letter/number tokenization behavior. This baseline does not ship or support
+dictionary segmenters or non-space language tokenizers.
 `pack.php` records source, license, attribution, provenance, generated file
 list, pack version/date, and whether the resource pack is curated seed data or
 an imported comprehensive pack. The analyzer does not load `pack.php` during

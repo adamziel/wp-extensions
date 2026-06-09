@@ -698,13 +698,16 @@ final class Language_FTS_Playground_Searcher
     private function build_partition_lookup_plan(string $query, string $language): array
     {
         $plan = $this->parse_query($query, $language);
-        $fuzzy_candidates = $this->resolve_fuzzy_candidates($plan['fuzzy_terms'], $language);
-        $fuzzy_terms = $this->flatten_fuzzy_candidates($fuzzy_candidates);
         $synonym_expansions = $this->analyzer->expand_query_synonyms($plan['exact_terms'], $language);
         $phrase_synonym_expansions = $this->analyzer->expand_query_synonym_phrases($plan['query_tokens'], $language);
         $synonym_terms = $this->synonym_terms($synonym_expansions);
         $phrase_synonym_terms = $this->phrase_synonym_terms($phrase_synonym_expansions);
-        $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms, $synonym_terms, $phrase_synonym_terms));
+        $non_fuzzy_terms = $this->unique_terms(array_merge($plan['exact_terms'], $synonym_terms, $phrase_synonym_terms));
+        $this->enforce_lookup_term_cap(count($non_fuzzy_terms), $language);
+
+        $fuzzy_candidates = $this->resolve_fuzzy_candidates($plan['fuzzy_terms'], $language);
+        $fuzzy_terms = $this->flatten_fuzzy_candidates($fuzzy_candidates);
+        $terms = $this->unique_terms(array_merge($non_fuzzy_terms, $fuzzy_terms));
 
         return [
             'plan' => $plan,
@@ -1467,6 +1470,7 @@ final class Language_FTS_Playground_Searcher
      */
     private function parse_query(string $query, string $language): array
     {
+        $supports_fuzzy = $this->analyzer->tokenizer_supports_fuzzy($language);
         $matches = [];
         $matched = preg_match_all('/"([^"]*)"|(\S+)/u', $query, $matches, PREG_SET_ORDER);
         if ($matched === false || $matched === 0) {
@@ -1507,7 +1511,7 @@ final class Language_FTS_Playground_Searcher
             foreach ($token_keys_list as $token_keys) {
                 foreach ($token_keys as $term) {
                     $exact_terms[$term] = true;
-                    if ($is_fuzzy && strlen($term) >= $this->fuzzy_min_length) {
+                    if ($is_fuzzy && $supports_fuzzy && strlen($term) >= $this->fuzzy_min_length) {
                         $fuzzy_terms[$term] = true;
                     }
                 }
@@ -1857,16 +1861,10 @@ final class Language_FTS_Playground_Searcher
      */
     private function first_match_offset(string $source, array $query_terms, string $language): ?int
     {
-        $matches = [];
-        $match_count = preg_match_all('/[\p{L}\p{N}]+/u', $source, $matches, PREG_OFFSET_CAPTURE);
-        if ($match_count === false || $match_count === 0) {
-            return null;
-        }
-
-        foreach ($matches[0] as $match) {
-            $token = (string) ($match[0] ?? '');
-            if ($this->token_matches_query($token, $query_terms, $language)) {
-                return (int) ($match[1] ?? 0);
+        $query_lookup = array_fill_keys($query_terms, true);
+        foreach ($this->analyzer->analyze_token_stream($source, $language) as $token) {
+            if ($this->token_stream_matches_query($token, $query_lookup)) {
+                return (int) $token['start_byte'];
             }
         }
 
@@ -1878,22 +1876,23 @@ final class Language_FTS_Playground_Searcher
      */
     private function highlight_terms(string $source, array $query_terms, string $language): string
     {
-        $matches = [];
-        $match_count = preg_match_all('/[\p{L}\p{N}]+/u', $source, $matches, PREG_OFFSET_CAPTURE);
-        if ($match_count === false || $match_count === 0) {
+        $token_stream = $this->analyzer->analyze_token_stream($source, $language);
+        if ($token_stream === []) {
             return self::escape_html($source);
         }
 
+        $query_lookup = array_fill_keys($query_terms, true);
         $highlighted = '';
         $cursor = 0;
-        foreach ($matches[0] as $match) {
-            $token = (string) ($match[0] ?? '');
-            $offset = (int) ($match[1] ?? 0);
-            $length = strlen($token);
+        foreach ($token_stream as $token) {
+            $offset = (int) $token['start_byte'];
+            $length = (int) $token['end_byte'] - $offset;
+            $surface = substr($source, $offset, $length);
+            $surface = is_string($surface) ? $surface : (string) $token['surface'];
 
             $highlighted .= self::escape_html(substr($source, $cursor, $offset - $cursor));
-            $escaped_token = self::escape_html($token);
-            $highlighted .= $this->token_matches_query($token, $query_terms, $language)
+            $escaped_token = self::escape_html($surface);
+            $highlighted .= $this->token_stream_matches_query($token, $query_lookup)
                 ? '<mark>' . $escaped_token . '</mark>'
                 : $escaped_token;
             $cursor = $offset + $length;
@@ -1905,13 +1904,13 @@ final class Language_FTS_Playground_Searcher
     }
 
     /**
-     * @param string[] $query_terms
+     * @param array{keys:string[]} $token
+     * @param array<string,bool> $query_lookup
      */
-    private function token_matches_query(string $token, array $query_terms, string $language): bool
+    private function token_stream_matches_query(array $token, array $query_lookup): bool
     {
-        $query_lookup = array_fill_keys($query_terms, true);
-        foreach ($this->analyzer->analyze_text($token, $language) as $term) {
-            if (isset($query_lookup[$term])) {
+        foreach ($token['keys'] as $term) {
+            if (isset($query_lookup[(string) $term])) {
                 return true;
             }
         }

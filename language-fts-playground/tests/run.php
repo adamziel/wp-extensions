@@ -32,6 +32,8 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public int $delete_count = 0;
     public int $fetch_term_language_hits_count = 0;
     public bool $fail_on_fetch_term_language_hits = false;
+    public int $fetch_candidate_terms_count = 0;
+    public bool $fail_on_fetch_candidate_terms = false;
     public int $fetch_document_fields_count = 0;
     public int $fetch_document_field_metadata_count = 0;
     /** @var string[] */
@@ -197,6 +199,11 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
     public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array
     {
+        $this->fetch_candidate_terms_count++;
+        if ($this->fail_on_fetch_candidate_terms) {
+            throw new RuntimeException('fetch_candidate_terms should not run before lookup term cap enforcement.');
+        }
+
         $max_distance = max(0, $max_distance);
         $min_length = max(1, strlen($term) - $max_distance);
         $max_length = strlen($term) + $max_distance;
@@ -1280,6 +1287,9 @@ function create_language_fts_temp_profile_set(array $profiles): string
         if (isset($definition['signals']) && is_array($definition['signals'])) {
             $profile['language_signals'] = array_values(array_map('strval', $definition['signals']));
         }
+        if (array_key_exists('tokenizer', $definition)) {
+            $profile['tokenizer'] = $definition['tokenizer'];
+        }
 
         file_put_contents(
             $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
@@ -1349,6 +1359,150 @@ function write_language_fts_temp_pack_metadata(string $language_dir, array $over
         $language_dir . DIRECTORY_SEPARATOR . 'pack.php',
         "<?php\nreturn " . var_export($metadata, true) . ";\n"
     );
+}
+
+/**
+ * @param array<string,mixed> $metadata
+ */
+function write_language_fts_temp_pack_metadata_array(string $language_dir, array $metadata): void
+{
+    file_put_contents(
+        $language_dir . DIRECTORY_SEPARATOR . 'pack.php',
+        "<?php\nreturn " . var_export($metadata, true) . ";\n"
+    );
+}
+
+/**
+ * @return array{resource:string,file:string,sha256:string,bytes:int,generated:bool}
+ */
+function language_fts_temp_runtime_file_record(string $language_dir, string $resource, string $file, bool $generated = false): array
+{
+    $path = $language_dir . DIRECTORY_SEPARATOR . $file;
+
+    return [
+        'resource' => $resource,
+        'file' => $file,
+        'sha256' => (string) hash_file('sha256', $path),
+        'bytes' => (int) filesize($path),
+        'generated' => $generated,
+    ];
+}
+
+/**
+ * @return array<int,array{resource:string,file:string,sha256:string,bytes:int,generated:bool}>
+ */
+function language_fts_temp_runtime_file_records(string $language_dir): array
+{
+    $profile_path = $language_dir . DIRECTORY_SEPARATOR . 'profile.php';
+    $profile = require $profile_path;
+    assert_true(is_array($profile), 'Temporary profile metadata is readable.');
+
+    $records = [
+        language_fts_temp_runtime_file_record($language_dir, 'profile', 'profile.php', false),
+    ];
+    foreach ((array) ($profile['resources'] ?? []) as $resource => $file) {
+        $file = (string) $file;
+        if (is_file($language_dir . DIRECTORY_SEPARATOR . $file)) {
+            $records[] = language_fts_temp_runtime_file_record($language_dir, (string) $resource, $file, false);
+        }
+    }
+    if (is_file($language_dir . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt')) {
+        $records[] = language_fts_temp_runtime_file_record($language_dir, 'license', 'LICENSE.fixture.txt', false);
+    }
+
+    usort(
+        $records,
+        static fn(array $a, array $b): int => strcmp($a['resource'], $b['resource'])
+            ?: strcmp($a['file'], $b['file'])
+    );
+
+    return $records;
+}
+
+/**
+ * @param array<string,mixed> $overrides
+ * @return array<string,mixed>
+ */
+function language_fts_temp_comprehensive_pack_metadata(string $language_dir, array $overrides = []): array
+{
+    $license_path = $language_dir . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt';
+    if (!is_file($license_path)) {
+        file_put_contents($license_path, "Fixture license text.\n");
+    }
+
+    $runtime_files = language_fts_temp_runtime_file_records($language_dir);
+    $files = array_values(array_unique(array_column($runtime_files, 'file')));
+    sort($files, SORT_STRING);
+    $profile_sha256 = (string) hash_file('sha256', $language_dir . DIRECTORY_SEPARATOR . 'profile.php');
+
+    $metadata = [
+        'metadata_schema' => Language_FTS_Playground_Lexical_Pack_Validator::METADATA_SCHEMA_V2,
+        'language_id' => basename($language_dir),
+        'pack_version' => 'fixture-comprehensive-2026-06-09',
+        'pack_date' => '2026-06-09',
+        'data_kind' => 'imported_comprehensive',
+        'source_name' => 'Fixture comprehensive lexical source',
+        'source_url' => 'https://example.test/fixture-comprehensive-source',
+        'license_name' => 'Fixture License 1.0',
+        'attribution_text' => 'Fixture comprehensive attribution.',
+        'provenance' => 'fixture-comprehensive',
+        'files' => $files,
+        'source' => [
+            'name' => 'Fixture comprehensive lexical source',
+            'version' => '2026-06-fixture',
+            'retrieved_at' => '2026-06-09',
+            'artifacts' => [
+                [
+                    'name' => 'fixture-source.json',
+                    'url' => 'https://example.test/fixture-source.json',
+                    'sha256' => str_repeat('a', 64),
+                    'bytes' => 123,
+                ],
+            ],
+        ],
+        'license' => [
+            'identifier' => 'Fixture-1.0',
+            'name' => 'Fixture License 1.0',
+            'url' => 'https://example.test/license',
+            'text_url' => 'https://example.test/license.txt',
+            'text_file' => 'LICENSE.fixture.txt',
+            'attribution' => 'Fixture comprehensive attribution.',
+        ],
+        'provenance_ids' => [
+            'fixture-comprehensive' => [
+                'source' => 'Fixture comprehensive lexical source',
+                'source_version' => '2026-06-fixture',
+                'description' => 'Fixture rows generated from a reviewed source snapshot.',
+            ],
+        ],
+        'normalization' => [
+            'profile_id' => basename($language_dir),
+            'profile_version' => 'language-fts-playground-normalization-fixture-v1',
+            'profile_file' => 'profile.php',
+            'profile_sha256' => $profile_sha256,
+        ],
+        'importer' => [
+            'name' => 'language-fts-playground/tools/import-lexical-source.php',
+            'version' => 'language-fts-playground-lexical-importer-v2',
+            'format' => 'membership-tsv',
+            'command' => 'php language-fts-playground/tools/import-lexical-source.php membership-tsv <source-artifact> <output-dir> --data-kind=imported_comprehensive',
+            'options' => [
+                'data_kind' => 'imported_comprehensive',
+                'language' => basename($language_dir),
+            ],
+        ],
+        'runtime_files' => $runtime_files,
+    ];
+
+    return array_replace_recursive($metadata, $overrides);
+}
+
+/**
+ * @param array<string,mixed> $overrides
+ */
+function write_language_fts_temp_comprehensive_pack_metadata(string $language_dir, array $overrides = []): void
+{
+    write_language_fts_temp_pack_metadata_array($language_dir, language_fts_temp_comprehensive_pack_metadata($language_dir, $overrides));
 }
 
 /**
@@ -1452,6 +1606,136 @@ function language_fts_eval_fixture_path(string $name): string
     return __DIR__ . '/fixtures/lexical-eval/' . $name;
 }
 
+function language_fts_morphology_fixture_path(string $name): string
+{
+    return __DIR__ . '/fixtures/morphology-sources/' . $name;
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function read_language_fts_morphology_fixture(string $name): array
+{
+    $path = language_fts_morphology_fixture_path($name);
+    $json = file_get_contents($path);
+    assert_true(is_string($json), 'Morphology fixture can be read: ' . $path);
+    $fixture = json_decode($json, true);
+    assert_true(is_array($fixture), 'Morphology fixture JSON decodes to an object: ' . $path);
+
+    return $fixture;
+}
+
+/**
+ * @param array<string,mixed> $fixture
+ */
+function write_language_fts_morphology_fixture_file(string $path, array $fixture): void
+{
+    $json = json_encode($fixture, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    assert_true(is_string($json), 'Morphology fixture variant encodes as JSON.');
+    file_put_contents($path, $json . "\n");
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_morphology_compiler(string $input_path, string $output_dir, array $options = []): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+        '-n',
+        escapeshellarg(__DIR__ . '/../tools/compile-morphology-fixture.php'),
+        escapeshellarg($input_path),
+        escapeshellarg($output_dir),
+    ];
+
+    if (!empty($options['file_only'])) {
+        $command[] = escapeshellarg('--file-only');
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function compile_language_fts_morphology_fixture_to_root(string $fixture_name, string $root): array
+{
+    $fixture = read_language_fts_morphology_fixture($fixture_name);
+    $language = (string) ($fixture['language'] ?? '');
+    assert_true($language !== '', 'Morphology fixture declares a language.');
+    $language_dir = $root . DIRECTORY_SEPARATOR . $language;
+    assert_true(mkdir($language_dir, 0777, true), 'Temporary morphology language directory is created.');
+
+    $result = run_language_fts_morphology_compiler(language_fts_morphology_fixture_path($fixture_name), $language_dir);
+    assert_same(0, $result['exit_code'], 'Morphology fixture compiler exits successfully for ' . $fixture_name . '. Output: ' . $result['output']);
+
+    return $fixture;
+}
+
+/**
+ * @param array<string,mixed> $fixture
+ */
+function assert_language_fts_morphology_fixture_behavior(array $fixture, Language_FTS_Playground_Analyzer $analyzer): void
+{
+    $language = (string) ($fixture['language'] ?? '');
+    assert_true($language !== '', 'Morphology fixture behavior has a language.');
+
+    foreach ((array) ($fixture['stemmer_sample_pairs'] ?? []) as $pair) {
+        assert_true(is_array($pair), 'Stemmer sample pair is an object.');
+        $id = (string) ($pair['id'] ?? '');
+        $surface = (string) ($pair['surface'] ?? '');
+        $reference_key = (string) ($pair['reference_key'] ?? '');
+        $policy = (string) ($pair['policy'] ?? '');
+        $terms = $analyzer->analyze_text($surface, $language);
+
+        if ($policy === 'must_emit') {
+            assert_true(
+                in_array($reference_key, $terms, true),
+                "Morphology sample {$id} emits {$reference_key}. Terms: " . var_export($terms, true)
+            );
+        } elseif ($policy === 'must_not_emit') {
+            assert_true(
+                !in_array($reference_key, $terms, true),
+                "Morphology bait sample {$id} does not emit {$reference_key}. Terms: " . var_export($terms, true)
+            );
+        }
+    }
+
+    foreach ((array) ($fixture['analyzer_expectations'] ?? []) as $expectation) {
+        assert_true(is_array($expectation), 'Analyzer expectation is an object.');
+        $id = (string) ($expectation['id'] ?? '');
+        $terms = $analyzer->analyze_text((string) ($expectation['text'] ?? ''), $language);
+
+        if (array_key_exists('keys_exact', $expectation)) {
+            assert_same(
+                array_values(array_map('strval', (array) $expectation['keys_exact'])),
+                $terms,
+                "Morphology analyzer expectation {$id} has exact keys."
+            );
+        }
+        foreach (array_values(array_map('strval', (array) ($expectation['keys_include'] ?? []))) as $key) {
+            assert_true(
+                in_array($key, $terms, true),
+                "Morphology analyzer expectation {$id} includes {$key}. Terms: " . var_export($terms, true)
+            );
+        }
+        foreach (array_values(array_map('strval', (array) ($expectation['keys_exclude'] ?? []))) as $key) {
+            assert_true(
+                !in_array($key, $terms, true),
+                "Morphology analyzer expectation {$id} excludes {$key}. Terms: " . var_export($terms, true)
+            );
+        }
+    }
+}
+
 /**
  * @param array<string,string> $options
  * @return array{exit_code:int,output:string}
@@ -1528,6 +1812,39 @@ function run_language_fts_evaluator(string $fixture_path, array $options = [], b
     }
     $command[] = escapeshellarg(__DIR__ . '/../tools/evaluate-lexical-pack.php');
     $command[] = escapeshellarg($fixture_path);
+
+    foreach ($options as $key => $value) {
+        $option = '--' . str_replace('_', '-', (string) $key);
+        if ($value === true) {
+            $command[] = escapeshellarg($option);
+        } elseif ($value !== false && $value !== null) {
+            $command[] = escapeshellarg($option . '=' . (string) $value);
+        }
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_search_benchmark(array $options = [], bool $no_ini = false): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+    ];
+    if ($no_ini) {
+        $command[] = '-n';
+    }
+    $command[] = escapeshellarg(__DIR__ . '/../tools/search-benchmark-counters.php');
 
     foreach ($options as $key => $value) {
         $option = '--' . str_replace('_', '-', (string) $key);
@@ -1753,6 +2070,31 @@ function language_fts_import_options(array $overrides = []): array
         ],
         $overrides
     );
+}
+
+/**
+ * @param array<string,string> $overrides
+ * @return array<string,string>
+ */
+function language_fts_comprehensive_import_options(string $input_path, array $overrides = []): array
+{
+    return language_fts_import_options(array_merge(
+        [
+            'data_kind' => 'imported_comprehensive',
+            'source_version' => '2026-06-fixture',
+            'source_retrieved_at' => '2026-06-09',
+            'source_artifact_name' => basename($input_path),
+            'source_artifact_url' => 'https://example.test/' . basename($input_path),
+            'source_artifact_sha256' => (string) hash_file('sha256', $input_path),
+            'source_artifact_bytes' => (string) filesize($input_path),
+            'license_id' => 'Fixture-1.0',
+            'license_url' => 'https://example.test/license',
+            'license_text_url' => 'https://example.test/license.txt',
+            'license_text_file' => 'LICENSE.fixture.txt',
+            'normalization_profile_version' => 'language-fts-playground-normalization-fixture-v1',
+        ],
+        $overrides
+    ));
 }
 
 function assert_language_fts_term_rules_rejected(string $label, string $term_rules, string $expected_message): void
@@ -2408,6 +2750,89 @@ test_case('rejects malformed lexical resource rows deliberately', function (): v
     }
 });
 
+test_case('tokenizer profile contract defaults and rejects unsupported declarations', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $profile = $repository->profile('xx');
+        assert_same(Language_FTS_Playground_Unicode_Words_Tokenizer::default_contract(), $profile['tokenizer'] ?? null, 'Profiles without tokenizer declarations default to unicode_words_v1.');
+        assert_same(true, (new Language_FTS_Playground_Analyzer($repository))->tokenizer_supports_fuzzy('xx'), 'The default tokenizer keeps fuzzy support enabled.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+
+    $unsupported_root = create_language_fts_temp_profile_set([
+        'xx' => [
+            'tokenizer' => [
+                'id' => 'dictionary_segmenter_v1',
+                'type' => 'dictionary_segmenter',
+                'resources' => [],
+                'capabilities' => [
+                    'emits_offsets' => true,
+                    'emits_positions' => true,
+                    'supports_fuzzy' => false,
+                    'supports_overlaps' => false,
+                ],
+            ],
+        ],
+    ]);
+    write_language_fts_temp_pack_metadata($unsupported_root . DIRECTORY_SEPARATOR . 'xx');
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($unsupported_root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Unsupported tokenizer declarations fail profile loading.'
+        );
+        assert_contains_text('supported unicode_words_v1/unicode_words', $throwable->getMessage(), 'Unsupported tokenizer failures explain the supported baseline.');
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($unsupported_root))->validate_all();
+        $warnings = implode("\n", language_fts_pack_status_by_id($report)['xx']['warnings'] ?? []);
+        assert_same(false, $report['valid'], 'Unsupported tokenizer declarations fail validator checks.');
+        assert_contains_text('supported unicode_words_v1/unicode_words', $warnings, 'Validator reports unsupported tokenizer declarations.');
+    } finally {
+        remove_language_fts_temp_tree($unsupported_root);
+    }
+});
+
+test_case('tokenizer profile contract validates declaration shape', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'xx' => [
+            'tokenizer' => [
+                'id' => 'unicode_words_v1',
+                'type' => 'unicode_words',
+                'resources' => [],
+                'capabilities' => [
+                    'emits_offsets' => true,
+                    'emits_positions' => true,
+                    'supports_fuzzy' => 'yes',
+                    'supports_overlaps' => false,
+                ],
+            ],
+        ],
+    ]);
+    write_language_fts_temp_pack_metadata($root . DIRECTORY_SEPARATOR . 'xx');
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Malformed tokenizer capabilities fail profile loading.'
+        );
+        assert_contains_text('capability supports_fuzzy must be a boolean', $throwable->getMessage(), 'Malformed tokenizer capability failures name the field.');
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $warnings = implode("\n", language_fts_pack_status_by_id($report)['xx']['warnings'] ?? []);
+        assert_same(false, $report['valid'], 'Malformed tokenizer capabilities fail validator checks.');
+        assert_contains_text('capability supports_fuzzy must be a boolean', $warnings, 'Validator reports malformed tokenizer capabilities.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('static guard expects production term rule resource support', function (): void {
     $repository_source = file_get_contents(__DIR__ . '/../src/LexicalProfileRepository.php');
     $analyzer_source = file_get_contents(__DIR__ . '/../src/Analyzer.php');
@@ -2449,6 +2874,28 @@ test_case('bundled morphology profiles declare term rule resources', function ()
         $missing,
         'Bundled en/pl/de profiles should declare term_rules.tsv for morphology migration.'
     );
+});
+
+test_case('bundled profiles declare the unicode words tokenizer baseline', function (): void {
+    $root = Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root();
+    $expected = Language_FTS_Playground_Unicode_Words_Tokenizer::default_contract();
+
+    foreach (['en', 'pl', 'de'] as $language) {
+        $profile_file = $root . DIRECTORY_SEPARATOR . $language . DIRECTORY_SEPARATOR . 'profile.php';
+        $profile = require $profile_file;
+        assert_true(is_array($profile), "Bundled {$language} profile returns an array.");
+        assert_same($expected, $profile['tokenizer'] ?? null, "Bundled {$language} profile declares the default tokenizer contract.");
+
+        $repository_profile = (new Language_FTS_Playground_Lexical_Profile_Repository())->profile($language);
+        assert_same($expected, $repository_profile['tokenizer'] ?? null, "Bundled {$language} runtime profile preserves the tokenizer contract.");
+    }
+
+    $report = (new Language_FTS_Playground_Lexical_Pack_Validator())->validate_all();
+    $by_id = language_fts_pack_status_by_id($report);
+    foreach (['en', 'pl', 'de'] as $language) {
+        assert_same($expected['id'], $by_id[$language]['tokenizer']['id'] ?? null, "Validator reports {$language} tokenizer id.");
+        assert_same($expected['capabilities'], $by_id[$language]['tokenizer']['capabilities'] ?? null, "Validator reports {$language} tokenizer capabilities.");
+    }
 });
 
 test_case('bundled morphology pack metadata lists term rule resources', function (): void {
@@ -3371,6 +3818,118 @@ test_case('lexical pack validator warns and fails when metadata omits profile re
     }
 });
 
+test_case('lexical pack validator requires v2 audit metadata for comprehensive packs', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir, [
+        'source' => null,
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Comprehensive packs missing source metadata fail validation.');
+        assert_contains_text('source must be an array', $warnings, 'The missing comprehensive source section is reported clearly.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator requires runtime resource and file pairs', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir);
+    foreach ($metadata['runtime_files'] as &$runtime_file) {
+        if (($runtime_file['file'] ?? '') === 'profile.php') {
+            $runtime_file['resource'] = 'license';
+            break;
+        }
+    }
+    unset($runtime_file);
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A runtime file declared under the wrong resource label fails validation.');
+        assert_same('incomplete', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Wrong resource/file coverage reports an incomplete runtime digest status.');
+        assert_contains_text('runtime_files must include profile.php for comprehensive resource profile', $warnings, 'The missing runtime resource/file pair is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator requires normalization profile id to match the profile language', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir, [
+        'normalization' => [
+            'profile_id' => 'de',
+        ],
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A comprehensive pack with the wrong normalization profile id fails validation.');
+        assert_contains_text('normalization.profile_id must match profile language id xx', $warnings, 'The wrong normalization profile id is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator reports missing runtime digest metadata as not declared', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir, [
+        'runtime_files' => null,
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A comprehensive pack missing runtime digest metadata fails validation.');
+        assert_same('not_declared', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Missing runtime digest metadata does not report ok.');
+        assert_contains_text('runtime_files must be a non-empty array', $warnings, 'Missing runtime digest metadata is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator reports malformed runtime digest metadata as invalid', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir);
+    foreach ($metadata['runtime_files'] as &$runtime_file) {
+        if (($runtime_file['file'] ?? '') === 'profile.php') {
+            $runtime_file['sha256'] = 'not-a-sha256';
+            break;
+        }
+    }
+    unset($runtime_file);
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A comprehensive pack with malformed runtime digest metadata fails validation.');
+        assert_same('invalid', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Malformed runtime digest metadata does not report ok or mismatch.');
+        assert_contains_text('runtime_files sha256 must be 64 lowercase hex characters', $warnings, 'Malformed runtime digest metadata is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('lexical pack validator rejects non-normalized resource keys consistently', function (): void {
     $root = create_language_fts_temp_profile_set([
         'xx' => [
@@ -3395,6 +3954,52 @@ test_case('lexical pack validator rejects non-normalized resource keys consisten
         assert_contains_text('synonym source must be normalized lowercase resource tokens', $warnings, 'Non-normalized pairwise synonym sources are reported.');
         assert_contains_text('term rule append must be normalized lowercase resource tokens', $warnings, 'Non-normalized term rule append literals are reported.');
         assert_contains_text('term rule alternate_replacement must be normalized lowercase resource tokens', $warnings, 'Non-normalized term rule alternate replacements are reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator fails runtime digest and byte mismatches', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir);
+    foreach ($metadata['runtime_files'] as &$runtime_file) {
+        if (($runtime_file['file'] ?? '') === 'profile.php') {
+            $runtime_file['sha256'] = str_repeat('b', 64);
+        }
+        if (($runtime_file['file'] ?? '') === 'stopwords.txt') {
+            $runtime_file['bytes'] = ((int) $runtime_file['bytes']) + 1;
+        }
+    }
+    unset($runtime_file);
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Runtime digest and byte mismatches fail validation.');
+        assert_same('mismatch', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Digest mismatch status is reported in metadata.');
+        assert_contains_text('runtime file sha256 mismatch', $warnings, 'Runtime sha256 mismatch is reported.');
+        assert_contains_text('runtime file byte count mismatch', $warnings, 'Runtime byte count mismatch is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator fails undeclared comprehensive row provenance', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\trogue-provenance\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Undeclared row provenance fails comprehensive pack validation.');
+        assert_contains_text('lexeme provenance must be declared', $warnings, 'The undeclared provenance failure names row provenance.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
@@ -3690,6 +4295,198 @@ test_case('lexical pack evaluator accepts suite option and spaced thresholds', f
     assert_contains_text('Evaluation passed.', $output, 'The --suite alias evaluates the requested fixture.');
 });
 
+test_case('morphology fixture compiler writes deterministic minimal English pack', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-morphology-en');
+
+    try {
+        $result = run_language_fts_morphology_compiler(language_fts_morphology_fixture_path('en-seed.json'), $output_dir);
+        assert_same(0, $result['exit_code'], 'Morphology fixture compiler exits successfully. Output: ' . $result['output']);
+
+        $expected_term_rules =
+            "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+            "en-010-ed-double\t5\t/^[a-z]*([bcdfghjkmnpqrtvwxyz])\\1ed$/u\t\ted\t\t3\ttrim_doubled_final_consonant,require_vowel_or_y,stop_after_match\t\t\tfixture-english-morphology\n" .
+            "en-020-ed-base\t5\t/^[a-z]+ed$/u\t\ted\t\t3\trequire_vowel_or_y\t\t\tfixture-english-morphology\n" .
+            "en-030-ing-double\t6\t/^[a-z]*([bcdfghjkmnpqrtvwxyz])\\1ing$/u\t\ting\t\t3\ttrim_doubled_final_consonant,require_vowel_or_y,stop_after_match\t\t\tfixture-english-morphology\n" .
+            "en-040-ing-base\t6\t/^[a-z]+ing$/u\t\ting\t\t3\trequire_vowel_or_y\t\t\tfixture-english-morphology\n" .
+            "en-050-es\t4\t/^[a-z]+(?:ches|shes|sses|xes|zes|ses|oes)$/u\t\tes\t\t3\tstop_after_match\t\t\tfixture-english-morphology\n" .
+            "en-060-final-s\t4\t/^[a-z]+s$/u\t\ts\t\t3\t\t\t\tfixture-english-morphology\n";
+        $expected_stopwords = "# Generated stopwords from morphology fixture.\n# provenance: fixture-english-morphology\nand\nthe\n";
+        $expected_protected_terms = "# Generated protected terms from morphology fixture.\n# provenance: fixture-english-morphology\nanalysis\nbus\nnews\n";
+
+        $first_outputs = [
+            'term_rules.tsv' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'term_rules.tsv'),
+            'stopwords.txt' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'stopwords.txt'),
+            'protected_terms.txt' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'protected_terms.txt'),
+            'lexemes.tsv' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv'),
+            'synonyms.tsv' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synonyms.tsv'),
+        ];
+
+        assert_same($expected_term_rules, $first_outputs['term_rules.tsv'], 'Compiler writes deterministic term_rules.tsv.');
+        assert_same($expected_stopwords, $first_outputs['stopwords.txt'], 'Compiler writes sorted stopwords with provenance.');
+        assert_same($expected_protected_terms, $first_outputs['protected_terms.txt'], 'Compiler writes sorted protected terms with provenance.');
+        assert_same("# observed\tcanonical\tprovenance\n", $first_outputs['lexemes.tsv'], 'Compiler writes a header-only lexemes.tsv when no lexeme rows are declared.');
+        assert_same("# source\ttarget\tdirection\tweight\tprovenance\n", $first_outputs['synonyms.tsv'], 'Compiler writes a header-only synonyms.tsv when no synonym rows are declared.');
+
+        $profile = require $output_dir . DIRECTORY_SEPARATOR . 'profile.php';
+        assert_same('en', $profile['id'] ?? null, 'Generated profile declares the fixture language.');
+        assert_same('term_rules.tsv', $profile['resources']['term_rules'] ?? null, 'Generated profile declares term_rules.tsv.');
+        assert_same('protected_terms.txt', $profile['resources']['protected_terms'] ?? null, 'Generated profile declares protected_terms.txt.');
+
+        $metadata = require $output_dir . DIRECTORY_SEPARATOR . 'pack.php';
+        assert_same('fixture-english-morphology', $metadata['provenance'] ?? null, 'Generated pack metadata declares fixture provenance.');
+        assert_same(
+            ['profile.php', 'stopwords.txt', 'lexemes.tsv', 'synonyms.tsv', 'term_rules.tsv', 'protected_terms.txt'],
+            $metadata['files'] ?? null,
+            'Generated pack metadata lists every profile resource.'
+        );
+
+        $second_result = run_language_fts_morphology_compiler(language_fts_morphology_fixture_path('en-seed.json'), $output_dir);
+        assert_same(0, $second_result['exit_code'], 'Morphology fixture compiler can overwrite fixed outputs. Output: ' . $second_result['output']);
+        foreach ($first_outputs as $file => $contents) {
+            assert_same($contents, file_get_contents($output_dir . DIRECTORY_SEPARATOR . $file), "Repeated morphology compile keeps {$file} deterministic.");
+        }
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('morphology fixture compiler supports file-only resource output', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-morphology-file-only');
+
+    try {
+        $result = run_language_fts_morphology_compiler(
+            language_fts_morphology_fixture_path('en-seed.json'),
+            $output_dir,
+            ['file_only' => true]
+        );
+        assert_same(0, $result['exit_code'], 'File-only morphology compile exits successfully. Output: ' . $result['output']);
+
+        $files = array_values(array_filter(
+            scandir($output_dir) ?: [],
+            static fn(string $file): bool => $file !== '.' && $file !== '..'
+        ));
+        sort($files, SORT_STRING);
+        assert_same(['protected_terms.txt', 'stopwords.txt', 'term_rules.tsv'], $files, 'File-only mode writes only morphology resource files.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('morphology fixture compiler rejects malformed fixtures clearly', function (): void {
+    $base = read_language_fts_morphology_fixture('en-seed.json');
+    $cases = [
+        'invalid schema' => [
+            static function (array $fixture): array {
+                $fixture['schema'] = 'broken-schema';
+
+                return $fixture;
+            },
+            'schema must be language-fts-playground-morphology-fixture-v1',
+        ],
+        'duplicate rule id' => [
+            static function (array $fixture): array {
+                $fixture['term_rule_behaviors'][] = $fixture['term_rule_behaviors'][0];
+
+                return $fixture;
+            },
+            'duplicate term_rule_behaviors id',
+        ],
+        'invalid surface regex' => [
+            static function (array $fixture): array {
+                $fixture['term_rule_behaviors'][0]['surface_pattern'] = '(?P<broken';
+
+                return $fixture;
+            },
+            'surface_pattern regex must be valid',
+        ],
+        'unknown flag' => [
+            static function (array $fixture): array {
+                $fixture['term_rule_behaviors'][0]['flags'][] = 'explode';
+
+                return $fixture;
+            },
+            'unknown term rule flag',
+        ],
+        'unsorted rule id' => [
+            static function (array $fixture): array {
+                $first = $fixture['term_rule_behaviors'][0];
+                $fixture['term_rule_behaviors'][0] = $fixture['term_rule_behaviors'][1];
+                $fixture['term_rule_behaviors'][1] = $first;
+
+                return $fixture;
+            },
+            'ascending rule id order',
+        ],
+        'non-normalized stopword' => [
+            static function (array $fixture): array {
+                $fixture['stopword_excerpt'][] = ['term' => 'The'];
+
+                return $fixture;
+            },
+            'stopword term must be normalized lowercase resource tokens',
+        ],
+        'duplicate protected term' => [
+            static function (array $fixture): array {
+                $fixture['protected_terms'][] = ['term' => 'news'];
+
+                return $fixture;
+            },
+            'duplicate protected term after normalization',
+        ],
+        'invalid expectation shape' => [
+            static function (array $fixture): array {
+                $fixture['analyzer_expectations'][0]['keys_include'] = 'run';
+
+                return $fixture;
+            },
+            'keys_include must be a list of strings',
+        ],
+    ];
+
+    foreach ($cases as $label => [$mutate, $expected_message]) {
+        $case_dir = create_language_fts_temp_dir('language-fts-morphology-invalid');
+        try {
+            $input_path = $case_dir . DIRECTORY_SEPARATOR . 'fixture.json';
+            $output_dir = $case_dir . DIRECTORY_SEPARATOR . 'out';
+            write_language_fts_morphology_fixture_file($input_path, $mutate($base));
+            $result = run_language_fts_morphology_compiler($input_path, $output_dir);
+            assert_true($result['exit_code'] !== 0, "Malformed morphology fixture exits nonzero for {$label}.");
+            assert_contains_text($expected_message, $result['output'], "Malformed morphology fixture reports the expected reason for {$label}.");
+        } finally {
+            remove_language_fts_temp_tree($case_dir);
+        }
+    }
+});
+
+test_case('compiled morphology fixtures feed repository analyzer and validator', function (): void {
+    $root = create_language_fts_temp_dir('language-fts-morphology-root');
+
+    try {
+        $fixtures = [
+            compile_language_fts_morphology_fixture_to_root('en-seed.json', $root),
+            compile_language_fts_morphology_fixture_to_root('de-ordering.json', $root),
+            compile_language_fts_morphology_fixture_to_root('pl-conservative.json', $root),
+        ];
+
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $analyzer = new Language_FTS_Playground_Analyzer($repository);
+        assert_same(['en', 'pl', 'de'], $repository->language_ids(), 'Generated morphology profiles use deterministic language order.');
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        assert_same(true, $report['valid'], 'Generated morphology fixture packs validate cleanly. Report: ' . var_export($report, true));
+
+        foreach ($fixtures as $fixture) {
+            assert_language_fts_morphology_fixture_behavior($fixture, $analyzer);
+        }
+
+        $metadata = $repository->pack_metadata('en');
+        assert_same('curated_seed', $metadata['data_kind'], 'Generated morphology fixture metadata remains curated_seed.');
+        assert_contains_text('synthetic_project_fixture', $metadata['attribution_text'], 'Generated metadata preserves sample-only reference scope.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('membership importer compiles deterministic synsets and lexemes', function (): void {
     $output_dir = create_language_fts_temp_dir('language-fts-membership-import');
 
@@ -3747,6 +4544,86 @@ test_case('membership importer defaults omitted data kind to curated seed and li
         assert_same(true, $report['valid'], 'Generated importer metadata passes lexical pack validation.');
     } finally {
         remove_language_fts_temp_tree($profile_tree['root']);
+    }
+});
+
+test_case('comprehensive importer requires audit metadata and source digest match', function (): void {
+    $input_path = language_fts_import_fixture_path('membership.tsv');
+    $profile_tree = create_language_fts_temp_import_profile('en');
+    file_put_contents($profile_tree['language_dir'] . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt', "Fixture license text.\n");
+
+    try {
+        $missing_metadata = run_language_fts_importer(
+            'membership-tsv',
+            $input_path,
+            $profile_tree['language_dir'],
+            language_fts_import_options([
+                'data_kind' => 'imported_comprehensive',
+                'provenance' => 'fixture-comprehensive-import',
+            ])
+        );
+        assert_true($missing_metadata['exit_code'] !== 0, 'Comprehensive imports missing audit metadata exit nonzero.');
+        assert_contains_text('Missing required comprehensive metadata option: --source-version', $missing_metadata['output'], 'Missing comprehensive metadata reports the first required option.');
+
+        $digest_mismatch = run_language_fts_importer(
+            'membership-tsv',
+            $input_path,
+            $profile_tree['language_dir'],
+            language_fts_comprehensive_import_options($input_path, [
+                'provenance' => 'fixture-comprehensive-import',
+                'source_artifact_sha256' => str_repeat('c', 64),
+            ])
+        );
+        assert_true($digest_mismatch['exit_code'] !== 0, 'Comprehensive imports with a source digest mismatch exit nonzero.');
+        assert_contains_text('Source artifact sha256 mismatch', $digest_mismatch['output'], 'Source artifact digest mismatch is reported.');
+    } finally {
+        remove_language_fts_temp_tree($profile_tree['root']);
+    }
+});
+
+test_case('comprehensive importer writes deterministic v2 audit metadata', function (): void {
+    $input_path = language_fts_import_fixture_path('membership.tsv');
+    $first_tree = create_language_fts_temp_import_profile('en');
+    $second_tree = create_language_fts_temp_import_profile('en');
+    file_put_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt', "Fixture license text.\n");
+    file_put_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt', "Fixture license text.\n");
+
+    $options = language_fts_comprehensive_import_options($input_path, [
+        'source_name' => 'Deterministic comprehensive fixture',
+        'source_url' => 'https://example.test/deterministic-comprehensive',
+        'license_name' => 'Fixture License 1.0',
+        'attribution' => 'Deterministic comprehensive fixture attribution.',
+        'pack_version' => 'fixture-comprehensive-import-v1',
+        'pack_date' => '2026-06-09',
+        'provenance' => 'fixture-comprehensive-import',
+        'weight' => '0.5',
+    ]);
+
+    try {
+        $first = run_language_fts_importer('membership-tsv', $input_path, $first_tree['language_dir'], $options);
+        $second = run_language_fts_importer('membership-tsv', $input_path, $second_tree['language_dir'], $options);
+
+        assert_same(0, $first['exit_code'], 'First comprehensive import exits successfully. Output: ' . $first['output']);
+        assert_same(0, $second['exit_code'], 'Second comprehensive import exits successfully. Output: ' . $second['output']);
+        assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'synsets.tsv'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'synsets.tsv'), 'Comprehensive synsets output is deterministic.');
+        assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'lexemes.tsv'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'lexemes.tsv'), 'Comprehensive lexemes output is deterministic.');
+        assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php'), 'Comprehensive pack metadata output is deterministic.');
+
+        $metadata = require $first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php';
+        assert_same(Language_FTS_Playground_Lexical_Pack_Validator::METADATA_SCHEMA_V2, $metadata['metadata_schema'] ?? null, 'Comprehensive importer writes the v2 metadata schema.');
+        assert_same('imported_comprehensive', $metadata['data_kind'] ?? null, 'Comprehensive importer labels comprehensive output explicitly.');
+        assert_same('fixture-comprehensive-import', $metadata['provenance'] ?? null, 'Comprehensive importer writes the requested provenance.');
+        assert_true(isset($metadata['source'], $metadata['license'], $metadata['provenance_ids'], $metadata['normalization'], $metadata['importer'], $metadata['runtime_files']), 'Comprehensive importer writes all nested audit sections.');
+        assert_true(in_array('LICENSE.fixture.txt', $metadata['files'] ?? [], true), 'Comprehensive metadata lists the local license text file.');
+        assert_contains_text('profile.php', implode("\n", array_column((array) ($metadata['runtime_files'] ?? []), 'file')), 'Comprehensive metadata includes profile.php runtime digest.');
+        assert_not_contains_text($first_tree['language_dir'], (string) ($metadata['importer']['command'] ?? ''), 'Importer command does not include the first temp output path.');
+        assert_not_contains_text($second_tree['language_dir'], (string) ($metadata['importer']['command'] ?? ''), 'Importer command does not include the second temp output path.');
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($first_tree['root']))->validate_all();
+        assert_same(true, $report['valid'], 'Generated comprehensive metadata validates cleanly.');
+    } finally {
+        remove_language_fts_temp_tree($first_tree['root']);
+        remove_language_fts_temp_tree($second_tree['root']);
     }
 });
 
@@ -4185,6 +5062,9 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('evaluate-lexical-pack.php', $docs, 'Lexical docs describe the relevance evaluator CLI.');
     assert_contains_text('synonym_phrases.tsv', $docs, 'Lexical docs describe synonym phrase resources.');
     assert_contains_text('full text search -> fts', $docs, 'Lexical docs describe the committed phrase synonym smoke fixture.');
+    assert_contains_text('Morphology Fixture Compiler', $docs, 'Lexical docs describe the morphology fixture compiler.');
+    assert_contains_text('language-fts-playground-morphology-fixture-v1', $docs, 'Lexical docs name the morphology fixture schema.');
+    assert_contains_text('not Snowball compliance tests', $docs, 'Lexical docs keep morphology fixture scope sample-only.');
     assert_contains_text('--max-synset-size', $docs, 'Lexical docs describe synset size thresholds.');
     assert_contains_text('recall@5', $docs, 'Lexical docs describe evaluator relevance metrics.');
     assert_contains_text('Broad synsets are dangerous', $docs, 'Lexical docs explain broad synset search-quality risk.');
@@ -4192,6 +5072,7 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('seed data unless', $readme, 'README keeps the shipped-data limitation explicit.');
     assert_contains_text('validate-lexical-packs.php', $readme, 'README documents the validation CLI.');
     assert_contains_text('evaluate-lexical-pack.php', $readme, 'README documents the relevance evaluator CLI.');
+    assert_contains_text('search-benchmark-counters.php', $readme, 'README documents the search benchmark counter CLI.');
     assert_contains_text('synonym_phrases.tsv', $readme, 'README documents phrase synonym resources.');
     assert_contains_text('curated_seed', $readme, 'README confirms current shipped packs are curated seed data.');
 });
@@ -4388,6 +5269,99 @@ test_case('removes Polish stopwords and stems Polish forms conservatively', func
     assert_query_terms_overlap($analyzer, 'pl', 'zielonymi zielonego zielonych', 'zielony', 'Polish adjective endings share conservative stem keys.');
     assert_same(['ul', 'rok'], $analyzer->analyze_text('ul w rok i', 'pl'), 'Short non-stopword Polish tokens remain exact.');
     assert_query_terms_do_not_overlap($analyzer, 'pl', 'rama', 'ram', 'Polish short stems are guarded from broad final-vowel trimming.');
+});
+
+test_case('unicode words token streams match current analyzer keys across bundled languages', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $cases = [
+        'en' => [
+            'text' => 'Searching stories 123 and boxes',
+            'expected' => [
+                ['surface' => 'Searching', 'normalized' => 'searching', 'keys' => ['searching', 'search'], 'position' => 0, 'start_byte' => 0, 'end_byte' => 9, 'type' => 'word', 'searchable' => true],
+                ['surface' => 'stories', 'normalized' => 'stories', 'keys' => ['stories', 'story'], 'position' => 1, 'start_byte' => 10, 'end_byte' => 17, 'type' => 'word', 'searchable' => true],
+                ['surface' => '123', 'normalized' => '123', 'keys' => ['123'], 'position' => 2, 'start_byte' => 18, 'end_byte' => 21, 'type' => 'number', 'searchable' => true],
+                ['surface' => 'boxes', 'normalized' => 'boxes', 'keys' => ['boxes', 'box'], 'position' => 3, 'start_byte' => 26, 'end_byte' => 31, 'type' => 'word', 'searchable' => true],
+            ],
+        ],
+        'pl' => [
+            'text' => 'Łódź oraz ul 42',
+            'expected' => [
+                ['surface' => 'Łódź', 'normalized' => 'lodz', 'keys' => ['lodz'], 'position' => 0, 'start_byte' => 0, 'end_byte' => 7, 'type' => 'word', 'searchable' => true],
+                ['surface' => 'ul', 'normalized' => 'ul', 'keys' => ['ul'], 'position' => 1, 'start_byte' => 13, 'end_byte' => 15, 'type' => 'word', 'searchable' => true],
+                ['surface' => '42', 'normalized' => '42', 'keys' => ['42'], 'position' => 2, 'start_byte' => 16, 'end_byte' => 18, 'type' => 'number', 'searchable' => true],
+            ],
+        ],
+        'de' => [
+            'text' => 'Führung und 88',
+            'expected' => [
+                ['surface' => 'Führung', 'normalized' => 'fuehrung', 'keys' => ['fuehrung'], 'position' => 0, 'start_byte' => 0, 'end_byte' => 8, 'type' => 'word', 'searchable' => true],
+                ['surface' => '88', 'normalized' => '88', 'keys' => ['88'], 'position' => 1, 'start_byte' => 13, 'end_byte' => 15, 'type' => 'number', 'searchable' => true],
+            ],
+        ],
+    ];
+
+    foreach ($cases as $language => $case) {
+        $stream = $analyzer->analyze_token_stream($case['text'], $language);
+        $summary = [];
+        foreach ($stream as $token) {
+            $summary[] = [
+                'surface' => $token['surface'],
+                'normalized' => $token['normalized'],
+                'keys' => $token['keys'],
+                'position' => $token['position'],
+                'start_byte' => $token['start_byte'],
+                'end_byte' => $token['end_byte'],
+                'type' => $token['type'],
+                'searchable' => $token['searchable'],
+            ];
+        }
+
+        assert_same($case['expected'], $summary, "{$language} token stream exposes surfaces, normalized keys, positions, and byte offsets.");
+        assert_same(array_column($case['expected'], 'keys'), $analyzer->analyze_text_token_keys($case['text'], $language), "{$language} token stream keys match analyze_text_token_keys.");
+
+        $flattened = [];
+        foreach ($case['expected'] as $expected_token) {
+            array_push($flattened, ...$expected_token['keys']);
+        }
+        assert_same($flattened, $analyzer->analyze_text($case['text'], $language), "{$language} token stream flattening matches analyze_text.");
+    }
+});
+
+test_case('token stream position gaps preserve phrase boundary behavior', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $analysis = $analyzer->analyze_segments_with_positions(['alpha the beta', 'gamma'], 'en');
+
+    assert_same(['alpha', 'beta', 'gamma'], $analysis['terms'], 'Stopwords are removed without adding in-segment positions.');
+    assert_same(
+        [
+            'alpha' => [0],
+            'beta' => [1],
+            'gamma' => [3],
+        ],
+        $analysis['positions'],
+        'Segment boundaries still insert a one-position phrase gap.'
+    );
+});
+
+test_case('tokenizer stream offsets preserve snippet highlights across bundled languages', function (): void {
+    $cases = [
+        ['post_id' => 641, 'language' => 'en', 'title' => 'English tokenizer snippet', 'content' => '<p>Searching stories and boxes stay visible.</p>', 'query' => 'search', 'mark' => '<mark>Searching</mark>'],
+        ['post_id' => 642, 'language' => 'pl', 'title' => 'Polish tokenizer snippet', 'content' => '<p>Łódź ma widoczny tekst wyszukiwania.</p>', 'query' => 'lodz', 'mark' => '<mark>Łódź</mark>'],
+        ['post_id' => 643, 'language' => 'de', 'title' => 'German tokenizer snippet', 'content' => '<p>Führung zeigt sichtbaren Text.</p>', 'query' => 'fuehrung', 'mark' => '<mark>Führung</mark>'],
+    ];
+
+    foreach ($cases as $case) {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer();
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post($case['post_id'], $case['language'], $case['title'], $case['content']));
+        $results = $searcher->search($case['query'], $case['language']);
+
+        assert_same([$case['post_id']], array_column($results, 'post_id'), "{$case['language']} tokenizer snippet fixture is searchable.");
+        assert_contains_text($case['mark'], $results[0]['snippet'] ?? '', "{$case['language']} tokenizer stream highlights the matched source token.");
+    }
 });
 
 test_case('uses one analyzer path for indexed documents and queries with stopwords', function (): void {
@@ -4764,6 +5738,40 @@ test_case('automatic fallback enforces lookup cap before preflight storage looku
         );
         assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Exact-token fallback reports the existing lookup cap diagnostic.');
         assert_same(0, $storage->fetch_term_language_hits_count, 'Over-cap exact fallback never reaches preflight storage lookup.');
+
+        $fuzzy_auto_storage = new Language_FTS_Playground_Test_Storage();
+        $fuzzy_auto_storage->fail_on_fetch_term_language_hits = true;
+        $fuzzy_auto_storage->fail_on_fetch_candidate_terms = true;
+        $fuzzy_auto_searcher = new Language_FTS_Playground_Searcher(
+            storage: $fuzzy_auto_storage,
+            analyzer: $analyzer,
+            max_lookup_terms: 2
+        );
+
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $fuzzy_auto_searcher->search('alpha beta fuzzyprobe~', 'auto'),
+            'Over-cap fuzzy fallback fails closed before candidate-term storage lookup.'
+        );
+        assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Fuzzy fallback reports the lookup cap diagnostic before candidate enumeration.');
+        assert_same(0, $fuzzy_auto_storage->fetch_candidate_terms_count, 'Over-cap fuzzy fallback never reaches candidate-term lookup.');
+        assert_same(0, $fuzzy_auto_storage->fetch_term_language_hits_count, 'Over-cap fuzzy fallback never reaches preflight storage lookup.');
+
+        $fuzzy_explicit_storage = new Language_FTS_Playground_Test_Storage();
+        $fuzzy_explicit_storage->fail_on_fetch_candidate_terms = true;
+        $fuzzy_explicit_searcher = new Language_FTS_Playground_Searcher(
+            storage: $fuzzy_explicit_storage,
+            analyzer: $analyzer,
+            max_lookup_terms: 2
+        );
+
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $fuzzy_explicit_searcher->search('alpha beta fuzzyprobe~', 'qa'),
+            'Over-cap explicit fuzzy search fails closed before candidate-term storage lookup.'
+        );
+        assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Explicit fuzzy search reports the lookup cap diagnostic before candidate enumeration.');
+        assert_same(0, $fuzzy_explicit_storage->fetch_candidate_terms_count, 'Over-cap explicit fuzzy search never reaches candidate-term lookup.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
@@ -5597,6 +6605,115 @@ test_case('public search fetches field text only for final results', function ()
     assert_contains_text('<mark>orchard</mark>', $explain['results'][0]['snippet'] ?? '', 'Explain results keep highlighted snippets.');
 });
 
+test_case('search benchmark counter fixture gates public final-window hydration', function (): void {
+    $report = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('common-term', [
+        'documents' => 24,
+        'limit' => 3,
+    ]);
+    $counters = (array) $report['counters'];
+
+    assert_same('common-term', $report['scenario'], 'The fixture reports the requested common-term scenario.');
+    assert_same(['commonterm'], $report['lookup_terms_by_class']['exact']['terms'] ?? null, 'Lookup classes include the exact common term.');
+    assert_true((int) $counters['candidate_count'] > (int) $report['result_count'], 'The common-term fixture creates more candidates than final results.');
+    assert_true((int) $counters['field_text_rows_fetched'] <= (int) $report['result_count'], 'Public search fetches field text rows only for the final result window.');
+    assert_same(0, $counters['field_metadata_rows_fetched'] ?? null, 'Public search fetches no field metadata rows.');
+    assert_same($counters['candidate_count'], $counters['document_length_rows_fetched'] ?? null, 'Document length rows match the materialized candidate set.');
+    assert_true((int) $counters['postings_rows_materialized'] >= (int) $counters['candidate_count'], 'Postings row materialization is counted.');
+    assert_true((int) $counters['peak_memory_delta_bytes'] >= 0, 'Peak memory delta is captured as a non-negative counter.');
+});
+
+test_case('search benchmark counting storage counts hit and field rows', function (): void {
+    $storage = new Language_FTS_Playground_Search_Benchmark_Counting_Storage();
+    $storage->replace_document(
+        701,
+        'en',
+        'Shared marker',
+        'publish',
+        3,
+        [
+            'title' => ['sharedmarker' => 1],
+            'content' => ['sharedmarker' => 2],
+        ],
+        [
+            'title' => 'Shared marker',
+            'content' => 'Shared marker body',
+        ],
+        ['sharedmarker' => [0, 2]]
+    );
+
+    $hits = $storage->fetch_term_language_hits(['en' => ['sharedmarker', 'missingmarker']]);
+    $postings = $storage->fetch_postings('en', ['sharedmarker']);
+    $counters = $storage->counters();
+
+    assert_same(['sharedmarker' => true, 'missingmarker' => false], $hits['en'] ?? null, 'The fixture includes one preflight hit and one miss.');
+    assert_same(['title' => 1, 'content' => 2], $postings['sharedmarker'][701] ?? null, 'The fixture stores one term across two fields.');
+    assert_same(1, $counters['term_language_hit_rows_fetched'] ?? null, 'Preflight hit rows count only true storage hits.');
+    assert_same(2, $counters['postings_rows_materialized'] ?? null, 'Posting row materialization counts field-aware storage rows.');
+    assert_same(1, $counters['candidate_count'] ?? null, 'Candidate counting remains per language/post candidate.');
+});
+
+test_case('search benchmark counter fixture covers phrase fuzzy and expansion probes', function (): void {
+    $phrase = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('phrase', [
+        'documents' => 30,
+        'limit' => 4,
+    ]);
+    assert_same(['alpha', 'beta'], $phrase['lookup_terms_by_class']['exact']['terms'] ?? null, 'Phrase probes report both exact phrase terms.');
+    assert_true((int) ($phrase['counters']['position_rows_fetched'] ?? 0) > 0, 'Phrase probes fetch position rows.');
+    assert_true((int) ($phrase['counters']['field_text_rows_fetched'] ?? 0) <= (int) $phrase['result_count'], 'Phrase probes keep public field text hydration final-window scoped.');
+    assert_same(0, $phrase['counters']['field_metadata_rows_fetched'] ?? null, 'Phrase probes fetch no public field metadata rows.');
+
+    $fuzzy = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('fuzzy', [
+        'documents' => 30,
+        'limit' => 4,
+    ]);
+    assert_same(['orchart'], $fuzzy['lookup_terms_by_class']['fuzzy']['terms'] ?? null, 'Fuzzy probes report the resolved typo candidate.');
+    assert_true((int) ($fuzzy['counters']['fuzzy_candidate_terms_returned'] ?? 0) > 0, 'Fuzzy probes count candidate-term materialization.');
+
+    $synonym = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('synonym', [
+        'documents' => 30,
+        'limit' => 4,
+    ]);
+    assert_same(['searchterm'], $synonym['lookup_terms_by_class']['single_token_synonyms']['terms'] ?? null, 'Single-token synonym probes report the configured target.');
+    assert_true((int) $synonym['result_count'] > 0, 'Single-token synonym probes return synthetic results.');
+
+    $phrase_synonym = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('phrase-synonym', [
+        'documents' => 32,
+        'limit' => 4,
+    ]);
+    assert_same(['search', 'site'], $phrase_synonym['lookup_terms_by_class']['phrase_synonyms']['terms'] ?? null, 'Phrase synonym probes report the target phrase terms.');
+    assert_true((int) ($phrase_synonym['counters']['position_rows_fetched'] ?? 0) > 0, 'Phrase synonym probes fetch target position rows.');
+    assert_same(0, $phrase_synonym['counters']['field_metadata_rows_fetched'] ?? null, 'Phrase synonym probes fetch no public field metadata rows.');
+});
+
+test_case('search benchmark counter CLI emits JSON under normal PHP and php -n', function (): void {
+    $normal = run_language_fts_search_benchmark([
+        'scenario' => 'fuzzy',
+        'documents' => 24,
+        'limit' => 3,
+        'json' => true,
+    ]);
+    $normal_decoded = json_decode($normal['output'], true);
+
+    assert_same(0, $normal['exit_code'], 'Benchmark counter CLI exits successfully under normal PHP. Output: ' . $normal['output']);
+    assert_true(is_array($normal_decoded), 'Benchmark counter CLI JSON is parseable.');
+    assert_same('fuzzy', $normal_decoded['scenario'] ?? null, 'Benchmark counter CLI reports the requested fuzzy scenario.');
+    assert_true((int) ($normal_decoded['counters']['postings_rows_materialized'] ?? 0) > 0, 'Benchmark counter CLI JSON includes postings counters.');
+
+    $no_ini = run_language_fts_search_benchmark([
+        'scenario' => 'common-term',
+        'documents' => 24,
+        'limit' => 3,
+        'json' => true,
+    ], true);
+    $no_ini_decoded = json_decode($no_ini['output'], true);
+
+    assert_same(0, $no_ini['exit_code'], 'Benchmark counter CLI exits successfully under php -n. Output: ' . $no_ini['output']);
+    assert_true(is_array($no_ini_decoded), 'php -n benchmark counter CLI JSON is parseable.');
+    assert_same('common-term', $no_ini_decoded['scenario'] ?? null, 'php -n benchmark counter CLI reports the requested common-term scenario.');
+    assert_true((int) ($no_ini_decoded['counters']['field_text_rows_fetched'] ?? 0) <= (int) ($no_ini_decoded['result_count'] ?? 0), 'php -n benchmark counter CLI preserves the final-window field text gate.');
+    assert_same(0, $no_ini_decoded['counters']['field_metadata_rows_fetched'] ?? null, 'php -n benchmark counter CLI preserves the metadata gate.');
+});
+
 test_case('explain reports field boosts and phrase filter failures', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
@@ -6266,6 +7383,76 @@ test_case('admin page renders lexical pack status safely as curated seed data', 
     assert_contains_text('2026-06-08-seed 2026-06-08', $html, 'Admin page shows pack version/date.');
     assert_contains_text('lexemes 34; synsets 1; phrase rows 0; expansions 12', $html, 'Admin page shows compact Polish pack counts.');
     assert_not_contains_text('<script>', $html, 'Admin lexical pack status does not emit raw unsafe markup.');
+});
+
+test_case('admin page escapes comprehensive audit metadata details', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir, [
+        'source_name' => 'Fixture <script>alert(1)</script> source',
+        'attribution_text' => 'Attribution <script>alert(2)</script>',
+    ]);
+    $metadata['importer']['command'] = 'php import <script>alert(3)</script>';
+    $metadata['provenance_ids']['fixture-comprehensive']['description'] = 'Description <script>alert(4)</script>';
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        reset_language_fts_plugin_runtime();
+        add_filter(
+            'language_fts_playground_lexical_resource_root',
+            static fn(): string => $normalized_root,
+            10,
+            1
+        );
+
+        ob_start();
+        Language_FTS_Playground_Plugin::render_admin_page();
+        $html = ob_get_clean();
+
+        assert_contains_text('Audit metadata', $html, 'Admin page renders audit metadata details for comprehensive packs.');
+        assert_contains_text('Fixture &lt;script&gt;alert(1)&lt;/script&gt; source', $html, 'Admin page escapes malicious source metadata.');
+        assert_contains_text('php import &lt;script&gt;alert(3)&lt;/script&gt;', $html, 'Admin page escapes malicious importer command metadata.');
+        assert_contains_text('Description &lt;script&gt;alert(4)&lt;/script&gt;', $html, 'Admin page escapes malicious provenance metadata.');
+        assert_not_contains_text('<script>', $html, 'Admin audit metadata details do not emit raw unsafe markup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('admin page renders non-ok runtime digest status for malformed comprehensive metadata', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir);
+    foreach ($metadata['runtime_files'] as &$runtime_file) {
+        if (($runtime_file['file'] ?? '') === 'profile.php') {
+            $runtime_file['sha256'] = 'not-a-sha256';
+            break;
+        }
+    }
+    unset($runtime_file);
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        reset_language_fts_plugin_runtime();
+        add_filter(
+            'language_fts_playground_lexical_resource_root',
+            static fn(): string => $normalized_root,
+            10,
+            1
+        );
+
+        ob_start();
+        Language_FTS_Playground_Plugin::render_admin_page();
+        $html = ob_get_clean();
+
+        assert_contains_text('<code>invalid</code>', $html, 'Admin runtime digest column renders malformed metadata as invalid.');
+        assert_contains_text('runtime_files sha256 must be 64 lowercase hex characters', $html, 'Admin warnings explain the malformed runtime digest metadata.');
+        assert_not_contains_text('<code>ok</code>', $html, 'Admin runtime digest column does not report ok beside malformed metadata warnings.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
 });
 
 test_case('admin page renders lexical pack status and disables search when custom root is invalid', function (): void {
