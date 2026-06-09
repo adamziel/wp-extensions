@@ -138,7 +138,7 @@ resources/languages/
 ```
 
 `profile.php` declares the language id, label, load order, optional character
-folds, optional language-detection signal regexes, and resource file names.
+folds, optional language signal regexes, and resource file names.
 `pack.php` records source, license, attribution, provenance, generated file
 list, pack version/date, and whether the resource pack is curated seed data or
 an imported comprehensive pack. The analyzer does not load `pack.php` during
@@ -167,6 +167,16 @@ the router confidence evidence for custom packs. Phrase synonym source
 sequences also contribute confidence when their analyzed non-stopword keys
 match the query. Stopwords are useful only as a tie-breaker/booster once that
 non-stopword evidence exists.
+
+Automatic mode is bounded and deterministic: confident profile evidence selects
+the top matching partitions, while weak, ambiguous, or missing profile evidence
+uses storage-backed preflight term hits to avoid blindly fetching every
+partition when many languages are enabled. When automatic mode searches more
+than one partition, public results keep the raw partition-local `score`, but
+ordering uses an internal normalized rank score with the routing prior as a
+small deterministic tie-breaker. This keeps title/content BM25 differences
+meaningful inside each partition without letting one partition's raw score
+scale dominate all cross-partition results.
 
 The included resources are a curated demo seed, not a comprehensive synonym
 database. To add demo synonyms without editing PHP, add normalized observed
@@ -342,8 +352,10 @@ find language-fts-playground -name "*.php" -print0 | xargs -0 -n1 php -l
 
 This is a demo-sized implementation. The custom tables are intentionally simple
 and portable, with no production indexing optimizations. Ranking is meant for
-relative ordering inside one query and one language partition, not for comparing
-scores across languages or unrelated queries. The lexical resources and concept
+relative ordering inside one query; public raw scores remain partition-local,
+while automatic cross-partition ordering uses the internal normalized rank
+described above. Automatic routing is deterministic profile/storage-backed
+routing, not statistical language detection. The lexical resources and concept
 pack are curated for the demo and are not full dictionaries or a shipped
 WordNet/plWordNet database; they are intended to be expanded or replaced later
 by generated resources from licensed linguistic sources. The fallback suffix

@@ -3719,6 +3719,77 @@ test_case('explain reports normalized auto ranking signals across partitions', f
     }
 });
 
+test_case('automatic multi-partition search orders results by normalized rank score', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'qa' => [
+            'order' => 10,
+            'signals' => [
+                '/\bsharedterm\b/u',
+            ],
+        ],
+        'qb' => [
+            'order' => 20,
+            'signals' => [
+                '/\bpreferqb\b/u',
+                '/\bsharedterm\b/u',
+            ],
+        ],
+    ]);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $ranked = $analyzer->rank_query_languages('preferqb sharedterm');
+        assert_same('qb', $ranked[0]['language'] ?? null, 'QB has the stronger fake routing prior.');
+        assert_same('qa', $ranked[1]['language'] ?? null, 'QA remains above the automatic routing threshold.');
+
+        $indexer->index_post(fixture_post(309, 'qa', 'sharedterm title match', '<p>QA content does not add another query hit.</p>'));
+        $indexer->index_post(fixture_post(310, 'qb', 'QB content match', '<p>sharedterm appears only in QB content.</p>'));
+
+        $explain = $searcher->explain('preferqb sharedterm', 'auto');
+        assert_same(['qb', 'qa'], $explain['language_routing']['selected_partitions'] ?? null, 'Automatic routing evaluates both fake partitions by prior.');
+
+        $results_by_language = [];
+        foreach ((array) ($explain['results'] ?? []) as $result) {
+            if (!is_array($result)) {
+                continue;
+            }
+
+            $results_by_language[(string) ($result['matched_language'] ?? '')] = $result;
+        }
+
+        assert_true(
+            isset($results_by_language['qa'], $results_by_language['qb']),
+            'Explain includes results from both fake language partitions.' .
+            "\nResults: " . var_export($explain['results'] ?? [], true)
+        );
+        assert_true(
+            (float) ($results_by_language['qa']['raw_score'] ?? 0.0) > (float) ($results_by_language['qb']['raw_score'] ?? 0.0),
+            'The QA title hit has the higher raw BM25 score.'
+        );
+        assert_true(
+            (float) ($results_by_language['qb']['rank_score'] ?? 0.0) > (float) ($results_by_language['qa']['rank_score'] ?? 0.0),
+            'The QB content hit has the higher normalized routing-aware rank score.'
+        );
+
+        $results = $searcher->search('preferqb sharedterm', 'auto');
+
+        assert_same([310, 309], array_column($results, 'post_id'), 'Public search follows normalized auto rank score instead of raw score.');
+        foreach ($results as $result) {
+            assert_same(
+                ['post_id', 'score', 'matched_terms', 'matched_fields', 'snippet', 'matched_language'],
+                array_keys($result),
+                'Public search results keep the expected result shape.'
+            );
+        }
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('ranks higher term frequency first', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();

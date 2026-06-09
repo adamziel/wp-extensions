@@ -728,7 +728,10 @@ final class Language_FTS_Playground_Searcher
                     }
                 }
 
-                return ($b['score'] <=> $a['score'])
+                $rank_a = (float) ($a['rank_score'] ?? $a['score'] ?? 0.0);
+                $rank_b = (float) ($b['rank_score'] ?? $b['score'] ?? 0.0);
+
+                return ($rank_b <=> $rank_a)
                     ?: (strcmp((string) $a['matched_language'], (string) $b['matched_language']))
                     ?: ($a['post_id'] <=> $b['post_id']);
             }
