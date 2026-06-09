@@ -107,22 +107,47 @@ representative query suite.
 The repository includes a pure-PHP synthetic benchmark fixture for search
 materialization counters. It builds a small in-memory `bm` language profile and
 documents with controlled common terms, quoted phrases, fuzzy typo candidates,
-single-token synonyms, and phrase synonyms. The command reports lookup terms by
-class plus candidate, postings, document length, position, field text, field
-metadata, and peak-memory counters without MySQL, database-native FTS, or large
+single-token synonyms, phrase synonyms, and mixed title/excerpt/content/alt
+field distributions. The command reports lookup terms by class plus candidate,
+postings, document length, position, field text, field metadata, gate, timing,
+and peak-memory counters without MySQL, database-native FTS, or committed large
 corpora.
 
-Run the common-term, phrase, and fuzzy probes under `php -n`:
+Run the PR-smoke gate suite under normal PHP and `php -n`:
+
+```sh
+php language-fts-playground/tools/search-benchmark-counters.php --suite=pr-smoke --json --fail-on-gate
+php -n language-fts-playground/tools/search-benchmark-counters.php --suite=pr-smoke --json --fail-on-gate
+```
+
+Run individual probes under `php -n` when investigating a specific materialized
+shape:
 
 ```sh
 php -n language-fts-playground/tools/search-benchmark-counters.php --scenario=common-term --documents=64 --limit=5 --json
-php -n language-fts-playground/tools/search-benchmark-counters.php --scenario=phrase --documents=64 --limit=5
-php -n language-fts-playground/tools/search-benchmark-counters.php --scenario=fuzzy --documents=64 --limit=5 --json
+php -n language-fts-playground/tools/search-benchmark-counters.php --scenario=phrase-heavy --documents=64 --limit=5
+php -n language-fts-playground/tools/search-benchmark-counters.php --scenario=fuzzy-heavy --documents=64 --limit=5 --json
 ```
 
-Use `--scenario=all` to print every committed probe, including the synonym and
-phrase-synonym fixtures. Public-search probes are gated so field text rows stay
-within the final result count and field metadata rows remain zero.
+Use `--scenario=all` to print every committed probe, including the synonym,
+phrase-synonym, and mixed-field fixtures. Use `--suite=scheduled --documents=5000
+--languages=8 --json --fail-on-gate` for a larger deterministic CI or nightly
+run, and `--suite=manual-stress --documents=25000 --languages=16 --json
+--fail-on-gate` for manual pre-release stress evidence. When `--languages` is
+greater than one, the fixture indexes generated language profiles and searches
+with automatic language routing, so `selected_partitions` and materialization
+counters reflect bounded multi-partition search fanout. Public-search probes are
+gated so field text rows stay within the final result count, field metadata rows
+remain zero, postings materialization counters participate in hard gates, and
+timing remains reported rather than the primary PR failure signal.
+
+The PR-smoke suite is intentionally fixture-sized and machine-stable: it is meant
+to catch materialization, fanout, and ranking-shape regressions during ordinary
+review. Scheduled and manual-stress suites raise document and language counts for
+trend evidence and exercise the automatic-routing cap, but they are still
+pure-PHP in-memory checks. They do not prove MySQL query plans, live WordPress
+latency, or production-scale relevance on a large real corpus; package smoke,
+Playground smoke, and site-specific profiling remain separate release evidence.
 
 ## Field-Aware Ranking And Snippets
 
