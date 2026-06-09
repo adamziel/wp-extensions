@@ -30,12 +30,10 @@ final class Language_FTS_Playground_Analyzer
     ];
 
     private Language_FTS_Playground_Lexical_Profile_Repository $profiles;
-    private Language_FTS_Playground_Unicode_Words_Tokenizer $unicode_words_tokenizer;
 
     public function __construct(Language_FTS_Playground_Lexical_Profile_Repository|null $profiles = null)
     {
         $this->profiles = $profiles ?? new Language_FTS_Playground_Lexical_Profile_Repository();
-        $this->unicode_words_tokenizer = new Language_FTS_Playground_Unicode_Words_Tokenizer();
     }
 
     public function canonical_language(string|null $language): string
@@ -149,7 +147,6 @@ final class Language_FTS_Playground_Analyzer
             return [];
         }
 
-        $tokens = $this->query_language_tokens($query);
         $candidates = [];
         foreach ($this->enabled_languages() as $language) {
             $score = 0.0;
@@ -170,6 +167,7 @@ final class Language_FTS_Playground_Analyzer
                 }
             }
 
+            $tokens = $this->query_language_tokens($query, $language);
             if ($tokens !== []) {
                 $evidence = $this->profiles->query_language_evidence($language);
                 $seen_terms = [];
@@ -810,10 +808,10 @@ final class Language_FTS_Playground_Analyzer
     /**
      * @return string[]
      */
-    private function query_language_tokens(string $query): array
+    private function query_language_tokens(string $query, string $language): array
     {
         $tokens = [];
-        foreach ($this->unicode_words_tokenizer->tokenize($query) as $raw_token) {
+        foreach ($this->profiles->tokenize($query, $language) as $raw_token) {
             $token = (string) $raw_token['surface'];
             if ($token !== '') {
                 $tokens[$token] = true;
@@ -828,15 +826,7 @@ final class Language_FTS_Playground_Analyzer
      */
     private function tokenize_surfaces(string $text, string $language): array
     {
-        $tokenizer = $this->tokenizer_contract($language);
-        if (
-            (string) ($tokenizer['id'] ?? '') !== Language_FTS_Playground_Unicode_Words_Tokenizer::ID
-            || (string) ($tokenizer['type'] ?? '') !== Language_FTS_Playground_Unicode_Words_Tokenizer::TYPE
-        ) {
-            throw new UnexpectedValueException('Unsupported tokenizer for analyzer profile.');
-        }
-
-        return $this->unicode_words_tokenizer->tokenize($text);
+        return $this->profiles->tokenize($text, $language);
     }
 
     /**

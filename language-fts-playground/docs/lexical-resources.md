@@ -43,8 +43,15 @@ regexes, and resource file names:
 
 Profiles may omit `tokenizer`; the runtime defaults to `unicode_words_v1`.
 That adapter preserves the current Unicode letter/number tokenization behavior.
-No dictionary segmenter or non-space language tokenizer is shipped or supported
-by this baseline.
+Tokenizer declarations are registry-backed and can reference profile-local
+resources through `resources`. The current non-space-ready path is
+`synthetic_dictionary_v1` with a `dictionary` resource, used only for synthetic
+readiness fixtures. It proves that the analyzer and searcher can consume
+resource-backed tokenizer output with byte offsets, logical positions, snippets,
+phrase matching, automatic routing diagnostics, and fuzzy capability reporting.
+It is generic and language-agnostic; it is not a CJK, Thai, or other production
+dictionary segmenter. Real non-space language support still requires reviewed
+tokenizer resources and a production registry adapter.
 
 ```php
 'resources' => [
