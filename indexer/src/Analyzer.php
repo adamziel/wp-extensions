@@ -41,6 +41,7 @@ final class WP_FTS_Analyzer
     private string $defaultLanguage;
     private ?string $documentLanguage;
     private ?string $queryLanguage;
+    private string $indexSignature;
 
     /**
      * Configure HTML extraction, language resolution, and token analysis.
@@ -176,6 +177,8 @@ final class WP_FTS_Analyzer
                 }
             }
         }
+
+        $this->indexSignature = $this->buildIndexSignature();
     }
 
     /**
@@ -347,6 +350,18 @@ final class WP_FTS_Analyzer
     }
 
     /**
+     * Return the analyzer behavior signature used by the indexer content hash.
+     *
+     * The signature changes when the built-in analyzer defaults or configured
+     * language pipeline change, forcing unchanged documents to be rewritten
+     * instead of leaving stale postings from an older analyzer contract.
+     */
+    public function index_signature(): string
+    {
+        return $this->indexSignature;
+    }
+
+    /**
      * Run the configured language pipeline for one resolved text segment.
      *
      * @param string $text Visible text from a document segment or query.
@@ -423,7 +438,12 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Add untagged query text either as one legacy segment or per resolver token.
+     * Add untagged query text using the same span-level detection as documents.
+     *
+     * A custom per-token resolver still gets first refusal for each token. When
+     * it has no answer, the whole untagged query span supplies the fallback
+     * language so weak single-token evidence does not drift back to the default
+     * partition and break AND recall.
      *
      * @param array<int,array{text:string,lang:string}> $segments
      * @param array<string,mixed> $options
@@ -434,15 +454,15 @@ final class WP_FTS_Analyzer
             return;
         }
 
-        if ($this->queryTermLanguageResolver === null && !$this->shouldAutoDetectQueryLanguage($options)) {
-            $segments[] = ['text' => $text, 'lang' => $defaultLang];
+        $spanLang = $this->detectQuerySpanLanguage($text, $defaultLang, $options);
+        if ($this->queryTermLanguageResolver === null || (bool) ($options['_force_query_lang'] ?? false)) {
+            $segments[] = ['text' => $text, 'lang' => $spanLang];
             return;
         }
 
         foreach ($this->queryRawTokens($text) as $token) {
             $lang = $this->callQueryTermLanguageResolver($token, $options, $defaultLang)
-                ?? $this->detectQueryTokenLanguage($token, $options)
-                ?? $defaultLang;
+                ?? $spanLang;
             $segments[] = ['text' => $token, 'lang' => $lang];
         }
     }
@@ -515,17 +535,17 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Detect language for a query token when no explicit resolver is configured.
+     * Detect language for a whole untagged query span.
      *
      * @param array<string,mixed> $options
      */
-    private function detectQueryTokenLanguage(string $token, array $options): ?string
+    private function detectQuerySpanLanguage(string $text, string $defaultLang, array $options): string
     {
         if (!$this->shouldAutoDetectQueryLanguage($options) || $this->languageDetector === null) {
-            return null;
+            return $defaultLang;
         }
 
-        return $this->languageDetector->detect_text($token) ?? null;
+        return $this->languageDetector->detect_text($text) ?? $defaultLang;
     }
 
     /**
@@ -1302,7 +1322,7 @@ final class WP_FTS_Analyzer
      */
     private function tagLangAttribute(string $tag): ?string
     {
-        if (!preg_match('/\b(?:xml:)?lang\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>\/]+))/i', $tag, $m)) {
+        if (!preg_match('/\s(?:xml:)?lang\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>\/]+))/i', $tag, $m)) {
             return null;
         }
 
@@ -1423,6 +1443,128 @@ final class WP_FTS_Analyzer
         $baseLang = explode('-', $lang, 2)[0];
 
         return isset($this->stopwordsByLang[$lang][$term]) || isset($this->stopwordsByLang[$baseLang][$term]);
+    }
+
+    /**
+     * Build a stable signature for document stale-detection.
+     */
+    private function buildIndexSignature(): string
+    {
+        $skipAncestors = array_keys($this->skipAncestors);
+        sort($skipAncestors, SORT_STRING);
+        $boosts = $this->boosts;
+        ksort($boosts, SORT_STRING);
+        $stopwords = array_keys($this->stopwords);
+        sort($stopwords, SORT_STRING);
+
+        $payload = [
+            'contract' => 'wp-fts-analyzer',
+            'version' => 2,
+            'skip_ancestors' => $skipAncestors,
+            'boosts' => $boosts,
+            'stopwords' => $stopwords,
+            'stopwords_by_lang' => $this->sortedStringSetMap($this->stopwordsByLang),
+            'default_language' => $this->defaultLanguage,
+            'document_language' => $this->documentLanguage,
+            'query_language' => $this->queryLanguage,
+            'auto_detect_language' => $this->autoDetectLanguage,
+            'language_detector' => $this->languageDetector === null ? null : $this->objectSignature($this->languageDetector),
+            'language_pipeline' => $this->objectSignature($this->languagePipeline),
+            'document_language_resolver' => $this->callableSignature($this->documentLanguageResolver),
+            'query_language_resolver' => $this->callableSignature($this->queryLanguageResolver),
+            'query_term_language_resolver' => $this->callableSignature($this->queryTermLanguageResolver),
+            'html_processor_factory' => $this->callableSignature($this->htmlProcessorFactory),
+            'html_processor_available' => class_exists('WP_HTML_Processor'),
+        ];
+
+        return 'wp-fts-analyzer-v2:' . sha1($this->stableJson($payload));
+    }
+
+    /**
+     * @param array<string,array<string,bool>> $sets
+     * @return array<string,string[]>
+     */
+    private function sortedStringSetMap(array $sets): array
+    {
+        ksort($sets, SORT_STRING);
+        $result = [];
+        foreach ($sets as $key => $set) {
+            $items = array_keys($set);
+            sort($items, SORT_STRING);
+            $result[(string) $key] = $items;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Return a deterministic descriptor for a callback.
+     */
+    private function callableSignature(mixed $callback): ?string
+    {
+        if (!is_callable($callback)) {
+            return null;
+        }
+
+        try {
+            if (is_string($callback)) {
+                return 'function:' . strtolower($callback);
+            }
+
+            if (is_array($callback) && count($callback) === 2) {
+                $target = is_object($callback[0]) ? get_class($callback[0]) : (string) $callback[0];
+                return 'method:' . $target . '::' . (string) $callback[1];
+            }
+
+            if ($callback instanceof Closure) {
+                $reflection = new ReflectionFunction($callback);
+                return sprintf(
+                    'closure:%s:%d-%d',
+                    $reflection->getFileName() ?: 'internal',
+                    $reflection->getStartLine(),
+                    $reflection->getEndLine()
+                );
+            }
+
+            if (is_object($callback)) {
+                return 'invokable:' . get_class($callback);
+            }
+        } catch (Throwable) {
+            return 'callable:' . get_debug_type($callback);
+        }
+
+        return 'callable:' . get_debug_type($callback);
+    }
+
+    /**
+     * Return a deterministic descriptor for an injected object.
+     */
+    private function objectSignature(object $object): string
+    {
+        if (is_callable([$object, 'index_signature'])) {
+            try {
+                $signature = $object->index_signature();
+                if (is_scalar($signature) && trim((string) $signature) !== '') {
+                    return (string) $signature;
+                }
+            } catch (Throwable) {
+                // Fall through to the class-level descriptor.
+            }
+        }
+
+        return get_debug_type($object);
+    }
+
+    /**
+     * Encode a sanitized signature payload.
+     */
+    private function stableJson(mixed $payload): string
+    {
+        try {
+            return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return serialize($payload);
+        }
     }
 
     /**

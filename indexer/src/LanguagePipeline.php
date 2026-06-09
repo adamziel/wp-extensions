@@ -22,6 +22,7 @@ final class WP_FTS_LanguagePipeline
     private bool $namespaceTerms;
     private int $minTermLen;
     private int $maxTermBytes;
+    private string $indexSignature;
 
     /**
      * Configure the token analysis pipeline.
@@ -74,6 +75,7 @@ final class WP_FTS_LanguagePipeline
         $this->namespaceTerms = (bool) ($options['namespace_terms'] ?? false);
         $this->minTermLen = max(1, (int) ($options['min_term_len'] ?? 2));
         $this->maxTermBytes = max(1, (int) ($options['max_term_bytes'] ?? 255));
+        $this->indexSignature = $this->buildIndexSignature($options, $tokenizer);
     }
 
     /**
@@ -152,6 +154,14 @@ final class WP_FTS_LanguagePipeline
     public function namespace_term(string $language, string $term): string
     {
         return $this->canonicalize_language($language) . "\x1e" . $term;
+    }
+
+    /**
+     * Return the language-pipeline behavior signature for stale-document checks.
+     */
+    public function index_signature(): string
+    {
+        return $this->indexSignature;
     }
 
     /**
@@ -439,5 +449,166 @@ final class WP_FTS_LanguagePipeline
         return $this->customStemmersByLanguage[$language]
             ?? $this->customStemmersByLanguage[$this->base_language($language)]
             ?? null;
+    }
+
+    /**
+     * Build a stable signature for tokenization, normalization, and stemming.
+     *
+     * @param array<string,mixed> $options Constructor options.
+     */
+    private function buildIndexSignature(array $options, mixed $tokenizer): string
+    {
+        $payload = [
+            'contract' => 'wp-fts-language-pipeline',
+            'version' => 2,
+            'min_term_len' => $this->minTermLen,
+            'max_term_bytes' => $this->maxTermBytes,
+            'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
+            'namespace_terms' => $this->namespaceTerms,
+            'enable_stemming' => $this->enableStemming,
+            'polish_stemming' => (string) ($options['polish_stemming'] ?? 'conservative'),
+            'stemmer' => $this->componentSignature($options['stemmer'] ?? null),
+            'stemmers_by_lang' => $this->stemmersByLanguageSignature($options['stemmers_by_lang'] ?? $options['stemmers'] ?? []),
+            'cjk_tokenizer' => $this->componentSignature($tokenizer),
+            'token_normalizer' => $this->componentSignature($options['token_normalizer'] ?? null),
+            'chinese_script_map' => $this->signatureValue($options['chinese_script_map'] ?? []),
+            'normalizer' => $this->componentSignature($options['normalizer'] ?? null),
+            'snowball_stemmer' => $this->componentSignature($options['snowball_stemmer'] ?? null),
+            'polish_stemmer' => $this->componentSignature($options['polish_stemmer'] ?? null),
+        ];
+
+        return 'wp-fts-language-pipeline-v2:' . sha1($this->stableJson($payload));
+    }
+
+    /**
+     * @param mixed $stemmers
+     * @return array<string,mixed>
+     */
+    private function stemmersByLanguageSignature(mixed $stemmers): array
+    {
+        if (!is_array($stemmers)) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($stemmers as $language => $stemmer) {
+            $lang = $this->canonicalize_language((string) $language);
+            if ($lang === 'und') {
+                continue;
+            }
+
+            $result[$lang] = $this->componentSignature($stemmer);
+        }
+        ksort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * Return a deterministic descriptor for a signature component.
+     */
+    private function componentSignature(mixed $component): mixed
+    {
+        if ($component === null || $component === false) {
+            return null;
+        }
+
+        if (is_callable($component)) {
+            return $this->callableSignature($component);
+        }
+
+        if (is_object($component)) {
+            if (is_callable([$component, 'index_signature'])) {
+                try {
+                    $signature = $component->index_signature();
+                    if (is_scalar($signature) && trim((string) $signature) !== '') {
+                        return (string) $signature;
+                    }
+                } catch (Throwable) {
+                    // Fall through to the class-level descriptor.
+                }
+            }
+
+            return 'object:' . get_debug_type($component);
+        }
+
+        return $this->signatureValue($component);
+    }
+
+    /**
+     * Return a deterministic descriptor for a callback.
+     */
+    private function callableSignature(callable $callback): string
+    {
+        try {
+            if (is_string($callback)) {
+                return 'function:' . strtolower($callback);
+            }
+
+            if (is_array($callback) && count($callback) === 2) {
+                $target = is_object($callback[0]) ? get_class($callback[0]) : (string) $callback[0];
+                return 'method:' . $target . '::' . (string) $callback[1];
+            }
+
+            if ($callback instanceof Closure) {
+                $reflection = new ReflectionFunction($callback);
+                return sprintf(
+                    'closure:%s:%d-%d',
+                    $reflection->getFileName() ?: 'internal',
+                    $reflection->getStartLine(),
+                    $reflection->getEndLine()
+                );
+            }
+
+            if (is_object($callback)) {
+                return 'invokable:' . get_class($callback);
+            }
+        } catch (Throwable) {
+            return 'callable:' . get_debug_type($callback);
+        }
+
+        return 'callable:' . get_debug_type($callback);
+    }
+
+    /**
+     * Normalize arrays and scalar values before JSON encoding a signature.
+     */
+    private function signatureValue(mixed $value): mixed
+    {
+        if ($value === null || is_scalar($value)) {
+            return $value;
+        }
+
+        if (is_callable($value)) {
+            return $this->callableSignature($value);
+        }
+
+        if (is_object($value)) {
+            return 'object:' . get_debug_type($value);
+        }
+
+        if (!is_array($value)) {
+            return get_debug_type($value);
+        }
+
+        $result = [];
+        foreach ($value as $key => $item) {
+            $result[(string) $key] = $this->signatureValue($item);
+        }
+        ksort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * Encode a sanitized signature payload.
+     */
+    private function stableJson(mixed $payload): string
+    {
+        try {
+            return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return serialize($payload);
+        }
     }
 }

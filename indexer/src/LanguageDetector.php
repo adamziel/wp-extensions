@@ -83,6 +83,20 @@ final class WP_FTS_LanguageDetector
     }
 
     /**
+     * Return the detector behavior signature used by analyzer stale checks.
+     */
+    public function index_signature(): string
+    {
+        return 'wp-fts-language-detector-v1:' . sha1($this->stableJson([
+            'contract' => 'wp-fts-language-detector',
+            'version' => 1,
+            'minimum_score' => $this->minimumScore,
+            'minimum_lead' => $this->minimumLead,
+            'evidence_terms' => $this->sortedStringSetMap($this->evidenceTerms),
+        ]));
+    }
+
+    /**
      * @return array<string,array<string,bool>>
      */
     private function normalize_evidence_terms(array $termsByLanguage): array
@@ -217,5 +231,34 @@ final class WP_FTS_LanguageDetector
         preg_match_all('/[A-Za-z0-9_]+/', $ascii, $matches);
 
         return $matches[0] ?? [];
+    }
+
+    /**
+     * @param array<string,array<string,bool>> $sets
+     * @return array<string,string[]>
+     */
+    private function sortedStringSetMap(array $sets): array
+    {
+        ksort($sets, SORT_STRING);
+        $result = [];
+        foreach ($sets as $key => $set) {
+            $items = array_keys($set);
+            sort($items, SORT_STRING);
+            $result[(string) $key] = $items;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Encode a sanitized signature payload.
+     */
+    private function stableJson(mixed $payload): string
+    {
+        try {
+            return json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            return serialize($payload);
+        }
     }
 }

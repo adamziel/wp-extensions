@@ -2460,6 +2460,30 @@ test_case('element language scopes end at siblings and restore parent scopes', f
     assert_same('en', $segments[1]['lang'] ?? null, 'fallback optional-end sibling should not inherit previous lang');
 });
 
+test_case('fallback parser only treats actual lang attributes as language scopes', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en', 'auto_detect_language' => false]);
+    $segments = test_fallback_segments(
+        $analyzer,
+        '<p data-lang="pl">DataAttr</p>' .
+        '<p aria-label="lang=pl">AriaLabel</p>' .
+        '<p lang="pl">LangAttr</p>' .
+        '<p xml:lang="de">XmlLangAttr</p>' .
+        '<p data-lang="pl" lang="de">ActualLangWins</p>',
+        'en'
+    );
+
+    $langsByText = [];
+    foreach ($segments as $segment) {
+        $langsByText[trim($segment['text'])] = $segment['lang'];
+    }
+
+    assert_same('en', $langsByText['DataAttr'] ?? null, 'fallback parser must ignore data-lang attributes');
+    assert_same('en', $langsByText['AriaLabel'] ?? null, 'fallback parser must ignore lang-like text inside other attributes');
+    assert_same('pl', $langsByText['LangAttr'] ?? null, 'fallback parser should honor actual lang attributes');
+    assert_same('de', $langsByText['XmlLangAttr'] ?? null, 'fallback parser should honor actual xml:lang attributes');
+    assert_same('de', $langsByText['ActualLangWins'] ?? null, 'fallback parser should prefer actual lang over data-lang');
+});
+
 test_case('query analysis exposes language-aware occurrences while preserving term shim', function (): void {
     $analyzer = new WP_FTS_Analyzer();
 
@@ -2722,6 +2746,30 @@ test_case('hash skip avoids unchanged rewrites', function (): void {
     assert_same($snapshot, storage_snapshot($storage), 'unchanged document should not rewrite storage');
 });
 
+test_case('analyzer signature reindexes unchanged content after default stemming changes', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $noStemAnalyzer = new WP_FTS_Analyzer(['enable_stemming' => false]);
+    $noStemIndexer = new WP_FTS_Indexer($storage, $noStemAnalyzer);
+    $html = '<p>Wrocławiu</p>';
+    $oldTerm = WP_FTS_TermNamespace::namespace_term('pl', 'wroclawiu');
+    $newTerm = WP_FTS_TermNamespace::namespace_term('pl', 'wroclaw');
+
+    assert_true($noStemIndexer->index_document(42, $html, ['lang' => 'pl']), 'initial no-stem index should write the document');
+    assert_true(in_array($oldTerm, $storage->all_terms(), true), 'no-stem index should store the unstemmed Polish term');
+    assert_true(!in_array($newTerm, $storage->all_terms(), true), 'no-stem index should not store the default stemmed term yet');
+
+    $defaultAnalyzer = new WP_FTS_Analyzer();
+    $defaultIndexer = new WP_FTS_Indexer($storage, $defaultAnalyzer);
+    assert_true($defaultIndexer->index_document(42, $html, ['lang' => 'pl']), 'analyzer signature change should force a rewrite for unchanged HTML');
+
+    $terms = $storage->all_terms();
+    assert_true(!in_array($oldTerm, $terms, true), 'reindex should remove the stale unstemmed posting');
+    assert_true(in_array($newTerm, $terms, true), 'reindex should store the default stemmed posting');
+
+    $searcher = new WP_FTS_Searcher($storage, $defaultAnalyzer);
+    assert_same([42], array_column($searcher->search('Wrocławiu', ['lang' => 'pl']), 'doc_id'), 'default search should find the reindexed stemmed document');
+});
+
 test_case('indexer consumes analyzer occurrences with language tags', function (): void {
     $indexer = new WP_FTS_Indexer(new WP_FTS_Storage_InMemory(), new WP_FTS_Analyzer());
     $method = new ReflectionMethod(WP_FTS_Indexer::class, 'weighted_term_frequencies_by_language');
@@ -2783,6 +2831,46 @@ test_case('auto-detected document and query languages meet in search', function 
     ]));
     assert_true(in_array(WP_FTS_TermNamespace::namespace_term('de', 'fuehrung'), $terms, true), 'detected document should store the German namespace');
     assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('en', 'fuehrung'), $terms, true), 'detected document should not fall back to the site/default namespace');
+});
+
+test_case('untagged query spans use document-parity language detection for AND recall', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>oraz jest</p>');
+    $indexer->index_document(2, '<p>Führung und Straße</p>');
+    $indexer->index_document(3, '<p>oraz jest</p>', ['lang' => 'en']);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([1], array_column($searcher->search('oraz jest', ['mode' => 'AND', 'limit' => 10]), 'doc_id'), 'untagged Polish AND query should match the untagged Polish document segment');
+    assert_same([2], array_column($searcher->search('Führung und Straße', ['mode' => 'AND', 'limit' => 10]), 'doc_id'), 'untagged German AND query should keep weak tokens in the detected German span');
+    assert_same([3], array_column($searcher->search('oraz jest', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10]), 'doc_id'), 'explicit query language should still isolate the requested partition');
+    assert_same([], $searcher->search('Führung und Straße', ['lang' => 'en', 'mode' => 'AND']), 'explicit English query should not leak into detected German postings');
+});
+
+test_case('custom query term resolver overrides detected untagged query spans', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'default_lang' => 'en',
+        'query_term_language_resolver' => static function (string $token): ?string {
+            return $token === 'Führung' ? 'en' : null;
+        },
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(
+        10,
+        '<article><p lang="en">Führung</p><p lang="de">Straße</p></article>',
+        ['lang' => 'en']
+    );
+
+    $langs = test_lang_by_term($analyzer->analyze_query_occurrences('Führung Straße'));
+    assert_same('en', $langs['fuhrung'] ?? null, 'custom resolver should override detected German span language for its token');
+    assert_same('de', $langs['strasse'] ?? null, 'unresolved tokens should inherit the detected German span language');
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([10], array_column($searcher->search('Führung Straße', ['mode' => 'AND']), 'doc_id'), 'resolver-selected token language should participate in AND search');
 });
 
 test_case('index_post lets detector fill missing WordPress language metadata', function (): void {

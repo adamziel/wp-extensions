@@ -10,6 +10,8 @@ declare(strict_types=1);
  */
 final class WP_FTS_Indexer
 {
+    private const INDEX_SIGNATURE_VERSION = 'wp-fts-indexer-v2';
+
     /**
      * @param WP_FTS_Storage $storage Storage backend for terms, documents, and
      *        metadata. Backends may be language-aware or legacy aggregate-only.
@@ -33,10 +35,11 @@ final class WP_FTS_Indexer
      * `$opts['document_lang']`, or `$opts['locale']` when the caller already
      * knows the document language.
      *
-     * The content hash includes the resolved primary language, so the same HTML
-     * can be reindexed when its language partition changes. Replacements remove
-     * old postings and subtract old per-language metadata before adding the new
-     * postings and document lengths in one storage transaction.
+     * The content hash includes the resolved primary language and analyzer
+     * behavior signature, so the same HTML can be reindexed when its language
+     * partition or analyzer output changes. Replacements remove old postings
+     * and subtract old per-language metadata before adding the new postings and
+     * document lengths in one storage transaction.
      *
      * @param int $doc_id Stable non-negative document identifier used in
      *        postings.
@@ -402,14 +405,39 @@ LIMIT %d",
     }
 
     /**
-     * Hash document content together with its primary language partition.
+     * Hash document content together with its primary language and analyzer.
      *
-     * The NUL separator keeps the language and HTML portions unambiguous while
-     * preserving the existing SHA-1 storage shape.
+     * The NUL separator keeps portions unambiguous while preserving the
+     * existing SHA-1 storage shape. The analyzer signature makes migrations from
+     * old no-stem or language-pipeline behavior rewrite unchanged documents.
      */
     private function content_hash(string $html, string $primaryLang): string
     {
-        return sha1(WP_FTS_TermNamespace::canonicalize_lang($primaryLang) . "\0" . $html);
+        return sha1(implode("\0", [
+            self::INDEX_SIGNATURE_VERSION,
+            $this->analyzer_index_signature(),
+            WP_FTS_TermNamespace::canonicalize_lang($primaryLang),
+            $html,
+        ]));
+    }
+
+    /**
+     * Return the analyzer's stale-detection signature when available.
+     */
+    private function analyzer_index_signature(): string
+    {
+        if (is_callable([$this->analyzer, 'index_signature'])) {
+            try {
+                $signature = $this->analyzer->index_signature();
+                if (is_scalar($signature) && trim((string) $signature) !== '') {
+                    return (string) $signature;
+                }
+            } catch (Throwable) {
+                // Fall through to a conservative class-level signature.
+            }
+        }
+
+        return 'analyzer:' . get_debug_type($this->analyzer);
     }
 
     /**

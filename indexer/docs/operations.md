@@ -64,7 +64,9 @@ wp fts reindex --limit=50 --batch_size=10
 The reindexer pages through posts by ascending ID. A repeated reindex of
 unchanged content is cheap at the document level because the content hash lets
 the indexer skip unchanged documents, but the command still reads and counts the
-posts it processes.
+posts it processes. The hash also includes the analyzer/index signature, so
+stemming, language-pipeline, or other analyzer behavior changes rewrite existing
+documents even when their source content is unchanged.
 
 Important current behaviors:
 

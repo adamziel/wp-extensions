@@ -35,7 +35,7 @@ metadata and change detection.
 
 Query language resolution follows the same idea. Prefer passing `--lang` on
 operational searches when the language is known; otherwise the analyzer may use
-conservative detector evidence to route untagged query tokens into the same
+conservative detector evidence to route untagged query spans into the same
 partition as untagged indexed content:
 
 ```sh
@@ -85,6 +85,11 @@ $analyzer = new WP_FTS_Analyzer([
 
 The WP-CLI commands currently create `new WP_FTS_Analyzer()` with no custom
 options.
+
+Analyzer behavior participates in stale-document detection. A reindex skips
+unchanged content only when the source content, primary language, and
+analyzer/index signature still match; stemming or language-pipeline changes
+force existing documents to be rewritten.
 
 ## Stemmers
 
