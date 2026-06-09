@@ -241,11 +241,11 @@ site search	search site	bidirectional	0.72	language-fts-playground-english-curat
 
 Both `source_terms` and `target_terms` are single-space-separated normalized
 canonical analyzer keys. Runtime search matches source sequences over the
-ordered query token-key sequence after tokenization, lexeme mapping, stemming,
-and stopword removal. A one-key target scores as a weighted phrase-synonym
-candidate. A multi-key target must match adjacent indexed positions; it is not
-treated as unrelated loose terms. Exact canonical matches still rank above
-phrase-synonym-only matches.
+ordered query token-key sequence after tokenization, lexeme mapping,
+profile-backed term-rule key generation, and stopword removal. A one-key target
+scores as a weighted phrase-synonym candidate. A multi-key target must match
+adjacent indexed positions; it is not treated as unrelated loose terms. Exact
+canonical matches still rank above phrase-synonym-only matches.
 
 The parser rejects malformed column counts, empty source or target sequences,
 broken spacing, duplicate terms inside one sequence, uppercase terms, invalid
@@ -380,9 +380,10 @@ databases into this repository without a separate review and promotion decision.
 
 ## Relevance Evaluation
 
-Validation proves the compact files are well-formed. Relevance evaluation
-proves a generated pack improves search behavior on a reviewed corpus/query
-fixture before it ships or becomes a custom production root:
+Validation proves the compact files are well-formed. Relevance evaluation gives
+maintainers evidence that a generated pack improves search behavior on a
+reviewed corpus/query fixture before it ships in a future pack or is used as a
+validated custom local root:
 
 ```sh
 php language-fts-playground/tools/evaluate-lexical-pack.php \
