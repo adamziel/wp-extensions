@@ -489,6 +489,27 @@ The fixture root is a JSON object:
       "language": "auto",
       "relevant": ["doc-search"],
       "irrelevant": ["doc-broad-synset-bait"],
+      "expect": {
+        "top_ids": ["doc-search"],
+        "selected_partitions": ["en"],
+        "diagnostics_contains": ["\"selected_partitions\":[\"en\"]"],
+        "diagnostics_not_contains": ["unexpected-warning"],
+        "matched_fields": {
+          "doc-search": ["title", "content"]
+        },
+        "matched_terms": {
+          "doc-search": ["lookup"]
+        },
+        "match_classes": {
+          "doc-search": ["exact"]
+        },
+        "snippet_contains": {
+          "doc-search": ["<mark>lookup</mark>"]
+        },
+        "snippet_not_contains": {
+          "doc-search": ["<script>"]
+        }
+      },
       "notes": "Optional query provenance."
     }
   ]
@@ -500,12 +521,34 @@ array of strings. `searchable_html` can be used when fixture authors want to
 append extra HTML separately from `content`. `relevant` document ids contribute
 to recall@5, precision@5, MRR, and nDCG@5. `irrelevant` ids are guard rails:
 if any of them appear in the top five, the evaluator reports an unexpected hit
-and exits nonzero. Human output lists misses and unexpected top-5 ids per
-query; `--json` emits deterministic machine-readable metrics for CI.
+and exits nonzero.
+
+`expect` is optional, but CI fixtures should use it for behavior that aggregate
+metrics cannot express. `top_ids` checks the ordered top-result prefix.
+`selected_partitions` checks automatic or explicit language routing from the
+explain payload. `diagnostics_contains` and `diagnostics_not_contains` search
+the deterministic explain JSON for provenance, expansion, fuzzy, phrase, or
+no-result evidence. `matched_fields`, `matched_terms`, and `match_classes` are
+document-id maps that assert top-hit metadata. `snippet_contains` and
+`snippet_not_contains` assert escaped snippets and highlights. `no_results:
+true` declares that a query should return no hits; in that case `relevant` may
+be omitted and the query metrics pass only when the top five are empty. Human
+output lists misses, unexpected top-5 ids, selected partitions, and expectation
+failures per query; `--json` emits deterministic machine-readable metrics,
+expectations, explain summaries, and failures for CI.
 
 The committed `phrase-suite.json` fixture is a small smoke test for
 resource-backed phrase synonyms. It checks `full text search -> fts` recall and
-guards against a separated partial-acronym bait document.
+guards against a separated partial-acronym bait document. The committed
+`coverage-suite.json` fixture expands evaluator guard coverage across ordered
+ranking, no-result false-positive checks, explain diagnostics, matched
+fields/terms/classes, snippets, morphology, synonyms, multiword phrase
+synonyms, fuzzy matching, no-evidence automatic fallback, field-aware ranking,
+and explicit-vs-auto language behavior. Intended CI coverage is the PHP test
+harness under normal PHP and `php -n`, lexical pack validation under normal
+PHP, `php -n`, and `--json`, and all evaluator suites (`demo-suite.json`,
+`phrase-suite.json`, and `coverage-suite.json`) under normal PHP, `php -n`, and
+`--json`.
 
 ## Custom Resource Roots
 

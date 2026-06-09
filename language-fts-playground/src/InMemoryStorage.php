@@ -177,6 +177,7 @@ final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Pl
 
         $candidates = [];
         foreach ($terms as $candidate) {
+            $candidate = (string) $candidate;
             $length = strlen($candidate);
             if ($length < $min_length || $length > $max_length) {
                 continue;

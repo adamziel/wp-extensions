@@ -1,0 +1,422 @@
+{
+  "name": "Evaluator expectation coverage suite",
+  "source": "Language FTS Playground committed CI fixture for evaluator guard coverage.",
+  "language_pack_expectations": {
+    "en": "English exact, phrase synonym, fuzzy, field ranking, and snippet behavior stay stable.",
+    "pl": "Polish morphology and search-action synonyms route to the Polish partition without English bait.",
+    "de": "German folded queries route to the German partition and conservative term rules avoid broad no-result false positives."
+  },
+  "thresholds": {
+    "recall_at_5": 1.0,
+    "precision_at_5": 0.2,
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0
+  },
+  "documents": [
+    {
+      "id": "en-title-orchard",
+      "language": "en",
+      "title": "Orchard reference guide",
+      "excerpt": "A title-heavy relevance target.",
+      "content": "<article><p>Reference material for local lookup.</p></article>",
+      "notes": "Field-aware ranking target: title hit should outrank body-only orchard hits."
+    },
+    {
+      "id": "en-body-orchard",
+      "language": "en",
+      "title": "Meadow reference guide",
+      "content": "<article><p>The orchard appears only in the body prose.</p></article>",
+      "notes": "Field-aware ranking guard."
+    },
+    {
+      "id": "en-story-alt",
+      "language": "en",
+      "title": "English story archive",
+      "content": "<article><p>Careful records preserve older pages.</p></article>",
+      "image_alt": [
+        "historic stories index"
+      ],
+      "notes": "Morphology and searchable image alt target."
+    },
+    {
+      "id": "en-fts",
+      "language": "en",
+      "title": "English FTS acronym",
+      "content": "<article><p>FTS powers compact indexing for local content.</p></article>",
+      "notes": "Phrase synonym target for full text search -> fts."
+    },
+    {
+      "id": "en-acronym-bait",
+      "language": "en",
+      "title": "Separated acronym bait",
+      "content": "<article><p>The letters FT and S appear separately without the searchable acronym.</p></article>",
+      "notes": "False-positive guard for phrase synonym matching."
+    },
+    {
+      "id": "en-polish-bait",
+      "language": "en",
+      "title": "English literal Polish bait",
+      "content": "<article><p>wyszukiwania appears as literal foreign prose in the English partition.</p></article>",
+      "notes": "Automatic routing false-positive guard."
+    },
+    {
+      "id": "pl-search",
+      "language": "pl",
+      "title": "Polska wyszukiwarka",
+      "content": "<article><p>Widoczna polskiej partycji wyszukiwania pokazuje wynik.</p></article>",
+      "notes": "Polish morphology and search-action synonym target."
+    },
+    {
+      "id": "pl-photo-bait",
+      "language": "pl",
+      "title": "Galeria fotografii",
+      "content": "<article><p>Zielonego domu i fotografii nie wolno laczyc z katalogiem informacji.</p></article>",
+      "notes": "Unrelated Polish bait document."
+    },
+    {
+      "id": "de-fuehrung",
+      "language": "de",
+      "title": "Deutsche Fuehrung",
+      "content": "<article><p>Die deutschen Beispiele zeigen Führung und schnelle Suche.</p></article>",
+      "notes": "German fold and automatic language routing target."
+    },
+    {
+      "id": "en-german-bait",
+      "language": "en",
+      "title": "English literal German bait",
+      "content": "<article><p>Führung appears as literal foreign prose in the English partition.</p></article>",
+      "notes": "Automatic routing false-positive guard."
+    },
+    {
+      "id": "en-unsafe-snippet",
+      "language": "en",
+      "title": "Unsafe source record",
+      "content": "<article><p>Escaped source keeps &lt;script&gt;alert(1)&lt;/script&gt; visible.</p></article>",
+      "notes": "Snippet escaping and generated mark target."
+    }
+  ],
+  "queries": [
+    {
+      "query": "orchard",
+      "language": "en",
+      "relevant": [
+        "en-title-orchard",
+        "en-body-orchard"
+      ],
+      "expect": {
+        "top_ids": [
+          "en-title-orchard",
+          "en-body-orchard"
+        ],
+        "selected_partitions": [
+          "en"
+        ],
+        "matched_fields": {
+          "en-title-orchard": [
+            "title"
+          ],
+          "en-body-orchard": [
+            "content"
+          ]
+        },
+        "matched_terms": {
+          "en-title-orchard": [
+            "orchard"
+          ]
+        },
+        "match_classes": {
+          "en-title-orchard": [
+            "exact"
+          ]
+        },
+        "snippet_contains": {
+          "en-title-orchard": [
+            "<mark>Orchard</mark>"
+          ],
+          "en-body-orchard": [
+            "<mark>orchard</mark>"
+          ]
+        },
+        "diagnostics_contains": [
+          "\"by_field\"",
+          "\"title\"",
+          "\"content\""
+        ]
+      },
+      "notes": "Ordered ranking and matched-field assertions."
+    },
+    {
+      "query": "story",
+      "language": "en",
+      "relevant": [
+        "en-story-alt"
+      ],
+      "expect": {
+        "top_ids": [
+          "en-story-alt"
+        ],
+        "selected_partitions": [
+          "en"
+        ],
+        "matched_fields": {
+          "en-story-alt": [
+            "title",
+            "alt"
+          ]
+        },
+        "snippet_contains": {
+          "en-story-alt": [
+            "<mark>story</mark>"
+          ]
+        },
+        "diagnostics_contains": [
+          "\"language_provenance\"",
+          "\"alt\""
+        ]
+      },
+      "notes": "English morphology through stories/story plus image alt diagnostics."
+    },
+    {
+      "query": "szukanie",
+      "language": "auto",
+      "relevant": [
+        "pl-search"
+      ],
+      "irrelevant": [
+        "pl-photo-bait",
+        "en-polish-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "pl-search"
+        ],
+        "selected_partitions": [
+          "pl"
+        ],
+        "matched_terms": {
+          "pl-search": [
+            "szukac=>wyszukiwarka"
+          ]
+        },
+        "match_classes": {
+          "pl-search": [
+            "synonym"
+          ]
+        },
+        "snippet_contains": {
+          "pl-search": [
+            "<mark>wyszukiwarka</mark>"
+          ]
+        },
+        "diagnostics_contains": [
+          "language-fts-playground-polish-curated-synset",
+          "\"source_key\":\"szukac\"",
+          "\"target_key\":\"wyszukiwarka\""
+        ]
+      },
+      "notes": "Polish synonym and automatic routing guard."
+    },
+    {
+      "query": "wyszukiwania",
+      "language": "pl",
+      "relevant": [
+        "pl-search"
+      ],
+      "irrelevant": [
+        "en-polish-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "pl-search"
+        ],
+        "selected_partitions": [
+          "pl"
+        ],
+        "matched_fields": {
+          "pl-search": [
+            "content"
+          ]
+        },
+        "diagnostics_not_contains": [
+          "\"selected_partitions\":[\"en\""
+        ]
+      },
+      "notes": "Explicit Polish precision should not search the English bait partition."
+    },
+    {
+      "query": "full text search",
+      "language": "en",
+      "relevant": [
+        "en-fts"
+      ],
+      "irrelevant": [
+        "en-acronym-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "en-fts"
+        ],
+        "selected_partitions": [
+          "en"
+        ],
+        "matched_terms": {
+          "en-fts": [
+            "full text search=>fts"
+          ]
+        },
+        "match_classes": {
+          "en-fts": [
+            "phrase_synonym"
+          ]
+        },
+        "snippet_contains": {
+          "en-fts": [
+            "<mark>FTS</mark>"
+          ]
+        },
+        "diagnostics_contains": [
+          "\"source_phrase\":\"full text search\"",
+          "\"target_phrase\":\"fts\"",
+          "language-fts-playground-english-curated_seed"
+        ]
+      },
+      "notes": "Multiword phrase synonym guard."
+    },
+    {
+      "query": "orchrd~",
+      "language": "en",
+      "relevant": [
+        "en-title-orchard",
+        "en-body-orchard"
+      ],
+      "expect": {
+        "top_ids": [
+          "en-title-orchard",
+          "en-body-orchard"
+        ],
+        "selected_partitions": [
+          "en"
+        ],
+        "matched_terms": {
+          "en-title-orchard": [
+            "orchrd~orchard"
+          ]
+        },
+        "match_classes": {
+          "en-title-orchard": [
+            "fuzzy"
+          ]
+        },
+        "diagnostics_contains": [
+          "\"query_term\":\"orchrd\"",
+          "\"candidate_term\":\"orchard\"",
+          "\"edit_distance\":1"
+        ]
+      },
+      "notes": "Opt-in one-edit fuzzy guard."
+    },
+    {
+      "query": "Führung",
+      "language": "auto",
+      "relevant": [
+        "de-fuehrung"
+      ],
+      "irrelevant": [
+        "en-german-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "de-fuehrung"
+        ],
+        "selected_partitions": [
+          "de"
+        ],
+        "matched_terms": {
+          "de-fuehrung": [
+            "fuehrung"
+          ]
+        },
+        "match_classes": {
+          "de-fuehrung": [
+            "exact"
+          ]
+        },
+        "snippet_contains": {
+          "de-fuehrung": [
+            "<mark>Fuehrung</mark>"
+          ]
+        }
+      },
+      "notes": "German fold and automatic selected-partition guard."
+    },
+    {
+      "query": "&lt;script&gt;alert(1)&lt;/script&gt;",
+      "language": "en",
+      "relevant": [
+        "en-unsafe-snippet"
+      ],
+      "expect": {
+        "top_ids": [
+          "en-unsafe-snippet"
+        ],
+        "selected_partitions": [
+          "en"
+        ],
+        "snippet_contains": {
+          "en-unsafe-snippet": [
+            "&lt;<mark>script</mark>&gt;",
+            "<mark>alert</mark>"
+          ]
+        },
+        "snippet_not_contains": {
+          "en-unsafe-snippet": [
+            "<script>"
+          ]
+        },
+        "diagnostics_contains": [
+          "&lt;script&gt;alert(1)&lt;/script&gt;"
+        ],
+        "diagnostics_not_contains": [
+          "\"snippet\":\"Escaped source keeps <script>"
+        ]
+      },
+      "notes": "Snippet/highlight safety guard."
+    },
+    {
+      "query": "gelobt",
+      "language": "de",
+      "expect": {
+        "no_results": true,
+        "selected_partitions": [
+          "de"
+        ],
+        "diagnostics_contains": [
+          "\"gelobt\"",
+          "\"gelob\"",
+          "no_postings_for_searched_terms"
+        ]
+      },
+      "notes": "German morphology diagnostics with no-result false-positive guard."
+    },
+    {
+      "query": "zephyrneedle",
+      "language": "auto",
+      "expect": {
+        "no_results": true,
+        "selected_partitions": [
+          "en",
+          "pl",
+          "de"
+        ],
+        "diagnostics_contains": [
+          "\"evaluated\":false",
+          "no_postings_for_searched_terms"
+        ],
+        "diagnostics_not_contains": [
+          "selected-partition warning"
+        ]
+      },
+      "notes": "No-evidence automatic fallback should remain bounded and quiet."
+    }
+  ]
+}

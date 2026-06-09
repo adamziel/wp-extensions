@@ -268,9 +268,23 @@ function language_fts_evaluate_pack_run(array $fixture, string $fixture_path, st
 
     foreach ($queries as $offset => $query) {
         $results = $searcher->search($query['query'], $query['language'], $top_k);
+        $diagnostics = $searcher->explain($query['query'], $query['language'], $top_k);
+        $diagnostic_results = [];
+        foreach ((array) ($diagnostics['results'] ?? []) as $diagnostic_result) {
+            if (!is_array($diagnostic_result)) {
+                continue;
+            }
+            $fixture_id = $numeric_to_fixture_ids[(int) ($diagnostic_result['post_id'] ?? 0)] ?? '';
+            if ($fixture_id !== '') {
+                $diagnostic_results[$fixture_id] = $diagnostic_result;
+            }
+        }
+
         $top_hits = [];
         foreach ($results as $rank => $result) {
             $fixture_id = $numeric_to_fixture_ids[(int) $result['post_id']] ?? '#' . (string) $result['post_id'];
+            $diagnostic_result = $diagnostic_results[$fixture_id] ?? [];
+            $diagnostic_result = is_array($diagnostic_result) ? $diagnostic_result : [];
             $top_hits[] = [
                 'rank' => $rank + 1,
                 'id' => $fixture_id,
@@ -278,6 +292,8 @@ function language_fts_evaluate_pack_run(array $fixture, string $fixture_path, st
                 'matched_language' => (string) $result['matched_language'],
                 'matched_terms' => array_values(array_map('strval', $result['matched_terms'] ?? [])),
                 'matched_fields' => array_values(array_map('strval', $result['matched_fields'] ?? [])),
+                'match_classes' => array_values(array_map('strval', (array) ($diagnostic_result['match_classes'] ?? []))),
+                'snippet' => (string) ($result['snippet'] ?? ''),
             ];
         }
 
@@ -302,6 +318,16 @@ function language_fts_evaluate_pack_run(array $fixture, string $fixture_path, st
             $failures[] = 'Unexpected top-' . $top_k . ' hit for query "' . $query['query'] . '": ' . implode(', ', $unexpected);
         }
 
+        $expectation_failures = language_fts_evaluate_pack_expectation_failures(
+            $query,
+            $top_hits,
+            $top_ids,
+            $diagnostics
+        );
+        foreach ($expectation_failures as $failure) {
+            $failures[] = $failure;
+        }
+
         $query_reports[] = [
             'ordinal' => $offset + 1,
             'query' => $query['query'],
@@ -313,6 +339,9 @@ function language_fts_evaluate_pack_run(array $fixture, string $fixture_path, st
             'metrics' => $metrics,
             'misses' => $misses,
             'unexpected_top_hits' => $unexpected,
+            'expectations' => $query['expectations'],
+            'expectation_failures' => $expectation_failures,
+            'explain_summary' => language_fts_evaluate_pack_explain_summary($diagnostics, $numeric_to_fixture_ids),
         ];
     }
 
@@ -397,7 +426,7 @@ function language_fts_evaluate_pack_documents(array $fixture): array
 /**
  * @param array<string,mixed> $fixture
  * @param string[] $document_ids
- * @return array<int,array{query:string,language:string,relevant:string[],irrelevant:string[],notes:?string}>
+ * @return array<int,array{query:string,language:string,relevant:string[],irrelevant:string[],notes:?string,expectations:array<string,mixed>}>
  */
 function language_fts_evaluate_pack_queries(array $fixture, array $document_ids): array
 {
@@ -416,10 +445,11 @@ function language_fts_evaluate_pack_queries(array $fixture, array $document_ids)
         $label = 'query at index ' . (string) $offset;
         $query_text = language_fts_evaluate_pack_required_string($query, 'query', $label);
         $language = language_fts_evaluate_pack_optional_string($query['language'] ?? null) ?? 'auto';
+        $expectations = language_fts_evaluate_pack_query_expectations($query, $label);
         $relevant = language_fts_evaluate_pack_document_id_list(
             $query['relevant'] ?? ($query['relevant_document_ids'] ?? ($query['relevant_ids'] ?? null)),
             $label . ' relevant',
-            true
+            empty($expectations['no_results'])
         );
         $irrelevant = language_fts_evaluate_pack_document_id_list(
             $query['irrelevant'] ?? ($query['irrelevant_document_ids'] ?? ($query['irrelevant_ids'] ?? [])),
@@ -427,7 +457,7 @@ function language_fts_evaluate_pack_queries(array $fixture, array $document_ids)
             false
         );
 
-        foreach (array_merge($relevant, $irrelevant) as $id) {
+        foreach (array_merge($relevant, $irrelevant, language_fts_evaluate_pack_expectation_document_ids($expectations)) as $id) {
             if (!isset($document_lookup[$id])) {
                 throw new UnexpectedValueException($label . ' references unknown document id: ' . $id);
             }
@@ -444,10 +474,152 @@ function language_fts_evaluate_pack_queries(array $fixture, array $document_ids)
             'relevant' => $relevant,
             'irrelevant' => $irrelevant,
             'notes' => language_fts_evaluate_pack_optional_string($query['notes'] ?? ($query['provenance'] ?? null)),
+            'expectations' => $expectations,
         ];
     }
 
     return $queries;
+}
+
+/**
+ * @param array<string,mixed> $query
+ * @return array<string,mixed>
+ */
+function language_fts_evaluate_pack_query_expectations(array $query, string $label): array
+{
+    $raw = $query['expect'] ?? ($query['expectations'] ?? []);
+    if ($raw === null || $raw === []) {
+        return language_fts_evaluate_pack_empty_expectations();
+    }
+    if (!is_array($raw) || array_is_list($raw)) {
+        throw new UnexpectedValueException($label . ' expect must be a JSON object when present.');
+    }
+
+    $top_ids = language_fts_evaluate_pack_optional_string_list(
+        $raw['top_ids'] ?? ($raw['ordered_ids'] ?? ($raw['expected_top_ids'] ?? [])),
+        $label . ' expect.top_ids'
+    );
+
+    $expectations = [
+        'no_results' => language_fts_evaluate_pack_optional_bool($raw['no_results'] ?? ($raw['expect_no_results'] ?? false), $label . ' expect.no_results'),
+        'top_ids' => $top_ids,
+        'selected_partitions' => language_fts_evaluate_pack_optional_string_list(
+            $raw['selected_partitions'] ?? ($raw['expected_selected_partitions'] ?? []),
+            $label . ' expect.selected_partitions'
+        ),
+        'diagnostics_contains' => language_fts_evaluate_pack_optional_string_list(
+            $raw['diagnostics_contains'] ?? [],
+            $label . ' expect.diagnostics_contains'
+        ),
+        'diagnostics_not_contains' => language_fts_evaluate_pack_optional_string_list(
+            $raw['diagnostics_not_contains'] ?? [],
+            $label . ' expect.diagnostics_not_contains'
+        ),
+        'matched_fields' => language_fts_evaluate_pack_expectation_map(
+            $raw['matched_fields'] ?? [],
+            $label . ' expect.matched_fields'
+        ),
+        'matched_terms' => language_fts_evaluate_pack_expectation_map(
+            $raw['matched_terms'] ?? [],
+            $label . ' expect.matched_terms'
+        ),
+        'match_classes' => language_fts_evaluate_pack_expectation_map(
+            $raw['match_classes'] ?? [],
+            $label . ' expect.match_classes'
+        ),
+        'snippet_contains' => language_fts_evaluate_pack_expectation_map(
+            $raw['snippet_contains'] ?? [],
+            $label . ' expect.snippet_contains'
+        ),
+        'snippet_not_contains' => language_fts_evaluate_pack_expectation_map(
+            $raw['snippet_not_contains'] ?? [],
+            $label . ' expect.snippet_not_contains'
+        ),
+    ];
+
+    if ($expectations['no_results'] && $top_ids !== []) {
+        throw new UnexpectedValueException($label . ' cannot combine expect.no_results with expect.top_ids.');
+    }
+
+    return $expectations;
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function language_fts_evaluate_pack_empty_expectations(): array
+{
+    return [
+        'no_results' => false,
+        'top_ids' => [],
+        'selected_partitions' => [],
+        'diagnostics_contains' => [],
+        'diagnostics_not_contains' => [],
+        'matched_fields' => [],
+        'matched_terms' => [],
+        'match_classes' => [],
+        'snippet_contains' => [],
+        'snippet_not_contains' => [],
+    ];
+}
+
+function language_fts_evaluate_pack_optional_bool(mixed $value, string $context): bool
+{
+    if (is_bool($value)) {
+        return $value;
+    }
+    if ($value === null || $value === '') {
+        return false;
+    }
+
+    throw new UnexpectedValueException($context . ' must be a boolean.');
+}
+
+/**
+ * @return array<string,string[]>
+ */
+function language_fts_evaluate_pack_expectation_map(mixed $value, string $context): array
+{
+    if ($value === null || $value === []) {
+        return [];
+    }
+    if (!is_array($value) || array_is_list($value)) {
+        throw new UnexpectedValueException($context . ' must be a JSON object keyed by document id.');
+    }
+
+    $map = [];
+    foreach ($value as $document_id => $items) {
+        if (!is_string($document_id) || trim($document_id) === '') {
+            throw new UnexpectedValueException($context . ' keys must be non-empty document ids.');
+        }
+        $map[$document_id] = language_fts_evaluate_pack_optional_string_list($items, $context . '.' . $document_id);
+    }
+    ksort($map, SORT_STRING);
+
+    return $map;
+}
+
+/**
+ * @param array<string,mixed> $expectations
+ * @return string[]
+ */
+function language_fts_evaluate_pack_expectation_document_ids(array $expectations): array
+{
+    $ids = [];
+    foreach (['top_ids', 'matched_fields', 'matched_terms', 'match_classes', 'snippet_contains', 'snippet_not_contains'] as $key) {
+        $value = $expectations[$key] ?? [];
+        if ($key === 'top_ids') {
+            foreach ((array) $value as $id) {
+                $ids[] = (string) $id;
+            }
+            continue;
+        }
+        foreach (array_keys((array) $value) as $id) {
+            $ids[] = (string) $id;
+        }
+    }
+
+    return array_values(array_unique($ids));
 }
 
 /**
@@ -564,6 +736,17 @@ function language_fts_evaluate_pack_document_id_list(mixed $value, string $conte
  */
 function language_fts_evaluate_pack_query_metrics(array $top_ids, array $relevant, int $top_k): array
 {
+    if ($relevant === []) {
+        $empty_pass = $top_ids === [] ? 1.0 : 0.0;
+
+        return [
+            'recall_at_5' => $empty_pass,
+            'precision_at_5' => $empty_pass,
+            'mrr' => $empty_pass,
+            'ndcg_at_5' => $empty_pass,
+        ];
+    }
+
     $relevant_lookup = array_fill_keys($relevant, true);
     $relevant_hits = 0;
     $mrr = 0.0;
@@ -594,6 +777,147 @@ function language_fts_evaluate_pack_query_metrics(array $top_ids, array $relevan
         'mrr' => language_fts_evaluate_pack_round_metric($mrr),
         'ndcg_at_5' => language_fts_evaluate_pack_round_metric($idcg > 0.0 ? $dcg / $idcg : 0.0),
     ];
+}
+
+/**
+ * @param array{query:string,language:string,relevant:string[],irrelevant:string[],notes:?string,expectations:array<string,mixed>} $query
+ * @param array<int,array<string,mixed>> $top_hits
+ * @param string[] $top_ids
+ * @param array<string,mixed> $diagnostics
+ * @return string[]
+ */
+function language_fts_evaluate_pack_expectation_failures(array $query, array $top_hits, array $top_ids, array $diagnostics): array
+{
+    $expectations = $query['expectations'];
+    $failures = [];
+    $query_label = 'query "' . $query['query'] . '"';
+
+    if (!empty($expectations['no_results']) && $top_ids !== []) {
+        $failures[] = $query_label . ' expected no results, got: ' . implode(', ', $top_ids);
+    }
+
+    $expected_top_ids = array_values(array_map('strval', (array) ($expectations['top_ids'] ?? [])));
+    if ($expected_top_ids !== []) {
+        $actual_prefix = array_slice($top_ids, 0, count($expected_top_ids));
+        if ($actual_prefix !== $expected_top_ids) {
+            $failures[] = $query_label . ' expected top ids [' . implode(', ', $expected_top_ids)
+                . '], got [' . implode(', ', $actual_prefix) . ']';
+        }
+    }
+
+    $selected_partitions = array_values(array_map('strval', (array) (($diagnostics['language_routing'] ?? [])['selected_partitions'] ?? [])));
+    $expected_partitions = array_values(array_map('strval', (array) ($expectations['selected_partitions'] ?? [])));
+    if ($expected_partitions !== [] && $selected_partitions !== $expected_partitions) {
+        $failures[] = $query_label . ' expected selected partitions [' . implode(', ', $expected_partitions)
+            . '], got [' . implode(', ', $selected_partitions) . ']';
+    }
+
+    $diagnostics_json = language_fts_evaluate_pack_stable_json($diagnostics);
+    foreach (array_values(array_map('strval', (array) ($expectations['diagnostics_contains'] ?? []))) as $needle) {
+        if ($needle !== '' && !str_contains($diagnostics_json, $needle)) {
+            $failures[] = $query_label . ' expected diagnostics to contain "' . $needle . '"';
+        }
+    }
+    foreach (array_values(array_map('strval', (array) ($expectations['diagnostics_not_contains'] ?? []))) as $needle) {
+        if ($needle !== '' && str_contains($diagnostics_json, $needle)) {
+            $failures[] = $query_label . ' expected diagnostics not to contain "' . $needle . '"';
+        }
+    }
+
+    $hits_by_id = [];
+    foreach ($top_hits as $hit) {
+        $id = (string) ($hit['id'] ?? '');
+        if ($id !== '') {
+            $hits_by_id[$id] = $hit;
+        }
+    }
+
+    $list_checks = [
+        'matched_fields' => 'matched_fields',
+        'matched_terms' => 'matched_terms',
+        'match_classes' => 'match_classes',
+    ];
+    foreach ($list_checks as $expectation_key => $hit_key) {
+        foreach ((array) ($expectations[$expectation_key] ?? []) as $document_id => $required_values) {
+            $hit = $hits_by_id[(string) $document_id] ?? null;
+            if (!is_array($hit)) {
+                $failures[] = $query_label . ' expected ' . $expectation_key . ' for missing top hit ' . (string) $document_id;
+                continue;
+            }
+            $actual_values = array_values(array_map('strval', (array) ($hit[$hit_key] ?? [])));
+            foreach (array_values(array_map('strval', (array) $required_values)) as $required_value) {
+                if (!in_array($required_value, $actual_values, true)) {
+                    $failures[] = $query_label . ' expected ' . (string) $document_id . ' ' . $expectation_key
+                        . ' to contain "' . $required_value . '", got [' . implode(', ', $actual_values) . ']';
+                }
+            }
+        }
+    }
+
+    foreach ((array) ($expectations['snippet_contains'] ?? []) as $document_id => $needles) {
+        $snippet = (string) (($hits_by_id[(string) $document_id] ?? [])['snippet'] ?? '');
+        foreach (array_values(array_map('strval', (array) $needles)) as $needle) {
+            if ($needle !== '' && !str_contains($snippet, $needle)) {
+                $failures[] = $query_label . ' expected ' . (string) $document_id . ' snippet to contain "' . $needle . '"';
+            }
+        }
+    }
+
+    foreach ((array) ($expectations['snippet_not_contains'] ?? []) as $document_id => $needles) {
+        $snippet = (string) (($hits_by_id[(string) $document_id] ?? [])['snippet'] ?? '');
+        foreach (array_values(array_map('strval', (array) $needles)) as $needle) {
+            if ($needle !== '' && str_contains($snippet, $needle)) {
+                $failures[] = $query_label . ' expected ' . (string) $document_id . ' snippet not to contain "' . $needle . '"';
+            }
+        }
+    }
+
+    return $failures;
+}
+
+/**
+ * @param array<string,mixed> $diagnostics
+ * @param array<int,string> $numeric_to_fixture_ids
+ * @return array<string,mixed>
+ */
+function language_fts_evaluate_pack_explain_summary(array $diagnostics, array $numeric_to_fixture_ids): array
+{
+    $routing = is_array($diagnostics['language_routing'] ?? null) ? $diagnostics['language_routing'] : [];
+    $results = [];
+    foreach ((array) ($diagnostics['results'] ?? []) as $result) {
+        if (!is_array($result)) {
+            continue;
+        }
+        $post_id = (int) ($result['post_id'] ?? 0);
+        $results[] = [
+            'id' => $numeric_to_fixture_ids[$post_id] ?? '#' . (string) $post_id,
+            'matched_language' => (string) ($result['matched_language'] ?? ''),
+            'matched_fields' => array_values(array_map('strval', (array) ($result['matched_fields'] ?? []))),
+            'matched_terms' => array_values(array_map('strval', (array) ($result['matched_terms'] ?? []))),
+            'match_classes' => array_values(array_map('strval', (array) ($result['match_classes'] ?? []))),
+        ];
+    }
+
+    return [
+        'selected_partitions' => array_values(array_map('strval', (array) ($routing['selected_partitions'] ?? []))),
+        'strategy' => (string) ($routing['strategy'] ?? ''),
+        'preflight_evaluated' => (bool) (($routing['preflight'] ?? [])['evaluated'] ?? false),
+        'no_result_causes' => array_values(array_map('strval', (array) ($diagnostics['no_result_causes'] ?? []))),
+        'results' => $results,
+    ];
+}
+
+/**
+ * @param array<string,mixed> $value
+ */
+function language_fts_evaluate_pack_stable_json(array $value): string
+{
+    $json = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($json)) {
+        throw new RuntimeException('Could not encode evaluator diagnostics JSON.');
+    }
+
+    return $json;
 }
 
 function language_fts_evaluate_pack_round_metric(float $value): float
@@ -692,10 +1016,16 @@ function language_fts_evaluate_pack_print_human(array $report): void
         }
         $misses = array_values(array_map('strval', (array) ($query['misses'] ?? [])));
         $unexpected = array_values(array_map('strval', (array) ($query['unexpected_top_hits'] ?? [])));
-        $prefix = $unexpected !== [] ? 'FAIL' : ($misses !== [] ? 'MISS' : 'OK');
+        $expectation_failures = array_values(array_map('strval', (array) ($query['expectation_failures'] ?? [])));
+        $prefix = ($unexpected !== [] || $expectation_failures !== []) ? 'FAIL' : ($misses !== [] ? 'MISS' : 'OK');
         echo '  ' . $prefix . ' ' . (int) ($query['ordinal'] ?? 0) . '. '
             . (string) ($query['query'] ?? '') . ' [' . (string) ($query['language'] ?? '') . "]\n";
         echo '    relevant: ' . implode(', ', array_map('strval', (array) ($query['relevant'] ?? []))) . "\n";
+        $summary = is_array($query['explain_summary'] ?? null) ? $query['explain_summary'] : [];
+        $partitions = array_values(array_map('strval', (array) ($summary['selected_partitions'] ?? [])));
+        if ($partitions !== []) {
+            echo '    selected partitions: ' . implode(', ', $partitions) . "\n";
+        }
         $top_hits = [];
         foreach ((array) ($query['top_hits'] ?? []) as $hit) {
             if (!is_array($hit)) {
@@ -710,6 +1040,9 @@ function language_fts_evaluate_pack_print_human(array $report): void
         }
         if ($unexpected !== []) {
             echo '    unexpected top-5 ids: ' . implode(', ', $unexpected) . "\n";
+        }
+        foreach ($expectation_failures as $failure) {
+            echo '    expectation failure: ' . $failure . "\n";
         }
     }
 

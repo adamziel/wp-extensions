@@ -213,6 +213,7 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
         $candidates = [];
         foreach ($terms as $candidate) {
+            $candidate = (string) $candidate;
             $length = strlen($candidate);
             if ($length < $min_length || $length > $max_length) {
                 continue;
@@ -4422,6 +4423,25 @@ test_case('lexical pack evaluator passes the committed phrase synonym fixture', 
     assert_contains_text('full text search=>fts', $result['output'], 'Phrase synonym evaluator output includes phrase diagnostics.');
 });
 
+test_case('lexical pack evaluator passes the committed expectation coverage fixture', function (): void {
+    $result = run_language_fts_evaluator(language_fts_eval_fixture_path('coverage-suite.json'), ['json' => true]);
+    $decoded = json_decode($result['output'], true);
+
+    assert_same(0, $result['exit_code'], 'Committed expectation coverage fixture passes. Output: ' . $result['output']);
+    assert_true(is_array($decoded), 'Expectation coverage evaluator JSON is parseable.');
+    assert_same(true, $decoded['passed'] ?? null, 'Expectation coverage evaluator output reports success.');
+    assert_same(10, $decoded['query_count'] ?? null, 'Expectation coverage fixture query count stays stable.');
+    assert_same([], $decoded['failures'] ?? null, 'Expectation coverage fixture has no aggregate failures.');
+    assert_same(
+        ['en', 'pl', 'de'],
+        $decoded['queries'][9]['explain_summary']['selected_partitions'] ?? null,
+        'Expectation coverage JSON reports automatic fallback partitions.'
+    );
+    assert_contains_text('"expectations"', $result['output'], 'Expectation coverage JSON includes parsed expectations.');
+    assert_contains_text('full text search=>fts', $result['output'], 'Expectation coverage JSON includes phrase-synonym match metadata.');
+    assert_contains_text('orchrd~orchard', $result['output'], 'Expectation coverage JSON includes fuzzy match metadata.');
+});
+
 test_case('lexical pack evaluator JSON is deterministic and parseable', function (): void {
     $fixture = language_fts_eval_fixture_path('demo-suite.json');
     $first = run_language_fts_evaluator($fixture, ['json' => true]);
@@ -4486,6 +4506,46 @@ test_case('lexical pack evaluator reports misses and unexpected top-k hits', fun
         assert_contains_text('missing relevant ids: expected', $result['output'], 'Evaluator human output lists missed relevant ids.');
         assert_contains_text('unexpected top-5 ids: bait', $result['output'], 'Evaluator human output lists unexpected top-k ids.');
         assert_contains_text('Unexpected top-5 hit for query "orchard": bait', $result['output'], 'Evaluator failure summary names the unexpected hit.');
+    } finally {
+        remove_language_fts_temp_file($fixture_path);
+    }
+});
+
+test_case('lexical pack evaluator enforces explicit expectation guards', function (): void {
+    $fixture_path = write_language_fts_temp_eval_fixture([
+        'name' => 'Expectation failure fixture',
+        'documents' => [
+            [
+                'id' => 'expected',
+                'language' => 'en',
+                'title' => 'Orchard target',
+                'content' => '<p>The relevant orchard document.</p>',
+            ],
+            [
+                'id' => 'bait',
+                'language' => 'en',
+                'title' => 'Bait document',
+                'content' => '<p>Unrelated fixture text.</p>',
+            ],
+        ],
+        'queries' => [
+            [
+                'query' => 'orchard',
+                'language' => 'en',
+                'relevant' => ['expected'],
+                'expect' => [
+                    'top_ids' => ['bait'],
+                ],
+            ],
+        ],
+    ]);
+
+    try {
+        $result = run_language_fts_evaluator($fixture_path);
+
+        assert_true($result['exit_code'] !== 0, 'Expectation mismatches make the evaluator exit nonzero.');
+        assert_contains_text('expected top ids [bait], got [expected]', $result['output'], 'Expectation failure names expected and actual top ids.');
+        assert_contains_text('expectation failure:', $result['output'], 'Human output lists expectation failures per query.');
     } finally {
         remove_language_fts_temp_file($fixture_path);
     }
