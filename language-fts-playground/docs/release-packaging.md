@@ -84,6 +84,27 @@ scoped as a demo/seed-pack direct-ZIP release candidate until a separate
 WordPress.org submission, directory asset, and policy-review workflow is
 completed.
 
+## WordPress.org SVN Dry Run
+
+The WordPress.org SVN staging helper is separate from the direct-ZIP builder.
+It creates a dry-run tree with plugin files directly under `trunk/`, a matching
+`tags/<version>/` copy, and a top-level `assets/` directory:
+
+```sh
+php language-fts-playground/tools/build-wordpress-org-svn-stage.php
+```
+
+To inspect an existing stage:
+
+```sh
+php language-fts-playground/tools/verify-wordpress-org-svn-stage.php \
+  --stage=language-fts-playground/dist/wordpress-org-svn-stage
+```
+
+The dry-run stage does not upload to WordPress.org, request a slug, create
+directory assets, or prove submission readiness. See
+`docs/wordpress-org-svn-staging.md` for the full runbook and remaining gates.
+
 ## Release Checklist
 
 1. Update the plugin header version and `LANGUAGE_FTS_PLAYGROUND_VERSION`.
