@@ -31,6 +31,7 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public int $clear_count = 0;
     public int $delete_count = 0;
     public int $fetch_term_language_hits_count = 0;
+    public bool $fail_on_fetch_term_language_hits = false;
     public int $fetch_document_fields_count = 0;
     public int $fetch_document_field_metadata_count = 0;
     /** @var string[] */
@@ -156,6 +157,9 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public function fetch_term_language_hits(array $language_terms): array
     {
         $this->fetch_term_language_hits_count++;
+        if ($this->fail_on_fetch_term_language_hits) {
+            throw new RuntimeException('fetch_term_language_hits should not run before lookup term cap enforcement.');
+        }
 
         $hits = [];
         foreach ($language_terms as $language => $terms) {
@@ -4547,6 +4551,72 @@ test_case('search diagnostics report lookup term caps and fail closed over the h
         'Lookup term expansion over the hard cap fails closed instead of silently truncating.'
     );
     assert_contains_text('Lookup term expansion produced 4 terms, exceeding runtime cap 3', $throwable->getMessage(), 'The lookup cap failure explains the produced and allowed term counts.');
+});
+
+test_case('automatic fallback enforces lookup cap before preflight storage lookup', function (): void {
+    $languages = ['qa', 'qb', 'qc', 'qd', 'qe', 'qf'];
+    $profiles = [];
+    foreach ($languages as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $storage->fail_on_fetch_term_language_hits = true;
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $searcher = new Language_FTS_Playground_Searcher(
+            storage: $storage,
+            analyzer: $analyzer,
+            max_lookup_terms: 2
+        );
+
+        assert_same([], $analyzer->rank_query_languages('alpha beta gamma'), 'The exact-token cap regression enters no-evidence automatic fallback.');
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $searcher->search('alpha beta gamma', 'auto'),
+            'Over-cap exact fallback fails closed before storage preflight.'
+        );
+        assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Exact-token fallback reports the existing lookup cap diagnostic.');
+        assert_same(0, $storage->fetch_term_language_hits_count, 'Over-cap exact fallback never reaches preflight storage lookup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+
+    $profiles = [];
+    foreach ($languages as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+            'lexemes' => "# observed\tcanonical\tprovenance\nrouteprobe\trouteprobe\tfixture\n",
+            'synonyms' => "# source\ttarget\tdirection\tweight\tprovenance\nrouteprobe\troutetarget\tquery_to_index\t0.7\tfixture\nrouteprobe\trouteextra\tquery_to_index\t0.6\tfixture\n",
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $storage->fail_on_fetch_term_language_hits = true;
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $searcher = new Language_FTS_Playground_Searcher(
+            storage: $storage,
+            analyzer: $analyzer,
+            max_lookup_terms: 2
+        );
+
+        $ranked = $analyzer->rank_query_languages('routeprobe', 2);
+        assert_same($ranked[0]['score'] ?? null, $ranked[1]['score'] ?? null, 'The synonym-expanded cap regression enters ambiguous automatic fallback.');
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $searcher->search('routeprobe', 'auto'),
+            'Over-cap synonym-expanded fallback fails closed before storage preflight.'
+        );
+        assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Expanded fallback reports the existing lookup cap diagnostic.');
+        assert_same(0, $storage->fetch_term_language_hits_count, 'Over-cap expanded fallback never reaches preflight storage lookup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
 });
 
 test_case('explicit Polish search finds the demo synonym target', function (): void {
