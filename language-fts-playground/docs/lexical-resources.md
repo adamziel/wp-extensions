@@ -24,7 +24,27 @@ for explicit lexeme rows.
 ## Profile Contract
 
 `profile.php` returns the language id, label, optional order, optional
-normalization folds, optional language signal regexes, and resource file names:
+tokenizer contract, optional normalization folds, optional language signal
+regexes, and resource file names:
+
+```php
+'tokenizer' => [
+    'id' => 'unicode_words_v1',
+    'type' => 'unicode_words',
+    'resources' => [],
+    'capabilities' => [
+        'emits_offsets' => true,
+        'emits_positions' => true,
+        'supports_fuzzy' => true,
+        'supports_overlaps' => false,
+    ],
+],
+```
+
+Profiles may omit `tokenizer`; the runtime defaults to `unicode_words_v1`.
+That adapter preserves the current Unicode letter/number tokenization behavior.
+No dictionary segmenter or non-space language tokenizer is shipped or supported
+by this baseline.
 
 ```php
 'resources' => [

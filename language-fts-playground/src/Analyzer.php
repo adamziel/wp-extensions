@@ -28,10 +28,12 @@ final class Language_FTS_Playground_Analyzer
     ];
 
     private Language_FTS_Playground_Lexical_Profile_Repository $profiles;
+    private Language_FTS_Playground_Unicode_Words_Tokenizer $unicode_words_tokenizer;
 
     public function __construct(Language_FTS_Playground_Lexical_Profile_Repository|null $profiles = null)
     {
         $this->profiles = $profiles ?? new Language_FTS_Playground_Lexical_Profile_Repository();
+        $this->unicode_words_tokenizer = new Language_FTS_Playground_Unicode_Words_Tokenizer();
     }
 
     public function canonical_language(string|null $language): string
@@ -62,6 +64,23 @@ final class Language_FTS_Playground_Analyzer
         $language = $this->canonical_language($language);
 
         return $this->profiles->language_label($language);
+    }
+
+    /**
+     * @return array{id:string,type:string,resources:array<string,string>,capabilities:array{emits_offsets:bool,emits_positions:bool,supports_fuzzy:bool,supports_overlaps:bool}}
+     */
+    public function tokenizer_contract(string $language): array
+    {
+        $profile = $this->profiles->profile($this->canonical_language($language));
+
+        return $profile['tokenizer'];
+    }
+
+    public function tokenizer_supports_fuzzy(string $language): bool
+    {
+        $tokenizer = $this->tokenizer_contract($language);
+
+        return !empty($tokenizer['capabilities']['supports_fuzzy']);
     }
 
     public function resolve_post_language(object $post): string
@@ -421,8 +440,8 @@ final class Language_FTS_Playground_Analyzer
         $has_previous_tokens = false;
 
         foreach ($segments as $segment) {
-            $token_keys = $this->analyze_text_token_keys((string) $segment, $language);
-            if ($token_keys === []) {
+            $token_stream = $this->analyze_token_stream((string) $segment, $language);
+            if ($token_stream === []) {
                 continue;
             }
 
@@ -430,7 +449,8 @@ final class Language_FTS_Playground_Analyzer
                 $position++;
             }
 
-            foreach ($token_keys as $keys) {
+            foreach ($token_stream as $token) {
+                $keys = array_values(array_map('strval', $token['keys']));
                 foreach ($keys as $key) {
                     $terms[] = $key;
                     $positions[$key][] = $position;
@@ -451,6 +471,19 @@ final class Language_FTS_Playground_Analyzer
      */
     public function analyze_text_token_keys(string $text, string $language): array
     {
+        $token_keys = [];
+        foreach ($this->analyze_token_stream($text, $language) as $token) {
+            $token_keys[] = array_values(array_map('strval', $token['keys']));
+        }
+
+        return $token_keys;
+    }
+
+    /**
+     * @return array<int,array{surface:string,normalized:string,keys:string[],position:int,position_increment:int,start_byte:int,end_byte:int,type:string,searchable:bool}>
+     */
+    public function analyze_token_stream(string $text, string $language): array
+    {
         $language = $this->canonical_language($language);
         $text = $this->normalize_plain_text($text);
 
@@ -458,34 +491,35 @@ final class Language_FTS_Playground_Analyzer
             return [];
         }
 
-        $matches = [];
-        $match_count = preg_match_all('/[\p{L}\p{N}]+/u', $text, $matches);
-        if ($match_count === false || $match_count === 0) {
-            return [];
-        }
-
-        $token_keys = [];
-        foreach ($matches[0] as $token) {
-            $term = $this->normalize_term($token, $language);
+        $stream = [];
+        $position = 0;
+        foreach ($this->tokenize_surfaces($text, $language) as $token) {
+            $surface = (string) $token['surface'];
+            $term = $this->normalize_term($surface, $language);
             if ($term === '' || $this->is_stopword($term, $language)) {
                 continue;
             }
 
-            $keys = [];
-            foreach ($this->term_keys($term, $language) as $key) {
-                if ($key === '' || strlen($key) > 255) {
-                    continue;
-                }
-
-                $keys[] = $key;
+            $keys = $this->term_keys($term, $language);
+            if ($keys === []) {
+                continue;
             }
 
-            if ($keys !== []) {
-                $token_keys[] = array_values(array_unique($keys));
-            }
+            $stream[] = [
+                'surface' => $surface,
+                'normalized' => $term,
+                'keys' => $keys,
+                'position' => $position,
+                'position_increment' => 1,
+                'start_byte' => (int) $token['start_byte'],
+                'end_byte' => (int) $token['end_byte'],
+                'type' => (string) $token['type'],
+                'searchable' => true,
+            ];
+            $position++;
         }
 
-        return $token_keys;
+        return $stream;
     }
 
     public function normalize_term(string $term, string $language): string
@@ -734,21 +768,31 @@ final class Language_FTS_Playground_Analyzer
      */
     private function query_language_tokens(string $query): array
     {
-        $matches = [];
-        $match_count = preg_match_all('/[\p{L}\p{N}]+/u', $query, $matches);
-        if ($match_count === false || $match_count === 0) {
-            return [];
-        }
-
         $tokens = [];
-        foreach ($matches[0] as $token) {
-            $token = (string) $token;
+        foreach ($this->unicode_words_tokenizer->tokenize($query) as $raw_token) {
+            $token = (string) $raw_token['surface'];
             if ($token !== '') {
                 $tokens[$token] = true;
             }
         }
 
         return array_values(array_map('strval', array_keys($tokens)));
+    }
+
+    /**
+     * @return array<int,array{surface:string,start_byte:int,end_byte:int,type:string}>
+     */
+    private function tokenize_surfaces(string $text, string $language): array
+    {
+        $tokenizer = $this->tokenizer_contract($language);
+        if (
+            (string) ($tokenizer['id'] ?? '') !== Language_FTS_Playground_Unicode_Words_Tokenizer::ID
+            || (string) ($tokenizer['type'] ?? '') !== Language_FTS_Playground_Unicode_Words_Tokenizer::TYPE
+        ) {
+            throw new UnexpectedValueException('Unsupported tokenizer for analyzer profile.');
+        }
+
+        return $this->unicode_words_tokenizer->tokenize($text);
     }
 
     /**
