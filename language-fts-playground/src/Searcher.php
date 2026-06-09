@@ -200,9 +200,11 @@ final class Language_FTS_Playground_Searcher
         }
 
         $language_terms = [];
+        $language_fuzzy_terms = [];
         foreach ($enabled as $language) {
             $plan = $this->parse_query($query, $language);
             $language_terms[$language] = $plan['exact_terms'];
+            $language_fuzzy_terms[$language] = $plan['fuzzy_terms'];
         }
 
         $hits = $this->storage->fetch_term_language_hits($language_terms);
@@ -214,10 +216,12 @@ final class Language_FTS_Playground_Searcher
                     $hit_count++;
                 }
             }
+            $fuzzy_hit_count = $this->fuzzy_preflight_hit_count($language_fuzzy_terms[$language] ?? [], $language);
 
             $scored_languages[] = [
                 'language' => $language,
                 'hit_count' => $hit_count,
+                'fuzzy_hit_count' => $fuzzy_hit_count,
                 'enabled_index' => $index,
             ];
         }
@@ -230,6 +234,7 @@ final class Language_FTS_Playground_Searcher
             $scored_languages,
             static function (array $a, array $b): int {
                 return ((int) $b['hit_count'] <=> (int) $a['hit_count'])
+                    ?: ((int) $b['fuzzy_hit_count'] <=> (int) $a['fuzzy_hit_count'])
                     ?: ((int) $a['enabled_index'] <=> (int) $b['enabled_index']);
             }
         );
@@ -237,7 +242,7 @@ final class Language_FTS_Playground_Searcher
         $selected = [];
         $selected_lookup = [];
         foreach ($scored_languages as $candidate) {
-            if ((int) $candidate['hit_count'] <= 0) {
+            if ((int) $candidate['hit_count'] <= 0 && (int) $candidate['fuzzy_hit_count'] <= 0) {
                 continue;
             }
 
@@ -261,6 +266,14 @@ final class Language_FTS_Playground_Searcher
         }
 
         return $selected;
+    }
+
+    /**
+     * @param string[] $fuzzy_terms
+     */
+    private function fuzzy_preflight_hit_count(array $fuzzy_terms, string $language): int
+    {
+        return count($this->resolve_fuzzy_candidates($fuzzy_terms, $language));
     }
 
     /**

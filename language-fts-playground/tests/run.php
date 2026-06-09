@@ -3544,6 +3544,39 @@ test_case('automatic fallback uses bounded preflight instead of scanning every l
     }
 });
 
+test_case('automatic fallback preflight includes opt-in fuzzy hits outside the fallback cap', function (): void {
+    $profiles = [];
+    foreach (['qa', 'qb', 'qc', 'qd', 'qe', 'qf', 'qg'] as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+        $enabled = $analyzer->enabled_languages();
+
+        assert_same('qg', $enabled[6] ?? null, 'The fuzzy target fake language sits outside a small automatic fallback cap.');
+        $indexer->index_post(fixture_post(403, 'qg', 'Fuzzy bounded fallback target', '<p>needleterm appears only in QG.</p>'));
+
+        assert_same([], $analyzer->rank_query_languages('needletrm~'), 'The fuzzy typo query has no profile evidence before storage preflight.');
+        $results = $searcher->search('needletrm~', 'auto');
+
+        assert_same([403], array_column($results, 'post_id'), 'Bounded automatic fallback recovers opt-in fuzzy matches in later language partitions.');
+        assert_same('qg', $results[0]['matched_language'] ?? null, 'The fuzzy bounded fallback result reports the matched fake language.');
+        assert_true(
+            count($storage->fetch_postings_languages) < count($enabled),
+            'Fuzzy preflight should avoid full fetch_postings() scans for every enabled language. Full postings languages: ' . implode(', ', $storage->fetch_postings_languages)
+        );
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('automatic search falls back to every custom partition when query has no profile evidence', function (): void {
     $root = create_language_fts_temp_profile_set([
         'qa' => [
