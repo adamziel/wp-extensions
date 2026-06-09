@@ -368,7 +368,12 @@ The importer writes `synsets.tsv`, `pack.php`, and `lexemes.tsv` when source
 rows include observed/canonical form pairs. It validates malformed rows, empty
 concepts, concepts with fewer than two usable terms, invalid whitespace-bearing
 terms, invalid weights, duplicate JSON synset ids, and fixed output file paths
-inside the requested output directory.
+inside the requested output directory. Generated `pack.php` metadata defaults to
+`curated_seed`; pass `--data-kind=imported_comprehensive` only after the source
+pack has had full license, provenance, scale, and relevance review. When the
+output directory already contains `profile.php`, the generated file list also
+includes every profile-declared runtime resource so validator and fingerprint
+checks can catch missing or stale pack contents.
 
 Line-oriented formats stream through the input file. The `wordnet-json` route
 uses PHP's core JSON decoder for small fixtures and reviewed excerpts. It

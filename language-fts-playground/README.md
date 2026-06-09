@@ -218,7 +218,10 @@ Supported importer formats are `membership-tsv`, `wordnet-membership-tsv`,
 `synsets.tsv`, generated `pack.php` metadata, and `lexemes.tsv` when source
 rows include observed/canonical forms. Runtime search remains pure PHP and fast
 because the plugin reads only compact local resource files, not source database
-formats.
+formats. Omitted `--data-kind` values default to `curated_seed`; use
+`imported_comprehensive` only for reviewed full-size source packs. If the
+output directory already has `profile.php`, generated metadata lists every
+profile-declared runtime resource.
 
 Validate lexical packs before committing generated resources:
 
@@ -229,7 +232,7 @@ php language-fts-playground/tools/validate-lexical-packs.php --max-synset-size=6
 ```
 
 The validator reports pack provenance, whether every file listed in `pack.php`
-exists, stopword/lexeme/synset/phrase/expansion counts, max synset size, max
+exists and whether profile-declared resources are listed, stopword/lexeme/synset/phrase/expansion counts, max synset size, max
 per-term expansion fanout, and warnings for invalid metadata or malformed
 resource rows.
 Broad synsets are dangerous for search quality because each term expands to

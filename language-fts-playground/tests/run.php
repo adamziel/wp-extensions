@@ -2540,6 +2540,22 @@ test_case('rejects malformed term rule rows with invalid alternate regex', funct
     );
 });
 
+test_case('rejects malformed term rule rows with non-normalized literal output fields', function (): void {
+    assert_language_fts_term_rules_rejected(
+        'non-normalized append literal',
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "bad-append\t5\t/ing$/u\t\ting\tE\t3\t\t\t\tfixture\n",
+        'term rule append must be normalized lowercase resource tokens'
+    );
+
+    assert_language_fts_term_rules_rejected(
+        'non-normalized alternate replacement literal',
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "bad-alternate\t5\t/^.+z$/u\t\tz\t\t3\t\t/e/u\tE\tfixture\n",
+        'term rule alternate_replacement must be normalized lowercase resource tokens'
+    );
+});
+
 test_case('declared missing term_rules resource fails profile loading', function (): void {
     assert_language_fts_declared_resource_missing('term_rules', 'missing-term-rules.tsv');
 });
@@ -3012,6 +3028,59 @@ test_case('lexical pack validator warns and fails for malformed metadata', funct
     }
 });
 
+test_case('lexical pack validator warns and fails when metadata omits profile resources', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'files' => [
+            'profile.php',
+            'stopwords.txt',
+            'lexemes.tsv',
+        ],
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Omitted profile resources make validation fail.');
+        assert_same(false, $by_id['xx']['metadata_valid'] ?? null, 'Omitted profile resources are reflected in metadata_valid.');
+        assert_contains_text('profile resource synonyms (synonyms.tsv)', $warnings, 'The omitted profile-declared resource is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator rejects non-normalized resource keys consistently', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'xx' => [
+            'folds' => ['é' => 'e', 'É' => 'e'],
+            'stopwords' => "And\ncafé\n",
+            'lexemes' => "# observed\tcanonical\tprovenance\nCafé\tcafe\tfixture\nvalid\tValid\tfixture\n",
+            'synonyms' => "# source\ttarget\tdirection\tweight\tprovenance\nAlpha\tbeta\tquery_to_index\t0.8\tfixture\n",
+            'term_rules' => "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\nbad-append\t5\t/ing$/u\t\ting\tÉ\t3\t\t/e/u\tÉ\tfixture\n",
+        ],
+    ]);
+    write_language_fts_temp_pack_metadata($root . DIRECTORY_SEPARATOR . 'xx');
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Non-normalized resource rows make validation fail.');
+        assert_contains_text('stopword must be normalized lowercase resource tokens', $warnings, 'Non-normalized stopwords are reported.');
+        assert_contains_text('lexeme observed form must be normalized lowercase resource tokens', $warnings, 'Non-normalized lexeme observed forms are reported.');
+        assert_contains_text('lexeme canonical key must be normalized lowercase resource tokens', $warnings, 'Non-normalized lexeme canonical keys are reported.');
+        assert_contains_text('synonym source must be normalized lowercase resource tokens', $warnings, 'Non-normalized pairwise synonym sources are reported.');
+        assert_contains_text('term rule append must be normalized lowercase resource tokens', $warnings, 'Non-normalized term rule append literals are reported.');
+        assert_contains_text('term rule alternate_replacement must be normalized lowercase resource tokens', $warnings, 'Non-normalized term rule alternate replacements are reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('lexical pack validator warns and fails for malformed synonym phrase rows', function (): void {
     $root = create_language_fts_temp_profile_tree(
         "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n",
@@ -3285,6 +3354,41 @@ test_case('membership importer compiles deterministic synsets and lexemes', func
         assert_same($first_lexemes, file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv'), 'Repeated membership import keeps lexemes deterministic.');
     } finally {
         remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('membership importer defaults omitted data kind to curated seed and lists profile resources', function (): void {
+    $profile_tree = create_language_fts_temp_import_profile('xx');
+
+    try {
+        $options = language_fts_import_options([
+            'language' => 'xx',
+            'source_name' => 'Fixture profile resource coverage',
+            'provenance' => 'fixture-profile-resource-coverage',
+            'weight' => '0.5',
+        ]);
+        unset($options['data_kind']);
+
+        $result = run_language_fts_importer(
+            'membership-tsv',
+            language_fts_import_fixture_path('membership.tsv'),
+            $profile_tree['language_dir'],
+            $options
+        );
+        assert_same(0, $result['exit_code'], 'membership-tsv importer exits successfully without data_kind. Output: ' . $result['output']);
+
+        $metadata = require $profile_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php';
+        assert_same('curated_seed', $metadata['data_kind'] ?? null, 'Omitted importer data_kind defaults to safer curated seed metadata.');
+        assert_same(
+            ['profile.php', 'stopwords.txt', 'lexemes.tsv', 'synonyms.tsv', 'synsets.tsv'],
+            $metadata['files'] ?? null,
+            'Generated pack metadata lists every profile-declared runtime resource.'
+        );
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($profile_tree['root']))->validate_all();
+        assert_same(true, $report['valid'], 'Generated importer metadata passes lexical pack validation.');
+    } finally {
+        remove_language_fts_temp_tree($profile_tree['root']);
     }
 });
 
