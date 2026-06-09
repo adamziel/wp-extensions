@@ -285,19 +285,21 @@ final class Language_FTS_Playground_Searcher
             $selected[] = $language;
             $selected_lookup[$language] = true;
             if (count($selected) >= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
-                return $selected;
+                break;
             }
         }
 
         foreach ($enabled as $language) {
+            if (count($selected) >= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
+                break;
+            }
+
             if (isset($selected_lookup[$language])) {
                 continue;
             }
 
             $selected[] = $language;
-            if (count($selected) >= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
-                break;
-            }
+            $selected_lookup[$language] = true;
         }
 
         foreach ($scored_languages as &$candidate) {
