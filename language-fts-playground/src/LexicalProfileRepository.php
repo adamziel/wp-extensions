@@ -59,6 +59,9 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
      */
     private array $profiles = [];
 
+    /** @var array<string,Language_FTS_Playground_Tokenizer_Adapter> */
+    private array $tokenizers = [];
+
     public function __construct(
         string|null $resource_root = null,
         int $max_synset_size = self::DEFAULT_MAX_SYNSET_SIZE,
@@ -162,6 +165,20 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
+     * @return array<int,array{surface:string,start_byte:int,end_byte:int,type:string}>
+     */
+    public function tokenize(string $text, string $language): array
+    {
+        $entry = $this->manifest_entry($language);
+        $language = (string) $entry['profile']['id'];
+        if (!isset($this->tokenizers[$language])) {
+            $this->profile($language);
+        }
+
+        return $this->tokenizers[$language]->tokenize($text);
+    }
+
+    /**
      * Compact profile maps used for automatic query-language evidence.
      *
      * These maps are derived from the same runtime resources as analysis and
@@ -253,13 +270,23 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             throw new UnexpectedValueException('Language pack metadata must return an array: ' . $path);
         }
 
-        return $this->validate_pack_metadata($metadata, (string) $entry['profile']['id'], $entry['directory'], $path, (array) ($entry['profile']['resources'] ?? []));
+        $profile_file = $this->profile_file($entry);
+        $tokenizer = $this->profile_tokenizer_contract($entry['profile']['tokenizer'] ?? null, $profile_file);
+
+        return $this->validate_pack_metadata(
+            $metadata,
+            (string) $entry['profile']['id'],
+            $entry['directory'],
+            $path,
+            (array) ($entry['profile']['resources'] ?? []),
+            $tokenizer
+        );
     }
 
     public function pack_fingerprint(): string
     {
         $payload = [
-            'schema' => 'language-fts-playground-lexical-pack-fingerprint-v2',
+            'schema' => 'language-fts-playground-lexical-pack-fingerprint-v3',
             'resource_root' => $this->resource_root,
             'languages' => [],
         ];
@@ -308,6 +335,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         if (!is_array($resources)) {
             throw new UnexpectedValueException('Language profile resources must be an array in ' . $profile_file);
         }
+        $tokenizer = $this->profile_tokenizer_contract($entry['profile']['tokenizer'] ?? null, $profile_file);
 
         $fingerprints = [];
         foreach ($resources as $resource_key => $resource_file) {
@@ -324,6 +352,20 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
             $fingerprints[] = [
                 'resource' => $resource_key,
+                'file' => $resource_file,
+                'sha256' => $digest,
+            ];
+        }
+
+        foreach ($this->tokenizer_resource_paths($entry['directory'], $tokenizer, $profile_file) as $resource_key => $path) {
+            $resource_file = (string) ($tokenizer['resources'][$resource_key] ?? '');
+            $digest = hash_file('sha256', $path);
+            if (!is_string($digest)) {
+                throw new RuntimeException("Could not hash language profile tokenizer resource {$resource_key}: {$path}");
+            }
+
+            $fingerprints[] = [
+                'resource' => 'tokenizer.' . $resource_key,
                 'file' => $resource_file,
                 'sha256' => $digest,
             ];
@@ -432,6 +474,10 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         $directory = $manifest_entry['directory'];
         $profile_file = $directory . DIRECTORY_SEPARATOR . 'profile.php';
         $tokenizer = $this->profile_tokenizer_contract($profile['tokenizer'] ?? null, $profile_file);
+        $this->tokenizers[$language] = Language_FTS_Playground_Tokenizer_Registry::create(
+            $tokenizer,
+            $this->tokenizer_resource_paths($directory, $tokenizer, $profile_file)
+        );
         $resources = $profile['resources'] ?? [];
         if (!is_array($resources)) {
             throw new UnexpectedValueException('Language profile resources must be an array in ' . $profile_file);
@@ -494,9 +540,10 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @param array<mixed> $metadata
      * @param array<mixed> $profile_resources
+     * @param array<string,mixed> $tokenizer
      * @return array<string,mixed>
      */
-    private function validate_pack_metadata(array $metadata, string $expected_language, string $directory, string $path, array $profile_resources): array
+    private function validate_pack_metadata(array $metadata, string $expected_language, string $directory, string $path, array $profile_resources, array $tokenizer): array
     {
         $required = [
             'language_id',
@@ -522,8 +569,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             throw new UnexpectedValueException('Language pack metadata language_id must match its profile in ' . $path);
         }
 
-        if (!in_array($validated['data_kind'], ['curated_seed', 'imported_comprehensive'], true)) {
-            throw new UnexpectedValueException('Language pack metadata data_kind must be curated_seed or imported_comprehensive in ' . $path);
+        if (!$this->pack_data_kind_is_allowed($validated['data_kind'], $expected_language, $tokenizer, $validated, $path)) {
+            throw new UnexpectedValueException('Language pack metadata data_kind must be curated_seed, imported_comprehensive, or synthetic_readiness_fixture with synthetic tokenizer provenance in ' . $path);
         }
 
         $files = $metadata['files'] ?? null;
@@ -550,7 +597,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         $listed_files = array_fill_keys($validated_files, true);
-        foreach ($profile_resources as $key => $file) {
+        foreach (array_merge($profile_resources, (array) ($tokenizer['resources'] ?? [])) as $key => $file) {
             if (!is_string($key) || !is_string($file)) {
                 continue;
             }
@@ -595,6 +642,33 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $validated_metadata;
+    }
+
+    /**
+     * @param array<string,mixed> $tokenizer
+     * @param array<string,string> $metadata
+     */
+    private function pack_data_kind_is_allowed(string $data_kind, string $expected_language, array $tokenizer, array $metadata, string $path): bool
+    {
+        if (in_array($data_kind, ['curated_seed', 'imported_comprehensive'], true)) {
+            return true;
+        }
+
+        if ($data_kind !== 'synthetic_readiness_fixture') {
+            return false;
+        }
+
+        if (!Language_FTS_Playground_Tokenizer_Registry::is_synthetic_readiness_contract($tokenizer)) {
+            return false;
+        }
+
+        if (preg_match('/^q[a-z0-9]*$/', $expected_language) !== 1) {
+            throw new UnexpectedValueException('Synthetic tokenizer readiness fixtures must use private q* language ids in ' . $path);
+        }
+
+        $combined = strtolower($metadata['source_name'] . ' ' . $metadata['attribution_text'] . ' ' . $metadata['provenance']);
+
+        return str_contains($combined, 'synthetic') && str_contains($combined, 'readiness');
     }
 
     /**
@@ -653,7 +727,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
-     * @return array{id:string,type:string,resources:array<string,string>,capabilities:array{emits_offsets:bool,emits_positions:bool,supports_fuzzy:bool,supports_overlaps:bool}}
+     * @return array<string,mixed>
      */
     private function profile_tokenizer_contract(mixed $value, string $profile_file): array
     {
@@ -669,25 +743,23 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         $type = $this->tokenizer_string($value['type'] ?? null, 'type', $profile_file);
         $resources = $this->tokenizer_resources($value['resources'] ?? [], $profile_file);
         $capabilities = $this->tokenizer_capabilities($value['capabilities'] ?? null, $profile_file);
+        $version = array_key_exists('version', $value)
+            ? $this->tokenizer_version($value['version'], $profile_file)
+            : null;
 
-        if ($id !== Language_FTS_Playground_Unicode_Words_Tokenizer::ID || $type !== Language_FTS_Playground_Unicode_Words_Tokenizer::TYPE) {
-            throw new UnexpectedValueException('Language profile tokenizer must use supported unicode_words_v1/unicode_words in ' . $profile_file);
-        }
-
-        if ($resources !== []) {
-            throw new UnexpectedValueException('Language profile tokenizer unicode_words_v1 resources must be empty in ' . $profile_file);
-        }
-
-        if (!$capabilities['emits_offsets'] || !$capabilities['emits_positions'] || $capabilities['supports_overlaps']) {
-            throw new UnexpectedValueException('Language profile tokenizer unicode_words_v1 capabilities must emit offsets and positions without overlaps in ' . $profile_file);
-        }
-
-        return [
+        $contract = [
             'id' => $id,
             'type' => $type,
             'resources' => $resources,
             'capabilities' => $capabilities,
         ];
+        if ($version !== null) {
+            $contract['version'] = $version;
+        }
+
+        Language_FTS_Playground_Tokenizer_Registry::validate_contract($contract, $profile_file);
+
+        return $contract;
     }
 
     private function tokenizer_string(mixed $value, string $key, string $profile_file): string
@@ -699,6 +771,20 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         $value = trim($value);
         if (preg_match('/^[a-z][a-z0-9_]*(?:_v[0-9]+)?$/', $value) !== 1) {
             throw new UnexpectedValueException("Language profile tokenizer {$key} has an invalid identifier in {$profile_file}");
+        }
+
+        return $value;
+    }
+
+    private function tokenizer_version(mixed $value, string $profile_file): string
+    {
+        if (!is_string($value) || trim($value) === '') {
+            throw new UnexpectedValueException('Language profile tokenizer version must be a non-empty string in ' . $profile_file);
+        }
+
+        $value = trim($value);
+        if (preg_match('/^[A-Za-z0-9_.-]+$/', $value) !== 1) {
+            throw new UnexpectedValueException('Language profile tokenizer version has an invalid identifier in ' . $profile_file);
         }
 
         return $value;
@@ -760,6 +846,37 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     private function is_local_file_name(string $name): bool
     {
         return $name !== '' && $name === basename($name) && !str_contains($name, '..');
+    }
+
+    /**
+     * @param array<string,mixed> $tokenizer
+     * @return array<string,string>
+     */
+    private function tokenizer_resource_paths(string $directory, array $tokenizer, string $profile_file): array
+    {
+        $paths = [];
+        foreach ((array) ($tokenizer['resources'] ?? []) as $key => $name) {
+            $key = (string) $key;
+            if (!is_string($name) || trim($name) === '') {
+                throw new UnexpectedValueException("Language profile tokenizer resource {$key} must be a non-empty string in {$profile_file}");
+            }
+
+            $name = trim($name);
+            if (!$this->is_local_file_name($name)) {
+                throw new UnexpectedValueException("Language profile tokenizer resource {$key} must be a local file name in {$profile_file}");
+            }
+
+            $path = $directory . DIRECTORY_SEPARATOR . $name;
+            if (!is_file($path)) {
+                throw new RuntimeException("Language profile tokenizer resource {$key} does not exist: {$path}");
+            }
+
+            $paths[$key] = $path;
+        }
+
+        ksort($paths, SORT_STRING);
+
+        return $paths;
     }
 
     /**

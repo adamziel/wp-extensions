@@ -189,8 +189,12 @@ resources/languages/
 contract, optional character folds, optional language signal regexes, and
 resource file names. Profiles may omit the tokenizer declaration; the runtime
 defaults to `unicode_words_v1`, which preserves the current Unicode
-letter/number tokenization behavior. This baseline does not ship or support
-dictionary segmenters or non-space language tokenizers.
+letter/number tokenization behavior. Tokenizer declarations are registry-backed
+and may reference profile-local resources; today the non-space-capable path is a
+generic synthetic readiness fixture used by tests to prove offsets, positions,
+phrase matching, snippets, and diagnostics. This baseline does not bundle real
+CJK, Thai, or other dictionary resources, and it should not be described as real
+language segmentation until reviewed tokenizer data is supplied.
 `pack.php` records source, license, attribution, provenance, generated file
 list, pack version/date, and whether the resource pack is curated seed data or
 an imported comprehensive pack. The analyzer does not load `pack.php` during
