@@ -20,23 +20,27 @@ Language tags are canonicalized from WordPress-style locales and BCP 47-style
 input. For example, `en_US` becomes `en-US`, `pl_PL` becomes `pl-PL`, and empty
 values fall back to the caller's default language.
 
-Document language resolution during `wp fts reindex` follows this order:
+Primary document language resolution during `wp fts reindex` follows this
+order. This primary language is stored as document metadata and participates in
+the content hash used to decide whether unchanged documents can be skipped:
 
 1. Explicit `--lang` or `--language`.
 2. Polylang `pll_get_post_language( $post_id, 'locale' )`, when available.
 3. WPML `wpml_post_language_details`, when available.
-4. Conservative detector evidence for otherwise untagged content.
-5. The WordPress site locale from `get_locale()` or `get_bloginfo( 'language' )`.
-6. The indexer default.
+4. The default language from `default_lang` or `locale`, then the WordPress site
+   locale, then `en`.
 
+Analyzer-level routing happens after that primary-language metadata decision.
 HTML `lang` and `xml:lang` attributes can route individual content segments into
-their own language partition while the post still has one primary language for
-metadata and change detection.
+their own language partition. For untagged segments, the conservative detector
+may fill gaps by script, distinctive Latin letters, and compact lexical evidence
+before falling back to the primary document language.
 
-Query language resolution follows the same idea. Prefer passing `--lang` on
+Query analysis follows the same explicit-first rule. Prefer passing `--lang` on
 operational searches when the language is known; otherwise the analyzer may use
-conservative detector evidence to route untagged query spans into the same
-partition as untagged indexed content:
+conservative detector evidence or a custom term-language resolver to route
+individual untagged query terms into the same partitions as untagged indexed
+content:
 
 ```sh
 wp fts search "zamek" --lang=pl-PL
@@ -48,8 +52,9 @@ distinctive Latin letters, and compact lexical evidence to fill gaps. Explicit
 caller options, HTML language attributes, Polylang/WPML metadata, and custom
 language resolvers remain authoritative.
 
-The current searcher scores one language partition per query term. It does not
-merge scores across languages.
+The current searcher scores each query term inside one resolved language
+partition. It can route different terms to different partitions, but it does not
+merge one term's scores across multiple languages.
 
 ## Analyzer Defaults
 

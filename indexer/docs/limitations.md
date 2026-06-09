@@ -46,8 +46,9 @@ The detector uses script ranges, distinctive Latin letters, and compact lexical
 evidence. Weak generic Latin text stays on the fallback language, so unsupported
 or ambiguous content can still land in the wrong language partition.
 
-Search uses one language partition per query term. It does not merge scores
-across multiple languages.
+Search can route different query terms to different language partitions. Each
+term still scores inside one resolved partition, and the searcher does not merge
+one term's scores across multiple languages.
 
 ## Supported Stemming
 
@@ -92,7 +93,8 @@ Current search supports:
 
 - `OR` and `AND` term matching;
 - `limit` and `offset`;
-- one query language;
+- per-term language partitions from explicit query language, resolver, or
+  detector evidence;
 - post type, status, and GMT date filters when document metadata is present;
 - snippets and highlighting from bounded extracted metadata text;
 - BM25 scoring with configurable `k1` and `b` for programmatic callers.

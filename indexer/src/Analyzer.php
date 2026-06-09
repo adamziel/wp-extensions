@@ -1322,16 +1322,111 @@ final class WP_FTS_Analyzer
      */
     private function tagLangAttribute(string $tag): ?string
     {
-        if (!preg_match('/\s(?:xml:)?lang\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s>\/]+))/i', $tag, $m)) {
-            return null;
+        $attributes = $this->fallbackTagAttributes($tag);
+
+        foreach (['lang', 'xml:lang'] as $name) {
+            if (!array_key_exists($name, $attributes)) {
+                continue;
+            }
+
+            $lang = $this->canonicalLanguage(html_entity_decode($attributes[$name], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            if ($lang !== null) {
+                return $lang;
+            }
         }
 
-        $doubleQuoted = $m[1] ?? '';
-        $singleQuoted = $m[2] ?? '';
-        $unquoted = $m[3] ?? '';
-        $value = $doubleQuoted !== '' ? $doubleQuoted : ($singleQuoted !== '' ? $singleQuoted : $unquoted);
+        return null;
+    }
 
-        return $this->canonicalLanguage(html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    /**
+     * Tokenize attributes from a raw fallback-parser opening tag.
+     *
+     * Regexing the whole tag for `lang=` is unsafe because quoted values on
+     * unrelated attributes may contain language-looking text. This tokenizer
+     * advances over quoted and unquoted values before considering the next
+     * attribute name.
+     *
+     * @return array<string,string> Lowercase attribute names mapped to raw values.
+     */
+    private function fallbackTagAttributes(string $tag): array
+    {
+        if (!preg_match('/^<\s*[A-Za-z][A-Za-z0-9:-]*/', $tag, $m)) {
+            return [];
+        }
+
+        $attributes = [];
+        $length = strlen($tag);
+        $offset = strlen($m[0]);
+
+        while ($offset < $length) {
+            while ($offset < $length && $this->isHtmlWhitespace($tag[$offset])) {
+                $offset++;
+            }
+
+            if ($offset >= $length || $tag[$offset] === '>' || $tag[$offset] === '/') {
+                break;
+            }
+
+            if (!preg_match('/[^\s\/=>]+/A', substr($tag, $offset), $nameMatch)) {
+                $offset++;
+                continue;
+            }
+
+            $name = strtolower($nameMatch[0]);
+            $offset += strlen($nameMatch[0]);
+
+            while ($offset < $length && $this->isHtmlWhitespace($tag[$offset])) {
+                $offset++;
+            }
+
+            $value = '';
+            if ($offset < $length && $tag[$offset] === '=') {
+                $offset++;
+                while ($offset < $length && $this->isHtmlWhitespace($tag[$offset])) {
+                    $offset++;
+                }
+
+                if ($offset < $length && ($tag[$offset] === '"' || $tag[$offset] === "'")) {
+                    $quote = $tag[$offset];
+                    $offset++;
+                    $start = $offset;
+                    while ($offset < $length && $tag[$offset] !== $quote) {
+                        $offset++;
+                    }
+                    $value = substr($tag, $start, $offset - $start);
+                    if ($offset < $length) {
+                        $offset++;
+                    }
+                } else {
+                    $start = $offset;
+                    while (
+                        $offset < $length
+                        && !$this->isHtmlWhitespace($tag[$offset])
+                        && $tag[$offset] !== '>'
+                        && $tag[$offset] !== '/'
+                    ) {
+                        $offset++;
+                    }
+                    $value = substr($tag, $start, $offset - $start);
+                }
+            }
+
+            $attributes[$name] ??= $value;
+        }
+
+        return $attributes;
+    }
+
+    /**
+     * Check HTML's ASCII whitespace without relying on the optional ctype extension.
+     */
+    private function isHtmlWhitespace(string $char): bool
+    {
+        return $char === ' '
+            || $char === "\t"
+            || $char === "\n"
+            || $char === "\r"
+            || $char === "\f";
     }
 
     /**

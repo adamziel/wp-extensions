@@ -2466,9 +2466,12 @@ test_case('fallback parser only treats actual lang attributes as language scopes
         $analyzer,
         '<p data-lang="pl">DataAttr</p>' .
         '<p aria-label="lang=pl">AriaLabel</p>' .
+        '<p aria-label="foo lang=pl">AriaFoo</p>' .
+        '<p title="x xml:lang=de">TitleXmlText</p>' .
         '<p lang="pl">LangAttr</p>' .
         '<p xml:lang="de">XmlLangAttr</p>' .
-        '<p data-lang="pl" lang="de">ActualLangWins</p>',
+        '<p data-lang="pl" lang="de">ActualLangWins</p>' .
+        '<p class="x lang=fr" lang=de>ClassRealLang</p>',
         'en'
     );
 
@@ -2479,9 +2482,12 @@ test_case('fallback parser only treats actual lang attributes as language scopes
 
     assert_same('en', $langsByText['DataAttr'] ?? null, 'fallback parser must ignore data-lang attributes');
     assert_same('en', $langsByText['AriaLabel'] ?? null, 'fallback parser must ignore lang-like text inside other attributes');
+    assert_same('en', $langsByText['AriaFoo'] ?? null, 'fallback parser must ignore lang-like text inside aria-label values');
+    assert_same('en', $langsByText['TitleXmlText'] ?? null, 'fallback parser must ignore xml:lang-like text inside title values');
     assert_same('pl', $langsByText['LangAttr'] ?? null, 'fallback parser should honor actual lang attributes');
     assert_same('de', $langsByText['XmlLangAttr'] ?? null, 'fallback parser should honor actual xml:lang attributes');
     assert_same('de', $langsByText['ActualLangWins'] ?? null, 'fallback parser should prefer actual lang over data-lang');
+    assert_same('de', $langsByText['ClassRealLang'] ?? null, 'fallback parser should prefer the real lang attribute over class text');
 });
 
 test_case('query analysis exposes language-aware occurrences while preserving term shim', function (): void {
