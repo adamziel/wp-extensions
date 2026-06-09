@@ -109,7 +109,7 @@ final class Language_FTS_Playground_Search_Benchmark_Counting_Storage implements
         $postings = $this->storage->fetch_postings($language, $terms);
         foreach ($postings as $term_postings) {
             foreach ($term_postings as $post_id => $_field_tfs) {
-                $this->counters['postings_rows_materialized'] = (int) $this->counters['postings_rows_materialized'] + 1;
+                $this->counters['postings_rows_materialized'] = (int) $this->counters['postings_rows_materialized'] + count((array) $_field_tfs);
                 $this->candidate_lookup[$language . "\t" . (int) $post_id] = true;
             }
         }
@@ -123,7 +123,11 @@ final class Language_FTS_Playground_Search_Benchmark_Counting_Storage implements
         $this->increment_fetch_call('fetch_term_language_hits');
         $hits = $this->storage->fetch_term_language_hits($language_terms);
         foreach ($hits as $term_hits) {
-            $this->counters['term_language_hit_rows_fetched'] = (int) $this->counters['term_language_hit_rows_fetched'] + count((array) $term_hits);
+            foreach ((array) $term_hits as $hit) {
+                if ($hit === true) {
+                    $this->counters['term_language_hit_rows_fetched'] = (int) $this->counters['term_language_hit_rows_fetched'] + 1;
+                }
+            }
         }
 
         return $hits;

@@ -4491,6 +4491,36 @@ test_case('search benchmark counter fixture gates public final-window hydration'
     assert_true((int) $counters['peak_memory_delta_bytes'] >= 0, 'Peak memory delta is captured as a non-negative counter.');
 });
 
+test_case('search benchmark counting storage counts hit and field rows', function (): void {
+    $storage = new Language_FTS_Playground_Search_Benchmark_Counting_Storage();
+    $storage->replace_document(
+        701,
+        'en',
+        'Shared marker',
+        'publish',
+        3,
+        [
+            'title' => ['sharedmarker' => 1],
+            'content' => ['sharedmarker' => 2],
+        ],
+        [
+            'title' => 'Shared marker',
+            'content' => 'Shared marker body',
+        ],
+        ['sharedmarker' => [0, 2]]
+    );
+
+    $hits = $storage->fetch_term_language_hits(['en' => ['sharedmarker', 'missingmarker']]);
+    $postings = $storage->fetch_postings('en', ['sharedmarker']);
+    $counters = $storage->counters();
+
+    assert_same(['sharedmarker' => true, 'missingmarker' => false], $hits['en'] ?? null, 'The fixture includes one preflight hit and one miss.');
+    assert_same(['title' => 1, 'content' => 2], $postings['sharedmarker'][701] ?? null, 'The fixture stores one term across two fields.');
+    assert_same(1, $counters['term_language_hit_rows_fetched'] ?? null, 'Preflight hit rows count only true storage hits.');
+    assert_same(2, $counters['postings_rows_materialized'] ?? null, 'Posting row materialization counts field-aware storage rows.');
+    assert_same(1, $counters['candidate_count'] ?? null, 'Candidate counting remains per language/post candidate.');
+});
+
 test_case('search benchmark counter fixture covers phrase fuzzy and expansion probes', function (): void {
     $phrase = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('phrase', [
         'documents' => 30,
