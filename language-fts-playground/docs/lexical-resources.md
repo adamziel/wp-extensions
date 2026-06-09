@@ -75,6 +75,104 @@ return [
 `imported_comprehensive` only after a reviewed full-size source pack has been
 generated and committed.
 
+### Comprehensive Pack Metadata
+
+`imported_comprehensive` packs must use the v2 audit schema. Existing
+`curated_seed` packs may keep the lightweight metadata above, but comprehensive
+packs must also declare source artifact, license, provenance allow-list,
+normalization, importer, and runtime digest sections:
+
+```php
+return [
+    'metadata_schema' => 'language-fts-playground-pack-metadata-v2',
+    'language_id' => 'en',
+    'pack_version' => 'oewn-2024-lexical-pack-1',
+    'pack_date' => '2026-06-09',
+    'data_kind' => 'imported_comprehensive',
+    'source_name' => 'Open English WordNet',
+    'source_url' => 'https://github.com/globalwordnet/english-wordnet',
+    'license_name' => 'Creative Commons Attribution 4.0 International',
+    'attribution_text' => 'Open English WordNet contributors, used under CC BY 4.0.',
+    'provenance' => 'oewn-2024',
+    'files' => [
+        'profile.php',
+        'stopwords.txt',
+        'lexemes.tsv',
+        'synonyms.tsv',
+        'synsets.tsv',
+        'LICENSE.oewn.txt',
+    ],
+    'source' => [
+        'name' => 'Open English WordNet',
+        'version' => '2024',
+        'retrieved_at' => '2026-06-09',
+        'artifacts' => [
+            [
+                'name' => 'english-wordnet-2024.json',
+                'url' => 'https://example.test/english-wordnet-2024.json',
+                'sha256' => '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+                'bytes' => 123456,
+            ],
+        ],
+    ],
+    'license' => [
+        'identifier' => 'CC-BY-4.0',
+        'name' => 'Creative Commons Attribution 4.0 International',
+        'url' => 'https://creativecommons.org/licenses/by/4.0/',
+        'text_url' => 'https://creativecommons.org/licenses/by/4.0/legalcode.txt',
+        'text_file' => 'LICENSE.oewn.txt',
+        'attribution' => 'Open English WordNet contributors, used under CC BY 4.0.',
+    ],
+    'provenance_ids' => [
+        'oewn-2024' => [
+            'source' => 'Open English WordNet',
+            'source_version' => '2024',
+            'description' => 'Generated rows from the reviewed OEWN source snapshot.',
+        ],
+    ],
+    'normalization' => [
+        'profile_id' => 'en',
+        'profile_version' => 'language-fts-playground-normalization-v1',
+        'profile_file' => 'profile.php',
+        'profile_sha256' => '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+    ],
+    'importer' => [
+        'name' => 'language-fts-playground/tools/import-lexical-source.php',
+        'version' => 'language-fts-playground-lexical-importer-v2',
+        'format' => 'wordnet-json',
+        'command' => 'php language-fts-playground/tools/import-lexical-source.php wordnet-json <source-artifact> <output-dir> ...',
+        'options' => [
+            'data_kind' => 'imported_comprehensive',
+            'language' => 'en',
+        ],
+    ],
+    'runtime_files' => [
+        [
+            'resource' => 'profile',
+            'file' => 'profile.php',
+            'sha256' => '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            'bytes' => 1234,
+            'generated' => false,
+        ],
+        [
+            'resource' => 'synsets',
+            'file' => 'synsets.tsv',
+            'sha256' => '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+            'bytes' => 45678,
+            'generated' => true,
+        ],
+    ],
+];
+```
+
+The validator does not fetch URLs or read source database archives. It checks
+that v2 dates, HTTP(S) URLs, lowercase SHA-256 digests, positive byte counts,
+local file names, license text files, runtime file coverage, and row provenance
+ids are internally consistent. It also compares every declared
+`runtime_files` digest and byte count against the installed local file. Source
+artifact digest verification happens in the importer or CI where the original
+source artifact is available.
+
 ## Runtime Formats
 
 `stopwords.txt` stores one already-normalized stopword per line.
@@ -202,12 +300,56 @@ results down.
 
 The WordPress admin page at `Tools -> Language FTS` includes a compact
 Lexical pack status table with the language, `curated_seed` or
-`imported_comprehensive` data kind, source, license, version/date, lexeme/
-synset/term-rule/expansion counts, warnings, and the effective local resource
-root.
+`imported_comprehensive` data kind, source, license, source version, license id,
+runtime digest status, importer version, version/date, lexeme/synset/term-rule/
+expansion counts, warnings, audit metadata details, and the effective local
+resource root.
 Read that table as a provenance and quality signal: current shipped packs are
 `curated_seed` demo data, not comprehensive WordNet, OpenThesaurus, or
 plWordNet databases.
+
+## Comprehensive Imports And Promotion
+
+`import-lexical-source.php` defaults to `curated_seed` when `--data-kind` is
+omitted. To produce `imported_comprehensive` metadata, pass the deterministic
+audit options and keep the source artifact outside the runtime pack:
+
+```sh
+php language-fts-playground/tools/import-lexical-source.php wordnet-json \
+  <source-artifact> <output-dir> \
+  --language=en \
+  --data-kind=imported_comprehensive \
+  --source-name='Open English WordNet' \
+  --source-url=https://github.com/globalwordnet/english-wordnet \
+  --source-version=2024 \
+  --source-retrieved-at=2026-06-09 \
+  --source-artifact-name=english-wordnet-2024.json \
+  --source-artifact-url=https://example.test/english-wordnet-2024.json \
+  --source-artifact-sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  --source-artifact-bytes=123456 \
+  --license-name='Creative Commons Attribution 4.0 International' \
+  --license-id=CC-BY-4.0 \
+  --license-url=https://creativecommons.org/licenses/by/4.0/ \
+  --license-text-url=https://creativecommons.org/licenses/by/4.0/legalcode.txt \
+  --license-text-file=LICENSE.oewn.txt \
+  --normalization-profile-version=language-fts-playground-normalization-v1 \
+  --attribution='Open English WordNet contributors, used under CC BY 4.0.' \
+  --pack-version=oewn-2024-lexical-pack-1 \
+  --pack-date=2026-06-09 \
+  --provenance=oewn-2024
+```
+
+The importer recomputes the input artifact SHA-256 and byte count and fails if
+they do not match the provided values. It records generated runtime files and
+preexisting profile-declared runtime files in `runtime_files`; license text must
+already exist as a local file in the output directory.
+
+Do not promote a generated pack as `imported_comprehensive` until review
+artifacts exist for validation output, deterministic re-import output, source
+artifact digest evidence, license and redistribution review, source-specific
+filter decisions, relevance evaluator results, fanout/memory checks, and admin
+status or validator JSON evidence. Do not download or vendor third-party lexical
+databases into this repository without a separate review and promotion decision.
 
 ## Relevance Evaluation
 

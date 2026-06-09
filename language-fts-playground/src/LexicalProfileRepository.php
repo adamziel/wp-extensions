@@ -213,7 +213,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
      * metadata behind an explicit accessor lets resource packs carry source and
      * license details without adding work to every search request.
      *
-     * @return array{language_id:string,pack_version:string,pack_date:string,source_name:string,source_url:string,license_name:string,attribution_text:string,provenance:string,files:string[],data_kind:string}
+     * @return array<string,mixed>
      */
     public function pack_metadata(string $language): array
     {
@@ -459,7 +459,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @param array<mixed> $metadata
      * @param array<mixed> $profile_resources
-     * @return array{language_id:string,pack_version:string,pack_date:string,source_name:string,source_url:string,license_name:string,attribution_text:string,provenance:string,files:string[],data_kind:string}
+     * @return array<string,mixed>
      */
     private function validate_pack_metadata(array $metadata, string $expected_language, string $directory, string $path, array $profile_resources): array
     {
@@ -530,7 +530,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             }
         }
 
-        return [
+        $validated_metadata = [
             'language_id' => $validated['language_id'],
             'pack_version' => $validated['pack_version'],
             'pack_date' => $validated['pack_date'],
@@ -542,6 +542,24 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'files' => $validated_files,
             'data_kind' => $validated['data_kind'],
         ];
+
+        if (array_key_exists('metadata_schema', $metadata)) {
+            if (!is_string($metadata['metadata_schema']) || trim($metadata['metadata_schema']) === '') {
+                throw new UnexpectedValueException('Language pack metadata metadata_schema must be a non-empty string when present in ' . $path);
+            }
+            $validated_metadata['metadata_schema'] = trim($metadata['metadata_schema']);
+        }
+
+        foreach (['source', 'license', 'provenance_ids', 'normalization', 'importer', 'runtime_files'] as $optional_key) {
+            if (array_key_exists($optional_key, $metadata)) {
+                if (!is_array($metadata[$optional_key])) {
+                    throw new UnexpectedValueException("Language pack metadata {$optional_key} must be an array when present in {$path}");
+                }
+                $validated_metadata[$optional_key] = $metadata[$optional_key];
+            }
+        }
+
+        return $validated_metadata;
     }
 
     /**
