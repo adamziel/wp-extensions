@@ -195,8 +195,8 @@ final class Language_FTS_Playground_Searcher
     private function bounded_fallback_partitions(string $query, array $enabled): array
     {
         $enabled = array_values(array_map('strval', $enabled));
-        if ($enabled === []) {
-            return [];
+        if (count($enabled) <= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
+            return $enabled;
         }
 
         $language_terms = [];
@@ -224,10 +224,6 @@ final class Language_FTS_Playground_Searcher
                 'fuzzy_hit_count' => $fuzzy_hit_count,
                 'enabled_index' => $index,
             ];
-        }
-
-        if (count($enabled) <= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
-            return $enabled;
         }
 
         usort(

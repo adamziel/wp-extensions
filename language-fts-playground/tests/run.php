@@ -22,6 +22,7 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public int $install_count = 0;
     public int $clear_count = 0;
     public int $delete_count = 0;
+    public int $fetch_term_language_hits_count = 0;
     /** @var string[] */
     public array $fetch_postings_languages = [];
 
@@ -140,6 +141,8 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
     public function fetch_term_language_hits(array $language_terms): array
     {
+        $this->fetch_term_language_hits_count++;
+
         $hits = [];
         foreach ($language_terms as $language => $terms) {
             $language = (string) $language;
@@ -3605,6 +3608,7 @@ test_case('automatic search falls back to every custom partition when query has 
         $results = $searcher->search('novelterm', 'auto');
 
         assert_same(['qa', 'qb', 'qc'], $storage->fetch_postings_languages, 'No-evidence automatic routing searches every enabled fake partition.');
+        assert_same(0, $storage->fetch_term_language_hits_count, 'Under-cap automatic fallback skips exact preflight storage calls.');
         assert_same([304], array_column($results, 'post_id'), 'Fallback fan-out preserves recall for the no-evidence query.');
         assert_same('qb', $results[0]['matched_language'] ?? null, 'The fallback result still reports the matched fake language.');
     } finally {
