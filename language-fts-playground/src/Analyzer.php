@@ -748,6 +748,10 @@ final class Language_FTS_Playground_Analyzer
         }
 
         $candidate = str_replace('_', '-', $candidate);
+        if ($this->profiles->has_language($candidate)) {
+            return $candidate;
+        }
+
         $primary = explode('-', $candidate, 2)[0];
 
         return $this->profiles->has_language($primary) ? $primary : null;

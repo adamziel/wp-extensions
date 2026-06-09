@@ -2471,6 +2471,25 @@ test_case('loads resource-backed lexical profiles for stopwords, lexemes, folds,
     assert_true(in_array('odnajdywac', array_column($profile['synonyms']['szukac'] ?? [], 'term'), true), 'Polish synset expansions are included in the profile expansion map.');
 });
 
+test_case('canonical language resolution preserves exact custom hyphenated profile ids', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'probe-a' => [
+            'order' => 10,
+            'lexemes' => "# observed\tcanonical\tprovenance\namberform\tamber\tfixture\n",
+        ],
+    ]);
+
+    try {
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+
+        assert_same(['probe-a'], $analyzer->enabled_languages(), 'The custom hyphenated profile id is enabled from the temp profile set.');
+        assert_same('probe-a', $analyzer->canonical_language('probe-a'), 'Exact custom hyphenated profile ids are not truncated to their primary subtag.');
+        assert_same('probe-a', $analyzer->canonical_search_language('probe-a'), 'Search language resolution also preserves exact custom hyphenated profile ids.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('ranks automatic query languages from bundled profile evidence', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
 
