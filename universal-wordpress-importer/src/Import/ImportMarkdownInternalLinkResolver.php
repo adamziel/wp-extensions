@@ -28,6 +28,13 @@ final class ImportMarkdownInternalLinkResolver {
 	private $posts;
 
 	/**
+	 * Prepared document route indexes keyed by session id.
+	 *
+	 * @var array<string,array<string,string>>
+	 */
+	private $route_indexes = array();
+
+	/**
 	 * Constructor.
 	 *
 	 * @param WordPressImportSessionStore     $store Durable store.
@@ -156,16 +163,25 @@ final class ImportMarkdownInternalLinkResolver {
 			return 'skipped';
 		}
 
-		$metadata        = $document->get_metadata();
-		$block_markup    = $document->get_block_markup();
-		$resolved_links  = isset( $metadata['markdown_internal_links_resolved'] ) && is_array( $metadata['markdown_internal_links_resolved'] ) ? $metadata['markdown_internal_links_resolved'] : array();
-		$deferred_links  = array();
-		$rewritten_count = 0;
+		$metadata               = $document->get_metadata();
+		$block_markup           = $document->get_block_markup();
+		$resolved_links         = isset( $metadata['markdown_internal_links_resolved'] ) && is_array( $metadata['markdown_internal_links_resolved'] ) ? $metadata['markdown_internal_links_resolved'] : array();
+		$deferred_links         = array();
+		$unresolved_route_links = array();
+		$rewritten_count        = 0;
 
 		foreach ( $links as $link ) {
 			$target_key = $this->target_document_key( $document, $link );
 
 			if ( null === $target_key ) {
+				if ( ! empty( $link['route_style'] ) ) {
+					$unresolved_route_links[] = array(
+						'href'     => $link['href'],
+						'path'     => $link['path'],
+						'fragment' => $link['fragment'],
+						'reason'   => 'No imported Markdown document route matched this link.',
+					);
+				}
 				continue;
 			}
 
@@ -201,15 +217,25 @@ final class ImportMarkdownInternalLinkResolver {
 
 		if ( 0 === $rewritten_count ) {
 			$this->record_deferred_event( $session, $document, $deferred_links );
+			$this->record_unresolved_route_event( $session, $document, $unresolved_route_links );
+			$this->save_unresolved_route_metadata( $document, $metadata, $unresolved_route_links );
 			return empty( $deferred_links ) ? 'skipped' : 'deferred';
 		}
 
 		$metadata['markdown_internal_links']          = array_values( $deferred_links );
 		$metadata['markdown_internal_links_resolved'] = array_values( $resolved_links );
-		$metadata['markdown_internal_links_status']   = empty( $deferred_links ) ? 'resolved' : 'partial';
+		$metadata['markdown_internal_links_status']   = empty( $deferred_links ) && empty( $unresolved_route_links ) ? 'resolved' : 'partial';
+
+		if ( empty( $unresolved_route_links ) ) {
+			unset( $metadata['markdown_internal_route_links_unresolved'] );
+		} else {
+			$metadata['markdown_internal_route_links_unresolved'] = array_values( $unresolved_route_links );
+		}
 
 		$content_hash = hash( 'sha256', 'markdown-link-resolved' . "\n" . $document->get_source_item_key() . "\n" . $block_markup );
 		$this->store->save_prepared_document( $document->with_rewritten_block_markup( $block_markup, $content_hash, $metadata ) );
+
+		$this->record_unresolved_route_event( $session, $document, $unresolved_route_links );
 
 		$this->store->record_event(
 			$session->get_id(),
@@ -221,6 +247,7 @@ final class ImportMarkdownInternalLinkResolver {
 					'source_item_key' => $document->get_source_item_key(),
 					'resolved'        => $rewritten_count,
 					'deferred'        => count( $deferred_links ),
+					'unresolved'      => count( $unresolved_route_links ),
 				)
 			)
 		);
@@ -232,7 +259,7 @@ final class ImportMarkdownInternalLinkResolver {
 	 * Finds local Markdown document hrefs in one prepared document.
 	 *
 	 * @param ImportPreparedDocument $document Prepared document.
-	 * @return array<int,array{href:string,path:string,fragment:string}>
+	 * @return array<int,array{href:string,path:string,fragment:string,markdown_file:bool,route_style:bool}>
 	 */
 	private function local_markdown_links( ImportPreparedDocument $document ) {
 		$links = array();
@@ -242,7 +269,7 @@ final class ImportMarkdownInternalLinkResolver {
 		foreach ( $matches as $match ) {
 			$href = html_entity_decode( $match[2], ENT_QUOTES, 'UTF-8' );
 
-			if ( ! $this->is_local_markdown_href( $href ) ) {
+			if ( ! $this->is_local_markdown_or_route_href( $href ) ) {
 				continue;
 			}
 
@@ -253,10 +280,13 @@ final class ImportMarkdownInternalLinkResolver {
 				continue;
 			}
 
+			$path = (string) $parts['path'];
 			$links[] = array(
 				'href'     => $href,
-				'path'     => $parts['path'],
+				'path'     => $path,
 				'fragment' => isset( $parts['fragment'] ) ? (string) $parts['fragment'] : '',
+				'markdown_file' => $this->is_markdown_document_path( $path ),
+				'route_style'   => $this->is_route_style_path( $path ),
 			);
 		}
 
@@ -264,42 +294,76 @@ final class ImportMarkdownInternalLinkResolver {
 	}
 
 	/**
-	 * Returns whether a link points to another local Markdown document.
+	 * Returns whether a link points to another local Markdown document or docs route.
 	 *
 	 * @param string $href Link href.
 	 * @return bool
 	 */
-	private function is_local_markdown_href( $href ) {
+	private function is_local_markdown_or_route_href( $href ) {
 		$href = trim( (string) $href );
 
 		if ( '' === $href || 0 === strpos( $href, '#' ) || 0 === strpos( $href, '//' ) ) {
 			return false;
 		}
 
-		if ( preg_match( '/^[a-z][a-z0-9+.-]*:/i', $href ) ) {
-			return false;
-		}
-
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- WordPress is not loaded in importer unit tests.
-		$path = parse_url( $href, PHP_URL_PATH );
-
-		if ( ! is_string( $path ) || '' === $path ) {
+		$parts = parse_url( $href );
+		if ( false === $parts || ! empty( $parts['scheme'] ) || empty( $parts['path'] ) ) {
 			return false;
 		}
 
-		return (bool) preg_match( '/\.(?:md|markdown|mdown|mdx|mdoc|markdoc)$/i', $path );
+		return true;
+	}
+
+	/**
+	 * Returns whether a path points to a Markdown source file.
+	 *
+	 * @param string $path Link path.
+	 * @return bool
+	 */
+	private function is_markdown_document_path( $path ) {
+		$extension = strtolower( pathinfo( (string) $path, PATHINFO_EXTENSION ) );
+
+		return in_array( $extension, array( 'md', 'markdown', 'mdown', 'mdx', 'mdoc', 'markdoc' ), true );
+	}
+
+	/**
+	 * Returns whether a local link has the shape of a docs route.
+	 *
+	 * @param string $path Link path.
+	 * @return bool
+	 */
+	private function is_route_style_path( $path ) {
+		if ( $this->is_markdown_document_path( $path ) ) {
+			return false;
+		}
+
+		$decoded_path = $this->decode_repository_link_path( (string) $path );
+		$last_segment = basename( str_replace( '\\', '/', $decoded_path ) );
+
+		return '' !== $last_segment && false === strpos( $last_segment, '.' );
 	}
 
 	/**
 	 * Builds the prepared document key for a target local Markdown file.
 	 *
 	 * @param ImportPreparedDocument                         $document Source document.
-	 * @param array{href:string,path:string,fragment:string} $link Link metadata.
+	 * @param array{href:string,path:string,fragment:string,markdown_file:bool,route_style:bool} $link Link metadata.
 	 * @return string|null
 	 */
 	private function target_document_key( ImportPreparedDocument $document, array $link ) {
 		$metadata = $document->get_metadata();
-		$github   = $this->github_target_document_key( $document, $link, $metadata );
+		$route    = $this->route_target_document_key( $document, $link );
+
+		if ( empty( $link['markdown_file'] ) && null !== $route ) {
+			return $route;
+		}
+
+		if ( empty( $link['markdown_file'] ) ) {
+			return null;
+		}
+
+		$github = $this->github_target_document_key( $document, $link, $metadata );
 
 		if ( null !== $github ) {
 			return $github;
@@ -319,13 +383,353 @@ final class ImportMarkdownInternalLinkResolver {
 		$target      = $this->normalize_local_path( $target_base . DIRECTORY_SEPARATOR . $target_path );
 		$real        = realpath( $target );
 
-		if ( false === $real || ! is_file( $real ) ) {
+		if ( false !== $real && is_file( $real ) ) {
+			$item_key = 'local:' . hash( 'sha256', $this->normalize_local_path( $real ) );
+
+			if ( null !== $this->store->find_source_item( $document->get_session_id(), $item_key ) ) {
+				return $item_key;
+			}
+		}
+
+		return $route;
+	}
+
+	/**
+	 * Resolves an extensionless docs route link to a prepared document key.
+	 *
+	 * @param ImportPreparedDocument                                                            $document Source document.
+	 * @param array{href:string,path:string,fragment:string,markdown_file:bool,route_style:bool} $link     Link metadata.
+	 * @return string|null
+	 */
+	private function route_target_document_key( ImportPreparedDocument $document, array $link ) {
+		$route_path = $this->target_route_path( $document, (string) $link['path'] );
+
+		if ( '' === $route_path ) {
 			return null;
 		}
 
-		$item_key = 'local:' . hash( 'sha256', $this->normalize_local_path( $real ) );
+		$route_index = $this->route_document_index( $document->get_session_id() );
 
-		return null === $this->store->find_source_item( $document->get_session_id(), $item_key ) ? null : $item_key;
+		return isset( $route_index[ $route_path ] ) ? $route_index[ $route_path ] : null;
+	}
+
+	/**
+	 * Builds the target route path for a link in a source document.
+	 *
+	 * @param ImportPreparedDocument $document Source document.
+	 * @param string                 $path     Link path.
+	 * @return string
+	 */
+	private function target_route_path( ImportPreparedDocument $document, $path ) {
+		$link_path = $this->decode_repository_link_path( (string) $path );
+
+		if ( '' === trim( $link_path ) ) {
+			return '';
+		}
+
+		if ( '/' === substr( $link_path, 0, 1 ) ) {
+			return $this->normalize_route_path( $link_path );
+		}
+
+		$base_route = $this->source_route_base_path( $document );
+		if ( '' === $base_route ) {
+			return '';
+		}
+
+		return $this->normalize_route_path( rtrim( $base_route, '/' ) . '/' . $link_path );
+	}
+
+	/**
+	 * Returns the route directory that relative links should resolve against.
+	 *
+	 * @param ImportPreparedDocument $document Source document.
+	 * @return string
+	 */
+	private function source_route_base_path( ImportPreparedDocument $document ) {
+		$routes = $this->document_route_paths( $document );
+		if ( empty( $routes ) ) {
+			return '';
+		}
+
+		$route_path  = $routes[0];
+		$source_path = $this->document_source_path( $document );
+
+		if ( $this->is_index_document_path( $source_path ) ) {
+			return $route_path;
+		}
+
+		$base = dirname( $route_path );
+
+		return '.' === $base || '\\' === $base ? '/' : $this->normalize_route_path( $base );
+	}
+
+	/**
+	 * Builds a route-to-source-key index for prepared Markdown documents.
+	 *
+	 * @param ImportSessionId $session_id Session id.
+	 * @return array<string,string>
+	 */
+	private function route_document_index( ImportSessionId $session_id ) {
+		$cache_key = $session_id->to_string();
+		if ( isset( $this->route_indexes[ $cache_key ] ) ) {
+			return $this->route_indexes[ $cache_key ];
+		}
+
+		$index                 = array();
+		$limit                 = 500;
+		$after_source_item_key = null;
+
+		do {
+			$documents      = $this->store->list_prepared_documents_after_source_item_key(
+				$session_id,
+				$after_source_item_key,
+				$limit
+			);
+			$document_count = count( $documents );
+
+			foreach ( $documents as $document ) {
+				$after_source_item_key = $document->get_source_item_key();
+
+				if ( 'markdown' !== $document->get_format() ) {
+					continue;
+				}
+
+				foreach ( $this->document_route_paths( $document ) as $route_path ) {
+					if ( ! isset( $index[ $route_path ] ) ) {
+						$index[ $route_path ] = $document->get_source_item_key();
+					}
+				}
+			}
+		} while ( $document_count === $limit );
+
+		$this->route_indexes[ $cache_key ] = $index;
+
+		return $index;
+	}
+
+	/**
+	 * Returns all route paths that can address a prepared Markdown document.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return array<int,string>
+	 */
+	private function document_route_paths( ImportPreparedDocument $document ) {
+		$metadata = $document->get_metadata();
+		$derived  = $this->derived_document_route_path( $document );
+		$routes   = array();
+
+		if ( ! empty( $metadata['markdown_front_matter_permalink'] ) ) {
+			$routes[] = $this->normalize_route_path( (string) $metadata['markdown_front_matter_permalink'] );
+		}
+
+		if ( ! empty( $metadata['markdown_route_path'] ) ) {
+			$routes[] = $this->normalize_route_path( (string) $metadata['markdown_route_path'] );
+		}
+
+		if ( ! empty( $metadata['markdown_front_matter_slug'] ) ) {
+			foreach ( $this->front_matter_slug_route_paths( (string) $metadata['markdown_front_matter_slug'], $derived ) as $route ) {
+				$routes[] = $route;
+			}
+		}
+
+		if ( '' !== $derived ) {
+			$routes[] = $derived;
+		}
+
+		$unique = array();
+		foreach ( $routes as $route ) {
+			$route = $this->normalize_route_path( $route );
+			if ( '' !== $route && ! isset( $unique[ $route ] ) ) {
+				$unique[ $route ] = true;
+			}
+		}
+
+		return array_keys( $unique );
+	}
+
+	/**
+	 * Returns route paths represented by a front matter slug.
+	 *
+	 * @param string $slug    Front matter slug.
+	 * @param string $derived Route inferred from the source path.
+	 * @return array<int,string>
+	 */
+	private function front_matter_slug_route_paths( $slug, $derived ) {
+		$slug = trim( (string) $slug );
+		if ( '' === $slug ) {
+			return array();
+		}
+
+		if ( '/' === substr( $slug, 0, 1 ) ) {
+			return array( $this->normalize_route_path( $slug ) );
+		}
+
+		$routes = array( $this->normalize_route_path( '/' . $slug ) );
+
+		if ( '' !== $derived ) {
+			$base     = dirname( $derived );
+			$base     = '.' === $base || '\\' === $base ? '/' : $base;
+			$routes[] = $this->normalize_route_path( rtrim( $base, '/' ) . '/' . $slug );
+		}
+
+		return $routes;
+	}
+
+	/**
+	 * Infers a route path from prepared document source metadata.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return string
+	 */
+	private function derived_document_route_path( ImportPreparedDocument $document ) {
+		$source_path = $this->document_source_path( $document );
+		if ( '' === $source_path ) {
+			return '';
+		}
+
+		$source_path = $this->route_source_path_without_extension( $source_path );
+		$source_path = $this->route_source_path_without_index( $source_path );
+
+		if ( '' === $source_path ) {
+			return '/';
+		}
+
+		return $this->normalize_route_path( $source_path );
+	}
+
+	/**
+	 * Returns the source path used for route inference.
+	 *
+	 * @param ImportPreparedDocument $document Prepared document.
+	 * @return string
+	 */
+	private function document_source_path( ImportPreparedDocument $document ) {
+		$metadata = $document->get_metadata();
+
+		if ( ! empty( $metadata['github_tree_path'] ) ) {
+			return $this->route_source_path_from_github_tree_path( (string) $metadata['github_tree_path'] );
+		}
+
+		if ( ! empty( $metadata['relative_path'] ) ) {
+			return trim( str_replace( '\\', '/', (string) $metadata['relative_path'] ), '/' );
+		}
+
+		return '';
+	}
+
+	/**
+	 * Returns the repository path segment that normally maps to docs routes.
+	 *
+	 * @param string $path GitHub tree path.
+	 * @return string
+	 */
+	private function route_source_path_from_github_tree_path( $path ) {
+		$segments = explode( '/', trim( str_replace( '\\', '/', (string) $path ), '/' ) );
+		$docs_at  = null;
+
+		foreach ( $segments as $index => $segment ) {
+			if ( 'docs' === strtolower( $segment ) ) {
+				$docs_at = $index;
+			}
+		}
+
+		if ( null === $docs_at ) {
+			return implode( '/', $segments );
+		}
+
+		return implode( '/', array_slice( $segments, $docs_at + 1 ) );
+	}
+
+	/**
+	 * Removes a Markdown document extension from a route source path.
+	 *
+	 * @param string $path Source path.
+	 * @return string
+	 */
+	private function route_source_path_without_extension( $path ) {
+		$extension = strtolower( pathinfo( (string) $path, PATHINFO_EXTENSION ) );
+
+		if ( ! in_array( $extension, array( 'md', 'markdown', 'mdown', 'mdx', 'mdoc', 'markdoc' ), true ) ) {
+			return (string) $path;
+		}
+
+		return substr( (string) $path, 0, -1 * ( strlen( $extension ) + 1 ) );
+	}
+
+	/**
+	 * Removes route index filenames from a route source path.
+	 *
+	 * @param string $path Source path without extension.
+	 * @return string
+	 */
+	private function route_source_path_without_index( $path ) {
+		$segments = explode( '/', trim( (string) $path, '/' ) );
+		$last     = strtolower( end( $segments ) );
+
+		if ( 'index' === $last || 'readme' === $last ) {
+			array_pop( $segments );
+		}
+
+		return implode( '/', $segments );
+	}
+
+	/**
+	 * Returns whether a source path represents a route index document.
+	 *
+	 * @param string $path Source path.
+	 * @return bool
+	 */
+	private function is_index_document_path( $path ) {
+		$without_extension = $this->route_source_path_without_extension( (string) $path );
+		$basename          = strtolower( basename( str_replace( '\\', '/', $without_extension ) ) );
+
+		return 'index' === $basename || 'readme' === $basename;
+	}
+
+	/**
+	 * Normalizes a path or URL into an absolute route path.
+	 *
+	 * @param string $path Path or URL.
+	 * @return string
+	 */
+	private function normalize_route_path( $path ) {
+		$path = trim( html_entity_decode( (string) $path, ENT_QUOTES, 'UTF-8' ) );
+		if ( '' === $path ) {
+			return '';
+		}
+
+		if ( false !== strpos( $path, '://' ) || 0 === strpos( $path, '//' ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- WordPress is not loaded in importer unit tests.
+			$parts = parse_url( $path );
+			if ( is_array( $parts ) && isset( $parts['path'] ) ) {
+				$path = (string) $parts['path'];
+			}
+		} else {
+			foreach ( array( '#', '?' ) as $delimiter ) {
+				$position = strpos( $path, $delimiter );
+				if ( false !== $position ) {
+					$path = substr( $path, 0, $position );
+				}
+			}
+		}
+
+		$segments = array();
+		foreach ( explode( '/', str_replace( '\\', '/', (string) $path ) ) as $segment ) {
+			$segment = rawurldecode( $segment );
+
+			if ( '' === $segment || '.' === $segment ) {
+				continue;
+			}
+
+			if ( '..' === $segment ) {
+				array_pop( $segments );
+				continue;
+			}
+
+			$segments[] = $segment;
+		}
+
+		return empty( $segments ) ? '/' : '/' . implode( '/', $segments );
 	}
 
 	/**
@@ -504,6 +908,66 @@ final class ImportMarkdownInternalLinkResolver {
 				array(
 					'source_item_key' => $document->get_source_item_key(),
 					'deferred'        => count( $deferred_links ),
+				)
+			)
+		);
+	}
+
+	/**
+	 * Saves unresolved route diagnostics without changing prepared block markup.
+	 *
+	 * @param ImportPreparedDocument         $document               Prepared document.
+	 * @param array<string,mixed>            $metadata               Current metadata.
+	 * @param array<int,array<string,mixed>> $unresolved_route_links Unresolved route links.
+	 * @return void
+	 */
+	private function save_unresolved_route_metadata( ImportPreparedDocument $document, array $metadata, array $unresolved_route_links ) {
+		$existing = isset( $metadata['markdown_internal_route_links_unresolved'] ) && is_array( $metadata['markdown_internal_route_links_unresolved'] )
+			? $metadata['markdown_internal_route_links_unresolved']
+			: array();
+
+		if ( empty( $unresolved_route_links ) ) {
+			if ( empty( $existing ) ) {
+				return;
+			}
+
+			unset( $metadata['markdown_internal_route_links_unresolved'] );
+		} else {
+			$metadata['markdown_internal_route_links_unresolved'] = array_values( $unresolved_route_links );
+			if ( empty( $metadata['markdown_internal_links_status'] ) ) {
+				$metadata['markdown_internal_links_status'] = 'unresolved-routes';
+			}
+		}
+
+		if ( $existing === ( isset( $metadata['markdown_internal_route_links_unresolved'] ) ? $metadata['markdown_internal_route_links_unresolved'] : array() ) ) {
+			return;
+		}
+
+		$this->store->save_prepared_document( $document->with_metadata( $metadata ) );
+	}
+
+	/**
+	 * Records a bounded warning for route links outside the imported document set.
+	 *
+	 * @param ImportSession                  $session                Session.
+	 * @param ImportPreparedDocument         $document               Prepared document.
+	 * @param array<int,array<string,mixed>> $unresolved_route_links Unresolved route links.
+	 * @return void
+	 */
+	private function record_unresolved_route_event( ImportSession $session, ImportPreparedDocument $document, array $unresolved_route_links ) {
+		if ( empty( $unresolved_route_links ) ) {
+			return;
+		}
+
+		$this->store->record_event(
+			$session->get_id(),
+			new ImportProgressEvent(
+				ImportProgressEvent::LEVEL_WARNING,
+				'markdown.internal_route_links_unresolved',
+				'Markdown route links did not match any imported prepared documents and were left unchanged.',
+				array(
+					'source_item_key' => $document->get_source_item_key(),
+					'unresolved'      => count( $unresolved_route_links ),
 				)
 			)
 		);

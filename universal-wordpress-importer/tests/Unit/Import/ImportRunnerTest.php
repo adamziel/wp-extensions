@@ -5430,10 +5430,20 @@ final class ImportRunnerTest extends TestCase {
 		mkdir( $root . '/src/content' );
 		mkdir( $root . '/src/content/docs' );
 		mkdir( $root . '/docs' );
+		mkdir( $root . '/docs/blueprints' );
+		mkdir( $root . '/docs/blueprints/tutorial' );
 		mkdir( $root . '/vault' );
 		mkdir( $root . '/vault/Guides' );
 		mkdir( $root . '/vault/assets' );
 
+		file_put_contents(
+			$root . '/index.md',
+			"# Docs Home\n\nRead [Getting Started](./getting-started)."
+		);
+		file_put_contents(
+			$root . '/getting-started.md',
+			"# Getting Started\n\nGetting started body."
+		);
 		file_put_contents(
 			$root . '/_posts/2026-06-08-release.md',
 			"---\ntitle: Jekyll Release Notes\nlayout: post\npermalink: /release-notes/\n---\n\n# Release Notes\n\nJekyll body."
@@ -5445,6 +5455,14 @@ final class ImportRunnerTest extends TestCase {
 		file_put_contents(
 			$root . '/docs/api.mdx',
 			"---\ntitle: Docusaurus API\nsidebar_position: 2\n---\n\nimport {\n  Tabs,\n  TabItem,\n} from '@theme/Tabs';\n\n# Docusaurus API\n\n:::note Stable API\nUse the stable docs path.\n:::\n\n<Tabs>\n</Tabs>\n\nContinue to [Astro](../src/content/docs/overview.mdoc)."
+		);
+		file_put_contents(
+			$root . '/docs/blueprints/tutorial/index.mdx',
+			"---\ntitle: Blueprints Tutorial\nslug: /blueprints/tutorial\n---\n\n# Blueprints Tutorial\n\nStart with [your first Blueprint](/blueprints/tutorial/build-your-first-blueprint) and continue at [step two](./build-your-first-blueprint#step-two)."
+		);
+		file_put_contents(
+			$root . '/docs/blueprints/tutorial/build-your-first-blueprint.mdx',
+			"---\ntitle: Build your first Blueprint\nslug: /blueprints/tutorial/build-your-first-blueprint\n---\n\n# Build your first Blueprint\n\n## Step Two\n\nBlueprint body."
 		);
 		file_put_contents(
 			$root . '/docs/fenced-sample.mdx',
@@ -5489,25 +5507,39 @@ final class ImportRunnerTest extends TestCase {
 		}
 
 		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertArrayHasKey( 'Docs Home', $by_title );
+		$this->assertArrayHasKey( 'Getting Started', $by_title );
 		$this->assertArrayHasKey( 'Jekyll Release Notes', $by_title );
 		$this->assertArrayHasKey( 'Astro Overview', $by_title );
 		$this->assertArrayHasKey( 'Docusaurus API', $by_title );
+		$this->assertArrayHasKey( 'Blueprints Tutorial', $by_title );
+		$this->assertArrayHasKey( 'Build your first Blueprint', $by_title );
 		$this->assertArrayHasKey( 'MDX Fence Fixture', $by_title );
 		$this->assertArrayHasKey( 'Concepts', $by_title );
 		$this->assertArrayHasKey( 'Setup', $by_title );
 		$this->assertArrayHasKey( 'Guide (v2)', $by_title );
 		$this->assertArrayHasKey( 'Guide [v2]', $by_title );
 
-		$jekyll     = $by_title['Jekyll Release Notes'];
-		$astro      = $by_title['Astro Overview'];
-		$docusaurus = $by_title['Docusaurus API'];
-		$fenced     = $by_title['MDX Fence Fixture'];
-		$obsidian   = $by_title['Concepts'];
-		$posts_by_title = $this->posts_by_title( $posts );
+		$home            = $by_title['Docs Home'];
+		$getting_started = $by_title['Getting Started'];
+		$jekyll          = $by_title['Jekyll Release Notes'];
+		$astro           = $by_title['Astro Overview'];
+		$docusaurus      = $by_title['Docusaurus API'];
+		$blueprints      = $by_title['Blueprints Tutorial'];
+		$fenced          = $by_title['MDX Fence Fixture'];
+		$obsidian        = $by_title['Concepts'];
+		$posts_by_title  = $this->posts_by_title( $posts );
 
+		$this->assertSame( '/', $home->get_metadata()['markdown_route_path'] );
+		$this->assertSame( '/getting-started', $getting_started->get_metadata()['markdown_route_path'] );
 		$this->assertContains( 'jekyll', $jekyll->get_metadata()['markdown_docs_flavors'] );
+		$this->assertSame( '/release-notes', $jekyll->get_metadata()['markdown_route_path'] );
+		$this->assertSame( '/release-notes/', $jekyll->get_metadata()['markdown_front_matter_permalink'] );
 		$this->assertContains( 'astro', $astro->get_metadata()['markdown_docs_flavors'] );
 		$this->assertContains( 'docusaurus', $docusaurus->get_metadata()['markdown_docs_flavors'] );
+		$this->assertContains( 'docusaurus', $blueprints->get_metadata()['markdown_docs_flavors'] );
+		$this->assertSame( '/blueprints/tutorial', $blueprints->get_metadata()['markdown_front_matter_slug'] );
+		$this->assertSame( '/blueprints/tutorial', $blueprints->get_metadata()['markdown_route_path'] );
 		$this->assertContains( 'obsidian', $obsidian->get_metadata()['markdown_docs_flavors'] );
 		$this->assertSame( 1, $docusaurus->get_metadata()['markdown_docs_admonition_count'] );
 		$this->assertSame( 6, $docusaurus->get_metadata()['markdown_mdx_lines_removed'] );
@@ -5540,9 +5572,19 @@ final class ImportRunnerTest extends TestCase {
 		$this->assertArrayHasKey( 'Setup', $posts_by_title );
 		$this->assertArrayHasKey( 'Guide (v2)', $posts_by_title );
 		$this->assertArrayHasKey( 'Guide [v2]', $posts_by_title );
+		$this->assertArrayHasKey( 'Docs Home', $posts_by_title );
+		$this->assertArrayHasKey( 'Getting Started', $posts_by_title );
+		$this->assertArrayHasKey( 'Blueprints Tutorial', $posts_by_title );
+		$this->assertArrayHasKey( 'Build your first Blueprint', $posts_by_title );
+		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Getting Started']['ID'] ), $posts_by_title['Docs Home']['post_content'] );
+		$this->assertStringNotContainsString( './getting-started', $posts_by_title['Docs Home']['post_content'] );
 		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Setup']['ID'] ), $posts_by_title['Concepts']['post_content'] );
 		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Guide (v2)']['ID'] ), $posts_by_title['Concepts']['post_content'] );
 		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Guide [v2]']['ID'] ), $posts_by_title['Concepts']['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Build your first Blueprint']['ID'] ), $posts_by_title['Blueprints Tutorial']['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Build your first Blueprint']['ID'] ) . '#step-two', $posts_by_title['Blueprints Tutorial']['post_content'] );
+		$this->assertStringNotContainsString( 'href="/blueprints/tutorial/build-your-first-blueprint"', $posts_by_title['Blueprints Tutorial']['post_content'] );
+		$this->assertStringNotContainsString( './build-your-first-blueprint#step-two', $posts_by_title['Blueprints Tutorial']['post_content'] );
 		$this->assertStringContainsString( '>Guide [v2]<', $posts_by_title['Concepts']['post_content'] );
 		$this->assertStringContainsString( '>Guide [stable]<', $posts_by_title['Concepts']['post_content'] );
 		$this->assertSame( 1, $media->count_attachments() );
