@@ -43,6 +43,27 @@ python3 -m http.server 8080
 
 Then open `http://localhost:8080/`.
 
+## Blueprints 101 Export Preview
+
+To preview a canonical StillPress export workflow with the WordPress Playground
+Blueprints tutorial docs imported first, open:
+
+```text
+https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/codex/playground-publish-docs-importer/static-site-generator/blueprints/stillpress-blueprints-101-export-preview.json
+```
+
+After this branch is merged, use the canonical `main` URL:
+
+```text
+https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/static-site-generator/blueprints/stillpress-blueprints-101-export-preview.json
+```
+
+The Blueprint installs Universal WordPress Importer, imports the Blueprints
+tutorial tree, installs StillPress, and opens `Tools -> StillPress`. The default
+admin ZIP export includes the static `/wp-admin/` Playground handoff and
+owner-only `_playground-source/` restore artifacts unless those options are
+unchecked.
+
 ## CLI Playground
 
 From a checkout of this repository:
@@ -345,5 +366,6 @@ php static-site-generator/tests/url-collector-test.php
 php static-site-generator/tests/url-rewriter-test.php
 php static-site-generator/tests/static-exporter-test.php
 php static-site-generator/tests/plugin-test.php
+php static-site-generator/tests/blueprint-contract-test.php
 php static-site-generator/tests/cloudflare-deploy-smoke-test.php
 ```
