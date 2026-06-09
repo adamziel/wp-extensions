@@ -73,7 +73,7 @@ function language_fts_search_benchmark_usage(): string
         '  --scenario=<name>        common-term, phrase, fuzzy, synonym, phrase-synonym, mixed-field, or all',
         '  --suite=<name>           pr-smoke, scheduled, manual-stress, or all',
         '  --documents=<n>          Synthetic documents per generated language',
-        '  --languages=<n>          Generated benchmark language count',
+        '  --languages=<n>          Generated automatic language partitions to index and search',
         '  --limit=<n>              Public result limit',
         '  --json                   Emit JSON instead of human-readable text',
         '  --fail-on-gate           Exit nonzero when any hard gate fails',
@@ -102,7 +102,7 @@ function language_fts_search_benchmark_print_human(array $report): void
         echo 'Advisory gate failures: ' . (int) ($summary['advisory_gate_failures'] ?? 0) . "\n\n";
         $reports = (array) $report['scenarios'];
     } else {
-        echo 'Resource root: ' . Language_FTS_Playground_Search_Benchmark_Fixture::resource_root() . "\n";
+        echo 'Default bundled resource root: ' . Language_FTS_Playground_Search_Benchmark_Fixture::resource_root() . "\n";
         $reports = array_is_list($report) ? $report : [$report];
     }
 
@@ -117,6 +117,9 @@ function language_fts_search_benchmark_print_human(array $report): void
         echo 'Query: ' . (string) ($entry['query'] ?? '') . "\n";
         echo 'Documents: ' . (int) ($entry['document_count'] ?? 0) . "\n";
         echo 'Languages: ' . (int) ($entry['language_count'] ?? 0) . "\n";
+        echo 'Language profile source: ' . (string) ($entry['resource_profile_source'] ?? '') . "\n";
+        echo 'Search language: ' . (string) ($entry['language'] ?? '') . "\n";
+        echo 'Selected partitions: ' . implode(', ', array_map('strval', (array) ($entry['selected_partitions'] ?? []))) . "\n";
         echo 'Limit: ' . (int) ($entry['limit'] ?? 0) . "\n";
         echo 'Results: ' . (int) ($entry['result_count'] ?? 0) . ' [' . implode(', ', array_map('strval', (array) ($entry['result_ids'] ?? ($entry['result_post_ids'] ?? [])))) . "]\n";
         echo 'Wall time ms: ' . (string) ($entry['wall_time_ms'] ?? 0) . "\n";

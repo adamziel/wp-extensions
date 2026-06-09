@@ -323,6 +323,7 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
                 $language_count,
                 $limit,
                 $resource_context['root'],
+                $resource_context['source'],
                 $options
             );
         } finally {
@@ -369,6 +370,7 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
                     $language_count,
                     $limit,
                     $resource_context['root'],
+                    $resource_context['source'],
                     $options
                 );
             }
@@ -466,6 +468,7 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
         int $language_count,
         int $limit,
         string $resource_root,
+        string $resource_profile_source,
         array $options
     ): array {
         $storage = new Language_FTS_Playground_Search_Benchmark_Counting_Storage();
@@ -477,7 +480,8 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
         self::index_documents($indexer, $document_count, $languages);
 
         $query = self::SCENARIO_QUERIES[$canonical_scenario];
-        $explain = $searcher->explain($query, self::LANGUAGE, $limit);
+        $search_language = self::search_language_for_language_count($language_count);
+        $explain = $searcher->explain($query, $search_language, $limit);
         $lookup_terms_by_class = self::lookup_terms_by_class($explain);
         $lookup_terms_by_partition = self::lookup_terms_by_partition($explain);
         $selected_partitions = self::selected_partitions($explain);
@@ -489,7 +493,7 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
         }
 
         $wall_start = microtime(true);
-        $results = $searcher->search($query, self::LANGUAGE, $limit);
+        $results = $searcher->search($query, $search_language, $limit);
         $wall_time_ms = round((microtime(true) - $wall_start) * 1000, 3);
         $counters = $storage->counters();
         $peak_memory_delta_bytes = max(0, memory_get_peak_usage(true) - $memory_before);
@@ -501,14 +505,17 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
         $report = [
             'scenario' => $report_scenario,
             'query' => $query,
-            'language' => self::LANGUAGE,
+            'language' => $search_language,
             'document_count' => $document_count,
             'language_count' => $language_count,
+            'indexed_languages' => $languages,
+            'resource_profile_source' => $resource_profile_source,
             'limit' => $limit,
             'result_count' => count($results),
             'result_ids' => $result_ids,
             'result_post_ids' => $result_ids,
             'selected_partitions' => $selected_partitions,
+            'routing_strategy' => (string) ($explain['language_routing']['strategy'] ?? ''),
             'top_result_signature' => self::top_result_signature($results),
             'lookup_terms_by_class' => $lookup_terms_by_class,
             'lookup_terms_by_partition' => $lookup_terms_by_partition,
@@ -523,6 +530,11 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
         $report['gates'] = self::evaluate_gates($canonical_scenario, $report, $options);
 
         return $report;
+    }
+
+    private static function search_language_for_language_count(int $language_count): string
+    {
+        return $language_count > 1 ? 'auto' : self::LANGUAGE;
     }
 
     /**
@@ -590,7 +602,7 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
 
     /**
      * @param array<string,mixed> $options
-     * @return array{root:string,temporary:bool}
+     * @return array{root:string,temporary:bool,source:string}
      */
     private static function resource_context(int $language_count, array $options): array
     {
@@ -598,6 +610,7 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
             return [
                 'root' => (string) $options['resource_root'],
                 'temporary' => false,
+                'source' => 'custom',
             ];
         }
 
@@ -605,12 +618,14 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
             return [
                 'root' => self::resource_root(),
                 'temporary' => false,
+                'source' => 'bundled',
             ];
         }
 
         return [
             'root' => self::create_generated_resource_root($language_count),
             'temporary' => true,
+            'source' => 'generated',
         ];
     }
 
@@ -960,6 +975,7 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
         $metrics = (array) ($report['metrics'] ?? []);
         $result_ids = array_values(array_map('intval', (array) ($report['result_ids'] ?? [])));
         $document_count = (int) ($report['document_count'] ?? 0);
+        $language_count = max(1, (int) ($report['language_count'] ?? 1));
         $limit = (int) ($report['limit'] ?? 0);
         $selected_partition_count = max(1, (int) ($metrics['selected_partition_count'] ?? 1));
         $gates = [];
@@ -972,6 +988,9 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
         $gates[] = self::gate('postings-materialization-counted', 'postings_rows_materialized', (int) ($counters['postings_rows_materialized'] ?? 0), '>=', (int) ($counters['candidate_count'] ?? 0));
         $gates[] = self::gate('public-field-metadata-zero', 'field_metadata_rows_fetched', (int) ($counters['field_metadata_rows_fetched'] ?? 0), '=', 0);
         $gates[] = self::gate('public-field-text-final-window', 'field_text_rows_fetched', (int) ($counters['field_text_rows_fetched'] ?? 0), '<=', (int) ($report['result_count'] ?? 0));
+        if ($language_count > 1) {
+            $gates[] = self::gate('multi-language-selected-partitions-scale', 'selected_partition_count', $selected_partition_count, '=', min($language_count, self::AUTO_LANGUAGE_MAX_PARTITIONS));
+        }
 
         if ($canonical_scenario === 'common-term') {
             $gates[] = self::gate('common-term-candidate-shape', 'candidate_count_minus_result_count', (int) ($counters['candidate_count'] ?? 0) - (int) ($report['result_count'] ?? 0), '>', 0);
@@ -986,7 +1005,9 @@ final class Language_FTS_Playground_Search_Benchmark_Fixture
             $gates[] = self::gate('fuzzy-candidate-heavy-shape', 'fuzzy_candidate_terms_returned', (int) ($counters['fuzzy_candidate_terms_returned'] ?? 0), '>=', min(3, max(1, $document_count - 3)));
             $gates[] = self::gate('fuzzy-exact-match-outranks-candidates', 'first_result_id', $result_ids[0] ?? 0, '=', 2);
         } elseif ($canonical_scenario === 'mixed-field') {
-            $gates[] = self::gate('mixed-field-alt-result-present', 'contains_alt_result_id_12', in_array(12, $result_ids, true) ? 1 : 0, '=', ($document_count >= 12 && $limit >= 4) ? 1 : 0);
+            if ($language_count === 1) {
+                $gates[] = self::gate('mixed-field-alt-result-present', 'contains_alt_result_id_12', in_array(12, $result_ids, true) ? 1 : 0, '=', ($document_count >= 12 && $limit >= 4) ? 1 : 0);
+            }
             $gates[] = self::gate('mixed-field-title-first', 'first_result_id', $result_ids[0] ?? 0, '=', $document_count >= 3 ? 3 : ($result_ids[0] ?? 0));
         } elseif ($canonical_scenario === 'single-token-synonym') {
             $gates[] = self::gate('single-token-synonym-expanded', 'single_token_synonym_terms', (int) ($report['lookup_terms_by_class']['single_token_synonyms']['count'] ?? 0), '>=', 1);

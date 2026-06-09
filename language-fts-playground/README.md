@@ -133,7 +133,10 @@ Use `--scenario=all` to print every committed probe, including the synonym,
 phrase-synonym, and mixed-field fixtures. Use `--suite=scheduled --documents=5000
 --languages=8 --json --fail-on-gate` for a larger deterministic CI or nightly
 run, and `--suite=manual-stress --documents=25000 --languages=16 --json
---fail-on-gate` for manual pre-release stress evidence. Public-search probes are
+--fail-on-gate` for manual pre-release stress evidence. When `--languages` is
+greater than one, the fixture indexes generated language profiles and searches
+with automatic language routing, so `selected_partitions` and materialization
+counters reflect bounded multi-partition search fanout. Public-search probes are
 gated so field text rows stay within the final result count, field metadata rows
 remain zero, postings materialization counters participate in hard gates, and
 timing remains reported rather than the primary PR failure signal.
@@ -141,10 +144,10 @@ timing remains reported rather than the primary PR failure signal.
 The PR-smoke suite is intentionally fixture-sized and machine-stable: it is meant
 to catch materialization, fanout, and ranking-shape regressions during ordinary
 review. Scheduled and manual-stress suites raise document and language counts for
-trend evidence, but they are still pure-PHP in-memory checks. They do not prove
-MySQL query plans, live WordPress latency, or production-scale relevance on a
-large real corpus; package smoke, Playground smoke, and site-specific profiling
-remain separate release evidence.
+trend evidence and exercise the automatic-routing cap, but they are still
+pure-PHP in-memory checks. They do not prove MySQL query plans, live WordPress
+latency, or production-scale relevance on a large real corpus; package smoke,
+Playground smoke, and site-specific profiling remain separate release evidence.
 
 ## Field-Aware Ranking And Snippets
 

@@ -6794,6 +6794,37 @@ test_case('search benchmark pr-smoke suite emits deterministic gate JSON under n
     );
 });
 
+test_case('search benchmark language scale changes measured automatic partitions and counters', function (): void {
+    $single = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('common-term', [
+        'documents' => 24,
+        'languages' => 1,
+        'limit' => 4,
+    ]);
+    $multi = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('common-term', [
+        'documents' => 24,
+        'languages' => 3,
+        'limit' => 4,
+    ]);
+
+    assert_same('bm', $single['language'] ?? null, 'Single-language benchmark probes retain explicit bm search.');
+    assert_same('auto', $multi['language'] ?? null, 'Generated multi-language benchmark probes exercise automatic routing.');
+    assert_same(['bm'], $single['selected_partitions'] ?? null, 'Single-language probes select only the bm partition.');
+    assert_same(['bm', 'bm01', 'bm02'], $multi['selected_partitions'] ?? null, 'Three-language probes select every generated partition under the automatic cap.');
+    assert_true(
+        (int) ($multi['counters']['candidate_count'] ?? 0) > (int) ($single['counters']['candidate_count'] ?? 0),
+        'Three-language probes materialize more public search candidates than one-language probes.'
+    );
+    assert_true(
+        (int) ($multi['counters']['postings_rows_materialized'] ?? 0) > (int) ($single['counters']['postings_rows_materialized'] ?? 0),
+        'Three-language probes materialize more posting rows than one-language probes.'
+    );
+    assert_same(
+        'pass',
+        language_fts_benchmark_gate_by_id($multi, 'multi-language-selected-partitions-scale')['status'] ?? null,
+        'The multi-language scale gate passes for generated automatic partitions.'
+    );
+});
+
 test_case('search benchmark fail-on-gate exits nonzero after printing JSON', function (): void {
     $failure = run_language_fts_search_benchmark([
         'scenario' => 'common-term',
