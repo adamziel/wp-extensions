@@ -445,14 +445,20 @@ ssgwp_assert_same(
 
 ssgwp_assert_same(
 	false,
-	$admin_args['include_playground_admin'] || $admin_args['include_cloudflare_publish'],
-	'request_to_export_args leaves publishing handoff artifacts disabled unless selected.'
+	$admin_args['include_cloudflare_publish'],
+	'request_to_export_args leaves the Cloudflare publishing contract disabled unless selected.'
 );
 
 ssgwp_assert_same(
-	false,
+	true,
+	$admin_args['include_playground_admin'],
+	'request_to_export_args includes the static /wp-admin/ Playground handoff by default.'
+);
+
+ssgwp_assert_same(
+	true,
 	$admin_args['include_playground_source_state'],
-	'request_to_export_args leaves Playground source-state artifacts disabled unless selected.'
+	'request_to_export_args includes owner-only Playground source-state artifacts by default.'
 );
 
 $report_args = $request_args_method->invoke( null, array( 'include_report' => '1' ) );
@@ -477,9 +483,24 @@ ssgwp_assert_same(
 	'request_to_export_args maps selected publishing handoff artifacts to exporter settings.'
 );
 
+$admin_playground_opt_out_args = $request_args_method->invoke(
+	null,
+	array(
+		'include_playground_admin'        => '0',
+		'include_playground_source_state' => '0',
+	)
+);
+
+ssgwp_assert_same(
+	false,
+	$admin_playground_opt_out_args['include_playground_admin'] || $admin_playground_opt_out_args['include_playground_source_state'],
+	'request_to_export_args preserves an explicit admin opt-out of Playground handoff and source-state artifacts.'
+);
+
 $admin_source_state_args = $request_args_method->invoke(
 	null,
 	array(
+		'include_playground_admin'        => '0',
 		'include_playground_source_state' => '1',
 	)
 );

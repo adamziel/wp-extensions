@@ -105,11 +105,13 @@ final class SSGWP_Plugin {
 								<?php esc_html_e( 'robots.txt with a sitemap reference', 'playground-static-site-generator' ); ?>
 							</label><br />
 							<label>
-								<input type="checkbox" name="include_playground_admin" value="1" />
+								<input type="hidden" name="include_playground_admin" value="0" />
+								<input type="checkbox" name="include_playground_admin" value="1" checked />
 								<?php esc_html_e( 'static /wp-admin/ handoff to WordPress Playground', 'playground-static-site-generator' ); ?>
 							</label><br />
 							<label>
-								<input type="checkbox" name="include_playground_source_state" value="1" />
+								<input type="hidden" name="include_playground_source_state" value="0" />
+								<input type="checkbox" name="include_playground_source_state" value="1" checked />
 								<?php esc_html_e( 'owner-only Playground source-state artifacts', 'playground-static-site-generator' ); ?>
 							</label><br />
 							<label>
@@ -117,7 +119,7 @@ final class SSGWP_Plugin {
 								<?php esc_html_e( 'Cloudflare Workers publish contract', 'playground-static-site-generator' ); ?>
 							</label>
 							<p class="description">
-								<?php esc_html_e( 'Theme, plugin, WordPress CSS/JS, and linked site pages are included automatically so the static site works. Source-state artifacts also include the static /wp-admin/ handoff and should be kept owner-only.', 'playground-static-site-generator' ); ?>
+								<?php esc_html_e( 'Theme, plugin, WordPress CSS/JS, linked site pages, the static /wp-admin/ Playground handoff, and owner-only source-state artifacts are included by default. Keep _playground-source/ owner-only and do not blindly publish it with visitor-facing static files.', 'playground-static-site-generator' ); ?>
 							</p>
 						</td>
 					</tr>
@@ -973,7 +975,8 @@ final class SSGWP_Plugin {
 			$url_mode = 'relative';
 		}
 
-		$include_playground_source_state = ! empty( $request['include_playground_source_state'] );
+		$include_playground_admin        = self::admin_request_flag_enabled( $request, 'include_playground_admin', true );
+		$include_playground_source_state = self::admin_request_flag_enabled( $request, 'include_playground_source_state', true );
 
 		return array(
 			'url_mode'         => $url_mode,
@@ -987,10 +990,32 @@ final class SSGWP_Plugin {
 			'generate_sitemap' => ! empty( $request['generate_sitemap'] ),
 			'generate_robots'  => ! empty( $request['generate_robots'] ),
 			'fetch_mode'       => 'internal',
-			'include_playground_admin' => ! empty( $request['include_playground_admin'] ) || $include_playground_source_state,
+			'include_playground_admin' => $include_playground_admin || $include_playground_source_state,
 			'include_playground_source_state' => $include_playground_source_state,
 			'include_cloudflare_publish' => ! empty( $request['include_cloudflare_publish'] ),
 		);
+	}
+
+	/**
+	 * Read an admin checkbox value that may be paired with a hidden opt-out field.
+	 *
+	 * @param array  $request Request data.
+	 * @param string $key Request key.
+	 * @param bool   $default Default value when the key is absent.
+	 * @return bool Whether the flag is enabled.
+	 */
+	private static function admin_request_flag_enabled( array $request, $key, $default ) {
+		if ( ! array_key_exists( $key, $request ) ) {
+			return (bool) $default;
+		}
+
+		$value = $request[ $key ];
+
+		if ( is_array( $value ) ) {
+			$value = end( $value );
+		}
+
+		return ! empty( $value ) && '0' !== (string) $value;
 	}
 
 	/**

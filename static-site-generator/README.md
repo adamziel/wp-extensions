@@ -27,9 +27,11 @@ The Blueprint installs this plugin, seeds a richer demo site with pages,
 categories, dated posts, and block content, then opens
 `Tools -> StillPress`.
 
-Use the admin screen to download the static ZIP. The ZIP is the published
-static site; save the full Playground site separately if you want to keep an
-editable WordPress source site.
+Use the admin screen to download the static ZIP. By default, the ZIP includes
+the published static site, a static `/wp-admin/` handoff to WordPress
+Playground, and owner-only `_playground-source/` restore artifacts for editing
+the source site later. Keep `_playground-source/` private unless you
+intentionally host it through a public, signed, or private owner-only URL.
 
 After extracting the ZIP, open `index.html` for a quick check. For the closest
 preview, serve the extracted folder over HTTP so browser module scripts can
@@ -84,8 +86,11 @@ cp -R static-site-generator /path/to/wordpress/wp-content/plugins/
 Then activate **StillPress** in `wp-admin -> Plugins`.
 Open `Tools -> StillPress`, choose any extra files you want, and
 download the static ZIP. The exporter includes required frontend assets and
-linked site pages automatically. Hosting settings can stay on the default
-unless your hosting provider specifically needs root-relative or full URLs.
+linked site pages automatically. The default admin ZIP also includes the static
+`/wp-admin/` Playground handoff and owner-only `_playground-source/` restore
+artifacts; uncheck those options when you only want visitor-facing static
+files. Hosting settings can stay on the default unless your hosting provider
+specifically needs root-relative or full URLs.
 
 Requirements:
 
@@ -121,6 +126,9 @@ wp static-site export --output-dir=./static-site --include-cloudflare-publish
 
 Use `--fetch-mode=internal` when loopback HTTP requests are blocked or
 unreliable, including many Playground environments.
+
+The admin UI selects the Playground handoff and source-state artifacts by
+default. WP-CLI keeps them opt-in through the flags below.
 
 `--include-playground-admin` adds a static `/wp-admin/index.html` handoff page,
 `wp-admin/playground-blueprint.json`, and
