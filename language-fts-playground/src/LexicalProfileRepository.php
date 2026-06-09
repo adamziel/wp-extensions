@@ -143,7 +143,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
      * query expansion. They intentionally do not read pack metadata or source
      * import files.
      *
-     * @return array{stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
+     * @return array{stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     public function query_language_evidence(string $language): array
     {
@@ -154,6 +154,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'lexemes' => $profile['lexemes'],
             'lexeme_forms' => $profile['lexeme_forms'],
             'canonical_keys' => $profile['canonical_keys'],
+            'protected_terms' => $profile['protected_terms'],
+            'term_rules' => $profile['term_rules'],
             'synonym_sources' => $profile['synonym_sources'],
             'synonym_phrases' => $profile['synonym_phrases'],
         ];
