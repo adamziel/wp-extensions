@@ -98,6 +98,28 @@ test_case('quality language detection gold fixtures keep accented English loanwo
     }
 });
 
+test_case('quality language detection gold fixtures keep inline markup weak connector parity', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(101, '<p>Führung <em>und</em> Straße</p>');
+    $contentLangs = test_lang_by_term($analyzer->analyze_content('<p>Führung <em>und</em> Straße</p>'));
+    $queryLangs = test_lang_by_term($analyzer->analyze_query_occurrences('Führung und Straße'));
+
+    foreach (['fuehrung', 'und', 'strasse'] as $term) {
+        assert_same('de', $contentLangs[$term] ?? null, "inline German content term {$term}");
+        assert_same('de', $queryLangs[$term] ?? null, "inline German query term {$term}");
+    }
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same(
+        [101],
+        wp_fts_ldgf_result_ids($searcher->search('Führung und Straße', ['mode' => 'AND', 'limit' => 10])),
+        'German AND query should find a document phrase split by inline markup'
+    );
+});
+
 test_case('quality language detection gold fixtures honor explicit and multilingual-plugin metadata', function (): void {
     wp_fts_ldgf_reset_multilingual_globals();
     $GLOBALS['wp_fts_ldgf_polylang_post_languages'][10] = 'pl_PL';
@@ -174,7 +196,7 @@ test_case('quality language detection gold fixtures preserve OR and AND language
     $storage = new WP_FTS_Storage_InMemory();
     $indexer = new WP_FTS_Indexer($storage, $analyzer);
 
-    $indexer->index_document(1, '<p>Führung und Straße</p>');
+    $indexer->index_document(1, '<p>Führung <em>und</em> Straße</p>');
     $indexer->index_document(2, '<p>Führung</p>', ['lang' => 'de']);
     $indexer->index_document(3, '<p>Straße</p>', ['lang' => 'de']);
     $indexer->index_document(4, '<p>Führung Straße</p>', ['lang' => 'en']);
