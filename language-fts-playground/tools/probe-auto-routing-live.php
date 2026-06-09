@@ -797,6 +797,8 @@ final class Language_FTS_Playground_Auto_Routing_Probe_Runner
             $this->cleanup_work_root = false;
         }
 
+        $this->assert_not_bundled_resource_root($this->work_root);
+
         if (is_dir($this->work_root)) {
             $entries = array_values(array_diff(scandir($this->work_root) ?: [], ['.', '..']));
             if ($entries !== []) {
@@ -805,7 +807,6 @@ final class Language_FTS_Playground_Auto_Routing_Probe_Runner
         } else {
             $this->make_directory($this->work_root);
         }
-        $this->assert_not_bundled_resource_root($this->work_root);
     }
 
     /**
@@ -1161,14 +1162,64 @@ final class Language_FTS_Playground_Auto_Routing_Probe_Runner
     private function assert_not_bundled_resource_root(string $path): void
     {
         $default_root = realpath(Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root());
-        $target = realpath($path);
-        if ($default_root === false || $target === false) {
+        if ($default_root === false) {
             return;
         }
+
+        $target = realpath($path);
+        $default_root = $this->normalize_path_for_comparison($default_root);
+        $target = $this->normalize_path_for_comparison($target === false ? $path : $target);
 
         if ($target === $default_root || str_starts_with($target, $default_root . DIRECTORY_SEPARATOR)) {
             throw new Language_FTS_Playground_Auto_Routing_Probe_Failure('Generated probe roots must not be inside bundled lexical resources: ' . $path);
         }
+    }
+
+    private function normalize_path_for_comparison(string $path): string
+    {
+        $path = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($path));
+        if (!$this->is_absolute_path($path)) {
+            $cwd = getcwd();
+            if (is_string($cwd) && $cwd !== '') {
+                $path = $cwd . DIRECTORY_SEPARATOR . $path;
+            }
+        }
+
+        $prefix = '';
+        if (preg_match('/^[A-Za-z]:' . preg_quote(DIRECTORY_SEPARATOR, '/') . '/', $path) === 1) {
+            $prefix = substr($path, 0, 2) . DIRECTORY_SEPARATOR;
+            $path = substr($path, 3);
+        } elseif (str_starts_with($path, DIRECTORY_SEPARATOR)) {
+            $prefix = DIRECTORY_SEPARATOR;
+            $path = ltrim($path, DIRECTORY_SEPARATOR);
+        }
+
+        $parts = [];
+        foreach (explode(DIRECTORY_SEPARATOR, $path) as $part) {
+            if ($part === '' || $part === '.') {
+                continue;
+            }
+            if ($part === '..') {
+                if ($parts !== [] && end($parts) !== '..') {
+                    array_pop($parts);
+                    continue;
+                }
+                if ($prefix === '') {
+                    $parts[] = $part;
+                }
+                continue;
+            }
+            $parts[] = $part;
+        }
+
+        $normalized = $prefix . implode(DIRECTORY_SEPARATOR, $parts);
+
+        return $normalized === '' ? '.' : $normalized;
+    }
+
+    private function is_absolute_path(string $path): bool
+    {
+        return str_starts_with($path, DIRECTORY_SEPARATOR) || preg_match('/^[A-Za-z]:[\/\\\\]/', $path) === 1;
     }
 
     private function remove_tree(string $path): void
@@ -1278,7 +1329,7 @@ function language_fts_auto_routing_probe_usage(): string
         'Usage: php language-fts-playground/tools/probe-auto-routing-live.php [options]',
         '',
         'Options:',
-        '  --json                   Emit deterministic JSON summary.',
+        '  --json                   Emit JSON summary with default temp paths omitted for determinism.',
         '  --resource-root=<path>   Empty directory where probe-specific resource roots are generated.',
         '  --keep-temp              Keep generated temporary resource roots after the run.',
         '  --help                   Show this help.',
@@ -1287,6 +1338,30 @@ function language_fts_auto_routing_probe_usage(): string
         '  php language-fts-playground/tools/probe-auto-routing-live.php --json',
         '  php -n language-fts-playground/tools/probe-auto-routing-live.php --json',
     ]) . "\n";
+}
+
+/**
+ * @param array<string,mixed> $report
+ */
+function language_fts_auto_routing_probe_json_report(array $report, array $options): array
+{
+    $json_report = $report;
+    $include_generated_paths = !empty($options['keep_temp']) || $options['resource_root'] !== null;
+    if ($include_generated_paths) {
+        return $json_report;
+    }
+
+    unset($json_report['work_root']);
+    if (isset($json_report['probes']) && is_array($json_report['probes'])) {
+        foreach ($json_report['probes'] as $index => $probe) {
+            if (is_array($probe)) {
+                unset($probe['resource_root']);
+                $json_report['probes'][$index] = $probe;
+            }
+        }
+    }
+
+    return $json_report;
 }
 
 /**
@@ -1318,7 +1393,7 @@ try {
     $runner = new Language_FTS_Playground_Auto_Routing_Probe_Runner($options);
     $report = $runner->run();
     if ($options['json']) {
-        echo json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+        echo json_encode(language_fts_auto_routing_probe_json_report($report, $options), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
     } else {
         language_fts_auto_routing_probe_print_human($report);
     }

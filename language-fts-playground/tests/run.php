@@ -1631,6 +1631,39 @@ function run_language_fts_validator(array $options = [], bool $no_ini = true): a
  * @param array<string,mixed> $options
  * @return array{exit_code:int,output:string}
  */
+function run_language_fts_auto_routing_probe(array $options = [], bool $no_ini = false): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+    ];
+    if ($no_ini) {
+        $command[] = '-n';
+    }
+    $command[] = escapeshellarg(__DIR__ . '/../tools/probe-auto-routing-live.php');
+
+    foreach ($options as $key => $value) {
+        $option = '--' . str_replace('_', '-', (string) $key);
+        if ($value === true) {
+            $command[] = escapeshellarg($option);
+        } elseif ($value !== false && $value !== null) {
+            $command[] = escapeshellarg($option . '=' . (string) $value);
+        }
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
 function run_language_fts_evaluator(string $fixture_path, array $options = [], bool $no_ini = false): array
 {
     $command = [
@@ -3534,6 +3567,42 @@ test_case('lexical pack validator CLI exits nonzero for a bad temp resource root
         assert_true(is_array($decoded), 'Bad resource root JSON is still parseable.');
         assert_same(false, $decoded['valid'] ?? null, 'Bad resource root JSON marks validation invalid.');
         assert_contains_text('missing-runtime.tsv', $result['output'], 'Bad resource root output explains the missing file.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('auto-routing live probe JSON is deterministic and omits volatile temp paths', function (): void {
+    $first = run_language_fts_auto_routing_probe(['json' => true]);
+    $second = run_language_fts_auto_routing_probe(['json' => true]);
+
+    assert_same(0, $first['exit_code'], 'Auto-routing probe JSON CLI exits successfully. Output: ' . $first['output']);
+    assert_same($first['output'], $second['output'], 'Auto-routing probe JSON output is deterministic across runs.');
+
+    $decoded = json_decode($first['output'], true);
+    assert_true(is_array($decoded), 'Auto-routing probe JSON output is parseable.');
+    assert_same('passed', $decoded['status'] ?? null, 'Auto-routing probe JSON marks all probes passed.');
+    assert_same(13, $decoded['probe_count'] ?? null, 'Auto-routing probe JSON preserves all live probes.');
+    assert_true(!array_key_exists('work_root', $decoded), 'Default JSON omits the random generated work root.');
+    assert_same(true, $decoded['work_root_cleaned'] ?? null, 'Default JSON still reports temp cleanup.');
+    foreach ((array) ($decoded['probes'] ?? []) as $probe) {
+        assert_true(is_array($probe), 'Each auto-routing probe JSON entry is an object.');
+        assert_true(!array_key_exists('resource_root', $probe), 'Default JSON omits random per-probe resource roots.');
+    }
+});
+
+test_case('auto-routing live probe rejects bundled resource roots before creating them', function (): void {
+    $root = Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root()
+        . DIRECTORY_SEPARATOR
+        . 'probe-rejected-' . str_replace('.', '-', uniqid('', true));
+
+    try {
+        assert_true(!is_dir($root), 'Rejected bundled probe root starts absent.');
+        $result = run_language_fts_auto_routing_probe(['resource_root' => $root, 'json' => true]);
+
+        assert_true($result['exit_code'] !== 0, 'Bundled probe resource roots are rejected.');
+        assert_contains_text('Generated probe roots must not be inside bundled lexical resources', $result['output'], 'Rejected bundled probe root explains the guard.');
+        assert_true(!is_dir($root), 'Rejected bundled probe root is not created.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
