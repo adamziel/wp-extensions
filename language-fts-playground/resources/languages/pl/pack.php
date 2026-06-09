@@ -16,6 +16,7 @@ return [
         'lexemes.tsv',
         'synonyms.tsv',
         'synsets.tsv',
+        'term_rules.tsv',
     ],
     'data_kind' => 'curated_seed',
 ];

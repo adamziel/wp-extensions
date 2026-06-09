@@ -16,6 +16,8 @@ return [
         'lexemes.tsv',
         'synonyms.tsv',
         'synonym_phrases.tsv',
+        'term_rules.tsv',
+        'protected_terms.txt',
     ],
     'data_kind' => 'curated_seed',
 ];

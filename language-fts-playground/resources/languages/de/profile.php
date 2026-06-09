@@ -23,5 +23,6 @@ return [
         'stopwords' => 'stopwords.txt',
         'lexemes' => 'lexemes.tsv',
         'synonyms' => 'synonyms.tsv',
+        'term_rules' => 'term_rules.tsv',
     ],
 ];

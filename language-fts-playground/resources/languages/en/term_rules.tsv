@@ -1,0 +1,18 @@
+# id	min_term_length	pattern	strip_prefix	strip_suffix	append	min_key_length	flags	alternate_pattern	alternate_replacement	provenance
+en-010-ied-short	4	/^[a-z]ied$/u		d		3				language-fts-playground-english-curated-term-rules
+en-020-ied-y	5	/^[a-z]+ied$/u		ied	y	3				language-fts-playground-english-curated-term-rules
+en-030-eed	5	/^[a-z]+eed$/u		d		3				language-fts-playground-english-curated-term-rules
+en-040-ed-double	5	/^[a-z]*([bcdfghjkmnpqrtvwxyz])\1ed$/u		ed		3	trim_doubled_final_consonant,require_vowel_or_y			language-fts-playground-english-curated-term-rules
+en-045-ed-double-preserve-ls	5	/^[a-z]*(?:ll|ss)ed$/u		ed		3	require_vowel_or_y			language-fts-playground-english-curated-term-rules
+en-050-ed-cvc-e	5	/^[bcdfghjklmnpqrstvwxyz][aeiou][bcdfghjklmnpqrstvz]ed$/u		ed		3	append_e_if_cvc			language-fts-playground-english-curated-term-rules
+en-060-ed-base	5	/^(?![a-z]*([bcdfghjklmnpqrstvwxyz])\1ed$)(?![bcdfghjklmnpqrstvwxyz][aeiou][bcdfghjklmnpqrstvz]ed$)(?![a-z]+(?:eed|ied)$)[a-z]+ed$/u		ed		3	require_vowel_or_y			language-fts-playground-english-curated-term-rules
+en-070-ing-double	6	/^[a-z]*([bcdfghjkmnpqrtvwxyz])\1ing$/u		ing		3	trim_doubled_final_consonant,require_vowel_or_y			language-fts-playground-english-curated-term-rules
+en-075-ing-double-preserve-ls	6	/^[a-z]*(?:ll|ss)ing$/u		ing		3	require_vowel_or_y			language-fts-playground-english-curated-term-rules
+en-080-ing-cvc-e	6	/^[bcdfghjklmnpqrstvwxyz][aeiou][bcdfghjklmnpqrstvz]ing$/u		ing		3	append_e_if_cvc			language-fts-playground-english-curated-term-rules
+en-090-ing-base	6	/^(?![a-z]*([bcdfghjklmnpqrstvwxyz])\1ing$)(?![bcdfghjklmnpqrstvwxyz][aeiou][bcdfghjklmnpqrstvz]ing$)[a-z]+ing$/u		ing		3	require_vowel_or_y			language-fts-playground-english-curated-term-rules
+en-100-ies-y	5	/^[a-z]+ies$/u		ies	y	3				language-fts-playground-english-curated-term-rules
+en-110-ies-short	4	/^[a-z]ies$/u		s		3				language-fts-playground-english-curated-term-rules
+en-120-ves-ive	5	/^[a-z]+ives$/u		ves	fe	4				language-fts-playground-english-curated-term-rules
+en-130-ves-f	5	/^(?![a-z]+ives$)[a-z]+ves$/u		ves	f	4				language-fts-playground-english-curated-term-rules
+en-140-es	4	/^[a-z]+(?:ches|shes|sses|xes|zes|ses|oes)$/u		es		3				language-fts-playground-english-curated-term-rules
+en-150-final-s	4	/^(?![a-z]*(?:ss|us|is|ies|ches|shes|sses|xes|zes|ses|oes)$)[a-z]+s$/u		s		3				language-fts-playground-english-curated-term-rules

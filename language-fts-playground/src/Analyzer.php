@@ -514,20 +514,6 @@ final class Language_FTS_Playground_Analyzer
             }
         }
 
-        if ($language === 'pl') {
-            foreach ($this->polish_stem_keys($term) as $key) {
-                $keys[] = $key;
-            }
-        } elseif ($language === 'en') {
-            foreach ($this->english_stem_keys($term) as $key) {
-                $keys[] = $key;
-            }
-        } elseif ($language === 'de') {
-            foreach ($this->german_stem_keys($term) as $key) {
-                $keys[] = $key;
-            }
-        }
-
         $unique = [];
         foreach ($keys as $key) {
             $key = (string) $key;
@@ -540,7 +526,7 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
-     * @param array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string}> $rules
+     * @param array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string}> $rules
      * @return string[]
      */
     private function resource_term_rule_keys(string $term, array $rules): array
@@ -561,19 +547,24 @@ final class Language_FTS_Playground_Analyzer
             }
 
             $key = $this->resource_strip_append_term_key($term, $rule);
-
-            if ($key === null || $key === '' || strlen($key) < (int) ($rule['min_key_length'] ?? 1)) {
+            if ($key === null || $key === '') {
                 continue;
             }
 
-            $keys[] = $key;
+            foreach (array_merge([$key], $this->resource_alternate_term_rule_keys($key, $rule)) as $candidate) {
+                if ($candidate === '' || strlen($candidate) < (int) ($rule['min_key_length'] ?? 1)) {
+                    continue;
+                }
+
+                $keys[] = $candidate;
+            }
         }
 
         return $keys;
     }
 
     /**
-     * @param array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string} $rule
+     * @param array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string} $rule
      */
     private function resource_strip_append_term_key(string $term, array $rule): string|null
     {
@@ -601,7 +592,7 @@ final class Language_FTS_Playground_Analyzer
             $key = $this->trim_doubled_final_consonant($key);
         }
 
-        if (isset($flags['append_e_if_cvc']) && $this->is_english_cvc($key)) {
+        if (isset($flags['append_e_if_cvc']) && $this->is_ascii_cvc($key)) {
             $key .= 'e';
         }
 
@@ -609,7 +600,30 @@ final class Language_FTS_Playground_Analyzer
             return null;
         }
 
+        if (isset($flags['require_vowel_or_y']) && !$this->contains_ascii_vowel_or_y($key)) {
+            return null;
+        }
+
         return $key;
+    }
+
+    /**
+     * @param array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string} $rule
+     * @return string[]
+     */
+    private function resource_alternate_term_rule_keys(string $key, array $rule): array
+    {
+        $alternate_pattern = (string) ($rule['alternate_pattern'] ?? '');
+        if ($alternate_pattern === '') {
+            return [];
+        }
+
+        $alternate = preg_replace($alternate_pattern, (string) ($rule['alternate_replacement'] ?? ''), $key);
+        if (!is_string($alternate) || $alternate === $key) {
+            return [];
+        }
+
+        return [$alternate];
     }
 
     private function trim_doubled_final_consonant(string $term): string
@@ -626,253 +640,9 @@ final class Language_FTS_Playground_Analyzer
         return preg_match('/[aeiou]/', $term) === 1;
     }
 
-    /**
-     * Adds conservative English stem keys after lowercasing.
-     *
-     * This deliberately stays rule-based and small: common plural/verb endings,
-     * y/ies, possessive fallout, and a few high-signal irregular plurals.
-     *
-     * @return string[]
-     */
-    private function english_stem_keys(string $term): array
+    private function contains_ascii_vowel_or_y(string $term): bool
     {
-        if (strlen($term) < 3 || preg_match('/^[a-z]+$/', $term) !== 1) {
-            return [];
-        }
-
-        $keys = [];
-        $irregulars = [
-            'children' => 'child',
-            'feet' => 'foot',
-            'geese' => 'goose',
-            'men' => 'man',
-            'mice' => 'mouse',
-            'people' => 'person',
-            'teeth' => 'tooth',
-            'women' => 'woman',
-        ];
-        if (isset($irregulars[$term])) {
-            $keys[] = $irregulars[$term];
-        }
-
-        $exact_only = [
-            'analysis' => true,
-            'basis' => true,
-            'bus' => true,
-            'news' => true,
-            'series' => true,
-            'species' => true,
-        ];
-        if (isset($exact_only[$term])) {
-            return array_values(array_unique($keys));
-        }
-
-        if (str_ends_with($term, 'ies')) {
-            $key = strlen($term) > 4 ? substr($term, 0, -3) . 'y' : substr($term, 0, -1);
-            if (strlen($key) >= 3) {
-                $keys[] = $key;
-            }
-        }
-
-        if (str_ends_with($term, 'ves') && strlen($term) >= 5) {
-            $base = substr($term, 0, -3);
-            if (str_ends_with($term, 'ives') && strlen($base) >= 2) {
-                $keys[] = $base . 'fe';
-            } elseif (strlen($base) >= 3) {
-                $keys[] = $base . 'f';
-            }
-        }
-
-        if (str_ends_with($term, 'ing') && strlen($term) >= 6) {
-            $key = $this->english_ed_ing_key(substr($term, 0, -3));
-            if ($key !== null) {
-                $keys[] = $key;
-            }
-        }
-
-        if (str_ends_with($term, 'ied') && strlen($term) >= 4) {
-            $keys[] = strlen($term) > 4 ? substr($term, 0, -3) . 'y' : substr($term, 0, -1);
-        } elseif (str_ends_with($term, 'eed') && strlen($term) >= 5) {
-            $keys[] = substr($term, 0, -1);
-        } elseif (str_ends_with($term, 'ed') && strlen($term) >= 5) {
-            $key = $this->english_ed_ing_key(substr($term, 0, -2));
-            if ($key !== null) {
-                $keys[] = $key;
-            }
-        }
-
-        if (preg_match('/(?:ches|shes|sses|xes|zes|ses|oes)$/', $term) === 1) {
-            $key = substr($term, 0, -2);
-            if (strlen($key) >= 3) {
-                $keys[] = $key;
-            }
-        } elseif (
-            str_ends_with($term, 's') &&
-            strlen($term) >= 4 &&
-            !str_ends_with($term, 'ss') &&
-            !str_ends_with($term, 'us') &&
-            !str_ends_with($term, 'is') &&
-            !str_ends_with($term, 'ies')
-        ) {
-            $key = substr($term, 0, -1);
-            if (strlen($key) >= 3) {
-                $keys[] = $key;
-            }
-        }
-
-        return array_values(array_unique($keys));
-    }
-
-    /**
-     * Adds conservative German stem keys after umlaut/ß folding.
-     *
-     * Rules cover common adjective endings, noun plurals, and regular verb
-     * forms, with short-token guards to avoid collapsing compact nouns.
-     *
-     * @return string[]
-     */
-    private function german_stem_keys(string $term): array
-    {
-        if (strlen($term) < 4 || preg_match('/^[a-z]+$/', $term) !== 1) {
-            return [];
-        }
-
-        $keys = [];
-        $handled_ge_participle = false;
-        if (str_starts_with($term, 'ge') && strlen($term) >= 7) {
-            $participle = substr($term, 2);
-            if (str_ends_with($participle, 't')) {
-                $key = substr($participle, 0, -1);
-                if (strlen($key) >= 5) {
-                    $keys[] = $key;
-                    $handled_ge_participle = true;
-                }
-            }
-
-            if (str_ends_with($participle, 'et')) {
-                $key = substr($participle, 0, -2);
-                if (strlen($key) >= 5) {
-                    $keys[] = $key;
-                    $handled_ge_participle = true;
-                }
-            }
-        }
-
-        foreach (
-            [
-                'ern' => 4,
-                'ten' => 5,
-                'en' => 4,
-                'er' => 4,
-                'em' => 5,
-                'es' => 5,
-                'te' => 5,
-                'est' => 5,
-                'st' => 5,
-                't' => 5,
-                'e' => 5,
-            ] as $suffix => $minimum_length
-        ) {
-            if ($handled_ge_participle && in_array($suffix, ['ten', 'te', 'est', 'st', 't'], true)) {
-                continue;
-            }
-
-            if (!str_ends_with($term, $suffix)) {
-                continue;
-            }
-
-            $key = substr($term, 0, -strlen($suffix));
-            if (strlen($key) >= $minimum_length) {
-                $keys[] = $key;
-                foreach ($this->german_umlaut_plural_keys($key) as $umlaut_key) {
-                    $keys[] = $umlaut_key;
-                }
-            }
-        }
-
-        if (str_ends_with($term, 'n')) {
-            $key = substr($term, 0, -1);
-            if (strlen($key) >= 5 && str_ends_with($key, 'e')) {
-                $keys[] = $key;
-            }
-        }
-
-        return array_values(array_unique($keys));
-    }
-
-    /**
-     * Adds conservative Polish stem keys after diacritic folding.
-     *
-     * The normalizer trims common case/adjective endings. Multi-letter endings
-     * may produce three-letter noun stems, but broad final-vowel trimming stays
-     * limited to longer stems to avoid noisy short matches.
-     *
-     * @return string[]
-     */
-    private function polish_stem_keys(string $term): array
-    {
-        if (strlen($term) < 4 || preg_match('/^[a-z]+$/', $term) !== 1) {
-            return [];
-        }
-
-        $rules = [
-            'owaniach' => 5,
-            'owaniami' => 5,
-            'owania' => 5,
-            'owanie' => 5,
-            'owaniu' => 5,
-            'skiego' => 4,
-            'skiej' => 4,
-            'skich' => 4,
-            'skimi' => 4,
-            'iego' => 4,
-            'ymi' => 4,
-            'imi' => 4,
-            'ami' => 3,
-            'ach' => 3,
-            'ych' => 4,
-            'ich' => 4,
-            'ego' => 4,
-            'emu' => 4,
-            'iej' => 4,
-            'owi' => 3,
-            'iem' => 4,
-            'ym' => 4,
-            'im' => 4,
-            'om' => 3,
-            'ow' => 3,
-            'em' => 3,
-            'ej' => 4,
-            'ii' => 4,
-            'ia' => 4,
-            'ie' => 4,
-            'iu' => 4,
-        ];
-
-        $keys = [];
-        foreach ($rules as $suffix => $minimum_length) {
-            if (substr($term, -strlen($suffix)) !== $suffix) {
-                continue;
-            }
-
-            $key = substr($term, 0, -strlen($suffix));
-            if (strlen($key) >= $minimum_length) {
-                $keys[] = $key;
-            }
-        }
-
-        foreach (['a', 'i', 'e', 'y', 'u', 'o'] as $suffix) {
-            if (!str_ends_with($term, $suffix)) {
-                continue;
-            }
-
-            $key = substr($term, 0, -1);
-            if (strlen($key) >= 5) {
-                $keys[] = $key;
-            }
-        }
-
-        return array_values(array_unique($keys));
+        return preg_match('/[aeiouy]/', $term) === 1;
     }
 
     private function is_stopword(string $term, string $language): bool
@@ -880,29 +650,7 @@ final class Language_FTS_Playground_Analyzer
         return isset($this->profiles->profile($language)['stopwords'][$term]);
     }
 
-    private function english_ed_ing_key(string $base): ?string
-    {
-        if (strlen($base) < 3 || !$this->contains_english_vowel($base)) {
-            return null;
-        }
-
-        if ($this->ends_with_trimmed_english_doubled_consonant($base)) {
-            return substr($base, 0, -1);
-        }
-
-        if (strlen($base) === 3 && $this->is_english_cvc($base)) {
-            return $base . 'e';
-        }
-
-        return $base;
-    }
-
-    private function contains_english_vowel(string $term): bool
-    {
-        return preg_match('/[aeiouy]/', $term) === 1;
-    }
-
-    private function is_english_cvc(string $term): bool
+    private function is_ascii_cvc(string $term): bool
     {
         if (strlen($term) < 3) {
             return false;
@@ -914,33 +662,6 @@ final class Language_FTS_Playground_Analyzer
         }
 
         return preg_match('/^[a-z]+$/', $last_three) === 1;
-    }
-
-    private function ends_with_trimmed_english_doubled_consonant(string $term): bool
-    {
-        if (strlen($term) < 2) {
-            return false;
-        }
-
-        $last = substr($term, -1);
-        if ($last !== substr($term, -2, 1)) {
-            return false;
-        }
-
-        return str_contains('bcdfghjkmnpqrtvwxyz', $last);
-    }
-
-    /**
-     * @return string[]
-     */
-    private function german_umlaut_plural_keys(string $key): array
-    {
-        if (!str_contains($key, 'aeu')) {
-            return [];
-        }
-
-        $singular = str_replace('aeu', 'au', $key);
-        return strlen($singular) >= 4 ? [$singular] : [];
     }
 
     /**

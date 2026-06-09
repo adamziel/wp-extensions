@@ -19,5 +19,11 @@ stop	stop	language-fts-playground-english-demo
 stopped	stop	language-fts-playground-english-demo
 child	child	language-fts-playground-english-demo
 children	child	language-fts-playground-english-demo
+feet	foot	language-fts-playground-english-curated-irregulars
+geese	goose	language-fts-playground-english-curated-irregulars
+men	man	language-fts-playground-english-curated-irregulars
+mice	mouse	language-fts-playground-english-curated-irregulars
 person	person	language-fts-playground-english-demo
 people	person	language-fts-playground-english-demo
+teeth	tooth	language-fts-playground-english-curated-irregulars
+women	woman	language-fts-playground-english-curated-irregulars

@@ -10,5 +10,7 @@ return [
         'lexemes' => 'lexemes.tsv',
         'synonyms' => 'synonyms.tsv',
         'synonym_phrases' => 'synonym_phrases.tsv',
+        'term_rules' => 'term_rules.tsv',
+        'protected_terms' => 'protected_terms.txt',
     ],
 ];

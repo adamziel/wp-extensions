@@ -1,0 +1,15 @@
+# id	min_term_length	pattern	strip_prefix	strip_suffix	append	min_key_length	flags	alternate_pattern	alternate_replacement	provenance
+de-010-ge-participle-t	7	/^ge[a-z]{5,}t$/u	ge	t		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-020-ge-participle-et	8	/^ge[a-z]{5,}et$/u	ge	et		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-030-ern	7	/^[a-z]+ern$/u		ern		4		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-040-ten	8	/^[a-z]+ten$/u		ten		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-050-en	6	/^[a-z]+en$/u		en		4		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-060-er	6	/^[a-z]+er$/u		er		4		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-070-em	7	/^[a-z]+em$/u		em		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-080-es	7	/^[a-z]+es$/u		es		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-090-te	7	/^[a-z]+te$/u		te		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-100-est	8	/^[a-z]+est$/u		est		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-110-st	7	/^[a-z]+st$/u		st		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-120-t	6	/^(?!ge)[a-z]+t$/u		t		5		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-130-e	6	/^[a-z]+e$/u		e		4		/aeu/u	au	language-fts-playground-german-curated-term-rules
+de-140-final-n-after-e	6	/^[a-z]+en$/u		n		5		/aeu/u	au	language-fts-playground-german-curated-term-rules

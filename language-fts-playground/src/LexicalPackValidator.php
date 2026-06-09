@@ -535,8 +535,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
             $line_number++;
             $columns = explode("\t", $line);
-            if (count($columns) !== 9) {
-                $warnings[] = $this->resource_error($path, $line_number, 'term rule rows must have exactly 9 tab-separated columns');
+            if (count($columns) !== 11) {
+                $warnings[] = $this->resource_error($path, $line_number, 'term rule rows must have exactly 11 tab-separated columns');
                 continue;
             }
 
@@ -580,11 +580,15 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $valid = false;
         }
 
-        if (!$this->term_rule_flags_are_valid($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'append_e_if_cvc'], $path, $line_number, $warnings, 'term rule flag must be trim_doubled_final_consonant, require_vowel, or append_e_if_cvc')) {
+        if (!$this->term_rule_flags_are_valid($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'require_vowel_or_y', 'append_e_if_cvc'], $path, $line_number, $warnings, 'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, or append_e_if_cvc')) {
             $valid = false;
         }
 
-        if ($this->term_rule_provenance($columns[8], $path, $line_number, $warnings) === null) {
+        if (!$this->term_rule_alternate_pattern_is_valid($columns[8], $columns[9], $path, $line_number, $warnings)) {
+            $valid = false;
+        }
+
+        if ($this->term_rule_provenance($columns[10], $path, $line_number, $warnings) === null) {
             $valid = false;
         }
 
@@ -632,6 +636,34 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $pattern = trim($value);
         if ($pattern === '' || @preg_match($pattern, '') === false) {
             $warnings[] = $this->resource_error($path, $line_number, 'term rule regex must be valid');
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private function term_rule_alternate_pattern_is_valid(
+        string $pattern_value,
+        string $replacement_value,
+        string $path,
+        int $line_number,
+        array &$warnings
+    ): bool {
+        $pattern = trim($pattern_value);
+        $replacement = trim($replacement_value);
+        if ($pattern === '') {
+            if ($replacement !== '') {
+                $warnings[] = $this->resource_error($path, $line_number, 'term rule alternate pattern is required when alternate replacement is set');
+
+                return false;
+            }
+
+            return true;
+        }
+
+        if (@preg_match($pattern, '') === false) {
+            $warnings[] = $this->resource_error($path, $line_number, 'term rule alternate regex must be valid');
 
             return false;
         }

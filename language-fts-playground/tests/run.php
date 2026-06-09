@@ -1988,15 +1988,83 @@ test_case('static guard expects production term rule resource support', function
     );
 });
 
+test_case('bundled morphology profiles declare term rule resources', function (): void {
+    $root = Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root();
+    $missing = [];
+
+    foreach (['en', 'pl', 'de'] as $language) {
+        $profile_file = $root . DIRECTORY_SEPARATOR . $language . DIRECTORY_SEPARATOR . 'profile.php';
+        $profile = require $profile_file;
+        assert_true(is_array($profile), "Bundled {$language} profile returns an array.");
+        $resources = $profile['resources'] ?? [];
+        assert_true(is_array($resources), "Bundled {$language} profile resources are an array.");
+
+        if (($resources['term_rules'] ?? null) !== 'term_rules.tsv') {
+            $missing[$language] = $resources['term_rules'] ?? null;
+        }
+    }
+
+    assert_same(
+        [],
+        $missing,
+        'Bundled en/pl/de profiles should declare term_rules.tsv for morphology migration.'
+    );
+});
+
+test_case('bundled morphology pack metadata lists term rule resources', function (): void {
+    $repository = new Language_FTS_Playground_Lexical_Profile_Repository();
+    $missing = [];
+
+    foreach (['en', 'pl', 'de'] as $language) {
+        $metadata = $repository->pack_metadata($language);
+        if (!in_array('term_rules.tsv', $metadata['files'], true)) {
+            $missing[] = $language;
+        }
+    }
+
+    assert_same(
+        [],
+        $missing,
+        'Bundled en/pl/de pack metadata should list term_rules.tsv for morphology migration.'
+    );
+});
+
+test_case('analyzer morphology has migrated out of concrete language branches', function (): void {
+    $source = file_get_contents(__DIR__ . '/../src/Analyzer.php');
+    assert_true(is_string($source), 'Analyzer source can be read.');
+
+    $present = [];
+    foreach (
+        [
+            'english_stem_keys',
+            'polish_stem_keys',
+            'german_stem_keys',
+            "\$language === 'en'",
+            "\$language === 'pl'",
+            "\$language === 'de'",
+        ] as $forbidden
+    ) {
+        if (str_contains($source, $forbidden)) {
+            $present[] = $forbidden;
+        }
+    }
+
+    assert_same(
+        [],
+        $present,
+        'Analyzer.php should no longer contain concrete en/pl/de morphology helpers or language branches.'
+    );
+});
+
 test_case('term_rules resource adds configured term keys for indexing and search', function (): void {
     $root = create_language_fts_temp_profile_tree(
         "# observed\tcanonical\tprovenance\n",
         "# source\ttarget\tdirection\tweight\tprovenance\n",
         null,
         null,
-        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
-        "glimmer-ed\t5\t/ed$/u\t\ted\t\t3\trequire_vowel\tfixture-term-rules\n" .
-        "glimmer-ing\t5\t/ing$/u\t\ting\t\t3\trequire_vowel\tfixture-term-rules\n"
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "glimmer-ed\t5\t/ed$/u\t\ted\t\t3\trequire_vowel\t\t\tfixture-term-rules\n" .
+        "glimmer-ing\t5\t/ing$/u\t\ting\t\t3\trequire_vowel\t\t\tfixture-term-rules\n"
     );
 
     try {
@@ -2030,14 +2098,62 @@ test_case('term_rules resource adds configured term keys for indexing and search
     }
 });
 
+test_case('term_rules resource emits configured alternate replacement keys', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        null,
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "folded-umlaut-e\t6\t/^[a-z]+e$/u\t\te\t\t4\t\t/aeu/u\tau\tfixture-alternate-rule\n"
+    );
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(504, 'xx', 'Alternate rule target', '<p>raeume</p>'));
+
+        $terms = $analyzer->analyze_text('raeume', 'xx');
+        assert_true(in_array('raeum', $terms, true), 'A term rule keeps its normal strip/append key when an alternate is configured.');
+        assert_true(in_array('raum', $terms, true), 'A term rule emits the regex-replaced alternate key.');
+        assert_same([504], array_column($searcher->search('raum', 'xx'), 'post_id'), 'The alternate rule key is indexed and queryable.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('term_rules resource can require y as an ASCII vowel guard', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        null,
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "drop-ing-with-y\t6\t/^[a-z]+ing$/u\t\ting\t\t3\trequire_vowel_or_y\t\t\tfixture-y-vowel-rule\n"
+    );
+
+    try {
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+
+        assert_true(in_array('try', $analyzer->analyze_text('trying', 'xx'), true), 'require_vowel_or_y accepts y-only stems.');
+        assert_true(in_array('cry', $analyzer->analyze_text('crying', 'xx'), true), 'require_vowel_or_y accepts another y-only stem.');
+        assert_same(['brring'], $analyzer->analyze_text('brring', 'xx'), 'require_vowel_or_y still rejects stems without a vowel or y.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('protected_terms blocks broad term rules while preserving lexeme keys', function (): void {
     $root = create_language_fts_temp_profile_tree(
         "# observed\tcanonical\tprovenance\nanalytics\tmetric\tfixture-lexeme\n",
         "# source\ttarget\tdirection\tweight\tprovenance\n",
         null,
         null,
-        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
-        "drop-final-s\t2\t/s$/u\t\ts\t\t2\trequire_vowel\tfixture-broad-rule\n",
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "drop-final-s\t2\t/s$/u\t\ts\t\t2\trequire_vowel\t\t\tfixture-broad-rule\n",
         "analytics\n"
     );
 
@@ -2090,16 +2206,16 @@ test_case('rejects legacy scoped 5-column term rule rows', function (): void {
         'legacy scoped row',
         "# id\tpattern\treplacement\tflags\tprovenance\n" .
         "legacy-scope\t/^(.+)s$/u\t\$1\tindex,query\tfixture\n",
-        'term rule rows must have exactly 9 tab-separated columns'
+        'term rule rows must have exactly 11 tab-separated columns'
     );
 });
 
 test_case('rejects malformed term rule rows with duplicate rule id', function (): void {
     assert_language_fts_term_rules_rejected(
         'duplicate rule id',
-        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
-        "duplicate\t5\t/ing$/u\t\ting\t\t3\trequire_vowel\tfixture\n" .
-        "duplicate\t5\t/ed$/u\t\ted\t\t3\trequire_vowel\tfixture\n",
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "duplicate\t5\t/ing$/u\t\ting\t\t3\trequire_vowel\t\t\tfixture\n" .
+        "duplicate\t5\t/ed$/u\t\ted\t\t3\trequire_vowel\t\t\tfixture\n",
         'duplicate term rule id'
     );
 });
@@ -2107,18 +2223,27 @@ test_case('rejects malformed term rule rows with duplicate rule id', function ()
 test_case('rejects malformed term rule rows with unknown flag', function (): void {
     assert_language_fts_term_rules_rejected(
         'unknown flag',
-        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
-        "unknown-flag\t5\t/ing$/u\t\ting\t\t3\texplode\tfixture\n",
-        'term rule flag must be trim_doubled_final_consonant, require_vowel, or append_e_if_cvc'
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "unknown-flag\t5\t/ing$/u\t\ting\t\t3\texplode\t\t\tfixture\n",
+        'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, or append_e_if_cvc'
     );
 });
 
 test_case('rejects malformed term rule rows with invalid regex', function (): void {
     assert_language_fts_term_rules_rejected(
         'invalid regex',
-        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
-        "invalid-regex\t5\t/(?P<broken/u\t\ting\t\t3\trequire_vowel\tfixture\n",
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "invalid-regex\t5\t/(?P<broken/u\t\ting\t\t3\trequire_vowel\t\t\tfixture\n",
         'term rule regex must be valid'
+    );
+});
+
+test_case('rejects malformed term rule rows with invalid alternate regex', function (): void {
+    assert_language_fts_term_rules_rejected(
+        'invalid alternate regex',
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+        "invalid-alternate\t5\t/ing$/u\t\ting\t\t3\t\t/(?P<broken/u\tfixed\tfixture\n",
+        'term rule alternate regex must be valid'
     );
 });
 
@@ -2528,7 +2653,7 @@ test_case('valid lexical packs produce deterministic validation stats', function
     assert_same('curated_seed', $by_id['de']['metadata']['data_kind'] ?? null, 'German pack is labeled as curated seed data.');
 
     assert_same(42, $by_id['en']['counts']['stopwords'] ?? null, 'English stopword count is deterministic.');
-    assert_same(22, $by_id['en']['counts']['lexeme_rows'] ?? null, 'English lexeme count is deterministic.');
+    assert_same(28, $by_id['en']['counts']['lexeme_rows'] ?? null, 'English lexeme count is deterministic.');
     assert_same(0, $by_id['en']['counts']['synset_rows'] ?? null, 'English does not ship synset rows yet.');
     assert_same(3, $by_id['en']['counts']['phrase_synonym_rows'] ?? null, 'English ships deterministic phrase synonym seed rows.');
     assert_same(4, $by_id['en']['counts']['phrase_synonym_expansions'] ?? null, 'English bidirectional phrase rows produce deterministic phrase expansions.');
@@ -3240,7 +3365,41 @@ test_case('removes English stopwords and stems common English forms conservative
     assert_query_terms_overlap($analyzer, 'en', 'stories skies', 'story sky', 'English y/ies plural forms share stem keys.');
     assert_query_terms_overlap($analyzer, 'en', 'making baked boxes buses', 'make bake box bus', 'English dropped-e and es plural forms share stem keys.');
     assert_query_terms_overlap($analyzer, 'en', 'running stopped', 'run stop', 'English doubled-consonant verb forms are guarded and stemmed.');
+    assert_query_terms_overlap($analyzer, 'en', 'falling missing missed', 'fall miss', 'English ll/ss doubled-consonant verb forms preserve their base keys.');
     assert_query_terms_overlap($analyzer, 'en', 'children people', 'child person', 'Guarded English irregular examples share stem keys.');
+    foreach (['falling' => 'fall', 'missing' => 'miss', 'missed' => 'miss'] as $form => $key) {
+        assert_true(
+            in_array($key, $analyzer->analyze_text($form, 'en'), true),
+            "English doubled-consonant form {$form} keeps the {$key} key."
+        );
+    }
+    foreach (['falling' => 'fal', 'missing' => 'mis', 'missed' => 'mis'] as $form => $key) {
+        assert_true(
+            !in_array($key, $analyzer->analyze_text($form, 'en'), true),
+            "English doubled-consonant form {$form} does not emit the shortened {$key} key."
+        );
+    }
+    foreach (
+        [
+            'feet' => 'foot',
+            'geese' => 'goose',
+            'men' => 'man',
+            'mice' => 'mouse',
+            'teeth' => 'tooth',
+            'women' => 'woman',
+        ] as $plural => $singular
+    ) {
+        assert_true(
+            in_array($singular, $analyzer->analyze_text($plural, 'en'), true),
+            "English irregular plural {$plural} keeps the resource-backed {$singular} key."
+        );
+    }
+    foreach (['trying' => 'try', 'crying' => 'cry', 'styling' => 'styl'] as $form => $key) {
+        assert_true(
+            in_array($key, $analyzer->analyze_text($form, 'en'), true),
+            "English y-vowel verb form {$form} keeps the {$key} key."
+        );
+    }
     assert_query_terms_do_not_overlap($analyzer, 'en', 'runner', 'run', 'Agent nouns do not collapse to short verb stems.');
     assert_query_terms_do_not_overlap($analyzer, 'en', 'university', 'universe', 'English y-ending words are not broadly conflated.');
     assert_same(['news', 'bus', 'analysis'], $analyzer->analyze_text('news bus analysis', 'en'), 'Sensitive English words remain exact.');
@@ -3254,6 +3413,12 @@ test_case('removes German stopwords and stems German forms conservatively', func
     assert_query_terms_overlap($analyzer, 'de', 'schnelle schnellen schneller schnellem', 'schnell', 'German adjective suffixes are normalized.');
     assert_query_terms_overlap($analyzer, 'de', 'Führungen Straßen Kindern', 'fuehrung strasse kind', 'German noun plurals after folding share stem keys.');
     assert_query_terms_overlap($analyzer, 'de', 'Bäume Häuser', 'baum haus', 'German umlauted noun plurals share conservative singular keys.');
+    foreach (['Räume' => 'raum', 'Träume' => 'traum'] as $plural => $singular) {
+        assert_true(
+            in_array($singular, $analyzer->analyze_text($plural, 'de'), true),
+            "German non-demo umlauted plural {$plural} keeps the generic {$singular} key."
+        );
+    }
     assert_query_terms_overlap($analyzer, 'de', 'spielen spielte gespielt', 'spiel', 'German common verb endings and ge- participles share stem keys.');
     assert_query_terms_do_not_overlap($analyzer, 'de', 'gespielt', 'gespiel', 'German ge-participles do not add noisy intermediate stems.');
     assert_query_terms_do_not_overlap($analyzer, 'de', 'artig', 'art', 'German ig-adjectives do not collapse to short nouns.');

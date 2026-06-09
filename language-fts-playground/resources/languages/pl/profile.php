@@ -35,5 +35,6 @@ return [
         'lexemes' => 'lexemes.tsv',
         'synonyms' => 'synonyms.tsv',
         'synsets' => 'synsets.tsv',
+        'term_rules' => 'term_rules.tsv',
     ],
 ];

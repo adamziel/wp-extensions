@@ -17,6 +17,9 @@ The repository separates two concerns:
 The shipped resources are curated seed data. They are not a comprehensive synonym database.
 Do not treat the current English, German, or Polish resources as a vendored
 Open English WordNet, OpenThesaurus, or plWordNet distribution.
+The bundled seed packs use `term_rules.tsv` for conservative suffix keys, and
+English also uses `protected_terms.txt` for terms that should stay exact except
+for explicit lexeme rows.
 
 ## Profile Contract
 
@@ -135,20 +138,26 @@ directions deterministically.
 `term_rules.tsv` adds generic profile-backed keys from one normalized term:
 
 ```text
-# id<TAB>min_term_length<TAB>pattern<TAB>strip_prefix<TAB>strip_suffix<TAB>append<TAB>min_key_length<TAB>flags<TAB>provenance
-drop-ing	5	/ing$/u		ing		3	trim_doubled_final_consonant,require_vowel	example-curated-rules
-make-e	5	/ing$/u		ing		4	append_e_if_cvc	example-curated-rules
+# id<TAB>min_term_length<TAB>pattern<TAB>strip_prefix<TAB>strip_suffix<TAB>append<TAB>min_key_length<TAB>flags<TAB>alternate_pattern<TAB>alternate_replacement<TAB>provenance
+drop-ing	5	/ing$/u		ing		3	trim_doubled_final_consonant,require_vowel			example-curated-rules
+make-e	5	/ing$/u		ing		4	append_e_if_cvc			example-curated-rules
+folded-umlaut-e	6	/^[a-z]+e$/u		e		4		/aeu/u	au	example-curated-rules
 ```
 
 The analyzer keeps the exact normalized term and any `lexemes.tsv` keys, then
 applies term rules unless the term is protected. A rule first checks
 `min_term_length` and `pattern`, strips an optional literal prefix and suffix,
 appends optional literal text, applies optional flags, and keeps the result only
-when it reaches `min_key_length` and the normal 255-byte key limit. Supported
-flags are `trim_doubled_final_consonant`, `require_vowel`, and
-`append_e_if_cvc`. These flags are deliberately ASCII-oriented foundation
-helpers; language-specific broad stemming still needs reviewed rules and
-relevance tests.
+when it reaches `min_key_length` and the normal 255-byte key limit. If
+`alternate_pattern` is non-empty, the analyzer also applies that regex to the
+generated key and emits the replaced key when it differs and still passes the
+length guard. Use blank `alternate_pattern` and `alternate_replacement` columns
+when a rule does not need an alternate key.
+
+Supported flags are `trim_doubled_final_consonant`, `require_vowel`,
+`require_vowel_or_y`, and `append_e_if_cvc`. These flags are deliberately
+ASCII-oriented foundation helpers; language-specific broad stemming still needs
+reviewed rules and relevance tests.
 
 `protected_terms.txt` stores one normalized lowercase term per line. Protected
 terms still receive exact and lexeme keys, but skip `term_rules.tsv`; use this

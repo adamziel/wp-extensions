@@ -122,6 +122,8 @@ resources/languages/
     lexemes.tsv
     synonyms.tsv
     synonym_phrases.tsv
+    term_rules.tsv
+    protected_terms.txt
   pl/
     profile.php
     pack.php
@@ -129,12 +131,14 @@ resources/languages/
     lexemes.tsv
     synonyms.tsv
     synsets.tsv
+    term_rules.tsv
   de/
     profile.php
     pack.php
     stopwords.txt
     lexemes.tsv
     synonyms.tsv
+    term_rules.tsv
 ```
 
 `profile.php` declares the language id, label, load order, optional character
@@ -260,12 +264,13 @@ warnings. It also shows the effective local resource root being validated.
 The shipped English, Polish, and German packs are still labeled `curated_seed`;
 they are not comprehensive lexical databases.
 
-Custom packs may also declare optional `term_rules.tsv` and
+Bundled and custom packs may declare `term_rules.tsv` and
 `protected_terms.txt` resources. Term rules add generic normalized term keys
-using a reviewed strip/append rule format; protected terms keep exact and
-lexeme keys while opting out of those broad rules. Omit those profile resource
-keys when a pack does not use them; declared keys must point at existing local
-files.
+using a reviewed strip/append rule format with optional alternate regex
+replacement keys and ASCII-oriented flags such as `require_vowel_or_y`.
+Protected terms keep exact and lexeme keys while opting out of those broad
+rules. Omit those profile resource keys when a pack does not use them; declared
+keys must point at existing local files.
 
 Generated packs can live outside this plugin. Install a complete
 `resources/languages`-style directory anywhere readable by PHP, validate it
@@ -307,13 +312,13 @@ review, pack-size review, and relevance testing.
 
 The analyzer removes profile-backed English, Polish, and German stopwords,
 keeps exact terms, applies profile-backed lexeme aliases first, applies optional
-profile term rules for unprotected terms, and then adds a small set of
-language-scoped conservative fallback stem keys:
+profile term rules for unprotected terms, and uses bundled lexeme rows for
+irregular or high-signal forms:
 
-- English lowercases terms and includes resource rows plus conservative keys for regular forms and a few guarded irregulars: `search` matches `searching`, `searched`, and `searches`; `story` matches `stories`; `make` matches `making`; `run` matches `running`; `child` matches `children`.
+- English lowercases terms and includes resource rows plus conservative term-rule keys for regular forms and a few guarded lexeme irregulars: `search` matches `searching`, `searched`, and `searches`; `story` matches `stories`; `make` matches `making`; `run` matches `running`; `child` matches `children`.
 - English keeps sensitive terms such as `news`, `bus`, and `analysis` exact, and avoids broad noun-to-verb collapses such as `runner` to `run`.
-- Polish folds diacritics from profile data, uses curated resource keys and the demo concept pack for `szukaj`/`szukanie`/`wyszukiwarka`/`wyszukiwanie`/`wyszukiwania`/`odnajdywanie`, and keeps fallback suffix keys for forms such as `polska`/`polskiej`, `partycja`/`partycji`, and `lodz`/`Łódź`.
-- German folds `ä`, `ö`, `ü`, and `ß` from profile data to `ae`, `oe`, `ue`, and `ss`, then uses resource rows and fallback keys for demo forms such as `deutsch`/`deutschen`/`deutscher`/`deutsche`, `fuehrung`/`Führungen`, `strasse`/`Straßen`, `baum`/`Bäume`, and `spiel`/`gespielt`.
+- Polish folds diacritics from profile data, uses curated resource keys and the demo concept pack for `szukaj`/`szukanie`/`wyszukiwarka`/`wyszukiwanie`/`wyszukiwania`/`odnajdywanie`, and keeps term-rule suffix keys for forms such as `polska`/`polskiej`, `partycja`/`partycji`, and `lodz`/`Łódź`.
+- German folds `ä`, `ö`, `ü`, and `ß` from profile data to `ae`, `oe`, `ue`, and `ss`, then uses resource rows and term-rule keys for demo forms such as `deutsch`/`deutschen`/`deutscher`/`deutsche`, `fuehrung`/`Führungen`, `strasse`/`Straßen`, `baum`/`Bäume`, and `spiel`/`gespielt`.
 - Short/common terms stay exact in every language to reduce noisy matches.
 
 ## Phrase And Fuzzy Search
@@ -366,8 +371,8 @@ described above. Automatic routing is deterministic profile/storage-backed
 routing, not statistical language detection. The lexical resources and concept
 pack are curated for the demo and are not full dictionaries or a shipped
 WordNet/plWordNet database; they are intended to be expanded or replaced later
-by generated resources from licensed linguistic sources. The fallback suffix
-rules are still conservative handwritten heuristics. The plugin does not
+by generated resources from licensed linguistic sources. The bundled suffix
+term rules are still conservative handwritten heuristics. The plugin does not
 implement full stemming, full lemmatization, multi-edit fuzzy search, or
 unconfigured cross-language fallback.
 Resource-backed term rules are a foundation for reviewed packs, not a full

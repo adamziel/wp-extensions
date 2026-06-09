@@ -15,6 +15,7 @@ return [
         'stopwords.txt',
         'lexemes.tsv',
         'synonyms.tsv',
+        'term_rules.tsv',
     ],
     'data_kind' => 'curated_seed',
 ];

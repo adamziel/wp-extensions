@@ -47,7 +47,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     private ?array $manifest = null;
 
     /**
-     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}>
+     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}>
      */
     private array $profiles = [];
 
@@ -122,7 +122,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
+     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     public function profile(string $language): array
     {
@@ -302,7 +302,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     /**
      * @param array{directory:string,profile:array<string,mixed>,order:int} $manifest_entry
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
+     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     private function load_language_profile(string $language, array $manifest_entry): array
     {
@@ -611,7 +611,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
-     * @return array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string}>
+     * @return array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string}>
      */
     private function parse_term_rules(string $path): array
     {
@@ -625,8 +625,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
             $line_number++;
             $columns = explode("\t", $line);
-            if (count($columns) !== 9) {
-                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule rows must have exactly 9 tab-separated columns'));
+            if (count($columns) !== 11) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule rows must have exactly 11 tab-separated columns'));
             }
 
             $rule = $this->parse_term_rule_row($columns, $path, $line_number);
@@ -647,7 +647,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     /**
      * @param string[] $columns
-     * @return array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string}
+     * @return array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string}
      */
     private function parse_term_rule_row(array $columns, string $path, int $line_number): array
     {
@@ -662,8 +662,10 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         $min_key_length = $this->term_rule_positive_integer($columns[6], $path, $line_number, 'min_key_length');
-        $flags = $this->term_rule_flags($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'append_e_if_cvc'], $path, $line_number, 'term rule flag must be trim_doubled_final_consonant, require_vowel, or append_e_if_cvc');
-        $provenance = $this->term_rule_provenance($columns[8], $path, $line_number);
+        $flags = $this->term_rule_flags($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'require_vowel_or_y', 'append_e_if_cvc'], $path, $line_number, 'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, or append_e_if_cvc');
+        $alternate_pattern = $this->term_rule_alternate_pattern($columns[8], $columns[9], $path, $line_number);
+        $alternate_replacement = trim($columns[9]);
+        $provenance = $this->term_rule_provenance($columns[10], $path, $line_number);
 
         return [
             'id' => $id,
@@ -675,6 +677,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'append' => $append,
             'min_key_length' => $min_key_length,
             'flags' => $flags,
+            'alternate_pattern' => $alternate_pattern,
+            'alternate_replacement' => $alternate_replacement,
             'provenance' => $provenance,
         ];
     }
@@ -714,6 +718,25 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         $pattern = trim($value);
         if ($pattern === '' || @preg_match($pattern, '') === false) {
             throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule regex must be valid'));
+        }
+
+        return $pattern;
+    }
+
+    private function term_rule_alternate_pattern(string $pattern_value, string $replacement_value, string $path, int $line_number): string
+    {
+        $pattern = trim($pattern_value);
+        $replacement = trim($replacement_value);
+        if ($pattern === '') {
+            if ($replacement !== '') {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule alternate pattern is required when alternate replacement is set'));
+            }
+
+            return '';
+        }
+
+        if (@preg_match($pattern, '') === false) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule alternate regex must be valid'));
         }
 
         return $pattern;
