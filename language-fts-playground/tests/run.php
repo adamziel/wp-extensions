@@ -1326,6 +1326,39 @@ function run_language_fts_evaluator(string $fixture_path, array $options = [], b
 }
 
 /**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_search_benchmark(array $options = [], bool $no_ini = false): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+    ];
+    if ($no_ini) {
+        $command[] = '-n';
+    }
+    $command[] = escapeshellarg(__DIR__ . '/../tools/search-benchmark-counters.php');
+
+    foreach ($options as $key => $value) {
+        $option = '--' . str_replace('_', '-', (string) $key);
+        if ($value === true) {
+            $command[] = escapeshellarg($option);
+        } elseif ($value !== false && $value !== null) {
+            $command[] = escapeshellarg($option . '=' . (string) $value);
+        }
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
  * @return array{exit_code:int,output:string}
  */
 function run_language_fts_wp_processor_lang_probe(): array
@@ -3281,6 +3314,7 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('seed data unless', $readme, 'README keeps the shipped-data limitation explicit.');
     assert_contains_text('validate-lexical-packs.php', $readme, 'README documents the validation CLI.');
     assert_contains_text('evaluate-lexical-pack.php', $readme, 'README documents the relevance evaluator CLI.');
+    assert_contains_text('search-benchmark-counters.php', $readme, 'README documents the search benchmark counter CLI.');
     assert_contains_text('synonym_phrases.tsv', $readme, 'README documents phrase synonym resources.');
     assert_contains_text('curated_seed', $readme, 'README confirms current shipped packs are curated seed data.');
 });
@@ -4438,6 +4472,85 @@ test_case('public search fetches field text only for final results', function ()
         'Explain fetches field metadata for the complete candidate set.'
     );
     assert_contains_text('<mark>orchard</mark>', $explain['results'][0]['snippet'] ?? '', 'Explain results keep highlighted snippets.');
+});
+
+test_case('search benchmark counter fixture gates public final-window hydration', function (): void {
+    $report = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('common-term', [
+        'documents' => 24,
+        'limit' => 3,
+    ]);
+    $counters = (array) $report['counters'];
+
+    assert_same('common-term', $report['scenario'], 'The fixture reports the requested common-term scenario.');
+    assert_same(['commonterm'], $report['lookup_terms_by_class']['exact']['terms'] ?? null, 'Lookup classes include the exact common term.');
+    assert_true((int) $counters['candidate_count'] > (int) $report['result_count'], 'The common-term fixture creates more candidates than final results.');
+    assert_true((int) $counters['field_text_rows_fetched'] <= (int) $report['result_count'], 'Public search fetches field text rows only for the final result window.');
+    assert_same(0, $counters['field_metadata_rows_fetched'] ?? null, 'Public search fetches no field metadata rows.');
+    assert_same($counters['candidate_count'], $counters['document_length_rows_fetched'] ?? null, 'Document length rows match the materialized candidate set.');
+    assert_true((int) $counters['postings_rows_materialized'] >= (int) $counters['candidate_count'], 'Postings row materialization is counted.');
+    assert_true((int) $counters['peak_memory_delta_bytes'] >= 0, 'Peak memory delta is captured as a non-negative counter.');
+});
+
+test_case('search benchmark counter fixture covers phrase fuzzy and expansion probes', function (): void {
+    $phrase = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('phrase', [
+        'documents' => 30,
+        'limit' => 4,
+    ]);
+    assert_same(['alpha', 'beta'], $phrase['lookup_terms_by_class']['exact']['terms'] ?? null, 'Phrase probes report both exact phrase terms.');
+    assert_true((int) ($phrase['counters']['position_rows_fetched'] ?? 0) > 0, 'Phrase probes fetch position rows.');
+    assert_true((int) ($phrase['counters']['field_text_rows_fetched'] ?? 0) <= (int) $phrase['result_count'], 'Phrase probes keep public field text hydration final-window scoped.');
+    assert_same(0, $phrase['counters']['field_metadata_rows_fetched'] ?? null, 'Phrase probes fetch no public field metadata rows.');
+
+    $fuzzy = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('fuzzy', [
+        'documents' => 30,
+        'limit' => 4,
+    ]);
+    assert_same(['orchart'], $fuzzy['lookup_terms_by_class']['fuzzy']['terms'] ?? null, 'Fuzzy probes report the resolved typo candidate.');
+    assert_true((int) ($fuzzy['counters']['fuzzy_candidate_terms_returned'] ?? 0) > 0, 'Fuzzy probes count candidate-term materialization.');
+
+    $synonym = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('synonym', [
+        'documents' => 30,
+        'limit' => 4,
+    ]);
+    assert_same(['searchterm'], $synonym['lookup_terms_by_class']['single_token_synonyms']['terms'] ?? null, 'Single-token synonym probes report the configured target.');
+    assert_true((int) $synonym['result_count'] > 0, 'Single-token synonym probes return synthetic results.');
+
+    $phrase_synonym = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('phrase-synonym', [
+        'documents' => 32,
+        'limit' => 4,
+    ]);
+    assert_same(['search', 'site'], $phrase_synonym['lookup_terms_by_class']['phrase_synonyms']['terms'] ?? null, 'Phrase synonym probes report the target phrase terms.');
+    assert_true((int) ($phrase_synonym['counters']['position_rows_fetched'] ?? 0) > 0, 'Phrase synonym probes fetch target position rows.');
+    assert_same(0, $phrase_synonym['counters']['field_metadata_rows_fetched'] ?? null, 'Phrase synonym probes fetch no public field metadata rows.');
+});
+
+test_case('search benchmark counter CLI emits JSON under normal PHP and php -n', function (): void {
+    $normal = run_language_fts_search_benchmark([
+        'scenario' => 'fuzzy',
+        'documents' => 24,
+        'limit' => 3,
+        'json' => true,
+    ]);
+    $normal_decoded = json_decode($normal['output'], true);
+
+    assert_same(0, $normal['exit_code'], 'Benchmark counter CLI exits successfully under normal PHP. Output: ' . $normal['output']);
+    assert_true(is_array($normal_decoded), 'Benchmark counter CLI JSON is parseable.');
+    assert_same('fuzzy', $normal_decoded['scenario'] ?? null, 'Benchmark counter CLI reports the requested fuzzy scenario.');
+    assert_true((int) ($normal_decoded['counters']['postings_rows_materialized'] ?? 0) > 0, 'Benchmark counter CLI JSON includes postings counters.');
+
+    $no_ini = run_language_fts_search_benchmark([
+        'scenario' => 'common-term',
+        'documents' => 24,
+        'limit' => 3,
+        'json' => true,
+    ], true);
+    $no_ini_decoded = json_decode($no_ini['output'], true);
+
+    assert_same(0, $no_ini['exit_code'], 'Benchmark counter CLI exits successfully under php -n. Output: ' . $no_ini['output']);
+    assert_true(is_array($no_ini_decoded), 'php -n benchmark counter CLI JSON is parseable.');
+    assert_same('common-term', $no_ini_decoded['scenario'] ?? null, 'php -n benchmark counter CLI reports the requested common-term scenario.');
+    assert_true((int) ($no_ini_decoded['counters']['field_text_rows_fetched'] ?? 0) <= (int) ($no_ini_decoded['result_count'] ?? 0), 'php -n benchmark counter CLI preserves the final-window field text gate.');
+    assert_same(0, $no_ini_decoded['counters']['field_metadata_rows_fetched'] ?? null, 'php -n benchmark counter CLI preserves the metadata gate.');
 });
 
 test_case('explain reports field boosts and phrase filter failures', function (): void {
