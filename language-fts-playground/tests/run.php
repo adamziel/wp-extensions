@@ -3314,6 +3314,99 @@ test_case('lexical pack validator requires v2 audit metadata for comprehensive p
     }
 });
 
+test_case('lexical pack validator requires runtime resource and file pairs', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir);
+    foreach ($metadata['runtime_files'] as &$runtime_file) {
+        if (($runtime_file['file'] ?? '') === 'profile.php') {
+            $runtime_file['resource'] = 'license';
+            break;
+        }
+    }
+    unset($runtime_file);
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A runtime file declared under the wrong resource label fails validation.');
+        assert_same('incomplete', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Wrong resource/file coverage reports an incomplete runtime digest status.');
+        assert_contains_text('runtime_files must include profile.php for comprehensive resource profile', $warnings, 'The missing runtime resource/file pair is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator requires normalization profile id to match the profile language', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir, [
+        'normalization' => [
+            'profile_id' => 'de',
+        ],
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A comprehensive pack with the wrong normalization profile id fails validation.');
+        assert_contains_text('normalization.profile_id must match profile language id xx', $warnings, 'The wrong normalization profile id is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator reports missing runtime digest metadata as not declared', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir, [
+        'runtime_files' => null,
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A comprehensive pack missing runtime digest metadata fails validation.');
+        assert_same('not_declared', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Missing runtime digest metadata does not report ok.');
+        assert_contains_text('runtime_files must be a non-empty array', $warnings, 'Missing runtime digest metadata is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator reports malformed runtime digest metadata as invalid', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir);
+    foreach ($metadata['runtime_files'] as &$runtime_file) {
+        if (($runtime_file['file'] ?? '') === 'profile.php') {
+            $runtime_file['sha256'] = 'not-a-sha256';
+            break;
+        }
+    }
+    unset($runtime_file);
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A comprehensive pack with malformed runtime digest metadata fails validation.');
+        assert_same('invalid', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Malformed runtime digest metadata does not report ok or mismatch.');
+        assert_contains_text('runtime_files sha256 must be 64 lowercase hex characters', $warnings, 'Malformed runtime digest metadata is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('lexical pack validator rejects non-normalized resource keys consistently', function (): void {
     $root = create_language_fts_temp_profile_set([
         'xx' => [
@@ -5838,6 +5931,41 @@ test_case('admin page escapes comprehensive audit metadata details', function ()
         assert_contains_text('php import &lt;script&gt;alert(3)&lt;/script&gt;', $html, 'Admin page escapes malicious importer command metadata.');
         assert_contains_text('Description &lt;script&gt;alert(4)&lt;/script&gt;', $html, 'Admin page escapes malicious provenance metadata.');
         assert_not_contains_text('<script>', $html, 'Admin audit metadata details do not emit raw unsafe markup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('admin page renders non-ok runtime digest status for malformed comprehensive metadata', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir);
+    foreach ($metadata['runtime_files'] as &$runtime_file) {
+        if (($runtime_file['file'] ?? '') === 'profile.php') {
+            $runtime_file['sha256'] = 'not-a-sha256';
+            break;
+        }
+    }
+    unset($runtime_file);
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        reset_language_fts_plugin_runtime();
+        add_filter(
+            'language_fts_playground_lexical_resource_root',
+            static fn(): string => $normalized_root,
+            10,
+            1
+        );
+
+        ob_start();
+        Language_FTS_Playground_Plugin::render_admin_page();
+        $html = ob_get_clean();
+
+        assert_contains_text('<code>invalid</code>', $html, 'Admin runtime digest column renders malformed metadata as invalid.');
+        assert_contains_text('runtime_files sha256 must be 64 lowercase hex characters', $html, 'Admin warnings explain the malformed runtime digest metadata.');
+        assert_not_contains_text('<code>ok</code>', $html, 'Admin runtime digest column does not report ok beside malformed metadata warnings.');
     } finally {
         remove_language_fts_temp_tree($root);
     }

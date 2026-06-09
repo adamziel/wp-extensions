@@ -406,9 +406,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $metadata['source'] = $this->validate_source_metadata($raw['source'] ?? null, $path, $warnings);
             $metadata['license'] = $this->validate_license_metadata($raw['license'] ?? null, $directory, $files_lookup, $path, $warnings);
             $metadata['provenance_ids'] = $this->validate_provenance_ids($raw['provenance_ids'] ?? null, $metadata['provenance'], $path, $warnings);
-            $metadata['normalization'] = $this->validate_normalization_metadata($raw['normalization'] ?? null, $directory, $profile_file, $path, $warnings);
+            $metadata['normalization'] = $this->validate_normalization_metadata($raw['normalization'] ?? null, $directory, $expected_language, $profile_file, $path, $warnings);
             $metadata['importer'] = $this->validate_importer_metadata($raw['importer'] ?? null, $path, $warnings);
-            $metadata['runtime_files'] = $this->validate_runtime_files_metadata($raw['runtime_files'] ?? null, $directory, $files_lookup, $path, $warnings);
+            $runtime_files_invalid = false;
+            $metadata['runtime_files'] = $this->validate_runtime_files_metadata($raw['runtime_files'] ?? null, $directory, $files_lookup, $path, $warnings, $runtime_files_invalid);
 
             $required_runtime_files = ['profile' => basename($profile_file)];
             foreach ($resource_paths as $resource => $resource_path) {
@@ -426,28 +427,34 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 }
             }
 
-            $runtime_files_by_file = [];
+            $runtime_files_by_pair = [];
+            $runtime_files_incomplete = false;
             $runtime_mismatched = false;
             foreach ($metadata['runtime_files'] as $record) {
                 if (!is_array($record)) {
+                    $runtime_files_invalid = true;
                     continue;
                 }
+                $resource = (string) ($record['resource'] ?? '');
                 $file = (string) ($record['file'] ?? '');
-                if ($file !== '') {
-                    $runtime_files_by_file[$file] = true;
+                if ($resource !== '' && $file !== '') {
+                    $runtime_files_by_pair[$this->runtime_file_pair_key($resource, $file)] = true;
                 }
                 if (($record['status'] ?? '') === 'mismatch') {
                     $runtime_mismatched = true;
+                } elseif (($record['status'] ?? '') === 'invalid') {
+                    $runtime_files_invalid = true;
                 }
             }
 
             foreach ($required_runtime_files as $resource => $file) {
-                if (!isset($runtime_files_by_file[$file])) {
+                if (!isset($runtime_files_by_pair[$this->runtime_file_pair_key((string) $resource, $file)])) {
+                    $runtime_files_incomplete = true;
                     $warnings[] = 'Language pack metadata runtime_files must include ' . $file . ' for comprehensive resource ' . $resource . ' in ' . $path;
                 }
             }
 
-            $metadata['runtime_digest_status'] = $runtime_mismatched ? 'mismatch' : 'ok';
+            $metadata['runtime_digest_status'] = $this->runtime_digest_status($raw['runtime_files'] ?? null, $runtime_files_invalid, $runtime_files_incomplete, $runtime_mismatched);
         }
 
         $valid = $valid && count($warnings) === $metadata_warning_count;
@@ -615,7 +622,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     /**
      * @return array<string,string>
      */
-    private function validate_normalization_metadata(mixed $normalization, string $directory, string $profile_file, string $path, array &$warnings): array
+    private function validate_normalization_metadata(mixed $normalization, string $directory, string $expected_language, string $profile_file, string $path, array &$warnings): array
     {
         if (!is_array($normalization) || array_is_list($normalization)) {
             $warnings[] = 'Language pack metadata normalization must be an array in ' . $path;
@@ -629,6 +636,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             'profile_file' => $this->metadata_required_string($normalization, 'profile_file', 'normalization.profile_file', $path, $warnings),
             'profile_sha256' => $this->metadata_required_string($normalization, 'profile_sha256', 'normalization.profile_sha256', $path, $warnings),
         ];
+
+        if ($metadata['profile_id'] !== '' && $metadata['profile_id'] !== $expected_language) {
+            $warnings[] = 'Language pack metadata normalization.profile_id must match profile language id ' . $expected_language . ' in ' . $path;
+        }
 
         if ($metadata['profile_file'] !== '' && !$this->is_local_file_name($metadata['profile_file'])) {
             $warnings[] = 'Language pack metadata normalization.profile_file must be a local file name in ' . $path;
@@ -688,9 +699,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
      * @param array<string,bool> $files_lookup
      * @return array<int,array<string,mixed>>
      */
-    private function validate_runtime_files_metadata(mixed $runtime_files, string $directory, array $files_lookup, string $path, array &$warnings): array
+    private function validate_runtime_files_metadata(mixed $runtime_files, string $directory, array $files_lookup, string $path, array &$warnings, bool &$invalid): array
     {
         if (!is_array($runtime_files) || $runtime_files === []) {
+            $invalid = true;
             $warnings[] = 'Language pack metadata runtime_files must be a non-empty array in ' . $path;
 
             return [];
@@ -700,6 +712,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $seen = [];
         foreach ($runtime_files as $index => $runtime_file) {
             if (!is_array($runtime_file) || array_is_list($runtime_file)) {
+                $invalid = true;
                 $warnings[] = 'Language pack metadata runtime_files entries must be arrays in ' . $path;
                 continue;
             }
@@ -713,26 +726,38 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 'status' => 'ok',
             ];
 
+            $record_invalid = false;
+            if ($record['resource'] === '' || $record['file'] === '' || $record['sha256'] === '') {
+                $record_invalid = true;
+            }
+
             if ($record['resource'] !== '' && preg_match('/^[a-z][a-z0-9_:-]*$/', $record['resource']) !== 1) {
+                $record_invalid = true;
                 $warnings[] = 'Language pack metadata runtime_files resource must be a stable lowercase key in ' . $path;
             }
 
             if ($record['file'] !== '' && !$this->is_local_file_name($record['file'])) {
+                $record_invalid = true;
                 $warnings[] = 'Language pack metadata runtime_files file must be a local file name in ' . $path;
             } elseif ($record['file'] !== '' && !isset($files_lookup[$record['file']])) {
+                $record_invalid = true;
                 $warnings[] = 'Language pack metadata runtime_files file must appear in files: ' . $record['file'] . ' in ' . $path;
             }
 
+            $sha256_valid = $record['sha256'] !== '' && $this->is_valid_sha256($record['sha256']);
             if ($record['sha256'] !== '' && !$this->is_valid_sha256($record['sha256'])) {
+                $record_invalid = true;
                 $warnings[] = 'Language pack metadata runtime_files sha256 must be 64 lowercase hex characters in ' . $path;
             }
             if (!$this->is_positive_int($record['bytes'])) {
+                $record_invalid = true;
                 $warnings[] = 'Language pack metadata runtime_files bytes must be a positive integer in ' . $path;
                 $record['bytes'] = 0;
             }
 
             $duplicate_key = $record['resource'] . "\t" . $record['file'];
             if ($record['resource'] !== '' && $record['file'] !== '' && isset($seen[$duplicate_key])) {
+                $record_invalid = true;
                 $warnings[] = 'Language pack metadata runtime_files contains duplicate resource/file entry ' . $record['resource'] . '/' . $record['file'] . ' in ' . $path;
             }
             $seen[$duplicate_key] = true;
@@ -740,7 +765,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $absolute = $directory . DIRECTORY_SEPARATOR . $record['file'];
             if ($record['file'] !== '' && is_file($absolute)) {
                 $actual_sha256 = $this->file_sha256($absolute);
-                if ($actual_sha256 !== null && $record['sha256'] !== '' && $actual_sha256 !== $record['sha256']) {
+                if ($actual_sha256 !== null && $sha256_valid && $actual_sha256 !== $record['sha256']) {
                     $record['status'] = 'mismatch';
                     $warnings[] = 'Language pack metadata runtime file sha256 mismatch for ' . $record['file'] . ' in ' . $path;
                 }
@@ -750,6 +775,11 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                     $record['status'] = 'mismatch';
                     $warnings[] = 'Language pack metadata runtime file byte count mismatch for ' . $record['file'] . ' in ' . $path;
                 }
+            }
+
+            if ($record_invalid) {
+                $invalid = true;
+                $record['status'] = 'invalid';
             }
 
             $metadata[] = $record;
@@ -762,6 +792,29 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         );
 
         return $metadata;
+    }
+
+    private function runtime_file_pair_key(string $resource, string $file): string
+    {
+        return $resource . "\t" . $file;
+    }
+
+    private function runtime_digest_status(mixed $runtime_files, bool $invalid, bool $incomplete, bool $mismatched): string
+    {
+        if (!is_array($runtime_files) || $runtime_files === []) {
+            return 'not_declared';
+        }
+        if ($mismatched) {
+            return 'mismatch';
+        }
+        if ($invalid) {
+            return 'invalid';
+        }
+        if ($incomplete) {
+            return 'incomplete';
+        }
+
+        return 'ok';
     }
 
     /**
