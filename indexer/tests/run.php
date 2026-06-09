@@ -1682,6 +1682,39 @@ if (!class_exists('WP_CLI')) {
     }
 }
 
+if (!class_exists('WP_Error')) {
+    final class WP_Error
+    {
+        /**
+         * @param array<string,mixed> $data
+         */
+        public function __construct(
+            private string $code,
+            private string $message,
+            private array $data = [],
+        ) {
+        }
+
+        public function get_error_code(): string
+        {
+            return $this->code;
+        }
+
+        public function get_error_message(): string
+        {
+            return $this->message;
+        }
+
+        /**
+         * @return array<string,mixed>
+         */
+        public function get_error_data(): array
+        {
+            return $this->data;
+        }
+    }
+}
+
 function wp_fts_test_reset_wordpress_fakes(): void
 {
     $GLOBALS['wp_fts_test_actions'] = [];
@@ -2212,6 +2245,8 @@ test_case('REST search surface filters private results by capability', function 
         assert_same(WP_FTS_Plugin::REST_SEARCH_ROUTE, $route['route'] ?? null, 'REST registration should expose the search route');
         assert_true(is_callable($route['args']['callback'] ?? null), 'REST search route should have a callable callback');
         assert_true(is_callable($route['args']['permission_callback'] ?? null), 'REST search route should have a callable permission callback');
+        assert_same(false, $route['args']['args']['q']['required'] ?? null, 'REST q parameter should not block the query alias during route validation');
+        assert_same(false, $route['args']['args']['query']['required'] ?? null, 'REST query alias should be optional and validated by the callback');
 
         $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer());
         $indexer->index_post($public);
@@ -2227,6 +2262,79 @@ test_case('REST search surface filters private results by capability', function 
         $response = WP_FTS_Plugin::rest_search(['q' => 'shared', 'limit' => 1]);
         assert_same(1, count($response['results']), 'REST search should honor the request limit');
         assert_true(in_array($response['results'][0]['doc_id'], [201, 202], true), 'REST search should return ranked result rows');
+
+        $aliasResponse = WP_FTS_Plugin::rest_search(['query' => 'shared', 'limit' => 1]);
+        assert_same(1, count($aliasResponse['results']), 'REST search should accept query as an alias for q');
+
+        $emptyQAliasResponse = WP_FTS_Plugin::rest_search(['q' => ' ', 'query' => 'shared', 'limit' => 1]);
+        assert_same(1, count($emptyQAliasResponse['results']), 'REST search should use query when q is present but empty');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('REST search returns explicit 400 errors for missing query and invalid mode', function (): void {
+    $missing = WP_FTS_Plugin::rest_search(['q' => ' ', 'query' => '']);
+    assert_true($missing instanceof WP_Error, 'missing REST query should return a WP_Error');
+    assert_same('wp_fts_missing_query', $missing->get_error_code(), 'missing REST query error should use a stable code');
+    assert_same(400, $missing->get_error_data()['status'] ?? null, 'missing REST query error should carry HTTP 400 status');
+
+    $invalidMode = WP_FTS_Plugin::rest_search(['query' => 'shared', 'mode' => 'xor']);
+    assert_true($invalidMode instanceof WP_Error, 'invalid REST mode should return a WP_Error');
+    assert_same('wp_fts_invalid_mode', $invalidMode->get_error_code(), 'invalid REST mode error should use a stable code');
+    assert_same(400, $invalidMode->get_error_data()['status'] ?? null, 'invalid REST mode error should carry HTTP 400 status');
+});
+
+test_case('search refills requested limit after filtering hidden stale rows', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $private = (object) [
+        'ID' => 211,
+        'post_title' => 'Private shared',
+        'post_content' => '<p>shared refill</p>',
+        'post_status' => 'private',
+        'post_type' => 'post',
+    ];
+    $passworded = (object) [
+        'ID' => 212,
+        'post_title' => 'Passworded shared',
+        'post_content' => '<p>shared refill</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_password' => 'secret',
+    ];
+    $excludedType = (object) [
+        'ID' => 213,
+        'post_title' => 'Excluded shared',
+        'post_content' => '<p>shared refill</p>',
+        'post_status' => 'publish',
+        'post_type' => 'secret',
+    ];
+    $visible = (object) [
+        'ID' => 214,
+        'post_title' => 'Visible shared',
+        'post_content' => '<p>shared refill</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+    $GLOBALS['wp_fts_test_posts'][211] = $private;
+    $GLOBALS['wp_fts_test_posts'][212] = $passworded;
+    $GLOBALS['wp_fts_test_posts'][213] = $excludedType;
+    $GLOBALS['wp_fts_test_posts'][214] = $visible;
+
+    try {
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer());
+        $indexer->index_post($private, ['lang' => 'en']);
+        $indexer->index_post($passworded, ['lang' => 'en']);
+        $indexer->index_post($excludedType, ['lang' => 'en']);
+        $indexer->index_post($visible, ['lang' => 'en']);
+
+        assert_same([214], array_column(WP_FTS_Plugin::search('shared', ['limit' => 1]), 'doc_id'), 'hidden stale rows should not consume the requested visible result limit');
     } finally {
         $wpdb = $oldWpdb;
     }
