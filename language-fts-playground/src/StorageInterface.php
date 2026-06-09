@@ -55,6 +55,13 @@ interface Language_FTS_Playground_Storage_Interface
     public function fetch_positions(string $language, array $terms, array $post_ids): array;
 
     /**
+     * Returns distinct fuzzy candidate terms for the requested language.
+     *
+     * Implementations should use length-band indexes to narrow the scan, then
+     * apply edit-distance filtering before enforcing $limit. Searcher performs
+     * the same filtering defensively, but storage must not truncate the raw
+     * length band before edit-distance eligibility is known.
+     *
      * @return string[]
      */
     public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array;

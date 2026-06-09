@@ -168,8 +168,9 @@ final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Pl
 
     public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array
     {
-        $min_length = max(1, strlen($term) - max(0, $max_distance));
-        $max_length = strlen($term) + max(0, $max_distance);
+        $max_distance = max(0, $max_distance);
+        $min_length = max(1, strlen($term) - $max_distance);
+        $max_length = strlen($term) + $max_distance;
         $limit = max(1, $limit);
         $terms = array_keys($this->postings[$language] ?? []);
         sort($terms, SORT_STRING);
@@ -178,6 +179,10 @@ final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Pl
         foreach ($terms as $candidate) {
             $length = strlen($candidate);
             if ($length < $min_length || $length > $max_length) {
+                continue;
+            }
+
+            if ($candidate === $term || levenshtein($term, $candidate) > $max_distance) {
                 continue;
             }
 

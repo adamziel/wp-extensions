@@ -15,7 +15,9 @@ final class Language_FTS_Playground_Analyzer
     private const QUERY_LANGUAGE_CANONICAL_KEY_WEIGHT = 2.0;
     private const QUERY_LANGUAGE_SYNONYM_SOURCE_WEIGHT = 2.5;
     private const QUERY_LANGUAGE_PHRASE_SYNONYM_SOURCE_WEIGHT = 4.0;
+    private const QUERY_LANGUAGE_TERM_RULE_KEY_WEIGHT = 1.5;
     private const QUERY_LANGUAGE_STOPWORD_WEIGHT = 0.75;
+    private const QUERY_LANGUAGE_MIN_TERM_RULE_KEY_LENGTH = 3;
 
     /** @var array<string,bool> */
     private array $skipped_elements = [
@@ -112,7 +114,7 @@ final class Language_FTS_Playground_Analyzer
      * repository for the analyzer instance. Pack metadata and source import
      * formats stay out of this path.
      *
-     * @return array<int,array{language:string,score:float,reasons:array{language_signals:string[],lexeme_forms:string[],canonical_keys:string[],synonym_sources:string[],stopwords:string[]}}>
+     * @return array<int,array{language:string,score:float,reasons:array{language_signals:string[],lexeme_forms:string[],canonical_keys:string[],synonym_sources:string[],term_rule_keys:string[],stopwords:string[]}}>
      */
     public function rank_query_languages(string $query, int $limit = 0): array
     {
@@ -131,6 +133,7 @@ final class Language_FTS_Playground_Analyzer
                 'lexeme_forms' => [],
                 'canonical_keys' => [],
                 'synonym_sources' => [],
+                'term_rule_keys' => [],
                 'stopwords' => [],
             ];
 
@@ -179,6 +182,15 @@ final class Language_FTS_Playground_Analyzer
 
                         if (isset($evidence['synonym_sources'][$canonical]) && $this->add_query_language_reason($reasons, 'synonym_sources', $canonical)) {
                             $score += self::QUERY_LANGUAGE_SYNONYM_SOURCE_WEIGHT;
+                        }
+                    }
+
+                    if (!isset($evidence['stopwords'][$term]) && !isset($evidence['protected_terms'][$term])) {
+                        foreach ($this->query_language_term_rule_keys($term, $evidence) as $key) {
+                            $reason = $term . '=>' . $key;
+                            if ($this->add_query_language_reason($reasons, 'term_rule_keys', $reason)) {
+                                $score += self::QUERY_LANGUAGE_TERM_RULE_KEY_WEIGHT;
+                            }
                         }
                     }
                 }
@@ -526,6 +538,30 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
+     * @param array{stopwords:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>} $evidence
+     * @return string[]
+     */
+    private function query_language_term_rule_keys(string $term, array $evidence): array
+    {
+        $keys = [];
+        foreach ($this->resource_term_rule_keys($term, $evidence['term_rules'] ?? []) as $key) {
+            $key = (string) $key;
+            if (
+                $key === ''
+                || $key === $term
+                || strlen($key) < self::QUERY_LANGUAGE_MIN_TERM_RULE_KEY_LENGTH
+                || isset($evidence['stopwords'][$key])
+            ) {
+                continue;
+            }
+
+            $keys[$key] = $key;
+        }
+
+        return array_values($keys);
+    }
+
+    /**
      * @param array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string}> $rules
      * @return string[]
      */
@@ -752,8 +788,8 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
-     * @param array{language_signals:string[],lexeme_forms:string[],canonical_keys:string[],synonym_sources:string[],stopwords:string[]} $reasons
-     * @param 'language_signals'|'lexeme_forms'|'canonical_keys'|'synonym_sources'|'stopwords' $type
+     * @param array{language_signals:string[],lexeme_forms:string[],canonical_keys:string[],synonym_sources:string[],term_rule_keys:string[],stopwords:string[]} $reasons
+     * @param 'language_signals'|'lexeme_forms'|'canonical_keys'|'synonym_sources'|'term_rule_keys'|'stopwords' $type
      */
     private function add_query_language_reason(array &$reasons, string $type, string $value): bool
     {

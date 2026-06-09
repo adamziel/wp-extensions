@@ -105,7 +105,7 @@ final class Language_FTS_Playground_Searcher
     }
 
     /**
-     * @return array{requested_language:string,resolved_language:string,enabled_languages:string[],ranked_candidates:array<int,array{language:string,score:float,reasons:array<string,string[]>}>,selected_partitions:string[],strategy:string,thresholds:array{min_score:float,min_lead:float,min_ratio:float,max_partitions:int}}
+     * @return array{requested_language:string,resolved_language:string,enabled_languages:string[],ranked_candidates:array<int,array{language:string,score:float,reasons:array<string,string[]>}>,selected_partitions:string[],strategy:string,thresholds:array{min_score:float,min_lead:float,min_ratio:float,max_partitions:int},preflight:array<string,mixed>}
      */
     private function search_language_plan(string $query, string $language, bool $include_explicit_ranking = true): array
     {
@@ -131,11 +131,13 @@ final class Language_FTS_Playground_Searcher
                 'selected_partitions' => [$language],
                 'strategy' => 'explicit_language',
                 'thresholds' => $thresholds,
+                'preflight' => [],
             ];
         }
 
         $strategy = 'auto_fallback_no_evidence_bounded_preflight';
         $selected = null;
+        $preflight = [];
         if ($ranked !== []) {
             $top_score = (float) $ranked[0]['score'];
             if ($top_score < self::AUTO_LANGUAGE_MIN_SCORE) {
@@ -174,7 +176,9 @@ final class Language_FTS_Playground_Searcher
         }
 
         if ($selected === null) {
-            $selected = $this->bounded_fallback_partitions($query, $enabled);
+            $fallback = $this->bounded_fallback_partitions($query, $enabled);
+            $selected = $fallback['selected_partitions'];
+            $preflight = $fallback['preflight'];
         }
 
         return [
@@ -185,43 +189,75 @@ final class Language_FTS_Playground_Searcher
             'selected_partitions' => $selected,
             'strategy' => $strategy,
             'thresholds' => $thresholds,
+            'preflight' => $preflight,
         ];
     }
 
     /**
      * @param string[] $enabled
-     * @return string[]
+     * @return array{selected_partitions:string[],preflight:array<string,mixed>}
      */
     private function bounded_fallback_partitions(string $query, array $enabled): array
     {
         $enabled = array_values(array_map('strval', $enabled));
+        $preflight = [
+            'evaluated' => false,
+            'max_partitions' => self::AUTO_LANGUAGE_MAX_PARTITIONS,
+            'scored_languages' => [],
+        ];
+
         if (count($enabled) <= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
-            return $enabled;
+            return [
+                'selected_partitions' => $enabled,
+                'preflight' => $preflight,
+            ];
         }
 
         $language_terms = [];
-        $language_fuzzy_terms = [];
+        $language_term_groups = [];
         foreach ($enabled as $language) {
             $plan = $this->parse_query($query, $language);
-            $language_terms[$language] = $plan['exact_terms'];
-            $language_fuzzy_terms[$language] = $plan['fuzzy_terms'];
+            $synonym_terms = $this->synonym_terms($this->analyzer->expand_query_synonyms($plan['exact_terms'], $language));
+            $phrase_synonym_terms = $this->phrase_synonym_terms($this->analyzer->expand_query_synonym_phrases($plan['query_tokens'], $language));
+            $fuzzy_terms = $this->flatten_fuzzy_candidates($this->resolve_fuzzy_candidates($plan['fuzzy_terms'], $language));
+
+            $language_term_groups[$language] = [
+                'exact' => $plan['exact_terms'],
+                'single_token_synonyms' => $synonym_terms,
+                'phrase_synonyms' => $phrase_synonym_terms,
+                'fuzzy' => $fuzzy_terms,
+            ];
+            $language_terms[$language] = $this->unique_terms(array_merge(
+                $plan['exact_terms'],
+                $synonym_terms,
+                $phrase_synonym_terms,
+                $fuzzy_terms
+            ));
         }
 
         $hits = $this->storage->fetch_term_language_hits($language_terms);
         $scored_languages = [];
         foreach ($enabled as $index => $language) {
-            $hit_count = 0;
-            foreach ($language_terms[$language] as $term) {
-                if (!empty($hits[$language][$term])) {
-                    $hit_count++;
-                }
-            }
-            $fuzzy_hit_count = $this->fuzzy_preflight_hit_count($language_fuzzy_terms[$language] ?? [], $language);
+            $groups = $language_term_groups[$language] ?? [
+                'exact' => [],
+                'single_token_synonyms' => [],
+                'phrase_synonyms' => [],
+                'fuzzy' => [],
+            ];
+            $exact_hit_count = $this->preflight_hit_count($groups['exact'], $hits[$language] ?? []);
+            $synonym_hit_count = $this->preflight_hit_count($groups['single_token_synonyms'], $hits[$language] ?? []);
+            $phrase_synonym_hit_count = $this->preflight_hit_count($groups['phrase_synonyms'], $hits[$language] ?? []);
+            $fuzzy_hit_count = $this->preflight_hit_count($groups['fuzzy'], $hits[$language] ?? []);
+            $hit_count = $exact_hit_count + $synonym_hit_count + $phrase_synonym_hit_count + $fuzzy_hit_count;
 
             $scored_languages[] = [
                 'language' => $language,
                 'hit_count' => $hit_count,
+                'exact_hit_count' => $exact_hit_count,
+                'synonym_hit_count' => $synonym_hit_count,
+                'phrase_synonym_hit_count' => $phrase_synonym_hit_count,
                 'fuzzy_hit_count' => $fuzzy_hit_count,
+                'terms' => $groups,
                 'enabled_index' => $index,
             ];
         }
@@ -230,6 +266,9 @@ final class Language_FTS_Playground_Searcher
             $scored_languages,
             static function (array $a, array $b): int {
                 return ((int) $b['hit_count'] <=> (int) $a['hit_count'])
+                    ?: ((int) $b['exact_hit_count'] <=> (int) $a['exact_hit_count'])
+                    ?: ((int) $b['synonym_hit_count'] <=> (int) $a['synonym_hit_count'])
+                    ?: ((int) $b['phrase_synonym_hit_count'] <=> (int) $a['phrase_synonym_hit_count'])
                     ?: ((int) $b['fuzzy_hit_count'] <=> (int) $a['fuzzy_hit_count'])
                     ?: ((int) $a['enabled_index'] <=> (int) $b['enabled_index']);
             }
@@ -238,7 +277,7 @@ final class Language_FTS_Playground_Searcher
         $selected = [];
         $selected_lookup = [];
         foreach ($scored_languages as $candidate) {
-            if ((int) $candidate['hit_count'] <= 0 && (int) $candidate['fuzzy_hit_count'] <= 0) {
+            if ((int) $candidate['hit_count'] <= 0) {
                 continue;
             }
 
@@ -261,15 +300,51 @@ final class Language_FTS_Playground_Searcher
             }
         }
 
-        return $selected;
+        foreach ($scored_languages as &$candidate) {
+            $language = (string) $candidate['language'];
+            $candidate['selected'] = isset($selected_lookup[$language]);
+        }
+        unset($candidate);
+
+        $preflight['evaluated'] = true;
+        $preflight['scored_languages'] = $scored_languages;
+
+        return [
+            'selected_partitions' => $selected,
+            'preflight' => $preflight,
+        ];
     }
 
     /**
-     * @param string[] $fuzzy_terms
+     * @param string[] $terms
+     * @param array<string,bool> $hits
      */
-    private function fuzzy_preflight_hit_count(array $fuzzy_terms, string $language): int
+    private function preflight_hit_count(array $terms, array $hits): int
     {
-        return count($this->resolve_fuzzy_candidates($fuzzy_terms, $language));
+        $count = 0;
+        foreach ($terms as $term) {
+            if (!empty($hits[(string) $term])) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * @param array<string,string[]> $fuzzy_candidates
+     * @return string[]
+     */
+    private function flatten_fuzzy_candidates(array $fuzzy_candidates): array
+    {
+        $terms = [];
+        foreach ($fuzzy_candidates as $candidates) {
+            foreach ($candidates as $candidate) {
+                $terms[] = (string) $candidate;
+            }
+        }
+
+        return $this->unique_terms($terms);
     }
 
     /**
@@ -1370,6 +1445,9 @@ final class Language_FTS_Playground_Searcher
 
                 if (levenshtein($term, $candidate) <= $this->fuzzy_max_distance) {
                     $candidates[$candidate] = true;
+                    if (count($candidates) >= $this->fuzzy_candidate_limit) {
+                        break;
+                    }
                 }
             }
 
