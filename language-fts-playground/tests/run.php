@@ -1866,6 +1866,50 @@ function run_language_fts_search_benchmark(array $options = [], bool $no_ini = f
 }
 
 /**
+ * @param array<string,mixed> $report
+ * @return array<string,mixed>
+ */
+function language_fts_benchmark_gate_by_id(array $report, string $id): array
+{
+    foreach ((array) ($report['gates'] ?? []) as $gate) {
+        if (is_array($gate) && ($gate['id'] ?? '') === $id) {
+            return $gate;
+        }
+    }
+
+    throw new Language_FTS_Playground_Test_Failure("Benchmark gate {$id} was not reported.");
+}
+
+/**
+ * Strip expected runtime-dependent values before comparing normal PHP and
+ * php -n benchmark JSON reports.
+ *
+ * @param array<string,mixed> $report
+ * @return array<string,mixed>
+ */
+function normalize_language_fts_benchmark_json_for_deterministic_compare(array $report): array
+{
+    if (isset($report['scenarios']) && is_array($report['scenarios'])) {
+        foreach ($report['scenarios'] as $index => $scenario) {
+            if (is_array($scenario)) {
+                $report['scenarios'][$index] = normalize_language_fts_benchmark_json_for_deterministic_compare($scenario);
+            }
+        }
+
+        return $report;
+    }
+
+    $report['wall_time_ms'] = 0;
+    $report['memory_delta_bytes'] = 0;
+    $report['peak_memory_delta_bytes'] = 0;
+    if (isset($report['counters']) && is_array($report['counters'])) {
+        $report['counters']['peak_memory_delta_bytes'] = 0;
+    }
+
+    return $report;
+}
+
+/**
  * @return array{exit_code:int,output:string}
  */
 function run_language_fts_wp_processor_lang_probe(): array
@@ -6620,6 +6664,8 @@ test_case('search benchmark counter fixture gates public final-window hydration'
     assert_same($counters['candidate_count'], $counters['document_length_rows_fetched'] ?? null, 'Document length rows match the materialized candidate set.');
     assert_true((int) $counters['postings_rows_materialized'] >= (int) $counters['candidate_count'], 'Postings row materialization is counted.');
     assert_true((int) $counters['peak_memory_delta_bytes'] >= 0, 'Peak memory delta is captured as a non-negative counter.');
+    assert_same('pass', language_fts_benchmark_gate_by_id($report, 'public-field-text-final-window')['status'] ?? null, 'The final-window field text gate passes.');
+    assert_same('pass', language_fts_benchmark_gate_by_id($report, 'postings-materialization-counted')['status'] ?? null, 'Postings materialization counters participate in hard gates.');
 });
 
 test_case('search benchmark counting storage counts hit and field rows', function (): void {
@@ -6666,8 +6712,11 @@ test_case('search benchmark counter fixture covers phrase fuzzy and expansion pr
         'documents' => 30,
         'limit' => 4,
     ]);
-    assert_same(['orchart'], $fuzzy['lookup_terms_by_class']['fuzzy']['terms'] ?? null, 'Fuzzy probes report the resolved typo candidate.');
-    assert_true((int) ($fuzzy['counters']['fuzzy_candidate_terms_returned'] ?? 0) > 0, 'Fuzzy probes count candidate-term materialization.');
+    $fuzzy_terms = (array) ($fuzzy['lookup_terms_by_class']['fuzzy']['terms'] ?? []);
+    assert_true(in_array('orchart', $fuzzy_terms, true), 'Fuzzy probes report the resolved typo candidate.');
+    assert_true(count($fuzzy_terms) >= 3, 'Fuzzy probes exercise a candidate-heavy deterministic dictionary.');
+    assert_same(2, $fuzzy['result_ids'][0] ?? null, 'Exact fuzzy-query matches outrank fuzzy-only candidates.');
+    assert_true((int) ($fuzzy['counters']['fuzzy_candidate_terms_returned'] ?? 0) >= 3, 'Fuzzy probes count candidate-term materialization.');
 
     $synonym = Language_FTS_Playground_Search_Benchmark_Fixture::run_probe('synonym', [
         'documents' => 30,
@@ -6712,6 +6761,52 @@ test_case('search benchmark counter CLI emits JSON under normal PHP and php -n',
     assert_same('common-term', $no_ini_decoded['scenario'] ?? null, 'php -n benchmark counter CLI reports the requested common-term scenario.');
     assert_true((int) ($no_ini_decoded['counters']['field_text_rows_fetched'] ?? 0) <= (int) ($no_ini_decoded['result_count'] ?? 0), 'php -n benchmark counter CLI preserves the final-window field text gate.');
     assert_same(0, $no_ini_decoded['counters']['field_metadata_rows_fetched'] ?? null, 'php -n benchmark counter CLI preserves the metadata gate.');
+});
+
+test_case('search benchmark pr-smoke suite emits deterministic gate JSON under normal PHP and php -n', function (): void {
+    $options = [
+        'suite' => 'pr-smoke',
+        'documents' => 24,
+        'limit' => 4,
+        'json' => true,
+        'fail_on_gate' => true,
+    ];
+    $normal = run_language_fts_search_benchmark($options);
+    $normal_decoded = json_decode($normal['output'], true);
+    $no_ini = run_language_fts_search_benchmark($options, true);
+    $no_ini_decoded = json_decode($no_ini['output'], true);
+
+    assert_same(0, $normal['exit_code'], 'PR-smoke benchmark suite exits successfully under normal PHP. Output: ' . $normal['output']);
+    assert_same(0, $no_ini['exit_code'], 'PR-smoke benchmark suite exits successfully under php -n. Output: ' . $no_ini['output']);
+    assert_true(is_array($normal_decoded), 'PR-smoke benchmark suite JSON is parseable under normal PHP.');
+    assert_true(is_array($no_ini_decoded), 'PR-smoke benchmark suite JSON is parseable under php -n.');
+    assert_same('language-fts-search-benchmark-gates-v1', $normal_decoded['schema_version'] ?? null, 'Suite JSON reports the benchmark gate schema.');
+    assert_same('pass', $normal_decoded['summary']['status'] ?? null, 'Suite JSON summary passes all hard gates.');
+    assert_same(
+        ['common-term', 'phrase-heavy', 'fuzzy-heavy', 'mixed-field'],
+        array_column((array) ($normal_decoded['scenarios'] ?? []), 'scenario'),
+        'PR-smoke scenarios are emitted in deterministic order.'
+    );
+    assert_same(
+        normalize_language_fts_benchmark_json_for_deterministic_compare($normal_decoded),
+        normalize_language_fts_benchmark_json_for_deterministic_compare($no_ini_decoded),
+        'Normal PHP and php -n benchmark JSON match after stripping runtime timing and memory values.'
+    );
+});
+
+test_case('search benchmark fail-on-gate exits nonzero after printing JSON', function (): void {
+    $failure = run_language_fts_search_benchmark([
+        'scenario' => 'common-term',
+        'documents' => 1,
+        'limit' => 5,
+        'json' => true,
+        'fail_on_gate' => true,
+    ]);
+    $decoded = json_decode($failure['output'], true);
+
+    assert_same(2, $failure['exit_code'], 'Benchmark CLI exits nonzero when --fail-on-gate sees a hard failure. Output: ' . $failure['output']);
+    assert_true(is_array($decoded), 'Benchmark CLI still prints parseable JSON on gate failure.');
+    assert_same('fail', language_fts_benchmark_gate_by_id($decoded, 'common-term-candidate-shape')['status'] ?? null, 'The expected hard gate reports failure.');
 });
 
 test_case('explain reports field boosts and phrase filter failures', function (): void {
