@@ -181,7 +181,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             throw new UnexpectedValueException('Language pack metadata must return an array: ' . $path);
         }
 
-        return $this->validate_pack_metadata($metadata, (string) $entry['profile']['id'], $entry['directory'], $path);
+        return $this->validate_pack_metadata($metadata, (string) $entry['profile']['id'], $entry['directory'], $path, (array) ($entry['profile']['resources'] ?? []));
     }
 
     public function pack_fingerprint(): string
@@ -314,14 +314,15 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             throw new UnexpectedValueException('Language profile resources must be an array in ' . $profile_file);
         }
 
+        $folds = $this->profile_string_map($profile['normalization']['fold'] ?? [], 'normalization.fold', $profile_file);
         $synset_expansions = isset($resources['synsets'])
-            ? $this->parse_synsets($this->resource_path($directory, $resources, 'synsets', $profile_file))
+            ? $this->parse_synsets($this->resource_path($directory, $resources, 'synsets', $profile_file), $folds)
             : [];
         $synonym_phrases = isset($resources['synonym_phrases'])
-            ? $this->parse_synonym_phrases($this->resource_path($directory, $resources, 'synonym_phrases', $profile_file))
+            ? $this->parse_synonym_phrases($this->resource_path($directory, $resources, 'synonym_phrases', $profile_file), $folds)
             : [];
-        $pairwise_synonyms = $this->parse_synonyms($this->resource_path($directory, $resources, 'synonyms', $profile_file));
-        $lexemes = $this->parse_lexemes($this->resource_path($directory, $resources, 'lexemes', $profile_file));
+        $pairwise_synonyms = $this->parse_synonyms($this->resource_path($directory, $resources, 'synonyms', $profile_file), $folds);
+        $lexemes = $this->parse_lexemes($this->resource_path($directory, $resources, 'lexemes', $profile_file), $folds);
         $synonyms = $this->merge_expansion_maps($synset_expansions, $pairwise_synonyms);
         $synonym_sources = array_merge(array_keys($synonyms), $this->synonym_phrase_source_labels($synonym_phrases));
         $term_rules_path = $this->optional_resource_path($directory, $resources, 'term_rules', $profile_file);
@@ -330,14 +331,14 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         return [
             'id' => $language,
             'label' => $this->language_label($language),
-            'folds' => $this->profile_string_map($profile['normalization']['fold'] ?? [], 'normalization.fold', $profile_file),
+            'folds' => $folds,
             'language_signals' => $this->language_signals($language),
-            'stopwords' => $this->parse_stopwords($this->resource_path($directory, $resources, 'stopwords', $profile_file)),
+            'stopwords' => $this->parse_stopwords($this->resource_path($directory, $resources, 'stopwords', $profile_file), $folds),
             'lexemes' => $lexemes,
             'lexeme_forms' => $this->lookup_from_keys(array_keys($lexemes)),
             'canonical_keys' => $this->canonical_key_lookup($lexemes),
-            'protected_terms' => $protected_terms_path === null ? [] : $this->parse_protected_terms($protected_terms_path),
-            'term_rules' => $term_rules_path === null ? [] : $this->parse_term_rules($term_rules_path),
+            'protected_terms' => $protected_terms_path === null ? [] : $this->parse_protected_terms($protected_terms_path, $folds),
+            'term_rules' => $term_rules_path === null ? [] : $this->parse_term_rules($term_rules_path, $folds),
             'synonym_sources' => $this->lookup_from_keys($synonym_sources),
             'synonyms' => $synonyms,
             'synonym_phrases' => $synonym_phrases,
@@ -367,9 +368,10 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     /**
      * @param array<mixed> $metadata
+     * @param array<mixed> $profile_resources
      * @return array{language_id:string,pack_version:string,pack_date:string,source_name:string,source_url:string,license_name:string,attribution_text:string,provenance:string,files:string[],data_kind:string}
      */
-    private function validate_pack_metadata(array $metadata, string $expected_language, string $directory, string $path): array
+    private function validate_pack_metadata(array $metadata, string $expected_language, string $directory, string $path, array $profile_resources): array
     {
         $required = [
             'language_id',
@@ -420,6 +422,22 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             }
 
             $validated_files[] = $file;
+        }
+
+        $listed_files = array_fill_keys($validated_files, true);
+        foreach ($profile_resources as $key => $file) {
+            if (!is_string($key) || !is_string($file)) {
+                continue;
+            }
+
+            $file = trim($file);
+            if ($file === '' || $file !== basename($file) || str_contains($file, '..')) {
+                continue;
+            }
+
+            if (!isset($listed_files[$file])) {
+                throw new UnexpectedValueException("Language pack metadata files must include profile resource {$key} ({$file}) declared by {$expected_language} in {$path}");
+            }
         }
 
         return [
@@ -539,7 +557,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return array<string,bool>
      */
-    private function parse_stopwords(string $path): array
+    private function parse_stopwords(string $path, array $folds): array
     {
         $stopwords = [];
         foreach ($this->resource_lines($path) as $line_number => $line) {
@@ -548,7 +566,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 continue;
             }
 
-            $stopwords[$this->resource_token($line, $path, $line_number + 1)] = true;
+            $stopwords[$this->normalized_resource_token($line, $path, $line_number + 1, 'stopword', $folds)] = true;
         }
 
         return $stopwords;
@@ -557,7 +575,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return array<string,string[]>
      */
-    private function parse_lexemes(string $path): array
+    private function parse_lexemes(string $path, array $folds): array
     {
         $lexemes = [];
         foreach ($this->resource_lines($path) as $line_number => $line) {
@@ -571,8 +589,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 throw new UnexpectedValueException($this->resource_error($path, $line_number + 1, 'lexeme rows must have 2 or 3 tab-separated columns'));
             }
 
-            $form = $this->resource_token($columns[0], $path, $line_number + 1);
-            $canonical = $this->resource_token($columns[1], $path, $line_number + 1);
+            $form = $this->normalized_resource_token($columns[0], $path, $line_number + 1, 'lexeme observed form', $folds);
+            $canonical = $this->normalized_resource_token($columns[1], $path, $line_number + 1, 'lexeme canonical key', $folds);
             $lexemes[$form][$canonical] = true;
         }
 
@@ -589,7 +607,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return array<string,bool>
      */
-    private function parse_protected_terms(string $path): array
+    private function parse_protected_terms(string $path, array $folds): array
     {
         $terms = [];
         foreach ($this->resource_lines($path) as $line_number => $line) {
@@ -598,7 +616,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 continue;
             }
 
-            $term = $this->normalized_resource_token($line, $path, $line_number + 1, 'protected terms');
+            $term = $this->normalized_resource_token($line, $path, $line_number + 1, 'protected term', $folds);
             if (isset($terms[$term])) {
                 throw new UnexpectedValueException($this->resource_error($path, $line_number + 1, 'duplicate protected term'));
             }
@@ -613,7 +631,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string}>
      */
-    private function parse_term_rules(string $path): array
+    private function parse_term_rules(string $path, array $folds): array
     {
         $rules = [];
         $rule_ids = [];
@@ -629,7 +647,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule rows must have exactly 11 tab-separated columns'));
             }
 
-            $rule = $this->parse_term_rule_row($columns, $path, $line_number);
+            $rule = $this->parse_term_rule_row($columns, $path, $line_number, $folds);
             if (isset($rule_ids[$rule['id']])) {
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate term rule id'));
             }
@@ -647,16 +665,17 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     /**
      * @param string[] $columns
+     * @param array<string,string> $folds
      * @return array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string}
      */
-    private function parse_term_rule_row(array $columns, string $path, int $line_number): array
+    private function parse_term_rule_row(array $columns, string $path, int $line_number, array $folds): array
     {
         $id = $this->term_rule_id($columns[0], $path, $line_number);
         $min_term_length = $this->term_rule_positive_integer($columns[1], $path, $line_number, 'min_term_length');
         $pattern = $this->term_rule_regex($columns[2], $path, $line_number);
-        $strip_prefix = trim($columns[3]);
-        $strip_suffix = trim($columns[4]);
-        $append = trim($columns[5]);
+        $strip_prefix = $this->term_rule_literal($columns[3], $path, $line_number, 'strip_prefix', $folds);
+        $strip_suffix = $this->term_rule_literal($columns[4], $path, $line_number, 'strip_suffix', $folds);
+        $append = $this->term_rule_literal($columns[5], $path, $line_number, 'append', $folds);
         if ($strip_prefix === '' && $strip_suffix === '' && $append === '') {
             throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule must strip a prefix, strip a suffix, or append text'));
         }
@@ -664,7 +683,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         $min_key_length = $this->term_rule_positive_integer($columns[6], $path, $line_number, 'min_key_length');
         $flags = $this->term_rule_flags($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'require_vowel_or_y', 'append_e_if_cvc', 'stop_after_match'], $path, $line_number, 'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, append_e_if_cvc, or stop_after_match');
         $alternate_pattern = $this->term_rule_alternate_pattern($columns[8], $columns[9], $path, $line_number);
-        $alternate_replacement = trim($columns[9]);
+        $alternate_replacement = $this->term_rule_literal($columns[9], $path, $line_number, 'alternate_replacement', $folds);
         $provenance = $this->term_rule_provenance($columns[10], $path, $line_number);
 
         return [
@@ -723,6 +742,19 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         return $pattern;
     }
 
+    /**
+     * @param array<string,string> $folds
+     */
+    private function term_rule_literal(string $value, string $path, int $line_number, string $label, array $folds): string
+    {
+        $literal = trim($value);
+        if ($literal === '') {
+            return '';
+        }
+
+        return $this->normalized_resource_token($literal, $path, $line_number, 'term rule ' . $label, $folds);
+    }
+
     private function term_rule_alternate_pattern(string $pattern_value, string $replacement_value, string $path, int $line_number): string
     {
         $pattern = trim($pattern_value);
@@ -769,7 +801,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>
      */
-    private function parse_synonyms(string $path): array
+    private function parse_synonyms(string $path, array $folds): array
     {
         $synonyms = [];
         foreach ($this->resource_lines($path) as $line_number => $line) {
@@ -783,8 +815,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 throw new UnexpectedValueException($this->resource_error($path, $line_number + 1, 'synonym rows must have exactly 5 tab-separated columns'));
             }
 
-            $source = $this->resource_token($columns[0], $path, $line_number + 1);
-            $target = $this->resource_token($columns[1], $path, $line_number + 1);
+            $source = $this->normalized_resource_token($columns[0], $path, $line_number + 1, 'synonym source', $folds);
+            $target = $this->normalized_resource_token($columns[1], $path, $line_number + 1, 'synonym target', $folds);
             if ($source === $target) {
                 throw new UnexpectedValueException($this->resource_error($path, $line_number + 1, 'synonym source and target must differ'));
             }
@@ -821,7 +853,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>
      */
-    private function parse_synsets(string $path): array
+    private function parse_synsets(string $path, array $folds): array
     {
         $synsets = [];
         $concept_ids = [];
@@ -849,7 +881,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset provenance must be non-empty'));
             }
 
-            $terms = $this->parse_synset_terms($columns[3], $path, $line_number);
+            $terms = $this->parse_synset_terms($columns[3], $path, $line_number, $folds);
             if (count($terms) < 2) {
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset rows must contain at least 2 terms'));
             }
@@ -871,7 +903,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>
      */
-    private function parse_synonym_phrases(string $path): array
+    private function parse_synonym_phrases(string $path, array $folds): array
     {
         $phrases = [];
         $seen_pairs = [];
@@ -887,8 +919,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synonym phrase rows must have exactly 5 tab-separated columns'));
             }
 
-            $source_terms = $this->parse_phrase_terms($columns[0], $path, $line_number, 'synonym phrase source terms');
-            $target_terms = $this->parse_phrase_terms($columns[1], $path, $line_number, 'synonym phrase target terms');
+            $source_terms = $this->parse_phrase_terms($columns[0], $path, $line_number, 'synonym phrase source terms', $folds);
+            $target_terms = $this->parse_phrase_terms($columns[1], $path, $line_number, 'synonym phrase target terms', $folds);
             $source = implode(' ', $source_terms);
             $target = implode(' ', $target_terms);
             if ($source === $target) {
@@ -1099,7 +1131,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return string[]
      */
-    private function parse_synset_terms(string $terms_column, string $path, int $line_number): array
+    private function parse_synset_terms(string $terms_column, string $path, int $line_number, array $folds): array
     {
         if (trim($terms_column) === '') {
             throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset terms must be non-empty'));
@@ -1115,7 +1147,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset terms must be separated by single spaces'));
             }
 
-            $term = $this->normalized_resource_token($term, $path, $line_number, 'synset terms');
+            $term = $this->normalized_resource_token($term, $path, $line_number, 'synset terms', $folds);
             if (isset($terms[$term])) {
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate synset term'));
             }
@@ -1128,7 +1160,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @return string[]
      */
-    private function parse_phrase_terms(string $terms_column, string $path, int $line_number, string $label): array
+    private function parse_phrase_terms(string $terms_column, string $path, int $line_number, string $label, array $folds): array
     {
         if (trim($terms_column) === '') {
             throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} must be non-empty"));
@@ -1144,7 +1176,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} must be separated by single spaces"));
             }
 
-            $term = $this->normalized_resource_token($term, $path, $line_number, $label);
+            $term = $this->normalized_resource_token($term, $path, $line_number, $label, $folds);
             if (isset($terms[$term])) {
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate ' . rtrim($label, 's')));
             }
@@ -1218,15 +1250,27 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         return $token;
     }
 
-    private function normalized_resource_token(string $value, string $path, int $line_number, string $label): string
+    /**
+     * @param array<string,string> $folds
+     */
+    private function normalized_resource_token(string $value, string $path, int $line_number, string $label, array $folds): string
     {
         $token = $this->resource_token($value, $path, $line_number);
-        $lowercase = function_exists('mb_strtolower') ? mb_strtolower($token, 'UTF-8') : strtolower($token);
-        if ($token !== $lowercase) {
+        if ($token !== $this->normalize_resource_token($token, $folds)) {
             throw new UnexpectedValueException($this->resource_error($path, $line_number, "{$label} must be normalized lowercase resource tokens"));
         }
 
         return $token;
+    }
+
+    /**
+     * @param array<string,string> $folds
+     */
+    private function normalize_resource_token(string $token, array $folds): string
+    {
+        $lowercase = function_exists('mb_strtolower') ? mb_strtolower($token, 'UTF-8') : strtolower($token);
+
+        return $folds === [] ? $lowercase : strtr($lowercase, $folds);
     }
 
     private function resource_error(string $path, int $line_number, string $message): string

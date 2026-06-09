@@ -138,6 +138,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $profile_file = $directory . DIRECTORY_SEPARATOR . 'profile.php';
         $profile = null;
         $resources = [];
+        $normalization_folds = [];
 
         if (!is_file($profile_file)) {
             $warnings[] = 'Missing language profile file: ' . $profile_file;
@@ -168,7 +169,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 }
 
                 if (isset($profile['normalization']['fold'])) {
-                    $this->validate_string_map($profile['normalization']['fold'], 'normalization.fold', $profile_file, $warnings);
+                    $normalization_folds = $this->validate_string_map($profile['normalization']['fold'], 'normalization.fold', $profile_file, $warnings);
                 }
 
                 if (isset($profile['language_signals'])) {
@@ -190,35 +191,44 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $status['missing_files'] = $metadata['missing_files'];
 
         $resource_paths = $this->resolve_profile_resources($directory, $profile_file, $resources, $warnings);
+        if ($metadata['metadata']['files'] !== []) {
+            $status['metadata_valid'] = $status['metadata_valid'] && $this->validate_pack_files_include_profile_resources(
+                $metadata['metadata']['files'],
+                $resources,
+                $profile_file,
+                $directory . DIRECTORY_SEPARATOR . 'pack.php',
+                $warnings
+            );
+        }
         $expansion_targets = [];
 
         if (isset($resource_paths['stopwords'])) {
-            $status['counts']['stopwords'] = $this->validate_stopwords($resource_paths['stopwords'], $warnings);
+            $status['counts']['stopwords'] = $this->validate_stopwords($resource_paths['stopwords'], $warnings, $normalization_folds);
         }
         if (isset($resource_paths['lexemes'])) {
-            $status['counts']['lexeme_rows'] = $this->validate_lexemes($resource_paths['lexemes'], $warnings);
+            $status['counts']['lexeme_rows'] = $this->validate_lexemes($resource_paths['lexemes'], $warnings, $normalization_folds);
         }
         if (isset($resource_paths['synonyms'])) {
-            $pairwise = $this->validate_pairwise_synonyms($resource_paths['synonyms'], $warnings, $expansion_targets);
+            $pairwise = $this->validate_pairwise_synonyms($resource_paths['synonyms'], $warnings, $expansion_targets, $normalization_folds);
             $status['counts']['pairwise_synonym_rows'] = $pairwise['rows'];
             $status['counts']['pairwise_synonym_expansions'] = $pairwise['expansions'];
         }
         if (isset($resource_paths['synsets'])) {
-            $synsets = $this->validate_synsets($resource_paths['synsets'], $warnings, $expansion_targets);
+            $synsets = $this->validate_synsets($resource_paths['synsets'], $warnings, $expansion_targets, $normalization_folds);
             $status['counts']['synset_rows'] = $synsets['rows'];
             $status['counts']['concept_expansions'] = $synsets['expansions'];
             $status['max_synset_size'] = $synsets['max_synset_size'];
         }
         if (isset($resource_paths['synonym_phrases'])) {
-            $phrase_synonyms = $this->validate_synonym_phrases($resource_paths['synonym_phrases'], $warnings, $expansion_targets);
+            $phrase_synonyms = $this->validate_synonym_phrases($resource_paths['synonym_phrases'], $warnings, $expansion_targets, $normalization_folds);
             $status['counts']['phrase_synonym_rows'] = $phrase_synonyms['rows'];
             $status['counts']['phrase_synonym_expansions'] = $phrase_synonyms['expansions'];
         }
         if (isset($resource_paths['term_rules'])) {
-            $status['counts']['term_rule_rows'] = $this->validate_term_rules($resource_paths['term_rules'], $warnings);
+            $status['counts']['term_rule_rows'] = $this->validate_term_rules($resource_paths['term_rules'], $warnings, $normalization_folds);
         }
         if (isset($resource_paths['protected_terms'])) {
-            $status['counts']['protected_term_rows'] = $this->validate_protected_terms($resource_paths['protected_terms'], $warnings);
+            $status['counts']['protected_term_rows'] = $this->validate_protected_terms($resource_paths['protected_terms'], $warnings, $normalization_folds);
         }
 
         $status['max_expansion_fanout'] = $this->max_expansion_fanout($expansion_targets);
@@ -388,6 +398,39 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
+     * @param string[] $files
+     * @param array<mixed> $resources
+     */
+    private function validate_pack_files_include_profile_resources(
+        array $files,
+        array $resources,
+        string $profile_file,
+        string $pack_file,
+        array &$warnings
+    ): bool {
+        $valid = true;
+        $listed_files = array_fill_keys($files, true);
+
+        foreach ($resources as $key => $file) {
+            if (!is_string($key) || !is_string($file)) {
+                continue;
+            }
+
+            $file = trim($file);
+            if ($file === '' || !$this->is_local_file_name($file)) {
+                continue;
+            }
+
+            if (!isset($listed_files[$file])) {
+                $valid = false;
+                $warnings[] = "Language pack metadata files must include profile resource {$key} ({$file}) declared in {$profile_file}: {$pack_file}";
+            }
+        }
+
+        return $valid;
+    }
+
+    /**
      * @param array<mixed> $resources
      */
     private function resolve_resource_path(
@@ -430,7 +473,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         return $path;
     }
 
-    private function validate_stopwords(string $path, array &$warnings): int
+    /**
+     * @param array<string,string> $normalization_folds
+     */
+    private function validate_stopwords(string $path, array &$warnings, array $normalization_folds): int
     {
         $count = 0;
         $seen = [];
@@ -440,7 +486,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 continue;
             }
 
-            $token = $this->resource_token($line, $path, $line_number + 1, 'stopword', $warnings);
+            $token = $this->normalized_resource_token($line, $path, $line_number + 1, 'stopword', $warnings, $normalization_folds);
             if ($token === null) {
                 continue;
             }
@@ -455,7 +501,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         return $count;
     }
 
-    private function validate_lexemes(string $path, array &$warnings): int
+    /**
+     * @param array<string,string> $normalization_folds
+     */
+    private function validate_lexemes(string $path, array &$warnings, array $normalization_folds): int
     {
         $count = 0;
         $seen = [];
@@ -471,8 +520,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 continue;
             }
 
-            $form = $this->resource_token($columns[0], $path, $line_number + 1, 'lexeme observed form', $warnings);
-            $canonical = $this->resource_token($columns[1], $path, $line_number + 1, 'lexeme canonical key', $warnings);
+            $form = $this->normalized_resource_token($columns[0], $path, $line_number + 1, 'lexeme observed form', $warnings, $normalization_folds);
+            $canonical = $this->normalized_resource_token($columns[1], $path, $line_number + 1, 'lexeme canonical key', $warnings, $normalization_folds);
             if ($form === null || $canonical === null) {
                 continue;
             }
@@ -492,7 +541,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         return $count;
     }
 
-    private function validate_protected_terms(string $path, array &$warnings): int
+    /**
+     * @param array<string,string> $normalization_folds
+     */
+    private function validate_protected_terms(string $path, array &$warnings, array $normalization_folds): int
     {
         $count = 0;
         $seen = [];
@@ -502,14 +554,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 continue;
             }
 
-            $term = $this->resource_token($trimmed, $path, $line_number + 1, 'protected term', $warnings);
+            $term = $this->normalized_resource_token($trimmed, $path, $line_number + 1, 'protected term', $warnings, $normalization_folds);
             if ($term === null) {
-                continue;
-            }
-
-            $lowercase = function_exists('mb_strtolower') ? mb_strtolower($term, 'UTF-8') : strtolower($term);
-            if ($term !== $lowercase) {
-                $warnings[] = $this->resource_error($path, $line_number + 1, 'protected terms must be normalized lowercase resource tokens');
                 continue;
             }
 
@@ -523,7 +569,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         return $count;
     }
 
-    private function validate_term_rules(string $path, array &$warnings): int
+    /**
+     * @param array<string,string> $normalization_folds
+     */
+    private function validate_term_rules(string $path, array &$warnings, array $normalization_folds): int
     {
         $count = 0;
         $seen_ids = [];
@@ -540,7 +589,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 continue;
             }
 
-            $id = $this->validate_term_rule_row($columns, $path, $line_number, $warnings);
+            $id = $this->validate_term_rule_row($columns, $path, $line_number, $warnings, $normalization_folds);
             if ($id === null) {
                 continue;
             }
@@ -557,8 +606,9 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
     /**
      * @param string[] $columns
+     * @param array<string,string> $normalization_folds
      */
-    private function validate_term_rule_row(array $columns, string $path, int $line_number, array &$warnings): string|null
+    private function validate_term_rule_row(array $columns, string $path, int $line_number, array &$warnings, array $normalization_folds): string|null
     {
         $id = $this->term_rule_id($columns[0], $path, $line_number, $warnings);
         $valid = $id !== null;
@@ -569,6 +619,12 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
         if (!$this->term_rule_regex_is_valid($columns[2], $path, $line_number, $warnings)) {
             $valid = false;
+        }
+
+        foreach ([3 => 'strip_prefix', 4 => 'strip_suffix', 5 => 'append'] as $column_index => $label) {
+            if ($this->term_rule_literal_is_valid($columns[$column_index], $path, $line_number, $label, $warnings, $normalization_folds) === null) {
+                $valid = false;
+            }
         }
 
         if (trim($columns[3]) === '' && trim($columns[4]) === '' && trim($columns[5]) === '') {
@@ -585,6 +641,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         }
 
         if (!$this->term_rule_alternate_pattern_is_valid($columns[8], $columns[9], $path, $line_number, $warnings)) {
+            $valid = false;
+        }
+
+        if ($this->term_rule_literal_is_valid($columns[9], $path, $line_number, 'alternate_replacement', $warnings, $normalization_folds) === null) {
             $valid = false;
         }
 
@@ -708,10 +768,30 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
+     * @param array<string,string> $normalization_folds
+     */
+    private function term_rule_literal_is_valid(
+        string $value,
+        string $path,
+        int $line_number,
+        string $label,
+        array &$warnings,
+        array $normalization_folds
+    ): string|null {
+        $literal = trim($value);
+        if ($literal === '') {
+            return '';
+        }
+
+        return $this->normalized_resource_token($literal, $path, $line_number, 'term rule ' . $label, $warnings, $normalization_folds);
+    }
+
+    /**
      * @param array<string,array<string,bool>> $expansion_targets
+     * @param array<string,string> $normalization_folds
      * @return array{rows:int,expansions:int}
      */
-    private function validate_pairwise_synonyms(string $path, array &$warnings, array &$expansion_targets): array
+    private function validate_pairwise_synonyms(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds): array
     {
         $rows = 0;
         $expansions = 0;
@@ -729,8 +809,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 continue;
             }
 
-            $source = $this->resource_token($columns[0], $path, $line_number + 1, 'synonym source', $warnings);
-            $target = $this->resource_token($columns[1], $path, $line_number + 1, 'synonym target', $warnings);
+            $source = $this->normalized_resource_token($columns[0], $path, $line_number + 1, 'synonym source', $warnings, $normalization_folds);
+            $target = $this->normalized_resource_token($columns[1], $path, $line_number + 1, 'synonym target', $warnings, $normalization_folds);
             if ($source === null || $target === null) {
                 continue;
             }
@@ -776,9 +856,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
     /**
      * @param array<string,array<string,bool>> $expansion_targets
+     * @param array<string,string> $normalization_folds
      * @return array{rows:int,expansions:int,max_synset_size:int}
      */
-    private function validate_synsets(string $path, array &$warnings, array &$expansion_targets): array
+    private function validate_synsets(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds): array
     {
         $rows = 0;
         $expansions = 0;
@@ -817,7 +898,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 continue;
             }
 
-            $terms = $this->parse_synset_terms($columns[3], $path, $line_number + 1, $warnings);
+            $terms = $this->parse_synset_terms($columns[3], $path, $line_number + 1, $warnings, $normalization_folds);
             if ($terms === null) {
                 continue;
             }
@@ -862,9 +943,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
     /**
      * @param array<string,array<string,bool>> $expansion_targets
+     * @param array<string,string> $normalization_folds
      * @return array{rows:int,expansions:int}
      */
-    private function validate_synonym_phrases(string $path, array &$warnings, array &$expansion_targets): array
+    private function validate_synonym_phrases(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds): array
     {
         $rows = 0;
         $expansions = 0;
@@ -882,8 +964,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 continue;
             }
 
-            $source_terms = $this->parse_synonym_phrase_terms($columns[0], $path, $line_number + 1, 'synonym phrase source terms', $warnings);
-            $target_terms = $this->parse_synonym_phrase_terms($columns[1], $path, $line_number + 1, 'synonym phrase target terms', $warnings);
+            $source_terms = $this->parse_synonym_phrase_terms($columns[0], $path, $line_number + 1, 'synonym phrase source terms', $warnings, $normalization_folds);
+            $target_terms = $this->parse_synonym_phrase_terms($columns[1], $path, $line_number + 1, 'synonym phrase target terms', $warnings, $normalization_folds);
             if ($source_terms === null || $target_terms === null) {
                 continue;
             }
@@ -931,9 +1013,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
+     * @param array<string,string> $normalization_folds
      * @return string[]|null
      */
-    private function parse_synset_terms(string $terms_column, string $path, int $line_number, array &$warnings): array|null
+    private function parse_synset_terms(string $terms_column, string $path, int $line_number, array &$warnings, array $normalization_folds): array|null
     {
         if (trim($terms_column) === '') {
             $warnings[] = $this->resource_error($path, $line_number, 'synset terms must be non-empty');
@@ -955,15 +1038,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 return null;
             }
 
-            $term = $this->resource_token($term, $path, $line_number, 'synset term', $warnings);
+            $term = $this->normalized_resource_token($term, $path, $line_number, 'synset terms', $warnings, $normalization_folds);
             if ($term === null) {
-                return null;
-            }
-
-            $lowercase = function_exists('mb_strtolower') ? mb_strtolower($term, 'UTF-8') : strtolower($term);
-            if ($term !== $lowercase) {
-                $warnings[] = $this->resource_error($path, $line_number, 'synset terms must be normalized lowercase resource tokens');
-
                 return null;
             }
 
@@ -979,9 +1055,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
+     * @param array<string,string> $normalization_folds
      * @return string[]|null
      */
-    private function parse_synonym_phrase_terms(string $terms_column, string $path, int $line_number, string $label, array &$warnings): array|null
+    private function parse_synonym_phrase_terms(string $terms_column, string $path, int $line_number, string $label, array &$warnings, array $normalization_folds): array|null
     {
         if (trim($terms_column) === '') {
             $warnings[] = $this->resource_error($path, $line_number, "{$label} must be non-empty");
@@ -1003,15 +1080,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 return null;
             }
 
-            $term = $this->resource_token($term, $path, $line_number, rtrim($label, 's'), $warnings);
+            $term = $this->normalized_resource_token($term, $path, $line_number, $label, $warnings, $normalization_folds);
             if ($term === null) {
-                return null;
-            }
-
-            $lowercase = function_exists('mb_strtolower') ? mb_strtolower($term, 'UTF-8') : strtolower($term);
-            if ($term !== $lowercase) {
-                $warnings[] = $this->resource_error($path, $line_number, "{$label} must be normalized lowercase resource tokens");
-
                 return null;
             }
 
@@ -1076,21 +1146,29 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         return trim($value);
     }
 
-    private function validate_string_map(mixed $value, string $key, string $path, array &$warnings): void
+    /**
+     * @return array<string,string>
+     */
+    private function validate_string_map(mixed $value, string $key, string $path, array &$warnings): array
     {
         if (!is_array($value)) {
             $warnings[] = "Language profile {$key} must be an array in {$path}";
 
-            return;
+            return [];
         }
 
+        $map = [];
         foreach ($value as $from => $to) {
             if (!is_string($from) || !is_string($to) || $from === '' || $to === '') {
                 $warnings[] = "Language profile {$key} must map non-empty strings in {$path}";
 
-                return;
+                return [];
             }
+
+            $map[$from] = $to;
         }
+
+        return $map;
     }
 
     private function validate_string_list(mixed $value, string $key, string $path, array &$warnings): void
@@ -1148,6 +1226,41 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         }
 
         return $token;
+    }
+
+    /**
+     * @param array<string,string> $normalization_folds
+     */
+    private function normalized_resource_token(
+        string $value,
+        string $path,
+        int $line_number,
+        string $label,
+        array &$warnings,
+        array $normalization_folds
+    ): string|null {
+        $token = $this->resource_token($value, $path, $line_number, $label, $warnings);
+        if ($token === null) {
+            return null;
+        }
+
+        if ($token !== $this->normalize_resource_token($token, $normalization_folds)) {
+            $warnings[] = $this->resource_error($path, $line_number, "{$label} must be normalized lowercase resource tokens");
+
+            return null;
+        }
+
+        return $token;
+    }
+
+    /**
+     * @param array<string,string> $normalization_folds
+     */
+    private function normalize_resource_token(string $token, array $normalization_folds): string
+    {
+        $lowercase = function_exists('mb_strtolower') ? mb_strtolower($token, 'UTF-8') : strtolower($token);
+
+        return $normalization_folds === [] ? $lowercase : strtr($lowercase, $normalization_folds);
     }
 
     private function resource_weight(string $value, string $path, int $line_number, string $label, array &$warnings): float|null

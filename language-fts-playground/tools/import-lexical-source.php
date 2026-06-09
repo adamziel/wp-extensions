@@ -105,7 +105,7 @@ function language_fts_import_usage($stream): void
         "  --provenance=<tsv-provenance>\n" .
         "Optional:\n" .
         "  --weight=<0..1>              Default: 0.62\n" .
-        "  --data-kind=<kind>           curated_seed or imported_comprehensive. Default: imported_comprehensive\n" .
+        "  --data-kind=<kind>           curated_seed or imported_comprehensive. Default: curated_seed\n" .
         "  --delimiter=<character>      For openthesaurus-text. Default: ;\n"
     );
 }
@@ -211,7 +211,7 @@ function language_fts_import_config(string $format, string $input_path, string $
         throw new Language_FTS_Playground_Lexical_Import_Exception('Pack date must be a valid YYYY-MM-DD date.');
     }
 
-    $data_kind = trim((string) ($options['data_kind'] ?? 'imported_comprehensive'));
+    $data_kind = trim((string) ($options['data_kind'] ?? 'curated_seed'));
     if (!in_array($data_kind, ['curated_seed', 'imported_comprehensive'], true)) {
         throw new Language_FTS_Playground_Lexical_Import_Exception('Data kind must be curated_seed or imported_comprehensive.');
     }
@@ -450,7 +450,7 @@ function language_fts_import_write_outputs(array $config, array $state): array
     $synsets_path = language_fts_import_output_path((string) $config['output_dir'], 'synsets.tsv');
     language_fts_import_write_file($synsets_path, implode("\n", $synset_rows) . "\n");
 
-    $files = ['synsets.tsv'];
+    $generated_files = ['synsets.tsv'];
     $lexeme_count = 0;
     $lexemes_path = language_fts_import_output_path((string) $config['output_dir'], 'lexemes.tsv');
     if ($state['lexemes'] !== []) {
@@ -465,7 +465,7 @@ function language_fts_import_write_outputs(array $config, array $state): array
             }
         }
         language_fts_import_write_file($lexemes_path, implode("\n", $lexeme_rows) . "\n");
-        $files[] = 'lexemes.tsv';
+        $generated_files[] = 'lexemes.tsv';
     }
 
     $metadata = [
@@ -477,7 +477,7 @@ function language_fts_import_write_outputs(array $config, array $state): array
         'license_name' => $config['license_name'],
         'attribution_text' => $config['attribution_text'],
         'provenance' => $config['provenance'],
-        'files' => $files,
+        'files' => language_fts_import_pack_file_list((string) $config['output_dir'], $generated_files),
         'data_kind' => $config['data_kind'],
     ];
     $pack_path = language_fts_import_output_path((string) $config['output_dir'], 'pack.php');
@@ -492,9 +492,82 @@ function language_fts_import_write_outputs(array $config, array $state): array
     ];
 }
 
+/**
+ * @param string[] $generated_files
+ * @return string[]
+ */
+function language_fts_import_pack_file_list(string $output_dir, array $generated_files): array
+{
+    $files = [];
+    $seen = [];
+    $add_file = static function (string $file) use (&$files, &$seen): void {
+        $file = trim($file);
+        if ($file === '' || isset($seen[$file])) {
+            return;
+        }
+
+        $seen[$file] = true;
+        $files[] = $file;
+    };
+
+    $profile_path = $output_dir . DIRECTORY_SEPARATOR . 'profile.php';
+    if (is_file($profile_path)) {
+        $add_file('profile.php');
+        foreach (language_fts_import_profile_resource_files($profile_path) as $file) {
+            $add_file($file);
+        }
+    }
+
+    foreach ($generated_files as $file) {
+        if (!language_fts_import_is_local_file_name($file)) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('Generated output file name is not local: ' . $file);
+        }
+        $add_file($file);
+    }
+
+    return $files;
+}
+
+/**
+ * @return string[]
+ */
+function language_fts_import_profile_resource_files(string $profile_path): array
+{
+    try {
+        $profile = require $profile_path;
+    } catch (Throwable $throwable) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Could not load output profile for pack file list: ' . $profile_path . ': ' . $throwable->getMessage());
+    }
+
+    if (!is_array($profile)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Output profile must return an array for pack file list: ' . $profile_path);
+    }
+
+    $resources = $profile['resources'] ?? null;
+    if (!is_array($resources)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Output profile resources must be an array for pack file list: ' . $profile_path);
+    }
+
+    $files = [];
+    foreach ($resources as $key => $file) {
+        if (!is_string($key) || !is_string($file) || trim($file) === '') {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('Output profile resources must map names to non-empty file strings for pack file list: ' . $profile_path);
+        }
+
+        $file = trim($file);
+        if (!language_fts_import_is_local_file_name($file)) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('Output profile resource ' . $key . ' must be a local file name for pack file list: ' . $profile_path);
+        }
+
+        $files[] = $file;
+    }
+
+    return $files;
+}
+
 function language_fts_import_output_path(string $output_dir, string $file_name): string
 {
-    if ($file_name !== basename($file_name) || str_contains($file_name, '..')) {
+    if (!language_fts_import_is_local_file_name($file_name)) {
         throw new Language_FTS_Playground_Lexical_Import_Exception('Unsafe output file name: ' . $file_name);
     }
 
@@ -505,6 +578,11 @@ function language_fts_import_output_path(string $output_dir, string $file_name):
     }
 
     return $path;
+}
+
+function language_fts_import_is_local_file_name(string $file_name): bool
+{
+    return $file_name !== '' && $file_name === basename($file_name) && !str_contains($file_name, '..');
 }
 
 function language_fts_import_write_file(string $path, string $contents): void
