@@ -3608,6 +3608,37 @@ test_case('auto-routing live probe rejects bundled resource roots before creatin
     }
 });
 
+test_case('auto-routing live probe rejects symlinked bundled resource roots before creating them', function (): void {
+    assert_true(function_exists('symlink'), 'The symlink regression requires symlink support.');
+    $bundled_root = Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root();
+    $bundled_root_real = realpath($bundled_root);
+    assert_true(is_string($bundled_root_real), 'Bundled lexical resource root can be resolved.');
+
+    $temp_root = create_language_fts_temp_dir('language-fts-probe-symlink-guard');
+    $link = $temp_root . DIRECTORY_SEPARATOR . 'bundled-languages-link';
+    $target_name = 'probe-rejected-symlink-' . str_replace('.', '-', uniqid('', true));
+    $aliased_root = $link . DIRECTORY_SEPARATOR . $target_name;
+    $real_target = $bundled_root_real . DIRECTORY_SEPARATOR . $target_name;
+
+    try {
+        assert_true(symlink($bundled_root_real, $link), 'Bundled lexical resource root symlink is created.');
+        assert_true(!is_dir($real_target), 'Rejected symlinked bundled probe root starts absent.');
+
+        $result = run_language_fts_auto_routing_probe(['resource_root' => $aliased_root, 'json' => true]);
+
+        assert_true($result['exit_code'] !== 0, 'Symlinked bundled probe resource roots are rejected.');
+        assert_contains_text('Generated probe roots must not be inside bundled lexical resources', $result['output'], 'Rejected symlinked bundled probe root explains the guard.');
+        assert_true(!is_dir($real_target), 'Rejected symlinked bundled probe root is not created through the alias.');
+        assert_true(!is_dir($aliased_root), 'Rejected symlinked bundled probe root alias remains absent.');
+    } finally {
+        if (is_link($link)) {
+            unlink($link);
+        }
+        remove_language_fts_temp_tree($real_target);
+        remove_language_fts_temp_tree($temp_root);
+    }
+});
+
 test_case('lexical pack evaluator passes the committed fixture with quality gates', function (): void {
     $result = run_language_fts_evaluator(language_fts_eval_fixture_path('demo-suite.json'), [
         'min_recall_at_5' => '1.0',

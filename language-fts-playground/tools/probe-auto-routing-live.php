@@ -728,8 +728,8 @@ final class Language_FTS_Playground_Auto_Routing_Probe_Runner
     private function run_case(string $name, array $profiles, array $documents, string $query, callable $assertions, int $limit = 10): array
     {
         $resource_root = $this->work_root . DIRECTORY_SEPARATOR . $name;
-        $this->make_directory($resource_root);
         $this->assert_not_bundled_resource_root($resource_root);
+        $this->make_directory($resource_root);
         $this->write_profile_set($resource_root, $profiles);
         $validations = [
             $this->validate_generated_root($resource_root, false),
@@ -1166,13 +1166,131 @@ final class Language_FTS_Playground_Auto_Routing_Probe_Runner
             return;
         }
 
-        $target = realpath($path);
         $default_root = $this->normalize_path_for_comparison($default_root);
-        $target = $this->normalize_path_for_comparison($target === false ? $path : $target);
+        $resolved = $this->resolve_path_for_bundled_guard($path);
 
-        if ($target === $default_root || str_starts_with($target, $default_root . DIRECTORY_SEPARATOR)) {
+        if (
+            $this->path_matches_or_is_inside($resolved['existing_ancestor'], $default_root)
+            || $this->path_matches_or_is_inside($resolved['target'], $default_root)
+        ) {
             throw new Language_FTS_Playground_Auto_Routing_Probe_Failure('Generated probe roots must not be inside bundled lexical resources: ' . $path);
         }
+    }
+
+    /**
+     * Resolve existing path segments before comparing a target that may not
+     * exist yet. This catches symlink aliases to bundled resources before any
+     * generated probe directory is created.
+     *
+     * @return array{existing_ancestor:string,target:string}
+     */
+    private function resolve_path_for_bundled_guard(string $path): array
+    {
+        $path = $this->absolute_path_preserving_resolution_segments($path);
+        [$root, $components] = $this->split_absolute_path_for_resolution($path);
+        $root_real = realpath($root);
+        $resolved_existing = $root_real === false ? $root : $root_real;
+        $existing_ancestor = $resolved_existing;
+        $virtual_segments = [];
+
+        foreach ($components as $component) {
+            if ($component === '' || $component === '.') {
+                continue;
+            }
+
+            if ($component === '..') {
+                if ($virtual_segments !== []) {
+                    array_pop($virtual_segments);
+                } else {
+                    $resolved_existing = dirname($resolved_existing);
+                }
+
+                if ($virtual_segments === []) {
+                    $resolved_real = realpath($resolved_existing);
+                    if ($resolved_real !== false) {
+                        $resolved_existing = $resolved_real;
+                    }
+                    $existing_ancestor = $resolved_existing;
+                }
+                continue;
+            }
+
+            if ($virtual_segments === []) {
+                $candidate = $this->join_path_segment($resolved_existing, $component);
+                $candidate_real = realpath($candidate);
+                if ($candidate_real !== false) {
+                    $resolved_existing = $candidate_real;
+                    $existing_ancestor = $resolved_existing;
+                    continue;
+                }
+            }
+
+            $virtual_segments[] = $component;
+        }
+
+        $target = $resolved_existing;
+        foreach ($virtual_segments as $segment) {
+            $target = $this->join_path_segment($target, $segment);
+        }
+
+        return [
+            'existing_ancestor' => $this->normalize_path_for_comparison($existing_ancestor),
+            'target' => $this->normalize_path_for_comparison($target),
+        ];
+    }
+
+    private function absolute_path_preserving_resolution_segments(string $path): string
+    {
+        $path = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($path));
+        if ($this->is_absolute_path($path)) {
+            return $path;
+        }
+
+        $cwd = getcwd();
+        if (!is_string($cwd) || $cwd === '') {
+            return $path;
+        }
+
+        return $this->join_path_segment($cwd, $path);
+    }
+
+    /**
+     * @return array{0:string,1:string[]}
+     */
+    private function split_absolute_path_for_resolution(string $path): array
+    {
+        if (preg_match('/^[A-Za-z]:' . preg_quote(DIRECTORY_SEPARATOR, '/') . '/', $path) === 1) {
+            $root = substr($path, 0, 3);
+            $path = substr($path, 3);
+
+            return [$root, $path === '' ? [] : explode(DIRECTORY_SEPARATOR, $path)];
+        }
+
+        if (str_starts_with($path, DIRECTORY_SEPARATOR)) {
+            $path = ltrim($path, DIRECTORY_SEPARATOR);
+
+            return [DIRECTORY_SEPARATOR, $path === '' ? [] : explode(DIRECTORY_SEPARATOR, $path)];
+        }
+
+        return ['', $path === '' ? [] : explode(DIRECTORY_SEPARATOR, $path)];
+    }
+
+    private function join_path_segment(string $base, string $segment): string
+    {
+        if ($base === '' || $base === DIRECTORY_SEPARATOR) {
+            return $base . $segment;
+        }
+
+        if (preg_match('/^[A-Za-z]:' . preg_quote(DIRECTORY_SEPARATOR, '/') . '$/', $base) === 1) {
+            return $base . $segment;
+        }
+
+        return rtrim($base, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $segment;
+    }
+
+    private function path_matches_or_is_inside(string $path, string $root): bool
+    {
+        return $path === $root || str_starts_with($path, $root . DIRECTORY_SEPARATOR);
     }
 
     private function normalize_path_for_comparison(string $path): string
