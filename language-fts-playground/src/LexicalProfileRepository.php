@@ -33,9 +33,9 @@ declare(strict_types=1);
  *   maintainers. Query-time profile loading does not read it.
  *
  * The repository parses each language lazily and caches the parsed profile for
- * the analyzer instance. Parsed stopwords, lexemes, and query expansions are
- * keyed maps so token lookup and query expansion do not scan whole resource
- * files.
+ * the analyzer instance. Parsed stopwords, lexemes, query expansions, and
+ * phrase synonym candidates are keyed maps so token lookup and query expansion
+ * do not scan whole resource files.
  */
 final class Language_FTS_Playground_Lexical_Profile_Repository
 {
@@ -157,6 +157,51 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'synonym_sources' => $profile['synonym_sources'],
             'synonym_phrases' => $profile['synonym_phrases'],
         ];
+    }
+
+    public function has_synonym_phrase_candidates(string $language): bool
+    {
+        return ($this->profile($language)['synonym_phrase_index'] ?? []) !== [];
+    }
+
+    /**
+     * Return phrase synonym rows whose source can start with one of the given
+     * query keys and whose source length exactly matches the requested length.
+     *
+     * @param string[] $first_source_keys
+     * @return array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>
+     */
+    public function synonym_phrase_candidates(string $language, array $first_source_keys, int $source_length): array
+    {
+        if ($source_length <= 0 || $first_source_keys === []) {
+            return [];
+        }
+
+        $profile = $this->profile($language);
+        $index = $profile['synonym_phrase_index'] ?? [];
+        if ($index === []) {
+            return [];
+        }
+
+        $candidates = [];
+        foreach ($first_source_keys as $first_source_key) {
+            $first_source_key = trim((string) $first_source_key);
+            if ($first_source_key === '' || !isset($index[$first_source_key][$source_length])) {
+                continue;
+            }
+
+            foreach ($index[$first_source_key][$source_length] as $phrase) {
+                $source = (string) ($phrase['source'] ?? '');
+                $target = (string) ($phrase['target'] ?? '');
+                if ($source === '' || $target === '') {
+                    continue;
+                }
+
+                $candidates[$source . "\t" . $target . "\t" . (string) ($phrase['provenance'] ?? '')] = $phrase;
+            }
+        }
+
+        return array_values($candidates);
     }
 
     /**
@@ -384,6 +429,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'synonym_sources' => $this->lookup_from_keys($synonym_sources),
             'synonyms' => $synonyms,
             'synonym_phrases' => $synonym_phrases,
+            'synonym_phrase_index' => $this->index_synonym_phrases($synonym_phrases),
         ];
     }
 
@@ -1086,6 +1132,33 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'direction' => $direction,
             'provenance' => $provenance,
         ];
+    }
+
+    /**
+     * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}> $synonym_phrases
+     * @return array<string,array<int,array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>>>
+     */
+    private function index_synonym_phrases(array $synonym_phrases): array
+    {
+        $index = [];
+        foreach ($synonym_phrases as $phrase) {
+            $source_terms = array_values(array_map('strval', $phrase['source_terms'] ?? []));
+            $source_length = count($source_terms);
+            $first_source_key = $source_terms[0] ?? '';
+            if ($first_source_key === '' || $source_length === 0) {
+                continue;
+            }
+
+            $index[$first_source_key][$source_length][] = $phrase;
+        }
+
+        ksort($index, SORT_STRING);
+        foreach ($index as $first_source_key => $by_length) {
+            ksort($by_length, SORT_NUMERIC);
+            $index[$first_source_key] = $by_length;
+        }
+
+        return $index;
     }
 
     /**

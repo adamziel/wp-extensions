@@ -344,39 +344,40 @@ final class Language_FTS_Playground_Analyzer
             return [];
         }
 
-        $phrases = $this->profiles->profile($language)['synonym_phrases'];
-        if ($phrases === []) {
+        if (!$this->profiles->has_synonym_phrase_candidates($language)) {
             return [];
         }
 
         $expanded = [];
         $query_length = count($query_token_keys);
-        foreach ($phrases as $phrase) {
-            $source_terms = array_values(array_map('strval', $phrase['source_terms'] ?? []));
-            $source_length = count($source_terms);
-            if ($source_length === 0 || $source_length > $query_length) {
+        for ($offset = 0; $offset < $query_length; $offset++) {
+            $first_source_keys = $this->unique_terms($query_token_keys[$offset] ?? []);
+            if ($first_source_keys === []) {
                 continue;
             }
 
-            for ($offset = 0; $offset <= $query_length - $source_length; $offset++) {
-                if (!$this->query_tokens_match_source($query_token_keys, $offset, $source_terms)) {
-                    continue;
-                }
+            for ($source_length = 1; $source_length <= $query_length - $offset; $source_length++) {
+                foreach ($this->profiles->synonym_phrase_candidates($language, $first_source_keys, $source_length) as $phrase) {
+                    $source_terms = array_values(array_map('strval', $phrase['source_terms'] ?? []));
+                    if (count($source_terms) !== $source_length || !$this->query_tokens_match_source($query_token_keys, $offset, $source_terms)) {
+                        continue;
+                    }
 
-                $target_terms = array_values(array_map('strval', $phrase['target_terms'] ?? []));
-                $source = (string) ($phrase['source'] ?? implode(' ', $source_terms));
-                $target = (string) ($phrase['target'] ?? implode(' ', $target_terms));
-                $key = $offset . "\t" . $source . "\t" . $target;
-                $expanded[$key] = [
-                    'source_terms' => $source_terms,
-                    'target_terms' => $target_terms,
-                    'source' => $source,
-                    'target' => $target,
-                    'weight' => (float) $phrase['weight'],
-                    'direction' => (string) $phrase['direction'],
-                    'provenance' => (string) $phrase['provenance'],
-                    'offset' => $offset,
-                ];
+                    $target_terms = array_values(array_map('strval', $phrase['target_terms'] ?? []));
+                    $source = (string) ($phrase['source'] ?? implode(' ', $source_terms));
+                    $target = (string) ($phrase['target'] ?? implode(' ', $target_terms));
+                    $key = $offset . "\t" . $source . "\t" . $target;
+                    $expanded[$key] = [
+                        'source_terms' => $source_terms,
+                        'target_terms' => $target_terms,
+                        'source' => $source,
+                        'target' => $target,
+                        'weight' => (float) $phrase['weight'],
+                        'direction' => (string) $phrase['direction'],
+                        'provenance' => (string) $phrase['provenance'],
+                        'offset' => $offset,
+                    ];
+                }
             }
         }
 

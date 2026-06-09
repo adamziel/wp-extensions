@@ -8,6 +8,14 @@ final class Language_FTS_Playground_Test_Failure extends RuntimeException
 {
 }
 
+final class Language_FTS_Playground_Exploding_Phrase_Term
+{
+    public function __toString(): string
+    {
+        throw new RuntimeException('Unrelated phrase synonym row was evaluated.');
+    }
+}
+
 final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playground_Storage_Interface
 {
     /** @var array<string,array{post_id:int,language:string,title:string,status:string,document_length:int,field_texts:array<string,string>,field_metadata:array<string,array{language:string,language_provenance:string}>,updated_at:string}> */
@@ -2799,6 +2807,44 @@ test_case('loads synonym phrase resource rows into analyzer phrase expansions', 
         $reverse_tokens = $analyzer->analyze_text_token_keys('search site', 'xx');
         $reverse = $analyzer->expand_query_synonym_phrases($reverse_tokens, 'xx');
         assert_same(['site', 'search'], $reverse[0]['target_terms'] ?? [], 'Bidirectional phrase rows expand in the reverse direction.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('phrase synonym expansion uses indexed candidates instead of evaluating unrelated rows', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nportal lookup\tsearch site\tquery_to_index\t0.74\tfixture-phrases\nalpha beta\tgamma\tquery_to_index\t0.61\tfixture-phrases\n"
+    );
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $profile = $repository->profile('xx');
+        assert_same(2, count($profile['synonym_phrases'] ?? []), 'The fixture loads multiple phrase synonym rows.');
+
+        $profiles_property = new ReflectionProperty(Language_FTS_Playground_Lexical_Profile_Repository::class, 'profiles');
+        $profiles_property->setAccessible(true);
+        $profiles = $profiles_property->getValue($repository);
+        $profiles['xx']['synonym_phrases'][] = [
+            'source_terms' => [new Language_FTS_Playground_Exploding_Phrase_Term()],
+            'target_terms' => ['unused'],
+            'source' => 'exploding',
+            'target' => 'unused',
+            'weight' => 0.5,
+            'direction' => 'query_to_index',
+            'provenance' => 'test-only',
+        ];
+        $profiles_property->setValue($repository, $profiles);
+
+        $analyzer = new Language_FTS_Playground_Analyzer($repository);
+        $query_tokens = $analyzer->analyze_text_token_keys('portal lookup', 'xx');
+        $expansions = $analyzer->expand_query_synonym_phrases($query_tokens, 'xx');
+
+        assert_same(1, count($expansions), 'Only phrase rows matching the query first key and source length are evaluated.');
+        assert_same(['search', 'site'], $expansions[0]['target_terms'] ?? [], 'The relevant phrase synonym still expands normally.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
