@@ -304,13 +304,24 @@ packs. Fixture documents include `id`, `language`, `title`, optional `excerpt`,
 `content`, optional searchable HTML or image alt text, and optional notes.
 Fixture queries include `query`, optional `language` (`auto` by default),
 `relevant` ids, optional `irrelevant` ids that must not appear in the top five,
-and optional notes/provenance. The evaluator reports recall@5, precision@5,
-MRR, nDCG@5, misses, and unexpected top-5 hits, then exits nonzero when a
-configured threshold or guard fails.
+optional `expect` assertions, and optional notes/provenance. The evaluator
+reports recall@5, precision@5, MRR, nDCG@5, misses, unexpected top-5 hits,
+selected partitions, expectation failures, and deterministic explain summaries,
+then exits nonzero when a configured threshold or guard fails. Use
+`expect.no_results` for no-result guards, `expect.top_ids` for ordered rank
+prefix checks, `expect.selected_partitions` for automatic routing assertions,
+`expect.diagnostics_contains`/`expect.diagnostics_not_contains` for explain
+payload checks, and document-id maps under `expect.matched_fields`,
+`expect.matched_terms`, `expect.match_classes`, `expect.snippet_contains`, and
+`expect.snippet_not_contains` for matched metadata and snippet safety checks.
 
 The committed `phrase-suite.json` fixture checks the bundled
 `full text search -> fts` phrase synonym and includes a false-positive guard for
-partial acronym/token matches.
+partial acronym/token matches. The committed `coverage-suite.json` fixture
+exercises ordered ranking, no-result false-positive guards, explain
+diagnostics, matched fields/terms/classes, snippets, morphology, synonyms,
+multiword phrase synonyms, fuzzy search, no-evidence automatic fallback,
+field-aware ranking, and explicit-vs-auto language behavior.
 
 The `Tools -> Language FTS` admin page includes a compact lexical pack status
 table with language, data kind, source, license, version/date, counts, and
@@ -429,8 +440,14 @@ php language-fts-playground/tools/validate-lexical-packs.php
 php -n language-fts-playground/tools/validate-lexical-packs.php
 php language-fts-playground/tools/validate-lexical-packs.php --json
 php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json
-php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json --json
 php -n language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json
+php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/demo-suite.json --json
+php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/phrase-suite.json
+php -n language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/phrase-suite.json
+php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/phrase-suite.json --json
+php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/coverage-suite.json
+php -n language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/coverage-suite.json
+php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/coverage-suite.json --json
 php -r "json_decode(file_get_contents('language-fts-playground/playground/blueprint.json')); if (json_last_error()) { fwrite(STDERR, json_last_error_msg() . PHP_EOL); exit(1); }"
 find language-fts-playground -name "*.php" -print0 | xargs -0 -n1 php -l
 ```
