@@ -983,6 +983,8 @@ final class WP_FTS_Test_WPDB
     public string $posts = 'wp_posts';
     public string $last_error = '';
     public ?string $failQueryPrefix = null;
+    public ?object $dbh = null;
+    public bool $missPreparedTermLookups = false;
 
     /** @var array<int,string> */
     public array $queries = [];
@@ -1205,10 +1207,16 @@ final class WP_FTS_Test_WPDB
     public function get_results(mixed $statement): array
     {
         [$sql, $args] = $this->statement_parts($statement);
+        if ($this->missPreparedTermLookups && $args !== [] && (
+            str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')
+            || str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
+        )) {
+            return [];
+        }
 
         if (str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')) {
             $rows = [];
-            foreach ($args as $term) {
+            foreach ($args === [] ? array_keys($this->terms) : $args as $term) {
                 $term = (string) $term;
                 if (isset($this->terms[$term])) {
                     $rows[] = (object) [
@@ -1222,7 +1230,7 @@ final class WP_FTS_Test_WPDB
 
         if (str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')) {
             $rows = [];
-            foreach ($args as $term) {
+            foreach ($args === [] ? array_keys($this->postings) : $args as $term) {
                 $term = (string) $term;
                 foreach ($this->postings[$term] ?? [] as $docId => $tf) {
                     $rows[] = (object) ['term' => $term, 'doc_id' => (int) $docId, 'tf' => (int) $tf];
@@ -1415,6 +1423,10 @@ final class WP_FTS_Test_WPDB
 
         return [(string) $statement, []];
     }
+}
+
+final class WP_FTS_Test_SQLite_Driver
+{
 }
 
 final class WP_FTS_Test_Language_Aware_Analyzer

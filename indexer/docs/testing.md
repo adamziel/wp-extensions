@@ -69,6 +69,34 @@ LD_LIBRARY_PATH=/nix/store/f2q5ld1nipl8w1r2w8m6azhlm2varqgb-zlib-1.3.1/lib:/nix/
 
 If `bm25s` is not installed, the script exits as an explicit optional skip.
 
+## WordPress Playground SQLite Benchmark Probe
+
+Run the committed live benchmark probe from the repository worktree root:
+
+```sh
+mkdir -p /tmp/wp-fts-live-benchmark
+npx @wp-playground/cli@latest run-blueprint \
+  --blueprint=indexer/playground/live-benchmark-blueprint.json \
+  --mount="$(pwd)/indexer:/wordpress/wp-content/plugins/indexer" \
+  --mount=/tmp/wp-fts-live-benchmark:/wordpress/wp-content/benchmark-output \
+  --blueprint-may-read-adjacent-files \
+  --verbosity=quiet
+cat /tmp/wp-fts-live-benchmark/live-benchmark.json
+```
+
+The probe activates the mounted `indexer` plugin in WordPress Playground,
+asserts SQLite runtime evidence, inserts a deterministic 72-post corpus across
+three explicit language partitions, indexes through `WP_FTS_Indexer`, searches
+through `WP_FTS_Searcher`, and writes one JSON artifact with row counts,
+timings, memory deltas, probe totals, and hard gates. It also emits a
+`WP_FTS_LIVE_PLAYGROUND_BENCHMARK` log line for runners that capture `runPHP`
+output.
+
+The hard gates require 72 indexed docs, 72 language-length rows, at least 576
+posting rows, exact common-term totals for one and three language partitions, a
+snippet-bearing metadata result, index time within 60 seconds, and peak memory
+within 128 MiB in the Playground runtime.
+
 ## PHP Syntax Check
 
 Run a syntax pass over source and tests:
