@@ -1,0 +1,7 @@
+# Synthetic plWordNet-style pre-extracted synset membership with observed forms.
+plwn-control-1	kierowac	kierowaniu	0.58
+plwn-control-1	prowadzic	prowadzeniu	0.58
+plwn-control-1	zarzadzac	zarzadzania	0.58
+plwn-find-1	szukac	szukaj	0.66
+plwn-find-1	wyszukiwac	wyszukiwane	0.66
+plwn-find-1	odnajdywac	odnajdywanie	0.66

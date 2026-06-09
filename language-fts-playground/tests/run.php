@@ -1471,13 +1471,15 @@ function run_language_fts_importer(string $format, string $input_path, string $o
  * @param array<string,mixed> $options
  * @return array{exit_code:int,output:string}
  */
-function run_language_fts_validator(array $options = []): array
+function run_language_fts_validator(array $options = [], bool $no_ini = true): array
 {
     $command = [
         escapeshellarg(PHP_BINARY),
-        '-n',
-        escapeshellarg(__DIR__ . '/../tools/validate-lexical-packs.php'),
     ];
+    if ($no_ini) {
+        $command[] = '-n';
+    }
+    $command[] = escapeshellarg(__DIR__ . '/../tools/validate-lexical-packs.php');
 
     foreach ($options as $key => $value) {
         $option = '--' . str_replace('_', '-', (string) $key);
@@ -3784,6 +3786,38 @@ test_case('OpenThesaurus text importer compiles a German synset row', function (
     }
 });
 
+test_case('OpenThesaurus importer preserves ambiguous German source groups deterministically', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-openthesaurus-ambiguity-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'openthesaurus-text',
+            language_fts_import_fixture_path('openthesaurus-ambiguity.txt'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'de',
+                'source_name' => 'OpenThesaurus ambiguity fixture',
+                'source_url' => 'https://www.openthesaurus.de/about/download',
+                'license_name' => 'CC BY-SA 4.0 or LGPL',
+                'attribution' => 'Synthetic OpenThesaurus-style ambiguity fixture data.',
+                'provenance' => 'fixture-openthesaurus-ambiguity',
+                'weight' => '0.61',
+            ])
+        );
+        assert_same(0, $result['exit_code'], 'openthesaurus-text ambiguity import exits successfully. Output: ' . $result['output']);
+        assert_same(
+            "# concept_id\tweight\tprovenance\tterms\n" .
+            "openthesaurus.line-000002\t0.61\tfixture-openthesaurus-ambiguity\tbank geldinstitut kreditinstitut\n" .
+            "openthesaurus.line-000003\t0.61\tfixture-openthesaurus-ambiguity\tbank parkbank sitzbank\n" .
+            "openthesaurus.line-000004\t0.61\tfixture-openthesaurus-ambiguity\tfinden recherche suche suchen\n",
+            file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synsets.tsv'),
+            'Repeated ambiguous source terms stay in distinct source-line concepts.'
+        );
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
 test_case('simple WordNet JSON fixture compiles an English synset row', function (): void {
     $output_dir = create_language_fts_temp_dir('language-fts-wordnet-import');
 
@@ -3849,6 +3883,38 @@ test_case('Global Wordnet JSON-LD importer resolves synset member IDs through le
     }
 });
 
+test_case('Global Wordnet JSON-LD importer resolves object-map source excerpts deterministically', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-wordnet-jsonld-source-shaped-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'wordnet-json',
+            language_fts_import_fixture_path('wordnet-jsonld-source-shaped.json'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'en',
+                'source_name' => 'Open English WordNet source-shaped fixture',
+                'source_url' => 'https://globalwordnet.github.io/schemas/#json',
+                'license_name' => 'CC-BY 4.0',
+                'attribution' => 'Synthetic Open English WordNet-shaped JSON-LD fixture data.',
+                'provenance' => 'fixture-wordnet-jsonld-source-shaped',
+            ])
+        );
+        assert_same(0, $result['exit_code'], 'wordnet-json source-shaped JSON-LD importer exits successfully. Output: ' . $result['output']);
+
+        $synsets = file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synsets.tsv');
+        assert_same(
+            "# concept_id\tweight\tprovenance\tterms\noewn-index-v-0001\t0.68\tfixture-wordnet-jsonld-source-shaped\tcatalog index list\n",
+            $synsets,
+            'Object-map lexical entries, mixed member refs, and confidenceScore compile deterministically.'
+        );
+        assert_not_contains_text('oewn-index-v-0001-01', $synsets, 'Object member refs are resolved before runtime synset output.');
+        assert_not_contains_text('oewn-catalog-v-0001-01', $synsets, 'Target member refs are resolved before runtime synset output.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
 test_case('Global Wordnet JSON-LD importer rejects unresolved member IDs', function (): void {
     $output_dir = create_language_fts_temp_dir('language-fts-wordnet-jsonld-broken-import');
 
@@ -3869,6 +3935,31 @@ test_case('Global Wordnet JSON-LD importer rejects unresolved member IDs', funct
 
         assert_true($result['exit_code'] !== 0, 'Unresolved JSON-LD member IDs exit nonzero.');
         assert_contains_text('member oewn-missing-v-0001-01 could not be resolved to a lexical written form', $result['output'], 'Unresolved JSON-LD member IDs report the missing mapping.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('Global Wordnet JSON-LD importer rejects malformed lexical entry containers', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-wordnet-jsonld-malformed-import');
+
+    try {
+        $result = run_language_fts_importer(
+            'wordnet-json',
+            language_fts_import_fixture_path('wordnet-jsonld-malformed-entry.json'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'en',
+                'source_name' => 'Malformed Open English WordNet JSON-LD fixture',
+                'source_url' => 'https://globalwordnet.github.io/schemas/#json',
+                'license_name' => 'CC-BY 4.0',
+                'attribution' => 'Malformed JSON-LD fixture data.',
+                'provenance' => 'fixture-wordnet-jsonld-malformed',
+            ])
+        );
+
+        assert_true($result['exit_code'] !== 0, 'Malformed JSON-LD entry containers exit nonzero.');
+        assert_contains_text('wordnet-json lexical entries must be an array or object', $result['output'], 'Malformed JSON-LD entry shape reports the source family problem.');
     } finally {
         remove_language_fts_temp_tree($output_dir);
     }
@@ -3896,6 +3987,74 @@ test_case('WordNet JSON importer rejects scalar sense IDs without lexical entrie
         assert_contains_text('member example-en-10161911-n-1 could not be resolved to a lexical written form', $result['output'], 'Unresolved scalar sense IDs report the missing mapping.');
     } finally {
         remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('plWordNet source-shaped membership import feeds repository and validator', function (): void {
+    $profile_tree = create_language_fts_temp_import_profile('plx');
+
+    try {
+        $result = run_language_fts_importer(
+            'wordnet-membership-tsv',
+            language_fts_import_fixture_path('plwordnet-export-membership.tsv'),
+            $profile_tree['language_dir'],
+            language_fts_import_options([
+                'language' => 'plx',
+                'source_name' => 'plWordNet export fixture',
+                'source_url' => 'https://clarin-pl.eu/license/plwordnet',
+                'license_name' => 'plWordNet license',
+                'attribution' => 'Synthetic plWordNet-style membership export fixture data.',
+                'provenance' => 'fixture-plwordnet-export',
+                'data_kind' => 'curated_seed',
+            ])
+        );
+        assert_same(0, $result['exit_code'], 'wordnet-membership-tsv source-shaped import exits successfully. Output: ' . $result['output']);
+        assert_same(
+            "# concept_id\tweight\tprovenance\tterms\n" .
+            "plwn-control-1\t0.58\tfixture-plwordnet-export\tkierowac prowadzic zarzadzac\n" .
+            "plwn-find-1\t0.66\tfixture-plwordnet-export\todnajdywac szukac wyszukiwac\n",
+            file_get_contents($profile_tree['language_dir'] . DIRECTORY_SEPARATOR . 'synsets.tsv'),
+            'plWordNet-style membership rows preserve per-concept weights and deterministic canonical keys.'
+        );
+        assert_same(
+            "# observed\tcanonical\tprovenance\n" .
+            "kierowaniu\tkierowac\tfixture-plwordnet-export\n" .
+            "odnajdywanie\todnajdywac\tfixture-plwordnet-export\n" .
+            "prowadzeniu\tprowadzic\tfixture-plwordnet-export\n" .
+            "szukaj\tszukac\tfixture-plwordnet-export\n" .
+            "wyszukiwane\twyszukiwac\tfixture-plwordnet-export\n" .
+            "zarzadzania\tzarzadzac\tfixture-plwordnet-export\n",
+            file_get_contents($profile_tree['language_dir'] . DIRECTORY_SEPARATOR . 'lexemes.tsv'),
+            'plWordNet-style observed forms become deterministic lexeme mappings.'
+        );
+
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($profile_tree['root']);
+        $profile = $repository->profile('plx');
+        assert_same(['prowadzic'], $profile['lexemes']['prowadzeniu'] ?? [], 'Generated observed forms are consumable by the profile repository.');
+        assert_same(['prowadzic', 'zarzadzac'], array_column($profile['synonyms']['kierowac'] ?? [], 'term'), 'Generated source-shaped synsets feed repository query expansions.');
+
+        $normal_validator = run_language_fts_validator([
+            'resource_root' => $profile_tree['root'],
+            'json' => true,
+        ], false);
+        $no_ini_validator = run_language_fts_validator([
+            'resource_root' => $profile_tree['root'],
+            'json' => true,
+        ]);
+
+        assert_same(0, $normal_validator['exit_code'], 'Generated source-shaped pack validates under normal PHP. Output: ' . $normal_validator['output']);
+        assert_same(0, $no_ini_validator['exit_code'], 'Generated source-shaped pack validates under php -n. Output: ' . $no_ini_validator['output']);
+        $normal_report = json_decode($normal_validator['output'], true);
+        $no_ini_report = json_decode($no_ini_validator['output'], true);
+        assert_true(is_array($normal_report), 'Normal PHP validator JSON is parseable.');
+        assert_true(is_array($no_ini_report), 'php -n validator JSON is parseable.');
+        assert_same(true, $normal_report['valid'] ?? null, 'Normal PHP validator marks generated source-shaped pack valid.');
+        assert_same(true, $no_ini_report['valid'] ?? null, 'php -n validator marks generated source-shaped pack valid.');
+        $normal_by_id = language_fts_pack_status_by_id($normal_report);
+        assert_same(6, $normal_by_id['plx']['counts']['lexeme_rows'] ?? null, 'Validator counts generated plWordNet observed-form rows.');
+        assert_same(2, $normal_by_id['plx']['counts']['synset_rows'] ?? null, 'Validator counts generated plWordNet synset rows.');
+    } finally {
+        remove_language_fts_temp_tree($profile_tree['root']);
     }
 });
 
@@ -3958,6 +4117,30 @@ test_case('malformed lexical imports fail with clear nonzero CLI output', functi
         );
         assert_true($invalid_weight['exit_code'] !== 0, 'Invalid importer weight exits nonzero.');
         assert_contains_text('weight must be greater than 0 and no more than 1', $invalid_weight['output'], 'Invalid importer weight reports its valid range.');
+
+        $malformed_openthesaurus = run_language_fts_importer(
+            'openthesaurus-text',
+            language_fts_import_fixture_path('openthesaurus-malformed.txt'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'de',
+                'provenance' => 'fixture-openthesaurus-malformed',
+            ])
+        );
+        assert_true($malformed_openthesaurus['exit_code'] !== 0, 'Malformed OpenThesaurus input exits nonzero.');
+        assert_contains_text('OpenThesaurus rows must contain at least 2 delimiter-separated terms', $malformed_openthesaurus['output'], 'Malformed OpenThesaurus rows report the row shape problem.');
+
+        $conflicting_plwordnet = run_language_fts_importer(
+            'wordnet-membership-tsv',
+            language_fts_import_fixture_path('plwordnet-membership-conflicting-weight.tsv'),
+            $output_dir,
+            language_fts_import_options([
+                'language' => 'pl',
+                'provenance' => 'fixture-plwordnet-conflicting-weight',
+            ])
+        );
+        assert_true($conflicting_plwordnet['exit_code'] !== 0, 'Conflicting plWordNet membership weights exit nonzero.');
+        assert_contains_text('conflicting weights for concept plwn-conflict-1', $conflicting_plwordnet['output'], 'Conflicting plWordNet membership weights report the concept id.');
     } finally {
         remove_language_fts_temp_tree($output_dir);
     }
