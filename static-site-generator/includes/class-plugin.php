@@ -13,6 +13,8 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Wires the exporter into WordPress.
  */
 final class SSGWP_Plugin {
+	const PLAYGROUND_SOURCE_HANDOFF_OPTION = 'ssgwp_playground_source_handoff';
+
 	/**
 	 * Register hooks.
 	 */
@@ -77,6 +79,7 @@ final class SSGWP_Plugin {
 		<div class="wrap">
 			<h1><?php esc_html_e( 'StillPress', 'playground-static-site-generator' ); ?></h1>
 			<p><?php esc_html_e( 'Export public WordPress pages and frontend assets as a static ZIP that can be hosted anywhere.', 'playground-static-site-generator' ); ?></p>
+			<?php self::render_playground_source_handoff_panel(); ?>
 
 			<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post" id="ssgwp-export-form" target="ssgwp-export-download-frame">
 				<input type="hidden" name="action" value="ssgwp_export" />
@@ -100,9 +103,23 @@ final class SSGWP_Plugin {
 							<label>
 								<input type="checkbox" name="generate_robots" value="1" />
 								<?php esc_html_e( 'robots.txt with a sitemap reference', 'playground-static-site-generator' ); ?>
+							</label><br />
+							<label>
+								<input type="hidden" name="include_playground_admin" value="0" />
+								<input type="checkbox" name="include_playground_admin" value="1" checked />
+								<?php esc_html_e( 'static /wp-admin/ handoff to WordPress Playground', 'playground-static-site-generator' ); ?>
+							</label><br />
+							<label>
+								<input type="hidden" name="include_playground_source_state" value="0" />
+								<input type="checkbox" name="include_playground_source_state" value="1" checked />
+								<?php esc_html_e( 'owner-only Playground source-state artifacts', 'playground-static-site-generator' ); ?>
+							</label><br />
+							<label>
+								<input type="checkbox" name="include_cloudflare_publish" value="1" />
+								<?php esc_html_e( 'Cloudflare Workers publish contract', 'playground-static-site-generator' ); ?>
 							</label>
 							<p class="description">
-								<?php esc_html_e( 'Theme, plugin, WordPress CSS/JS, and linked site pages are included automatically so the static site works.', 'playground-static-site-generator' ); ?>
+								<?php esc_html_e( 'Theme, plugin, WordPress CSS/JS, linked site pages, the static /wp-admin/ Playground handoff, and owner-only source-state artifacts are included by default. Keep _playground-source/ owner-only and do not blindly publish it with visitor-facing static files.', 'playground-static-site-generator' ); ?>
 							</p>
 						</td>
 					</tr>
@@ -480,6 +497,198 @@ final class SSGWP_Plugin {
 	}
 
 	/**
+	 * Render restored Playground source-state context, when present.
+	 */
+	private static function render_playground_source_handoff_panel() {
+		$context = self::get_playground_source_handoff_context();
+
+		if ( null === $context ) {
+			return;
+		}
+
+		?>
+		<div class="notice notice-info ssgwp-playground-source-handoff">
+			<p><strong><?php esc_html_e( 'Playground source-state handoff', 'playground-static-site-generator' ); ?></strong></p>
+			<?php if ( ! empty( $context['full_site_restore'] ) ) : ?>
+				<p><?php esc_html_e( 'This Playground admin was opened from an owner-only SQLite full-site source-state bundle. The restore imported wp-content plus the SQLite database, including plugins, themes, uploads, content, and database-stored settings. It is still owner-only source material, not a credential or authorization system. Edit content and plugins here, then export a new static ZIP from this page.', 'playground-static-site-generator' ); ?></p>
+			<?php else : ?>
+				<p><?php esc_html_e( 'This Playground admin was opened from a static export source-state handoff. The WXR restore is content-only, not a full database, plugin settings, users, secrets, or runtime restore. Edit content and plugins here, then export a new static ZIP from this page.', 'playground-static-site-generator' ); ?></p>
+			<?php endif; ?>
+			<ul>
+				<li>
+					<?php
+					echo esc_html(
+						sprintf(
+							/* translators: 1: WXR URL mode, 2: WXR SHA-256 hash or fallback. */
+							__( 'WXR import: %1$s; SHA-256: %2$s.', 'playground-static-site-generator' ),
+							$context['wxr_url_mode'],
+							'' === $context['wxr_sha256'] ? __( 'not recorded', 'playground-static-site-generator' ) : $context['wxr_sha256']
+						)
+					);
+					?>
+				</li>
+				<?php if ( ! empty( $context['full_site_restore'] ) ) : ?>
+					<li>
+						<?php
+						echo esc_html(
+							sprintf(
+								/* translators: 1: snapshot status, 2: snapshot SHA-256 hash or fallback. */
+								__( 'Full-site snapshot: %1$s; SHA-256: %2$s.', 'playground-static-site-generator' ),
+								$context['wordpress_files_snapshot_status'],
+								'' === $context['wordpress_files_snapshot_sha256'] ? __( 'not recorded', 'playground-static-site-generator' ) : $context['wordpress_files_snapshot_sha256']
+							)
+						);
+						?>
+					</li>
+				<?php endif; ?>
+				<?php if ( '' !== $context['source_access_expires_at'] ) : ?>
+					<li>
+						<?php
+						echo esc_html(
+							sprintf(
+								/* translators: 1: source access expiry timestamp, 2: expiry status. */
+								__( 'Source access expiry metadata: %1$s (%2$s). This is displayed as metadata only, not enforced here.', 'playground-static-site-generator' ),
+								$context['source_access_expires_at'],
+								$context['source_access_expires_at_status']
+							)
+						);
+						?>
+					</li>
+				<?php endif; ?>
+				<li>
+					<?php
+					echo esc_html(
+						sprintf(
+							/* translators: %s: whether Cloudflare publish artifacts were included. */
+							__( 'Cloudflare Workers publish contract: %s.', 'playground-static-site-generator' ),
+							$context['cloudflare_publish_included']
+								? __( 'included in the source export', 'playground-static-site-generator' )
+								: __( 'not included in the source export', 'playground-static-site-generator' )
+						)
+					);
+					?>
+				</li>
+			</ul>
+			<p><?php esc_html_e( 'Selecting the Cloudflare Workers publish contract generates local deploy and redeploy artifacts. No Cloudflare credentials, authorization tokens, owner identity, or explicit WXR URL are stored in this Playground option; deploy and rollback commands must be run by an authorized owner/operator with credentials outside the export.', 'playground-static-site-generator' ); ?></p>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Return validated source handoff context from the restored Playground option.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	private static function get_playground_source_handoff_context() {
+		$value = get_option( self::PLAYGROUND_SOURCE_HANDOFF_OPTION, null );
+
+		if ( is_string( $value ) ) {
+			$decoded = json_decode( $value, true );
+
+			if ( is_array( $decoded ) ) {
+				$value = $decoded;
+			}
+		}
+
+		if ( ! is_array( $value ) ) {
+			return null;
+		}
+
+		if (
+			! isset( $value['schema'], $value['version'], $value['source_state'], $value['wxr'], $value['restore'], $value['security'], $value['redeploy'], $value['publish'] )
+			|| 'https://stillpress.local/playground-source-handoff/v1' !== $value['schema']
+			|| 1 !== (int) $value['version']
+			|| ! is_array( $value['source_state'] )
+			|| ! is_array( $value['wxr'] )
+			|| ! is_array( $value['restore'] )
+			|| ! is_array( $value['security'] )
+			|| ! is_array( $value['redeploy'] )
+			|| ! is_array( $value['publish'] )
+		) {
+			return null;
+		}
+
+		if (
+			'source-state-generated' !== ( isset( $value['source_state']['status'] ) ? (string) $value['source_state']['status'] : '' )
+			|| ! array_key_exists( 'credentials_stored', $value['security'] )
+			|| ! array_key_exists( 'tokens_stored', $value['security'] )
+			|| ! array_key_exists( 'owner_identity_stored', $value['security'] )
+			|| ! array_key_exists( 'effective_wxr_url_stored', $value['security'] )
+			|| ! empty( $value['security']['credentials_stored'] )
+			|| ! empty( $value['security']['tokens_stored'] )
+			|| ! empty( $value['security']['owner_identity_stored'] )
+			|| ! empty( $value['security']['effective_wxr_url_stored'] )
+			|| empty( $value['redeploy']['requires_external_credentials'] )
+		) {
+			return null;
+		}
+
+		$content_only      = ! empty( $value['restore']['content_only'] );
+		$full_site_restore = ! empty( $value['restore']['full_site_restore'] );
+
+		if ( $full_site_restore ) {
+			if ( $content_only || ! empty( $value['restore']['not_full_restore_bundle'] ) ) {
+				return null;
+			}
+
+			if ( ! isset( $value['wordpress_files_snapshot'] ) || ! is_array( $value['wordpress_files_snapshot'] ) ) {
+				return null;
+			}
+
+			if (
+				'available' !== ( isset( $value['wordpress_files_snapshot']['status'] ) ? (string) $value['wordpress_files_snapshot']['status'] : '' )
+				|| empty( $value['wordpress_files_snapshot']['sqlite_database_captured'] )
+			) {
+				return null;
+			}
+		} elseif ( ! $content_only || empty( $value['restore']['not_full_restore_bundle'] ) || empty( $value['wxr']['import_enabled'] ) ) {
+			return null;
+		}
+
+		$wxr_url_mode = isset( $value['wxr']['url_mode'] ) ? sanitize_key( (string) $value['wxr']['url_mode'] ) : '';
+
+		if ( ! in_array( $wxr_url_mode, array( 'runtime-relative-export-path', 'provided-url', 'bundled-resource', 'not-used-full-site-sqlite' ), true ) ) {
+			return null;
+		}
+
+		$wxr_sha256 = isset( $value['wxr']['sha256'] ) && is_string( $value['wxr']['sha256'] )
+			? strtolower( $value['wxr']['sha256'] )
+			: '';
+
+		if ( '' !== $wxr_sha256 && ( 64 !== strlen( $wxr_sha256 ) || ! ctype_xdigit( $wxr_sha256 ) ) ) {
+			$wxr_sha256 = '';
+		}
+
+		$source_access = isset( $value['source_access'] ) && is_array( $value['source_access'] )
+			? $value['source_access']
+			: array();
+
+		return array(
+			'wxr_url_mode' => $wxr_url_mode,
+			'wxr_sha256' => $wxr_sha256,
+			'content_only' => $content_only,
+			'full_site_restore' => $full_site_restore,
+			'wordpress_files_snapshot_status' => isset( $value['wordpress_files_snapshot']['status'] ) ? sanitize_key( (string) $value['wordpress_files_snapshot']['status'] ) : '',
+			'wordpress_files_snapshot_sha256' => self::sanitize_sha256_value( isset( $value['wordpress_files_snapshot']['sha256'] ) ? $value['wordpress_files_snapshot']['sha256'] : '' ),
+			'source_access_expires_at' => isset( $source_access['expires_at'] ) && is_string( $source_access['expires_at'] ) ? sanitize_text_field( $source_access['expires_at'] ) : '',
+			'source_access_expires_at_status' => isset( $source_access['expires_at_status'] ) ? sanitize_key( (string) $source_access['expires_at_status'] ) : 'not-provided',
+			'cloudflare_publish_included' => ! empty( $value['publish']['cloudflare_publish_included'] ),
+		);
+	}
+
+	/**
+	 * Return a safe SHA-256 value or an empty string.
+	 *
+	 * @param mixed $value Candidate value.
+	 * @return string Safe hash.
+	 */
+	private static function sanitize_sha256_value( $value ) {
+		$value = is_string( $value ) ? strtolower( $value ) : '';
+
+		return 64 === strlen( $value ) && ctype_xdigit( $value ) ? $value : '';
+	}
+
+	/**
 	 * Handle admin export download.
 	 */
 	public static function handle_export_download() {
@@ -766,6 +975,9 @@ final class SSGWP_Plugin {
 			$url_mode = 'relative';
 		}
 
+		$include_playground_admin        = self::admin_request_flag_enabled( $request, 'include_playground_admin', true );
+		$include_playground_source_state = self::admin_request_flag_enabled( $request, 'include_playground_source_state', true );
+
 		return array(
 			'url_mode'         => $url_mode,
 			'max_pages'        => 10000,
@@ -778,7 +990,32 @@ final class SSGWP_Plugin {
 			'generate_sitemap' => ! empty( $request['generate_sitemap'] ),
 			'generate_robots'  => ! empty( $request['generate_robots'] ),
 			'fetch_mode'       => 'internal',
+			'include_playground_admin' => $include_playground_admin || $include_playground_source_state,
+			'include_playground_source_state' => $include_playground_source_state,
+			'include_cloudflare_publish' => ! empty( $request['include_cloudflare_publish'] ),
 		);
+	}
+
+	/**
+	 * Read an admin checkbox value that may be paired with a hidden opt-out field.
+	 *
+	 * @param array  $request Request data.
+	 * @param string $key Request key.
+	 * @param bool   $default Default value when the key is absent.
+	 * @return bool Whether the flag is enabled.
+	 */
+	private static function admin_request_flag_enabled( array $request, $key, $default ) {
+		if ( ! array_key_exists( $key, $request ) ) {
+			return (bool) $default;
+		}
+
+		$value = $request[ $key ];
+
+		if ( is_array( $value ) ) {
+			$value = end( $value );
+		}
+
+		return ! empty( $value ) && '0' !== (string) $value;
 	}
 
 	/**
@@ -1016,6 +1253,12 @@ final class SSGWP_Plugin {
 				case 'generate_robots':
 					$percent = 95;
 					break;
+				case 'playground_admin':
+					$percent = 95;
+					break;
+				case 'cloudflare_publish':
+					$percent = 95;
+					break;
 				case 'complete':
 					$percent = 96;
 					break;
@@ -1055,6 +1298,8 @@ final class SSGWP_Plugin {
 				'copy_text_asset_dependencies',
 				'generate_sitemap',
 				'generate_robots',
+				'playground_admin',
+				'cloudflare_publish',
 				'complete',
 				'zip',
 				'zip_complete',
@@ -1246,6 +1491,8 @@ final class SSGWP_Plugin {
 			$url_mode = 'relative';
 		}
 
+		$include_playground_source_state = isset( $assoc_args['include-playground-source-state'] );
+
 		$args = array(
 			'url_mode'         => $url_mode,
 			'max_pages'        => isset( $assoc_args['max-pages'] ) ? max( 1, absint( $assoc_args['max-pages'] ) ) : 10000,
@@ -1258,13 +1505,169 @@ final class SSGWP_Plugin {
 			'generate_sitemap' => isset( $assoc_args['generate-sitemap'] ),
 			'generate_robots'  => isset( $assoc_args['generate-robots'] ),
 			'fetch_mode'       => isset( $assoc_args['fetch-mode'] ) ? sanitize_key( $assoc_args['fetch-mode'] ) : 'auto',
+			'include_playground_admin' => isset( $assoc_args['include-playground-admin'] ) || $include_playground_source_state,
+			'include_playground_source_state' => $include_playground_source_state,
+			'include_cloudflare_publish' => isset( $assoc_args['include-cloudflare-publish'] ),
 		);
+
+		if ( isset( $assoc_args['cloudflare-worker-name'] ) ) {
+			$args['cloudflare_worker_name'] = sanitize_text_field( (string) $assoc_args['cloudflare-worker-name'] );
+		}
+
+		if ( isset( $assoc_args['cloudflare-compatibility-date'] ) ) {
+			$args['cloudflare_compatibility_date'] = sanitize_text_field( (string) $assoc_args['cloudflare-compatibility-date'] );
+		}
+
+		if ( isset( $assoc_args['playground-source-bundle-url'] ) ) {
+			$args['playground_source_bundle_url'] = self::sanitize_playground_source_url_arg( $assoc_args['playground-source-bundle-url'] );
+		}
+
+		if ( isset( $assoc_args['playground-source-wxr-url'] ) ) {
+			$args['playground_source_wxr_url'] = self::sanitize_playground_source_url_arg( $assoc_args['playground-source-wxr-url'] );
+		}
+
+		if ( isset( $assoc_args['playground-source-expires-at'] ) ) {
+			$args['playground_source_expires_at'] = self::sanitize_playground_source_expires_at_arg( $assoc_args['playground-source-expires-at'] );
+		}
 
 		if ( isset( $assoc_args['output-dir'] ) ) {
 			$args['output_dir'] = sanitize_text_field( (string) $assoc_args['output-dir'] );
 		}
 
 		return $args;
+	}
+
+	/**
+	 * Sanitize a WP-CLI source-state WXR URL argument.
+	 *
+	 * @param mixed $url Candidate URL.
+	 * @return string Safe absolute HTTP(S) URL, or empty string.
+	 */
+	private static function sanitize_playground_source_url_arg( $url ) {
+		$url = trim( (string) $url );
+
+		if ( '' === $url || self::contains_control_character( $url ) || false !== strpos( $url, ' ' ) ) {
+			return '';
+		}
+
+		$parts = parse_url( $url );
+
+		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+			return '';
+		}
+
+		$scheme = strtolower( (string) $parts['scheme'] );
+
+		if ( ! in_array( $scheme, array( 'http', 'https' ), true ) ) {
+			return '';
+		}
+
+		return $url;
+	}
+
+	/**
+	 * Sanitize a WP-CLI source-state expiry argument.
+	 *
+	 * @param mixed $timestamp Candidate ISO-ish timestamp.
+	 * @return string Valid timestamp, or empty string.
+	 */
+	private static function sanitize_playground_source_expires_at_arg( $timestamp ) {
+		$timestamp = trim( sanitize_text_field( (string) $timestamp ) );
+
+		if ( '' === $timestamp || ! self::is_valid_playground_source_timestamp_arg( $timestamp ) ) {
+			return '';
+		}
+
+		return $timestamp;
+	}
+
+	/**
+	 * Return whether a string contains ASCII control characters.
+	 *
+	 * @param string $value Candidate value.
+	 * @return bool Whether a control character was found.
+	 */
+	private static function contains_control_character( $value ) {
+		$length = strlen( $value );
+
+		for ( $i = 0; $i < $length; ++$i ) {
+			$ord = ord( $value[ $i ] );
+
+			if ( $ord < 32 || 127 === $ord ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Conservatively validate YYYY-MM-DDTHH:MM:SSZ or timezone-offset timestamps.
+	 *
+	 * @param string $timestamp Candidate timestamp.
+	 * @return bool Whether the timestamp is valid.
+	 */
+	private static function is_valid_playground_source_timestamp_arg( $timestamp ) {
+		$length = strlen( $timestamp );
+
+		if ( 20 !== $length && 25 !== $length ) {
+			return false;
+		}
+
+		if (
+			'-' !== $timestamp[4]
+			|| '-' !== $timestamp[7]
+			|| 'T' !== $timestamp[10]
+			|| ':' !== $timestamp[13]
+			|| ':' !== $timestamp[16]
+		) {
+			return false;
+		}
+
+		$digit_parts = substr( $timestamp, 0, 4 )
+			. substr( $timestamp, 5, 2 )
+			. substr( $timestamp, 8, 2 )
+			. substr( $timestamp, 11, 2 )
+			. substr( $timestamp, 14, 2 )
+			. substr( $timestamp, 17, 2 );
+
+		if ( ! ctype_digit( $digit_parts ) ) {
+			return false;
+		}
+
+		$year   = (int) substr( $timestamp, 0, 4 );
+		$month  = (int) substr( $timestamp, 5, 2 );
+		$day    = (int) substr( $timestamp, 8, 2 );
+		$hour   = (int) substr( $timestamp, 11, 2 );
+		$minute = (int) substr( $timestamp, 14, 2 );
+		$second = (int) substr( $timestamp, 17, 2 );
+
+		if ( ! checkdate( $month, $day, $year ) || $hour > 23 || $minute > 59 || $second > 59 ) {
+			return false;
+		}
+
+		if ( 20 === $length ) {
+			return 'Z' === $timestamp[19];
+		}
+
+		if ( '+' !== $timestamp[19] && '-' !== $timestamp[19] ) {
+			return false;
+		}
+
+		if ( ':' !== $timestamp[22] ) {
+			return false;
+		}
+
+		$offset_digits = substr( $timestamp, 20, 2 ) . substr( $timestamp, 23, 2 );
+
+		if ( ! ctype_digit( $offset_digits ) ) {
+			return false;
+		}
+
+		$offset_hour   = (int) substr( $timestamp, 20, 2 );
+		$offset_minute = (int) substr( $timestamp, 23, 2 );
+
+		return $offset_hour <= 14 && $offset_minute <= 59 && ( 14 !== $offset_hour || 0 === $offset_minute );
 	}
 
 	/**

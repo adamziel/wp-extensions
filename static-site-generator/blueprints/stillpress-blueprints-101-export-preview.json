@@ -1,0 +1,203 @@
+{
+	"$schema": "https://playground.wordpress.net/blueprint-schema.json",
+	"meta": {
+		"title": "StillPress: Blueprints 101 Export Preview",
+		"description": "Import the WordPress Playground Blueprints tutorial docs, install StillPress, and open the static export admin screen.",
+		"author": "Adam Zielinski",
+		"categories": ["static-sites", "data-liberation", "tools"]
+	},
+	"landingPage": "/wp-admin/tools.php?page=playground-static-site-generator",
+	"login": true,
+	"preferredVersions": {
+		"wp": "latest",
+		"php": "8.3"
+	},
+	"features": {
+		"networking": true
+	},
+	"extraLibraries": ["wp-cli"],
+	"steps": [
+		{
+			"step": "installPlugin",
+			"pluginData": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/codex/playground-publish-docs-importer/universal-wordpress-importer/dist/universal-wordpress-importer-0.1.0.zip?v=c360d5b"
+			},
+			"options": {
+				"activate": true,
+				"targetFolderName": "universal-wordpress-importer"
+			}
+		},
+		{
+			"step": "mkdir",
+			"path": "/wordpress/wp-content/plugins/static-site-generator"
+		},
+		{
+			"step": "mkdir",
+			"path": "/wordpress/wp-content/plugins/static-site-generator/includes"
+		},
+		{
+			"step": "writeFile",
+			"path": "/wordpress/wp-content/plugins/static-site-generator/static-site-generator.php",
+			"data": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/codex/playground-publish-docs-importer/static-site-generator/static-site-generator.php?v=8aa7937"
+			}
+		},
+		{
+			"step": "writeFile",
+			"path": "/wordpress/wp-content/plugins/static-site-generator/includes/class-path-utils.php",
+			"data": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/codex/playground-publish-docs-importer/static-site-generator/includes/class-path-utils.php?v=8aa7937"
+			}
+		},
+		{
+			"step": "writeFile",
+			"path": "/wordpress/wp-content/plugins/static-site-generator/includes/class-url-collector.php",
+			"data": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/codex/playground-publish-docs-importer/static-site-generator/includes/class-url-collector.php?v=8aa7937"
+			}
+		},
+		{
+			"step": "writeFile",
+			"path": "/wordpress/wp-content/plugins/static-site-generator/includes/class-url-rewriter.php",
+			"data": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/codex/playground-publish-docs-importer/static-site-generator/includes/class-url-rewriter.php?v=8aa7937"
+			}
+		},
+		{
+			"step": "writeFile",
+			"path": "/wordpress/wp-content/plugins/static-site-generator/includes/class-static-exporter.php",
+			"data": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/codex/playground-publish-docs-importer/static-site-generator/includes/class-static-exporter.php?v=8aa7937"
+			}
+		},
+		{
+			"step": "writeFile",
+			"path": "/wordpress/wp-content/plugins/static-site-generator/includes/class-plugin.php",
+			"data": {
+				"resource": "url",
+				"url": "https://raw.githubusercontent.com/adamziel/wp-extensions/codex/playground-publish-docs-importer/static-site-generator/includes/class-plugin.php?v=8aa7937"
+			}
+		},
+		{
+			"step": "runPHP",
+			"code": "<?php\nif ( ! defined( 'ABSPATH' ) ) {\n\trequire '/wordpress/wp-load.php';\n}\n\nrequire_once ABSPATH . 'wp-admin/includes/plugin.php';\n\nif ( ! is_plugin_active( 'static-site-generator/static-site-generator.php' ) ) {\n\t$result = activate_plugin( 'static-site-generator/static-site-generator.php' );\n\tif ( is_wp_error( $result ) ) {\n\t\tthrow new Exception( $result->get_error_message() );\n\t}\n}\n"
+		},
+		{
+			"step": "setSiteOptions",
+			"options": {
+				"blogname": "StillPress Blueprints 101 Preview",
+				"blogdescription": "Imported Playground tutorial docs ready for a static export preview."
+			}
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp option update permalink_structure '/%postname%/'"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp rewrite flush --hard"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp post delete 1 --force"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer import https://github.com/WordPress/wordpress-playground/tree/trunk/packages/docs/site/docs/blueprints/tutorial"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick --max-ticks=1"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp universal-importer tick"
+		},
+		{
+			"step": "wp-cli",
+			"command": "wp rewrite flush --hard"
+		}
+	]
+}

@@ -626,7 +626,7 @@ final class SourceItemDocumentProcessor {
 		$metadata  = $item->get_metadata();
 		$extension = isset( $metadata['extension'] ) ? strtolower( (string) $metadata['extension'] ) : strtolower( pathinfo( $item->get_source_uri(), PATHINFO_EXTENSION ) );
 
-		if ( in_array( $extension, array( 'md', 'markdown', 'mdown' ), true ) ) {
+		if ( in_array( $extension, array( 'md', 'markdown', 'mdown', 'mdx', 'mdoc', 'markdoc' ), true ) ) {
 			return 'markdown';
 		}
 
@@ -1916,13 +1916,19 @@ final class SourceItemDocumentProcessor {
 		if ( 0 === $chunk_index ) {
 			$markdown_document = $this->extract_markdown_front_matter( $content );
 			$content           = trim( $markdown_document['content'] );
+			$front_matter_metadata = $this->markdown_front_matter_metadata( $markdown_document, $item );
 			if ( '' !== $markdown_document['title'] ) {
-				$markdown_title                                = $markdown_document['title'];
-				$chunk_metadata['markdown_front_matter_title'] = $markdown_title;
+				$markdown_title = $markdown_document['title'];
 			}
-			if ( $markdown_document['detected'] ) {
-				$chunk_metadata['markdown_front_matter'] = true;
+			if ( ! empty( $front_matter_metadata ) ) {
+				$chunk_metadata = array_merge( $chunk_metadata, $front_matter_metadata );
 			}
+		}
+
+		$docs_document = $this->normalize_docs_markdown_conventions( $content, $item );
+		$content       = $docs_document['content'];
+		if ( ! empty( $docs_document['metadata'] ) ) {
+			$chunk_metadata = array_merge( $chunk_metadata, $docs_document['metadata'] );
 		}
 
 		$markdown_reference_document = $this->extract_markdown_reference_definitions( $content );
@@ -3579,12 +3585,18 @@ final class SourceItemDocumentProcessor {
 		if ( 'markdown' === $format ) {
 			$markdown_document = $this->extract_markdown_front_matter( $content );
 			$content           = $markdown_document['content'];
+			$front_matter_metadata = $this->markdown_front_matter_metadata( $markdown_document, $item );
 			if ( '' !== $markdown_document['title'] ) {
-				$markdown_title                          = $markdown_document['title'];
-				$metadata['markdown_front_matter_title'] = $markdown_title;
+				$markdown_title = $markdown_document['title'];
 			}
-			if ( $markdown_document['detected'] ) {
-				$metadata['markdown_front_matter'] = true;
+			if ( ! empty( $front_matter_metadata ) ) {
+				$metadata = array_merge( $metadata, $front_matter_metadata );
+			}
+
+			$docs_document = $this->normalize_docs_markdown_conventions( $content, $item );
+			$content       = $docs_document['content'];
+			if ( ! empty( $docs_document['metadata'] ) ) {
+				$metadata = array_merge( $metadata, $docs_document['metadata'] );
 			}
 
 			$markdown_reference_document = $this->extract_markdown_reference_definitions( $content );
@@ -8425,10 +8437,21 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
+	 * Normalizes conservative docs-site Markdown conventions before block parsing.
+	 *
+	 * @param string           $content Markdown content without leading front matter.
+	 * @param ImportSourceItem $item    Source item.
+	 * @return array{content:string,metadata:array<string,mixed>}
+	 */
+	private function normalize_docs_markdown_conventions( $content, ImportSourceItem $item ) {
+		return ( new ImportDocsMarkdownNormalizer() )->normalize( $content, $item );
+	}
+
+	/**
 	 * Extracts conservative leading Markdown front matter metadata.
 	 *
 	 * @param string $content Markdown content.
-	 * @return array{content:string,title:string,detected:bool}
+	 * @return array{content:string,title:string,slug:string,permalink:string,detected:bool}
 	 */
 	private function extract_markdown_front_matter( $content ) {
 		$content = (string) $content;
@@ -8436,20 +8459,14 @@ final class SourceItemDocumentProcessor {
 			$content = substr( $content, 3 );
 		}
 
-		if ( ! preg_match( '/\A---[ \t]*\R/', $content ) ) {
+		$lines = $this->split_lines( $content );
+		if ( count( $lines ) < 3 || '---' !== trim( (string) $lines[0] ) ) {
 			return array(
-				'content'  => $content,
-				'title'    => '',
-				'detected' => false,
-			);
-		}
-
-		$lines = preg_split( '/\R/', $content );
-		if ( ! is_array( $lines ) || count( $lines ) < 3 ) {
-			return array(
-				'content'  => $content,
-				'title'    => '',
-				'detected' => false,
+				'content'   => $content,
+				'title'     => '',
+				'slug'      => '',
+				'permalink' => '',
+				'detected'  => false,
 			);
 		}
 
@@ -8464,25 +8481,279 @@ final class SourceItemDocumentProcessor {
 
 		if ( null === $closing_index ) {
 			return array(
-				'content'  => $content,
-				'title'    => '',
-				'detected' => false,
+				'content'   => $content,
+				'title'     => '',
+				'slug'      => '',
+				'permalink' => '',
+				'detected'  => false,
 			);
 		}
 
-		$title = '';
+		$front_matter = array(
+			'title'     => '',
+			'slug'      => '',
+			'permalink' => '',
+		);
 		for ( $i = 1; $i < $closing_index; ++$i ) {
-			if ( preg_match( '/^\s*title\s*:\s*(.+?)\s*$/i', (string) $lines[ $i ], $matches ) ) {
-				$title = $this->normalize_markdown_front_matter_scalar( $matches[1] );
-				break;
+			$line  = trim( (string) $lines[ $i ] );
+			$colon = strpos( $line, ':' );
+			if ( false === $colon ) {
+				continue;
+			}
+
+			$key = strtolower( trim( substr( $line, 0, $colon ) ) );
+			if ( ! array_key_exists( $key, $front_matter ) ) {
+				continue;
+			}
+
+			if ( '' !== $front_matter[ $key ] ) {
+				continue;
+			}
+
+			$value = $this->normalize_markdown_front_matter_scalar( substr( $line, $colon + 1 ) );
+			if ( '' !== $value ) {
+				$front_matter[ $key ] = $value;
 			}
 		}
 
 		return array(
-			'content'  => ltrim( implode( "\n", array_slice( $lines, $closing_index + 1 ) ) ),
-			'title'    => $title,
-			'detected' => true,
+			'content'   => ltrim( implode( "\n", array_slice( $lines, $closing_index + 1 ) ) ),
+			'title'     => $front_matter['title'],
+			'slug'      => $front_matter['slug'],
+			'permalink' => $front_matter['permalink'],
+			'detected'  => true,
 		);
+	}
+
+	/**
+	 * Splits text into lines without using a pattern parser.
+	 *
+	 * @param string $content Text content.
+	 * @return array<int,string>
+	 */
+	private function split_lines( $content ) {
+		return explode( "\n", str_replace( array( "\r\n", "\r" ), "\n", (string) $content ) );
+	}
+
+	/**
+	 * Builds front matter metadata used by downstream Markdown route resolvers.
+	 *
+	 * @param array{content:string,title:string,slug:string,permalink:string,detected:bool} $front_matter Parsed front matter.
+	 * @param ImportSourceItem                                                            $item         Source item.
+	 * @return array<string,mixed>
+	 */
+	private function markdown_front_matter_metadata( array $front_matter, ImportSourceItem $item ) {
+		$metadata = array();
+
+		if ( ! empty( $front_matter['detected'] ) ) {
+			$metadata['markdown_front_matter'] = true;
+		}
+
+		if ( '' !== $front_matter['title'] ) {
+			$metadata['markdown_front_matter_title'] = $front_matter['title'];
+		}
+
+		if ( '' !== $front_matter['slug'] ) {
+			$metadata['markdown_front_matter_slug'] = $front_matter['slug'];
+		}
+
+		if ( '' !== $front_matter['permalink'] ) {
+			$metadata['markdown_front_matter_permalink'] = $front_matter['permalink'];
+		}
+
+		$route_path = $this->markdown_route_path( $item, $front_matter );
+		if ( '' !== $route_path ) {
+			$metadata['markdown_route_path'] = $route_path;
+		}
+
+		return $metadata;
+	}
+
+	/**
+	 * Returns a preferred route path for a Markdown document.
+	 *
+	 * @param ImportSourceItem                                                            $item         Source item.
+	 * @param array{content:string,title:string,slug:string,permalink:string,detected:bool} $front_matter Parsed front matter.
+	 * @return string
+	 */
+	private function markdown_route_path( ImportSourceItem $item, array $front_matter ) {
+		$derived_route = $this->markdown_route_path_from_item( $item );
+
+		if ( '' !== $front_matter['permalink'] ) {
+			$permalink_route = $this->normalize_markdown_route_path( $front_matter['permalink'] );
+			if ( '' !== $permalink_route ) {
+				return $permalink_route;
+			}
+		}
+
+		if ( '' !== $front_matter['slug'] ) {
+			$slug_route = $this->markdown_slug_route_path( $front_matter['slug'], $derived_route );
+			if ( '' !== $slug_route ) {
+				return $slug_route;
+			}
+		}
+
+		return $derived_route;
+	}
+
+	/**
+	 * Converts a front matter slug to an absolute route path.
+	 *
+	 * @param string $slug          Front matter slug.
+	 * @param string $derived_route Route inferred from the source path.
+	 * @return string
+	 */
+	private function markdown_slug_route_path( $slug, $derived_route ) {
+		$slug = trim( (string) $slug );
+		if ( '' === $slug ) {
+			return '';
+		}
+
+		if ( '/' === substr( $slug, 0, 1 ) ) {
+			return $this->normalize_markdown_route_path( $slug );
+		}
+
+		$base = '' === $derived_route ? '/' : dirname( $derived_route );
+		if ( '.' === $base || '\\' === $base ) {
+			$base = '/';
+		}
+
+		return $this->normalize_markdown_route_path( rtrim( $base, '/' ) . '/' . $slug );
+	}
+
+	/**
+	 * Infers a docs route path from source item metadata and relative path.
+	 *
+	 * @param ImportSourceItem $item Source item.
+	 * @return string
+	 */
+	private function markdown_route_path_from_item( ImportSourceItem $item ) {
+		$metadata = $item->get_metadata();
+		$path     = '';
+
+		if ( ! empty( $metadata['github_tree_path'] ) ) {
+			$path = $this->markdown_route_source_path_from_github_tree_path( (string) $metadata['github_tree_path'] );
+		}
+
+		if ( '' === $path ) {
+			$path = $item->get_relative_path();
+		}
+
+		$path = trim( str_replace( '\\', '/', (string) $path ), '/' );
+		if ( '' === $path ) {
+			return '';
+		}
+
+		$path = $this->markdown_route_source_path_without_extension( $path );
+		$path = $this->markdown_route_source_path_without_index( $path );
+
+		if ( '' === $path ) {
+			return '/';
+		}
+
+		return $this->normalize_markdown_route_path( $path );
+	}
+
+	/**
+	 * Returns the repository path segment that normally maps to docs routes.
+	 *
+	 * @param string $path GitHub tree path.
+	 * @return string
+	 */
+	private function markdown_route_source_path_from_github_tree_path( $path ) {
+		$segments = explode( '/', trim( str_replace( '\\', '/', (string) $path ), '/' ) );
+		$docs_at  = null;
+
+		foreach ( $segments as $index => $segment ) {
+			if ( 'docs' === strtolower( $segment ) ) {
+				$docs_at = $index;
+			}
+		}
+
+		if ( null === $docs_at ) {
+			return implode( '/', $segments );
+		}
+
+		return implode( '/', array_slice( $segments, $docs_at + 1 ) );
+	}
+
+	/**
+	 * Removes a Markdown document extension from a route source path.
+	 *
+	 * @param string $path Source path.
+	 * @return string
+	 */
+	private function markdown_route_source_path_without_extension( $path ) {
+		$extension = strtolower( pathinfo( (string) $path, PATHINFO_EXTENSION ) );
+
+		if ( ! in_array( $extension, array( 'md', 'markdown', 'mdown', 'mdx', 'mdoc', 'markdoc' ), true ) ) {
+			return (string) $path;
+		}
+
+		return substr( (string) $path, 0, -1 * ( strlen( $extension ) + 1 ) );
+	}
+
+	/**
+	 * Removes route index filenames from a route source path.
+	 *
+	 * @param string $path Source path without extension.
+	 * @return string
+	 */
+	private function markdown_route_source_path_without_index( $path ) {
+		$segments = explode( '/', trim( (string) $path, '/' ) );
+		$last     = strtolower( end( $segments ) );
+
+		if ( 'index' === $last || 'readme' === $last ) {
+			array_pop( $segments );
+		}
+
+		return implode( '/', $segments );
+	}
+
+	/**
+	 * Normalizes a path or URL into an absolute route path.
+	 *
+	 * @param string $path Path or URL.
+	 * @return string
+	 */
+	private function normalize_markdown_route_path( $path ) {
+		$path = trim( html_entity_decode( (string) $path, ENT_QUOTES, 'UTF-8' ) );
+		if ( '' === $path ) {
+			return '';
+		}
+
+		if ( false !== strpos( $path, '://' ) || 0 === strpos( $path, '//' ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.parse_url_parse_url -- WordPress is not loaded in importer unit tests.
+			$parts = parse_url( $path );
+			if ( is_array( $parts ) && isset( $parts['path'] ) ) {
+				$path = (string) $parts['path'];
+			}
+		} else {
+			foreach ( array( '#', '?' ) as $delimiter ) {
+				$position = strpos( $path, $delimiter );
+				if ( false !== $position ) {
+					$path = substr( $path, 0, $position );
+				}
+			}
+		}
+
+		$segments = array();
+		foreach ( explode( '/', str_replace( '\\', '/', (string) $path ) ) as $segment ) {
+			$segment = rawurldecode( $segment );
+
+			if ( '' === $segment || '.' === $segment ) {
+				continue;
+			}
+
+			if ( '..' === $segment ) {
+				array_pop( $segments );
+				continue;
+			}
+
+			$segments[] = $segment;
+		}
+
+		return empty( $segments ) ? '/' : '/' . implode( '/', $segments );
 	}
 
 	/**
@@ -8580,7 +8851,7 @@ final class SourceItemDocumentProcessor {
 			}
 
 			$url   = $this->normalize_markdown_link_url( $references[ $id ]['url'] );
-			$alt   = (string) $matches[1];
+			$alt   = $this->decode_markdown_text_entities( $matches[1] );
 			$title = $references[ $id ]['title'];
 			if ( null === $url ) {
 				return null;
@@ -8598,7 +8869,7 @@ final class SourceItemDocumentProcessor {
 			return null;
 		}
 
-		$alt   = (string) $matches[1];
+		$alt   = $this->decode_markdown_text_entities( $matches[1] );
 		$title = isset( $matches[4] ) ? (string) $matches[4] : '';
 
 		return $this->markdown_image_block( $url, $alt, $title );
@@ -8790,7 +9061,7 @@ final class SourceItemDocumentProcessor {
 				if ( '' !== $references[ $id ]['title'] ) {
 					$link .= ' title="' . $this->escape_html( $references[ $id ]['title'] ) . '"';
 				}
-				$link .= '>' . $this->escape_html( $matches[1] ) . '</a>';
+				$link .= '>' . $this->escape_html( $this->decode_markdown_text_entities( $matches[1] ) ) . '</a>';
 
 				$placeholder            = "\x1A" . count( $tokens ) . "\x1A";
 				$tokens[ $placeholder ] = $link;
@@ -8812,7 +9083,7 @@ final class SourceItemDocumentProcessor {
 				if ( isset( $matches[4] ) && '' !== (string) $matches[4] ) {
 					$link .= ' title="' . $this->escape_html( $matches[4] ) . '"';
 				}
-				$link .= '>' . $this->escape_html( $matches[1] ) . '</a>';
+				$link .= '>' . $this->escape_html( $this->decode_markdown_text_entities( $matches[1] ) ) . '</a>';
 
 				$placeholder            = "\x1A" . count( $tokens ) . "\x1A";
 				$tokens[ $placeholder ] = $link;
@@ -8834,6 +9105,16 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return $html;
+	}
+
+	/**
+	 * Decodes Markdown text entities that were used to avoid delimiter ambiguity.
+	 *
+	 * @param string $text Markdown text.
+	 * @return string Plain text.
+	 */
+	private function decode_markdown_text_entities( $text ) {
+		return html_entity_decode( (string) $text, ENT_QUOTES, 'UTF-8' );
 	}
 
 	/**
