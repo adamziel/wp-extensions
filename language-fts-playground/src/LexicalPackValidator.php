@@ -112,6 +112,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         $status = [
             'language_id' => $directory_id,
             'label' => $directory_id,
+            'tokenizer' => Language_FTS_Playground_Unicode_Words_Tokenizer::default_contract(),
             'metadata' => $this->empty_metadata(),
             'metadata_valid' => false,
             'runtime_files_exist' => false,
@@ -175,6 +176,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 if (isset($profile['language_signals'])) {
                     $this->validate_string_list($profile['language_signals'], 'language_signals', $profile_file, $warnings);
                 }
+
+                $status['tokenizer'] = $this->validate_tokenizer_contract($profile['tokenizer'] ?? null, $profile_file, $warnings);
 
                 if (!isset($profile['resources']) || !is_array($profile['resources'])) {
                     $warnings[] = 'Language profile resources must be an array in ' . $profile_file;
@@ -1186,6 +1189,127 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 return;
             }
         }
+    }
+
+    /**
+     * @return array{id:string,type:string,resources:array<string,string>,capabilities:array{emits_offsets:bool,emits_positions:bool,supports_fuzzy:bool,supports_overlaps:bool}}
+     */
+    private function validate_tokenizer_contract(mixed $value, string $path, array &$warnings): array
+    {
+        $default = Language_FTS_Playground_Unicode_Words_Tokenizer::default_contract();
+        if ($value === null) {
+            return $default;
+        }
+
+        if (!is_array($value)) {
+            $warnings[] = 'Language profile tokenizer must be an array in ' . $path;
+
+            return $default;
+        }
+
+        $id = $this->validate_tokenizer_string($value['id'] ?? null, 'id', $path, $warnings);
+        $type = $this->validate_tokenizer_string($value['type'] ?? null, 'type', $path, $warnings);
+        $resources = $this->validate_tokenizer_resources($value['resources'] ?? [], $path, $warnings);
+        $capabilities = $this->validate_tokenizer_capabilities($value['capabilities'] ?? null, $path, $warnings);
+
+        if ($id !== null && $type !== null && ($id !== $default['id'] || $type !== $default['type'])) {
+            $warnings[] = 'Language profile tokenizer must use supported unicode_words_v1/unicode_words in ' . $path;
+        }
+
+        if ($resources !== []) {
+            $warnings[] = 'Language profile tokenizer unicode_words_v1 resources must be empty in ' . $path;
+        }
+
+        if ($capabilities !== null && (!$capabilities['emits_offsets'] || !$capabilities['emits_positions'] || $capabilities['supports_overlaps'])) {
+            $warnings[] = 'Language profile tokenizer unicode_words_v1 capabilities must emit offsets and positions without overlaps in ' . $path;
+        }
+
+        return [
+            'id' => $id ?? $default['id'],
+            'type' => $type ?? $default['type'],
+            'resources' => $resources,
+            'capabilities' => $capabilities ?? $default['capabilities'],
+        ];
+    }
+
+    private function validate_tokenizer_string(mixed $value, string $key, string $path, array &$warnings): string|null
+    {
+        if (!is_string($value) || trim($value) === '') {
+            $warnings[] = "Language profile tokenizer {$key} must be a non-empty string in {$path}";
+
+            return null;
+        }
+
+        $value = trim($value);
+        if (preg_match('/^[a-z][a-z0-9_]*(?:_v[0-9]+)?$/', $value) !== 1) {
+            $warnings[] = "Language profile tokenizer {$key} has an invalid identifier in {$path}";
+
+            return null;
+        }
+
+        return $value;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function validate_tokenizer_resources(mixed $value, string $path, array &$warnings): array
+    {
+        if (!is_array($value)) {
+            $warnings[] = 'Language profile tokenizer resources must be an array in ' . $path;
+
+            return [];
+        }
+
+        $resources = [];
+        foreach ($value as $key => $name) {
+            if (!is_string($key) || trim($key) === '') {
+                $warnings[] = 'Language profile tokenizer resources must use non-empty string keys in ' . $path;
+                continue;
+            }
+
+            if (!is_string($name) || trim($name) === '') {
+                $warnings[] = "Language profile tokenizer resource {$key} must be a non-empty string in {$path}";
+                continue;
+            }
+
+            $name = trim($name);
+            if (!$this->is_local_file_name($name)) {
+                $warnings[] = "Language profile tokenizer resource {$key} must be a local file name in {$path}";
+                continue;
+            }
+
+            $resources[trim($key)] = $name;
+        }
+
+        ksort($resources, SORT_STRING);
+
+        return $resources;
+    }
+
+    /**
+     * @return array{emits_offsets:bool,emits_positions:bool,supports_fuzzy:bool,supports_overlaps:bool}|null
+     */
+    private function validate_tokenizer_capabilities(mixed $value, string $path, array &$warnings): array|null
+    {
+        if (!is_array($value)) {
+            $warnings[] = 'Language profile tokenizer capabilities must be an array in ' . $path;
+
+            return null;
+        }
+
+        $capabilities = [];
+        foreach (['emits_offsets', 'emits_positions', 'supports_fuzzy', 'supports_overlaps'] as $key) {
+            if (!array_key_exists($key, $value) || !is_bool($value[$key])) {
+                $warnings[] = "Language profile tokenizer capability {$key} must be a boolean in {$path}";
+
+                return null;
+            }
+
+            $capabilities[$key] = $value[$key];
+        }
+
+        return $capabilities;
     }
 
     /**

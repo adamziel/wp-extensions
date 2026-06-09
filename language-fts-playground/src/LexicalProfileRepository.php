@@ -7,9 +7,9 @@ declare(strict_types=1);
  * File formats:
  *
  * - profile.php returns an array with id, label, optional order, optional
- *   normalization.fold map, optional language_signals regexes, and resource
- *   file names for stopwords, lexemes, synonyms, optional synsets, and
- *   optional synonym phrase rows.
+ *   tokenizer contract, optional normalization.fold map, optional
+ *   language_signals regexes, and resource file names for stopwords, lexemes,
+ *   synonyms, optional synsets, and optional synonym phrase rows.
  * - stopwords.txt contains one already-normalized stopword per line. Empty
  *   lines and full-line comments beginning with "#" are ignored.
  * - lexemes.tsv contains "observed<TAB>canonical<TAB>provenance". The third
@@ -47,7 +47,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     private ?array $manifest = null;
 
     /**
-     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}>
+     * @var array<string,array{id:string,label:string,tokenizer:array<string,mixed>,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}>
      */
     private array $profiles = [];
 
@@ -122,7 +122,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
+     * @return array{id:string,label:string,tokenizer:array<string,mixed>,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     public function profile(string $language): array
     {
@@ -241,6 +241,10 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
         foreach ($this->language_ids() as $language) {
             $metadata = $this->pack_metadata($language);
+            $entry = $this->manifest_entry($language);
+            $profile_file = $this->profile_file($entry);
+            $folds = $this->profile_string_map($entry['profile']['normalization']['fold'] ?? [], 'normalization.fold', $profile_file);
+            ksort($folds, SORT_STRING);
             $payload['languages'][] = [
                 'language_id' => $metadata['language_id'],
                 'pack_version' => $metadata['pack_version'],
@@ -253,6 +257,10 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 'attribution_text' => $metadata['attribution_text'],
                 'files' => array_values($metadata['files']),
                 'runtime_resources' => $this->runtime_resource_fingerprints($language),
+                'normalization' => [
+                    'fold' => $folds,
+                ],
+                'tokenizer' => $this->profile_tokenizer_contract($entry['profile']['tokenizer'] ?? null, $profile_file),
             ];
         }
 
@@ -391,13 +399,14 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     /**
      * @param array{directory:string,profile:array<string,mixed>,order:int} $manifest_entry
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
+     * @return array{id:string,label:string,tokenizer:array<string,mixed>,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],alternate_pattern:string,alternate_replacement:string,provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     private function load_language_profile(string $language, array $manifest_entry): array
     {
         $profile = $manifest_entry['profile'];
         $directory = $manifest_entry['directory'];
         $profile_file = $directory . DIRECTORY_SEPARATOR . 'profile.php';
+        $tokenizer = $this->profile_tokenizer_contract($profile['tokenizer'] ?? null, $profile_file);
         $resources = $profile['resources'] ?? [];
         if (!is_array($resources)) {
             throw new UnexpectedValueException('Language profile resources must be an array in ' . $profile_file);
@@ -420,6 +429,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         return [
             'id' => $language,
             'label' => $this->language_label($language),
+            'tokenizer' => $tokenizer,
             'folds' => $folds,
             'language_signals' => $this->language_signals($language),
             'stopwords' => $this->parse_stopwords($this->resource_path($directory, $resources, 'stopwords', $profile_file), $folds),
@@ -597,6 +607,116 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $items;
+    }
+
+    /**
+     * @return array{id:string,type:string,resources:array<string,string>,capabilities:array{emits_offsets:bool,emits_positions:bool,supports_fuzzy:bool,supports_overlaps:bool}}
+     */
+    private function profile_tokenizer_contract(mixed $value, string $profile_file): array
+    {
+        if ($value === null) {
+            return Language_FTS_Playground_Unicode_Words_Tokenizer::default_contract();
+        }
+
+        if (!is_array($value)) {
+            throw new UnexpectedValueException('Language profile tokenizer must be an array in ' . $profile_file);
+        }
+
+        $id = $this->tokenizer_string($value['id'] ?? null, 'id', $profile_file);
+        $type = $this->tokenizer_string($value['type'] ?? null, 'type', $profile_file);
+        $resources = $this->tokenizer_resources($value['resources'] ?? [], $profile_file);
+        $capabilities = $this->tokenizer_capabilities($value['capabilities'] ?? null, $profile_file);
+
+        if ($id !== Language_FTS_Playground_Unicode_Words_Tokenizer::ID || $type !== Language_FTS_Playground_Unicode_Words_Tokenizer::TYPE) {
+            throw new UnexpectedValueException('Language profile tokenizer must use supported unicode_words_v1/unicode_words in ' . $profile_file);
+        }
+
+        if ($resources !== []) {
+            throw new UnexpectedValueException('Language profile tokenizer unicode_words_v1 resources must be empty in ' . $profile_file);
+        }
+
+        if (!$capabilities['emits_offsets'] || !$capabilities['emits_positions'] || $capabilities['supports_overlaps']) {
+            throw new UnexpectedValueException('Language profile tokenizer unicode_words_v1 capabilities must emit offsets and positions without overlaps in ' . $profile_file);
+        }
+
+        return [
+            'id' => $id,
+            'type' => $type,
+            'resources' => $resources,
+            'capabilities' => $capabilities,
+        ];
+    }
+
+    private function tokenizer_string(mixed $value, string $key, string $profile_file): string
+    {
+        if (!is_string($value) || trim($value) === '') {
+            throw new UnexpectedValueException("Language profile tokenizer {$key} must be a non-empty string in {$profile_file}");
+        }
+
+        $value = trim($value);
+        if (preg_match('/^[a-z][a-z0-9_]*(?:_v[0-9]+)?$/', $value) !== 1) {
+            throw new UnexpectedValueException("Language profile tokenizer {$key} has an invalid identifier in {$profile_file}");
+        }
+
+        return $value;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function tokenizer_resources(mixed $value, string $profile_file): array
+    {
+        if (!is_array($value)) {
+            throw new UnexpectedValueException('Language profile tokenizer resources must be an array in ' . $profile_file);
+        }
+
+        $resources = [];
+        foreach ($value as $key => $name) {
+            if (!is_string($key) || trim($key) === '') {
+                throw new UnexpectedValueException('Language profile tokenizer resources must use non-empty string keys in ' . $profile_file);
+            }
+
+            if (!is_string($name) || trim($name) === '') {
+                throw new UnexpectedValueException("Language profile tokenizer resource {$key} must be a non-empty string in {$profile_file}");
+            }
+
+            $name = trim($name);
+            if (!$this->is_local_file_name($name)) {
+                throw new UnexpectedValueException("Language profile tokenizer resource {$key} must be a local file name in {$profile_file}");
+            }
+
+            $resources[trim($key)] = $name;
+        }
+
+        ksort($resources, SORT_STRING);
+
+        return $resources;
+    }
+
+    /**
+     * @return array{emits_offsets:bool,emits_positions:bool,supports_fuzzy:bool,supports_overlaps:bool}
+     */
+    private function tokenizer_capabilities(mixed $value, string $profile_file): array
+    {
+        if (!is_array($value)) {
+            throw new UnexpectedValueException('Language profile tokenizer capabilities must be an array in ' . $profile_file);
+        }
+
+        $capabilities = [];
+        foreach (['emits_offsets', 'emits_positions', 'supports_fuzzy', 'supports_overlaps'] as $key) {
+            if (!array_key_exists($key, $value) || !is_bool($value[$key])) {
+                throw new UnexpectedValueException("Language profile tokenizer capability {$key} must be a boolean in {$profile_file}");
+            }
+
+            $capabilities[$key] = $value[$key];
+        }
+
+        return $capabilities;
+    }
+
+    private function is_local_file_name(string $name): bool
+    {
+        return $name !== '' && $name === basename($name) && !str_contains($name, '..');
     }
 
     /**

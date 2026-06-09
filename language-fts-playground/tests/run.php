@@ -1276,6 +1276,9 @@ function create_language_fts_temp_profile_set(array $profiles): string
         if (isset($definition['signals']) && is_array($definition['signals'])) {
             $profile['language_signals'] = array_values(array_map('strval', $definition['signals']));
         }
+        if (array_key_exists('tokenizer', $definition)) {
+            $profile['tokenizer'] = $definition['tokenizer'];
+        }
 
         file_put_contents(
             $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
@@ -2389,6 +2392,89 @@ test_case('rejects malformed lexical resource rows deliberately', function (): v
     }
 });
 
+test_case('tokenizer profile contract defaults and rejects unsupported declarations', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $profile = $repository->profile('xx');
+        assert_same(Language_FTS_Playground_Unicode_Words_Tokenizer::default_contract(), $profile['tokenizer'] ?? null, 'Profiles without tokenizer declarations default to unicode_words_v1.');
+        assert_same(true, (new Language_FTS_Playground_Analyzer($repository))->tokenizer_supports_fuzzy('xx'), 'The default tokenizer keeps fuzzy support enabled.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+
+    $unsupported_root = create_language_fts_temp_profile_set([
+        'xx' => [
+            'tokenizer' => [
+                'id' => 'dictionary_segmenter_v1',
+                'type' => 'dictionary_segmenter',
+                'resources' => [],
+                'capabilities' => [
+                    'emits_offsets' => true,
+                    'emits_positions' => true,
+                    'supports_fuzzy' => false,
+                    'supports_overlaps' => false,
+                ],
+            ],
+        ],
+    ]);
+    write_language_fts_temp_pack_metadata($unsupported_root . DIRECTORY_SEPARATOR . 'xx');
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($unsupported_root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Unsupported tokenizer declarations fail profile loading.'
+        );
+        assert_contains_text('supported unicode_words_v1/unicode_words', $throwable->getMessage(), 'Unsupported tokenizer failures explain the supported baseline.');
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($unsupported_root))->validate_all();
+        $warnings = implode("\n", language_fts_pack_status_by_id($report)['xx']['warnings'] ?? []);
+        assert_same(false, $report['valid'], 'Unsupported tokenizer declarations fail validator checks.');
+        assert_contains_text('supported unicode_words_v1/unicode_words', $warnings, 'Validator reports unsupported tokenizer declarations.');
+    } finally {
+        remove_language_fts_temp_tree($unsupported_root);
+    }
+});
+
+test_case('tokenizer profile contract validates declaration shape', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'xx' => [
+            'tokenizer' => [
+                'id' => 'unicode_words_v1',
+                'type' => 'unicode_words',
+                'resources' => [],
+                'capabilities' => [
+                    'emits_offsets' => true,
+                    'emits_positions' => true,
+                    'supports_fuzzy' => 'yes',
+                    'supports_overlaps' => false,
+                ],
+            ],
+        ],
+    ]);
+    write_language_fts_temp_pack_metadata($root . DIRECTORY_SEPARATOR . 'xx');
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Malformed tokenizer capabilities fail profile loading.'
+        );
+        assert_contains_text('capability supports_fuzzy must be a boolean', $throwable->getMessage(), 'Malformed tokenizer capability failures name the field.');
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $warnings = implode("\n", language_fts_pack_status_by_id($report)['xx']['warnings'] ?? []);
+        assert_same(false, $report['valid'], 'Malformed tokenizer capabilities fail validator checks.');
+        assert_contains_text('capability supports_fuzzy must be a boolean', $warnings, 'Validator reports malformed tokenizer capabilities.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('static guard expects production term rule resource support', function (): void {
     $repository_source = file_get_contents(__DIR__ . '/../src/LexicalProfileRepository.php');
     $analyzer_source = file_get_contents(__DIR__ . '/../src/Analyzer.php');
@@ -2430,6 +2516,28 @@ test_case('bundled morphology profiles declare term rule resources', function ()
         $missing,
         'Bundled en/pl/de profiles should declare term_rules.tsv for morphology migration.'
     );
+});
+
+test_case('bundled profiles declare the unicode words tokenizer baseline', function (): void {
+    $root = Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root();
+    $expected = Language_FTS_Playground_Unicode_Words_Tokenizer::default_contract();
+
+    foreach (['en', 'pl', 'de'] as $language) {
+        $profile_file = $root . DIRECTORY_SEPARATOR . $language . DIRECTORY_SEPARATOR . 'profile.php';
+        $profile = require $profile_file;
+        assert_true(is_array($profile), "Bundled {$language} profile returns an array.");
+        assert_same($expected, $profile['tokenizer'] ?? null, "Bundled {$language} profile declares the default tokenizer contract.");
+
+        $repository_profile = (new Language_FTS_Playground_Lexical_Profile_Repository())->profile($language);
+        assert_same($expected, $repository_profile['tokenizer'] ?? null, "Bundled {$language} runtime profile preserves the tokenizer contract.");
+    }
+
+    $report = (new Language_FTS_Playground_Lexical_Pack_Validator())->validate_all();
+    $by_id = language_fts_pack_status_by_id($report);
+    foreach (['en', 'pl', 'de'] as $language) {
+        assert_same($expected['id'], $by_id[$language]['tokenizer']['id'] ?? null, "Validator reports {$language} tokenizer id.");
+        assert_same($expected['capabilities'], $by_id[$language]['tokenizer']['capabilities'] ?? null, "Validator reports {$language} tokenizer capabilities.");
+    }
 });
 
 test_case('bundled morphology pack metadata lists term rule resources', function (): void {
@@ -4071,6 +4179,99 @@ test_case('removes Polish stopwords and stems Polish forms conservatively', func
     assert_query_terms_overlap($analyzer, 'pl', 'zielonymi zielonego zielonych', 'zielony', 'Polish adjective endings share conservative stem keys.');
     assert_same(['ul', 'rok'], $analyzer->analyze_text('ul w rok i', 'pl'), 'Short non-stopword Polish tokens remain exact.');
     assert_query_terms_do_not_overlap($analyzer, 'pl', 'rama', 'ram', 'Polish short stems are guarded from broad final-vowel trimming.');
+});
+
+test_case('unicode words token streams match current analyzer keys across bundled languages', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $cases = [
+        'en' => [
+            'text' => 'Searching stories 123 and boxes',
+            'expected' => [
+                ['surface' => 'Searching', 'normalized' => 'searching', 'keys' => ['searching', 'search'], 'position' => 0, 'start_byte' => 0, 'end_byte' => 9, 'type' => 'word', 'searchable' => true],
+                ['surface' => 'stories', 'normalized' => 'stories', 'keys' => ['stories', 'story'], 'position' => 1, 'start_byte' => 10, 'end_byte' => 17, 'type' => 'word', 'searchable' => true],
+                ['surface' => '123', 'normalized' => '123', 'keys' => ['123'], 'position' => 2, 'start_byte' => 18, 'end_byte' => 21, 'type' => 'number', 'searchable' => true],
+                ['surface' => 'boxes', 'normalized' => 'boxes', 'keys' => ['boxes', 'box'], 'position' => 3, 'start_byte' => 26, 'end_byte' => 31, 'type' => 'word', 'searchable' => true],
+            ],
+        ],
+        'pl' => [
+            'text' => 'Łódź oraz ul 42',
+            'expected' => [
+                ['surface' => 'Łódź', 'normalized' => 'lodz', 'keys' => ['lodz'], 'position' => 0, 'start_byte' => 0, 'end_byte' => 7, 'type' => 'word', 'searchable' => true],
+                ['surface' => 'ul', 'normalized' => 'ul', 'keys' => ['ul'], 'position' => 1, 'start_byte' => 13, 'end_byte' => 15, 'type' => 'word', 'searchable' => true],
+                ['surface' => '42', 'normalized' => '42', 'keys' => ['42'], 'position' => 2, 'start_byte' => 16, 'end_byte' => 18, 'type' => 'number', 'searchable' => true],
+            ],
+        ],
+        'de' => [
+            'text' => 'Führung und 88',
+            'expected' => [
+                ['surface' => 'Führung', 'normalized' => 'fuehrung', 'keys' => ['fuehrung'], 'position' => 0, 'start_byte' => 0, 'end_byte' => 8, 'type' => 'word', 'searchable' => true],
+                ['surface' => '88', 'normalized' => '88', 'keys' => ['88'], 'position' => 1, 'start_byte' => 13, 'end_byte' => 15, 'type' => 'number', 'searchable' => true],
+            ],
+        ],
+    ];
+
+    foreach ($cases as $language => $case) {
+        $stream = $analyzer->analyze_token_stream($case['text'], $language);
+        $summary = [];
+        foreach ($stream as $token) {
+            $summary[] = [
+                'surface' => $token['surface'],
+                'normalized' => $token['normalized'],
+                'keys' => $token['keys'],
+                'position' => $token['position'],
+                'start_byte' => $token['start_byte'],
+                'end_byte' => $token['end_byte'],
+                'type' => $token['type'],
+                'searchable' => $token['searchable'],
+            ];
+        }
+
+        assert_same($case['expected'], $summary, "{$language} token stream exposes surfaces, normalized keys, positions, and byte offsets.");
+        assert_same(array_column($case['expected'], 'keys'), $analyzer->analyze_text_token_keys($case['text'], $language), "{$language} token stream keys match analyze_text_token_keys.");
+
+        $flattened = [];
+        foreach ($case['expected'] as $expected_token) {
+            array_push($flattened, ...$expected_token['keys']);
+        }
+        assert_same($flattened, $analyzer->analyze_text($case['text'], $language), "{$language} token stream flattening matches analyze_text.");
+    }
+});
+
+test_case('token stream position gaps preserve phrase boundary behavior', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $analysis = $analyzer->analyze_segments_with_positions(['alpha the beta', 'gamma'], 'en');
+
+    assert_same(['alpha', 'beta', 'gamma'], $analysis['terms'], 'Stopwords are removed without adding in-segment positions.');
+    assert_same(
+        [
+            'alpha' => [0],
+            'beta' => [1],
+            'gamma' => [3],
+        ],
+        $analysis['positions'],
+        'Segment boundaries still insert a one-position phrase gap.'
+    );
+});
+
+test_case('tokenizer stream offsets preserve snippet highlights across bundled languages', function (): void {
+    $cases = [
+        ['post_id' => 641, 'language' => 'en', 'title' => 'English tokenizer snippet', 'content' => '<p>Searching stories and boxes stay visible.</p>', 'query' => 'search', 'mark' => '<mark>Searching</mark>'],
+        ['post_id' => 642, 'language' => 'pl', 'title' => 'Polish tokenizer snippet', 'content' => '<p>Łódź ma widoczny tekst wyszukiwania.</p>', 'query' => 'lodz', 'mark' => '<mark>Łódź</mark>'],
+        ['post_id' => 643, 'language' => 'de', 'title' => 'German tokenizer snippet', 'content' => '<p>Führung zeigt sichtbaren Text.</p>', 'query' => 'fuehrung', 'mark' => '<mark>Führung</mark>'],
+    ];
+
+    foreach ($cases as $case) {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer();
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post($case['post_id'], $case['language'], $case['title'], $case['content']));
+        $results = $searcher->search($case['query'], $case['language']);
+
+        assert_same([$case['post_id']], array_column($results, 'post_id'), "{$case['language']} tokenizer snippet fixture is searchable.");
+        assert_contains_text($case['mark'], $results[0]['snippet'] ?? '', "{$case['language']} tokenizer stream highlights the matched source token.");
+    }
 });
 
 test_case('uses one analyzer path for indexed documents and queries with stopwords', function (): void {

@@ -5,6 +5,17 @@ return [
     'id' => 'pl',
     'label' => 'Polish',
     'order' => 20,
+    'tokenizer' => [
+        'id' => 'unicode_words_v1',
+        'type' => 'unicode_words',
+        'resources' => [],
+        'capabilities' => [
+            'emits_offsets' => true,
+            'emits_positions' => true,
+            'supports_fuzzy' => true,
+            'supports_overlaps' => false,
+        ],
+    ],
     'normalization' => [
         'fold' => [
             'ą' => 'a',

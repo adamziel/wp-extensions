@@ -148,8 +148,12 @@ resources/languages/
     term_rules.tsv
 ```
 
-`profile.php` declares the language id, label, load order, optional character
-folds, optional language signal regexes, and resource file names.
+`profile.php` declares the language id, label, load order, optional tokenizer
+contract, optional character folds, optional language signal regexes, and
+resource file names. Profiles may omit the tokenizer declaration; the runtime
+defaults to `unicode_words_v1`, which preserves the current Unicode
+letter/number tokenization behavior. This baseline does not ship or support
+dictionary segmenters or non-space language tokenizers.
 `pack.php` records source, license, attribution, provenance, generated file
 list, pack version/date, and whether the resource pack is curated seed data or
 an imported comprehensive pack. The analyzer does not load `pack.php` during
