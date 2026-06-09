@@ -50,11 +50,13 @@ The language selector defaults to `Automatic`, which ranks likely language
 partitions from profile-backed language signals, lexeme/canonical-key coverage,
 synonym/synset source keys, and stopword evidence that only boosts candidates
 after non-stopword evidence exists. When that evidence produces confident
-candidates, the searcher queries only those selected partitions; when a query
-is ambiguous or has no profile evidence, it safely fans out to all enabled
-partitions. Results still report the partition that matched. Choosing English,
-Polish, German, or a custom language id keeps the previous precision-filter
-behavior and searches only that partition.
+candidates, the searcher queries only those selected partitions. When evidence
+is ambiguous or missing, automatic mode uses bounded fallback: the bundled
+three-language demo can search all enabled seed partitions, while larger local
+roots use storage-backed preflight term hits and search only the bounded
+selected set. Results still report the partition that matched. Choosing English,
+Polish, German, or a custom language id keeps the precision-filter behavior and
+searches only that partition.
 
 ## Search Diagnostics
 
