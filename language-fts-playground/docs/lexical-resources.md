@@ -155,7 +155,9 @@ length guard. Use blank `alternate_pattern` and `alternate_replacement` columns
 when a rule does not need an alternate key.
 
 Supported flags are `trim_doubled_final_consonant`, `require_vowel`,
-`require_vowel_or_y`, and `append_e_if_cvc`. These flags are deliberately
+`require_vowel_or_y`, `append_e_if_cvc`, and `stop_after_match`. The analyzer
+honors `stop_after_match` only after that rule emits at least one key, then it
+skips later term rules for the same term. The other flags are deliberately
 ASCII-oriented foundation helpers; language-specific broad stemming still needs
 reviewed rules and relevance tests.
 

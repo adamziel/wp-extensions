@@ -267,7 +267,8 @@ they are not comprehensive lexical databases.
 Bundled and custom packs may declare `term_rules.tsv` and
 `protected_terms.txt` resources. Term rules add generic normalized term keys
 using a reviewed strip/append rule format with optional alternate regex
-replacement keys and ASCII-oriented flags such as `require_vowel_or_y`.
+replacement keys and flags such as `require_vowel_or_y` and
+`stop_after_match`.
 Protected terms keep exact and lexeme keys while opting out of those broad
 rules. Omit those profile resource keys when a pack does not use them; declared
 keys must point at existing local files.

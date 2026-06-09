@@ -662,7 +662,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         $min_key_length = $this->term_rule_positive_integer($columns[6], $path, $line_number, 'min_key_length');
-        $flags = $this->term_rule_flags($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'require_vowel_or_y', 'append_e_if_cvc'], $path, $line_number, 'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, or append_e_if_cvc');
+        $flags = $this->term_rule_flags($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'require_vowel_or_y', 'append_e_if_cvc', 'stop_after_match'], $path, $line_number, 'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, append_e_if_cvc, or stop_after_match');
         $alternate_pattern = $this->term_rule_alternate_pattern($columns[8], $columns[9], $path, $line_number);
         $alternate_replacement = trim($columns[9]);
         $provenance = $this->term_rule_provenance($columns[10], $path, $line_number);

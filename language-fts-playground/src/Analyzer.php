@@ -551,12 +551,18 @@ final class Language_FTS_Playground_Analyzer
                 continue;
             }
 
+            $emitted = false;
             foreach (array_merge([$key], $this->resource_alternate_term_rule_keys($key, $rule)) as $candidate) {
                 if ($candidate === '' || strlen($candidate) < (int) ($rule['min_key_length'] ?? 1)) {
                     continue;
                 }
 
                 $keys[] = $candidate;
+                $emitted = true;
+            }
+
+            if ($emitted && in_array('stop_after_match', (array) ($rule['flags'] ?? []), true)) {
+                break;
             }
         }
 

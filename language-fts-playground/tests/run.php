@@ -2225,7 +2225,7 @@ test_case('rejects malformed term rule rows with unknown flag', function (): voi
         'unknown flag',
         "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
         "unknown-flag\t5\t/ing$/u\t\ting\t\t3\texplode\t\t\tfixture\n",
-        'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, or append_e_if_cvc'
+        'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, append_e_if_cvc, or stop_after_match'
     );
 });
 
@@ -3421,6 +3421,21 @@ test_case('removes German stopwords and stems German forms conservatively', func
     }
     assert_query_terms_overlap($analyzer, 'de', 'spielen spielte gespielt', 'spiel', 'German common verb endings and ge- participles share stem keys.');
     assert_query_terms_do_not_overlap($analyzer, 'de', 'gespielt', 'gespiel', 'German ge-participles do not add noisy intermediate stems.');
+    assert_same(['gerechtest', 'rechtes'], $analyzer->analyze_text('gerechtest', 'de'), 'Guarded German ge-participles stop before generic est/st/t suffix rules.');
+    assert_same(['gespieltest', 'spieltes'], $analyzer->analyze_text('gespieltest', 'de'), 'Guarded German ge-participles do not emit extra generic suffix keys.');
+    assert_same(['gelobt', 'gelob'], $analyzer->analyze_text('gelobt', 'de'), 'Short German ge-t forms still fall through to the generic t fallback.');
+    foreach (['gerecht', 'gerechte'] as $unexpected) {
+        assert_true(
+            !in_array($unexpected, $analyzer->analyze_text('gerechtest', 'de'), true),
+            "German guarded ge-participle gerechtest does not emit {$unexpected}."
+        );
+    }
+    foreach (['gespielt', 'gespielte'] as $unexpected) {
+        assert_true(
+            !in_array($unexpected, $analyzer->analyze_text('gespieltest', 'de'), true),
+            "German guarded ge-participle gespieltest does not emit {$unexpected}."
+        );
+    }
     assert_query_terms_do_not_overlap($analyzer, 'de', 'artig', 'art', 'German ig-adjectives do not collapse to short nouns.');
     assert_same(['arm', 'arme'], $analyzer->analyze_text('arm arme', 'de'), 'Short German tokens stay guarded from broad stemming.');
 });

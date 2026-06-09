@@ -580,7 +580,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $valid = false;
         }
 
-        if (!$this->term_rule_flags_are_valid($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'require_vowel_or_y', 'append_e_if_cvc'], $path, $line_number, $warnings, 'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, or append_e_if_cvc')) {
+        if (!$this->term_rule_flags_are_valid($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'require_vowel_or_y', 'append_e_if_cvc', 'stop_after_match'], $path, $line_number, $warnings, 'term rule flag must be trim_doubled_final_consonant, require_vowel, require_vowel_or_y, append_e_if_cvc, or stop_after_match')) {
             $valid = false;
         }
 
