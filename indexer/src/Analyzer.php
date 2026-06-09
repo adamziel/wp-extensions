@@ -685,8 +685,10 @@ final class WP_FTS_Analyzer
     {
         $segments = [];
         $langByDepth = [0 => ['lang' => $documentLang, 'explicit' => false]];
-        $textGroupByDepth = [0 => 0];
+        $textGroupByDepth = [];
+        $textGroupBoundaryByDepth = [];
         $textGroupCounter = 0;
+        $rootTextGroup = null;
 
         while ($processor->next_token()) {
             $breadcrumbs = method_exists($processor, 'get_breadcrumbs')
@@ -697,7 +699,7 @@ final class WP_FTS_Analyzer
                 $breadcrumbs
             );
             $this->pruneLanguageStack($langByDepth, count($breadcrumbs));
-            $this->pruneTextGroupStack($textGroupByDepth, count($breadcrumbs));
+            $this->pruneTextGroupStack($textGroupByDepth, $textGroupBoundaryByDepth, count($breadcrumbs));
 
             if ($processor->get_token_type() === '#tag') {
                 $isCloser = method_exists($processor, 'is_tag_closer') && $processor->is_tag_closer();
@@ -705,19 +707,21 @@ final class WP_FTS_Analyzer
                 $tag = $this->processorCurrentTag($processor, $breadcrumbs);
                 if ($isCloser) {
                     unset($langByDepth[$depth]);
-                    unset($textGroupByDepth[$depth]);
+                    unset($textGroupByDepth[$depth], $textGroupBoundaryByDepth[$depth]);
                     continue;
                 }
 
                 unset($langByDepth[$depth]);
-                unset($textGroupByDepth[$depth]);
+                unset($textGroupByDepth[$depth], $textGroupBoundaryByDepth[$depth]);
                 $lang = $this->processorLangAttribute($processor);
                 if ($lang !== null) {
                     $langByDepth[$depth] = ['lang' => $lang, 'explicit' => true];
                 }
                 if ($tag !== null && $this->isTextGroupBoundaryTag($tag)) {
+                    $this->retireCurrentTextGroup($textGroupByDepth, $textGroupBoundaryByDepth, $rootTextGroup);
                     $textGroupCounter++;
                     $textGroupByDepth[$depth] = $textGroupCounter;
+                    $textGroupBoundaryByDepth[$depth] = true;
                 }
                 continue;
             }
@@ -741,7 +745,12 @@ final class WP_FTS_Analyzer
                 'weight' => $this->boostForAncestors($breadcrumbs),
                 'lang' => $scope['lang'],
                 'explicit_lang' => $scope['explicit'],
-                'detect_group' => $this->currentTextGroup($textGroupByDepth),
+                'detect_group' => $this->currentTextGroup(
+                    $textGroupByDepth,
+                    $textGroupBoundaryByDepth,
+                    $rootTextGroup,
+                    $textGroupCounter
+                ),
             ];
         }
 
@@ -782,6 +791,7 @@ final class WP_FTS_Analyzer
         $stack = [];
         $segments = [];
         $textGroupCounter = 0;
+        $rootTextGroup = null;
         $voidTags = array_fill_keys([
             'AREA',
             'BASE',
@@ -825,8 +835,10 @@ final class WP_FTS_Analyzer
                     $selfClosing = (bool) preg_match('/\/\s*>$/', $part);
                     $this->closeFallbackOptionalEndTags($stack, $opening);
                     if (!isset($voidTags[$opening]) && !$selfClosing) {
+                        $isTextGroupBoundary = $this->isTextGroupBoundaryTag($opening);
                         $detectGroup = null;
-                        if ($this->isTextGroupBoundaryTag($opening)) {
+                        if ($isTextGroupBoundary) {
+                            $this->retireFallbackCurrentTextGroup($stack, $rootTextGroup);
                             $textGroupCounter++;
                             $detectGroup = $textGroupCounter;
                         }
@@ -834,6 +846,7 @@ final class WP_FTS_Analyzer
                             'tag' => $opening,
                             'lang' => $this->tagLangAttribute($part),
                             'detect_group' => $detectGroup,
+                            'text_group_boundary' => $isTextGroupBoundary,
                         ];
                     }
                 }
@@ -859,7 +872,7 @@ final class WP_FTS_Analyzer
                 'weight' => $this->boostForAncestors($ancestors),
                 'lang' => $scope['lang'],
                 'explicit_lang' => $scope['explicit'],
-                'detect_group' => $this->fallbackCurrentTextGroup($stack),
+                'detect_group' => $this->fallbackCurrentTextGroup($stack, $rootTextGroup, $textGroupCounter),
             ];
         }
 
@@ -1299,15 +1312,47 @@ final class WP_FTS_Analyzer
     /**
      * Remove text-detection groups deeper than the processor's current depth.
      *
-     * @param array<int,int> $textGroupByDepth
+     * @param array<int,int|null> $textGroupByDepth
+     * @param array<int,bool> $textGroupBoundaryByDepth
      */
-    private function pruneTextGroupStack(array &$textGroupByDepth, int $depth): void
+    private function pruneTextGroupStack(array &$textGroupByDepth, array &$textGroupBoundaryByDepth, int $depth): void
     {
         foreach (array_keys($textGroupByDepth) as $scopeDepth) {
             if ($scopeDepth > $depth) {
                 unset($textGroupByDepth[$scopeDepth]);
             }
         }
+
+        foreach (array_keys($textGroupBoundaryByDepth) as $scopeDepth) {
+            if ($scopeDepth > $depth) {
+                unset($textGroupBoundaryByDepth[$scopeDepth]);
+            }
+        }
+    }
+
+    /**
+     * Close the current inline text run before a child boundary starts.
+     *
+     * A boundary element such as `p` gets its own detection group. Retiring the
+     * parent run here prevents direct sibling text after that boundary from
+     * being concatenated with direct text that came before it.
+     *
+     * @param array<int,int|null> $textGroupByDepth
+     * @param array<int,bool> $textGroupBoundaryByDepth
+     */
+    private function retireCurrentTextGroup(
+        array &$textGroupByDepth,
+        array $textGroupBoundaryByDepth,
+        ?int &$rootTextGroup
+    ): void {
+        krsort($textGroupBoundaryByDepth, SORT_NUMERIC);
+
+        foreach ($textGroupBoundaryByDepth as $depth => $_active) {
+            $textGroupByDepth[(int) $depth] = null;
+            return;
+        }
+
+        $rootTextGroup = null;
     }
 
     /**
@@ -1317,14 +1362,35 @@ final class WP_FTS_Analyzer
      * weak connector words split into their own text node can still be detected
      * with the phrase around them.
      *
-     * @param array<int,int> $textGroupByDepth
+     * @param array<int,int|null> $textGroupByDepth
+     * @param array<int,bool> $textGroupBoundaryByDepth
      */
-    private function currentTextGroup(array $textGroupByDepth): int
+    private function currentTextGroup(
+        array &$textGroupByDepth,
+        array $textGroupBoundaryByDepth,
+        ?int &$rootTextGroup,
+        int &$textGroupCounter
+    ): int
     {
-        krsort($textGroupByDepth, SORT_NUMERIC);
+        krsort($textGroupBoundaryByDepth, SORT_NUMERIC);
 
-        $group = reset($textGroupByDepth);
-        return is_int($group) ? $group : 0;
+        foreach ($textGroupBoundaryByDepth as $depth => $_active) {
+            $depth = (int) $depth;
+            if (isset($textGroupByDepth[$depth]) && $textGroupByDepth[$depth] !== null) {
+                return (int) $textGroupByDepth[$depth];
+            }
+
+            $textGroupCounter++;
+            $textGroupByDepth[$depth] = $textGroupCounter;
+            return $textGroupCounter;
+        }
+
+        if ($rootTextGroup === null) {
+            $textGroupCounter++;
+            $rootTextGroup = $textGroupCounter;
+        }
+
+        return $rootTextGroup;
     }
 
     /**
@@ -1583,7 +1649,7 @@ final class WP_FTS_Analyzer
      * explicit end tag. The fallback parser models the common cases so language
      * and boost scopes do not leak across sibling elements.
      *
-     * @param array<int,array{tag:string,lang:?string,detect_group:?int}> $stack
+     * @param array<int,array{tag:string,lang:?string,detect_group:?int,text_group_boundary?:bool}> $stack
      */
     private function closeFallbackOptionalEndTags(array &$stack, string $opening): void
     {
@@ -1653,7 +1719,7 @@ final class WP_FTS_Analyzer
     /**
      * Return the nearest language scope in the fallback parser stack.
      *
-     * @param array<int,array{tag:string,lang:?string,detect_group:?int}> $stack
+     * @param array<int,array{tag:string,lang:?string,detect_group:?int,text_group_boundary?:bool}> $stack
      * @param string $documentLang Fallback language outside any scoped tag.
      * @return array{lang:string,explicit:bool} Effective language for the
      *         current text node and whether it came from an HTML attribute.
@@ -1670,19 +1736,49 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Return the nearest visible-text detection group in the fallback parser.
+     * Close the current fallback inline text run before a child boundary starts.
      *
-     * @param array<int,array{tag:string,lang:?string,detect_group:?int}> $stack
+     * @param array<int,array{tag:string,lang:?string,detect_group:?int,text_group_boundary?:bool}> $stack
      */
-    private function fallbackCurrentTextGroup(array $stack): int
+    private function retireFallbackCurrentTextGroup(array &$stack, ?int &$rootTextGroup): void
     {
         for ($i = count($stack) - 1; $i >= 0; $i--) {
-            if (isset($stack[$i]['detect_group']) && $stack[$i]['detect_group'] !== null) {
-                return (int) $stack[$i]['detect_group'];
+            if (!empty($stack[$i]['text_group_boundary'])) {
+                $stack[$i]['detect_group'] = null;
+                return;
             }
         }
 
-        return 0;
+        $rootTextGroup = null;
+    }
+
+    /**
+     * Return or allocate the nearest visible-text detection group in the fallback parser.
+     *
+     * @param array<int,array{tag:string,lang:?string,detect_group:?int,text_group_boundary?:bool}> $stack
+     */
+    private function fallbackCurrentTextGroup(array &$stack, ?int &$rootTextGroup, int &$textGroupCounter): int
+    {
+        for ($i = count($stack) - 1; $i >= 0; $i--) {
+            if (empty($stack[$i]['text_group_boundary'])) {
+                continue;
+            }
+
+            if (isset($stack[$i]['detect_group']) && $stack[$i]['detect_group'] !== null) {
+                return (int) $stack[$i]['detect_group'];
+            }
+
+            $textGroupCounter++;
+            $stack[$i]['detect_group'] = $textGroupCounter;
+            return $textGroupCounter;
+        }
+
+        if ($rootTextGroup === null) {
+            $textGroupCounter++;
+            $rootTextGroup = $textGroupCounter;
+        }
+
+        return $rootTextGroup;
     }
 
     /**

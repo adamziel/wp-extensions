@@ -120,6 +120,34 @@ test_case('quality language detection gold fixtures keep inline markup weak conn
     );
 });
 
+test_case('quality language detection gold fixtures isolate top-level text across block boundaries', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $html = 'Führung Straße<p>plain alpha</p>oraz jest';
+    $contentLangs = test_lang_by_term($analyzer->analyze_content($html));
+
+    assert_same('de', $contentLangs['fuehrung'] ?? null, 'leading top-level German term should route to de');
+    assert_same('de', $contentLangs['strasse'] ?? null, 'leading top-level German suffix should route to de');
+    assert_same('en', $contentLangs['plain'] ?? null, 'intervening ambiguous block text should remain fallback language');
+    assert_same('pl', $contentLangs['oraz'] ?? null, 'trailing top-level Polish term should route to pl after a block boundary');
+    assert_same('pl', $contentLangs['jest'] ?? null, 'trailing weak Polish term should not inherit German from earlier top-level text');
+
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(102, $html);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same(
+        [102],
+        wp_fts_ldgf_result_ids($searcher->search('oraz jest', ['mode' => 'AND', 'limit' => 10])),
+        'Polish AND query should find trailing top-level text separated from earlier German text by a block'
+    );
+    assert_same(
+        [],
+        wp_fts_ldgf_result_ids($searcher->search('oraz jest', ['lang' => 'de', 'mode' => 'AND', 'limit' => 10])),
+        'trailing Polish text should not be indexed into the earlier German namespace'
+    );
+});
+
 test_case('quality language detection gold fixtures honor explicit and multilingual-plugin metadata', function (): void {
     wp_fts_ldgf_reset_multilingual_globals();
     $GLOBALS['wp_fts_ldgf_polylang_post_languages'][10] = 'pl_PL';
@@ -147,6 +175,10 @@ test_case('quality language detection gold fixtures honor explicit and multiling
         assert_same('en', $explicitSegments['oraz'] ?? null, 'HTML lang should override Polylang metadata');
         assert_same('de', $explicitSegments['fuehrung'] ?? null, 'xml:lang should override Polylang metadata');
         assert_same('de', $explicitSegments['und'] ?? null, 'weak connector should inherit explicit xml:lang');
+
+        $dataLang = test_lang_by_term($analyzer->analyze_content('<p data-lang="de">Wrocław oraz Łódź</p>'));
+        assert_same('pl', $dataLang['wroclaw'] ?? null, 'data-lang should not override detector evidence');
+        assert_same('pl', $dataLang['lodz'] ?? null, 'data-lang should not be treated as explicit language metadata');
 
         $wpml = test_lang_by_term($analyzer->analyze_content('<p>Führung und Straße</p>', ['post_id' => 20]));
         assert_same('fr-FR', $wpml['fuhrung'] ?? null, 'WPML post locale should resolve untagged document language');

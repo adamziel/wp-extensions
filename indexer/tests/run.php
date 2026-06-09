@@ -2423,6 +2423,14 @@ test_case('language detection does not override explicit metadata or segment tag
     assert_same('en', $explicitSegment['wroclaw'] ?? null, 'HTML lang matching the fallback language should remain explicit metadata');
     assert_same('en', $explicitSegment['lodz'] ?? null, 'detector evidence must not override explicit HTML lang');
 
+    $explicitXmlSegment = test_lang_by_term($analyzer->analyze_content('<p xml:lang="de">oraz jest</p>'));
+    assert_same('de', $explicitXmlSegment['oraz'] ?? null, 'xml:lang should remain authoritative metadata');
+    assert_same('de', $explicitXmlSegment['jest'] ?? null, 'detector evidence must not override explicit xml:lang');
+
+    $dataLangSegment = test_lang_by_term($analyzer->analyze_content('<p data-lang="de">Wrocław oraz Łódź</p>'));
+    assert_same('pl', $dataLangSegment['wroclaw'] ?? null, 'data-lang must not be treated as authoritative metadata');
+    assert_same('pl', $dataLangSegment['lodz'] ?? null, 'data-lang should leave untagged text eligible for conservative detection');
+
     $resolverAnalyzer = new WP_FTS_Analyzer([
         'default_lang' => 'en',
         'document_language_resolver' => static fn(array $options): string => 'en',
@@ -2887,6 +2895,26 @@ test_case('untagged query spans use document-parity language detection for AND r
     assert_same([2], array_column($searcher->search('Führung und Straße', ['mode' => 'AND', 'limit' => 10]), 'doc_id'), 'untagged German AND query should keep weak tokens in the detected German span');
     assert_same([3], array_column($searcher->search('oraz jest', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10]), 'doc_id'), 'explicit query language should still isolate the requested partition');
     assert_same([], $searcher->search('Führung und Straße', ['lang' => 'en', 'mode' => 'AND']), 'explicit English query should not leak into detected German postings');
+});
+
+test_case('fallback parser separates top-level language groups across block boundaries', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $html = 'Führung Straße<p>plain alpha</p>oraz jest';
+    $langs = test_lang_by_term($analyzer->analyze_content($html));
+
+    assert_same('de', $langs['fuehrung'] ?? null, 'leading top-level German text should still detect as de');
+    assert_same('de', $langs['strasse'] ?? null, 'leading top-level German suffix should stay in its text run');
+    assert_same('en', $langs['plain'] ?? null, 'ambiguous block text should stay on the fallback language');
+    assert_same('pl', $langs['oraz'] ?? null, 'trailing top-level Polish text after a block should get its own detection group');
+    assert_same('pl', $langs['jest'] ?? null, 'trailing top-level Polish weak term should not inherit the earlier German group');
+
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, $html);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([1], array_column($searcher->search('oraz jest', ['mode' => 'AND', 'limit' => 10]), 'doc_id'), 'Polish AND query should find trailing top-level text after a block');
+    assert_same([], $searcher->search('oraz jest', ['lang' => 'de', 'mode' => 'AND']), 'trailing Polish text should not be stored in the earlier German namespace');
 });
 
 test_case('inline markup document spans share detected language for AND recall', function (): void {
