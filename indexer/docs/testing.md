@@ -93,13 +93,18 @@ find . -path ./vendor -prune -o -name '*.php' -print0 | xargs -0 -n1 php -l
 
 ## WordPress And MySQL Integration Harness
 
-This branch does not include a real WordPress/MySQL integration harness yet. If
-the real-integration-tests lane is merged into the active branch, run the exact
-command documented by that lane against a disposable WordPress database, not a
-production database.
+This branch includes an optional real WordPress/MySQL integration harness and a
+quality skip-contract that proves the harness exits clearly when WordPress is
+not configured. The real harness is composer-addressable:
 
-Until that lane is present, the MySQL and WP-CLI coverage in `tests/run.php` uses
-test doubles instead of a live WordPress install.
+```sh
+composer test:integration:real
+```
+
+Configure it only against a disposable WordPress database, not a production
+database. In the default unconfigured environment, `tests/run.php` still uses
+MySQL and WP-CLI fakes/contracts for broad coverage and the real integration
+contract safely reports an explicit skip.
 
 ## Diff And Status Checks
 

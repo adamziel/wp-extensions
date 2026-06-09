@@ -10,7 +10,7 @@ repository without referring to old task/review lanes.
 | Project | Current passing gate | Implemented scope | Main remaining gap |
 | --- | ---: | --- | --- |
 | Universal WordPress Importer | 502 tests, 10,127 assertions | Markdown, HTML, text, EPUB, PDF, WXR/XML, archives, GitHub, WordPress REST/site URLs, feeds, OPML, browser uploads, media references | Pick and commit the next formal format backlog. |
-| Pure PHP FTS Indexer | 107/107 named tests, 12,428 checks/scenarios | WordPress full-text indexer with analyzer, language partitions, BM25 search, MySQL-style storage contracts, WP-CLI/REST/lifecycle hooks | Live WordPress/MySQL production validation and richer search features. |
+| Pure PHP FTS Indexer | PHP harness passes in normal and no-extension modes with no failures or pending tests | WordPress full-text indexer with analyzer, conservative language detection, default safe stemming, language partitions, BM25 search, MySQL-style storage contracts, WP-CLI/REST/lifecycle hooks | Live WordPress/MySQL production validation and richer search features. |
 
 ## Universal WordPress Importer
 
@@ -81,8 +81,12 @@ cd indexer && php -n tests/run.php
 Result in both modes:
 
 ```text
-107/107 named tests passed; failures=0; pending=0; checks/scenarios=12428
+Named PHP harness passes with failures=0 and pending=0.
 ```
+
+The harness prints exact named-test and check/scenario counts on each run. Those
+counts can change as quality modules are added; the fixed branch gate is a clean
+normal run, a clean no-extension run, and the built-in minimum-check enforcement.
 
 Snowball fixture harness in this checkout:
 
@@ -101,8 +105,8 @@ is installed.
 | --- | --- | --- |
 | Analyzer / tokenizer | Implemented | HTML-aware visible-text extraction, unsafe-region skipping, element boosts, diacritic folding, invalid UTF-8 tolerance, mixed-script tokenization, CJK fallback bigrams. |
 | Language partitioning | Implemented | Terms are stored as language-namespaced keys; document language can come from explicit options, site locale, multilingual plugins, or inline HTML `lang`/`xml:lang`. |
-| Language detection | Not implemented | There is no statistical auto-detection. Wrong or missing language metadata can put terms in the wrong partition. |
-| Normalization / stemming | Partial by design | Stemming is off by default; optional Snowball path is allowlisted for Catalan and Dutch Porter when dependency data is available; Polish has a conservative suffix stemmer; custom stemmers are supported. |
+| Language detection | Implemented conservatively | Gap-only detector evidence routes otherwise untagged content and query spans by script, distinctive Latin letters, and compact lexical markers. It is not statistical detection; explicit options, HTML `lang`/`xml:lang`, Polylang/WPML metadata, and custom resolvers remain authoritative, and ambiguous text stays on the fallback language. |
+| Normalization / stemming | Implemented, narrow by design | Stemming is enabled by default with safe no-op behavior for unsupported languages or missing optional dependencies. The optional Snowball path is allowlisted for Catalan and Dutch Porter when dependency data is available; Polish has a conservative suffix stemmer; custom stemmers are supported; `enable_stemming=false` remains the exact-term escape hatch. |
 | Storage backends | Implemented for harness and MySQL contract | In-memory and file backends are covered; MySQL schema/SQL behavior is covered with fakes and contracts. Live MySQL validation remains environment-specific. |
 | Indexing lifecycle | Implemented | Activation/schema repair, deactivation, uninstall state cleanup, runtime save/status/delete hooks, bounded queue processing, tombstoning non-searchable/protected posts. |
 | Content extraction | Implemented | Title, content, excerpt, rendered block deltas, taxonomy terms, selected custom fields, field boosts, and bounded metadata for filters/snippets. |
