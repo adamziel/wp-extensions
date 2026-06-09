@@ -121,6 +121,7 @@ return [
         'synonyms.tsv',
         'synsets.tsv',
         'LICENSE.oewn.txt',
+        'pack.lock.json',
     ],
     'source' => [
         'name' => 'Open English WordNet',
@@ -192,6 +193,18 @@ ids are internally consistent. It also compares every declared
 `runtime_files` digest and byte count against the installed local file. Source
 artifact digest verification happens in the importer or CI where the original
 source artifact is available.
+
+Comprehensive packs must also include `pack.lock.json`, a deterministic
+machine-readable inventory generated from the reviewed `pack.php` metadata and
+installed runtime files. The lock uses the
+`language-fts-playground-pack-inventory-v1` schema and records `data_kind`,
+pack version/date, source name/version/date/artifact digests, license and
+attribution fields, provenance ids, normalization profile, importer
+command/format/options, and SHA-256 plus byte count for each runtime resource.
+The validator recomputes this inventory locally and fails comprehensive packs
+when the lock is missing or no longer matches the installed files and metadata.
+Curated seed packs get the same computed inventory in validator JSON output but
+do not need to commit a lock file.
 
 ## Runtime Formats
 
@@ -304,6 +317,7 @@ The validator reports, per language:
 - language id and label,
 - `pack.php` source name, source URL, license, version/date, data kind, and provenance,
 - whether every runtime file listed in `pack.php` exists,
+- inventory lock status and the computed inventory report in JSON output,
 - stopword rows, lexeme rows, pairwise synonym rows/expansions, synset rows,
   concept-derived expansions, phrase synonym rows, phrase synonym expansions,
   term rule rows, and protected term rows,
@@ -328,9 +342,9 @@ results down.
 The WordPress admin page at `Tools -> Language FTS` includes a compact
 Lexical pack status table with the language, `curated_seed` or
 `imported_comprehensive` data kind, source, license, source version, license id,
-runtime digest status, importer version, version/date, lexeme/synset/term-rule/
-expansion counts, warnings, audit metadata details, and the effective local
-resource root.
+runtime digest status, inventory status, importer version, version/date,
+lexeme/synset/term-rule/expansion counts, warnings, audit metadata details, and
+the effective local resource root.
 Read that table as a provenance and quality signal: current shipped packs are
 `curated_seed` demo data, not comprehensive WordNet, OpenThesaurus, or
 plWordNet databases.
@@ -369,7 +383,39 @@ php language-fts-playground/tools/import-lexical-source.php wordnet-json \
 The importer recomputes the input artifact SHA-256 and byte count and fails if
 they do not match the provided values. It records generated runtime files and
 preexisting profile-declared runtime files in `runtime_files`; license text must
-already exist as a local file in the output directory.
+already exist as a local file in the output directory. For
+`imported_comprehensive` imports it also writes `pack.lock.json`; commit that
+lock with the compact runtime files so later validation can detect source
+metadata drift or edited runtime resources.
+
+Maintainer promotion workflow for a real external source:
+
+1. Keep the downloaded or converted source artifact outside this repository.
+   Record its source URL, upstream version/date, SHA-256, byte count, license,
+   and attribution in the task or release evidence.
+2. Prepare the target runtime directory with the reviewed `profile.php`,
+   seed stopwords/synonyms placeholders as needed, and the local license text
+   file permitted by the source license.
+3. Run `import-lexical-source.php` with `--data-kind=imported_comprehensive`
+   and all audit options shown above. Do not let the command fetch the source;
+   pass an already-reviewed local artifact.
+4. Inspect the generated `pack.php` and `pack.lock.json`. Confirm that the
+   lock records the expected importer format, command, source artifact digest,
+   normalization profile digest, license fields, provenance ids, and runtime
+   resource digests.
+5. Re-run the same import into a temporary directory and compare generated
+   `synsets.tsv`, `lexemes.tsv`, `pack.php`, and `pack.lock.json` byte for
+   byte to prove deterministic output.
+6. Run `validate-lexical-packs.php`, `php -n validate-lexical-packs.php`, and
+   `validate-lexical-packs.php --json` against the generated root. Archive the
+   human and JSON reports with the promotion evidence.
+7. Run `evaluate-lexical-pack.php` against the reviewed relevance fixture and
+   record query-level wins, losses, broad-match failures, and acceptance gates.
+8. Review source-specific filters, max synset size, expansion fanout, memory
+   footprint, admin status output, and redistribution terms before committing.
+9. Commit only compact reviewed runtime files, `pack.php`, license text allowed
+   for redistribution, and `pack.lock.json`. Do not vendor raw unreviewed
+   third-party lexical databases in this repository.
 
 Do not promote a generated pack as `imported_comprehensive` until review
 artifacts exist for validation output, deterministic re-import output, source

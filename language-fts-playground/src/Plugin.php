@@ -650,6 +650,7 @@ final class Language_FTS_Playground_Plugin
         echo '<th>' . esc_html__('Source version', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('License id', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Runtime digest', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Inventory', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Importer', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Version/date', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Counts', 'language-fts-playground') . '</th>';
@@ -692,6 +693,7 @@ final class Language_FTS_Playground_Plugin
             echo '<td>' . esc_html(trim((string) ($source['version'] ?? '') . ' ' . (string) ($source['retrieved_at'] ?? ''))) . '</td>';
             echo '<td><code>' . esc_html((string) ($license['identifier'] ?? '')) . '</code></td>';
             echo '<td><code>' . esc_html((string) ($metadata['runtime_digest_status'] ?? 'not_declared')) . '</code></td>';
+            echo '<td><code>' . esc_html((string) ($metadata['inventory_status'] ?? 'not_declared')) . '</code></td>';
             echo '<td>' . esc_html((string) ($importer['version'] ?? '')) . '</td>';
             echo '<td>' . esc_html(trim((string) ($metadata['pack_version'] ?? '') . ' ' . (string) ($metadata['pack_date'] ?? ''))) . '</td>';
             echo '<td>' . esc_html($count_text) . '</td>';
@@ -716,8 +718,9 @@ final class Language_FTS_Playground_Plugin
         $importer = isset($metadata['importer']) && is_array($metadata['importer']) ? $metadata['importer'] : [];
         $runtime_files = isset($metadata['runtime_files']) && is_array($metadata['runtime_files']) ? $metadata['runtime_files'] : [];
         $provenance_ids = isset($metadata['provenance_ids']) && is_array($metadata['provenance_ids']) ? $metadata['provenance_ids'] : [];
+        $inventory = isset($metadata['inventory']) && is_array($metadata['inventory']) ? $metadata['inventory'] : [];
 
-        if ($source === [] && $license === [] && $normalization === [] && $importer === [] && $runtime_files === [] && $provenance_ids === []) {
+        if ($source === [] && $license === [] && $normalization === [] && $importer === [] && $runtime_files === [] && $provenance_ids === [] && $inventory === []) {
             return;
         }
 
@@ -735,6 +738,7 @@ final class Language_FTS_Playground_Plugin
             __('Attribution', 'language-fts-playground') => (string) ($metadata['attribution_text'] ?? ''),
             __('Normalization', 'language-fts-playground') => trim((string) ($normalization['profile_version'] ?? '') . ' ' . (string) ($normalization['profile_sha256'] ?? '')),
             __('Importer command', 'language-fts-playground') => (string) ($importer['command'] ?? ''),
+            __('Inventory', 'language-fts-playground') => trim((string) ($inventory['schema'] ?? '') . ' ' . (string) ($metadata['inventory_status'] ?? 'not_declared')),
         ];
 
         foreach ($rows as $label => $value) {

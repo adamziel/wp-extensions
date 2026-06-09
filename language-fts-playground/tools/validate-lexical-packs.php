@@ -177,6 +177,7 @@ function language_fts_validate_packs_print_human(array $report): void
         echo '  kind: ' . (string) ($metadata['data_kind'] ?? '') . "\n";
         echo '  source: ' . (string) ($metadata['source_name'] ?? '') . "\n";
         echo '  license: ' . (string) ($metadata['license_name'] ?? '') . "\n";
+        echo '  inventory: ' . (string) ($metadata['inventory_status'] ?? 'not_declared') . "\n";
         echo '  version/date: ' . $version . "\n";
         echo '  counts: stopwords ' . (int) ($counts['stopwords'] ?? 0)
             . ', lexemes ' . (int) ($counts['lexeme_rows'] ?? 0)
