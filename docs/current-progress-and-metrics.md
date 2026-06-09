@@ -1,19 +1,20 @@
-# Universal WordPress Importer Progress
+# Current Progress and Metrics
 
 Last checked: 2026-06-09
 
+This report tracks the current state of the two active project areas in this
+repository without referring to old task/review lanes.
+
 ## Summary
 
-| Metric | Current value |
-| --- | ---: |
-| Test suite passing | 502 tests, 10,127 assertions |
-| Implemented document formats | 6 |
-| Implemented source/container families | 9 |
-| Advertised import families covered by code/tests | 15 |
-| Formal tracked format backlog in this repo | 0 |
-| Suggested next high-value formats not implemented | 9 |
+| Project | Current passing gate | Implemented scope | Main remaining gap |
+| --- | ---: | --- | --- |
+| Universal WordPress Importer | 502 tests, 10,127 assertions | Markdown, HTML, text, EPUB, PDF, WXR/XML, archives, GitHub, WordPress REST/site URLs, feeds, OPML, browser uploads, media references | Pick and commit the next formal format backlog. |
+| Pure PHP FTS Indexer | 107/107 named tests, 12,428 checks/scenarios | WordPress full-text indexer with analyzer, language partitions, BM25 search, MySQL-style storage contracts, WP-CLI/REST/lifecycle hooks | Live WordPress/MySQL production validation and richer search features. |
 
-Test command run:
+## Universal WordPress Importer
+
+Test command:
 
 ```sh
 cd universal-wordpress-importer && composer test
@@ -25,41 +26,32 @@ Result:
 OK (502 tests, 10127 assertions)
 ```
 
-## Current Format Status
+### Import Format Status
 
-### Document Files
-
-| Format | Extensions / inputs | Status | Coverage notes |
-| --- | --- | --- | --- |
-| Markdown | `.md`, `.markdown`, `.mdown`, `.mdx`, `.mdoc`, `.markdoc` | Implemented | Includes front matter, headings, lists, images, links, reference links, unsafe image rejection, streaming, internal link resolution, and docs-flavored Markdown. |
-| Docs Markdown dialects | CommonMark, Obsidian, Docusaurus, Astro, Markdoc, MDX wrapper syntax | Implemented | 364 fixture cases: CommonMark 63, Obsidian 60, Docusaurus 60, Astro 60, Markdoc 60, MDX-skip 61. |
-| HTML | `.html`, `.htm`, remote HTML pages | Implemented | Scripts/unsafe attributes stripped; clear blocks become native blocks; ambiguous or opaque HTML falls back to Classic/Custom HTML. |
-| Plain text | `.txt`, `.text` | Implemented | Converts to paragraph blocks and supports large streamed text documents. |
-| EPUB | `.epub` | Implemented | Spine import, NAV/NCX table of contents, internal link resolution, asset extraction, large-book cursoring, unsafe path rejection. |
-| PDF | `.pdf` | Implemented, bounded | Native text extraction, structure diagnostics, embedded JPEG/bitmap handling, external text helper, OCR helper, table-ish layout from external text, oversized/unsupported diagnostics. |
-| WXR / WordPress XML | `.wxr`, `.xml` | Implemented | Posts, pages, attachments, postmeta, featured media, nav menu items, attachment metadata/parents, deferred relationship handling. |
-
-### Source / Container Inputs
-
-| Input family | Status | Coverage notes |
+| Format / input family | Status | Coverage notes |
 | --- | --- | --- |
-| Local folders/files | Implemented | Mixed local trees import supported files, skip unsupported files, preserve resumability. |
-| Browser uploads / dropped folders | Implemented | Admin upload staging, limits, duplicate/path rejection, browser folder tree handling. |
-| ZIP archives | Implemented | Archive expansion, nested ZIPs, cursor-based resume, unsafe path rejection, unsupported-only archives complete cleanly. |
-| GitHub repositories | Implemented | Sparse checkout through Git plumbing where possible; API/archive fallback; subtree URLs; rate-limit diagnostics. |
-| WordPress REST URLs | Implemented | Posts/pages/custom post types, authors/terms/comments/media, pagination, relationship decisions, auth guardrails. |
-| WordPress site homepage URLs | Implemented | REST discovery from headers/HTML; feed fallback; single remote HTML fallback. |
+| Markdown | Implemented | `.md`, `.markdown`, `.mdown`, `.mdx`, `.mdoc`, `.markdoc`; front matter, headings, lists, images, links, unsafe image rejection, streaming, internal links, docs-flavored dialects. |
+| Docs Markdown dialects | Implemented | CommonMark, Obsidian, Docusaurus, Astro, Markdoc, and MDX wrapper syntax fixture coverage. |
+| HTML | Implemented | Local and remote HTML; unsafe scripts/attributes stripped; clear structures become native blocks; opaque HTML falls back safely. |
+| Plain text | Implemented | Paragraph block conversion and large streamed text documents. |
+| EPUB | Implemented | Spine import, NAV/NCX contents, internal links, assets, cursoring, unsafe path rejection. |
+| PDF | Implemented, bounded | Native text extraction, diagnostics, embedded image handling, optional text/OCR helpers; complex scanned/layout-heavy PDFs remain limited. |
+| WXR / WordPress XML | Implemented | Posts, pages, attachments, postmeta, featured media, menus, attachment metadata/parents, deferred relationships. |
+| Local folders/files | Implemented | Mixed local trees, unsupported-file skipping, resumability. |
+| Browser uploads / dropped folders | Implemented | Upload staging, limits, duplicate/path rejection, folder tree handling. |
+| ZIP archives | Implemented | Expansion, nested ZIPs, resume cursors, unsafe path rejection. |
+| GitHub repositories | Implemented | Sparse checkout where possible, API/archive fallback, subtree URLs, rate-limit diagnostics. |
+| WordPress REST/site URLs | Implemented | REST discovery, posts/pages/CPTs, authors/terms/comments/media, pagination, feed/HTML fallback. |
 | RSS / Atom / RDF feeds | Implemented | Direct feed import and feed-discovered site fallback. |
-| OPML feed lists | Implemented | Imports listed feeds with bounded feed count. |
-| Media references | Implemented | Local and confirmed first-party remote media are queued through the attachment pipeline. |
+| OPML feed lists | Implemented | Bounded import of listed feeds. |
+| Media references | Implemented | Local and confirmed first-party remote media go through the attachment pipeline. |
 
-## What Is Not Implemented Yet
+### Importer Formats Not Yet Implemented
 
-There is no committed, authoritative backlog that says "these N formats must be
-ported next." Based on normal data-liberation expectations, the most likely next
-format work is:
+There is no committed authoritative backlog that says these must be next. If we
+decide to expand supported input formats, the likely high-value candidates are:
 
-| Candidate format | Status |
+| Candidate | Status |
 | --- | --- |
 | DOCX | Not implemented |
 | ODT | Not implemented |
@@ -71,34 +63,85 @@ format work is:
 | JSON / YAML structured content | Not implemented as first-class document imports |
 | Notion / Confluence exports | Not implemented |
 
-So the practical count is:
+Importer count:
 
-- Ported now: 15 advertised import families.
-- Formal remaining backlog: 0, because it is not tracked in the repo.
-- Suggested next backlog: 9 high-value format families, if we decide to make
-  them part of the project scope.
+- Implemented advertised import families: 15.
+- Formal remaining format backlog: 0 in the repository.
+- Suggested next format families: 9, if we choose to make them scope.
 
-## Format-by-Format Readiness
+## Pure PHP FTS Indexer
 
-| Format / input | Ready for demos | Ready for careful users | Main limitation |
-| --- | --- | --- | --- |
-| Markdown | Yes | Yes | Docs dialect handling is broad but still heuristic, not a full Markdown AST implementation. |
-| HTML | Yes | Yes | Ambiguous layouts intentionally preserve safe HTML instead of forcing native blocks. |
-| Text | Yes | Yes | Minimal structure by design. |
-| EPUB | Yes | Yes | EPUB fidelity depends on spine/manifest quality and supported assets. |
-| PDF | Yes | Limited | Bounded first-pass extraction; complex layout/scanned PDFs need helper commands and still may lose fidelity. |
-| WXR | Yes | Yes | Relationship mapping can require operator decisions. |
-| ZIP / nested ZIP | Yes | Yes | Archive safety and cursoring are covered; imported content still depends on contained formats. |
-| GitHub repository | Yes | Yes | Private repos/API limits need configured credentials; commit-SHA-only sources are not the primary path. |
-| WordPress REST/site URL | Yes | Yes | Authenticated imports need explicit host-scoped credentials. |
-| Feeds / OPML | Yes | Yes | Imports advertised/current feed items, not complete historical crawls. |
+Test commands:
+
+```sh
+cd indexer && php tests/run.php
+cd indexer && php -n tests/run.php
+```
+
+Result in both modes:
+
+```text
+107/107 named tests passed; failures=0; pending=0; checks/scenarios=12428
+```
+
+Snowball fixture harness in this checkout:
+
+```text
+0 pass, 37 skip, 0 fail
+```
+
+That Snowball result is expected for this checkout because `indexer/vendor/` is
+not installed. The adapter only advertises Snowball stemming for the allowlisted
+languages that match the official fixtures when the optional Wamania dependency
+is installed.
+
+### FTS Component Status
+
+| Component | Status | Coverage notes |
+| --- | --- | --- |
+| Analyzer / tokenizer | Implemented | HTML-aware visible-text extraction, unsafe-region skipping, element boosts, diacritic folding, invalid UTF-8 tolerance, mixed-script tokenization, CJK fallback bigrams. |
+| Language partitioning | Implemented | Terms are stored as language-namespaced keys; document language can come from explicit options, site locale, multilingual plugins, or inline HTML `lang`/`xml:lang`. |
+| Language detection | Not implemented | There is no statistical auto-detection. Wrong or missing language metadata can put terms in the wrong partition. |
+| Normalization / stemming | Partial by design | Stemming is off by default; optional Snowball path is allowlisted for Catalan and Dutch Porter when dependency data is available; Polish has a conservative suffix stemmer; custom stemmers are supported. |
+| Storage backends | Implemented for harness and MySQL contract | In-memory and file backends are covered; MySQL schema/SQL behavior is covered with fakes and contracts. Live MySQL validation remains environment-specific. |
+| Indexing lifecycle | Implemented | Activation/schema repair, deactivation, uninstall state cleanup, runtime save/status/delete hooks, bounded queue processing, tombstoning non-searchable/protected posts. |
+| Content extraction | Implemented | Title, content, excerpt, rendered block deltas, taxonomy terms, selected custom fields, field boosts, and bounded metadata for filters/snippets. |
+| Search | Implemented baseline | BM25 scoring, `OR`/`AND`, limit/offset, one query language, post metadata filters, snippets/highlighting. |
+| Search features beyond baseline | Not implemented | No phrase/position search, facets, typo tolerance, query-time synonyms, pagination cursors, field-specific explanations, or cross-language score merging. |
+| WordPress surfaces | Implemented with test doubles | WP-CLI reindex/search/delete/optimize, REST search helper, lifecycle hooks, visibility checks, and capability filtering are covered by the PHP harness. |
+| Production operations | Partially ready | Docs cover reindex, optimize, schema repair, backup/restore, and sizing notes. Large-site rollout still needs a real WordPress/MySQL validation pass. |
+
+### FTS Quality Coverage
+
+The FTS suite auto-discovers 7 quality modules:
+
+| Quality module | Purpose |
+| --- | --- |
+| `000-discovery-sentinel.php` | Proves quality-file discovery is active. |
+| `analyzer-language-corpus.php` | Analyzer, language, HTML, tokenization, and generated corpus checks. |
+| `external-reference-suite.php` | Snowball/BM25/reference-corpus boundaries and optional dependency skips. |
+| `harness-metrics.php` | Check counting and minimum-gate behavior. |
+| `mysql-wpcli-contracts.php` | MySQL schema, SQL behavior, WP-CLI command contracts. |
+| `real-integration-harness-contracts.php` | Documents and safely skips real WordPress/MySQL integration when not configured. |
+| `storage-search-properties.php` | Storage parity, BM25 properties, incremental-vs-full rebuild convergence. |
+
+### FTS Remaining Work
+
+| Gap | Why it matters |
+| --- | --- |
+| Real WordPress/MySQL validation | The current suite uses strong fakes/contracts, but production rollout depends on actual DB isolation, object cache, cron reliability, and hosting limits. |
+| Settings/admin UI | There is no settings screen for analyzer/search/extractor configuration. |
+| Front-end search integration | The plugin does not replace WordPress core front-end search automatically. |
+| Richer search semantics | Phrase/position search, typo tolerance, facets, synonyms, cursors, and cross-language merging are not present. |
+| Broader language morphology | Current built-in stemming is intentionally conservative; serious multilingual relevance needs more verified analyzers/lemmatizers. |
+| Large-site performance proof | The docs include sizing cautions, but not a final production-scale benchmark against a live large WordPress/MySQL site. |
 
 ## Bottom Line
 
-The importer is in a usable demo/early-user state for the formats it advertises:
-Markdown, HTML, text, EPUB, PDF, WXR/XML, ZIPs, GitHub repositories, WordPress
-REST/site URLs, feeds, OPML, browser uploads, and media references.
+The importer is usable for demos and careful early users across its advertised
+format families.
 
-The next meaningful progress is not more status reporting. It is choosing the
-next real format family to add, defining acceptance fixtures for it, and making
-that backlog explicit.
+The FTS indexer has a solid pure-PHP quality harness and a functional WordPress
+plugin shape, but should still be treated as experimental until it gets live
+WordPress/MySQL validation and a deliberate decision on which advanced search
+features are in scope.
