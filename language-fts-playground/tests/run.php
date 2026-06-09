@@ -5077,6 +5077,28 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('curated_seed', $readme, 'README confirms current shipped packs are curated seed data.');
 });
 
+test_case('WordPress.org readme metadata stays aligned with plugin headers', function (): void {
+    $plugin_file = file_get_contents(__DIR__ . '/../language-fts-playground.php');
+    $readme = file_get_contents(__DIR__ . '/../readme.txt');
+    assert_true(is_string($plugin_file), 'Plugin file can be read.');
+    assert_true(is_string($readme), 'WordPress.org readme can be read.');
+
+    assert_contains_text('Stable tag: 0.3.0', $readme, 'WordPress.org readme stable tag matches the release.');
+    assert_contains_text('Requires at least: 6.5', $readme, 'WordPress.org readme records the WordPress requirement.');
+    assert_contains_text('Requires PHP: 8.1', $readme, 'WordPress.org readme records the PHP requirement.');
+    assert_contains_text('License: GPL-2.0-or-later', $readme, 'WordPress.org readme records the license.');
+    assert_contains_text('License URI: https://www.gnu.org/licenses/gpl-2.0.html', $readme, 'WordPress.org readme records the license URI.');
+    assert_contains_text('License URI: https://www.gnu.org/licenses/gpl-2.0.html', $plugin_file, 'Plugin header records the license URI.');
+    assert_contains_text('== Description ==', $readme, 'WordPress.org readme has a Description section.');
+    assert_contains_text('== Installation ==', $readme, 'WordPress.org readme has an Installation section.');
+    assert_contains_text('== Frequently Asked Questions ==', $readme, 'WordPress.org readme has a FAQ section.');
+    assert_contains_text('== Screenshots ==', $readme, 'WordPress.org readme has a Screenshots section.');
+    assert_contains_text('== Changelog ==', $readme, 'WordPress.org readme has a Changelog section.');
+    assert_contains_text('demo/seed-pack release candidate', $readme, 'WordPress.org readme keeps demo/seed-pack scope explicit.');
+    assert_contains_text('direct ZIP artifact', $readme, 'WordPress.org readme keeps direct-ZIP distribution scope explicit.');
+    assert_contains_text('not a WordPress.org/plugin-directory release', $readme, 'WordPress.org readme avoids claiming current directory readiness.');
+});
+
 test_case('analyzer no longer ships a hardcoded query synonym map property', function (): void {
     $source = file_get_contents(__DIR__ . '/../src/Analyzer.php');
     assert_true(is_string($source), 'Analyzer source can be read.');

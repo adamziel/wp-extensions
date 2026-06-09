@@ -56,6 +56,10 @@ try {
     }
 
     assert_zip_path_absent($first_zip, LANGUAGE_FTS_RELEASE_SLUG . '/static-site-output/');
+    assert_zip_path_present($first_zip, LANGUAGE_FTS_RELEASE_SLUG . '/readme.txt');
+    assert_zip_path_present($first_zip, LANGUAGE_FTS_RELEASE_SLUG . '/LICENSE');
+    assert_zip_path_absent($first_zip, LANGUAGE_FTS_RELEASE_SLUG . '/tools/');
+    assert_zip_path_absent($first_zip, LANGUAGE_FTS_RELEASE_SLUG . '/tests/');
 
     echo "Release packaging regressions passed.\n";
     echo 'Deterministic SHA-256: ' . $first_hash . "\n";
@@ -88,6 +92,29 @@ function single_release_zip(string $output_dir): string
     }
 
     return $matches[0];
+}
+
+/**
+ * Requires that a zip has an exact entry.
+ *
+ * @param string $zip_path Zip path.
+ * @param string $entry    Zip entry.
+ */
+function assert_zip_path_present(string $zip_path, string $entry): void
+{
+    $zip = new ZipArchive();
+
+    if (true !== $zip->open($zip_path)) {
+        throw new RuntimeException('Unable to open release regression zip: ' . $zip_path);
+    }
+
+    try {
+        if (false === $zip->locateName($entry)) {
+            throw new RuntimeException('Expected release path was not packaged: ' . $entry);
+        }
+    } finally {
+        $zip->close();
+    }
 }
 
 /**

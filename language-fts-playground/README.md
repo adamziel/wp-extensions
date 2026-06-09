@@ -33,10 +33,10 @@ php language-fts-playground/tools/build-release.php
 
 The zip is written to `language-fts-playground/dist/` by default and contains
 one top-level `language-fts-playground/` directory with runtime PHP, bundled
-lexical resources, docs, README, and the Playground Blueprint. Tests, source
-tools, fixtures, logs, review artifacts, and generated build outputs are
-excluded. See `docs/release-packaging.md` for the release checklist and package
-policy.
+lexical resources, docs, README, WordPress.org `readme.txt`, and the Playground
+Blueprint. Tests, source tools, fixtures, logs, review artifacts, and generated
+build outputs are excluded. See `docs/release-packaging.md` for the release
+checklist and package policy.
 
 Search results show the score, matched fields, matched normalized terms, and a
 safe snippet with matched source terms highlighted with `<mark>`. Snippet text

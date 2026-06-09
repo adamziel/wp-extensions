@@ -146,6 +146,7 @@ function run_preflight_checks(string $plugin_root, string $repo_root): void
     }
 
     run_command([PHP_BINARY, 'tests/run.php'], $plugin_root, 'run Language FTS Playground tests');
+    run_command([PHP_BINARY, 'tools/verify-wordpress-org-readme.php'], $plugin_root, 'verify WordPress.org readme metadata');
 
     $blueprint_check = "json_decode(file_get_contents('playground/blueprint.json'));" .
         "if (json_last_error() !== JSON_ERROR_NONE) {" .

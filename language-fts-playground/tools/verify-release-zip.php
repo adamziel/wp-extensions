@@ -108,6 +108,10 @@ function verify_release_zip(string $zip_path): array
 
     $version = match_required('/^\s*\*\s*Version:\s*([^\r\n]+)/mi', $main_file, 'plugin header Version');
     $constant_version = match_required("/define\\(\\s*'LANGUAGE_FTS_PLAYGROUND_VERSION'\\s*,\\s*'([^']+)'\\s*\\)/", $main_file, 'LANGUAGE_FTS_PLAYGROUND_VERSION constant');
+    $requires_at_least = match_required('/^\s*\*\s*Requires at least:\s*([^\r\n]+)/mi', $main_file, 'plugin header Requires at least');
+    $requires_php = match_required('/^\s*\*\s*Requires PHP:\s*([^\r\n]+)/mi', $main_file, 'plugin header Requires PHP');
+    $license = match_required('/^\s*\*\s*License:\s*([^\r\n]+)/mi', $main_file, 'plugin header License');
+    $license_uri = match_required('/^\s*\*\s*License URI:\s*([^\r\n]+)/mi', $main_file, 'plugin header License URI');
 
     if ($version !== $constant_version) {
         throw new RuntimeException(
@@ -115,6 +119,23 @@ function verify_release_zip(string $zip_path): array
             ', but LANGUAGE_FTS_PLAYGROUND_VERSION is ' . $constant_version . '.'
         );
     }
+
+    $readme = $zip->getFromName($root . 'readme.txt');
+
+    if (!is_string($readme)) {
+        throw new RuntimeException('Unable to read WordPress.org readme.txt from release zip.');
+    }
+
+    assert_wordpress_org_readme(
+        $readme,
+        [
+            'version' => $version,
+            'requires_at_least' => $requires_at_least,
+            'requires_php' => $requires_php,
+            'license' => $license,
+            'license_uri' => $license_uri,
+        ]
+    );
 
     $blueprint = $zip->getFromName($root . 'playground/blueprint.json');
 
@@ -150,6 +171,7 @@ function required_release_paths(string $root): array
         $root . 'language-fts-playground.php',
         $root . 'LICENSE',
         $root . 'README.md',
+        $root . 'readme.txt',
         $root . 'docs/lexical-resources.md',
         $root . 'docs/release-packaging.md',
         $root . 'playground/blueprint.json',
@@ -220,6 +242,101 @@ function assert_not_excluded_release_path(string $path): void
         preg_match('/\.(?:log|tmp|bak|swp|zip)$/', $basename)
     ) {
         throw new RuntimeException('Release zip contains excluded file path: ' . $path);
+    }
+}
+
+/**
+ * Verifies the packaged WordPress.org readme metadata and scope language.
+ *
+ * @param string $readme   Packaged readme contents.
+ * @param array{version:string,requires_at_least:string,requires_php:string,license:string,license_uri:string} $metadata Release metadata.
+ */
+function assert_wordpress_org_readme(string $readme, array $metadata): void
+{
+    if (!preg_match('/^===\s*Language FTS Playground\s*===\s*$/m', $readme)) {
+        throw new RuntimeException('Release zip readme.txt is missing the plugin title.');
+    }
+
+    $headers = parse_wordpress_org_readme_headers($readme);
+    $required_headers = [
+        'contributors',
+        'tags',
+        'requires at least',
+        'tested up to',
+        'stable tag',
+        'requires php',
+        'license',
+        'license uri',
+    ];
+
+    foreach ($required_headers as $header) {
+        if (!isset($headers[$header]) || '' === $headers[$header]) {
+            throw new RuntimeException('Release zip readme.txt is missing required header: ' . $header);
+        }
+    }
+
+    assert_same_readme_value($metadata['version'], $headers['stable tag'], 'Stable tag');
+    assert_same_readme_value($metadata['requires_at_least'], $headers['requires at least'], 'Requires at least');
+    assert_same_readme_value($metadata['requires_php'], $headers['requires php'], 'Requires PHP');
+    assert_same_readme_value($metadata['license'], $headers['license'], 'License');
+    assert_same_readme_value($metadata['license_uri'], $headers['license uri'], 'License URI');
+
+    foreach (['Description', 'Installation', 'Frequently Asked Questions', 'Screenshots', 'Changelog'] as $section) {
+        if (!preg_match('/^==\s*' . preg_quote($section, '/') . '\s*==\s*$/m', $readme)) {
+            throw new RuntimeException('Release zip readme.txt is missing required section: ' . $section);
+        }
+    }
+
+    foreach (['demo/seed-pack', 'direct ZIP', 'not a WordPress.org/plugin-directory release', 'WordPress.org submission'] as $phrase) {
+        if (false === strpos($readme, $phrase)) {
+            throw new RuntimeException('Release zip readme.txt is missing required scope wording: ' . $phrase);
+        }
+    }
+
+    if (preg_match('/\b(available|listed|published)\s+on\s+WordPress\.org\b/i', $readme)) {
+        throw new RuntimeException('Release zip readme.txt must not claim current WordPress.org availability.');
+    }
+}
+
+/**
+ * Parses top-level WordPress.org readme headers before the first section.
+ *
+ * @param string $readme Readme contents.
+ * @return array<string,string>
+ */
+function parse_wordpress_org_readme_headers(string $readme): array
+{
+    $headers = [];
+    $lines = preg_split("/\r\n|\n|\r/", $readme);
+
+    if (!is_array($lines)) {
+        throw new RuntimeException('Unable to split release zip readme.txt into lines.');
+    }
+
+    foreach ($lines as $line) {
+        if (preg_match('/^==\s+/', $line)) {
+            break;
+        }
+
+        if (preg_match('/^([^:]+):\s*(.+)$/', $line, $matches)) {
+            $headers[strtolower(trim($matches[1]))] = trim($matches[2]);
+        }
+    }
+
+    return $headers;
+}
+
+/**
+ * Verifies an exact readme metadata value match.
+ *
+ * @param string $expected Expected value.
+ * @param string $actual   Actual value.
+ * @param string $label    Diagnostic label.
+ */
+function assert_same_readme_value(string $expected, string $actual, string $label): void
+{
+    if ($expected !== $actual) {
+        throw new RuntimeException($label . ' mismatch in release zip readme.txt: expected ' . $expected . ', found ' . $actual . '.');
     }
 }
 
