@@ -18,6 +18,9 @@ final class WP_FTS_Plugin
     public const REST_SEARCH_ROUTE = '/search';
     public const DEFAULT_BATCH_SIZE = 25;
     public const MAX_SEARCH_LIMIT = 50;
+    private const VISIBILITY_REFILL_MIN_BATCH = 10;
+    private const VISIBILITY_REFILL_MULTIPLIER = 4;
+    private const VISIBILITY_REFILL_MAX_SCAN = 250;
 
     /**
      * Register runtime hooks when WordPress hook APIs are available.
@@ -212,7 +215,7 @@ final class WP_FTS_Plugin
             'callback' => [self::class, 'rest_search'],
             'permission_callback' => [self::class, 'rest_search_permission'],
             'args' => [
-                'q' => ['required' => true],
+                'q' => ['required' => false],
                 'query' => ['required' => false],
                 'lang' => ['required' => false],
                 'mode' => ['required' => false],
@@ -233,16 +236,32 @@ final class WP_FTS_Plugin
      * REST callback returning filtered ranked result rows.
      *
      * @param mixed $request WordPress REST request or request-like array/object.
-     * @return array{results:array<int,array{doc_id:int,score:float}>}
+     * @return array{results:array<int,array{doc_id:int,score:float}>}|object|array<string,mixed>
      */
-    public static function rest_search(mixed $request): array
+    public static function rest_search(mixed $request): array|object
     {
-        $query = (string) (self::request_param($request, 'q', '') ?: self::request_param($request, 'query', ''));
+        $query = self::rest_query($request);
+        if ($query === '') {
+            return self::rest_error(
+                'wp_fts_missing_query',
+                'REST search requires a non-empty q or query parameter.',
+                400
+            );
+        }
+
+        $mode = self::rest_mode($request);
+        if ($mode === null) {
+            return self::rest_error(
+                'wp_fts_invalid_mode',
+                'REST search mode must be OR or AND.',
+                400
+            );
+        }
 
         return [
             'results' => self::search($query, [
                 'lang' => self::request_param($request, 'lang', null),
-                'mode' => self::request_param($request, 'mode', 'OR'),
+                'mode' => $mode,
                 'limit' => self::request_param($request, 'limit', 10),
             ]),
         ];
@@ -271,16 +290,34 @@ final class WP_FTS_Plugin
         }
 
         $searcher = new WP_FTS_Searcher(self::storage(false), new WP_FTS_Analyzer());
-        $rows = $searcher->search($query, $search_options);
         $visible = [];
-        foreach ($rows as $row) {
-            $doc_id = (int) $row['doc_id'];
-            if (self::can_read_post_result($doc_id)) {
-                $visible[] = [
-                    'doc_id' => $doc_id,
-                    'score' => (float) $row['score'],
-                ];
+        $offset = 0;
+        $batch_limit = self::visibility_refill_batch_limit($limit);
+        while (count($visible) < $limit && $offset < self::VISIBILITY_REFILL_MAX_SCAN) {
+            $search_options['limit'] = min($batch_limit, self::VISIBILITY_REFILL_MAX_SCAN - $offset);
+            $search_options['offset'] = $offset;
+            $rows = $searcher->search($query, $search_options);
+            if ($rows === []) {
+                break;
             }
+
+            foreach ($rows as $row) {
+                $doc_id = (int) $row['doc_id'];
+                if (self::can_read_post_result($doc_id)) {
+                    $visible[] = [
+                        'doc_id' => $doc_id,
+                        'score' => (float) $row['score'],
+                    ];
+                    if (count($visible) >= $limit) {
+                        break;
+                    }
+                }
+            }
+
+            if (count($rows) < $search_options['limit']) {
+                break;
+            }
+            $offset += $search_options['limit'];
         }
 
         if (function_exists('apply_filters')) {
@@ -586,6 +623,54 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Resolve the REST query alias without letting an empty `q` mask `query`.
+     */
+    private static function rest_query(mixed $request): string
+    {
+        foreach (['q', 'query'] as $key) {
+            $value = self::request_param($request, $key, null);
+            if (is_scalar($value)) {
+                $query = trim((string) $value);
+                if ($query !== '') {
+                    return $query;
+                }
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Return a canonical REST search mode or null when the caller supplied junk.
+     */
+    private static function rest_mode(mixed $request): ?string
+    {
+        $mode = self::request_param($request, 'mode', 'OR');
+        if (!is_scalar($mode)) {
+            return null;
+        }
+
+        $mode = strtoupper(trim((string) $mode));
+        return in_array($mode, ['OR', 'AND'], true) ? $mode : null;
+    }
+
+    /**
+     * Build a WordPress-style REST error with a test-friendly fallback shape.
+     */
+    private static function rest_error(string $code, string $message, int $status): object|array
+    {
+        if (class_exists('WP_Error')) {
+            return new WP_Error($code, $message, ['status' => $status]);
+        }
+
+        return [
+            'code' => $code,
+            'message' => $message,
+            'data' => ['status' => $status],
+        ];
+    }
+
+    /**
      * Clamp numeric request options to a bounded integer range.
      */
     private static function clamp_int(mixed $value, int $min, int $max): int
@@ -593,5 +678,15 @@ final class WP_FTS_Plugin
         $number = is_numeric($value) ? (int) $value : $min;
 
         return min($max, max($min, $number));
+    }
+
+    /**
+     * Overfetch enough rows to refill after stale hidden documents are filtered.
+     */
+    private static function visibility_refill_batch_limit(int $limit): int
+    {
+        $batch = max(self::VISIBILITY_REFILL_MIN_BATCH, $limit * self::VISIBILITY_REFILL_MULTIPLIER);
+
+        return min(self::VISIBILITY_REFILL_MAX_SCAN, $batch);
     }
 }
