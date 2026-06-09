@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 const LANGUAGE_FTS_RELEASE_SLUG = 'language-fts-playground';
+const LANGUAGE_FTS_RELEASE_MTIME = 946684800;
 
 $options = getopt('', ['zip:', 'help']);
 
@@ -65,6 +66,8 @@ function verify_release_zip(string $zip_path): array
         if (is_release_zip_symlink_entry($zip, $index)) {
             throw new RuntimeException('Release zip contains symlink entry path: ' . $path);
         }
+
+        assert_release_zip_entry_mtime($zip, $index, $path);
 
         if (isset($seen_paths[$path])) {
             throw new RuntimeException('Release zip contains duplicate entry path: ' . $path);
@@ -145,6 +148,7 @@ function required_release_paths(string $root): array
 {
     return [
         $root . 'language-fts-playground.php',
+        $root . 'LICENSE',
         $root . 'README.md',
         $root . 'docs/lexical-resources.md',
         $root . 'docs/release-packaging.md',
@@ -207,7 +211,7 @@ function assert_not_excluded_release_path(string $path): void
         throw new RuntimeException('Release zip contains excluded path: ' . $path);
     }
 
-    if (preg_match('#/(?:\.git|\.github|\.cao|\.tmp|node_modules|dist|coverage|tests|tools|review-artifacts|smoke-artifacts)(?:/|$)#', '/' . $trimmed . '/')) {
+    if (preg_match('#/(?:\.git|\.github|\.cao|\.tmp|node_modules|dist|coverage|tests|tools|review-artifacts|smoke-artifacts|static-site-output)(?:/|$)#', '/' . $trimmed . '/')) {
         throw new RuntimeException('Release zip contains an excluded tree path: ' . $path);
     }
 
@@ -216,6 +220,26 @@ function assert_not_excluded_release_path(string $path): void
         preg_match('/\.(?:log|tmp|bak|swp|zip)$/', $basename)
     ) {
         throw new RuntimeException('Release zip contains excluded file path: ' . $path);
+    }
+}
+
+/**
+ * Verifies that a zip entry has the release-normalized mtime.
+ *
+ * @param ZipArchive $zip   Zip archive.
+ * @param int        $index Entry index.
+ * @param string     $path  Entry path.
+ */
+function assert_release_zip_entry_mtime(ZipArchive $zip, int $index, string $path): void
+{
+    $stat = $zip->statIndex($index);
+
+    if (!is_array($stat) || !isset($stat['mtime'])) {
+        throw new RuntimeException('Unable to inspect release zip entry mtime: ' . $path);
+    }
+
+    if (LANGUAGE_FTS_RELEASE_MTIME !== (int) $stat['mtime']) {
+        throw new RuntimeException('Release zip entry has nondeterministic mtime: ' . $path);
     }
 }
 

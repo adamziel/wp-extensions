@@ -11,6 +11,7 @@ tests
 tools
 review-artifacts
 smoke-artifacts
+static-site-output
 *.log
 *.tmp
 *.bak

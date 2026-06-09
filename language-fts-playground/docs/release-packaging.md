@@ -26,8 +26,9 @@ local smoke builds from an uncommitted checkout.
 The builder verifies that the plugin header version and
 `LANGUAGE_FTS_PLAYGROUND_VERSION` agree, runs PHP lint across the plugin
 checkout, runs `php tests/run.php`, decodes `playground/blueprint.json`, runs
-`git diff --check`, stages a single `language-fts-playground/` directory, writes
-a versioned zip, and runs the package verifier.
+`git diff --check`, stages tracked plugin files into a single
+`language-fts-playground/` directory, writes a versioned zip with normalized
+entry mtimes, and runs the package verifier.
 
 To inspect a previously built zip without rebuilding:
 
@@ -36,12 +37,20 @@ php language-fts-playground/tools/verify-release-zip.php \
   --zip=language-fts-playground/dist/language-fts-playground-0.3.0.zip
 ```
 
+To rerun the release packaging regressions that protect deterministic output and
+ignored local artifact exclusion:
+
+```sh
+php language-fts-playground/tools/test-release-packaging.php
+```
+
 ## Zip Contents
 
 The installable zip contains one top-level `language-fts-playground/`
 directory with:
 
 - `language-fts-playground.php`
+- `LICENSE`
 - `src/`
 - `resources/languages/`
 - `README.md`
@@ -58,7 +67,8 @@ The zip excludes:
 
 - `.git/`, `.github/`, `.cao/`, `.tmp/`, and local editor files
 - `node_modules/`
-- `dist/`, generated zips, logs, review artifacts, and smoke artifacts
+- `dist/`, `static-site-output/`, generated zips, logs, review artifacts, and
+  smoke artifacts
 - `tests/` and all test fixtures
 - `tools/`
 
@@ -71,7 +81,8 @@ keep the package smaller and avoid shipping review fixtures.
 1. Update the plugin header version and `LANGUAGE_FTS_PLAYGROUND_VERSION`.
 2. Update user-facing release notes or README details as needed.
 3. Run `php language-fts-playground/tools/build-release.php`.
-4. Inspect the zip listing and confirm one top-level plugin directory.
-5. Install the zip in a disposable WordPress or Playground site, activate
+4. Run `php language-fts-playground/tools/test-release-packaging.php`.
+5. Inspect the zip listing and confirm one top-level plugin directory.
+6. Install the zip in a disposable WordPress or Playground site, activate
    `Language FTS Playground`, and open `Tools -> Language FTS`.
-6. Do not commit generated zips unless release policy changes.
+7. Do not commit generated zips unless release policy changes.

@@ -53,7 +53,7 @@ try {
     $payload = $staging . '/' . LANGUAGE_FTS_RELEASE_SLUG;
 
     try {
-        copy_tree($plugin_root, $payload, read_distignore_patterns($plugin_root));
+        copy_tracked_release_files($repo_root, $payload, read_distignore_patterns($plugin_root));
         create_release_zip($payload, $zip_path);
     } finally {
         remove_tree($staging);
@@ -223,46 +223,35 @@ function read_distignore_patterns(string $plugin_root): array
 }
 
 /**
- * Copies the plugin source tree to staging, honoring .distignore.
+ * Copies tracked plugin files to staging, honoring .distignore.
  *
- * @param string   $source   Absolute source path.
- * @param string   $target   Absolute target path.
+ * @param string   $repo_root Absolute repository root.
+ * @param string   $target    Absolute target path.
  * @param string[] $patterns Exclusion patterns.
  */
-function copy_tree(string $source, string $target, array $patterns): void
+function copy_tracked_release_files(string $repo_root, string $target, array $patterns): void
 {
     ensure_directory($target);
 
-    $items = scandir($source);
-
-    if (false === $items) {
-        throw new RuntimeException('Unable to read source directory: ' . $source);
-    }
-
-    sort($items);
-
-    foreach ($items as $item) {
-        if ('.' === $item || '..' === $item) {
-            continue;
-        }
-
-        $source_path = $source . '/' . $item;
-        $relative = release_relative_path($source_path);
+    foreach (tracked_release_paths($repo_root) as $repo_relative) {
+        $relative = plugin_relative_path($repo_relative);
 
         if (is_excluded($relative, $patterns)) {
             continue;
         }
 
+        $source_path = rtrim($repo_root, '/') . '/' . $repo_relative;
+
         if (is_link($source_path)) {
             throw new RuntimeException('Refusing to package symlink: ' . $relative);
         }
 
-        $target_path = $target . '/' . $item;
-
-        if (is_dir($source_path)) {
-            copy_tree($source_path, $target_path, $patterns);
-            continue;
+        if (!is_file($source_path)) {
+            throw new RuntimeException('Tracked release file is missing from the working tree: ' . $relative);
         }
+
+        $target_path = $target . '/' . $relative;
+        ensure_directory(dirname($target_path));
 
         if (!copy($source_path, $target_path)) {
             throw new RuntimeException('Unable to copy release file: ' . $relative);
@@ -271,20 +260,49 @@ function copy_tree(string $source, string $target, array $patterns): void
 }
 
 /**
- * Returns a plugin-relative path for the release source tree.
+ * Lists tracked plugin paths from git.
  *
- * @param string $path Absolute path.
- * @return string Relative path.
+ * @param string $repo_root Absolute repository root.
+ * @return string[] Repository-relative file paths.
  */
-function release_relative_path(string $path): string
+function tracked_release_paths(string $repo_root): array
 {
-    static $plugin_root = null;
+    $result = run_command(
+        ['git', 'ls-files', '-z', '--', LANGUAGE_FTS_RELEASE_SLUG],
+        $repo_root,
+        'list tracked plugin release files',
+        true
+    );
 
-    if (null === $plugin_root) {
-        $plugin_root = str_replace('\\', '/', dirname(__DIR__));
+    $paths = array_values(array_filter(
+        explode("\0", $result['stdout']),
+        static fn(string $path): bool => '' !== $path
+    ));
+    sort($paths, SORT_STRING);
+
+    if ([] === $paths) {
+        throw new RuntimeException('No tracked plugin files found for release packaging.');
     }
 
-    return ltrim(str_replace($plugin_root, '', str_replace('\\', '/', $path)), '/');
+    return $paths;
+}
+
+/**
+ * Converts a repository-relative plugin path to a plugin-relative path.
+ *
+ * @param string $repo_relative Repository-relative path.
+ * @return string Plugin-relative path.
+ */
+function plugin_relative_path(string $repo_relative): string
+{
+    $repo_relative = trim(str_replace('\\', '/', $repo_relative), '/');
+    $prefix = LANGUAGE_FTS_RELEASE_SLUG . '/';
+
+    if (0 !== strpos($repo_relative, $prefix)) {
+        throw new RuntimeException('Tracked release path is outside the plugin root: ' . $repo_relative);
+    }
+
+    return substr($repo_relative, strlen($prefix));
 }
 
 /**
@@ -350,12 +368,13 @@ function create_release_zip(string $payload, string $zip_path): void
 function add_directory_to_zip(ZipArchive $zip, string $base_path, string $relative): void
 {
     $absolute = $base_path . '/' . $relative;
+    $directory_entry = zip_directory_entry_name($relative);
 
-    if (!$zip->addEmptyDir($relative)) {
-        throw new RuntimeException('Unable to add release directory to zip: ' . $relative);
+    if (!$zip->addEmptyDir($directory_entry)) {
+        throw new RuntimeException('Unable to add release directory to zip: ' . $directory_entry);
     }
 
-    set_zip_entry_mtime($zip, $relative);
+    set_zip_entry_mtime($zip, $directory_entry);
 
     $items = scandir($absolute);
 
@@ -387,15 +406,30 @@ function add_directory_to_zip(ZipArchive $zip, string $base_path, string $relati
 }
 
 /**
- * Sets a stable timestamp for a zip entry when supported by ext-zip.
+ * Returns the exact directory entry name stored by ZipArchive.
+ *
+ * @param string $relative Relative directory path.
+ * @return string Zip directory entry name.
+ */
+function zip_directory_entry_name(string $relative): string
+{
+    return rtrim(str_replace('\\', '/', $relative), '/') . '/';
+}
+
+/**
+ * Sets a stable timestamp for a zip entry.
  *
  * @param ZipArchive $zip  Zip archive.
  * @param string     $name Entry name.
  */
 function set_zip_entry_mtime(ZipArchive $zip, string $name): void
 {
-    if (method_exists($zip, 'setMtimeName')) {
-        $zip->setMtimeName($name, LANGUAGE_FTS_RELEASE_MTIME);
+    if (!method_exists($zip, 'setMtimeName')) {
+        throw new RuntimeException('The PHP zip extension does not support deterministic entry mtimes.');
+    }
+
+    if (!$zip->setMtimeName($name, LANGUAGE_FTS_RELEASE_MTIME)) {
+        throw new RuntimeException('Unable to normalize release zip entry mtime: ' . $name);
     }
 }
 
