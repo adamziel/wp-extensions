@@ -49,6 +49,37 @@ partitions. Results still report the partition that matched. Choosing English,
 Polish, German, or a custom language id keeps the previous precision-filter
 behavior and searches only that partition.
 
+## Search Diagnostics
+
+The searcher exposes a PHP-only explain API:
+
+```php
+$diagnostics = $searcher->explain($query, $language, $limit);
+```
+
+The `Tools -> Language FTS` admin page renders the same diagnostics as escaped
+JSON after each search. The payload is deterministic and JSON-serializable, so
+it can be copied into regression fixtures or compared in tests without a live
+WordPress/MySQL search backend.
+
+Diagnostics show the original query, requested language mode, automatic routing
+evidence and selected partitions, analyzed query tokens and lookup terms per
+searched language, single-token synonym expansions, multiword phrase synonym
+expansions, fuzzy candidates with edit distance, phrase filter pass/fail
+results, matched fields, matched terms, match classes, and score contribution
+breakdowns by term, class, and field. No-result responses include coarse causes
+such as an empty analyzed query after stopwords, no postings for searched terms,
+phrase filters removing candidates, or no scored results after candidate
+collection.
+
+Use diagnostics to answer why automatic mode searched a specific language, why
+`szukanie` expanded toward indexed Polish `wyszukiwania`, whether
+`full text search` came from `synonym_phrases.tsv`, which `orchrd~` fuzzy
+candidate was selected, which field boost influenced ranking, and where a
+no-result query stopped. This is a debugging aid for maintainers and lexical
+pack authors; it is not a replacement for offline relevance evaluation with a
+representative query suite.
+
 ## Field-Aware Ranking And Snippets
 
 The index stores normalized source text and term frequencies separately for

@@ -69,7 +69,9 @@ function language_fts_evaluate_pack_parse_options(array $args): array
         'thresholds' => [],
     ];
 
-    foreach ($args as $arg) {
+    $count = count($args);
+    for ($i = 0; $i < $count; $i++) {
+        $arg = $args[$i];
         $arg = (string) $arg;
         if ($arg === '--help' || $arg === '-h') {
             $options['help'] = true;
@@ -82,13 +84,26 @@ function language_fts_evaluate_pack_parse_options(array $args): array
         }
 
         if (str_starts_with($arg, '--')) {
-            if (!str_contains($arg, '=')) {
-                throw new InvalidArgumentException('Options must use --name=value syntax unless they are --json or --help: ' . $arg);
+            $raw_option = substr($arg, 2);
+            if (str_contains($raw_option, '=')) {
+                [$name, $value] = explode('=', $raw_option, 2);
+            } else {
+                $name = $raw_option;
+                if (!isset($args[$i + 1]) || str_starts_with((string) $args[$i + 1], '--')) {
+                    throw new InvalidArgumentException('Option requires a value: ' . $arg);
+                }
+                $value = (string) $args[++$i];
             }
 
-            [$name, $value] = explode('=', substr($arg, 2), 2);
             $name = str_replace('-', '_', $name);
             switch ($name) {
+                case 'suite':
+                    if ($options['fixture'] !== '') {
+                        throw new InvalidArgumentException('Only one fixture path may be provided.');
+                    }
+                    $options['fixture'] = $value;
+                    break;
+
                 case 'resource_root':
                     $options['resource_root'] = $value;
                     break;
@@ -736,6 +751,7 @@ function language_fts_evaluate_pack_usage($stream): void
         $stream,
         "Usage: php evaluate-lexical-pack.php <fixture.json> [options]\n" .
         "Options:\n" .
+        "  --suite=<fixture.json>          Alias for the fixture path.\n" .
         "  --json                         Emit deterministic JSON.\n" .
         "  --resource-root=<path>          Use a non-default language resource root.\n" .
         "  --min-recall-at-5=<float>       Fail when mean recall@5 is below the value.\n" .

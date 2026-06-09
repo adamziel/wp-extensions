@@ -41,14 +41,10 @@ final class Language_FTS_Playground_Searcher
      */
     public function search(string $query, string $language, int $limit = 10): array
     {
-        $language = $this->analyzer->canonical_search_language($language);
         $limit = max(1, $limit);
-        if ($language !== 'auto') {
-            return $this->finalize_results($this->search_partition($query, $language), $limit);
-        }
-
+        $routing = $this->search_language_plan($query, $language, false);
         $results = [];
-        foreach ($this->automatic_search_partitions($query) as $partition) {
+        foreach ($routing['selected_partitions'] as $partition) {
             foreach ($this->search_partition($query, $partition) as $result) {
                 $results[] = $result;
             }
@@ -58,50 +54,142 @@ final class Language_FTS_Playground_Searcher
     }
 
     /**
-     * @return string[]
+     * Build a deterministic diagnostics payload for a query without changing
+     * the public search result shape.
+     *
+     * @return array<string,mixed>
      */
-    private function automatic_search_partitions(string $query): array
+    public function explain(string $query, string $language = 'auto', int $limit = 10): array
     {
-        $enabled = $this->analyzer->enabled_languages();
-        $ranked = $this->analyzer->rank_query_languages($query);
-        if ($ranked === []) {
-            return $enabled;
-        }
-
-        $top_score = (float) $ranked[0]['score'];
-        if ($top_score < self::AUTO_LANGUAGE_MIN_SCORE) {
-            return $enabled;
-        }
-
-        $runner_up_score = isset($ranked[1]) ? (float) $ranked[1]['score'] : 0.0;
-        $has_clear_lead = $runner_up_score <= 0.0
-            || ($top_score - $runner_up_score) >= self::AUTO_LANGUAGE_MIN_LEAD
-            || $top_score >= ($runner_up_score * self::AUTO_LANGUAGE_MIN_RATIO);
-
-        if (!$has_clear_lead) {
-            return $enabled;
-        }
-
-        $enabled_lookup = array_fill_keys($enabled, true);
+        $limit = max(1, $limit);
+        $routing = $this->search_language_plan($query, $language);
+        $results = [];
         $partitions = [];
-        foreach ($ranked as $candidate) {
-            if ((float) $candidate['score'] < self::AUTO_LANGUAGE_MIN_SCORE) {
-                continue;
+        foreach ($routing['selected_partitions'] as $partition) {
+            $evaluation = $this->evaluate_partition($query, $partition);
+            foreach ($evaluation['results'] as $result) {
+                $results[] = $result;
             }
+            $partitions[] = $evaluation['diagnostics'];
+        }
 
-            $language = (string) $candidate['language'];
-            if (isset($enabled_lookup[$language])) {
-                $partitions[] = $language;
+        $ranked_results = $this->rank_results($results, $limit);
+        $explain_results = [];
+        foreach ($ranked_results as $result) {
+            $explain_results[] = $this->explain_result($result);
+        }
+
+        $no_result_causes = [];
+        if ($explain_results === []) {
+            foreach ($partitions as $partition) {
+                foreach ((array) ($partition['no_result_causes'] ?? []) as $cause) {
+                    $no_result_causes[(string) $cause] = true;
+                }
             }
         }
 
-        return $partitions !== [] ? $partitions : $enabled;
+        return [
+            'query' => $query,
+            'requested_language' => (string) $language,
+            'resolved_language' => $routing['resolved_language'],
+            'limit' => $limit,
+            'language_routing' => $routing,
+            'partitions' => $partitions,
+            'results' => $explain_results,
+            'no_result_causes' => array_keys($no_result_causes),
+        ];
     }
 
     /**
-     * @return array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string,_exact_match_count:int,_has_lower_priority_match:bool}>
+     * @return array{requested_language:string,resolved_language:string,enabled_languages:string[],ranked_candidates:array<int,array{language:string,score:float,reasons:array<string,string[]>}>,selected_partitions:string[],strategy:string,thresholds:array{min_score:float,min_lead:float,min_ratio:float}}
+     */
+    private function search_language_plan(string $query, string $language, bool $include_explicit_ranking = true): array
+    {
+        $requested_language = (string) $language;
+        $language = $this->analyzer->canonical_search_language($language);
+        $enabled = $this->analyzer->enabled_languages();
+        $ranked = ($language === 'auto' || $include_explicit_ranking)
+            ? $this->analyzer->rank_query_languages($query)
+            : [];
+        $thresholds = [
+            'min_score' => self::AUTO_LANGUAGE_MIN_SCORE,
+            'min_lead' => self::AUTO_LANGUAGE_MIN_LEAD,
+            'min_ratio' => self::AUTO_LANGUAGE_MIN_RATIO,
+        ];
+
+        if ($language !== 'auto') {
+            return [
+                'requested_language' => $requested_language,
+                'resolved_language' => $language,
+                'enabled_languages' => $enabled,
+                'ranked_candidates' => $ranked,
+                'selected_partitions' => [$language],
+                'strategy' => 'explicit_language',
+                'thresholds' => $thresholds,
+            ];
+        }
+
+        $strategy = 'auto_fallback_no_evidence';
+        $selected = $enabled;
+        if ($ranked !== []) {
+            $top_score = (float) $ranked[0]['score'];
+            if ($top_score < self::AUTO_LANGUAGE_MIN_SCORE) {
+                $strategy = 'auto_fallback_low_evidence';
+            } else {
+                $runner_up_score = isset($ranked[1]) ? (float) $ranked[1]['score'] : 0.0;
+                $has_clear_lead = $runner_up_score <= 0.0
+                    || ($top_score - $runner_up_score) >= self::AUTO_LANGUAGE_MIN_LEAD
+                    || $top_score >= ($runner_up_score * self::AUTO_LANGUAGE_MIN_RATIO);
+
+                if (!$has_clear_lead) {
+                    $strategy = 'auto_fallback_ambiguous_evidence';
+                } else {
+                    $enabled_lookup = array_fill_keys($enabled, true);
+                    $selected = [];
+                    foreach ($ranked as $candidate) {
+                        if ((float) $candidate['score'] < self::AUTO_LANGUAGE_MIN_SCORE) {
+                            continue;
+                        }
+
+                        $candidate_language = (string) $candidate['language'];
+                        if (isset($enabled_lookup[$candidate_language])) {
+                            $selected[] = $candidate_language;
+                        }
+                    }
+
+                    if ($selected === []) {
+                        $selected = $enabled;
+                        $strategy = 'auto_fallback_no_enabled_candidates';
+                    } else {
+                        $strategy = 'auto_confident_profile_evidence';
+                    }
+                }
+            }
+        }
+
+        return [
+            'requested_language' => $requested_language,
+            'resolved_language' => $language,
+            'enabled_languages' => $enabled,
+            'ranked_candidates' => $ranked,
+            'selected_partitions' => $selected,
+            'strategy' => $strategy,
+            'thresholds' => $thresholds,
+        ];
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
      */
     private function search_partition(string $query, string $language): array
+    {
+        return $this->evaluate_partition($query, $language)['results'];
+    }
+
+    /**
+     * @return array{results:array<int,array<string,mixed>>,diagnostics:array<string,mixed>}
+     */
+    private function evaluate_partition(string $query, string $language): array
     {
         $language = $this->analyzer->canonical_language($language);
         $plan = $this->parse_query($query, $language);
@@ -118,30 +206,79 @@ final class Language_FTS_Playground_Searcher
         $synonym_terms = $this->synonym_terms($synonym_expansions);
         $phrase_synonym_terms = $this->phrase_synonym_terms($phrase_synonym_expansions);
         $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms, $synonym_terms, $phrase_synonym_terms));
+        $diagnostics = [
+            'language' => $language,
+            'analyzed_query' => [
+                'tokens' => $plan['query_tokens'],
+                'exact_terms' => $plan['exact_terms'],
+                'phrases' => $plan['phrases'],
+                'fuzzy_terms' => $plan['fuzzy_terms'],
+            ],
+            'lookup_terms' => [
+                'exact' => $plan['exact_terms'],
+                'single_token_synonyms' => $synonym_terms,
+                'phrase_synonyms' => $phrase_synonym_terms,
+                'fuzzy' => $fuzzy_terms,
+                'all' => $terms,
+            ],
+            'synonym_expansions' => $this->explain_synonym_expansions($synonym_expansions),
+            'phrase_synonym_expansions' => $this->explain_phrase_synonym_expansions($phrase_synonym_expansions, $language),
+            'fuzzy_expansions' => $this->explain_fuzzy_expansions($fuzzy_candidates, $language),
+            'candidate_post_ids' => [],
+            'document_count' => 0,
+            'phrase_filters' => [],
+            'results' => [],
+            'no_result_causes' => [],
+        ];
+
         if ($terms === []) {
-            return [];
+            $diagnostics['no_result_causes'][] = 'analyzed_query_empty_after_stopwords';
+
+            return [
+                'results' => [],
+                'diagnostics' => $diagnostics,
+            ];
         }
 
         $postings = $this->storage->fetch_postings($language, $terms);
         if ($postings === []) {
-            return [];
+            $diagnostics['no_result_causes'][] = 'no_postings_for_searched_terms';
+
+            return [
+                'results' => [],
+                'diagnostics' => $diagnostics,
+            ];
         }
 
-        $candidate_ids = [];
+        $candidate_lookup = [];
         foreach ($postings as $term_postings) {
             foreach ($term_postings as $post_id => $_field_tfs) {
-                $candidate_ids[(int) $post_id] = true;
+                $candidate_lookup[(int) $post_id] = true;
             }
         }
+        $candidate_ids = array_keys($candidate_lookup);
+        sort($candidate_ids, SORT_NUMERIC);
+        $diagnostics['candidate_post_ids'] = $candidate_ids;
 
-        $document_lengths = $this->storage->fetch_document_lengths($language, array_keys($candidate_ids));
+        $document_lengths = $this->storage->fetch_document_lengths($language, $candidate_ids);
         if ($document_lengths === []) {
-            return [];
+            $diagnostics['no_result_causes'][] = 'searched_partitions_contained_no_candidates';
+
+            return [
+                'results' => [],
+                'diagnostics' => $diagnostics,
+            ];
         }
 
         $document_count = $this->storage->document_count($language);
+        $diagnostics['document_count'] = $document_count;
         if ($document_count <= 0) {
-            return [];
+            $diagnostics['no_result_causes'][] = 'searched_partitions_contained_no_candidates';
+
+            return [
+                'results' => [],
+                'diagnostics' => $diagnostics,
+            ];
         }
 
         $positions = [];
@@ -150,14 +287,18 @@ final class Language_FTS_Playground_Searcher
             $this->multiword_phrase_synonym_terms($phrase_synonym_expansions)
         ));
         if ($position_terms !== []) {
-            $positions = $this->storage->fetch_positions($language, $position_terms, array_keys($candidate_ids));
+            $positions = $this->storage->fetch_positions($language, $position_terms, $candidate_ids);
         }
+        $diagnostics['phrase_filters'] = array_merge(
+            $this->explain_query_phrase_filters($plan['phrases'], $positions, $candidate_ids),
+            $this->explain_phrase_synonym_filters($phrase_synonym_expansions, $positions, $candidate_ids)
+        );
 
-        $document_fields = $this->storage->fetch_document_fields($language, array_keys($candidate_ids));
+        $document_fields = $this->storage->fetch_document_fields($language, $candidate_ids);
         $average_length = array_sum($document_lengths) / max(1, count($document_lengths));
         $has_lower_priority_match = $plan['fuzzy_terms'] !== [] || $synonym_expansions !== [] || $phrase_synonym_expansions !== [];
         $results = [];
-        foreach (array_keys($candidate_ids) as $post_id) {
+        foreach ($candidate_ids as $post_id) {
             if (!isset($document_lengths[$post_id])) {
                 continue;
             }
@@ -169,6 +310,8 @@ final class Language_FTS_Playground_Searcher
             $score = 0.0;
             $matched_terms = [];
             $matched_fields = [];
+            $match_classes = [];
+            $score_breakdown = $this->empty_score_breakdown();
             $exact_match_count = 0;
             foreach ($plan['exact_terms'] as $term) {
                 $field_tfs = $postings[$term][$post_id] ?? [];
@@ -177,15 +320,21 @@ final class Language_FTS_Playground_Searcher
                 }
 
                 $document_frequency = count($postings[$term] ?? []);
-                $score += $this->bm25(
+                $term_score = $this->bm25(
                     $this->weighted_term_frequency($field_tfs),
                     $document_lengths[$post_id],
                     $document_count,
                     $document_frequency,
                     $average_length
                 );
+                $score += $term_score;
                 $matched_terms[$term] = true;
+                $match_classes['exact'] = true;
                 $exact_match_count++;
+                $this->add_score_detail(
+                    $score_breakdown,
+                    $this->score_detail($term, $term, 'exact', $field_tfs, $term_score, $document_frequency)
+                );
                 foreach ($field_tfs as $field => $tf) {
                     if ((int) $tf > 0) {
                         $matched_fields[(string) $field] = true;
@@ -201,6 +350,7 @@ final class Language_FTS_Playground_Searcher
                 $best_score = 0.0;
                 $best_term = '';
                 $best_fields = [];
+                $best_document_frequency = 0;
                 foreach ($candidates as $candidate) {
                     $field_tfs = $postings[$candidate][$post_id] ?? [];
                     if ($field_tfs === []) {
@@ -219,12 +369,29 @@ final class Language_FTS_Playground_Searcher
                         $best_score = $candidate_score;
                         $best_term = $candidate;
                         $best_fields = $field_tfs;
+                        $best_document_frequency = $document_frequency;
                     }
                 }
 
                 if ($best_score > 0.0) {
                     $score += $best_score;
                     $matched_terms[$query_term . '~' . $best_term] = true;
+                    $match_classes['fuzzy'] = true;
+                    $this->add_score_detail(
+                        $score_breakdown,
+                        $this->score_detail(
+                            $best_term,
+                            $query_term,
+                            'fuzzy',
+                            $best_fields,
+                            $best_score,
+                            $best_document_frequency,
+                            [
+                                'edit_distance' => levenshtein($query_term, $best_term),
+                                'multiplier' => $this->fuzzy_score_multiplier,
+                            ]
+                        )
+                    );
                     foreach ($best_fields as $field => $tf) {
                         if ((int) $tf > 0) {
                             $matched_fields[(string) $field] = true;
@@ -241,6 +408,8 @@ final class Language_FTS_Playground_Searcher
                 $best_score = 0.0;
                 $best_term = '';
                 $best_fields = [];
+                $best_document_frequency = 0;
+                $best_expansion = null;
                 foreach ($expansions as $expansion) {
                     $candidate = (string) $expansion['term'];
                     $field_tfs = $postings[$candidate][$post_id] ?? [];
@@ -260,12 +429,31 @@ final class Language_FTS_Playground_Searcher
                         $best_score = $candidate_score;
                         $best_term = $candidate;
                         $best_fields = $field_tfs;
+                        $best_document_frequency = $document_frequency;
+                        $best_expansion = $expansion;
                     }
                 }
 
                 if ($best_score > 0.0) {
                     $score += $best_score;
                     $matched_terms[$query_term . '=>' . $best_term] = true;
+                    $match_classes['synonym'] = true;
+                    $this->add_score_detail(
+                        $score_breakdown,
+                        $this->score_detail(
+                            $best_term,
+                            $query_term,
+                            'synonym',
+                            $best_fields,
+                            $best_score,
+                            $best_document_frequency,
+                            [
+                                'weight' => (float) ($best_expansion['weight'] ?? 0.0),
+                                'direction' => (string) ($best_expansion['direction'] ?? ''),
+                                'provenance' => (string) ($best_expansion['provenance'] ?? ''),
+                            ]
+                        )
+                    );
                     foreach ($best_fields as $field => $tf) {
                         if ((int) $tf > 0) {
                             $matched_fields[(string) $field] = true;
@@ -277,6 +465,10 @@ final class Language_FTS_Playground_Searcher
             foreach ($this->best_phrase_synonym_scores($phrase_synonym_expansions, $postings, $positions, (int) $post_id, $document_lengths[$post_id], $document_count, $average_length) as $match) {
                 $score += (float) $match['score'];
                 $matched_terms[(string) $match['label']] = true;
+                $match_classes['phrase_synonym'] = true;
+                foreach ($match['details'] as $detail) {
+                    $this->add_score_detail($score_breakdown, $detail);
+                }
                 foreach ($match['fields'] as $field) {
                     $matched_fields[(string) $field] = true;
                 }
@@ -298,18 +490,50 @@ final class Language_FTS_Playground_Searcher
                     'matched_language' => $language,
                     '_exact_match_count' => $exact_match_count,
                     '_has_lower_priority_match' => $has_lower_priority_match,
+                    '_match_classes' => array_keys($match_classes),
+                    '_score_breakdown' => $score_breakdown,
                 ];
             }
         }
+
+        if ($results === []) {
+            $diagnostics['no_result_causes'][] = $this->phrase_filters_removed_all_candidates($diagnostics['phrase_filters'])
+                ? 'phrase_filter_removed_candidates'
+                : 'no_scored_results';
+        }
+        $diagnostics['results'] = array_map([$this, 'explain_result'], $this->rank_results($results, count($results) > 0 ? count($results) : 1));
+
+        return [
+            'results' => $results,
+            'diagnostics' => $diagnostics,
+        ];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $results
+     * @return array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string}>
+     */
+    private function finalize_results(array $results, int $limit): array
+    {
+        $results = $this->rank_results($results, $limit);
+        foreach ($results as &$result) {
+            unset(
+                $result['_exact_match_count'],
+                $result['_has_lower_priority_match'],
+                $result['_match_classes'],
+                $result['_score_breakdown']
+            );
+        }
+        unset($result);
 
         return $results;
     }
 
     /**
-     * @param array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string,_exact_match_count:int,_has_lower_priority_match:bool}> $results
-     * @return array<int,array{post_id:int,score:float,matched_terms:string[],matched_fields:string[],snippet:string,matched_language:string}>
+     * @param array<int,array<string,mixed>> $results
+     * @return array<int,array<string,mixed>>
      */
-    private function finalize_results(array $results, int $limit): array
+    private function rank_results(array $results, int $limit): array
     {
         $has_lower_priority_match = false;
         foreach ($results as $result) {
@@ -335,13 +559,304 @@ final class Language_FTS_Playground_Searcher
             }
         );
 
-        $results = array_slice($results, 0, max(1, $limit));
-        foreach ($results as &$result) {
-            unset($result['_exact_match_count'], $result['_has_lower_priority_match']);
-        }
-        unset($result);
+        return array_slice($results, 0, max(1, $limit));
+    }
 
-        return $results;
+    /**
+     * @param array<string,mixed> $result
+     * @return array<string,mixed>
+     */
+    private function explain_result(array $result): array
+    {
+        return [
+            'post_id' => (int) ($result['post_id'] ?? 0),
+            'matched_language' => (string) ($result['matched_language'] ?? ''),
+            'score' => (float) ($result['score'] ?? 0.0),
+            'matched_fields' => array_values(array_map('strval', (array) ($result['matched_fields'] ?? []))),
+            'matched_terms' => array_values(array_map('strval', (array) ($result['matched_terms'] ?? []))),
+            'match_classes' => array_values(array_map('strval', (array) ($result['_match_classes'] ?? []))),
+            'score_breakdown' => is_array($result['_score_breakdown'] ?? null)
+                ? $result['_score_breakdown']
+                : $this->empty_score_breakdown(),
+            'snippet' => (string) ($result['snippet'] ?? ''),
+        ];
+    }
+
+    /**
+     * @return array{by_term:array<string,float>,by_class:array<string,float>,by_field:array<string,float>,details:array<int,array<string,mixed>>}
+     */
+    private function empty_score_breakdown(): array
+    {
+        return [
+            'by_term' => [],
+            'by_class' => [],
+            'by_field' => [],
+            'details' => [],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $breakdown
+     * @param array<string,mixed> $detail
+     */
+    private function add_score_detail(array &$breakdown, array $detail): void
+    {
+        $score = (float) ($detail['score'] ?? 0.0);
+        if ($score <= 0.0) {
+            return;
+        }
+
+        $term = (string) ($detail['term'] ?? '');
+        $class = (string) ($detail['class'] ?? '');
+        if ($term !== '') {
+            $breakdown['by_term'][$term] = (float) ($breakdown['by_term'][$term] ?? 0.0) + $score;
+        }
+        if ($class !== '') {
+            $breakdown['by_class'][$class] = (float) ($breakdown['by_class'][$class] ?? 0.0) + $score;
+        }
+        foreach ((array) ($detail['fields'] ?? []) as $field_detail) {
+            if (!is_array($field_detail)) {
+                continue;
+            }
+
+            $field = (string) ($field_detail['field'] ?? '');
+            if ($field === '') {
+                continue;
+            }
+
+            $breakdown['by_field'][$field] = (float) ($breakdown['by_field'][$field] ?? 0.0) + (float) ($field_detail['contribution'] ?? 0.0);
+        }
+        $breakdown['details'][] = $detail;
+    }
+
+    /**
+     * @param array<string,int> $field_tfs
+     * @param array<string,mixed> $extra
+     * @return array<string,mixed>
+     */
+    private function score_detail(
+        string $term,
+        string $query_term,
+        string $class,
+        array $field_tfs,
+        float $score,
+        int $document_frequency,
+        array $extra = []
+    ): array {
+        $detail = [
+            'term' => $term,
+            'query_term' => $query_term,
+            'class' => $class,
+            'score' => $score,
+            'document_frequency' => $document_frequency,
+            'fields' => $this->score_field_details($field_tfs, $score),
+        ];
+
+        foreach ($extra as $key => $value) {
+            $detail[(string) $key] = $value;
+        }
+
+        return $detail;
+    }
+
+    /**
+     * @param array<string,int> $field_tfs
+     * @return array<int,array{field:string,term_frequency:int,boost:float,weighted_term_frequency:float,contribution:float}>
+     */
+    private function score_field_details(array $field_tfs, float $score): array
+    {
+        $weighted_total = $this->weighted_term_frequency($field_tfs);
+        $details = [];
+        foreach ($this->sort_fields(array_keys($field_tfs)) as $field) {
+            $tf = max(0, (int) ($field_tfs[$field] ?? 0));
+            if ($tf <= 0) {
+                continue;
+            }
+
+            $boost = self::FIELD_BOOSTS[$field] ?? 1.0;
+            $weighted_tf = $tf * $boost;
+            $details[] = [
+                'field' => $field,
+                'term_frequency' => $tf,
+                'boost' => $boost,
+                'weighted_term_frequency' => $weighted_tf,
+                'contribution' => $weighted_total > 0.0 ? $score * ($weighted_tf / $weighted_total) : 0.0,
+            ];
+        }
+
+        return $details;
+    }
+
+    /**
+     * @param array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>> $expansions
+     * @return array<int,array{source_key:string,target_key:string,target_keys:string[],direction:string,weight:float,provenance:string}>
+     */
+    private function explain_synonym_expansions(array $expansions): array
+    {
+        $explained = [];
+        foreach ($expansions as $source => $targets) {
+            foreach ($targets as $target) {
+                $target_key = (string) $target['term'];
+                $explained[] = [
+                    'source_key' => (string) $source,
+                    'target_key' => $target_key,
+                    'target_keys' => [$target_key],
+                    'direction' => (string) $target['direction'],
+                    'weight' => (float) $target['weight'],
+                    'provenance' => (string) $target['provenance'],
+                ];
+            }
+        }
+
+        return $explained;
+    }
+
+    /**
+     * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string,offset:int}> $expansions
+     * @return array<int,array<string,mixed>>
+     */
+    private function explain_phrase_synonym_expansions(array $expansions, string $language): array
+    {
+        $explained = [];
+        foreach ($expansions as $expansion) {
+            $explained[] = [
+                'source_phrase' => (string) $expansion['source'],
+                'target_phrase' => (string) $expansion['target'],
+                'source_terms' => array_values(array_map('strval', $expansion['source_terms'])),
+                'target_terms' => array_values(array_map('strval', $expansion['target_terms'])),
+                'direction' => (string) $expansion['direction'],
+                'weight' => (float) $expansion['weight'],
+                'provenance' => (string) $expansion['provenance'],
+                'offset' => (int) $expansion['offset'],
+                'searched_language' => $language,
+            ];
+        }
+
+        return $explained;
+    }
+
+    /**
+     * @param array<string,string[]> $fuzzy_candidates
+     * @return array<int,array{query_term:string,candidate_term:string,edit_distance:int,searched_language:string}>
+     */
+    private function explain_fuzzy_expansions(array $fuzzy_candidates, string $language): array
+    {
+        $explained = [];
+        foreach ($fuzzy_candidates as $query_term => $candidates) {
+            foreach ($candidates as $candidate) {
+                $explained[] = [
+                    'query_term' => (string) $query_term,
+                    'candidate_term' => (string) $candidate,
+                    'edit_distance' => levenshtein((string) $query_term, (string) $candidate),
+                    'searched_language' => $language,
+                ];
+            }
+        }
+
+        return $explained;
+    }
+
+    /**
+     * @param array<int,array<int,string[]>> $phrases
+     * @param array<string,array<int,int[]>> $positions
+     * @param int[] $candidate_ids
+     * @return array<int,array<string,mixed>>
+     */
+    private function explain_query_phrase_filters(array $phrases, array $positions, array $candidate_ids): array
+    {
+        $filters = [];
+        foreach ($phrases as $phrase) {
+            $filters[] = [
+                'type' => 'query_phrase',
+                'phrase' => $this->phrase_label($phrase),
+                'terms' => $phrase,
+                'documents' => $this->explain_phrase_filter_documents($phrase, $positions, $candidate_ids),
+            ];
+        }
+
+        return $filters;
+    }
+
+    /**
+     * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string,offset:int}> $expansions
+     * @param array<string,array<int,int[]>> $positions
+     * @param int[] $candidate_ids
+     * @return array<int,array<string,mixed>>
+     */
+    private function explain_phrase_synonym_filters(array $expansions, array $positions, array $candidate_ids): array
+    {
+        $filters = [];
+        foreach ($expansions as $expansion) {
+            $target_terms = $this->unique_terms($expansion['target_terms']);
+            if (count($target_terms) < 2) {
+                continue;
+            }
+
+            $phrase = $this->terms_to_phrase($target_terms);
+            $filters[] = [
+                'type' => 'phrase_synonym_target',
+                'source_phrase' => (string) $expansion['source'],
+                'target_phrase' => (string) $expansion['target'],
+                'terms' => $phrase,
+                'documents' => $this->explain_phrase_filter_documents($phrase, $positions, $candidate_ids),
+            ];
+        }
+
+        return $filters;
+    }
+
+    /**
+     * @param array<int,string[]> $phrase
+     * @param array<string,array<int,int[]>> $positions
+     * @param int[] $candidate_ids
+     * @return array<int,array{post_id:int,passed:bool}>
+     */
+    private function explain_phrase_filter_documents(array $phrase, array $positions, array $candidate_ids): array
+    {
+        $documents = [];
+        foreach ($candidate_ids as $post_id) {
+            $documents[] = [
+                'post_id' => (int) $post_id,
+                'passed' => $this->document_matches_phrase($phrase, $positions, (int) $post_id),
+            ];
+        }
+
+        return $documents;
+    }
+
+    /**
+     * @param array<int,string[]> $phrase
+     */
+    private function phrase_label(array $phrase): string
+    {
+        $tokens = [];
+        foreach ($phrase as $token_keys) {
+            $tokens[] = implode('|', array_values(array_map('strval', $token_keys)));
+        }
+
+        return implode(' ', $tokens);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $phrase_filters
+     */
+    private function phrase_filters_removed_all_candidates(array $phrase_filters): bool
+    {
+        $saw_document = false;
+        foreach ($phrase_filters as $filter) {
+            foreach ((array) ($filter['documents'] ?? []) as $document) {
+                if (!is_array($document)) {
+                    continue;
+                }
+
+                $saw_document = true;
+                if (!empty($document['passed'])) {
+                    return false;
+                }
+            }
+        }
+
+        return $saw_document;
     }
 
     /**
@@ -400,7 +915,7 @@ final class Language_FTS_Playground_Searcher
      * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string,offset:int}> $expansions
      * @param array<string,array<int,array<string,int>>> $postings
      * @param array<string,array<int,int[]>> $positions
-     * @return array<int,array{score:float,label:string,fields:string[]}>
+     * @return array<int,array{score:float,label:string,fields:string[],details:array<int,array<string,mixed>>}>
      */
     private function best_phrase_synonym_scores(
         array $expansions,
@@ -424,20 +939,39 @@ final class Language_FTS_Playground_Searcher
 
             $score = 0.0;
             $fields = [];
+            $details = [];
+            $weight = (float) $expansion['weight'];
             foreach ($target_terms as $target_term) {
                 $field_tfs = $postings[$target_term][$post_id] ?? [];
                 if ($field_tfs === []) {
                     $score = 0.0;
+                    $details = [];
                     break;
                 }
 
                 $document_frequency = count($postings[$target_term] ?? []);
-                $score += $this->bm25(
+                $term_score = $this->bm25(
                     $this->weighted_term_frequency($field_tfs),
                     $document_length,
                     $document_count,
                     $document_frequency,
                     $average_length
+                ) * $weight;
+                $score += $term_score;
+                $details[] = $this->score_detail(
+                    $target_term,
+                    (string) $expansion['source'],
+                    'phrase_synonym',
+                    $field_tfs,
+                    $term_score,
+                    $document_frequency,
+                    [
+                        'source_phrase' => (string) $expansion['source'],
+                        'target_phrase' => (string) $expansion['target'],
+                        'weight' => $weight,
+                        'direction' => (string) $expansion['direction'],
+                        'provenance' => (string) $expansion['provenance'],
+                    ]
                 );
                 foreach ($field_tfs as $field => $tf) {
                     if ((int) $tf > 0) {
@@ -446,7 +980,6 @@ final class Language_FTS_Playground_Searcher
                 }
             }
 
-            $score *= (float) $expansion['weight'];
             if ($score <= 0.0) {
                 continue;
             }
@@ -457,6 +990,7 @@ final class Language_FTS_Playground_Searcher
                 'score' => $score,
                 'label' => $label,
                 'fields' => $this->sort_fields(array_keys($fields)),
+                'details' => $details,
             ];
 
             $existing = $best_by_source[$source_key] ?? null;
@@ -527,9 +1061,9 @@ final class Language_FTS_Playground_Searcher
         }
 
         return [
-            'exact_terms' => array_keys($exact_terms),
+            'exact_terms' => array_values(array_map('strval', array_keys($exact_terms))),
             'phrases' => $phrases,
-            'fuzzy_terms' => array_keys($fuzzy_terms),
+            'fuzzy_terms' => array_values(array_map('strval', array_keys($fuzzy_terms))),
             'query_tokens' => $query_tokens,
         ];
     }
@@ -682,7 +1216,7 @@ final class Language_FTS_Playground_Searcher
             }
         }
 
-        return array_keys($unique);
+        return array_values(array_map('strval', array_keys($unique)));
     }
 
     /**

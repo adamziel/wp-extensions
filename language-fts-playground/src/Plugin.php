@@ -441,6 +441,7 @@ final class Language_FTS_Playground_Plugin
         $language = 'auto';
         $runtime_errors = [];
         $results = [];
+        $diagnostics = null;
         $documents = [];
         $search_error = null;
         $language_options = ['auto' => __('Automatic', 'language-fts-playground')];
@@ -462,7 +463,9 @@ final class Language_FTS_Playground_Plugin
 
         if ($query !== '' && $search_error === null) {
             try {
-                $results = self::searcher()->search($query, $language, 10);
+                $searcher = self::searcher();
+                $results = $searcher->search($query, $language, 10);
+                $diagnostics = $searcher->explain($query, $language, 10);
             } catch (Throwable $throwable) {
                 $runtime_errors[] = $throwable->getMessage();
                 self::record_error(__('Could not read the Language FTS search index.', 'language-fts-playground'), $throwable);
@@ -486,6 +489,7 @@ final class Language_FTS_Playground_Plugin
         if ($search_error === null) {
             self::render_sample_searches();
             self::render_results($results, $query, $language);
+            self::render_search_diagnostics($diagnostics);
         } else {
             self::render_search_unavailable($search_error);
         }
@@ -744,6 +748,26 @@ final class Language_FTS_Playground_Plugin
             echo '</tr>';
         }
         echo '</tbody></table>';
+    }
+
+    /**
+     * @param array<string,mixed>|null $diagnostics
+     */
+    private static function render_search_diagnostics(array|null $diagnostics): void
+    {
+        if ($diagnostics === null) {
+            return;
+        }
+
+        $json = json_encode($diagnostics, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($json)) {
+            $json = '{"error":"Could not encode search diagnostics."}';
+        }
+
+        echo '<details style="margin-top:1em;">';
+        echo '<summary>' . esc_html__('Search diagnostics', 'language-fts-playground') . '</summary>';
+        echo '<pre style="overflow:auto;max-height:32em;background:#fff;border:1px solid #dcdcde;padding:1em;">' . esc_html($json) . '</pre>';
+        echo '</details>';
     }
 
     /**

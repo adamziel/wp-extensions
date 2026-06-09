@@ -894,7 +894,7 @@ final class Language_FTS_Playground_Analyzer
             }
         }
 
-        return array_keys($tokens);
+        return array_values(array_map('strval', array_keys($tokens)));
     }
 
     /**

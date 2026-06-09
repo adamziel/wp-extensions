@@ -2045,6 +2045,26 @@ test_case('lexical pack evaluator works under php -n', function (): void {
     assert_contains_text('Evaluation passed.', $result['output'], 'php -n evaluator output reports success.');
 });
 
+test_case('lexical pack evaluator accepts suite option and spaced thresholds', function (): void {
+    $command = [
+        escapeshellarg(PHP_BINARY),
+        escapeshellarg(__DIR__ . '/../tools/evaluate-lexical-pack.php'),
+        '--suite',
+        escapeshellarg(language_fts_eval_fixture_path('phrase-suite.json')),
+        '--min-recall-at-5',
+        '1',
+        '--min-mrr',
+        '1',
+    ];
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+    $output = implode("\n", $lines);
+
+    assert_same(0, $exit_code, 'Evaluator accepts Task 154 --suite command syntax. Output: ' . $output);
+    assert_contains_text('Evaluation passed.', $output, 'The --suite alias evaluates the requested fixture.');
+});
+
 test_case('membership importer compiles deterministic synsets and lexemes', function (): void {
     $output_dir = create_language_fts_temp_dir('language-fts-membership-import');
 
@@ -2580,6 +2600,75 @@ test_case('automatic search finds Polish synonym matches with matched language p
     assert_contains_text('<mark>wyszukiwania</mark>', $results[0]['snippet'], 'The synonym match highlights the indexed source token.');
 });
 
+test_case('explain reports automatic Polish routing and resource-backed synonyms', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(127, 'pl', 'Polski dokument', '<p>Partycja wyszukiwania pokazuje wynik.</p>'));
+
+    $explain = $searcher->explain('szukanie', 'auto');
+    $json = json_encode($explain);
+
+    assert_true(is_string($json), 'Explain output is JSON serializable.');
+    assert_same('szukanie', $explain['query'] ?? null, 'Explain preserves the original query.');
+    assert_same('auto', $explain['requested_language'] ?? null, 'Explain records the requested language mode.');
+    assert_same(['pl'], $explain['language_routing']['selected_partitions'] ?? null, 'Explain records the routed Polish partition.');
+    assert_same('pl', $explain['language_routing']['ranked_candidates'][0]['language'] ?? null, 'Explain exposes Polish routing evidence.');
+
+    $partition = $explain['partitions'][0] ?? [];
+    assert_same('pl', $partition['language'] ?? null, 'Explain includes a Polish partition block.');
+    assert_true(in_array('szukac', $partition['analyzed_query']['exact_terms'] ?? [], true), 'Explain includes the canonical Polish query key.');
+    assert_true(in_array('wyszukiwac', $partition['lookup_terms']['single_token_synonyms'] ?? [], true), 'Explain includes the synonym target lookup term.');
+
+    $synonym_targets = [];
+    foreach ($partition['synonym_expansions'] ?? [] as $expansion) {
+        if (($expansion['source_key'] ?? '') === 'szukac') {
+            $synonym_targets = array_merge($synonym_targets, (array) ($expansion['target_keys'] ?? []));
+            assert_same('synset', $expansion['direction'] ?? null, 'Explain records the synset expansion source kind.');
+            assert_same('language-fts-playground-polish-curated-synset', $expansion['provenance'] ?? null, 'Explain records synonym provenance.');
+        }
+    }
+    assert_true(in_array('wyszukiwac', $synonym_targets, true), 'Explain connects szukac to the indexed wyszukiwac key.');
+    assert_same([127], array_column($explain['results'] ?? [], 'post_id'), 'Explain top-level results mirror the matching search result.');
+    assert_true(in_array('synonym', $explain['results'][0]['match_classes'] ?? [], true), 'Explain classifies the result as a synonym match.');
+});
+
+test_case('explain reports multiword phrase synonyms and fuzzy candidates', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(128, 'en', 'FTS acronym', '<p>FTS makes local lookup visible.</p>'));
+    $phrase_explain = $searcher->explain('full text search', 'en');
+    $partition = $phrase_explain['partitions'][0] ?? [];
+    $phrase_expansion = $partition['phrase_synonym_expansions'][0] ?? [];
+
+    assert_same('full text search', $phrase_expansion['source_phrase'] ?? null, 'Explain records the multiword synonym source phrase.');
+    assert_same('fts', $phrase_expansion['target_phrase'] ?? null, 'Explain records the multiword synonym target phrase.');
+    assert_same('language-fts-playground-english-curated_seed', $phrase_expansion['provenance'] ?? null, 'Explain records synonym phrase provenance.');
+    assert_same('en', $phrase_expansion['searched_language'] ?? null, 'Explain records the language that supplied the phrase synonym.');
+    assert_same([128], array_column($phrase_explain['results'] ?? [], 'post_id'), 'Phrase synonym explain returns the matched FTS document.');
+    assert_true(in_array('phrase_synonym', $phrase_explain['results'][0]['match_classes'] ?? [], true), 'Phrase synonym matches are classified separately.');
+
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+    $indexer->index_post(fixture_post(129, 'en', 'Orchard', '<p>orchard meadow</p>'));
+
+    $fuzzy_explain = $searcher->explain('orchrd~', 'en');
+    $fuzzy_partition = $fuzzy_explain['partitions'][0] ?? [];
+    $fuzzy_expansion = $fuzzy_partition['fuzzy_expansions'][0] ?? [];
+
+    assert_same('orchrd', $fuzzy_expansion['query_term'] ?? null, 'Explain records the fuzzy source query term.');
+    assert_same('orchard', $fuzzy_expansion['candidate_term'] ?? null, 'Explain records the fuzzy candidate term.');
+    assert_same(1, $fuzzy_expansion['edit_distance'] ?? null, 'Explain records fuzzy edit distance.');
+    assert_same('en', $fuzzy_expansion['searched_language'] ?? null, 'Explain records the fuzzy candidate language.');
+    assert_true(in_array('fuzzy', $fuzzy_explain['results'][0]['match_classes'] ?? [], true), 'Fuzzy matches are classified separately.');
+});
+
 test_case('explicit Polish search finds the demo synonym target', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
@@ -2603,6 +2692,25 @@ test_case('explicit English search does not search Polish synonym partitions', f
     $indexer->index_post(fixture_post(122, 'pl', 'Polski dokument', '<p>Widoczna partycja wyszukiwania.</p>'));
 
     assert_same([], $searcher->search('szukanie', 'en'), 'Explicit English mode remains a precision filter and does not search Polish.');
+});
+
+test_case('explain reports explicit-language narrowing and no-result causes', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(130, 'pl', 'Polski dokument', '<p>Widoczna partycja wyszukiwania.</p>'));
+
+    $explain = $searcher->explain('szukanie', 'en');
+    assert_same(['en'], $explain['language_routing']['selected_partitions'] ?? null, 'Explicit English explain searches only English.');
+    assert_same('pl', $explain['language_routing']['ranked_candidates'][0]['language'] ?? null, 'Explain still exposes cross-language routing evidence in explicit mode.');
+    assert_same([], $explain['results'] ?? null, 'Explicit English explain has no Polish synonym result.');
+    assert_true(in_array('no_postings_for_searched_terms', $explain['partitions'][0]['no_result_causes'] ?? [], true), 'Explain reports missing postings in the narrowed partition.');
+
+    $stopword_explain = $searcher->explain('the and of', 'en');
+    assert_same([], $stopword_explain['partitions'][0]['analyzed_query']['exact_terms'] ?? null, 'Stopword-only explain has no searchable terms.');
+    assert_true(in_array('analyzed_query_empty_after_stopwords', $stopword_explain['no_result_causes'] ?? [], true), 'Stopword-only explain reports why no terms were searched.');
 });
 
 test_case('exact Polish matches rank above synonym-only Polish matches', function (): void {
@@ -2863,6 +2971,39 @@ test_case('ranks title hits above equal content hits', function (): void {
     assert_same(42, $results[0]['post_id'], 'A title hit outranks an equal content hit even with the higher post ID.');
     assert_same(['title'], $results[0]['matched_fields'], 'The top result reports the title field.');
     assert_same(['content'], $results[1]['matched_fields'], 'The second result reports the content field.');
+});
+
+test_case('explain reports field boosts and phrase filter failures', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(131, 'en', 'Body match', '<p>orchard plain visible text</p>'));
+    $indexer->index_post(fixture_post(132, 'en', 'Orchard title', '<p>plain visible text only</p>'));
+
+    $field_explain = $searcher->explain('orchard', 'en');
+    $first = $field_explain['results'][0] ?? [];
+    $first_detail = $first['score_breakdown']['details'][0] ?? [];
+    $first_field = $first_detail['fields'][0] ?? [];
+
+    assert_same(132, $first['post_id'] ?? null, 'Explain preserves field-aware ranking.');
+    assert_same(['title'], $first['matched_fields'] ?? null, 'Explain reports matched fields.');
+    assert_same('exact', $first_detail['class'] ?? null, 'Exact matches have score detail entries.');
+    assert_same('title', $first_field['field'] ?? null, 'Score details identify the matched field.');
+    assert_same(4.0, $first_field['boost'] ?? null, 'Score details expose the field boost.');
+    assert_true(($first['score_breakdown']['by_field']['title'] ?? 0.0) > 0.0, 'Score breakdown includes title contribution.');
+
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+    $indexer->index_post(fixture_post(133, 'en', 'Reversed', '<p>Pages stay searching in reverse order.</p>'));
+
+    $phrase_explain = $searcher->explain('"search pages"', 'en');
+    $phrase_partition = $phrase_explain['partitions'][0] ?? [];
+    assert_true(in_array('phrase_filter_removed_candidates', $phrase_partition['no_result_causes'] ?? [], true), 'Explain reports when phrase filters remove candidates.');
+    assert_same(133, $phrase_partition['phrase_filters'][0]['documents'][0]['post_id'] ?? null, 'Phrase filter diagnostics identify the candidate document.');
+    assert_same(false, $phrase_partition['phrase_filters'][0]['documents'][0]['passed'] ?? null, 'Phrase filter diagnostics record failed candidates.');
 });
 
 test_case('reports excerpt field matches with highlighted excerpt snippets', function (): void {
@@ -3404,6 +3545,30 @@ test_case('admin automatic results show matched language partition', function ()
     assert_contains_text('<option value="auto" selected="selected">Automatic</option>', $html, 'Automatic remains selected after an auto search.');
     assert_contains_text('<th>Language</th>', $html, 'Admin search results include a matched-language column.');
     assert_contains_text('<td><code>pl</code></td><td><mark>wyszukiwania</mark>', $html, 'Auto results show the Polish partition next to the highlighted synonym match.');
+});
+
+test_case('admin renders escaped search diagnostics for unsafe query text', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    $post = fixture_post(
+        404,
+        'en',
+        'Admin diagnostics',
+        '<p>Stories keep unsafe &lt;script&gt;alert(1)&lt;/script&gt; text visible.</p>'
+    );
+    $GLOBALS['language_fts_test_posts'][404] = $post;
+    $indexer = new Language_FTS_Playground_Indexer($storage, new Language_FTS_Playground_Analyzer());
+    $indexer->index_post($post);
+    $_GET['lft_query'] = 'story &lt;script&gt;alert(1)&lt;/script&gt;';
+    $_GET['lft_language'] = 'en';
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = ob_get_clean();
+
+    assert_contains_text('Search diagnostics', $html, 'Admin search renders a diagnostics section.');
+    assert_contains_text('&amp;lt;script&amp;gt;alert(1)&amp;lt;/script&amp;gt;', $html, 'Diagnostics escape unsafe-looking query text inside JSON.');
+    assert_not_contains_text('<script>', $html, 'Diagnostics do not emit raw script tags.');
 });
 
 test_case('renders admin snippets and matched fields safely', function (): void {
