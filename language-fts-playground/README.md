@@ -260,6 +260,13 @@ warnings. It also shows the effective local resource root being validated.
 The shipped English, Polish, and German packs are still labeled `curated_seed`;
 they are not comprehensive lexical databases.
 
+Custom packs may also declare optional `term_rules.tsv` and
+`protected_terms.txt` resources. Term rules add generic normalized term keys
+using a reviewed strip/append rule format; protected terms keep exact and
+lexeme keys while opting out of those broad rules. Omit those profile resource
+keys when a pack does not use them; declared keys must point at existing local
+files.
+
 Generated packs can live outside this plugin. Install a complete
 `resources/languages`-style directory anywhere readable by PHP, validate it
 first, then point the plugin at that local path:
@@ -299,8 +306,9 @@ review, pack-size review, and relevance testing.
 ## Supported Analyzer Behavior
 
 The analyzer removes profile-backed English, Polish, and German stopwords,
-keeps exact terms, applies profile-backed lexeme aliases first, and then adds a
-small set of language-scoped conservative fallback stem keys:
+keeps exact terms, applies profile-backed lexeme aliases first, applies optional
+profile term rules for unprotected terms, and then adds a small set of
+language-scoped conservative fallback stem keys:
 
 - English lowercases terms and includes resource rows plus conservative keys for regular forms and a few guarded irregulars: `search` matches `searching`, `searched`, and `searches`; `story` matches `stories`; `make` matches `making`; `run` matches `running`; `child` matches `children`.
 - English keeps sensitive terms such as `news`, `bus`, and `analysis` exact, and avoids broad noun-to-verb collapses such as `runner` to `run`.
@@ -362,5 +370,8 @@ by generated resources from licensed linguistic sources. The fallback suffix
 rules are still conservative handwritten heuristics. The plugin does not
 implement full stemming, full lemmatization, multi-edit fuzzy search, or
 unconfigured cross-language fallback.
+Resource-backed term rules are a foundation for reviewed packs, not a full
+stemmer; their generic flags are ASCII-oriented and should be validated against
+relevance fixtures before use in broad language packs.
 Snippets are built from normalized field text, not from full-fidelity rendered
 HTML, and use a small fixed excerpt window for long fields.

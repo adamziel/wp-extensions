@@ -26,6 +26,9 @@ declare(strict_types=1);
  *   "source_terms<TAB>target_terms<TAB>direction<TAB>weight<TAB>provenance".
  *   Source and target terms are single-space-separated normalized canonical
  *   key sequences. Phrase rows are matched over analyzed query token keys.
+ * - term_rules.tsv optionally contains generic normalized-term key rules.
+ * - protected_terms.txt optionally contains normalized terms that should keep
+ *   exact/lexeme keys but skip term_rules.tsv.
  * - pack.php optionally returns provenance metadata for repository tooling and
  *   maintainers. Query-time profile loading does not read it.
  *
@@ -44,7 +47,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     private ?array $manifest = null;
 
     /**
-     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}>
+     * @var array<string,array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}>
      */
     private array $profiles = [];
 
@@ -119,7 +122,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
+     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     public function profile(string $language): array
     {
@@ -299,7 +302,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
 
     /**
      * @param array{directory:string,profile:array<string,mixed>,order:int} $manifest_entry
-     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
+     * @return array{id:string,label:string,folds:array<string,string>,language_signals:string[],stopwords:array<string,bool>,lexemes:array<string,string[]>,lexeme_forms:array<string,bool>,canonical_keys:array<string,bool>,protected_terms:array<string,bool>,term_rules:array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string>>,synonym_sources:array<string,bool>,synonyms:array<string,array<int,array{term:string,weight:float,source:string,direction:string,provenance:string}>>,synonym_phrases:array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}>}
      */
     private function load_language_profile(string $language, array $manifest_entry): array
     {
@@ -321,6 +324,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         $lexemes = $this->parse_lexemes($this->resource_path($directory, $resources, 'lexemes', $profile_file));
         $synonyms = $this->merge_expansion_maps($synset_expansions, $pairwise_synonyms);
         $synonym_sources = array_merge(array_keys($synonyms), $this->synonym_phrase_source_labels($synonym_phrases));
+        $term_rules_path = $this->optional_resource_path($directory, $resources, 'term_rules', $profile_file);
+        $protected_terms_path = $this->optional_resource_path($directory, $resources, 'protected_terms', $profile_file);
 
         return [
             'id' => $language,
@@ -331,6 +336,8 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             'lexemes' => $lexemes,
             'lexeme_forms' => $this->lookup_from_keys(array_keys($lexemes)),
             'canonical_keys' => $this->canonical_key_lookup($lexemes),
+            'protected_terms' => $protected_terms_path === null ? [] : $this->parse_protected_terms($protected_terms_path),
+            'term_rules' => $term_rules_path === null ? [] : $this->parse_term_rules($term_rules_path),
             'synonym_sources' => $this->lookup_from_keys($synonym_sources),
             'synonyms' => $synonyms,
             'synonym_phrases' => $synonym_phrases,
@@ -508,6 +515,28 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     }
 
     /**
+     * @param array<mixed> $resources
+     */
+    private function optional_resource_path(string $directory, array $resources, string $key, string $profile_file): string|null
+    {
+        if (!array_key_exists($key, $resources)) {
+            return null;
+        }
+
+        $name = $resources[$key] ?? null;
+        if (!is_string($name) || trim($name) === '') {
+            throw new UnexpectedValueException("Language profile resource {$key} must be a non-empty string in {$profile_file}");
+        }
+
+        $name = trim($name);
+        if ($name !== basename($name) || str_contains($name, '..')) {
+            throw new UnexpectedValueException("Language profile resource {$key} must be a local file name in {$profile_file}");
+        }
+
+        return $this->resource_path($directory, $resources, $key, $profile_file);
+    }
+
+    /**
      * @return array<string,bool>
      */
     private function parse_stopwords(string $path): array
@@ -555,6 +584,163 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $lexemes;
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    private function parse_protected_terms(string $path): array
+    {
+        $terms = [];
+        foreach ($this->resource_lines($path) as $line_number => $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+
+            $term = $this->normalized_resource_token($line, $path, $line_number + 1, 'protected terms');
+            if (isset($terms[$term])) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number + 1, 'duplicate protected term'));
+            }
+            $terms[$term] = true;
+        }
+
+        ksort($terms, SORT_STRING);
+
+        return $terms;
+    }
+
+    /**
+     * @return array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string}>
+     */
+    private function parse_term_rules(string $path): array
+    {
+        $rules = [];
+        $rule_ids = [];
+        foreach ($this->resource_lines($path) as $line_number => $line) {
+            $trimmed_line = trim($line);
+            if ($trimmed_line === '' || str_starts_with($trimmed_line, '#')) {
+                continue;
+            }
+
+            $line_number++;
+            $columns = explode("\t", $line);
+            if (count($columns) !== 9) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule rows must have exactly 9 tab-separated columns'));
+            }
+
+            $rule = $this->parse_term_rule_row($columns, $path, $line_number);
+            if (isset($rule_ids[$rule['id']])) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate term rule id'));
+            }
+            $rule_ids[$rule['id']] = true;
+            $rules[] = $rule;
+        }
+
+        usort(
+            $rules,
+            static fn(array $a, array $b): int => strcmp((string) $a['id'], (string) $b['id'])
+        );
+
+        return $rules;
+    }
+
+    /**
+     * @param string[] $columns
+     * @return array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string}
+     */
+    private function parse_term_rule_row(array $columns, string $path, int $line_number): array
+    {
+        $id = $this->term_rule_id($columns[0], $path, $line_number);
+        $min_term_length = $this->term_rule_positive_integer($columns[1], $path, $line_number, 'min_term_length');
+        $pattern = $this->term_rule_regex($columns[2], $path, $line_number);
+        $strip_prefix = trim($columns[3]);
+        $strip_suffix = trim($columns[4]);
+        $append = trim($columns[5]);
+        if ($strip_prefix === '' && $strip_suffix === '' && $append === '') {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule must strip a prefix, strip a suffix, or append text'));
+        }
+
+        $min_key_length = $this->term_rule_positive_integer($columns[6], $path, $line_number, 'min_key_length');
+        $flags = $this->term_rule_flags($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'append_e_if_cvc'], $path, $line_number, 'term rule flag must be trim_doubled_final_consonant, require_vowel, or append_e_if_cvc');
+        $provenance = $this->term_rule_provenance($columns[8], $path, $line_number);
+
+        return [
+            'id' => $id,
+            'format' => 'strip_append',
+            'min_term_length' => $min_term_length,
+            'pattern' => $pattern,
+            'strip_prefix' => $strip_prefix,
+            'strip_suffix' => $strip_suffix,
+            'append' => $append,
+            'min_key_length' => $min_key_length,
+            'flags' => $flags,
+            'provenance' => $provenance,
+        ];
+    }
+
+    private function term_rule_id(string $value, string $path, int $line_number): string
+    {
+        $id = trim($value);
+        if ($id === '') {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule id must be non-empty'));
+        }
+
+        return $id;
+    }
+
+    private function term_rule_provenance(string $value, string $path, int $line_number): string
+    {
+        $provenance = trim($value);
+        if ($provenance === '') {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule provenance must be non-empty'));
+        }
+
+        return $provenance;
+    }
+
+    private function term_rule_positive_integer(string $value, string $path, int $line_number, string $label): int
+    {
+        $value = trim($value);
+        if (preg_match('/^[1-9][0-9]*$/', $value) !== 1) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, "term rule {$label} must be a positive integer"));
+        }
+
+        return (int) $value;
+    }
+
+    private function term_rule_regex(string $value, string $path, int $line_number): string
+    {
+        $pattern = trim($value);
+        if ($pattern === '' || @preg_match($pattern, '') === false) {
+            throw new UnexpectedValueException($this->resource_error($path, $line_number, 'term rule regex must be valid'));
+        }
+
+        return $pattern;
+    }
+
+    /**
+     * @param string[] $allowed
+     * @return string[]
+     */
+    private function term_rule_flags(string $value, array $allowed, string $path, int $line_number, string $message): array
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return [];
+        }
+
+        $allowed_lookup = array_fill_keys($allowed, true);
+        $flags = [];
+        foreach (explode(',', $value) as $flag) {
+            $flag = trim($flag);
+            if ($flag === '' || !isset($allowed_lookup[$flag])) {
+                throw new UnexpectedValueException($this->resource_error($path, $line_number, $message));
+            }
+            $flags[$flag] = true;
+        }
+
+        return array_keys($flags);
     }
 
     /**

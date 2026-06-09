@@ -626,12 +626,14 @@ final class Language_FTS_Playground_Plugin
                 + (int) ($counts['concept_expansions'] ?? 0)
                 + (int) ($counts['phrase_synonym_expansions'] ?? 0);
             $count_text = sprintf(
-                /* translators: 1: lexeme rows, 2: synset rows, 3: phrase synonym rows, 4: synonym expansion rows */
-                __('lexemes %1$d; synsets %2$d; phrase rows %3$d; expansions %4$d', 'language-fts-playground'),
+                /* translators: 1: lexeme rows, 2: synset rows, 3: phrase synonym rows, 4: synonym expansion rows, 5: term rule rows, 6: protected term rows */
+                __('lexemes %1$d; synsets %2$d; phrase rows %3$d; expansions %4$d; term rules %5$d; protected terms %6$d', 'language-fts-playground'),
                 (int) ($counts['lexeme_rows'] ?? 0),
                 (int) ($counts['synset_rows'] ?? 0),
                 (int) ($counts['phrase_synonym_rows'] ?? 0),
-                $total_expansions
+                $total_expansions,
+                (int) ($counts['term_rule_rows'] ?? 0),
+                (int) ($counts['protected_term_rows'] ?? 0)
             );
             $warning_text = $warnings === []
                 ? __('None', 'language-fts-playground')

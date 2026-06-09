@@ -10,7 +10,7 @@ if (!defined('LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION')) {
 }
 
 if (!defined('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION')) {
-    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-09-multiword-synonym-phrases');
+    define('LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION', '2026-06-09-resource-backed-term-rules');
 }
 
 if (!defined('LANGUAGE_FTS_PLAYGROUND_QUEUE_BATCH_SIZE')) {

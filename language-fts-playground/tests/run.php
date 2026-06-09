@@ -956,7 +956,9 @@ function create_language_fts_temp_profile_tree(
     string $lexemes,
     string $synonyms = "# source\ttarget\tdirection\tweight\tprovenance\n",
     string|null $synsets = null,
-    string|null $synonym_phrases = null
+    string|null $synonym_phrases = null,
+    string|null $term_rules = null,
+    string|null $protected_terms = null
 ): string
 {
     $root = sys_get_temp_dir() . '/language-fts-profile-' . str_replace('.', '-', uniqid('', true));
@@ -964,6 +966,8 @@ function create_language_fts_temp_profile_tree(
     assert_true(mkdir($language_dir, 0777, true), 'Temporary language profile directory is created.');
     $synset_resource = $synsets === null ? '' : "        'synsets' => 'synsets.tsv',\n";
     $synonym_phrase_resource = $synonym_phrases === null ? '' : "        'synonym_phrases' => 'synonym_phrases.tsv',\n";
+    $term_rule_resource = $term_rules === null ? '' : "        'term_rules' => 'term_rules.tsv',\n";
+    $protected_terms_resource = $protected_terms === null ? '' : "        'protected_terms' => 'protected_terms.txt',\n";
 
     file_put_contents(
         $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
@@ -976,6 +980,8 @@ function create_language_fts_temp_profile_tree(
         "        'synonyms' => 'synonyms.tsv',\n" .
         $synset_resource .
         $synonym_phrase_resource .
+        $term_rule_resource .
+        $protected_terms_resource .
         "    ],\n" .
         "];\n"
     );
@@ -987,6 +993,12 @@ function create_language_fts_temp_profile_tree(
     }
     if ($synonym_phrases !== null) {
         file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonym_phrases.tsv', $synonym_phrases);
+    }
+    if ($term_rules !== null) {
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'term_rules.tsv', $term_rules);
+    }
+    if ($protected_terms !== null) {
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'protected_terms.txt', $protected_terms);
     }
 
     return $root;
@@ -1016,6 +1028,12 @@ function create_language_fts_temp_profile_set(array $profiles): string
         if (array_key_exists('synonym_phrases', $definition)) {
             $resources['synonym_phrases'] = 'synonym_phrases.tsv';
         }
+        if (array_key_exists('term_rules', $definition)) {
+            $resources['term_rules'] = 'term_rules.tsv';
+        }
+        if (array_key_exists('protected_terms', $definition)) {
+            $resources['protected_terms'] = 'protected_terms.txt';
+        }
 
         $profile = [
             'id' => $language,
@@ -1043,6 +1061,12 @@ function create_language_fts_temp_profile_set(array $profiles): string
         if (array_key_exists('synonym_phrases', $definition)) {
             file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonym_phrases.tsv', (string) $definition['synonym_phrases']);
         }
+        if (array_key_exists('term_rules', $definition)) {
+            file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'term_rules.tsv', (string) $definition['term_rules']);
+        }
+        if (array_key_exists('protected_terms', $definition)) {
+            file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'protected_terms.txt', (string) $definition['protected_terms']);
+        }
     }
 
     return $root;
@@ -1064,6 +1088,12 @@ function write_language_fts_temp_pack_metadata(string $language_dir, array $over
     }
     if (is_file($language_dir . DIRECTORY_SEPARATOR . 'synonym_phrases.tsv')) {
         $files[] = 'synonym_phrases.tsv';
+    }
+    if (is_file($language_dir . DIRECTORY_SEPARATOR . 'term_rules.tsv')) {
+        $files[] = 'term_rules.tsv';
+    }
+    if (is_file($language_dir . DIRECTORY_SEPARATOR . 'protected_terms.txt')) {
+        $files[] = 'protected_terms.txt';
     }
 
     $metadata = array_merge(
@@ -1477,6 +1507,75 @@ function language_fts_import_options(array $overrides = []): array
     );
 }
 
+function assert_language_fts_term_rules_rejected(string $label, string $term_rules, string $expected_message): void
+{
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        null,
+        $term_rules
+    );
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            "Malformed term rule rows fail profile loading for {$label}."
+        );
+        assert_contains_text($expected_message, $throwable->getMessage(), "The malformed term rule reason is reported for {$label}.");
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+}
+
+function create_language_fts_temp_profile_tree_with_declared_resource(string $resource_key, string $resource_file): string
+{
+    $root = sys_get_temp_dir() . '/language-fts-profile-missing-resource-' . str_replace('.', '-', uniqid('', true));
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    assert_true(mkdir($language_dir, 0777, true), 'Temporary language profile directory is created.');
+
+    $profile = [
+        'id' => 'xx',
+        'label' => 'Test',
+        'resources' => [
+            'stopwords' => 'stopwords.txt',
+            'lexemes' => 'lexemes.tsv',
+            'synonyms' => 'synonyms.tsv',
+            $resource_key => $resource_file,
+        ],
+    ];
+
+    file_put_contents(
+        $language_dir . DIRECTORY_SEPARATOR . 'profile.php',
+        "<?php\nreturn " . var_export($profile, true) . ";\n"
+    );
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'stopwords.txt', "and\n");
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv', "# observed\tcanonical\tprovenance\n");
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'synonyms.tsv', "# source\ttarget\tdirection\tweight\tprovenance\n");
+
+    return $root;
+}
+
+function assert_language_fts_declared_resource_missing(string $resource_key, string $resource_file): void
+{
+    $root = create_language_fts_temp_profile_tree_with_declared_resource($resource_key, $resource_file);
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $repository->profile('xx'),
+            "Declared missing {$resource_key} resource fails profile loading."
+        );
+        assert_contains_text("Language profile resource {$resource_key} does not exist", $throwable->getMessage(), "The missing {$resource_key} resource reason is reported.");
+        assert_contains_text($resource_file, $throwable->getMessage(), "The missing {$resource_key} file name is reported.");
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+}
+
 test_case('storage replacement supports multiple language partitions for one post', function (): void {
     $partitions = [
         [
@@ -1867,6 +1966,168 @@ test_case('rejects malformed lexical resource rows deliberately', function (): v
     } finally {
         remove_language_fts_temp_tree($root);
     }
+});
+
+test_case('static guard expects production term rule resource support', function (): void {
+    $repository_source = file_get_contents(__DIR__ . '/../src/LexicalProfileRepository.php');
+    $analyzer_source = file_get_contents(__DIR__ . '/../src/Analyzer.php');
+    assert_true(is_string($repository_source) && is_string($analyzer_source), 'Production sources are readable.');
+
+    $source = $repository_source . "\n" . $analyzer_source;
+    $missing = [];
+    foreach (['term_rules', 'protected_terms'] as $resource_key) {
+        if (!str_contains($source, $resource_key)) {
+            $missing[] = $resource_key;
+        }
+    }
+
+    assert_same(
+        [],
+        $missing,
+        'Production should expose resource-backed term_rules/protected_terms support instead of ignoring those profile resources.'
+    );
+});
+
+test_case('term_rules resource adds configured term keys for indexing and search', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        null,
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
+        "glimmer-ed\t5\t/ed$/u\t\ted\t\t3\trequire_vowel\tfixture-term-rules\n" .
+        "glimmer-ing\t5\t/ing$/u\t\ting\t\t3\trequire_vowel\tfixture-term-rules\n"
+    );
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(501, 'xx', 'Term rule target', '<p>glimmering</p>'));
+
+        $issues = [];
+        $shared_terms = $analyzer->analyze_text('glimmering glimmered', 'xx');
+        $shared_counts = array_count_values($shared_terms);
+        if (($shared_counts['glimmer'] ?? 0) !== 2) {
+            $issues[] = 'glimmering and glimmered should each add the shared glimmer key. Terms: ' . var_export($shared_terms, true);
+        }
+
+        $glimmer_results = $searcher->search('glimmer', 'xx');
+        if (array_column($glimmer_results, 'post_id') !== [501]) {
+            $issues[] = 'search("glimmer", "xx") should find a document containing only glimmering. Results: ' . var_export($glimmer_results, true);
+        }
+
+        $glimmered_results = $searcher->search('glimmered', 'xx');
+        if (array_column($glimmered_results, 'post_id') !== [501]) {
+            $issues[] = 'search("glimmered", "xx") should share the glimmer key with indexed glimmering. Results: ' . var_export($glimmered_results, true);
+        }
+
+        assert_same([], $issues, 'term_rules.tsv should add configured term keys during indexing and query analysis.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('protected_terms blocks broad term rules while preserving lexeme keys', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nanalytics\tmetric\tfixture-lexeme\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        null,
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
+        "drop-final-s\t2\t/s$/u\t\ts\t\t2\trequire_vowel\tfixture-broad-rule\n",
+        "analytics\n"
+    );
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(502, 'xx', 'Protected term target', '<p>analytics</p>'));
+        $indexer->index_post(fixture_post(503, 'xx', 'Broad rule target', '<p>signals</p>'));
+
+        $issues = [];
+        $analytics_terms = $analyzer->analyze_text('analytics', 'xx');
+        if (!in_array('metric', $analytics_terms, true)) {
+            $issues[] = 'Protected term analytics should still receive its lexeme key metric. Terms: ' . var_export($analytics_terms, true);
+        }
+        if (in_array('analytic', $analytics_terms, true)) {
+            $issues[] = 'Protected term analytics should not receive the broad drop-final-s key analytic. Terms: ' . var_export($analytics_terms, true);
+        }
+
+        $signals_terms = $analyzer->analyze_text('signals', 'xx');
+        if (!in_array('signal', $signals_terms, true)) {
+            $issues[] = 'Unprotected term signals should receive the broad drop-final-s key signal. Terms: ' . var_export($signals_terms, true);
+        }
+
+        $metric_results = $searcher->search('metric', 'xx');
+        if (array_column($metric_results, 'post_id') !== [502]) {
+            $issues[] = 'Lexeme search for metric should still find the protected analytics document. Results: ' . var_export($metric_results, true);
+        }
+
+        $analytic_results = $searcher->search('analytic', 'xx');
+        if ($analytic_results !== []) {
+            $issues[] = 'Broad-rule search for analytic should not find protected analytics. Results: ' . var_export($analytic_results, true);
+        }
+
+        $signal_results = $searcher->search('signal', 'xx');
+        if (array_column($signal_results, 'post_id') !== [503]) {
+            $issues[] = 'Broad-rule search for signal should find the unprotected signals document. Results: ' . var_export($signal_results, true);
+        }
+
+        assert_same([], $issues, 'protected_terms.txt should suppress broad rule keys without disabling lexeme mappings.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('rejects legacy scoped 5-column term rule rows', function (): void {
+    assert_language_fts_term_rules_rejected(
+        'legacy scoped row',
+        "# id\tpattern\treplacement\tflags\tprovenance\n" .
+        "legacy-scope\t/^(.+)s$/u\t\$1\tindex,query\tfixture\n",
+        'term rule rows must have exactly 9 tab-separated columns'
+    );
+});
+
+test_case('rejects malformed term rule rows with duplicate rule id', function (): void {
+    assert_language_fts_term_rules_rejected(
+        'duplicate rule id',
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
+        "duplicate\t5\t/ing$/u\t\ting\t\t3\trequire_vowel\tfixture\n" .
+        "duplicate\t5\t/ed$/u\t\ted\t\t3\trequire_vowel\tfixture\n",
+        'duplicate term rule id'
+    );
+});
+
+test_case('rejects malformed term rule rows with unknown flag', function (): void {
+    assert_language_fts_term_rules_rejected(
+        'unknown flag',
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
+        "unknown-flag\t5\t/ing$/u\t\ting\t\t3\texplode\tfixture\n",
+        'term rule flag must be trim_doubled_final_consonant, require_vowel, or append_e_if_cvc'
+    );
+});
+
+test_case('rejects malformed term rule rows with invalid regex', function (): void {
+    assert_language_fts_term_rules_rejected(
+        'invalid regex',
+        "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\tprovenance\n" .
+        "invalid-regex\t5\t/(?P<broken/u\t\ting\t\t3\trequire_vowel\tfixture\n",
+        'term rule regex must be valid'
+    );
+});
+
+test_case('declared missing term_rules resource fails profile loading', function (): void {
+    assert_language_fts_declared_resource_missing('term_rules', 'missing-term-rules.tsv');
+});
+
+test_case('declared missing protected_terms resource fails profile loading', function (): void {
+    assert_language_fts_declared_resource_missing('protected_terms', 'missing-protected-terms.txt');
 });
 
 test_case('loads synset resource rows into keyed query expansions', function (): void {

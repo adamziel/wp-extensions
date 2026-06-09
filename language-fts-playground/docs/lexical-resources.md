@@ -8,8 +8,9 @@ expansion does not scan resource files.
 The repository separates two concerns:
 
 - Runtime packs are compact local files: `stopwords.txt`, `lexemes.tsv`,
-  `synonyms.tsv`, optional `synsets.tsv`, optional `synonym_phrases.tsv`, and
-  `pack.php` provenance metadata.
+  `synonyms.tsv`, optional `synsets.tsv`, optional `synonym_phrases.tsv`,
+  optional `term_rules.tsv`, optional `protected_terms.txt`, and `pack.php`
+  provenance metadata.
 - Build-time imports convert source-specific fixtures or pre-extracted lexical
   database exports into those compact runtime files.
 
@@ -29,11 +30,15 @@ normalization folds, optional language signal regexes, and resource file names:
     'synonyms' => 'synonyms.tsv',
     'synsets' => 'synsets.tsv',
     'synonym_phrases' => 'synonym_phrases.tsv',
+    'term_rules' => 'term_rules.tsv',
+    'protected_terms' => 'protected_terms.txt',
 ],
 ```
 
-`synsets` and `synonym_phrases` are optional. `synonyms.tsv` remains required
-for compatibility, even when it contains only the header.
+`synsets`, `synonym_phrases`, `term_rules`, and `protected_terms` keys may be
+omitted. When one of those keys is declared, the named local file must exist.
+`synonyms.tsv` remains required for compatibility, even when it contains only
+the header.
 
 `pack.php` returns provenance metadata for maintainers and tests. The runtime
 repository loads it only when `pack_metadata()` is called, not during normal
@@ -56,6 +61,8 @@ return [
         'synonyms.tsv',
         'synsets.tsv',
         'synonym_phrases.tsv',
+        'term_rules.tsv',
+        'protected_terms.txt',
     ],
     'data_kind' => 'curated_seed',
 ];
@@ -125,6 +132,28 @@ directions, invalid weights, empty provenance, no-op source/target pairs, and
 duplicate source/target phrase pairs. Bidirectional rows materialize both
 directions deterministically.
 
+`term_rules.tsv` adds generic profile-backed keys from one normalized term:
+
+```text
+# id<TAB>min_term_length<TAB>pattern<TAB>strip_prefix<TAB>strip_suffix<TAB>append<TAB>min_key_length<TAB>flags<TAB>provenance
+drop-ing	5	/ing$/u		ing		3	trim_doubled_final_consonant,require_vowel	example-curated-rules
+make-e	5	/ing$/u		ing		4	append_e_if_cvc	example-curated-rules
+```
+
+The analyzer keeps the exact normalized term and any `lexemes.tsv` keys, then
+applies term rules unless the term is protected. A rule first checks
+`min_term_length` and `pattern`, strips an optional literal prefix and suffix,
+appends optional literal text, applies optional flags, and keeps the result only
+when it reaches `min_key_length` and the normal 255-byte key limit. Supported
+flags are `trim_doubled_final_consonant`, `require_vowel`, and
+`append_e_if_cvc`. These flags are deliberately ASCII-oriented foundation
+helpers; language-specific broad stemming still needs reviewed rules and
+relevance tests.
+
+`protected_terms.txt` stores one normalized lowercase term per line. Protected
+terms still receive exact and lexeme keys, but skip `term_rules.tsv`; use this
+for words where a broad generic rule would produce misleading keys.
+
 ## Validation And Admin Status
 
 Run the pack validator before committing generated resources:
@@ -147,7 +176,8 @@ The validator reports, per language:
 - `pack.php` source name, source URL, license, version/date, data kind, and provenance,
 - whether every runtime file listed in `pack.php` exists,
 - stopword rows, lexeme rows, pairwise synonym rows/expansions, synset rows,
-  concept-derived expansions, phrase synonym rows, and phrase synonym expansions,
+  concept-derived expansions, phrase synonym rows, phrase synonym expansions,
+  term rule rows, and protected term rows,
 - max synset size and max unique expansion fanout for any one term,
 - warnings for invalid metadata, missing files, malformed rows, duplicate rows, and broad synsets.
 
@@ -162,7 +192,8 @@ results down.
 The WordPress admin page at `Tools -> Language FTS` includes a compact
 Lexical pack status table with the language, `curated_seed` or
 `imported_comprehensive` data kind, source, license, version/date, lexeme/
-synset/expansion counts, warnings, and the effective local resource root.
+synset/term-rule/expansion counts, warnings, and the effective local resource
+root.
 Read that table as a provenance and quality signal: current shipped packs are
 `curated_seed` demo data, not comprehensive WordNet, OpenThesaurus, or
 plWordNet databases.

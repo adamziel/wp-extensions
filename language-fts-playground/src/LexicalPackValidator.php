@@ -125,6 +125,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 'concept_expansions' => 0,
                 'phrase_synonym_rows' => 0,
                 'phrase_synonym_expansions' => 0,
+                'term_rule_rows' => 0,
+                'protected_term_rows' => 0,
             ],
             'max_synset_size' => 0,
             'max_expansion_fanout' => 0,
@@ -211,6 +213,12 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $phrase_synonyms = $this->validate_synonym_phrases($resource_paths['synonym_phrases'], $warnings, $expansion_targets);
             $status['counts']['phrase_synonym_rows'] = $phrase_synonyms['rows'];
             $status['counts']['phrase_synonym_expansions'] = $phrase_synonyms['expansions'];
+        }
+        if (isset($resource_paths['term_rules'])) {
+            $status['counts']['term_rule_rows'] = $this->validate_term_rules($resource_paths['term_rules'], $warnings);
+        }
+        if (isset($resource_paths['protected_terms'])) {
+            $status['counts']['protected_term_rows'] = $this->validate_protected_terms($resource_paths['protected_terms'], $warnings);
         }
 
         $status['max_expansion_fanout'] = $this->max_expansion_fanout($expansion_targets);
@@ -369,7 +377,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             }
         }
 
-        foreach (['synsets', 'synonym_phrases'] as $optional_key) {
+        foreach (['synsets', 'synonym_phrases', 'term_rules', 'protected_terms'] as $optional_key) {
             $path = $this->resolve_resource_path($directory, $resources, $optional_key, $profile_file, $warnings, false);
             if ($path !== null) {
                 $paths[$optional_key] = $path;
@@ -482,6 +490,189 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         }
 
         return $count;
+    }
+
+    private function validate_protected_terms(string $path, array &$warnings): int
+    {
+        $count = 0;
+        $seen = [];
+        foreach ($this->resource_lines($path, $warnings) as $line_number => $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+
+            $term = $this->resource_token($trimmed, $path, $line_number + 1, 'protected term', $warnings);
+            if ($term === null) {
+                continue;
+            }
+
+            $lowercase = function_exists('mb_strtolower') ? mb_strtolower($term, 'UTF-8') : strtolower($term);
+            if ($term !== $lowercase) {
+                $warnings[] = $this->resource_error($path, $line_number + 1, 'protected terms must be normalized lowercase resource tokens');
+                continue;
+            }
+
+            $count++;
+            if (isset($seen[$term])) {
+                $warnings[] = $this->resource_error($path, $line_number + 1, 'duplicate protected term');
+            }
+            $seen[$term] = true;
+        }
+
+        return $count;
+    }
+
+    private function validate_term_rules(string $path, array &$warnings): int
+    {
+        $count = 0;
+        $seen_ids = [];
+        foreach ($this->resource_lines($path, $warnings) as $line_number => $line) {
+            $trimmed = trim($line);
+            if ($trimmed === '' || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+
+            $line_number++;
+            $columns = explode("\t", $line);
+            if (count($columns) !== 9) {
+                $warnings[] = $this->resource_error($path, $line_number, 'term rule rows must have exactly 9 tab-separated columns');
+                continue;
+            }
+
+            $id = $this->validate_term_rule_row($columns, $path, $line_number, $warnings);
+            if ($id === null) {
+                continue;
+            }
+
+            $count++;
+            if (isset($seen_ids[$id])) {
+                $warnings[] = $this->resource_error($path, $line_number, 'duplicate term rule id');
+            }
+            $seen_ids[$id] = true;
+        }
+
+        return $count;
+    }
+
+    /**
+     * @param string[] $columns
+     */
+    private function validate_term_rule_row(array $columns, string $path, int $line_number, array &$warnings): string|null
+    {
+        $id = $this->term_rule_id($columns[0], $path, $line_number, $warnings);
+        $valid = $id !== null;
+
+        if ($this->term_rule_positive_integer($columns[1], $path, $line_number, 'min_term_length', $warnings) === null) {
+            $valid = false;
+        }
+
+        if (!$this->term_rule_regex_is_valid($columns[2], $path, $line_number, $warnings)) {
+            $valid = false;
+        }
+
+        if (trim($columns[3]) === '' && trim($columns[4]) === '' && trim($columns[5]) === '') {
+            $warnings[] = $this->resource_error($path, $line_number, 'term rule must strip a prefix, strip a suffix, or append text');
+            $valid = false;
+        }
+
+        if ($this->term_rule_positive_integer($columns[6], $path, $line_number, 'min_key_length', $warnings) === null) {
+            $valid = false;
+        }
+
+        if (!$this->term_rule_flags_are_valid($columns[7], ['trim_doubled_final_consonant', 'require_vowel', 'append_e_if_cvc'], $path, $line_number, $warnings, 'term rule flag must be trim_doubled_final_consonant, require_vowel, or append_e_if_cvc')) {
+            $valid = false;
+        }
+
+        if ($this->term_rule_provenance($columns[8], $path, $line_number, $warnings) === null) {
+            $valid = false;
+        }
+
+        return $valid ? $id : null;
+    }
+
+    private function term_rule_id(string $value, string $path, int $line_number, array &$warnings): string|null
+    {
+        $id = trim($value);
+        if ($id === '') {
+            $warnings[] = $this->resource_error($path, $line_number, 'term rule id must be non-empty');
+
+            return null;
+        }
+
+        return $id;
+    }
+
+    private function term_rule_provenance(string $value, string $path, int $line_number, array &$warnings): string|null
+    {
+        $provenance = trim($value);
+        if ($provenance === '') {
+            $warnings[] = $this->resource_error($path, $line_number, 'term rule provenance must be non-empty');
+
+            return null;
+        }
+
+        return $provenance;
+    }
+
+    private function term_rule_positive_integer(string $value, string $path, int $line_number, string $label, array &$warnings): int|null
+    {
+        $value = trim($value);
+        if (preg_match('/^[1-9][0-9]*$/', $value) !== 1) {
+            $warnings[] = $this->resource_error($path, $line_number, "term rule {$label} must be a positive integer");
+
+            return null;
+        }
+
+        return (int) $value;
+    }
+
+    private function term_rule_regex_is_valid(string $value, string $path, int $line_number, array &$warnings): bool
+    {
+        $pattern = trim($value);
+        if ($pattern === '' || @preg_match($pattern, '') === false) {
+            $warnings[] = $this->resource_error($path, $line_number, 'term rule regex must be valid');
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param string[] $allowed
+     */
+    private function term_rule_flags_are_valid(
+        string $value,
+        array $allowed,
+        string $path,
+        int $line_number,
+        array &$warnings,
+        string $message,
+        bool $require_one = false
+    ): bool {
+        $value = trim($value);
+        if ($value === '') {
+            if ($require_one) {
+                $warnings[] = $this->resource_error($path, $line_number, $message);
+
+                return false;
+            }
+
+            return true;
+        }
+
+        $allowed_lookup = array_fill_keys($allowed, true);
+        foreach (explode(',', $value) as $flag) {
+            $flag = trim($flag);
+            if ($flag === '' || !isset($allowed_lookup[$flag])) {
+                $warnings[] = $this->resource_error($path, $line_number, $message);
+
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

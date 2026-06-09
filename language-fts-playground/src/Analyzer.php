@@ -502,9 +502,16 @@ final class Language_FTS_Playground_Analyzer
      */
     private function term_keys(string $term, string $language): array
     {
+        $profile = $this->profiles->profile($language);
         $keys = [$term];
-        foreach ($this->profiles->profile($language)['lexemes'][$term] ?? [] as $key) {
+        foreach ($profile['lexemes'][$term] ?? [] as $key) {
             $keys[] = $key;
+        }
+
+        if (!isset($profile['protected_terms'][$term])) {
+            foreach ($this->resource_term_rule_keys($term, $profile['term_rules'] ?? []) as $key) {
+                $keys[] = $key;
+            }
         }
 
         if ($language === 'pl') {
@@ -521,7 +528,102 @@ final class Language_FTS_Playground_Analyzer
             }
         }
 
-        return array_values(array_unique($keys));
+        $unique = [];
+        foreach ($keys as $key) {
+            $key = (string) $key;
+            if ($key !== '' && strlen($key) <= 255) {
+                $unique[$key] = $key;
+            }
+        }
+
+        return array_values($unique);
+    }
+
+    /**
+     * @param array<int,array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string}> $rules
+     * @return string[]
+     */
+    private function resource_term_rule_keys(string $term, array $rules): array
+    {
+        if ($rules === []) {
+            return [];
+        }
+
+        $keys = [];
+        foreach ($rules as $rule) {
+            if (strlen($term) < (int) ($rule['min_term_length'] ?? 1)) {
+                continue;
+            }
+
+            $pattern = (string) ($rule['pattern'] ?? '');
+            if ($pattern === '' || preg_match($pattern, $term) !== 1) {
+                continue;
+            }
+
+            $key = $this->resource_strip_append_term_key($term, $rule);
+
+            if ($key === null || $key === '' || strlen($key) < (int) ($rule['min_key_length'] ?? 1)) {
+                continue;
+            }
+
+            $keys[] = $key;
+        }
+
+        return $keys;
+    }
+
+    /**
+     * @param array{id:string,format:string,min_term_length:int,pattern:string,strip_prefix:string,strip_suffix:string,append:string,min_key_length:int,flags:string[],provenance:string} $rule
+     */
+    private function resource_strip_append_term_key(string $term, array $rule): string|null
+    {
+        $key = $term;
+        $strip_prefix = (string) ($rule['strip_prefix'] ?? '');
+        if ($strip_prefix !== '') {
+            if (!str_starts_with($key, $strip_prefix)) {
+                return null;
+            }
+            $key = substr($key, strlen($strip_prefix));
+        }
+
+        $strip_suffix = (string) ($rule['strip_suffix'] ?? '');
+        if ($strip_suffix !== '') {
+            if (!str_ends_with($key, $strip_suffix)) {
+                return null;
+            }
+            $key = substr($key, 0, -strlen($strip_suffix));
+        }
+
+        $key .= (string) ($rule['append'] ?? '');
+
+        $flags = array_fill_keys(array_map('strval', (array) ($rule['flags'] ?? [])), true);
+        if (isset($flags['trim_doubled_final_consonant'])) {
+            $key = $this->trim_doubled_final_consonant($key);
+        }
+
+        if (isset($flags['append_e_if_cvc']) && $this->is_english_cvc($key)) {
+            $key .= 'e';
+        }
+
+        if (isset($flags['require_vowel']) && !$this->contains_ascii_vowel($key)) {
+            return null;
+        }
+
+        return $key;
+    }
+
+    private function trim_doubled_final_consonant(string $term): string
+    {
+        if (preg_match('/([bcdfghjklmnpqrstvwxyz])\1$/', $term) !== 1) {
+            return $term;
+        }
+
+        return substr($term, 0, -1);
+    }
+
+    private function contains_ascii_vowel(string $term): bool
+    {
+        return preg_match('/[aeiou]/', $term) === 1;
     }
 
     /**
