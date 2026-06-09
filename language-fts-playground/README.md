@@ -1,6 +1,13 @@
 # Language FTS Playground
 
+Stable demo:
+
 [![Try it in WordPress Playground](https://playground.wordpress.net/badge.svg)](https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/language-fts-playground/playground/blueprint.json)
+
+The badge always launches the `main` branch Blueprint. Use it for the published
+demo only. For branch QA, use a local Playground mount or a temporary branch
+Blueprint whose `installPlugin.pluginData.ref` points at the branch being
+tested.
 
 Language FTS Playground is a small WordPress plugin that demonstrates
 language-partitioned full-text search in WordPress Playground. It works with
@@ -337,15 +344,33 @@ synonym-only matches.
 
 ## Playground Blueprint
 
-Open the browser demo:
+Open the stable browser demo:
 
 ```text
 https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/language-fts-playground/playground/blueprint.json
 ```
 
-The Blueprint installs this monorepo subdirectory with `installPlugin` using
-`git:directory`, activates the plugin, seeds demo posts, rebuilds the PHP index,
-and lands on the admin search page.
+The stable Blueprint installs this monorepo subdirectory from `main` with
+`installPlugin` using `git:directory`, activates the plugin, seeds demo posts,
+rebuilds the PHP index, and lands on the admin search page.
+
+For branch QA, do not use the stable badge unless the change has already landed
+on `main`. Run the current checkout locally instead:
+
+```sh
+npx --yes @wp-playground/cli@latest server \
+  --login \
+  --mount=./language-fts-playground:/wordpress/wp-content/plugins/language-fts-playground
+```
+
+Then activate `Language FTS Playground` in `/wp-admin/plugins.php` and open
+`Tools -> Language FTS`.
+
+If you need a shareable branch QA link after pushing a branch, create a
+temporary copy of `playground/blueprint.json`, change
+`steps[0].pluginData.ref` from `main` to that branch name, and publish the
+branch-specific Blueprint URL. Keep the public badge pointed at the stable
+`main` Blueprint.
 
 ## Development Checks
 

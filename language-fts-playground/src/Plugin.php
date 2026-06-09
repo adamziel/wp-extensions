@@ -421,6 +421,7 @@ final class Language_FTS_Playground_Plugin
     public static function handle_clear_action(): void
     {
         self::verify_admin_action('language_fts_playground_clear_index');
+        self::verify_clear_index_confirmation();
         try {
             self::clear_index();
         } catch (Throwable $throwable) {
@@ -482,9 +483,6 @@ final class Language_FTS_Playground_Plugin
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('Language FTS Playground', 'language-fts-playground') . '</h1>';
         self::render_notice($runtime_errors);
-        self::render_actions();
-        self::render_index_status($documents, self::index_status());
-        self::render_lexical_pack_status();
         self::render_search_form($query, $language, $language_options, $search_error);
         if ($search_error === null) {
             self::render_sample_searches();
@@ -493,6 +491,9 @@ final class Language_FTS_Playground_Plugin
         } else {
             self::render_search_unavailable($search_error);
         }
+        self::render_actions();
+        self::render_index_status($documents, self::index_status());
+        self::render_lexical_pack_status();
         self::render_documents($documents);
         echo '</div>';
     }
@@ -538,17 +539,24 @@ final class Language_FTS_Playground_Plugin
             admin_url('admin-post.php?action=language_fts_playground_process_queue'),
             'language_fts_playground_process_queue'
         );
-        $clear_url = wp_nonce_url(
-            admin_url('admin-post.php?action=language_fts_playground_clear_index'),
-            'language_fts_playground_clear_index'
-        );
+        $clear_confirmation = __('Clear the Language FTS index and queue? Searches may return no results until you rebuild or seed demo posts.', 'language-fts-playground');
+        $clear_confirmation_json = json_encode($clear_confirmation, JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE);
+        if (!is_string($clear_confirmation_json)) {
+            $clear_confirmation_json = '"Clear the Language FTS index and queue?"';
+        }
 
-        echo '<p>';
+        echo '<h2>' . esc_html__('Maintenance', 'language-fts-playground') . '</h2>';
+        echo '<div style="margin:1em 0;">';
         echo '<a class="button button-primary" href="' . esc_url($seed_url) . '">' . esc_html__('Seed demo posts', 'language-fts-playground') . '</a> ';
         echo '<a class="button" href="' . esc_url($rebuild_url) . '">' . esc_html__('Rebuild index', 'language-fts-playground') . '</a> ';
         echo '<a class="button" href="' . esc_url($process_url) . '">' . esc_html__('Process queue', 'language-fts-playground') . '</a> ';
-        echo '<a class="button" href="' . esc_url($clear_url) . '">' . esc_html__('Clear index', 'language-fts-playground') . '</a>';
-        echo '</p>';
+        echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" style="display:inline-block;margin:0 0 0 0.5em;" onsubmit="' . esc_attr('return confirm(' . $clear_confirmation_json . ');') . '">';
+        echo '<input type="hidden" name="action" value="language_fts_playground_clear_index" />';
+        echo '<input type="hidden" name="_wpnonce" value="' . esc_attr(wp_create_nonce('language_fts_playground_clear_index')) . '" />';
+        echo '<input type="hidden" name="language_fts_playground_confirm_clear" value="1" />';
+        echo '<button type="submit" class="button button-link-delete">' . esc_html__('Clear index and queue', 'language-fts-playground') . '</button>';
+        echo '</form>';
+        echo '</div>';
     }
 
     /**
@@ -565,7 +573,10 @@ final class Language_FTS_Playground_Plugin
             ? (string) $status['last_error']
             : '';
 
-        echo '<h2>' . esc_html__('Index status', 'language-fts-playground') . '</h2>';
+        $open_attribute = (self::rebuild_required() || $last_error !== '') ? ' open' : '';
+
+        echo '<details style="margin-top:1em;"' . $open_attribute . '>';
+        echo '<summary><strong>' . esc_html__('Index status', 'language-fts-playground') . '</strong></summary>';
         echo '<table class="widefat striped" style="max-width:720px;"><tbody>';
         echo '<tr><th scope="row">' . esc_html__('Indexed documents', 'language-fts-playground') . '</th><td>' . esc_html((string) count($documents)) . ' <span class="description">(' . esc_html($language_counts) . ')</span></td></tr>';
         echo '<tr><th scope="row">' . esc_html__('Queued posts', 'language-fts-playground') . '</th><td>' . esc_html((string) self::queued_count()) . '</td></tr>';
@@ -575,20 +586,24 @@ final class Language_FTS_Playground_Plugin
             echo '<tr><th scope="row">' . esc_html__('Last error', 'language-fts-playground') . '</th><td>' . esc_html($last_error) . '</td></tr>';
         }
         echo '</tbody></table>';
+        echo '</details>';
     }
 
     private static function render_lexical_pack_status(): void
     {
-        echo '<h2>' . esc_html__('Lexical pack status', 'language-fts-playground') . '</h2>';
-
         try {
             $resource_root = self::lexical_resource_root();
-            echo '<p>' . esc_html__('Resource root:', 'language-fts-playground') . ' <code>' . esc_html($resource_root) . '</code></p>';
-
             require_once __DIR__ . '/LexicalPackValidator.php';
             $report = (new Language_FTS_Playground_Lexical_Pack_Validator($resource_root))->validate_all();
+
+            echo '<details style="margin-top:1em;">';
+            echo '<summary><strong>' . esc_html__('Lexical pack status', 'language-fts-playground') . '</strong></summary>';
+            echo '<p>' . esc_html__('Resource root:', 'language-fts-playground') . ' <code>' . esc_html($resource_root) . '</code></p>';
         } catch (Throwable $throwable) {
+            echo '<details style="margin-top:1em;" open>';
+            echo '<summary><strong>' . esc_html__('Lexical pack status', 'language-fts-playground') . '</strong></summary>';
             echo '<p>' . esc_html(sprintf(__('Could not validate lexical packs: %s', 'language-fts-playground'), $throwable->getMessage())) . '</p>';
+            echo '</details>';
 
             return;
         }
@@ -600,6 +615,7 @@ final class Language_FTS_Playground_Plugin
         $languages = isset($report['languages']) && is_array($report['languages']) ? $report['languages'] : [];
         if ($languages === []) {
             echo '<p>' . esc_html__('No lexical resource packs were found.', 'language-fts-playground') . '</p>';
+            echo '</details>';
 
             return;
         }
@@ -651,6 +667,7 @@ final class Language_FTS_Playground_Plugin
         }
 
         echo '</tbody></table>';
+        echo '</details>';
     }
 
     /**
@@ -725,7 +742,7 @@ final class Language_FTS_Playground_Plugin
         echo '<table class="widefat striped"><thead><tr>';
         echo '<th>' . esc_html__('Post', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Score', 'language-fts-playground') . '</th>';
-        echo '<th>' . esc_html__('Language', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Matched language', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Snippet', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Matched fields', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Matched terms', 'language-fts-playground') . '</th>';
@@ -1290,6 +1307,20 @@ final class Language_FTS_Playground_Plugin
             wp_die(esc_html__('You do not have permission to run this action.', 'language-fts-playground'));
         }
         check_admin_referer($nonce_action);
+    }
+
+    private static function verify_clear_index_confirmation(): void
+    {
+        if (strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) !== 'POST') {
+            wp_die(esc_html__('Clear index requires confirmation from the admin page.', 'language-fts-playground'));
+        }
+
+        $confirmed = isset($_POST['language_fts_playground_confirm_clear'])
+            ? sanitize_key((string) wp_unslash((string) $_POST['language_fts_playground_confirm_clear']))
+            : '';
+        if ($confirmed !== '1') {
+            wp_die(esc_html__('Clear index requires confirmation from the admin page.', 'language-fts-playground'));
+        }
     }
 
     private static function redirect_admin_page(string $status): void

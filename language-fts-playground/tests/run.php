@@ -795,6 +795,13 @@ if (!function_exists('wp_nonce_url')) {
     }
 }
 
+if (!function_exists('wp_create_nonce')) {
+    function wp_create_nonce(string $action): string
+    {
+        return $action;
+    }
+}
+
 if (!function_exists('add_query_arg')) {
     function add_query_arg(array $args, string $url): string
     {
@@ -4875,7 +4882,10 @@ test_case('renders admin lifecycle controls and protects destructive actions', f
 
     assert_contains_text('Queued posts', $html, 'Admin status shows queued count.');
     assert_contains_text('Process queue', $html, 'Admin page exposes manual queue processing.');
-    assert_contains_text('Clear index', $html, 'Admin page exposes a clear-index control.');
+    assert_contains_text('method="post" action="/wp-admin/admin-post.php"', $html, 'Admin clear-index control uses a POST form.');
+    assert_contains_text('language_fts_playground_confirm_clear" value="1"', $html, 'Admin clear-index control carries an explicit confirmation field.');
+    assert_contains_text('return confirm(', $html, 'Admin clear-index control asks for browser confirmation.');
+    assert_contains_text('Clear index and queue', $html, 'Admin page exposes a clearly destructive clear-index control.');
     assert_contains_text('Rebuild index', $html, 'Admin page keeps a rebuild control.');
 
     $GLOBALS['language_fts_test_current_user_can'] = false;
@@ -4886,6 +4896,17 @@ test_case('renders admin lifecycle controls and protects destructive actions', f
     }
 
     assert_same(0, $storage->clear_count, 'Clear index does not run without the required capability.');
+
+    $GLOBALS['language_fts_test_current_user_can'] = true;
+    $_SERVER['REQUEST_METHOD'] = 'GET';
+    $_POST = [];
+    try {
+        Language_FTS_Playground_Plugin::handle_clear_action();
+    } catch (RuntimeException $exception) {
+        assert_contains_text('confirmation', strtolower($exception->getMessage()), 'Clear index requires explicit admin confirmation.');
+    }
+
+    assert_same(0, $storage->clear_count, 'Clear index does not run without the confirmation POST.');
 });
 
 test_case('admin search form defaults to automatic language mode', function (): void {
@@ -4897,6 +4918,20 @@ test_case('admin search form defaults to automatic language mode', function (): 
 
     assert_contains_text('<option value="auto" selected="selected">Automatic</option>', $html, 'The admin language selector defaults to Automatic.');
     assert_not_contains_text('<option value="en" selected="selected">English</option>', $html, 'The admin language selector no longer defaults to English.');
+    $search_position = strpos($html, 'Search results');
+    $maintenance_position = strpos($html, 'Maintenance');
+    $index_position = strpos($html, 'Index status');
+    $lexical_position = strpos($html, 'Lexical pack status');
+    assert_true(
+        $search_position !== false
+            && $maintenance_position !== false
+            && $index_position !== false
+            && $lexical_position !== false
+            && $search_position < $maintenance_position
+            && $search_position < $index_position
+            && $search_position < $lexical_position,
+        'The admin page prioritizes search results before maintenance and status sections.'
+    );
 });
 
 test_case('admin page renders lexical pack status safely as curated seed data', function (): void {
@@ -4957,7 +4992,7 @@ test_case('admin automatic results show matched language partition', function ()
     $html = ob_get_clean();
 
     assert_contains_text('<option value="auto" selected="selected">Automatic</option>', $html, 'Automatic remains selected after an auto search.');
-    assert_contains_text('<th>Language</th>', $html, 'Admin search results include a matched-language column.');
+    assert_contains_text('<th>Matched language</th>', $html, 'Admin search results include a clearly labeled matched-language column.');
     assert_contains_text('<td><code>pl</code></td><td><mark>wyszukiwania</mark>', $html, 'Auto results show the Polish partition next to the highlighted synonym match.');
 });
 
