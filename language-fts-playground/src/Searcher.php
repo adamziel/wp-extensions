@@ -24,6 +24,7 @@ final class Language_FTS_Playground_Searcher
     private const AUTO_LANGUAGE_MIN_LEAD = 1.5;
     private const AUTO_LANGUAGE_MIN_RATIO = 1.35;
     private const AUTO_LANGUAGE_MAX_PARTITIONS = 5;
+    private const AUTO_ROUTING_PRIOR_RANK_WEIGHT = 0.000001;
 
     public function __construct(
         private Language_FTS_Playground_Storage_Interface $storage,
@@ -50,6 +51,7 @@ final class Language_FTS_Playground_Searcher
                 $results[] = $result;
             }
         }
+        $results = $this->annotate_auto_ranking_diagnostics($results, $routing);
 
         return $this->finalize_results($results, $limit);
     }
@@ -73,6 +75,7 @@ final class Language_FTS_Playground_Searcher
             }
             $partitions[] = $evaluation['diagnostics'];
         }
+        $results = $this->annotate_auto_ranking_diagnostics($results, $routing);
 
         $ranked_results = $this->rank_results($results, $limit);
         $explain_results = [];
@@ -609,12 +612,96 @@ final class Language_FTS_Playground_Searcher
                 $result['_exact_match_count'],
                 $result['_has_lower_priority_match'],
                 $result['_match_classes'],
-                $result['_score_breakdown']
+                $result['_score_breakdown'],
+                $result['raw_score'],
+                $result['normalized_score'],
+                $result['rank_score'],
+                $result['routing_prior'],
+                $result['partition_max_score']
             );
         }
         unset($result);
 
         return $results;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $results
+     * @param array<string,mixed> $routing
+     * @return array<int,array<string,mixed>>
+     */
+    private function annotate_auto_ranking_diagnostics(array $results, array $routing): array
+    {
+        if ($results === [] || (string) ($routing['resolved_language'] ?? '') !== 'auto') {
+            return $results;
+        }
+
+        $partition_max_scores = [];
+        foreach ($results as $result) {
+            $language = (string) ($result['matched_language'] ?? '');
+            if ($language === '') {
+                continue;
+            }
+
+            $raw_score = (float) ($result['score'] ?? 0.0);
+            if (!isset($partition_max_scores[$language]) || $raw_score > $partition_max_scores[$language]) {
+                $partition_max_scores[$language] = $raw_score;
+            }
+        }
+
+        $routing_priors = $this->routing_priors_by_language((array) ($routing['ranked_candidates'] ?? []));
+        foreach ($results as &$result) {
+            $language = (string) ($result['matched_language'] ?? '');
+            $raw_score = (float) ($result['score'] ?? 0.0);
+            $partition_max_score = (float) ($partition_max_scores[$language] ?? 0.0);
+            $normalized_score = $partition_max_score > 0.0
+                ? max(0.0, min(1.0, $raw_score / $partition_max_score))
+                : 0.0;
+            $routing_prior = (float) ($routing_priors[$language] ?? 0.0);
+
+            $result['raw_score'] = $raw_score;
+            $result['partition_max_score'] = $partition_max_score;
+            $result['normalized_score'] = $normalized_score;
+            $result['routing_prior'] = $routing_prior;
+            $result['rank_score'] = $normalized_score + ($routing_prior * self::AUTO_ROUTING_PRIOR_RANK_WEIGHT);
+        }
+        unset($result);
+
+        return $results;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $ranked_candidates
+     * @return array<string,float>
+     */
+    private function routing_priors_by_language(array $ranked_candidates): array
+    {
+        $scores = [];
+        $max_score = 0.0;
+        foreach ($ranked_candidates as $candidate) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $language = (string) ($candidate['language'] ?? '');
+            if ($language === '') {
+                continue;
+            }
+
+            $score = max(0.0, (float) ($candidate['score'] ?? 0.0));
+            $scores[$language] = max((float) ($scores[$language] ?? 0.0), $score);
+            $max_score = max($max_score, $scores[$language]);
+        }
+
+        if ($max_score <= 0.0) {
+            return [];
+        }
+
+        foreach ($scores as $language => $score) {
+            $scores[$language] = $score / $max_score;
+        }
+
+        return $scores;
     }
 
     /**
@@ -667,7 +754,23 @@ final class Language_FTS_Playground_Searcher
                 ? $result['_score_breakdown']
                 : $this->empty_score_breakdown(),
             'snippet' => (string) ($result['snippet'] ?? ''),
-        ];
+        ] + $this->explain_auto_ranking_diagnostics($result);
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return array<string,float>
+     */
+    private function explain_auto_ranking_diagnostics(array $result): array
+    {
+        $diagnostics = [];
+        foreach (['raw_score', 'normalized_score', 'rank_score', 'routing_prior', 'partition_max_score'] as $field) {
+            if (array_key_exists($field, $result)) {
+                $diagnostics[$field] = (float) $result[$field];
+            }
+        }
+
+        return $diagnostics;
     }
 
     /**

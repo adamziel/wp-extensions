@@ -3647,6 +3647,78 @@ test_case('automatic search falls back when custom profile evidence is ambiguous
     }
 });
 
+test_case('explain reports normalized auto ranking signals across partitions', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'qa' => [
+            'order' => 10,
+        ],
+        'qb' => [
+            'order' => 20,
+        ],
+    ]);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(307, 'qa', 'QA normalized diagnostic target', '<p>sharedterm appears in QA.</p>'));
+        $indexer->index_post(fixture_post(308, 'qb', 'QB normalized diagnostic target', '<p>sharedterm appears in QB.</p>'));
+
+        $explain = $searcher->explain('sharedterm', 'auto');
+        $selected_partitions = array_values(array_map('strval', (array) ($explain['language_routing']['selected_partitions'] ?? [])));
+        $evaluated_partitions = array_values(array_map(
+            static fn(array $partition): string => (string) ($partition['language'] ?? ''),
+            array_filter((array) ($explain['partitions'] ?? []), 'is_array')
+        ));
+
+        assert_true(
+            count($selected_partitions) > 1,
+            'Automatic explain selects more than one partition for no-evidence custom profiles.' .
+            "\nSelected partitions: " . var_export($selected_partitions, true)
+        );
+        assert_true(
+            count($evaluated_partitions) > 1,
+            'Automatic explain evaluates more than one selected partition.' .
+            "\nEvaluated partitions: " . var_export($evaluated_partitions, true)
+        );
+
+        $result_languages = array_values(array_map('strval', array_column((array) ($explain['results'] ?? []), 'matched_language')));
+        sort($result_languages, SORT_STRING);
+        assert_same(['qa', 'qb'], $result_languages, 'Each fake language contributes one sharedterm explain result.');
+
+        $required_fields = [
+            'raw_score',
+            'normalized_score',
+            'rank_score',
+            'routing_prior',
+            'partition_max_score',
+        ];
+        $missing_fields_by_result = [];
+        foreach ((array) ($explain['results'] ?? []) as $result) {
+            if (!is_array($result)) {
+                continue;
+            }
+
+            $result_key = (string) ($result['matched_language'] ?? 'unknown') . '#' . (string) ($result['post_id'] ?? '0');
+            foreach ($required_fields as $field) {
+                if (!array_key_exists($field, $result)) {
+                    $missing_fields_by_result[$result_key][] = $field;
+                }
+            }
+        }
+
+        assert_same(
+            [],
+            $missing_fields_by_result,
+            'Explain auto results should expose normalized ranking diagnostics for every partition result.'
+        );
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('ranks higher term frequency first', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
