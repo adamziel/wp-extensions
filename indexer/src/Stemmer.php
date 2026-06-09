@@ -186,22 +186,24 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
 }
 
 /**
- * Conservative Polish suffix stemmer used until a fuller lemmatizer is present.
+ * Polish stemmer with stable conservative and opt-in verified modes.
  *
- * The implementation is intentionally small and only removes suffixes when the
- * remaining stem stays at least three characters long.
+ * The default conservative mode preserves the historical suffix-only behavior.
+ * The `verified` mode first consults a compact fixture slice and then falls
+ * back to the same conservative suffix path for unknown, unprotected terms.
  */
 final class WP_FTS_PolishStemmer implements WP_FTS_Stemmer
 {
     private string $mode;
 
     /**
-     * @param string $mode `conservative` enables the suffix list; `none`
-     *        disables Polish stemming while preserving the adapter object.
+     * @param string $mode `conservative` enables the suffix list, `verified`
+     *        enables the fixture-backed slice plus conservative fallback, and
+     *        `none` disables Polish stemming while preserving the adapter.
      */
     public function __construct(string $mode = 'conservative')
     {
-        $this->mode = $mode;
+        $this->mode = $this->normalize_mode($mode);
     }
 
     /**
@@ -209,7 +211,7 @@ final class WP_FTS_PolishStemmer implements WP_FTS_Stemmer
      *
      * @param string $term Normalized term text.
      * @param string $language Canonical or locale-style language tag.
-     * @return string Conservatively stemmed term or original term.
+     * @return string Stemmed term or original term.
      */
     public function stem(string $term, string $language): string
     {
@@ -217,15 +219,58 @@ final class WP_FTS_PolishStemmer implements WP_FTS_Stemmer
             return $term;
         }
 
+        if ($this->mode === 'verified') {
+            return $this->verified_stem($term);
+        }
+
         return $this->conservative_suffix_stem($term);
+    }
+
+    /**
+     * Return a stable descriptor for analyzer/index stale-document checks.
+     */
+    public function index_signature(): string
+    {
+        $version = $this->mode === 'verified'
+            ? ':' . WP_FTS_PolishVerifiedStemmerData::VERSION
+            : '';
+
+        return 'wp-fts-polish-stemmer:' . $this->mode . $version;
+    }
+
+    /**
+     * Normalize unknown mode strings to the historical conservative behavior.
+     */
+    private function normalize_mode(string $mode): string
+    {
+        $mode = strtolower(trim($mode));
+
+        return in_array($mode, ['conservative', 'verified', 'none'], true)
+            ? $mode
+            : 'conservative';
+    }
+
+    /**
+     * Use the verified fixture slice, then fall back conservatively.
+     *
+     * Protected rows are checked before the stem map so ambiguous forms remain
+     * no-ops if future fixture slices add nearby paradigms.
+     */
+    private function verified_stem(string $term): string
+    {
+        if (isset(WP_FTS_PolishVerifiedStemmerData::protected_term_map()[$term])) {
+            return $term;
+        }
+
+        return WP_FTS_PolishVerifiedStemmerData::stem_map()[$term]
+            ?? $this->conservative_suffix_stem($term);
     }
 
     /**
      * Remove one known suffix only when the remaining stem stays meaningful.
      *
-     * Stopgap only. A Stempel port or Morfologik-backed lemmatizer should
-     * replace this for serious Polish relevance once those data files are
-     * available.
+     * Stopgap only. The verified mode above is still a fixture-backed stemmer
+     * slice, not a replacement for a full Stempel or Morfologik lemmatizer.
      *
      * @param string $term Normalized Polish term.
      * @return string Term with one conservative suffix removed, or original.

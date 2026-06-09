@@ -458,6 +458,10 @@ final class WP_FTS_LanguagePipeline
      */
     private function buildIndexSignature(array $options, mixed $tokenizer): string
     {
+        $polishMode = strtolower(trim((string) ($options['polish_stemming'] ?? 'conservative')));
+        if (!in_array($polishMode, ['conservative', 'verified', 'none'], true)) {
+            $polishMode = 'conservative';
+        }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
             'version' => 2,
@@ -466,7 +470,7 @@ final class WP_FTS_LanguagePipeline
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
             'namespace_terms' => $this->namespaceTerms,
             'enable_stemming' => $this->enableStemming,
-            'polish_stemming' => (string) ($options['polish_stemming'] ?? 'conservative'),
+            'polish_stemming' => $polishMode,
             'stemmer' => $this->componentSignature($options['stemmer'] ?? null),
             'stemmers_by_lang' => $this->stemmersByLanguageSignature($options['stemmers_by_lang'] ?? $options['stemmers'] ?? []),
             'cjk_tokenizer' => $this->componentSignature($tokenizer),
@@ -476,6 +480,10 @@ final class WP_FTS_LanguagePipeline
             'snowball_stemmer' => $this->componentSignature($options['snowball_stemmer'] ?? null),
             'polish_stemmer' => $this->componentSignature($options['polish_stemmer'] ?? null),
         ];
+
+        if ($polishMode === 'verified') {
+            $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
+        }
 
         return 'wp-fts-language-pipeline-v2:' . sha1($this->stableJson($payload));
     }

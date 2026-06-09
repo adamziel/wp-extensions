@@ -106,6 +106,9 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
   a plugin archive and how Composer dependencies are handled.
 - [Snowball compliance](docs/snowball-compliance.md) explains the dedicated
   Snowball fixture harness.
+- [Polish verified stemmer](docs/polish-verified-stemmer.md) explains the
+  opt-in fixture-backed Polish stemmer slice and how it differs from
+  dictionary lemmatization.
 
 ## Current Caveats
 

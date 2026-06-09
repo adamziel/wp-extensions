@@ -30,6 +30,18 @@ php -n tests/run.php
 
 This verifies the fallback paths used when optional extensions are missing.
 
+## Polish Verified Stemmer Fixtures
+
+The opt-in Polish verified stemmer slice has a standalone fixture validator:
+
+```sh
+php tests/polish-verified-stemmer-fixtures.php
+php -n tests/polish-verified-stemmer-fixtures.php
+```
+
+The same fixture rows are also covered by `tests/run.php` through
+`tests/quality/polish-verified-stemmer.php`.
+
 ## Explicit Check Gate
 
 The integrated quality harness is expected to meet at least 1500 checks:

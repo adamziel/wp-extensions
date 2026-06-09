@@ -2470,11 +2470,19 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     ]);
     assert_same(['kot'], $pipeline->analyze('kotami', 'pl'), 'Polish conservative suffix strategy should be available');
     assert_same(['wroclaw'], $pipeline->analyze('Wrocławiu', 'pl'), 'Polish fallback should run after folding');
+
+    $verifiedPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_stemming' => 'verified',
+    ]);
+    assert_same(['samochod'], $verifiedPipeline->analyze('samochody', 'pl'), 'Polish verified mode should stem mapped fixture rows');
+    assert_same(['danie'], $verifiedPipeline->analyze('danie', 'pl'), 'Polish verified mode should protect ambiguous rows');
 });
 
 test_case('stemming is enabled by default and can be explicitly disabled', function (): void {
     $defaultPipeline = new WP_FTS_LanguagePipeline();
     assert_same(['kot'], $defaultPipeline->analyze('kotami', 'pl'), 'default pipeline should use safe built-in stemming');
+    assert_same(['samochody'], $defaultPipeline->analyze('samochody', 'pl'), 'default Polish mode should remain conservative');
 
     $disabledPipeline = new WP_FTS_LanguagePipeline(['enable_stemming' => false]);
     assert_same(['kotami'], $disabledPipeline->analyze('kotami', 'pl'), 'enable_stemming false should preserve exact normalized terms');
