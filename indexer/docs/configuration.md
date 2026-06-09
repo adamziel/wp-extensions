@@ -122,6 +122,21 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
+An opt-in Polish fixture pack proves the Morfologik/PoliMorf-compatible
+dictionary lemmatizer contract without shipping a full third-party dictionary:
+
+```php
+$analyzer = new WP_FTS_Analyzer([
+    'default_lang' => 'pl',
+    'polish_lemma_pack' => true,
+]);
+```
+
+The fixture pack maps only its reviewed normalized runtime rows. Ambiguous and
+missing forms remain unchanged. If the pack is disabled, missing, or invalid,
+the analyzer falls back to the existing conservative Polish suffix stemmer.
+Validate the fixture with `php tools/validate-analyzer-pack.php`.
+
 Disable the Polish suffix stemmer while keeping other analyzer behavior:
 
 ```php
