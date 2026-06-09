@@ -9,6 +9,79 @@ declare(strict_types=1);
  * checks while remaining easy to drop into the eventual generic discovery hook.
  */
 
+$wp_fts_external_reference_direct = !function_exists('test_case');
+if ($wp_fts_external_reference_direct) {
+    require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+
+    final class WP_FTS_TestFailure extends RuntimeException
+    {
+    }
+
+    /** @var array<int,array{name:string,fn:callable}> */
+    $GLOBALS['wp_fts_external_reference_tests'] = [];
+    $GLOBALS['wp_fts_external_reference_harness_checks'] = 0;
+
+    function test_case(string $name, callable $fn): void
+    {
+        $GLOBALS['wp_fts_external_reference_tests'][] = ['name' => $name, 'fn' => $fn];
+    }
+
+    function record_check(?string $label = null, int $count = 1): void
+    {
+        if ($count < 1) {
+            throw new WP_FTS_TestFailure('record_check() count must be at least 1.');
+        }
+
+        $GLOBALS['wp_fts_external_reference_harness_checks'] += $count;
+    }
+
+    function assert_true(bool $condition, string $message): void
+    {
+        record_check($message);
+        if (!$condition) {
+            throw new WP_FTS_TestFailure($message);
+        }
+    }
+
+    function assert_same(mixed $expected, mixed $actual, string $message): void
+    {
+        record_check($message);
+        if ($expected !== $actual) {
+            throw new WP_FTS_TestFailure($message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true));
+        }
+    }
+
+    function assert_float_near(float $expected, float $actual, string $message, float $epsilon = 1e-6): void
+    {
+        record_check($message);
+        $scale = max(1.0, abs($expected), abs($actual));
+        if (abs($expected - $actual) / $scale > $epsilon) {
+            throw new WP_FTS_TestFailure($message . "\nExpected: {$expected}\nActual: {$actual}");
+        }
+    }
+
+    function assert_contains(string $needle, string $haystack, string $message): void
+    {
+        record_check($message);
+        if (!str_contains($haystack, $needle)) {
+            throw new WP_FTS_TestFailure($message . "\nMissing: " . var_export($needle, true) . "\nIn: " . $haystack);
+        }
+    }
+
+    /**
+     * @param array<int,string> $documents
+     */
+    function build_index(WP_FTS_Storage $storage, WP_FTS_Analyzer $analyzer, array $documents): WP_FTS_Indexer
+    {
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        foreach ($documents as $docId => $html) {
+            $indexer->index_document((int) $docId, $html);
+        }
+
+        return $indexer;
+    }
+}
+
 $GLOBALS['wp_fts_external_reference_checks'] = $GLOBALS['wp_fts_external_reference_checks'] ?? 0;
 $GLOBALS['wp_fts_external_reference_optional_skips'] = $GLOBALS['wp_fts_external_reference_optional_skips'] ?? [];
 
@@ -139,6 +212,29 @@ function wp_fts_external_reference_supported_snowball_rows(): array
                 ['line' => 40000, 'input' => 'verlengde', 'output' => 'verlengd'],
             ],
         ],
+        'english' => [
+            'code' => 'en',
+            'rows' => [
+                ['line' => 10, 'input' => "'s", 'output' => "'s"],
+                ['line' => 11, 'input' => "'s'", 'output' => 's'],
+                ['line' => 20, 'input' => 'abandoned', 'output' => 'abandon'],
+                ['line' => 21, 'input' => 'abandoning', 'output' => 'abandon'],
+                ['line' => 835, 'input' => 'agreed', 'output' => 'agre'],
+                ['line' => 2035, 'input' => 'as', 'output' => 'as'],
+                ['line' => 5569, 'input' => 'caresses', 'output' => 'caress'],
+                ['line' => 5778, 'input' => 'cats', 'output' => 'cat'],
+                ['line' => 11964, 'input' => 'early', 'output' => 'earli'],
+                ['line' => 16101, 'input' => 'generously', 'output' => 'generous'],
+                ['line' => 18341, 'input' => 'hopping', 'output' => 'hop'],
+                ['line' => 19762, 'input' => 'inning', 'output' => 'inning'],
+                ['line' => 25049, 'input' => 'news', 'output' => 'news'],
+                ['line' => 28367, 'input' => 'ponies', 'output' => 'poni'],
+                ['line' => 29113, 'input' => 'proceed', 'output' => 'proceed'],
+                ['line' => 34163, 'input' => 'skies', 'output' => 'sky'],
+                ['line' => 37784, 'input' => 'ties', 'output' => 'tie'],
+                ['line' => 40277, 'input' => 'us', 'output' => 'us'],
+            ],
+        ],
     ];
 }
 
@@ -193,8 +289,6 @@ function wp_fts_external_reference_unsupported_boundaries(): array
     $reason = 'Wamania exposes an implementation, but this project does not advertise it as Snowball-compliant against current official data.';
 
     return [
-        'english' => ['code' => 'en', 'line' => 20, 'input' => 'abandoned', 'output' => 'abandon', 'reason' => $reason],
-        'porter' => ['code' => 'en', 'line' => 20, 'input' => 'abandoned', 'output' => 'abandon', 'reason' => 'Porter English is a variant dataset and is not advertised by WP_FTS_SnowballStemmer.'],
         'german' => ['code' => 'de', 'line' => 3, 'input' => 'aalglatten', 'output' => 'aalglatt', 'reason' => $reason],
         'spanish' => ['code' => 'es', 'line' => 2, 'input' => 'aarón', 'output' => 'aaron', 'reason' => $reason],
         'french' => ['code' => 'fr', 'line' => 3, 'input' => 'abaissait', 'output' => 'abaiss', 'reason' => $reason],
@@ -356,7 +450,7 @@ test_case('quality external Snowball fixtures cover advertised supported dataset
             wp_fts_external_reference_assert_true($row['input'] !== '', "{$dataset} row {$row['line']} input should be non-empty");
             wp_fts_external_reference_assert_true($row['output'] !== '', "{$dataset} row {$row['line']} output should be non-empty");
 
-            if ($stemmer->is_available()) {
+            if ($stemmer->is_language_available($code)) {
                 wp_fts_external_reference_assert_same(
                     $row['output'],
                     $stemmer->stem($row['input'], $code),
@@ -365,8 +459,8 @@ test_case('quality external Snowball fixtures cover advertised supported dataset
             }
         }
 
-        if (!$stemmer->is_available()) {
-            wp_fts_external_reference_skip("{$dataset} runtime stem comparison", 'Wamania Snowball classes are not installed in this worktree.');
+        if (!$stemmer->is_language_available($code)) {
+            wp_fts_external_reference_skip("{$dataset} runtime stem comparison", 'The verified runtime for this language is not installed in this worktree.');
         }
     }
 });
@@ -375,6 +469,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     $stemmer = new WP_FTS_SnowballStemmer();
     $advertised = [
         'ca' => true,
+        'en' => true,
         'nl' => true,
     ];
 
@@ -387,8 +482,9 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     }
 
     wp_fts_external_reference_assert_true($stemmer->supports_language('ca-ES'), 'Catalan locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true($stemmer->supports_language('en-US'), 'English locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('nl_BE'), 'Dutch locale tags should inherit supported base language');
-    wp_fts_external_reference_assert_true(!$stemmer->supports_language('en-US'), 'Unsupported locale tags should remain no-ops');
+    wp_fts_external_reference_assert_true(!$stemmer->supports_language('fr-FR'), 'Unsupported locale tags should remain no-ops');
 });
 
 test_case('quality external unsupported Snowball boundaries stay documented no-ops', function (): void {
@@ -520,7 +616,7 @@ test_case('quality external multilingual tokenization reference corpus stays sta
         'English dialect spellings' => [
             'lang' => 'en',
             'text' => 'colour colours coloured colouring flavour flavours behaviour behaviours organise organises organised organising normalise normalises normalised normalising realise realised recognise recognising',
-            'terms' => ['color', 'colors', 'colored', 'coloring', 'flavor', 'flavors', 'behavior', 'behaviors', 'organize', 'organizes', 'organized', 'organizing', 'normalize', 'normalizes', 'normalized', 'normalizing', 'realize', 'realized', 'recognize', 'recognizing'],
+            'terms' => ['color', 'color', 'color', 'color', 'flavor', 'flavor', 'behavior', 'behavior', 'organiz', 'organiz', 'organiz', 'organiz', 'normal', 'normal', 'normal', 'normal', 'realiz', 'realiz', 'recogn', 'recogn'],
         ],
         'CJK bigrams' => [
             'lang' => 'zh',
@@ -619,3 +715,30 @@ test_case('quality external optional dependency skips are recorded and local con
         'external reference suite should contribute at least 300 executed checks; actual ' . wp_fts_external_reference_check_count()
     );
 });
+
+if ($wp_fts_external_reference_direct) {
+    $failures = 0;
+    $start = microtime(true);
+    foreach ($GLOBALS['wp_fts_external_reference_tests'] as $test) {
+        try {
+            ($test['fn'])();
+            fwrite(STDOUT, "[PASS] {$test['name']}\n");
+        } catch (Throwable $e) {
+            $failures++;
+            fwrite(STDERR, "[FAIL] {$test['name']}\n{$e->getMessage()}\n{$e->getTraceAsString()}\n");
+        }
+    }
+
+    $duration = number_format(microtime(true) - $start, 3);
+    $count = count($GLOBALS['wp_fts_external_reference_tests']);
+    $passed = $count - $failures;
+    $checks = (int) $GLOBALS['wp_fts_external_reference_harness_checks'];
+    $externalChecks = wp_fts_external_reference_check_count();
+    $summary = "{$passed}/{$count} external reference suite tests passed; failures={$failures}; checks/scenarios={$checks}; external_checks={$externalChecks}; duration={$duration}s\n";
+    if ($failures > 0) {
+        fwrite(STDERR, $summary);
+        exit(1);
+    }
+
+    fwrite(STDOUT, $summary);
+}

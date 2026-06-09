@@ -111,20 +111,25 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
 {
     /** @var array<string,bool> */
     private array $supportedLanguages;
+    private WP_FTS_EnglishSnowballStemmer $englishStemmer;
 
     /**
      * Initialize the set of Snowball languages accepted by this adapter.
      */
-    public function __construct()
+    public function __construct(?WP_FTS_EnglishSnowballStemmer $englishStemmer = null)
     {
-        // Expose only Wamania implementations that match the official
-        // Snowball fixtures exactly. Other Wamania classes currently diverge
-        // from the current snowball-data outputs and are treated as no-ops
-        // until their algorithms are replaced or patched.
+        // Expose only implementations that match the official Snowball
+        // fixtures exactly. English is a local generated Snowball/Porter2 port;
+        // Catalan and Dutch Porter remain Wamania-backed optional paths.
+        // Other Wamania classes currently diverge from the current
+        // snowball-data outputs and are treated as no-ops until their
+        // algorithms are replaced or patched.
         $this->supportedLanguages = array_fill_keys([
             'ca',
+            'en',
             'nl',
         ], true);
+        $this->englishStemmer = $englishStemmer ?? new WP_FTS_EnglishSnowballStemmer();
     }
 
     /**
@@ -149,6 +154,58 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     }
 
     /**
+     * Report whether a supported language has an available runtime path.
+     *
+     * English is bundled as generated PHP; Wamania-backed languages remain
+     * optional and no-op safely when Composer packages are absent.
+     *
+     * @param string $language Canonical or locale-style language tag.
+     * @return bool True when `stem()` can apply a verified implementation.
+     */
+    public function is_language_available(string $language): bool
+    {
+        $language = $this->base_language($language);
+        if ($language === 'en') {
+            return true;
+        }
+
+        return isset($this->supportedLanguages[$language]) && $this->is_available();
+    }
+
+    /**
+     * Return the implementation identity used for review and index signatures.
+     */
+    public function source_identity(string $language = ''): string
+    {
+        $language = $this->base_language($language);
+        if ($language === 'en') {
+            return $this->englishStemmer->source_identity();
+        }
+
+        if ($language === 'nl') {
+            return 'wamania/php-stemmer Dutch Porter mapped to nl; verified against snowball-data dutch_porter fixtures when Wamania is installed';
+        }
+
+        if ($language === 'ca') {
+            return 'wamania/php-stemmer Catalan; verified against snowball-data catalan fixtures when Wamania is installed';
+        }
+
+        return 'unsupported Snowball language; no-op';
+    }
+
+    /**
+     * Stable descriptor for stale-index detection.
+     */
+    public function index_signature(): string
+    {
+        return 'wp-fts-snowball-stemmer:v2:' . sha1(implode('|', [
+            'ca=wamania-catalan',
+            'en=' . WP_FTS_EnglishSnowballStemmer::VARIANT . '@snowball-data-13803281',
+            'nl=wamania-dutch-porter',
+        ]));
+    }
+
+    /**
      * Stem with Snowball when the package and language support are present.
      *
      * Failures are swallowed and return the original term so indexing/searching
@@ -161,7 +218,15 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     public function stem(string $term, string $language): string
     {
         $language = $this->base_language($language);
-        if (!isset($this->supportedLanguages[$language]) || !$this->is_available()) {
+        if (!isset($this->supportedLanguages[$language])) {
+            return $term;
+        }
+
+        if ($language === 'en') {
+            return $this->englishStemmer->stem_word($term);
+        }
+
+        if (!$this->is_available()) {
             return $term;
         }
 

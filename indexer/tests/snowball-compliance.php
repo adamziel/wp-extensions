@@ -24,7 +24,7 @@ function wp_fts_snowball_datasets(): array
             'skip_reason' => 'WP_FTS_SnowballStemmer maps nl to Wamania Dutch Porter; the newer official Dutch algorithm is not implemented',
         ],
         'dutch_porter' => ['code' => 'nl', 'name' => 'Dutch Porter'],
-        'english' => ['code' => 'en', 'name' => 'English', 'skip_reason' => $wamaniaDiverges],
+        'english' => ['code' => 'en', 'name' => 'English'],
         'esperanto' => ['code' => 'eo', 'name' => 'Esperanto'],
         'estonian' => ['code' => 'et', 'name' => 'Estonian'],
         'finnish' => ['code' => 'fi', 'name' => 'Finnish', 'skip_reason' => $wamaniaDiverges],
@@ -149,10 +149,11 @@ fwrite(
     STDOUT,
     'Dependency status: ' . (
         $stemmer->is_available()
-            ? 'wamania/php-stemmer available; supported-language comparisons will run'
-            : 'wamania/php-stemmer missing; supported-language comparisons will be reported as SKIP'
-    ) . "\n\n"
+            ? 'wamania/php-stemmer available; Wamania-backed supported-language comparisons will run'
+            : 'wamania/php-stemmer missing; Wamania-backed supported-language comparisons will be reported as SKIP'
+    ) . "\n"
 );
+fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n\n");
 
 foreach ($datasets as $dataset => $metadata) {
     $label = wp_fts_language_label($dataset, $metadata);
@@ -169,14 +170,14 @@ foreach ($datasets as $dataset => $metadata) {
     }
 
     if ($code === null || !$stemmer->supports_language($code)) {
-        $reason = $metadata['skip_reason'] ?? 'language is not supported by WP_FTS_SnowballStemmer via Wamania';
+        $reason = $metadata['skip_reason'] ?? 'language is not supported by WP_FTS_SnowballStemmer';
         $results['skip'][] = $label;
         fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
         continue;
     }
 
-    if (!$stemmer->is_available()) {
-        $reason = 'Wamania StemmerFactory is unavailable; run composer install first';
+    if (!$stemmer->is_language_available($code)) {
+        $reason = 'language runtime is unavailable; Wamania-backed languages require composer install';
         $results['skip'][] = $label;
         fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
         continue;
