@@ -10,7 +10,7 @@ final class Language_FTS_Playground_Test_Failure extends RuntimeException
 
 final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playground_Storage_Interface
 {
-    /** @var array<int,array{post_id:int,language:string,title:string,status:string,document_length:int,field_texts:array<string,string>,updated_at:string}> */
+    /** @var array<string,array{post_id:int,language:string,title:string,status:string,document_length:int,field_texts:array<string,string>,field_metadata:array<string,array{language:string,language_provenance:string}>,updated_at:string}> */
     private array $documents = [];
 
     /** @var array<string,array<string,array<int,array<string,int>>>> */
@@ -48,23 +48,51 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         array $field_texts,
         array $term_positions
     ): void {
-        $this->delete_document($post_id);
-        $this->documents[$post_id] = [
-            'post_id' => $post_id,
-            'language' => $language,
-            'title' => $title,
-            'status' => $status,
-            'document_length' => max(1, $document_length),
-            'field_texts' => $field_texts,
-            'updated_at' => 'test',
-        ];
+        $this->replace_document_partitions(
+            $post_id,
+            [
+                [
+                    'language' => $language,
+                    'title' => $title,
+                    'status' => $status,
+                    'document_length' => $document_length,
+                    'field_term_frequencies' => $field_term_frequencies,
+                    'field_texts' => $field_texts,
+                    'term_positions' => $term_positions,
+                ],
+            ]
+        );
+    }
 
-        foreach ($field_term_frequencies as $field => $term_frequencies) {
-            foreach ($term_frequencies as $term => $tf) {
-                $term = (string) $term;
-                $field = (string) $field;
-                $this->postings[$language][$term][$post_id][$field] = max(1, (int) $tf);
-                $this->positions[$language][$term][$post_id] = array_values(array_map('intval', $term_positions[$term] ?? []));
+    public function replace_document_partitions(int $post_id, array $partitions): void
+    {
+        $this->delete_document($post_id);
+
+        foreach ($partitions as $partition) {
+            $language = (string) ($partition['language'] ?? '');
+            $field_texts = (array) ($partition['field_texts'] ?? []);
+            $field_keys = array_values(array_unique(array_merge(
+                array_map('strval', array_keys($field_texts)),
+                array_map('strval', array_keys((array) ($partition['field_term_frequencies'] ?? [])))
+            )));
+            $this->documents[$this->document_key($language, $post_id)] = [
+                'post_id' => $post_id,
+                'language' => $language,
+                'title' => (string) ($partition['title'] ?? ''),
+                'status' => (string) ($partition['status'] ?? ''),
+                'document_length' => max(1, (int) ($partition['document_length'] ?? 0)),
+                'field_texts' => $field_texts,
+                'field_metadata' => $this->normalize_field_metadata($language, $field_keys, (array) ($partition['field_metadata'] ?? [])),
+                'updated_at' => 'test',
+            ];
+
+            foreach ((array) ($partition['field_term_frequencies'] ?? []) as $field => $term_frequencies) {
+                foreach ((array) $term_frequencies as $term => $tf) {
+                    $term = (string) $term;
+                    $field = (string) $field;
+                    $this->postings[$language][$term][$post_id][$field] = max(1, (int) $tf);
+                    $this->positions[$language][$term][$post_id] = array_values(array_map('intval', (array) ($partition['term_positions'][$term] ?? [])));
+                }
             }
         }
     }
@@ -72,17 +100,26 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public function delete_document(int $post_id): void
     {
         $this->delete_count++;
-        unset($this->documents[$post_id]);
-        foreach ($this->postings as $language => $terms) {
-            foreach ($terms as $term => $postings) {
-                unset($postings[$post_id]);
+        foreach ($this->documents as $key => $document) {
+            if ($document['post_id'] === $post_id) {
+                unset($this->documents[$key]);
+            }
+        }
+        foreach (array_keys($this->postings) as $language) {
+            foreach (array_keys($this->postings[$language]) as $term) {
+                unset($this->postings[$language][$term][$post_id]);
                 unset($this->positions[$language][$term][$post_id]);
-                if ($postings === []) {
+                if (($this->postings[$language][$term] ?? []) === []) {
                     unset($this->postings[$language][$term]);
                     unset($this->positions[$language][$term]);
-                } else {
-                    $this->postings[$language][$term] = $postings;
                 }
+            }
+
+            if (($this->postings[$language] ?? []) === []) {
+                unset($this->postings[$language]);
+            }
+            if (($this->positions[$language] ?? []) === []) {
+                unset($this->positions[$language]);
             }
         }
     }
@@ -150,8 +187,9 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         $lengths = [];
         foreach ($post_ids as $post_id) {
             $post_id = (int) $post_id;
-            if (($this->documents[$post_id]['language'] ?? null) === $language) {
-                $lengths[$post_id] = $this->documents[$post_id]['document_length'];
+            $key = $this->document_key($language, $post_id);
+            if (isset($this->documents[$key])) {
+                $lengths[$post_id] = $this->documents[$key]['document_length'];
             }
         }
 
@@ -163,12 +201,27 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         $fields = [];
         foreach ($post_ids as $post_id) {
             $post_id = (int) $post_id;
-            if (($this->documents[$post_id]['language'] ?? null) === $language) {
-                $fields[$post_id] = $this->documents[$post_id]['field_texts'];
+            $key = $this->document_key($language, $post_id);
+            if (isset($this->documents[$key])) {
+                $fields[$post_id] = $this->documents[$key]['field_texts'];
             }
         }
 
         return $fields;
+    }
+
+    public function fetch_document_field_metadata(string $language, array $post_ids): array
+    {
+        $metadata = [];
+        foreach ($post_ids as $post_id) {
+            $post_id = (int) $post_id;
+            $key = $this->document_key($language, $post_id);
+            if (isset($this->documents[$key])) {
+                $metadata[$post_id] = $this->documents[$key]['field_metadata'];
+            }
+        }
+
+        return $metadata;
     }
 
     public function document_count(string $language): int
@@ -186,6 +239,34 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public function all_documents(): array
     {
         return array_values($this->documents);
+    }
+
+    private function document_key(string $language, int $post_id): string
+    {
+        return $language . "\t" . $post_id;
+    }
+
+    /**
+     * @param string[] $field_keys
+     * @param array<string,mixed> $field_metadata
+     * @return array<string,array{language:string,language_provenance:string}>
+     */
+    private function normalize_field_metadata(string $language, array $field_keys, array $field_metadata): array
+    {
+        $metadata = [];
+        foreach (array_unique(array_merge($field_keys, array_map('strval', array_keys($field_metadata)))) as $field) {
+            $entry = $field_metadata[$field] ?? [];
+            $entry = is_array($entry) ? $entry : [];
+            $field_language = trim((string) ($entry['language'] ?? $language));
+            $provenance = trim((string) ($entry['language_provenance'] ?? 'fallback'));
+
+            $metadata[(string) $field] = [
+                'language' => $field_language !== '' ? $field_language : $language,
+                'language_provenance' => $provenance !== '' ? $provenance : 'fallback',
+            ];
+        }
+
+        return $metadata;
     }
 }
 
@@ -214,7 +295,25 @@ final class Language_FTS_Playground_Test_Failing_Storage implements Language_FTS
         array $field_texts,
         array $term_positions
     ): void {
-        unset($post_id, $language, $title, $status, $document_length, $field_term_frequencies, $field_texts, $term_positions);
+        $this->replace_document_partitions(
+            $post_id,
+            [
+                [
+                    'language' => $language,
+                    'title' => $title,
+                    'status' => $status,
+                    'document_length' => $document_length,
+                    'field_term_frequencies' => $field_term_frequencies,
+                    'field_texts' => $field_texts,
+                    'term_positions' => $term_positions,
+                ],
+            ]
+        );
+    }
+
+    public function replace_document_partitions(int $post_id, array $partitions): void
+    {
+        unset($post_id, $partitions);
         throw new RuntimeException($this->message);
     }
 
@@ -249,6 +348,12 @@ final class Language_FTS_Playground_Test_Failing_Storage implements Language_FTS
     }
 
     public function fetch_document_fields(string $language, array $post_ids): array
+    {
+        unset($language, $post_ids);
+        throw new RuntimeException($this->message);
+    }
+
+    public function fetch_document_field_metadata(string $language, array $post_ids): array
     {
         unset($language, $post_ids);
         throw new RuntimeException($this->message);
@@ -784,6 +889,44 @@ function fixture_post(
     ];
 }
 
+function mixed_language_segment_fixture_post(int $id, bool $include_polish_segment = true): object
+{
+    $content = '<p>Searching pages stay visible in English.</p>';
+    if ($include_polish_segment) {
+        $content .= '<p lang="pl">Partycja wyszukiwania pokazuje wynik.</p>';
+    }
+
+    return fixture_post($id, 'en', 'Mixed language note', $content);
+}
+
+/**
+ * @param array<string,mixed> $explain_result
+ * @return array<int,array{field:string,language:string,language_provenance:string}>
+ */
+function language_fts_explain_field_language_details(array $explain_result): array
+{
+    $language_details = [];
+    foreach ((array) ($explain_result['score_breakdown']['details'] ?? []) as $score_detail) {
+        if (!is_array($score_detail)) {
+            continue;
+        }
+
+        foreach ((array) ($score_detail['fields'] ?? []) as $field_detail) {
+            if (!is_array($field_detail)) {
+                continue;
+            }
+
+            $language_details[] = [
+                'field' => (string) ($field_detail['field'] ?? ''),
+                'language' => (string) ($field_detail['language'] ?? ''),
+                'language_provenance' => (string) ($field_detail['language_provenance'] ?? ''),
+            ];
+        }
+    }
+
+    return $language_details;
+}
+
 function create_language_fts_temp_profile_tree(
     string $lexemes,
     string $synonyms = "# source\ttarget\tdirection\tweight\tprovenance\n",
@@ -1144,6 +1287,193 @@ function language_fts_import_options(array $overrides = []): array
         $overrides
     );
 }
+
+test_case('storage replacement supports multiple language partitions for one post', function (): void {
+    $partitions = [
+        [
+            'language' => 'en',
+            'title' => 'Shared post',
+            'status' => 'publish',
+            'document_length' => 3,
+            'field_term_frequencies' => [
+                'content' => ['search' => 2],
+            ],
+            'field_texts' => [
+                'content' => 'search search page',
+            ],
+            'field_metadata' => [
+                'content' => [
+                    'language' => 'en',
+                    'language_provenance' => 'post',
+                ],
+            ],
+            'term_positions' => [
+                'search' => [0, 1],
+            ],
+        ],
+        [
+            'language' => 'pl',
+            'title' => 'Shared post',
+            'status' => 'publish',
+            'document_length' => 2,
+            'field_term_frequencies' => [
+                'content' => ['wyszukiw' => 1],
+            ],
+            'field_texts' => [
+                'content' => 'wyszukiwania wynik',
+            ],
+            'field_metadata' => [
+                'content' => [
+                    'language' => 'pl',
+                    'language_provenance' => 'html_lang',
+                ],
+            ],
+            'term_positions' => [
+                'wyszukiw' => [0],
+            ],
+        ],
+    ];
+
+    foreach ([new Language_FTS_Playground_Test_Storage(), new Language_FTS_Playground_In_Memory_Storage()] as $storage) {
+        $storage->replace_document_partitions(77, $partitions);
+
+        assert_same(2, count($storage->all_documents()), $storage::class . ' stores both language partitions.');
+        assert_same(1, $storage->document_count('en'), $storage::class . ' counts the English partition.');
+        assert_same(1, $storage->document_count('pl'), $storage::class . ' counts the Polish partition.');
+        assert_same([77 => 3], $storage->fetch_document_lengths('en', [77]), $storage::class . ' fetches the English document length.');
+        assert_same([77 => 2], $storage->fetch_document_lengths('pl', [77]), $storage::class . ' fetches the Polish document length.');
+        assert_same(['content' => 'wyszukiwania wynik'], $storage->fetch_document_fields('pl', [77])[77] ?? null, $storage::class . ' fetches fields from the Polish partition.');
+        assert_same(['content' => ['language' => 'pl', 'language_provenance' => 'html_lang']], $storage->fetch_document_field_metadata('pl', [77])[77] ?? null, $storage::class . ' fetches field metadata from the Polish partition.');
+        assert_same(['content' => 2], $storage->fetch_postings('en', ['search'])['search'][77] ?? null, $storage::class . ' fetches English postings.');
+        assert_same([0], $storage->fetch_positions('pl', ['wyszukiw'], [77])['wyszukiw'][77] ?? null, $storage::class . ' fetches Polish positions.');
+
+        $storage->replace_document_partitions(77, [$partitions[0]]);
+
+        assert_same(1, count($storage->all_documents()), $storage::class . ' removes stale partitions during replacement.');
+        assert_same(0, $storage->document_count('pl'), $storage::class . ' removes the stale Polish document partition.');
+        assert_same([], $storage->fetch_postings('pl', ['wyszukiw']), $storage::class . ' removes stale Polish postings.');
+        assert_same([], $storage->fetch_document_field_metadata('pl', [77]), $storage::class . ' removes stale Polish field metadata.');
+
+        $storage->delete_document(77);
+
+        assert_same([], $storage->all_documents(), $storage::class . ' deletes all partitions for the post.');
+    }
+});
+
+test_case('wpdb storage replacement deletes a post once before inserting partitions', function (): void {
+    $wpdb = new class {
+        public string $prefix = 'wp_';
+        public string $last_error = '';
+        /** @var string[] */
+        public array $queries = [];
+        /** @var array<int,array{table:string,data:array<string,mixed>,format:string[]}> */
+        public array $inserts = [];
+
+        public function prepare(string $query, mixed ...$args): string
+        {
+            if (count($args) === 1 && is_array($args[0])) {
+                $args = $args[0];
+            }
+
+            foreach ($args as $arg) {
+                $replacement = is_int($arg) ? (string) $arg : "'" . addslashes((string) $arg) . "'";
+                $query = preg_replace('/%[ds]/', $replacement, $query, 1) ?? $query;
+            }
+
+            return $query;
+        }
+
+        public function query(string $sql): int
+        {
+            $this->queries[] = $sql;
+
+            return 1;
+        }
+
+        /**
+         * @param array<string,mixed> $data
+         * @param string[] $format
+         */
+        public function insert(string $table, array $data, array $format): int
+        {
+            $this->inserts[] = [
+                'table' => $table,
+                'data' => $data,
+                'format' => $format,
+            ];
+
+            return 1;
+        }
+    };
+
+    $storage = new Language_FTS_Playground_Wpdb_Storage($wpdb);
+    $storage->replace_document_partitions(
+        88,
+        [
+            [
+                'language' => 'en',
+                'title' => 'Shared SQL post',
+                'status' => 'publish',
+                'document_length' => 1,
+                'field_term_frequencies' => [
+                    'content' => ['search' => 1],
+                ],
+                'field_texts' => [
+                    'content' => 'search',
+                ],
+                'field_metadata' => [
+                    'content' => [
+                        'language' => 'en',
+                        'language_provenance' => 'post',
+                    ],
+                ],
+                'term_positions' => [
+                    'search' => [0],
+                ],
+            ],
+            [
+                'language' => 'pl',
+                'title' => 'Shared SQL post',
+                'status' => 'publish',
+                'document_length' => 1,
+                'field_term_frequencies' => [
+                    'content' => ['wyszukiw' => 1],
+                ],
+                'field_texts' => [
+                    'content' => 'wyszukiwania',
+                ],
+                'field_metadata' => [
+                    'content' => [
+                        'language' => 'pl',
+                        'language_provenance' => 'html_lang',
+                    ],
+                ],
+                'term_positions' => [
+                    'wyszukiw' => [0],
+                ],
+            ],
+        ]
+    );
+
+    $document_inserts = array_values(array_filter(
+        $wpdb->inserts,
+        static fn(array $insert): bool => $insert['table'] === 'wp_language_fts_documents'
+    ));
+    $posting_inserts = array_values(array_filter(
+        $wpdb->inserts,
+        static fn(array $insert): bool => $insert['table'] === 'wp_language_fts_postings'
+    ));
+
+    assert_same(2, count($wpdb->queries), 'Replacing partitions deletes document and posting rows once each.');
+    assert_contains_text('post_id = 88', implode("\n", $wpdb->queries), 'Replacement deletes existing rows for the target post.');
+    assert_same(['en', 'pl'], array_column(array_column($document_inserts, 'data'), 'language'), 'Both document partitions are inserted.');
+    assert_same(
+        ['content' => ['language' => 'pl', 'language_provenance' => 'html_lang']],
+        json_decode((string) ($document_inserts[1]['data']['field_metadata'] ?? ''), true),
+        'Document partitions persist field metadata JSON.'
+    );
+    assert_same(['en', 'pl'], array_column(array_column($posting_inserts, 'data'), 'language'), 'Both posting partitions are inserted.');
+});
 
 test_case('lexical resource root defaults to bundled resources and handles invalid filters safely', function (): void {
     reset_language_fts_plugin_runtime();
@@ -2382,6 +2712,67 @@ test_case('extracts visible text and image alt while excluding markup noise', fu
     assert_not_contains_text('ghostmarkup', $text, 'Markup, CSS, script, comments, and templates are excluded.');
 });
 
+test_case('extracts language-aware searchable field segment details', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $details = $analyzer->extract_searchable_field_segment_details(
+        '<p>Searching pages stay visible.</p>' .
+        '<p lang="pl">Partycja wyszukiwania pokazuje wynik.</p>' .
+        '<img lang="pl" alt="polska fotografia" />',
+        'en'
+    );
+
+    $content_details = array_values(array_filter(
+        $details,
+        static fn(array $detail): bool => $detail['field'] === 'content'
+    ));
+    $alt_details = array_values(array_filter(
+        $details,
+        static fn(array $detail): bool => $detail['field'] === 'alt'
+    ));
+
+    assert_same('polska fotografia', $alt_details[0]['text'] ?? null, 'Image alt text is extracted as an alt segment detail.');
+
+    if (class_exists(DOMDocument::class)) {
+        assert_same('Searching pages stay visible.', $content_details[0]['text'] ?? null, 'Sibling content without lang is extracted as its own content segment.');
+        assert_same('en', $content_details[0]['language'] ?? null, 'Sibling content without lang inherits the fallback language.');
+        assert_same('fallback', $content_details[0]['language_provenance'] ?? null, 'Sibling content without lang records fallback provenance.');
+        assert_same('pl', $content_details[1]['language'] ?? null, 'Content inside p lang="pl" records the Polish segment language.');
+        assert_same('html_lang', $content_details[1]['language_provenance'] ?? null, 'Content inside p lang="pl" records HTML lang provenance.');
+        assert_same('pl', $alt_details[0]['language'] ?? null, 'Image alt text inherits the img lang attribute.');
+        assert_same('html_lang', $alt_details[0]['language_provenance'] ?? null, 'Image alt text records HTML lang provenance.');
+    } else {
+        assert_contains_text('Searching pages stay visible.', $content_details[0]['text'] ?? '', 'The no-DOM fallback extracts sibling content text.');
+        assert_contains_text('Partycja wyszukiwania pokazuje wynik.', $content_details[0]['text'] ?? '', 'The no-DOM fallback extracts lang-marked content text.');
+        assert_same(['en'], array_values(array_unique(array_column($details, 'language'))), 'The no-DOM fallback keeps all segment details on the fallback language.');
+        assert_same(['fallback'], array_values(array_unique(array_column($details, 'language_provenance'))), 'The no-DOM fallback keeps fallback provenance.');
+    }
+});
+
+test_case('language-aware segment fallback provenance can represent post language', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $details = $analyzer->extract_searchable_field_segment_details('<p>Visible orchard</p>', 'en', 'post');
+
+    assert_same('en', $details[0]['language'] ?? null, 'Fallback segment language is canonicalized.');
+    assert_same('post', $details[0]['language_provenance'] ?? null, 'Callers can mark fallback segments as post-language provenance.');
+});
+
+test_case('language-aware segment details inherit xml lang through descendants', function (): void {
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $details = $analyzer->extract_searchable_field_segment_details(
+        '<section xml:lang="pl"><span>Dziedziczony segment.</span></section>',
+        'en'
+    );
+
+    assert_same('Dziedziczony segment.', $details[0]['text'] ?? null, 'Descendant text is extracted from an xml:lang ancestor.');
+    if (class_exists(DOMDocument::class)) {
+        assert_same('pl', $details[0]['language'] ?? null, 'Descendant text inherits the xml:lang language.');
+        assert_same('html_lang', $details[0]['language_provenance'] ?? null, 'Descendant text records xml:lang as HTML lang provenance.');
+    } else {
+        assert_same('en', $details[0]['language'] ?? null, 'The no-DOM fallback keeps xml:lang content on the fallback language.');
+        assert_same('fallback', $details[0]['language_provenance'] ?? null, 'The no-DOM fallback keeps fallback provenance for xml:lang content.');
+    }
+});
+
 test_case('normalizes supported languages deterministically', function (): void {
     $analyzer = new Language_FTS_Playground_Analyzer();
 
@@ -2598,6 +2989,80 @@ test_case('automatic search finds Polish synonym matches with matched language p
     assert_same('pl', $results[0]['matched_language'], 'The result reports the matched Polish partition.');
     assert_contains_text('szukac=>', implode(', ', $results[0]['matched_terms']), 'The resource-backed synonym relationship is reported as a query-time match.');
     assert_contains_text('<mark>wyszukiwania</mark>', $results[0]['snippet'], 'The synonym match highlights the indexed source token.');
+});
+
+test_case('mixed-language HTML lang segment preserves English and Polish recall', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(mixed_language_segment_fixture_post(140));
+
+    $english_results = $searcher->search('searching', 'auto');
+    assert_same([140], array_column($english_results, 'post_id'), 'Automatic English search still returns the mixed-language post.');
+    assert_same('en', $english_results[0]['matched_language'], 'Automatic English search reports the English segment partition.');
+
+    $polish_results = $searcher->search('szukanie', 'auto');
+    assert_same([140], array_column($polish_results, 'post_id'), 'Automatic Polish synonym search reaches the HTML lang="pl" segment.');
+    assert_same('pl', $polish_results[0]['matched_language'], 'Automatic Polish search reports the Polish segment partition.');
+});
+
+test_case('explicit language searches isolate mixed-language HTML lang segments', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(mixed_language_segment_fixture_post(141));
+
+    $english_content_results = $searcher->search('searching', 'en');
+    assert_same([141], array_column($english_content_results, 'post_id'), 'Explicit English search still returns the English segment.');
+    assert_same('en', $english_content_results[0]['matched_language'], 'Explicit English search reports the English segment partition.');
+    assert_same([], $searcher->search('szukanie', 'en'), 'Explicit English mode does not match the Polish synonym query from the HTML lang segment.');
+
+    $polish_results = $searcher->search('szukanie', 'pl');
+    assert_same([141], array_column($polish_results, 'post_id'), 'Explicit Polish mode matches the Polish HTML lang segment.');
+    assert_same('pl', $polish_results[0]['matched_language'], 'Explicit Polish search reports the Polish segment partition.');
+});
+
+test_case('reindex removes stale mixed-language HTML lang partitions', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(mixed_language_segment_fixture_post(142));
+    $initial_polish_results = $searcher->search('szukanie', 'pl');
+    assert_same([142], array_column($initial_polish_results, 'post_id'), 'The initial index writes the Polish HTML lang segment.');
+    assert_same('pl', $initial_polish_results[0]['matched_language'], 'The initial Polish result reports the Polish segment partition.');
+
+    $indexer->index_post(mixed_language_segment_fixture_post(142, false));
+
+    assert_same([], $searcher->search('szukanie', 'pl'), 'Reindexing without the Polish segment removes stale Polish postings.');
+    $english_results = $searcher->search('searching', 'en');
+    assert_same([142], array_column($english_results, 'post_id'), 'Reindexing keeps the remaining English segment searchable.');
+    assert_same('en', $english_results[0]['matched_language'], 'The remaining English segment keeps the English matched-language payload.');
+});
+
+test_case('explain reports HTML lang segment language provenance', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(mixed_language_segment_fixture_post(143));
+
+    $explain = $searcher->explain('szukanie', 'auto');
+    assert_same([143], array_column($explain['results'] ?? [], 'post_id'), 'Explain returns the mixed-language Polish segment hit.');
+    assert_same('pl', $explain['results'][0]['matched_language'] ?? null, 'Explain result reports the Polish matched language.');
+
+    $field_language_details = array_values(array_filter(
+        language_fts_explain_field_language_details($explain['results'][0]),
+        static fn(array $detail): bool => $detail['field'] === 'content'
+    ));
+    assert_true(in_array('pl', array_column($field_language_details, 'language'), true), 'Explain field contributions include the Polish content segment language.');
+    assert_true(in_array('html_lang', array_column($field_language_details, 'language_provenance'), true), 'Explain field contributions include html_lang provenance for the Polish segment.');
 });
 
 test_case('explain reports automatic Polish routing and resource-backed synonyms', function (): void {

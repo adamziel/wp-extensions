@@ -10,7 +10,7 @@ declare(strict_types=1);
  */
 final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Playground_Storage_Interface
 {
-    /** @var array<int,array{post_id:int,language:string,title:string,status:string,document_length:int,field_texts:array<string,string>,updated_at:string}> */
+    /** @var array<string,array{post_id:int,language:string,title:string,status:string,document_length:int,field_texts:array<string,string>,field_metadata:array<string,array{language:string,language_provenance:string}>,updated_at:string}> */
     private array $documents = [];
 
     /** @var array<string,array<string,array<int,array<string,int>>>> */
@@ -40,41 +40,79 @@ final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Pl
         array $field_texts,
         array $term_positions
     ): void {
-        $this->delete_document($post_id);
-        $this->documents[$post_id] = [
-            'post_id' => $post_id,
-            'language' => $language,
-            'title' => $title,
-            'status' => $status,
-            'document_length' => max(1, $document_length),
-            'field_texts' => $field_texts,
-            'updated_at' => 'memory',
-        ];
+        $this->replace_document_partitions(
+            $post_id,
+            [
+                [
+                    'language' => $language,
+                    'title' => $title,
+                    'status' => $status,
+                    'document_length' => $document_length,
+                    'field_term_frequencies' => $field_term_frequencies,
+                    'field_texts' => $field_texts,
+                    'term_positions' => $term_positions,
+                ],
+            ]
+        );
+    }
 
-        foreach ($field_term_frequencies as $field => $term_frequencies) {
-            foreach ($term_frequencies as $term => $tf) {
-                $term = (string) $term;
-                $field = (string) $field;
-                $this->postings[$language][$term][$post_id][$field] = max(1, (int) $tf);
-                $this->positions[$language][$term][$post_id] = array_values(array_map('intval', $term_positions[$term] ?? []));
+    public function replace_document_partitions(int $post_id, array $partitions): void
+    {
+        $this->delete_document($post_id);
+
+        foreach ($partitions as $partition) {
+            $language = (string) ($partition['language'] ?? '');
+            $field_texts = (array) ($partition['field_texts'] ?? []);
+            $field_keys = array_values(array_unique(array_merge(
+                array_map('strval', array_keys($field_texts)),
+                array_map('strval', array_keys((array) ($partition['field_term_frequencies'] ?? [])))
+            )));
+            $this->documents[$this->document_key($language, $post_id)] = [
+                'post_id' => $post_id,
+                'language' => $language,
+                'title' => (string) ($partition['title'] ?? ''),
+                'status' => (string) ($partition['status'] ?? ''),
+                'document_length' => max(1, (int) ($partition['document_length'] ?? 0)),
+                'field_texts' => $field_texts,
+                'field_metadata' => $this->normalize_field_metadata($language, $field_keys, (array) ($partition['field_metadata'] ?? [])),
+                'updated_at' => 'memory',
+            ];
+
+            foreach ((array) ($partition['field_term_frequencies'] ?? []) as $field => $term_frequencies) {
+                foreach ((array) $term_frequencies as $term => $tf) {
+                    $term = (string) $term;
+                    $field = (string) $field;
+                    $this->postings[$language][$term][$post_id][$field] = max(1, (int) $tf);
+                    $this->positions[$language][$term][$post_id] = array_values(array_map('intval', (array) ($partition['term_positions'][$term] ?? [])));
+                }
             }
         }
     }
 
     public function delete_document(int $post_id): void
     {
-        unset($this->documents[$post_id]);
+        foreach ($this->documents as $key => $document) {
+            if ($document['post_id'] === $post_id) {
+                unset($this->documents[$key]);
+            }
+        }
 
-        foreach ($this->postings as $language => $terms) {
-            foreach ($terms as $term => $postings) {
-                unset($postings[$post_id]);
+        foreach (array_keys($this->postings) as $language) {
+            foreach (array_keys($this->postings[$language]) as $term) {
+                unset($this->postings[$language][$term][$post_id]);
                 unset($this->positions[$language][$term][$post_id]);
-                if ($postings === []) {
+
+                if (($this->postings[$language][$term] ?? []) === []) {
                     unset($this->postings[$language][$term]);
                     unset($this->positions[$language][$term]);
-                } else {
-                    $this->postings[$language][$term] = $postings;
                 }
+            }
+
+            if (($this->postings[$language] ?? []) === []) {
+                unset($this->postings[$language]);
+            }
+            if (($this->positions[$language] ?? []) === []) {
+                unset($this->positions[$language]);
             }
         }
     }
@@ -141,8 +179,9 @@ final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Pl
         $lengths = [];
         foreach ($post_ids as $post_id) {
             $post_id = (int) $post_id;
-            if (($this->documents[$post_id]['language'] ?? null) === $language) {
-                $lengths[$post_id] = $this->documents[$post_id]['document_length'];
+            $key = $this->document_key($language, $post_id);
+            if (isset($this->documents[$key])) {
+                $lengths[$post_id] = $this->documents[$key]['document_length'];
             }
         }
 
@@ -154,12 +193,27 @@ final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Pl
         $fields = [];
         foreach ($post_ids as $post_id) {
             $post_id = (int) $post_id;
-            if (($this->documents[$post_id]['language'] ?? null) === $language) {
-                $fields[$post_id] = $this->documents[$post_id]['field_texts'];
+            $key = $this->document_key($language, $post_id);
+            if (isset($this->documents[$key])) {
+                $fields[$post_id] = $this->documents[$key]['field_texts'];
             }
         }
 
         return $fields;
+    }
+
+    public function fetch_document_field_metadata(string $language, array $post_ids): array
+    {
+        $metadata = [];
+        foreach ($post_ids as $post_id) {
+            $post_id = (int) $post_id;
+            $key = $this->document_key($language, $post_id);
+            if (isset($this->documents[$key])) {
+                $metadata[$post_id] = $this->documents[$key]['field_metadata'];
+            }
+        }
+
+        return $metadata;
     }
 
     public function document_count(string $language): int
@@ -177,5 +231,33 @@ final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Pl
     public function all_documents(): array
     {
         return array_values($this->documents);
+    }
+
+    private function document_key(string $language, int $post_id): string
+    {
+        return $language . "\t" . $post_id;
+    }
+
+    /**
+     * @param string[] $field_keys
+     * @param array<string,mixed> $field_metadata
+     * @return array<string,array{language:string,language_provenance:string}>
+     */
+    private function normalize_field_metadata(string $language, array $field_keys, array $field_metadata): array
+    {
+        $metadata = [];
+        foreach (array_unique(array_merge($field_keys, array_map('strval', array_keys($field_metadata)))) as $field) {
+            $entry = $field_metadata[$field] ?? [];
+            $entry = is_array($entry) ? $entry : [];
+            $field_language = trim((string) ($entry['language'] ?? $language));
+            $provenance = trim((string) ($entry['language_provenance'] ?? 'fallback'));
+
+            $metadata[(string) $field] = [
+                'language' => $field_language !== '' ? $field_language : $language,
+                'language_provenance' => $provenance !== '' ? $provenance : 'fallback',
+            ];
+        }
+
+        return $metadata;
     }
 }

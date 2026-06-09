@@ -263,6 +263,31 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
+     * @return array<int,array{field:string,text:string,language:string,language_provenance:string}>
+     */
+    public function extract_searchable_field_segment_details(
+        string $html,
+        string $fallback_language,
+        string $fallback_provenance = 'fallback'
+    ): array {
+        if (trim($html) === '') {
+            return [];
+        }
+
+        $fallback_context = $this->language_segment_context($fallback_language, $fallback_provenance);
+
+        if (class_exists(DOMDocument::class)) {
+            return $this->extract_searchable_field_segment_details_with_dom($html, $fallback_context);
+        }
+
+        if (class_exists('WP_HTML_Processor')) {
+            return $this->extract_searchable_field_segment_details_with_wp_processor($html, $fallback_context);
+        }
+
+        return $this->extract_searchable_field_segment_details_without_dom($html, $fallback_context);
+    }
+
+    /**
      * @return string[]
      */
     public function analyze_query(string $query, string $language): array
@@ -946,6 +971,77 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
+     * @param array{language:string,language_provenance:string} $fallback_context
+     * @return array<int,array{field:string,text:string,language:string,language_provenance:string}>
+     */
+    private function extract_searchable_field_segment_details_with_dom(string $html, array $fallback_context): array
+    {
+        $document = new DOMDocument('1.0', 'UTF-8');
+        $previous = libxml_use_internal_errors(true);
+        $flags = 0;
+        if (defined('LIBXML_HTML_NOIMPLIED')) {
+            $flags |= LIBXML_HTML_NOIMPLIED;
+        }
+        if (defined('LIBXML_HTML_NODEFDTD')) {
+            $flags |= LIBXML_HTML_NODEFDTD;
+        }
+
+        $wrapped = '<!DOCTYPE html><html><body><div id="language-fts-playground-root">' . $html . '</div></body></html>';
+        $document->loadHTML('<?xml encoding="UTF-8">' . $wrapped, $flags);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        $root = $document->getElementById('language-fts-playground-root') ?? $document;
+        $segments = [];
+        $current_content = $this->empty_content_segment($fallback_context);
+        $this->collect_searchable_field_segment_details($root, $segments, $current_content, $fallback_context);
+        $this->flush_segment_detail($segments, $current_content);
+
+        return $segments;
+    }
+
+    /**
+     * @param array<int,array{field:string,text:string,language:string,language_provenance:string}> $segments
+     * @param array{text:string,language:string,language_provenance:string} $current_content
+     * @param array{language:string,language_provenance:string} $context
+     */
+    private function collect_searchable_field_segment_details(
+        DOMNode $node,
+        array &$segments,
+        array &$current_content,
+        array $context
+    ): void {
+        if ($node->nodeType === XML_TEXT_NODE || $node->nodeType === XML_CDATA_SECTION_NODE) {
+            $this->append_content_segment_text((string) $node->nodeValue, $context, $segments, $current_content);
+            return;
+        }
+
+        if ($node->nodeType === XML_COMMENT_NODE) {
+            $this->flush_segment_detail($segments, $current_content);
+            return;
+        }
+
+        if ($node instanceof DOMElement) {
+            $tag = strtolower($node->tagName);
+            if (isset($this->skipped_elements[$tag])) {
+                $this->flush_segment_detail($segments, $current_content);
+                return;
+            }
+
+            $context = $this->language_segment_context_for_dom_element($node, $context);
+            if ($tag === 'img' && $node->hasAttribute('alt')) {
+                $this->flush_segment_detail($segments, $current_content);
+                $this->append_searchable_field_segment_detail($segments, 'alt', $node->getAttribute('alt'), $context);
+                return;
+            }
+        }
+
+        foreach ($node->childNodes as $child) {
+            $this->collect_searchable_field_segment_details($child, $segments, $current_content, $context);
+        }
+    }
+
+    /**
      * @param string[] $content_segments
      * @param string[] $alt_segments
      */
@@ -995,6 +1091,145 @@ final class Language_FTS_Playground_Analyzer
         $current = '';
     }
 
+    /**
+     * @param array{language:string,language_provenance:string} $context
+     * @return array{text:string,language:string,language_provenance:string}
+     */
+    private function empty_content_segment(array $context): array
+    {
+        return [
+            'text' => '',
+            'language' => $context['language'],
+            'language_provenance' => $context['language_provenance'],
+        ];
+    }
+
+    /**
+     * @param array{language:string,language_provenance:string} $context
+     * @return array{language:string,language_provenance:string}
+     */
+    private function language_segment_context_for_dom_element(DOMElement $element, array $context): array
+    {
+        $language = $this->html_language_from_dom_element($element);
+        if ($language !== null) {
+            return [
+                'language' => $language,
+                'language_provenance' => 'html_lang',
+            ];
+        }
+
+        return $context;
+    }
+
+    private function html_language_from_dom_element(DOMElement $element): ?string
+    {
+        foreach (['lang', 'xml:lang'] as $attribute) {
+            if (!$element->hasAttribute($attribute)) {
+                continue;
+            }
+
+            $language = $this->canonical_language_or_null($element->getAttribute($attribute));
+            if ($language !== null) {
+                return $language;
+            }
+        }
+
+        if (!$element->hasAttributes()) {
+            return null;
+        }
+
+        foreach ($element->attributes as $attribute) {
+            if (!$attribute instanceof DOMAttr) {
+                continue;
+            }
+
+            $name = strtolower($attribute->name);
+            if ($name !== 'lang' && $name !== 'xml:lang') {
+                continue;
+            }
+
+            $language = $this->canonical_language_or_null($attribute->value);
+            if ($language !== null) {
+                return $language;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{language:string,language_provenance:string}
+     */
+    private function language_segment_context(string $language, string $provenance): array
+    {
+        $provenance = trim($provenance);
+
+        return [
+            'language' => $this->canonical_language($language),
+            'language_provenance' => $provenance !== '' ? $provenance : 'fallback',
+        ];
+    }
+
+    /**
+     * @param array<int,array{field:string,text:string,language:string,language_provenance:string}> $segments
+     * @param array{language:string,language_provenance:string} $context
+     */
+    private function append_searchable_field_segment_detail(array &$segments, string $field, string $text, array $context): void
+    {
+        $text = $this->normalize_plain_text($text);
+        if ($text === '') {
+            return;
+        }
+
+        $segments[] = [
+            'field' => $field,
+            'text' => $text,
+            'language' => $context['language'],
+            'language_provenance' => $context['language_provenance'],
+        ];
+    }
+
+    /**
+     * @param array{language:string,language_provenance:string} $context
+     * @param array<int,array{field:string,text:string,language:string,language_provenance:string}> $segments
+     * @param array{text:string,language:string,language_provenance:string} $current_content
+     */
+    private function append_content_segment_text(
+        string $text,
+        array $context,
+        array &$segments,
+        array &$current_content
+    ): void {
+        if ($this->normalize_plain_text($current_content['text']) !== ''
+            && (
+                $current_content['language'] !== $context['language']
+                || $current_content['language_provenance'] !== $context['language_provenance']
+            )
+        ) {
+            $this->flush_segment_detail($segments, $current_content);
+        }
+
+        if ($this->normalize_plain_text($current_content['text']) === '') {
+            $current_content['language'] = $context['language'];
+            $current_content['language_provenance'] = $context['language_provenance'];
+        }
+
+        $current_content['text'] .= ' ' . $text;
+    }
+
+    /**
+     * @param array<int,array{field:string,text:string,language:string,language_provenance:string}> $segments
+     * @param array{text:string,language:string,language_provenance:string} $current_content
+     */
+    private function flush_segment_detail(array &$segments, array &$current_content): void
+    {
+        $this->append_searchable_field_segment_detail($segments, 'content', $current_content['text'], [
+            'language' => $current_content['language'],
+            'language_provenance' => $current_content['language_provenance'],
+        ]);
+        $current_content['text'] = '';
+    }
+
     private function first_html_language(string $html): ?string
     {
         if ($html === '' || !class_exists(DOMDocument::class)) {
@@ -1013,13 +1248,9 @@ final class Language_FTS_Playground_Analyzer
     private function first_html_language_in_node(DOMNode $node): ?string
     {
         if ($node instanceof DOMElement) {
-            foreach (['lang', 'xml:lang'] as $attribute) {
-                if ($node->hasAttribute($attribute)) {
-                    $language = $this->canonical_language_or_null($node->getAttribute($attribute));
-                    if ($language !== null) {
-                        return $language;
-                    }
-                }
+            $language = $this->html_language_from_dom_element($node);
+            if ($language !== null) {
+                return $language;
             }
         }
 
@@ -1088,6 +1319,18 @@ final class Language_FTS_Playground_Analyzer
     }
 
     /**
+     * @param array{language:string,language_provenance:string} $fallback_context
+     * @return array<int,array{field:string,text:string,language:string,language_provenance:string}>
+     */
+    private function extract_searchable_field_segment_details_with_wp_processor(string $html, array $fallback_context): array
+    {
+        return $this->field_segments_to_details(
+            $this->extract_searchable_field_segments_with_wp_processor($html),
+            $fallback_context
+        );
+    }
+
+    /**
      * @param string[] $breadcrumbs
      */
     private function has_skipped_breadcrumb(array $breadcrumbs): bool
@@ -1138,6 +1381,32 @@ final class Language_FTS_Playground_Analyzer
             'content' => $content_segments,
             'alt' => $alt_segments,
         ];
+    }
+
+    /**
+     * @param array{language:string,language_provenance:string} $fallback_context
+     * @return array<int,array{field:string,text:string,language:string,language_provenance:string}>
+     */
+    private function extract_searchable_field_segment_details_without_dom(string $html, array $fallback_context): array
+    {
+        return $this->field_segments_to_details($this->extract_searchable_field_segments_without_dom($html), $fallback_context);
+    }
+
+    /**
+     * @param array{content:string[],alt:string[]} $field_segments
+     * @param array{language:string,language_provenance:string} $context
+     * @return array<int,array{field:string,text:string,language:string,language_provenance:string}>
+     */
+    private function field_segments_to_details(array $field_segments, array $context): array
+    {
+        $details = [];
+        foreach (['content', 'alt'] as $field) {
+            foreach ($field_segments[$field] ?? [] as $text) {
+                $this->append_searchable_field_segment_detail($details, $field, (string) $text, $context);
+            }
+        }
+
+        return $details;
     }
 
     private function post_id(object $post): int

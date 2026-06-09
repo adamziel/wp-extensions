@@ -295,6 +295,7 @@ final class Language_FTS_Playground_Searcher
         );
 
         $document_fields = $this->storage->fetch_document_fields($language, $candidate_ids);
+        $document_field_metadata = $this->storage->fetch_document_field_metadata($language, $candidate_ids);
         $average_length = array_sum($document_lengths) / max(1, count($document_lengths));
         $has_lower_priority_match = $plan['fuzzy_terms'] !== [] || $synonym_expansions !== [] || $phrase_synonym_expansions !== [];
         $results = [];
@@ -312,6 +313,7 @@ final class Language_FTS_Playground_Searcher
             $matched_fields = [];
             $match_classes = [];
             $score_breakdown = $this->empty_score_breakdown();
+            $field_metadata = $document_field_metadata[$post_id] ?? [];
             $exact_match_count = 0;
             foreach ($plan['exact_terms'] as $term) {
                 $field_tfs = $postings[$term][$post_id] ?? [];
@@ -333,7 +335,7 @@ final class Language_FTS_Playground_Searcher
                 $exact_match_count++;
                 $this->add_score_detail(
                     $score_breakdown,
-                    $this->score_detail($term, $term, 'exact', $field_tfs, $term_score, $document_frequency)
+                    $this->score_detail($term, $term, 'exact', $field_tfs, $term_score, $document_frequency, $field_metadata, $language)
                 );
                 foreach ($field_tfs as $field => $tf) {
                     if ((int) $tf > 0) {
@@ -386,6 +388,8 @@ final class Language_FTS_Playground_Searcher
                             $best_fields,
                             $best_score,
                             $best_document_frequency,
+                            $field_metadata,
+                            $language,
                             [
                                 'edit_distance' => levenshtein($query_term, $best_term),
                                 'multiplier' => $this->fuzzy_score_multiplier,
@@ -447,6 +451,8 @@ final class Language_FTS_Playground_Searcher
                             $best_fields,
                             $best_score,
                             $best_document_frequency,
+                            $field_metadata,
+                            $language,
                             [
                                 'weight' => (float) ($best_expansion['weight'] ?? 0.0),
                                 'direction' => (string) ($best_expansion['direction'] ?? ''),
@@ -462,7 +468,7 @@ final class Language_FTS_Playground_Searcher
                 }
             }
 
-            foreach ($this->best_phrase_synonym_scores($phrase_synonym_expansions, $postings, $positions, (int) $post_id, $document_lengths[$post_id], $document_count, $average_length) as $match) {
+            foreach ($this->best_phrase_synonym_scores($phrase_synonym_expansions, $postings, $positions, (int) $post_id, $field_metadata, $language, $document_lengths[$post_id], $document_count, $average_length) as $match) {
                 $score += (float) $match['score'];
                 $matched_terms[(string) $match['label']] = true;
                 $match_classes['phrase_synonym'] = true;
@@ -631,6 +637,7 @@ final class Language_FTS_Playground_Searcher
 
     /**
      * @param array<string,int> $field_tfs
+     * @param array<string,array{language:string,language_provenance:string}> $field_metadata
      * @param array<string,mixed> $extra
      * @return array<string,mixed>
      */
@@ -641,6 +648,8 @@ final class Language_FTS_Playground_Searcher
         array $field_tfs,
         float $score,
         int $document_frequency,
+        array $field_metadata = [],
+        string $default_language = '',
         array $extra = []
     ): array {
         $detail = [
@@ -649,7 +658,7 @@ final class Language_FTS_Playground_Searcher
             'class' => $class,
             'score' => $score,
             'document_frequency' => $document_frequency,
-            'fields' => $this->score_field_details($field_tfs, $score),
+            'fields' => $this->score_field_details($field_tfs, $score, $field_metadata, $default_language),
         ];
 
         foreach ($extra as $key => $value) {
@@ -661,9 +670,10 @@ final class Language_FTS_Playground_Searcher
 
     /**
      * @param array<string,int> $field_tfs
-     * @return array<int,array{field:string,term_frequency:int,boost:float,weighted_term_frequency:float,contribution:float}>
+     * @param array<string,array{language:string,language_provenance:string}> $field_metadata
+     * @return array<int,array{field:string,term_frequency:int,boost:float,weighted_term_frequency:float,contribution:float,language:string,language_provenance:string}>
      */
-    private function score_field_details(array $field_tfs, float $score): array
+    private function score_field_details(array $field_tfs, float $score, array $field_metadata = [], string $default_language = ''): array
     {
         $weighted_total = $this->weighted_term_frequency($field_tfs);
         $details = [];
@@ -675,16 +685,36 @@ final class Language_FTS_Playground_Searcher
 
             $boost = self::FIELD_BOOSTS[$field] ?? 1.0;
             $weighted_tf = $tf * $boost;
+            $metadata = $this->score_field_metadata($field_metadata, $field, $default_language);
             $details[] = [
                 'field' => $field,
                 'term_frequency' => $tf,
                 'boost' => $boost,
                 'weighted_term_frequency' => $weighted_tf,
                 'contribution' => $weighted_total > 0.0 ? $score * ($weighted_tf / $weighted_total) : 0.0,
+                'language' => $metadata['language'],
+                'language_provenance' => $metadata['language_provenance'],
             ];
         }
 
         return $details;
+    }
+
+    /**
+     * @param array<string,array{language:string,language_provenance:string}> $field_metadata
+     * @return array{language:string,language_provenance:string}
+     */
+    private function score_field_metadata(array $field_metadata, string $field, string $default_language): array
+    {
+        $metadata = $field_metadata[$field] ?? [];
+        $metadata = is_array($metadata) ? $metadata : [];
+        $language = trim((string) ($metadata['language'] ?? $default_language));
+        $provenance = trim((string) ($metadata['language_provenance'] ?? 'fallback'));
+
+        return [
+            'language' => $language !== '' ? $language : $default_language,
+            'language_provenance' => $provenance !== '' ? $provenance : 'fallback',
+        ];
     }
 
     /**
@@ -965,6 +995,7 @@ final class Language_FTS_Playground_Searcher
      * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string,offset:int}> $expansions
      * @param array<string,array<int,array<string,int>>> $postings
      * @param array<string,array<int,int[]>> $positions
+     * @param array<string,array{language:string,language_provenance:string}> $field_metadata
      * @return array<int,array{score:float,label:string,fields:string[],details:array<int,array<string,mixed>>}>
      */
     private function best_phrase_synonym_scores(
@@ -972,6 +1003,8 @@ final class Language_FTS_Playground_Searcher
         array $postings,
         array $positions,
         int $post_id,
+        array $field_metadata,
+        string $language,
         int $document_length,
         int $document_count,
         float $average_length
@@ -1015,6 +1048,8 @@ final class Language_FTS_Playground_Searcher
                     $field_tfs,
                     $term_score,
                     $document_frequency,
+                    $field_metadata,
+                    $language,
                     [
                         'source_phrase' => (string) $expansion['source'],
                         'target_phrase' => (string) $expansion['target'],

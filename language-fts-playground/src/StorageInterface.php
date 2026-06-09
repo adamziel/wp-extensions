@@ -23,6 +23,16 @@ interface Language_FTS_Playground_Storage_Interface
         array $term_positions
     ): void;
 
+    /**
+     * Replaces the complete set of language partitions for a post.
+     *
+     * Each partition describes one language-specific document row for the same
+     * post ID and contains the same field/position payloads as replace_document().
+     *
+     * @param array<int,array{language:string,title:string,status:string,document_length:int,field_term_frequencies:array<string,array<string,int>>,field_texts:array<string,string>,term_positions:array<string,int[]>,field_metadata?:array<string,array{language:string,language_provenance:string}>}> $partitions
+     */
+    public function replace_document_partitions(int $post_id, array $partitions): void;
+
     public function delete_document(int $post_id): void;
 
     /**
@@ -54,6 +64,12 @@ interface Language_FTS_Playground_Storage_Interface
      * @return array<int,array<string,string>>
      */
     public function fetch_document_fields(string $language, array $post_ids): array;
+
+    /**
+     * @param int[] $post_ids
+     * @return array<int,array<string,array{language:string,language_provenance:string}>>
+     */
+    public function fetch_document_field_metadata(string $language, array $post_ids): array;
 
     public function document_count(string $language): int;
 
