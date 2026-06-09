@@ -169,7 +169,7 @@ final class Language_FTS_Playground_Indexer
      */
     private function extract_content_segment_details(string $html, string $fallback_language): array
     {
-        if ($this->has_structured_html_language_reader() || !$this->html_may_contain_language_attributes($html)) {
+        if ($this->has_dom_html_language_reader() || !$this->html_may_contain_language_attributes($html)) {
             return $this->analyzer->extract_searchable_field_segment_details($html, $fallback_language, 'post');
         }
 
@@ -275,9 +275,9 @@ final class Language_FTS_Playground_Indexer
         return $segments;
     }
 
-    private function has_structured_html_language_reader(): bool
+    private function has_dom_html_language_reader(): bool
     {
-        return class_exists(DOMDocument::class) || class_exists('WP_HTML_Processor');
+        return class_exists(DOMDocument::class);
     }
 
     private function html_may_contain_language_attributes(string $html): bool

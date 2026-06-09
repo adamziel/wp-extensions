@@ -1246,6 +1246,170 @@ function run_language_fts_evaluator(string $fixture_path, array $options = [], b
 }
 
 /**
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_wp_processor_lang_probe(): array
+{
+    $script_path = tempnam(sys_get_temp_dir(), 'language-fts-wp-processor-probe-');
+    assert_true(is_string($script_path), 'Temporary WP_HTML_Processor probe script can be created.');
+
+    $script = <<<'PHP'
+<?php
+declare(strict_types=1);
+
+final class WP_HTML_Processor
+{
+    /** @var string[] */
+    private array $tokens = [];
+    private int $position = -1;
+
+    public static function create_fragment(string $html): self
+    {
+        return new self($html);
+    }
+
+    private function __construct(string $html)
+    {
+        $matches = [];
+        if (preg_match_all('/[^<]+/u', $html, $matches) === false) {
+            return;
+        }
+
+        foreach ($matches[0] as $token) {
+            $token = (string) $token;
+            if ($token === '') {
+                continue;
+            }
+
+            $this->tokens[] = $token;
+        }
+    }
+
+    public function next_token(): bool
+    {
+        $this->position++;
+
+        return isset($this->tokens[$this->position]);
+    }
+
+    /**
+     * @return string[]
+     */
+    public function get_breadcrumbs(): array
+    {
+        return [];
+    }
+
+    public function get_token_type(): string
+    {
+        return '#text';
+    }
+
+    public function get_modifiable_text(): string
+    {
+        return (string) ($this->tokens[$this->position] ?? '');
+    }
+
+    public function get_tag(): string
+    {
+        return '';
+    }
+}
+
+function probe_fail(string $message, array $payload = []): void
+{
+    fwrite(STDERR, $message . "\n");
+    if ($payload !== []) {
+        fwrite(STDERR, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+    }
+    exit(1);
+}
+
+/**
+ * @param array<int,array{post_id:int}> $results
+ * @return int[]
+ */
+function probe_post_ids(array $results): array
+{
+    return array_values(array_map(static fn(array $result): int => (int) $result['post_id'], $results));
+}
+
+/**
+ * @param array<int,array{language:string}> $documents
+ * @return string[]
+ */
+function probe_document_languages(array $documents): array
+{
+    $languages = array_values(array_unique(array_map(static fn(array $document): string => (string) $document['language'], $documents)));
+    sort($languages, SORT_STRING);
+
+    return $languages;
+}
+
+if (class_exists(DOMDocument::class, false)) {
+    probe_fail('DOMDocument is available under php -n; the hybrid no-DOM runtime was not exercised.');
+}
+
+require __LANGUAGE_FTS_BOOTSTRAP_PATH__;
+
+$storage = new Language_FTS_Playground_In_Memory_Storage();
+$analyzer = new Language_FTS_Playground_Analyzer();
+$indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+$searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+$post = (object) [
+    'ID' => 185,
+    'post_status' => 'publish',
+    'post_type' => 'post',
+    'post_password' => '',
+    'post_title' => 'Hybrid runtime mixed language',
+    'post_excerpt' => '',
+    'post_content' => '<p>Searching pages stay visible in English.</p><p lang="pl">Partycja wyszukiwania pokazuje wynik.</p>',
+    'language' => 'en',
+];
+$indexer->index_post($post);
+
+$polish_post_ids = probe_post_ids($searcher->search('szukanie', 'pl'));
+$english_post_ids = probe_post_ids($searcher->search('wyszukiwania', 'en'));
+$documents = $storage->all_documents();
+$languages = probe_document_languages($documents);
+$payload = [
+    'polish_post_ids' => $polish_post_ids,
+    'english_post_ids' => $english_post_ids,
+    'languages' => $languages,
+    'document_count' => count($documents),
+];
+
+if ($polish_post_ids !== [185]) {
+    probe_fail('Polish search did not return the lang-marked segment post.', $payload);
+}
+if ($english_post_ids !== []) {
+    probe_fail('English search leaked the lang-marked Polish segment.', $payload);
+}
+if ($languages !== ['en', 'pl']) {
+    probe_fail('Indexed documents did not include both en and pl partitions.', $payload);
+}
+
+echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+PHP;
+    $script = str_replace('__LANGUAGE_FTS_BOOTSTRAP_PATH__', var_export(__DIR__ . '/../src/bootstrap.php', true), $script);
+    assert_true(file_put_contents($script_path, $script) !== false, 'Temporary WP_HTML_Processor probe script can be written.');
+
+    try {
+        $lines = [];
+        $exit_code = 0;
+        exec(escapeshellarg(PHP_BINARY) . ' -n ' . escapeshellarg($script_path) . ' 2>&1', $lines, $exit_code);
+
+        return [
+            'exit_code' => $exit_code,
+            'output' => implode("\n", $lines),
+        ];
+    } finally {
+        remove_language_fts_temp_file($script_path);
+    }
+}
+
+/**
  * @param array<string,mixed> $fixture
  */
 function write_language_fts_temp_eval_fixture(array $fixture): string
@@ -3024,6 +3188,14 @@ test_case('explicit language searches isolate mixed-language HTML lang segments'
     $polish_results = $searcher->search('szukanie', 'pl');
     assert_same([141], array_column($polish_results, 'post_id'), 'Explicit Polish mode matches the Polish HTML lang segment.');
     assert_same('pl', $polish_results[0]['matched_language'], 'Explicit Polish search reports the Polish segment partition.');
+});
+
+test_case('php-n WP_HTML_Processor runtime isolates HTML lang segment partitions', function (): void {
+    $result = run_language_fts_wp_processor_lang_probe();
+
+    assert_same(0, $result['exit_code'], 'php -n WP_HTML_Processor hybrid probe passes. Output: ' . $result['output']);
+    assert_contains_text('"languages": [', $result['output'], 'The hybrid probe reports indexed language partitions.');
+    assert_contains_text('"pl"', $result['output'], 'The hybrid probe indexes the Polish lang segment partition.');
 });
 
 test_case('reindex removes stale mixed-language HTML lang partitions', function (): void {
