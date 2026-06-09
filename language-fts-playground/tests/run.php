@@ -1864,6 +1864,29 @@ test_case('lexical pack fingerprint changes when pack metadata changes', functio
     }
 });
 
+test_case('lexical pack fingerprint changes when runtime resource content changes without metadata changes', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $pack_file = $language_dir . DIRECTORY_SEPARATOR . 'pack.php';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'pack_version' => 'fixture-v1',
+        'pack_date' => '2026-06-08',
+        'provenance' => 'fixture-provenance-v1',
+    ]);
+
+    try {
+        $first = (new Language_FTS_Playground_Lexical_Profile_Repository($root))->pack_fingerprint();
+        $metadata_before = (string) file_get_contents($pack_file);
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv', "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\nbeta\tbeta\tfixture\n");
+        $second = (new Language_FTS_Playground_Lexical_Profile_Repository($root))->pack_fingerprint();
+
+        assert_same($metadata_before, (string) file_get_contents($pack_file), 'The fixture leaves pack.php metadata unchanged.');
+        assert_true($first !== $second, 'Changing profile-declared TSV content changes the lexical fingerprint.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('ensure_schema marks rebuild required when lexical pack fingerprint changes', function (): void {
     $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
     $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
@@ -1904,6 +1927,48 @@ test_case('ensure_schema marks rebuild required when lexical pack fingerprint ch
         assert_same(true, get_option('language_fts_playground_rebuild_required'), 'A lexical fingerprint change marks the index for rebuild.');
         assert_same($normalized_root, $status['lexical_resource_root'] ?? null, 'Status records the resource root that triggered the rebuild check.');
         assert_contains_text('lexical resource packs changed', (string) ($status['last_status'] ?? ''), 'Status explains that lexical packs can require a rebuild.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('ensure_schema marks rebuild required when runtime resource content changes without metadata changes', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $pack_file = $language_dir . DIRECTORY_SEPARATOR . 'pack.php';
+    write_language_fts_temp_pack_metadata($language_dir, [
+        'pack_version' => 'fixture-v1',
+        'pack_date' => '2026-06-08',
+        'provenance' => 'fixture-provenance-v1',
+    ]);
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        $storage = reset_language_fts_plugin_runtime();
+        assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+        add_filter(
+            'language_fts_playground_lexical_resource_root',
+            static fn(): string => $normalized_root,
+            10,
+            1
+        );
+        $initial_fingerprint = Language_FTS_Playground_Plugin::lexical_pack_fingerprint();
+        update_option('language_fts_playground_schema_version', LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION);
+        update_option('language_fts_playground_analyzer_version', LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION);
+        update_option('language_fts_playground_lexical_pack_fingerprint', $initial_fingerprint);
+        update_option('language_fts_playground_rebuild_required', false);
+
+        $metadata_before = (string) file_get_contents($pack_file);
+        file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv', "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\nbeta\tbeta\tfixture\n");
+        $next_fingerprint = Language_FTS_Playground_Plugin::lexical_pack_fingerprint();
+
+        Language_FTS_Playground_Plugin::ensure_schema();
+
+        assert_same($metadata_before, (string) file_get_contents($pack_file), 'The fixture leaves pack.php metadata unchanged.');
+        assert_true($initial_fingerprint !== $next_fingerprint, 'A changed TSV produces a new stored lexical fingerprint value.');
+        assert_same(1, $storage->install_count, 'A runtime resource content change still runs the idempotent schema installer.');
+        assert_same($next_fingerprint, get_option('language_fts_playground_lexical_pack_fingerprint'), 'The changed content fingerprint is stored.');
+        assert_same(true, get_option('language_fts_playground_rebuild_required'), 'A runtime resource content change marks the index for rebuild.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
