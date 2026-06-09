@@ -1435,6 +1435,136 @@ function language_fts_eval_fixture_path(string $name): string
     return __DIR__ . '/fixtures/lexical-eval/' . $name;
 }
 
+function language_fts_morphology_fixture_path(string $name): string
+{
+    return __DIR__ . '/fixtures/morphology-sources/' . $name;
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function read_language_fts_morphology_fixture(string $name): array
+{
+    $path = language_fts_morphology_fixture_path($name);
+    $json = file_get_contents($path);
+    assert_true(is_string($json), 'Morphology fixture can be read: ' . $path);
+    $fixture = json_decode($json, true);
+    assert_true(is_array($fixture), 'Morphology fixture JSON decodes to an object: ' . $path);
+
+    return $fixture;
+}
+
+/**
+ * @param array<string,mixed> $fixture
+ */
+function write_language_fts_morphology_fixture_file(string $path, array $fixture): void
+{
+    $json = json_encode($fixture, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    assert_true(is_string($json), 'Morphology fixture variant encodes as JSON.');
+    file_put_contents($path, $json . "\n");
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_morphology_compiler(string $input_path, string $output_dir, array $options = []): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+        '-n',
+        escapeshellarg(__DIR__ . '/../tools/compile-morphology-fixture.php'),
+        escapeshellarg($input_path),
+        escapeshellarg($output_dir),
+    ];
+
+    if (!empty($options['file_only'])) {
+        $command[] = escapeshellarg('--file-only');
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function compile_language_fts_morphology_fixture_to_root(string $fixture_name, string $root): array
+{
+    $fixture = read_language_fts_morphology_fixture($fixture_name);
+    $language = (string) ($fixture['language'] ?? '');
+    assert_true($language !== '', 'Morphology fixture declares a language.');
+    $language_dir = $root . DIRECTORY_SEPARATOR . $language;
+    assert_true(mkdir($language_dir, 0777, true), 'Temporary morphology language directory is created.');
+
+    $result = run_language_fts_morphology_compiler(language_fts_morphology_fixture_path($fixture_name), $language_dir);
+    assert_same(0, $result['exit_code'], 'Morphology fixture compiler exits successfully for ' . $fixture_name . '. Output: ' . $result['output']);
+
+    return $fixture;
+}
+
+/**
+ * @param array<string,mixed> $fixture
+ */
+function assert_language_fts_morphology_fixture_behavior(array $fixture, Language_FTS_Playground_Analyzer $analyzer): void
+{
+    $language = (string) ($fixture['language'] ?? '');
+    assert_true($language !== '', 'Morphology fixture behavior has a language.');
+
+    foreach ((array) ($fixture['stemmer_sample_pairs'] ?? []) as $pair) {
+        assert_true(is_array($pair), 'Stemmer sample pair is an object.');
+        $id = (string) ($pair['id'] ?? '');
+        $surface = (string) ($pair['surface'] ?? '');
+        $reference_key = (string) ($pair['reference_key'] ?? '');
+        $policy = (string) ($pair['policy'] ?? '');
+        $terms = $analyzer->analyze_text($surface, $language);
+
+        if ($policy === 'must_emit') {
+            assert_true(
+                in_array($reference_key, $terms, true),
+                "Morphology sample {$id} emits {$reference_key}. Terms: " . var_export($terms, true)
+            );
+        } elseif ($policy === 'must_not_emit') {
+            assert_true(
+                !in_array($reference_key, $terms, true),
+                "Morphology bait sample {$id} does not emit {$reference_key}. Terms: " . var_export($terms, true)
+            );
+        }
+    }
+
+    foreach ((array) ($fixture['analyzer_expectations'] ?? []) as $expectation) {
+        assert_true(is_array($expectation), 'Analyzer expectation is an object.');
+        $id = (string) ($expectation['id'] ?? '');
+        $terms = $analyzer->analyze_text((string) ($expectation['text'] ?? ''), $language);
+
+        if (array_key_exists('keys_exact', $expectation)) {
+            assert_same(
+                array_values(array_map('strval', (array) $expectation['keys_exact'])),
+                $terms,
+                "Morphology analyzer expectation {$id} has exact keys."
+            );
+        }
+        foreach (array_values(array_map('strval', (array) ($expectation['keys_include'] ?? []))) as $key) {
+            assert_true(
+                in_array($key, $terms, true),
+                "Morphology analyzer expectation {$id} includes {$key}. Terms: " . var_export($terms, true)
+            );
+        }
+        foreach (array_values(array_map('strval', (array) ($expectation['keys_exclude'] ?? []))) as $key) {
+            assert_true(
+                !in_array($key, $terms, true),
+                "Morphology analyzer expectation {$id} excludes {$key}. Terms: " . var_export($terms, true)
+            );
+        }
+    }
+}
+
 /**
  * @param array<string,string> $options
  * @return array{exit_code:int,output:string}
@@ -3556,6 +3686,198 @@ test_case('lexical pack evaluator accepts suite option and spaced thresholds', f
     assert_contains_text('Evaluation passed.', $output, 'The --suite alias evaluates the requested fixture.');
 });
 
+test_case('morphology fixture compiler writes deterministic minimal English pack', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-morphology-en');
+
+    try {
+        $result = run_language_fts_morphology_compiler(language_fts_morphology_fixture_path('en-seed.json'), $output_dir);
+        assert_same(0, $result['exit_code'], 'Morphology fixture compiler exits successfully. Output: ' . $result['output']);
+
+        $expected_term_rules =
+            "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+            "en-010-ed-double\t5\t/^[a-z]*([bcdfghjkmnpqrtvwxyz])\\1ed$/u\t\ted\t\t3\ttrim_doubled_final_consonant,require_vowel_or_y,stop_after_match\t\t\tfixture-english-morphology\n" .
+            "en-020-ed-base\t5\t/^[a-z]+ed$/u\t\ted\t\t3\trequire_vowel_or_y\t\t\tfixture-english-morphology\n" .
+            "en-030-ing-double\t6\t/^[a-z]*([bcdfghjkmnpqrtvwxyz])\\1ing$/u\t\ting\t\t3\ttrim_doubled_final_consonant,require_vowel_or_y,stop_after_match\t\t\tfixture-english-morphology\n" .
+            "en-040-ing-base\t6\t/^[a-z]+ing$/u\t\ting\t\t3\trequire_vowel_or_y\t\t\tfixture-english-morphology\n" .
+            "en-050-es\t4\t/^[a-z]+(?:ches|shes|sses|xes|zes|ses|oes)$/u\t\tes\t\t3\tstop_after_match\t\t\tfixture-english-morphology\n" .
+            "en-060-final-s\t4\t/^[a-z]+s$/u\t\ts\t\t3\t\t\t\tfixture-english-morphology\n";
+        $expected_stopwords = "# Generated stopwords from morphology fixture.\n# provenance: fixture-english-morphology\nand\nthe\n";
+        $expected_protected_terms = "# Generated protected terms from morphology fixture.\n# provenance: fixture-english-morphology\nanalysis\nbus\nnews\n";
+
+        $first_outputs = [
+            'term_rules.tsv' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'term_rules.tsv'),
+            'stopwords.txt' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'stopwords.txt'),
+            'protected_terms.txt' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'protected_terms.txt'),
+            'lexemes.tsv' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'lexemes.tsv'),
+            'synonyms.tsv' => file_get_contents($output_dir . DIRECTORY_SEPARATOR . 'synonyms.tsv'),
+        ];
+
+        assert_same($expected_term_rules, $first_outputs['term_rules.tsv'], 'Compiler writes deterministic term_rules.tsv.');
+        assert_same($expected_stopwords, $first_outputs['stopwords.txt'], 'Compiler writes sorted stopwords with provenance.');
+        assert_same($expected_protected_terms, $first_outputs['protected_terms.txt'], 'Compiler writes sorted protected terms with provenance.');
+        assert_same("# observed\tcanonical\tprovenance\n", $first_outputs['lexemes.tsv'], 'Compiler writes a header-only lexemes.tsv when no lexeme rows are declared.');
+        assert_same("# source\ttarget\tdirection\tweight\tprovenance\n", $first_outputs['synonyms.tsv'], 'Compiler writes a header-only synonyms.tsv when no synonym rows are declared.');
+
+        $profile = require $output_dir . DIRECTORY_SEPARATOR . 'profile.php';
+        assert_same('en', $profile['id'] ?? null, 'Generated profile declares the fixture language.');
+        assert_same('term_rules.tsv', $profile['resources']['term_rules'] ?? null, 'Generated profile declares term_rules.tsv.');
+        assert_same('protected_terms.txt', $profile['resources']['protected_terms'] ?? null, 'Generated profile declares protected_terms.txt.');
+
+        $metadata = require $output_dir . DIRECTORY_SEPARATOR . 'pack.php';
+        assert_same('fixture-english-morphology', $metadata['provenance'] ?? null, 'Generated pack metadata declares fixture provenance.');
+        assert_same(
+            ['profile.php', 'stopwords.txt', 'lexemes.tsv', 'synonyms.tsv', 'term_rules.tsv', 'protected_terms.txt'],
+            $metadata['files'] ?? null,
+            'Generated pack metadata lists every profile resource.'
+        );
+
+        $second_result = run_language_fts_morphology_compiler(language_fts_morphology_fixture_path('en-seed.json'), $output_dir);
+        assert_same(0, $second_result['exit_code'], 'Morphology fixture compiler can overwrite fixed outputs. Output: ' . $second_result['output']);
+        foreach ($first_outputs as $file => $contents) {
+            assert_same($contents, file_get_contents($output_dir . DIRECTORY_SEPARATOR . $file), "Repeated morphology compile keeps {$file} deterministic.");
+        }
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('morphology fixture compiler supports file-only resource output', function (): void {
+    $output_dir = create_language_fts_temp_dir('language-fts-morphology-file-only');
+
+    try {
+        $result = run_language_fts_morphology_compiler(
+            language_fts_morphology_fixture_path('en-seed.json'),
+            $output_dir,
+            ['file_only' => true]
+        );
+        assert_same(0, $result['exit_code'], 'File-only morphology compile exits successfully. Output: ' . $result['output']);
+
+        $files = array_values(array_filter(
+            scandir($output_dir) ?: [],
+            static fn(string $file): bool => $file !== '.' && $file !== '..'
+        ));
+        sort($files, SORT_STRING);
+        assert_same(['protected_terms.txt', 'stopwords.txt', 'term_rules.tsv'], $files, 'File-only mode writes only morphology resource files.');
+    } finally {
+        remove_language_fts_temp_tree($output_dir);
+    }
+});
+
+test_case('morphology fixture compiler rejects malformed fixtures clearly', function (): void {
+    $base = read_language_fts_morphology_fixture('en-seed.json');
+    $cases = [
+        'invalid schema' => [
+            static function (array $fixture): array {
+                $fixture['schema'] = 'broken-schema';
+
+                return $fixture;
+            },
+            'schema must be language-fts-playground-morphology-fixture-v1',
+        ],
+        'duplicate rule id' => [
+            static function (array $fixture): array {
+                $fixture['term_rule_behaviors'][] = $fixture['term_rule_behaviors'][0];
+
+                return $fixture;
+            },
+            'duplicate term_rule_behaviors id',
+        ],
+        'invalid surface regex' => [
+            static function (array $fixture): array {
+                $fixture['term_rule_behaviors'][0]['surface_pattern'] = '(?P<broken';
+
+                return $fixture;
+            },
+            'surface_pattern regex must be valid',
+        ],
+        'unknown flag' => [
+            static function (array $fixture): array {
+                $fixture['term_rule_behaviors'][0]['flags'][] = 'explode';
+
+                return $fixture;
+            },
+            'unknown term rule flag',
+        ],
+        'unsorted rule id' => [
+            static function (array $fixture): array {
+                $first = $fixture['term_rule_behaviors'][0];
+                $fixture['term_rule_behaviors'][0] = $fixture['term_rule_behaviors'][1];
+                $fixture['term_rule_behaviors'][1] = $first;
+
+                return $fixture;
+            },
+            'ascending rule id order',
+        ],
+        'non-normalized stopword' => [
+            static function (array $fixture): array {
+                $fixture['stopword_excerpt'][] = ['term' => 'The'];
+
+                return $fixture;
+            },
+            'stopword term must be normalized lowercase resource tokens',
+        ],
+        'duplicate protected term' => [
+            static function (array $fixture): array {
+                $fixture['protected_terms'][] = ['term' => 'news'];
+
+                return $fixture;
+            },
+            'duplicate protected term after normalization',
+        ],
+        'invalid expectation shape' => [
+            static function (array $fixture): array {
+                $fixture['analyzer_expectations'][0]['keys_include'] = 'run';
+
+                return $fixture;
+            },
+            'keys_include must be a list of strings',
+        ],
+    ];
+
+    foreach ($cases as $label => [$mutate, $expected_message]) {
+        $case_dir = create_language_fts_temp_dir('language-fts-morphology-invalid');
+        try {
+            $input_path = $case_dir . DIRECTORY_SEPARATOR . 'fixture.json';
+            $output_dir = $case_dir . DIRECTORY_SEPARATOR . 'out';
+            write_language_fts_morphology_fixture_file($input_path, $mutate($base));
+            $result = run_language_fts_morphology_compiler($input_path, $output_dir);
+            assert_true($result['exit_code'] !== 0, "Malformed morphology fixture exits nonzero for {$label}.");
+            assert_contains_text($expected_message, $result['output'], "Malformed morphology fixture reports the expected reason for {$label}.");
+        } finally {
+            remove_language_fts_temp_tree($case_dir);
+        }
+    }
+});
+
+test_case('compiled morphology fixtures feed repository analyzer and validator', function (): void {
+    $root = create_language_fts_temp_dir('language-fts-morphology-root');
+
+    try {
+        $fixtures = [
+            compile_language_fts_morphology_fixture_to_root('en-seed.json', $root),
+            compile_language_fts_morphology_fixture_to_root('de-ordering.json', $root),
+            compile_language_fts_morphology_fixture_to_root('pl-conservative.json', $root),
+        ];
+
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $analyzer = new Language_FTS_Playground_Analyzer($repository);
+        assert_same(['en', 'pl', 'de'], $repository->language_ids(), 'Generated morphology profiles use deterministic language order.');
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        assert_same(true, $report['valid'], 'Generated morphology fixture packs validate cleanly. Report: ' . var_export($report, true));
+
+        foreach ($fixtures as $fixture) {
+            assert_language_fts_morphology_fixture_behavior($fixture, $analyzer);
+        }
+
+        $metadata = $repository->pack_metadata('en');
+        assert_same('curated_seed', $metadata['data_kind'], 'Generated morphology fixture metadata remains curated_seed.');
+        assert_contains_text('synthetic_project_fixture', $metadata['attribution_text'], 'Generated metadata preserves sample-only reference scope.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('membership importer compiles deterministic synsets and lexemes', function (): void {
     $output_dir = create_language_fts_temp_dir('language-fts-membership-import');
 
@@ -4051,6 +4373,9 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('evaluate-lexical-pack.php', $docs, 'Lexical docs describe the relevance evaluator CLI.');
     assert_contains_text('synonym_phrases.tsv', $docs, 'Lexical docs describe synonym phrase resources.');
     assert_contains_text('full text search -> fts', $docs, 'Lexical docs describe the committed phrase synonym smoke fixture.');
+    assert_contains_text('Morphology Fixture Compiler', $docs, 'Lexical docs describe the morphology fixture compiler.');
+    assert_contains_text('language-fts-playground-morphology-fixture-v1', $docs, 'Lexical docs name the morphology fixture schema.');
+    assert_contains_text('not Snowball compliance tests', $docs, 'Lexical docs keep morphology fixture scope sample-only.');
     assert_contains_text('--max-synset-size', $docs, 'Lexical docs describe synset size thresholds.');
     assert_contains_text('recall@5', $docs, 'Lexical docs describe evaluator relevance metrics.');
     assert_contains_text('Broad synsets are dangerous', $docs, 'Lexical docs explain broad synset search-quality risk.');

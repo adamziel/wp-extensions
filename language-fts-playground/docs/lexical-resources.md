@@ -330,6 +330,40 @@ admin-visible status. If the custom root is missing or pack metadata cannot be
 read, the schema check records an error instead of silently accepting stale
 analyzer assumptions.
 
+## Morphology Fixture Compiler
+
+Use `tools/compile-morphology-fixture.php` to turn a small reviewed JSON
+morphology fixture into compact runtime files:
+
+```sh
+php language-fts-playground/tools/compile-morphology-fixture.php \
+  language-fts-playground/tests/fixtures/morphology-sources/en-seed.json \
+  /tmp/language-fts-morphology-en
+```
+
+The fixture schema is
+`language-fts-playground-morphology-fixture-v1`. It describes synthetic or
+sample behavior: source/provenance metadata, normalized stopword excerpts,
+protected terms, reviewed term-rule rows, sample stemming pairs, and analyzer
+expectations. The compiler writes `profile.php`, `stopwords.txt`,
+`lexemes.tsv`, `synonyms.tsv`, `term_rules.tsv`, `protected_terms.txt`, and
+`pack.php`. Pass `--file-only` when a maintainer only wants refreshed
+`term_rules.tsv`, `protected_terms.txt`, and `stopwords.txt` files for review.
+
+The compiler validates fixture shape before writing resources. It rejects an
+unknown schema, duplicate rule or expectation ids, invalid regex patterns,
+unknown term-rule flags, rule arrays whose IDs are not already in sortable
+runtime order, non-normalized stopword/protected terms, duplicate normalized
+terms, and malformed analyzer expectations. Sorting happens after
+normalization checks, so case or fold mistakes fail clearly instead of being
+silently collapsed.
+
+These fixtures are not Snowball compliance tests and are not vendored
+morphology datasets. They are deliberately tiny, synthetic or sample behavior
+checks that prove the generic analyzer path handles positive suffix keys,
+over-stemming bait, protected terms, stopword removal, alternate keys, and
+`stop_after_match` ordering.
+
 ## Build-Time Importer
 
 Use the canonical PHP importer to create compact runtime outputs from small
