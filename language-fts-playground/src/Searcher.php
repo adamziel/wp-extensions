@@ -34,8 +34,10 @@ final class Language_FTS_Playground_Searcher
         private int $fuzzy_min_length = 4,
         private int $fuzzy_candidate_limit = 128,
         private int $fuzzy_max_distance = 1,
-        private float $fuzzy_score_multiplier = 0.45
+        private float $fuzzy_score_multiplier = 0.45,
+        private int $max_lookup_terms = Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_LOOKUP_TERMS
     ) {
+        $this->max_lookup_terms = max(1, $this->max_lookup_terms);
     }
 
     /**
@@ -216,23 +218,17 @@ final class Language_FTS_Playground_Searcher
         $language_terms = [];
         $language_term_groups = [];
         foreach ($enabled as $language) {
-            $plan = $this->parse_query($query, $language);
-            $synonym_terms = $this->synonym_terms($this->analyzer->expand_query_synonyms($plan['exact_terms'], $language));
-            $phrase_synonym_terms = $this->phrase_synonym_terms($this->analyzer->expand_query_synonym_phrases($plan['query_tokens'], $language));
-            $fuzzy_terms = $this->flatten_fuzzy_candidates($this->resolve_fuzzy_candidates($plan['fuzzy_terms'], $language));
+            $lookup_plan = $this->build_partition_lookup_plan($query, $language);
+            $this->enforce_lookup_term_cap((int) $lookup_plan['lookup_term_count'], $language);
+            $plan = $lookup_plan['plan'];
 
             $language_term_groups[$language] = [
                 'exact' => $plan['exact_terms'],
-                'single_token_synonyms' => $synonym_terms,
-                'phrase_synonyms' => $phrase_synonym_terms,
-                'fuzzy' => $fuzzy_terms,
+                'single_token_synonyms' => $lookup_plan['synonym_terms'],
+                'phrase_synonyms' => $lookup_plan['phrase_synonym_terms'],
+                'fuzzy' => $lookup_plan['fuzzy_terms'],
             ];
-            $language_terms[$language] = $this->unique_terms(array_merge(
-                $plan['exact_terms'],
-                $synonym_terms,
-                $phrase_synonym_terms,
-                $fuzzy_terms
-            ));
+            $language_terms[$language] = $lookup_plan['terms'];
         }
 
         $hits = $this->storage->fetch_term_language_hits($language_terms);
@@ -363,20 +359,16 @@ final class Language_FTS_Playground_Searcher
     private function evaluate_partition(string $query, string $language, bool $include_candidate_enrichment = true): array
     {
         $language = $this->analyzer->canonical_language($language);
-        $plan = $this->parse_query($query, $language);
-        $fuzzy_candidates = $this->resolve_fuzzy_candidates($plan['fuzzy_terms'], $language);
-        $fuzzy_terms = [];
-        foreach ($fuzzy_candidates as $candidates) {
-            foreach ($candidates as $candidate) {
-                $fuzzy_terms[] = $candidate;
-            }
-        }
-
-        $synonym_expansions = $this->analyzer->expand_query_synonyms($plan['exact_terms'], $language);
-        $phrase_synonym_expansions = $this->analyzer->expand_query_synonym_phrases($plan['query_tokens'], $language);
-        $synonym_terms = $this->synonym_terms($synonym_expansions);
-        $phrase_synonym_terms = $this->phrase_synonym_terms($phrase_synonym_expansions);
-        $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms, $synonym_terms, $phrase_synonym_terms));
+        $lookup_plan = $this->build_partition_lookup_plan($query, $language);
+        $plan = $lookup_plan['plan'];
+        $fuzzy_candidates = $lookup_plan['fuzzy_candidates'];
+        $fuzzy_terms = $lookup_plan['fuzzy_terms'];
+        $synonym_expansions = $lookup_plan['synonym_expansions'];
+        $phrase_synonym_expansions = $lookup_plan['phrase_synonym_expansions'];
+        $synonym_terms = $lookup_plan['synonym_terms'];
+        $phrase_synonym_terms = $lookup_plan['phrase_synonym_terms'];
+        $terms = $lookup_plan['terms'];
+        $lookup_term_count = (int) $lookup_plan['lookup_term_count'];
         $diagnostics = [
             'language' => $language,
             'analyzed_query' => [
@@ -392,6 +384,11 @@ final class Language_FTS_Playground_Searcher
                 'fuzzy' => $fuzzy_terms,
                 'all' => $terms,
             ],
+            'expansion_caps' => [
+                'max_lookup_terms' => $this->max_lookup_terms,
+                'lookup_term_count' => $lookup_term_count,
+                'truncated' => false,
+            ],
             'synonym_expansions' => $this->explain_synonym_expansions($synonym_expansions),
             'phrase_synonym_expansions' => $this->explain_phrase_synonym_expansions($phrase_synonym_expansions, $language),
             'fuzzy_expansions' => $this->explain_fuzzy_expansions($fuzzy_candidates, $language),
@@ -401,6 +398,8 @@ final class Language_FTS_Playground_Searcher
             'results' => [],
             'no_result_causes' => [],
         ];
+
+        $this->enforce_lookup_term_cap($lookup_term_count, $language);
 
         if ($terms === []) {
             $diagnostics['no_result_causes'][] = 'analyzed_query_empty_after_stopwords';
@@ -691,6 +690,50 @@ final class Language_FTS_Playground_Searcher
             'results' => $results,
             'diagnostics' => $diagnostics,
         ];
+    }
+
+    /**
+     * @return array{plan:array<string,mixed>,fuzzy_candidates:array<string,string[]>,synonym_expansions:array<string,array<int,array<string,mixed>>>,phrase_synonym_expansions:array<int,array<string,mixed>>,synonym_terms:string[],phrase_synonym_terms:string[],fuzzy_terms:string[],terms:string[],lookup_term_count:int}
+     */
+    private function build_partition_lookup_plan(string $query, string $language): array
+    {
+        $plan = $this->parse_query($query, $language);
+        $synonym_expansions = $this->analyzer->expand_query_synonyms($plan['exact_terms'], $language);
+        $phrase_synonym_expansions = $this->analyzer->expand_query_synonym_phrases($plan['query_tokens'], $language);
+        $synonym_terms = $this->synonym_terms($synonym_expansions);
+        $phrase_synonym_terms = $this->phrase_synonym_terms($phrase_synonym_expansions);
+        $non_fuzzy_terms = $this->unique_terms(array_merge($plan['exact_terms'], $synonym_terms, $phrase_synonym_terms));
+        $this->enforce_lookup_term_cap(count($non_fuzzy_terms), $language);
+
+        $fuzzy_candidates = $this->resolve_fuzzy_candidates($plan['fuzzy_terms'], $language);
+        $fuzzy_terms = $this->flatten_fuzzy_candidates($fuzzy_candidates);
+        $terms = $this->unique_terms(array_merge($non_fuzzy_terms, $fuzzy_terms));
+
+        return [
+            'plan' => $plan,
+            'fuzzy_candidates' => $fuzzy_candidates,
+            'synonym_expansions' => $synonym_expansions,
+            'phrase_synonym_expansions' => $phrase_synonym_expansions,
+            'synonym_terms' => $synonym_terms,
+            'phrase_synonym_terms' => $phrase_synonym_terms,
+            'fuzzy_terms' => $fuzzy_terms,
+            'terms' => $terms,
+            'lookup_term_count' => count($terms),
+        ];
+    }
+
+    private function enforce_lookup_term_cap(int $lookup_term_count, string $language): void
+    {
+        if ($lookup_term_count <= $this->max_lookup_terms) {
+            return;
+        }
+
+        throw new RuntimeException(sprintf(
+            'Lookup term expansion produced %d terms, exceeding runtime cap %d for language %s.',
+            $lookup_term_count,
+            $this->max_lookup_terms,
+            $language
+        ));
     }
 
     /**

@@ -39,7 +39,15 @@ declare(strict_types=1);
  */
 final class Language_FTS_Playground_Lexical_Profile_Repository
 {
+    public const DEFAULT_MAX_SYNSET_SIZE = 64;
+    public const DEFAULT_MAX_EXPANSIONS_PER_TERM = 128;
+    public const DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE = 64;
+    public const DEFAULT_MAX_LOOKUP_TERMS = 512;
+
     private string $resource_root;
+    private int $max_synset_size;
+    private int $max_expansions_per_term;
+    private int $max_phrase_expansions_per_source;
 
     /**
      * @var array<string,array{directory:string,profile:array<string,mixed>,order:int}>|null
@@ -51,9 +59,17 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
      */
     private array $profiles = [];
 
-    public function __construct(string|null $resource_root = null)
+    public function __construct(
+        string|null $resource_root = null,
+        int $max_synset_size = self::DEFAULT_MAX_SYNSET_SIZE,
+        int $max_expansions_per_term = self::DEFAULT_MAX_EXPANSIONS_PER_TERM,
+        int $max_phrase_expansions_per_source = self::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE
+    )
     {
         $this->resource_root = self::normalize_resource_root($resource_root ?? self::default_resource_root());
+        $this->max_synset_size = $this->positive_limit($max_synset_size, 'Maximum synset size');
+        $this->max_expansions_per_term = $this->positive_limit($max_expansions_per_term, 'Maximum expansions per term');
+        $this->max_phrase_expansions_per_source = $this->positive_limit($max_phrase_expansions_per_source, 'Maximum phrase expansions per source');
     }
 
     public static function default_resource_root(): string
@@ -82,6 +98,15 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $normalized;
+    }
+
+    private function positive_limit(int $limit, string $label): int
+    {
+        if ($limit < 1) {
+            throw new InvalidArgumentException($label . ' must be a positive integer.');
+        }
+
+        return $limit;
     }
 
     public function resource_root(): string
@@ -1113,6 +1138,18 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             if (count($terms) < 2) {
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synset rows must contain at least 2 terms'));
             }
+            if (count($terms) > $this->max_synset_size) {
+                throw new UnexpectedValueException($this->resource_error(
+                    $path,
+                    $line_number,
+                    sprintf(
+                        'synset %s exceeds max synset size %d with %d terms',
+                        $concept_id,
+                        $this->max_synset_size,
+                        count($terms)
+                    )
+                ));
+            }
 
             foreach ($terms as $source) {
                 foreach ($terms as $target) {
@@ -1120,7 +1157,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                         continue;
                     }
 
-                    $this->add_synset_expansion($synsets, $source, $target, $weight, $provenance);
+                    $this->add_synset_expansion($synsets, $source, $target, $weight, $provenance, $path, $line_number);
                 }
             }
         }
@@ -1135,6 +1172,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     {
         $phrases = [];
         $seen_pairs = [];
+        $source_counts = [];
         foreach ($this->resource_lines($path) as $line_number => $line) {
             $trimmed_line = trim($line);
             if ($trimmed_line === '' || str_starts_with($trimmed_line, '#')) {
@@ -1166,9 +1204,9 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 throw new UnexpectedValueException($this->resource_error($path, $line_number, 'synonym phrase provenance must be non-empty'));
             }
 
-            $this->add_synonym_phrase($phrases, $seen_pairs, $source_terms, $target_terms, $direction, $weight, $provenance, $path, $line_number);
+            $this->add_synonym_phrase($phrases, $seen_pairs, $source_counts, $source_terms, $target_terms, $direction, $weight, $provenance, $path, $line_number);
             if ($direction === 'bidirectional') {
-                $this->add_synonym_phrase($phrases, $seen_pairs, $target_terms, $source_terms, $direction, $weight, $provenance, $path, $line_number);
+                $this->add_synonym_phrase($phrases, $seen_pairs, $source_counts, $target_terms, $source_terms, $direction, $weight, $provenance, $path, $line_number);
             }
         }
 
@@ -1199,6 +1237,14 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate synonym source/target pair'));
         }
 
+        $this->assert_expansion_fanout_allows_target(
+            $synonyms[$source] ?? [],
+            $source,
+            $this->max_expansions_per_term,
+            'max expansions per term',
+            $path,
+            $line_number
+        );
         $synonyms[$source][$target] = [
             'term' => $target,
             'weight' => $weight,
@@ -1216,7 +1262,9 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         string $source,
         string $target,
         float $weight,
-        string $provenance
+        string $provenance,
+        string $path,
+        int $line_number
     ): void {
         $existing = $synsets[$source][$target] ?? null;
         if (
@@ -1229,6 +1277,16 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             return;
         }
 
+        if ($existing === null) {
+            $this->assert_expansion_fanout_allows_target(
+                $synsets[$source] ?? [],
+                $source,
+                $this->max_expansions_per_term,
+                'max expansions per term',
+                $path,
+                $line_number
+            );
+        }
         $synsets[$source][$target] = [
             'term' => $target,
             'weight' => $weight,
@@ -1241,12 +1299,14 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     /**
      * @param array<int,array{source_terms:string[],target_terms:string[],source:string,target:string,weight:float,direction:string,provenance:string}> $phrases
      * @param array<string,bool> $seen_pairs
+     * @param array<string,int> $source_counts
      * @param string[] $source_terms
      * @param string[] $target_terms
      */
     private function add_synonym_phrase(
         array &$phrases,
         array &$seen_pairs,
+        array &$source_counts,
         array $source_terms,
         array $target_terms,
         string $direction,
@@ -1262,6 +1322,20 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
             throw new UnexpectedValueException($this->resource_error($path, $line_number, 'duplicate synonym phrase source/target pair'));
         }
         $seen_pairs[$pair_key] = true;
+
+        $source_count = (int) ($source_counts[$source] ?? 0);
+        if ($source_count >= $this->max_phrase_expansions_per_source) {
+            throw new UnexpectedValueException($this->resource_error(
+                $path,
+                $line_number,
+                sprintf(
+                    'phrase synonym expansion fanout for %s exceeds max phrase expansions per source %d',
+                    $source,
+                    $this->max_phrase_expansions_per_source
+                )
+            ));
+        }
+        $source_counts[$source] = $source_count + 1;
 
         $phrases[] = [
             'source_terms' => $source_terms,
@@ -1317,6 +1391,13 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                         continue;
                     }
 
+                    if (!isset($merged[(string) $source][$target]) && count($merged[(string) $source] ?? []) >= $this->max_expansions_per_term) {
+                        throw new UnexpectedValueException(sprintf(
+                            'Lexical profile expansion fanout for %s exceeds max expansions per term %d after merging resource expansion maps.',
+                            (string) $source,
+                            $this->max_expansions_per_term
+                        ));
+                    }
                     $merged[(string) $source][$target] = [
                         'term' => $target,
                         'weight' => (float) $expansion['weight'],
@@ -1329,6 +1410,33 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return $this->finalize_expansion_map($merged);
+    }
+
+    /**
+     * @param array<string,mixed> $targets
+     */
+    private function assert_expansion_fanout_allows_target(
+        array $targets,
+        string $source,
+        int $limit,
+        string $limit_label,
+        string $path,
+        int $line_number
+    ): void {
+        if (count($targets) < $limit) {
+            return;
+        }
+
+        throw new UnexpectedValueException($this->resource_error(
+            $path,
+            $line_number,
+            sprintf(
+                'single-token expansion fanout for %s exceeds %s %d',
+                $source,
+                $limit_label,
+                $limit
+            )
+        ));
     }
 
     /**

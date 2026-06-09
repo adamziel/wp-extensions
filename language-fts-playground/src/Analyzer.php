@@ -61,6 +61,13 @@ final class Language_FTS_Playground_Analyzer
         return $this->profiles->language_ids();
     }
 
+    public function assert_profiles_loadable(): void
+    {
+        foreach ($this->enabled_languages() as $language) {
+            $this->profiles->profile($language);
+        }
+    }
+
     public function language_label(string $language): string
     {
         $language = $this->canonical_language($language);

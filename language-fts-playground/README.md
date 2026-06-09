@@ -267,17 +267,20 @@ Validate lexical packs before committing generated resources:
 ```sh
 php language-fts-playground/tools/validate-lexical-packs.php
 php language-fts-playground/tools/validate-lexical-packs.php --json
-php language-fts-playground/tools/validate-lexical-packs.php --max-synset-size=64 --max-expansions-per-term=128
+php language-fts-playground/tools/validate-lexical-packs.php --max-synset-size=64 --max-expansions-per-term=128 --max-phrase-expansions-per-source=64
 ```
 
 The validator reports pack provenance, whether every file listed in `pack.php`
-exists and whether profile-declared resources are listed, stopword/lexeme/synset/phrase/expansion counts, max synset size, max
-per-term expansion fanout, and warnings for invalid metadata or malformed
-resource rows.
+exists and whether profile-declared resources are listed, stopword/lexeme/
+synset/phrase/expansion counts, max synset size, max per-term expansion
+fanout, max phrase-source expansion fanout, and warnings for invalid metadata
+or malformed resource rows.
 Broad synsets are dangerous for search quality because each term expands to
 every other term in the concept; a large or loosely related concept can turn a
 precise query into many weak matches. The threshold options make those cases
-fail in CI before they reach the admin UI or search tests.
+fail in CI before they reach the admin UI or search tests. Runtime profile
+loading enforces the same hard caps and rejects oversized packs instead of
+silently truncating expansion maps.
 
 Evaluate relevance before installing or committing a larger generated pack:
 

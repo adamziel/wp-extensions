@@ -31,6 +31,9 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public int $clear_count = 0;
     public int $delete_count = 0;
     public int $fetch_term_language_hits_count = 0;
+    public bool $fail_on_fetch_term_language_hits = false;
+    public int $fetch_candidate_terms_count = 0;
+    public bool $fail_on_fetch_candidate_terms = false;
     public int $fetch_document_fields_count = 0;
     public int $fetch_document_field_metadata_count = 0;
     /** @var string[] */
@@ -156,6 +159,9 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public function fetch_term_language_hits(array $language_terms): array
     {
         $this->fetch_term_language_hits_count++;
+        if ($this->fail_on_fetch_term_language_hits) {
+            throw new RuntimeException('fetch_term_language_hits should not run before lookup term cap enforcement.');
+        }
 
         $hits = [];
         foreach ($language_terms as $language => $terms) {
@@ -193,6 +199,11 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
     public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array
     {
+        $this->fetch_candidate_terms_count++;
+        if ($this->fail_on_fetch_candidate_terms) {
+            throw new RuntimeException('fetch_candidate_terms should not run before lookup term cap enforcement.');
+        }
+
         $max_distance = max(0, $max_distance);
         $min_length = max(1, strlen($term) - $max_distance);
         $max_length = strlen($term) + $max_distance;
@@ -1492,6 +1503,19 @@ function language_fts_temp_comprehensive_pack_metadata(string $language_dir, arr
 function write_language_fts_temp_comprehensive_pack_metadata(string $language_dir, array $overrides = []): void
 {
     write_language_fts_temp_pack_metadata_array($language_dir, language_fts_temp_comprehensive_pack_metadata($language_dir, $overrides));
+}
+
+/**
+ * @return string[]
+ */
+function language_fts_numbered_terms(string $prefix, int $count): array
+{
+    $terms = [];
+    for ($index = 1; $index <= $count; $index++) {
+        $terms[] = $prefix . sprintf('%03d', $index);
+    }
+
+    return $terms;
 }
 
 /**
@@ -3291,6 +3315,84 @@ test_case('rejects duplicate synset concept IDs', function (): void {
     }
 });
 
+test_case('runtime profile loading rejects oversized synsets before expansion materialization', function (): void {
+    $terms = language_fts_numbered_terms('term', Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_SYNSET_SIZE + 1);
+    $lexeme_rows = "# observed\tcanonical\tprovenance\n";
+    foreach ($terms as $term) {
+        $lexeme_rows .= $term . "\t" . $term . "\tfixture\n";
+    }
+    $root = create_language_fts_temp_profile_tree(
+        $lexeme_rows,
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        "# concept_id\tweight\tprovenance\tterms\nconcept.too-wide\t0.5\tfixture\t" . implode(' ', $terms) . "\n"
+    );
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Oversized synsets fail closed during runtime profile loading.'
+        );
+        assert_contains_text('max synset size ' . Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_SYNSET_SIZE, $throwable->getMessage(), 'The synset hard cap is visible in the runtime error.');
+        assert_contains_text('concept.too-wide', $throwable->getMessage(), 'The rejected synset concept is named in the runtime error.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('runtime profile loading rejects per-term synonym expansion fanout', function (): void {
+    $target_terms = language_fts_numbered_terms('target', Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_EXPANSIONS_PER_TERM + 1);
+    $synonyms = "# source\ttarget\tdirection\tweight\tprovenance\n";
+    foreach ($target_terms as $target) {
+        $synonyms .= "alpha\t{$target}\tquery_to_index\t0.6\tfixture-fanout\n";
+    }
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\n",
+        $synonyms
+    );
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Per-term synonym expansion fanout fails closed during runtime profile loading.'
+        );
+        assert_contains_text('max expansions per term ' . Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_EXPANSIONS_PER_TERM, $throwable->getMessage(), 'The per-term hard cap is visible in the runtime error.');
+        assert_contains_text('alpha', $throwable->getMessage(), 'The rejected source term is named in the runtime error.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('runtime profile loading rejects phrase synonym expansion fanout', function (): void {
+    $target_terms = language_fts_numbered_terms('phrase', Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE + 1);
+    $phrases = "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\n";
+    foreach ($target_terms as $target) {
+        $phrases .= "alpha beta\t{$target}\tquery_to_index\t0.6\tfixture-phrase-fanout\n";
+    }
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\nbeta\tbeta\tfixture\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        $phrases
+    );
+
+    try {
+        $repository = new Language_FTS_Playground_Lexical_Profile_Repository($root);
+        $throwable = assert_throws(
+            UnexpectedValueException::class,
+            static fn(): array => $repository->profile('xx'),
+            'Phrase synonym expansion fanout fails closed during runtime profile loading.'
+        );
+        assert_contains_text('max phrase expansions per source ' . Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE, $throwable->getMessage(), 'The phrase hard cap is visible in the runtime error.');
+        assert_contains_text('alpha beta', $throwable->getMessage(), 'The rejected phrase source is named in the runtime error.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('pairwise synonyms remain compatible and override duplicate synset pairs', function (): void {
     $root = create_language_fts_temp_profile_tree(
         "# observed\tcanonical\tprovenance\nalpha\talpha\nbeta\tbeta\ngamma\tgamma\n",
@@ -3947,6 +4049,42 @@ test_case('lexical pack validator fails too-large synsets and expansion fanout t
     }
 });
 
+test_case('lexical pack validator CLI exposes phrase fanout thresholds and honors stricter overrides', function (): void {
+    $root = create_language_fts_temp_profile_tree(
+        "# observed\tcanonical\tprovenance\nalpha\talpha\tfixture\nbeta\tbeta\tfixture\nfirst\tfirst\tfixture\nsecond\tsecond\tfixture\n",
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        null,
+        "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nalpha beta\tfirst\tquery_to_index\t0.7\tfixture\nalpha beta\tsecond\tquery_to_index\t0.6\tfixture\n"
+    );
+    write_language_fts_temp_pack_metadata($root . DIRECTORY_SEPARATOR . 'xx');
+
+    try {
+        $default = run_language_fts_validator([
+            'resource_root' => $root,
+            'json' => true,
+        ]);
+        $default_decoded = json_decode($default['output'], true);
+
+        assert_same(0, $default['exit_code'], 'The default phrase fanout cap accepts the small custom pack. Output: ' . $default['output']);
+        assert_true(is_array($default_decoded), 'Default validator JSON is parseable.');
+        assert_same(Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE, $default_decoded['thresholds']['max_phrase_expansions_per_source'] ?? null, 'Validator JSON exposes the runtime phrase fanout default.');
+
+        $strict = run_language_fts_validator([
+            'resource_root' => $root,
+            'max_phrase_expansions_per_source' => 1,
+            'json' => true,
+        ]);
+        $strict_decoded = json_decode($strict['output'], true);
+
+        assert_true($strict['exit_code'] !== 0, 'A stricter phrase fanout CLI cap makes validation fail.');
+        assert_true(is_array($strict_decoded), 'Strict validator JSON is parseable.');
+        assert_same(1, $strict_decoded['thresholds']['max_phrase_expansions_per_source'] ?? null, 'Validator JSON records the stricter CLI phrase fanout cap.');
+        assert_contains_text('Maximum phrase expansion fanout 2 exceeds threshold 1', $strict['output'], 'The stricter phrase fanout failure is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('lexical pack validator CLI emits deterministic parseable JSON', function (): void {
     $first = run_language_fts_validator(['json' => true]);
     $second = run_language_fts_validator(['json' => true]);
@@ -3957,6 +4095,9 @@ test_case('lexical pack validator CLI emits deterministic parseable JSON', funct
     $decoded = json_decode($first['output'], true);
     assert_true(is_array($decoded), 'Validator JSON output is parseable.');
     assert_same(true, $decoded['valid'] ?? null, 'Validator JSON marks current packs valid.');
+    assert_same(Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_SYNSET_SIZE, $decoded['thresholds']['max_synset_size'] ?? null, 'Validator JSON exposes the runtime synset size default.');
+    assert_same(Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_EXPANSIONS_PER_TERM, $decoded['thresholds']['max_expansions_per_term'] ?? null, 'Validator JSON exposes the runtime per-term fanout default.');
+    assert_same(Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE, $decoded['thresholds']['max_phrase_expansions_per_source'] ?? null, 'Validator JSON exposes the runtime phrase fanout default.');
     assert_same(['en', 'pl', 'de'], array_column($decoded['languages'] ?? [], 'language_id'), 'Validator JSON preserves deterministic language order.');
 });
 
@@ -5539,6 +5680,134 @@ test_case('explain reports multiword phrase synonyms and fuzzy candidates', func
     assert_same(1, $fuzzy_expansion['edit_distance'] ?? null, 'Explain records fuzzy edit distance.');
     assert_same('en', $fuzzy_expansion['searched_language'] ?? null, 'Explain records the fuzzy candidate language.');
     assert_true(in_array('fuzzy', $fuzzy_explain['results'][0]['match_classes'] ?? [], true), 'Fuzzy matches are classified separately.');
+});
+
+test_case('search diagnostics report lookup term caps and fail closed over the hard limit', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $safe_searcher = new Language_FTS_Playground_Searcher(
+        storage: $storage,
+        analyzer: $analyzer,
+        max_lookup_terms: 4
+    );
+
+    $safe_explain = $safe_searcher->explain('full text search', 'en');
+    $safe_caps = $safe_explain['partitions'][0]['expansion_caps'] ?? [];
+    assert_same(4, $safe_caps['max_lookup_terms'] ?? null, 'Explain reports the active lookup term hard cap.');
+    assert_same(4, $safe_caps['lookup_term_count'] ?? null, 'Explain reports the total lookup term count when search safely continues.');
+    assert_same(false, $safe_caps['truncated'] ?? null, 'Safe diagnostics make it explicit that lookup terms were not truncated.');
+
+    $strict_searcher = new Language_FTS_Playground_Searcher(
+        storage: $storage,
+        analyzer: $analyzer,
+        max_lookup_terms: 3
+    );
+    $throwable = assert_throws(
+        RuntimeException::class,
+        static fn(): array => $strict_searcher->explain('full text search', 'en'),
+        'Lookup term expansion over the hard cap fails closed instead of silently truncating.'
+    );
+    assert_contains_text('Lookup term expansion produced 4 terms, exceeding runtime cap 3', $throwable->getMessage(), 'The lookup cap failure explains the produced and allowed term counts.');
+});
+
+test_case('automatic fallback enforces lookup cap before preflight storage lookup', function (): void {
+    $languages = ['qa', 'qb', 'qc', 'qd', 'qe', 'qf'];
+    $profiles = [];
+    foreach ($languages as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $storage->fail_on_fetch_term_language_hits = true;
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $searcher = new Language_FTS_Playground_Searcher(
+            storage: $storage,
+            analyzer: $analyzer,
+            max_lookup_terms: 2
+        );
+
+        assert_same([], $analyzer->rank_query_languages('alpha beta gamma'), 'The exact-token cap regression enters no-evidence automatic fallback.');
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $searcher->search('alpha beta gamma', 'auto'),
+            'Over-cap exact fallback fails closed before storage preflight.'
+        );
+        assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Exact-token fallback reports the existing lookup cap diagnostic.');
+        assert_same(0, $storage->fetch_term_language_hits_count, 'Over-cap exact fallback never reaches preflight storage lookup.');
+
+        $fuzzy_auto_storage = new Language_FTS_Playground_Test_Storage();
+        $fuzzy_auto_storage->fail_on_fetch_term_language_hits = true;
+        $fuzzy_auto_storage->fail_on_fetch_candidate_terms = true;
+        $fuzzy_auto_searcher = new Language_FTS_Playground_Searcher(
+            storage: $fuzzy_auto_storage,
+            analyzer: $analyzer,
+            max_lookup_terms: 2
+        );
+
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $fuzzy_auto_searcher->search('alpha beta fuzzyprobe~', 'auto'),
+            'Over-cap fuzzy fallback fails closed before candidate-term storage lookup.'
+        );
+        assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Fuzzy fallback reports the lookup cap diagnostic before candidate enumeration.');
+        assert_same(0, $fuzzy_auto_storage->fetch_candidate_terms_count, 'Over-cap fuzzy fallback never reaches candidate-term lookup.');
+        assert_same(0, $fuzzy_auto_storage->fetch_term_language_hits_count, 'Over-cap fuzzy fallback never reaches preflight storage lookup.');
+
+        $fuzzy_explicit_storage = new Language_FTS_Playground_Test_Storage();
+        $fuzzy_explicit_storage->fail_on_fetch_candidate_terms = true;
+        $fuzzy_explicit_searcher = new Language_FTS_Playground_Searcher(
+            storage: $fuzzy_explicit_storage,
+            analyzer: $analyzer,
+            max_lookup_terms: 2
+        );
+
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $fuzzy_explicit_searcher->search('alpha beta fuzzyprobe~', 'qa'),
+            'Over-cap explicit fuzzy search fails closed before candidate-term storage lookup.'
+        );
+        assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Explicit fuzzy search reports the lookup cap diagnostic before candidate enumeration.');
+        assert_same(0, $fuzzy_explicit_storage->fetch_candidate_terms_count, 'Over-cap explicit fuzzy search never reaches candidate-term lookup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+
+    $profiles = [];
+    foreach ($languages as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+            'lexemes' => "# observed\tcanonical\tprovenance\nrouteprobe\trouteprobe\tfixture\n",
+            'synonyms' => "# source\ttarget\tdirection\tweight\tprovenance\nrouteprobe\troutetarget\tquery_to_index\t0.7\tfixture\nrouteprobe\trouteextra\tquery_to_index\t0.6\tfixture\n",
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $storage->fail_on_fetch_term_language_hits = true;
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $searcher = new Language_FTS_Playground_Searcher(
+            storage: $storage,
+            analyzer: $analyzer,
+            max_lookup_terms: 2
+        );
+
+        $ranked = $analyzer->rank_query_languages('routeprobe', 2);
+        assert_same($ranked[0]['score'] ?? null, $ranked[1]['score'] ?? null, 'The synonym-expanded cap regression enters ambiguous automatic fallback.');
+        $throwable = assert_throws(
+            RuntimeException::class,
+            static fn(): array => $searcher->search('routeprobe', 'auto'),
+            'Over-cap synonym-expanded fallback fails closed before storage preflight.'
+        );
+        assert_contains_text('Lookup term expansion produced 3 terms, exceeding runtime cap 2', $throwable->getMessage(), 'Expanded fallback reports the existing lookup cap diagnostic.');
+        assert_same(0, $storage->fetch_term_language_hits_count, 'Over-cap expanded fallback never reaches preflight storage lookup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
 });
 
 test_case('explicit Polish search finds the demo synonym target', function (): void {
@@ -7211,6 +7480,46 @@ test_case('admin page renders lexical pack status and disables search when custo
     assert_contains_text('<button type="submit" disabled="disabled">Search</button>', $html, 'The search submit control is disabled while lexical resources are unavailable.');
     assert_not_contains_text('English visible: orchard', $html, 'Sample search links are hidden while lexical resources are unavailable.');
     assert_not_contains_text('No matches for', $html, 'The admin page does not present an empty result set as a successful search.');
+});
+
+test_case('admin page disables search and records status when custom lexical packs exceed runtime caps', function (): void {
+    $terms = language_fts_numbered_terms('term', Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_SYNSET_SIZE + 1);
+    $lexeme_rows = "# observed\tcanonical\tprovenance\n";
+    foreach ($terms as $term) {
+        $lexeme_rows .= $term . "\t" . $term . "\tfixture\n";
+    }
+    $root = create_language_fts_temp_profile_tree(
+        $lexeme_rows,
+        "# source\ttarget\tdirection\tweight\tprovenance\n",
+        "# concept_id\tweight\tprovenance\tterms\nconcept.too-wide\t0.5\tfixture\t" . implode(' ', $terms) . "\n"
+    );
+    write_language_fts_temp_pack_metadata($root . DIRECTORY_SEPARATOR . 'xx');
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        reset_language_fts_plugin_runtime();
+        add_filter(
+            'language_fts_playground_lexical_resource_root',
+            static fn(): string => $normalized_root,
+            10,
+            1
+        );
+
+        ob_start();
+        Language_FTS_Playground_Plugin::render_admin_page();
+        $html = ob_get_clean();
+        $status = Language_FTS_Playground_Plugin::index_status();
+
+        assert_contains_text('Search is unavailable because lexical resources could not be loaded', $html, 'Oversized custom resources make admin search unavailable.');
+        assert_contains_text('max synset size ' . Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_SYNSET_SIZE, $html, 'The runtime cap failure is visible in admin output.');
+        assert_contains_text('concept.too-wide', $html, 'The rejected concept is visible in admin output.');
+        assert_contains_text('name="lft_query" value="orchard" class="regular-text" disabled="disabled"', $html, 'The search query control is disabled for oversized custom packs.');
+        assert_contains_text('Could not load Language FTS analyzer resources for admin search.', (string) ($status['last_status'] ?? ''), 'Index status records the analyzer resource failure.');
+        assert_contains_text('max synset size ' . Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_SYNSET_SIZE, (string) ($status['last_error'] ?? ''), 'Index status records the runtime cap failure.');
+        assert_not_contains_text('No matches for', $html, 'The admin page does not present an empty result set when runtime packs are invalid.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
 });
 
 test_case('admin automatic results show matched language partition', function (): void {
