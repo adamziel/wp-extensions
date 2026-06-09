@@ -12,6 +12,7 @@ declare(strict_types=1);
 final class Language_FTS_Playground_Lexical_Pack_Validator
 {
     public const METADATA_SCHEMA_V2 = 'language-fts-playground-pack-metadata-v2';
+    public const INVENTORY_SCHEMA_V1 = 'language-fts-playground-pack-inventory-v1';
     public const DEFAULT_MAX_SYNSET_SIZE = Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_SYNSET_SIZE;
     public const DEFAULT_MAX_EXPANSIONS_PER_TERM = Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_EXPANSIONS_PER_TERM;
     public const DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE = Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE;
@@ -291,6 +292,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             'importer' => [],
             'runtime_files' => [],
             'runtime_digest_status' => 'not_declared',
+            'inventory' => [],
+            'inventory_status' => 'not_declared',
         ];
     }
 
@@ -416,6 +419,14 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         sort($missing_files, SORT_STRING);
         $files_lookup = array_fill_keys($metadata['files'], true);
 
+        if ($metadata['data_kind'] === 'curated_seed') {
+            foreach (['source', 'license', 'provenance_ids', 'normalization', 'importer', 'runtime_files'] as $section) {
+                if (array_key_exists($section, $raw)) {
+                    $warnings[] = 'Language pack metadata curated_seed packs must not declare comprehensive audit section ' . $section . '; use data_kind imported_comprehensive in ' . $path;
+                }
+            }
+        }
+
         if ($metadata['data_kind'] === 'imported_comprehensive') {
             if ($metadata['metadata_schema'] !== self::METADATA_SCHEMA_V2) {
                 $warnings[] = 'Language pack metadata imported_comprehensive packs must declare metadata_schema ' . self::METADATA_SCHEMA_V2 . ' in ' . $path;
@@ -474,6 +485,9 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
             $metadata['runtime_digest_status'] = $this->runtime_digest_status($raw['runtime_files'] ?? null, $runtime_files_invalid, $runtime_files_incomplete, $runtime_mismatched);
         }
+
+        $metadata['inventory'] = $this->pack_inventory($metadata, $directory, $expected_language, $profile_file, $resource_paths);
+        $metadata['inventory_status'] = $this->validate_pack_inventory_lock($metadata['inventory'], $directory, $files_lookup, $metadata['data_kind'], $path, $warnings);
 
         $valid = $valid && count($warnings) === $metadata_warning_count;
 
@@ -553,6 +567,218 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         );
 
         return $metadata;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,string> $resource_paths
+     * @return array<string,mixed>
+     */
+    private function pack_inventory(array $metadata, string $directory, string $expected_language, string $profile_file, array $resource_paths): array
+    {
+        $source = isset($metadata['source']) && is_array($metadata['source']) ? $metadata['source'] : [];
+        $license = isset($metadata['license']) && is_array($metadata['license']) ? $metadata['license'] : [];
+        $normalization = isset($metadata['normalization']) && is_array($metadata['normalization']) ? $metadata['normalization'] : [];
+        $importer = isset($metadata['importer']) && is_array($metadata['importer']) ? $metadata['importer'] : [];
+        $provenance_ids = isset($metadata['provenance_ids']) && is_array($metadata['provenance_ids']) ? $metadata['provenance_ids'] : [];
+
+        $source_artifacts = [];
+        foreach ((array) ($source['artifacts'] ?? []) as $artifact) {
+            if (!is_array($artifact)) {
+                continue;
+            }
+            $source_artifacts[] = [
+                'name' => (string) ($artifact['name'] ?? ''),
+                'url' => (string) ($artifact['url'] ?? ''),
+                'sha256' => (string) ($artifact['sha256'] ?? ''),
+                'bytes' => (int) ($artifact['bytes'] ?? 0),
+            ];
+        }
+        usort(
+            $source_artifacts,
+            static fn(array $a, array $b): int => strcmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''))
+                ?: strcmp((string) ($a['url'] ?? ''), (string) ($b['url'] ?? ''))
+        );
+
+        ksort($provenance_ids, SORT_STRING);
+        $importer_options = isset($importer['options']) && is_array($importer['options']) ? $importer['options'] : [];
+        ksort($importer_options, SORT_STRING);
+
+        return [
+            'schema' => self::INVENTORY_SCHEMA_V1,
+            'language_id' => (string) ($metadata['language_id'] ?? ''),
+            'data_kind' => (string) ($metadata['data_kind'] ?? ''),
+            'pack' => [
+                'version' => (string) ($metadata['pack_version'] ?? ''),
+                'date' => (string) ($metadata['pack_date'] ?? ''),
+            ],
+            'source' => [
+                'name' => (string) ($source['name'] ?? $metadata['source_name'] ?? ''),
+                'url' => (string) ($metadata['source_url'] ?? ''),
+                'version' => (string) ($source['version'] ?? $metadata['pack_version'] ?? ''),
+                'date' => (string) ($source['retrieved_at'] ?? $metadata['pack_date'] ?? ''),
+                'artifacts' => $source_artifacts,
+            ],
+            'license' => [
+                'name' => (string) ($license['name'] ?? $metadata['license_name'] ?? ''),
+                'identifier' => (string) ($license['identifier'] ?? ''),
+                'url' => (string) ($license['url'] ?? ''),
+                'text_url' => (string) ($license['text_url'] ?? ''),
+                'text_file' => (string) ($license['text_file'] ?? ''),
+                'attribution' => (string) ($license['attribution'] ?? $metadata['attribution_text'] ?? ''),
+            ],
+            'provenance' => [
+                'default' => (string) ($metadata['provenance'] ?? ''),
+                'ids' => $provenance_ids,
+            ],
+            'normalization' => [
+                'profile_id' => (string) ($normalization['profile_id'] ?? $expected_language),
+                'profile_version' => (string) ($normalization['profile_version'] ?? ''),
+                'profile_file' => (string) ($normalization['profile_file'] ?? basename($profile_file)),
+                'profile_sha256' => (string) ($normalization['profile_sha256'] ?? $this->file_sha256($profile_file) ?? ''),
+            ],
+            'importer' => [
+                'name' => (string) ($importer['name'] ?? 'manual-curated-seed'),
+                'version' => (string) ($importer['version'] ?? $metadata['pack_version'] ?? ''),
+                'format' => (string) ($importer['format'] ?? 'curated_seed'),
+                'command' => (string) ($importer['command'] ?? ''),
+                'options' => $importer_options,
+            ],
+            'runtime_resources' => $this->runtime_resource_inventory($metadata, $directory, $profile_file, $resource_paths),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,string> $resource_paths
+     * @return array<int,array{resource:string,file:string,sha256:string,bytes:int,generated:bool}>
+     */
+    private function runtime_resource_inventory(array $metadata, string $directory, string $profile_file, array $resource_paths): array
+    {
+        $resources = ['profile' => basename($profile_file)];
+        foreach ($resource_paths as $resource => $resource_path) {
+            $resources[(string) $resource] = basename((string) $resource_path);
+        }
+
+        $license_text_file = '';
+        if (isset($metadata['license']) && is_array($metadata['license'])) {
+            $license_text_file = (string) ($metadata['license']['text_file'] ?? '');
+        }
+        if ($license_text_file !== '') {
+            $resources['license'] = $license_text_file;
+        }
+
+        ksort($resources, SORT_STRING);
+
+        $generated_lookup = [];
+        foreach ((array) ($metadata['runtime_files'] ?? []) as $runtime_file) {
+            if (!is_array($runtime_file)) {
+                continue;
+            }
+            $resource = (string) ($runtime_file['resource'] ?? '');
+            $file = (string) ($runtime_file['file'] ?? '');
+            if ($resource === '' || $file === '') {
+                continue;
+            }
+            $generated_lookup[$this->runtime_file_pair_key($resource, $file)] = (bool) ($runtime_file['generated'] ?? false);
+        }
+
+        $records = [];
+        foreach ($resources as $resource => $file) {
+            $path = $directory . DIRECTORY_SEPARATOR . $file;
+            $bytes = is_file($path) ? filesize($path) : false;
+            $records[] = [
+                'resource' => (string) $resource,
+                'file' => $file,
+                'sha256' => $this->file_sha256($path) ?? '',
+                'bytes' => is_int($bytes) ? $bytes : 0,
+                'generated' => (bool) ($generated_lookup[$this->runtime_file_pair_key((string) $resource, $file)] ?? false),
+            ];
+        }
+
+        return $records;
+    }
+
+    /**
+     * @param array<string,mixed> $inventory
+     * @param array<string,bool> $files_lookup
+     */
+    private function validate_pack_inventory_lock(array $inventory, string $directory, array $files_lookup, string $data_kind, string $path, array &$warnings): string
+    {
+        $file = 'pack.lock.json';
+        $lock_path = $directory . DIRECTORY_SEPARATOR . $file;
+        $required = $data_kind === 'imported_comprehensive';
+        $invalid = false;
+
+        if ($required && !isset($files_lookup[$file])) {
+            $invalid = true;
+            $warnings[] = 'Language pack metadata files must include pack.lock.json for comprehensive inventory lock in ' . $path;
+        }
+
+        if (!is_file($lock_path)) {
+            if ($required) {
+                $warnings[] = 'Language pack inventory lock file does not exist: ' . $lock_path;
+            }
+
+            return 'not_declared';
+        }
+
+        if (!isset($files_lookup[$file])) {
+            $invalid = true;
+            $warnings[] = 'Language pack metadata files must include existing pack inventory lock pack.lock.json in ' . $path;
+        }
+
+        $contents = file_get_contents($lock_path);
+        if (!is_string($contents)) {
+            $warnings[] = 'Language pack inventory lock could not be read: ' . $lock_path;
+
+            return 'invalid';
+        }
+
+        $decoded = json_decode($contents, true);
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($decoded) || array_is_list($decoded)) {
+            $warnings[] = 'Language pack inventory lock must be a JSON object matching ' . self::INVENTORY_SCHEMA_V1 . ': ' . $lock_path;
+
+            return 'invalid';
+        }
+
+        if ((string) ($decoded['schema'] ?? '') !== self::INVENTORY_SCHEMA_V1) {
+            $invalid = true;
+            $warnings[] = 'Language pack inventory lock schema must be ' . self::INVENTORY_SCHEMA_V1 . ': ' . $lock_path;
+        }
+
+        if ($this->canonical_json($decoded) !== $this->canonical_json($inventory)) {
+            $warnings[] = 'Language pack inventory lock does not match computed runtime inventory in ' . $lock_path;
+
+            return 'mismatch';
+        }
+
+        return $invalid ? 'invalid' : 'ok';
+    }
+
+    private function canonical_json(mixed $value): string
+    {
+        $encoded = json_encode($this->canonicalize_json_value($value), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        return is_string($encoded) ? $encoded : '';
+    }
+
+    private function canonicalize_json_value(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        if (array_is_list($value)) {
+            return array_map(fn(mixed $item): mixed => $this->canonicalize_json_value($item), $value);
+        }
+
+        ksort($value, SORT_STRING);
+        foreach ($value as $key => $item) {
+            $value[$key] = $this->canonicalize_json_value($item);
+        }
+
+        return $value;
     }
 
     /**

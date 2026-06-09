@@ -1373,6 +1373,24 @@ function write_language_fts_temp_pack_metadata_array(string $language_dir, array
 }
 
 /**
+ * @return array<string,mixed>
+ */
+function write_language_fts_temp_pack_inventory_lock(string $language_dir): array
+{
+    $report = (new Language_FTS_Playground_Lexical_Pack_Validator(dirname($language_dir)))->validate_all();
+    $by_id = language_fts_pack_status_by_id($report);
+    $language_id = basename($language_dir);
+    $inventory = $by_id[$language_id]['metadata']['inventory'] ?? null;
+    assert_true(is_array($inventory), 'Temporary lexical pack inventory report is available.');
+
+    $json = json_encode($inventory, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    assert_true(is_string($json), 'Temporary lexical pack inventory lock encodes as JSON.');
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'pack.lock.json', $json . "\n");
+
+    return $inventory;
+}
+
+/**
  * @return array{resource:string,file:string,sha256:string,bytes:int,generated:bool}
  */
 function language_fts_temp_runtime_file_record(string $language_dir, string $resource, string $file, bool $generated = false): array
@@ -1432,6 +1450,8 @@ function language_fts_temp_comprehensive_pack_metadata(string $language_dir, arr
 
     $runtime_files = language_fts_temp_runtime_file_records($language_dir);
     $files = array_values(array_unique(array_column($runtime_files, 'file')));
+    $files[] = 'pack.lock.json';
+    $files = array_values(array_unique($files));
     sort($files, SORT_STRING);
     $profile_sha256 = (string) hash_file('sha256', $language_dir . DIRECTORY_SEPARATOR . 'profile.php');
 
@@ -1503,6 +1523,7 @@ function language_fts_temp_comprehensive_pack_metadata(string $language_dir, arr
 function write_language_fts_temp_comprehensive_pack_metadata(string $language_dir, array $overrides = []): void
 {
     write_language_fts_temp_pack_metadata_array($language_dir, language_fts_temp_comprehensive_pack_metadata($language_dir, $overrides));
+    write_language_fts_temp_pack_inventory_lock($language_dir);
 }
 
 /**
@@ -3726,6 +3747,24 @@ test_case('valid lexical packs produce deterministic validation stats', function
     assert_same('curated_seed', $by_id['en']['metadata']['data_kind'] ?? null, 'English pack is labeled as curated seed data.');
     assert_same('curated_seed', $by_id['pl']['metadata']['data_kind'] ?? null, 'Polish pack is labeled as curated seed data.');
     assert_same('curated_seed', $by_id['de']['metadata']['data_kind'] ?? null, 'German pack is labeled as curated seed data.');
+    assert_same('not_declared', $by_id['en']['metadata']['inventory_status'] ?? null, 'Curated seed packs do not require a checked-in inventory lock.');
+
+    $english_inventory = $by_id['en']['metadata']['inventory'] ?? null;
+    assert_true(is_array($english_inventory), 'Validator emits a machine-readable inventory report for curated seed packs.');
+    assert_same(Language_FTS_Playground_Lexical_Pack_Validator::INVENTORY_SCHEMA_V1, $english_inventory['schema'] ?? null, 'Curated seed inventory uses the stable inventory schema.');
+    assert_same('curated_seed', $english_inventory['data_kind'] ?? null, 'Curated seed inventory preserves data_kind.');
+    assert_same('manual-curated-seed', $english_inventory['importer']['name'] ?? null, 'Curated seed inventory cannot be mistaken for importer-generated comprehensive data.');
+    $runtime_resources = is_array($english_inventory['runtime_resources'] ?? null) ? $english_inventory['runtime_resources'] : [];
+    $stopword_resource = null;
+    foreach ($runtime_resources as $runtime_resource) {
+        if (is_array($runtime_resource) && ($runtime_resource['resource'] ?? '') === 'stopwords') {
+            $stopword_resource = $runtime_resource;
+            break;
+        }
+    }
+    assert_true(is_array($stopword_resource), 'Curated seed inventory records profile-declared runtime resources.');
+    assert_same('stopwords.txt', $stopword_resource['file'] ?? null, 'Curated seed inventory records runtime resource file names.');
+    assert_true(is_string($stopword_resource['sha256'] ?? null) && strlen((string) $stopword_resource['sha256']) === 64, 'Curated seed inventory records runtime resource digests.');
 
     assert_same(42, $by_id['en']['counts']['stopwords'] ?? null, 'English stopword count is deterministic.');
     assert_same(28, $by_id['en']['counts']['lexeme_rows'] ?? null, 'English lexeme count is deterministic.');
@@ -3832,6 +3871,57 @@ test_case('lexical pack validator requires v2 audit metadata for comprehensive p
 
         assert_same(false, $report['valid'], 'Comprehensive packs missing source metadata fail validation.');
         assert_contains_text('source must be an array', $warnings, 'The missing comprehensive source section is reported clearly.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator requires matching inventory locks for comprehensive packs', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_pack_metadata_array($language_dir, language_fts_temp_comprehensive_pack_metadata($language_dir));
+
+    try {
+        $missing_report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $missing_by_id = language_fts_pack_status_by_id($missing_report);
+        $missing_warnings = implode("\n", $missing_by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $missing_report['valid'], 'Comprehensive packs without a pack inventory lock fail validation.');
+        assert_same('not_declared', $missing_by_id['xx']['metadata']['inventory_status'] ?? null, 'Missing comprehensive inventory locks are not reported as ok.');
+        assert_contains_text('pack.lock.json', $missing_warnings, 'The missing comprehensive inventory lock is reported.');
+
+        $inventory = write_language_fts_temp_pack_inventory_lock($language_dir);
+        $locked_report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $locked_by_id = language_fts_pack_status_by_id($locked_report);
+
+        assert_same(true, $locked_report['valid'], 'A comprehensive pack with a matching pack inventory lock validates cleanly.');
+        assert_same('ok', $locked_by_id['xx']['metadata']['inventory_status'] ?? null, 'Matching comprehensive inventory locks report ok.');
+        assert_same(Language_FTS_Playground_Lexical_Pack_Validator::INVENTORY_SCHEMA_V1, $inventory['schema'] ?? null, 'Generated comprehensive locks use the stable inventory schema.');
+        assert_same('imported_comprehensive', $inventory['data_kind'] ?? null, 'Generated comprehensive locks preserve data_kind.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator fails mismatched inventory locks', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir);
+
+    try {
+        $lock_path = $language_dir . DIRECTORY_SEPARATOR . 'pack.lock.json';
+        $lock = json_decode((string) file_get_contents($lock_path), true);
+        assert_true(is_array($lock), 'Temporary comprehensive inventory lock decodes.');
+        $lock['source']['name'] = 'Wrong source name';
+        file_put_contents($lock_path, json_encode($lock, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'A comprehensive pack with a mismatched inventory lock fails validation.');
+        assert_same('mismatch', $by_id['xx']['metadata']['inventory_status'] ?? null, 'Mismatched inventory locks report mismatch.');
+        assert_contains_text('inventory lock does not match computed runtime inventory', $warnings, 'The inventory mismatch warning is reported.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
@@ -3983,6 +4073,27 @@ test_case('lexical pack validator fails runtime digest and byte mismatches', fun
         assert_same('mismatch', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Digest mismatch status is reported in metadata.');
         assert_contains_text('runtime file sha256 mismatch', $warnings, 'Runtime sha256 mismatch is reported.');
         assert_contains_text('runtime file byte count mismatch', $warnings, 'Runtime byte count mismatch is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator fails runtime resource changes after inventory lock generation', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir);
+    file_put_contents($language_dir . DIRECTORY_SEPARATOR . 'stopwords.txt', "and\nor\n");
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Runtime resource edits after lock generation fail validation.');
+        assert_same('mismatch', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Runtime digest status reports resource drift.');
+        assert_same('mismatch', $by_id['xx']['metadata']['inventory_status'] ?? null, 'Inventory status reports resource drift.');
+        assert_contains_text('runtime file sha256 mismatch', $warnings, 'Runtime digest drift is reported.');
+        assert_contains_text('inventory lock does not match computed runtime inventory', $warnings, 'Inventory lock drift is reported.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
@@ -4608,6 +4719,8 @@ test_case('comprehensive importer writes deterministic v2 audit metadata', funct
         assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'synsets.tsv'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'synsets.tsv'), 'Comprehensive synsets output is deterministic.');
         assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'lexemes.tsv'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'lexemes.tsv'), 'Comprehensive lexemes output is deterministic.');
         assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php'), 'Comprehensive pack metadata output is deterministic.');
+        assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.lock.json'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.lock.json'), 'Comprehensive pack inventory lock output is deterministic.');
+        assert_contains_text('Wrote pack inventory lock', $first['output'], 'Comprehensive importer reports the generated pack inventory lock.');
 
         $metadata = require $first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php';
         assert_same(Language_FTS_Playground_Lexical_Pack_Validator::METADATA_SCHEMA_V2, $metadata['metadata_schema'] ?? null, 'Comprehensive importer writes the v2 metadata schema.');
@@ -4615,12 +4728,22 @@ test_case('comprehensive importer writes deterministic v2 audit metadata', funct
         assert_same('fixture-comprehensive-import', $metadata['provenance'] ?? null, 'Comprehensive importer writes the requested provenance.');
         assert_true(isset($metadata['source'], $metadata['license'], $metadata['provenance_ids'], $metadata['normalization'], $metadata['importer'], $metadata['runtime_files']), 'Comprehensive importer writes all nested audit sections.');
         assert_true(in_array('LICENSE.fixture.txt', $metadata['files'] ?? [], true), 'Comprehensive metadata lists the local license text file.');
+        assert_true(in_array('pack.lock.json', $metadata['files'] ?? [], true), 'Comprehensive metadata lists the generated inventory lock file.');
         assert_contains_text('profile.php', implode("\n", array_column((array) ($metadata['runtime_files'] ?? []), 'file')), 'Comprehensive metadata includes profile.php runtime digest.');
         assert_not_contains_text($first_tree['language_dir'], (string) ($metadata['importer']['command'] ?? ''), 'Importer command does not include the first temp output path.');
         assert_not_contains_text($second_tree['language_dir'], (string) ($metadata['importer']['command'] ?? ''), 'Importer command does not include the second temp output path.');
 
+        $lock = json_decode((string) file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.lock.json'), true);
+        assert_true(is_array($lock), 'Comprehensive inventory lock decodes as JSON.');
+        assert_same(Language_FTS_Playground_Lexical_Pack_Validator::INVENTORY_SCHEMA_V1, $lock['schema'] ?? null, 'Comprehensive inventory lock uses the stable inventory schema.');
+        assert_same('membership-tsv', $lock['importer']['format'] ?? null, 'Comprehensive inventory lock records the importer source format.');
+        assert_same((string) hash_file('sha256', $input_path), $lock['source']['artifacts'][0]['sha256'] ?? null, 'Comprehensive inventory lock records the reviewed source artifact digest.');
+        assert_contains_text('synsets.tsv', json_encode($lock['runtime_resources'] ?? [], JSON_UNESCAPED_SLASHES) ?: '', 'Comprehensive inventory lock records generated runtime resources.');
+
         $report = (new Language_FTS_Playground_Lexical_Pack_Validator($first_tree['root']))->validate_all();
         assert_same(true, $report['valid'], 'Generated comprehensive metadata validates cleanly.');
+        $by_id = language_fts_pack_status_by_id($report);
+        assert_same('ok', $by_id['en']['metadata']['inventory_status'] ?? null, 'Generated comprehensive metadata has a matching inventory lock.');
     } finally {
         remove_language_fts_temp_tree($first_tree['root']);
         remove_language_fts_temp_tree($second_tree['root']);

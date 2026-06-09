@@ -21,6 +21,7 @@ final class Language_FTS_Playground_Lexical_Import_Exception extends RuntimeExce
 }
 
 const LANGUAGE_FTS_IMPORT_METADATA_SCHEMA_V2 = 'language-fts-playground-pack-metadata-v2';
+const LANGUAGE_FTS_IMPORT_INVENTORY_SCHEMA_V1 = 'language-fts-playground-pack-inventory-v1';
 const LANGUAGE_FTS_IMPORTER_VERSION = 'language-fts-playground-lexical-importer-v2';
 
 exit(language_fts_import_main($_SERVER['argv'] ?? []));
@@ -79,6 +80,9 @@ function language_fts_import_main(array $argv): int
             echo 'Imported ' . $summary['lexeme_count'] . ' lexeme rows to ' . $summary['lexemes_path'] . "\n";
         }
         echo 'Wrote pack metadata to ' . $summary['pack_path'] . "\n";
+        if ($summary['inventory_path'] !== null) {
+            echo 'Wrote pack inventory lock to ' . $summary['inventory_path'] . "\n";
+        }
 
         return 0;
     } catch (Language_FTS_Playground_Lexical_Import_Exception $exception) {
@@ -557,7 +561,7 @@ function language_fts_import_add_lexeme(array &$state, string $observed, string 
 /**
  * @param array<string,mixed> $config
  * @param array{concepts:array<string,array{weight:string,terms:array<string,bool>}>,lexemes:array<string,array<string,bool>>} $state
- * @return array{synset_count:int,lexeme_count:int,synsets_path:string,lexemes_path:string,pack_path:string}
+ * @return array{synset_count:int,lexeme_count:int,synsets_path:string,lexemes_path:string,pack_path:string,inventory_path:string|null}
  */
 function language_fts_import_write_outputs(array $config, array $state): array
 {
@@ -610,12 +614,19 @@ function language_fts_import_write_outputs(array $config, array $state): array
     $pack_path = language_fts_import_output_path((string) $config['output_dir'], 'pack.php');
     language_fts_import_write_file($pack_path, "<?php\ndeclare(strict_types=1);\n\nreturn " . var_export($metadata, true) . ";\n");
 
+    $inventory_path = null;
+    if ((string) $config['data_kind'] === 'imported_comprehensive') {
+        $inventory_path = language_fts_import_output_path((string) $config['output_dir'], 'pack.lock.json');
+        language_fts_import_write_file($inventory_path, language_fts_import_json(language_fts_import_pack_inventory($metadata)));
+    }
+
     return [
         'synset_count' => count($state['concepts']),
         'lexeme_count' => $lexeme_count,
         'synsets_path' => $synsets_path,
         'lexemes_path' => $lexemes_path,
         'pack_path' => $pack_path,
+        'inventory_path' => $inventory_path,
     ];
 }
 
@@ -656,6 +667,8 @@ function language_fts_import_comprehensive_metadata(array $config, array $genera
 
     $generated_lookup = array_fill_keys(array_values($generated_files), true);
     $files = array_values(array_unique(array_values($runtime_resource_files)));
+    $files[] = 'pack.lock.json';
+    $files = array_values(array_unique($files));
     sort($files, SORT_STRING);
 
     $runtime_files = [];
@@ -759,6 +772,131 @@ function language_fts_import_comprehensive_metadata(array $config, array $genera
         ],
         'runtime_files' => $runtime_files,
     ];
+}
+
+/**
+ * @param array<string,mixed> $metadata
+ * @return array<string,mixed>
+ */
+function language_fts_import_pack_inventory(array $metadata): array
+{
+    $source = isset($metadata['source']) && is_array($metadata['source']) ? $metadata['source'] : [];
+    $license = isset($metadata['license']) && is_array($metadata['license']) ? $metadata['license'] : [];
+    $normalization = isset($metadata['normalization']) && is_array($metadata['normalization']) ? $metadata['normalization'] : [];
+    $importer = isset($metadata['importer']) && is_array($metadata['importer']) ? $metadata['importer'] : [];
+    $importer_options = isset($importer['options']) && is_array($importer['options']) ? $importer['options'] : [];
+    ksort($importer_options, SORT_STRING);
+
+    $provenance_ids = isset($metadata['provenance_ids']) && is_array($metadata['provenance_ids']) ? $metadata['provenance_ids'] : [];
+    ksort($provenance_ids, SORT_STRING);
+
+    $source_artifacts = [];
+    foreach ((array) ($source['artifacts'] ?? []) as $artifact) {
+        if (!is_array($artifact)) {
+            continue;
+        }
+        $source_artifacts[] = [
+            'name' => (string) ($artifact['name'] ?? ''),
+            'url' => (string) ($artifact['url'] ?? ''),
+            'sha256' => (string) ($artifact['sha256'] ?? ''),
+            'bytes' => (int) ($artifact['bytes'] ?? 0),
+        ];
+    }
+    usort(
+        $source_artifacts,
+        static fn(array $a, array $b): int => strcmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''))
+            ?: strcmp((string) ($a['url'] ?? ''), (string) ($b['url'] ?? ''))
+    );
+
+    $runtime_resources = [];
+    foreach ((array) ($metadata['runtime_files'] ?? []) as $runtime_file) {
+        if (!is_array($runtime_file)) {
+            continue;
+        }
+        $runtime_resources[] = [
+            'resource' => (string) ($runtime_file['resource'] ?? ''),
+            'file' => (string) ($runtime_file['file'] ?? ''),
+            'sha256' => (string) ($runtime_file['sha256'] ?? ''),
+            'bytes' => (int) ($runtime_file['bytes'] ?? 0),
+            'generated' => (bool) ($runtime_file['generated'] ?? false),
+        ];
+    }
+    usort(
+        $runtime_resources,
+        static fn(array $a, array $b): int => strcmp((string) ($a['resource'] ?? ''), (string) ($b['resource'] ?? ''))
+            ?: strcmp((string) ($a['file'] ?? ''), (string) ($b['file'] ?? ''))
+    );
+
+    return [
+        'schema' => LANGUAGE_FTS_IMPORT_INVENTORY_SCHEMA_V1,
+        'language_id' => (string) ($metadata['language_id'] ?? ''),
+        'data_kind' => (string) ($metadata['data_kind'] ?? ''),
+        'pack' => [
+            'version' => (string) ($metadata['pack_version'] ?? ''),
+            'date' => (string) ($metadata['pack_date'] ?? ''),
+        ],
+        'source' => [
+            'name' => (string) ($source['name'] ?? $metadata['source_name'] ?? ''),
+            'url' => (string) ($metadata['source_url'] ?? ''),
+            'version' => (string) ($source['version'] ?? $metadata['pack_version'] ?? ''),
+            'date' => (string) ($source['retrieved_at'] ?? $metadata['pack_date'] ?? ''),
+            'artifacts' => $source_artifacts,
+        ],
+        'license' => [
+            'name' => (string) ($license['name'] ?? $metadata['license_name'] ?? ''),
+            'identifier' => (string) ($license['identifier'] ?? ''),
+            'url' => (string) ($license['url'] ?? ''),
+            'text_url' => (string) ($license['text_url'] ?? ''),
+            'text_file' => (string) ($license['text_file'] ?? ''),
+            'attribution' => (string) ($license['attribution'] ?? $metadata['attribution_text'] ?? ''),
+        ],
+        'provenance' => [
+            'default' => (string) ($metadata['provenance'] ?? ''),
+            'ids' => $provenance_ids,
+        ],
+        'normalization' => [
+            'profile_id' => (string) ($normalization['profile_id'] ?? $metadata['language_id'] ?? ''),
+            'profile_version' => (string) ($normalization['profile_version'] ?? ''),
+            'profile_file' => (string) ($normalization['profile_file'] ?? 'profile.php'),
+            'profile_sha256' => (string) ($normalization['profile_sha256'] ?? ''),
+        ],
+        'importer' => [
+            'name' => (string) ($importer['name'] ?? ''),
+            'version' => (string) ($importer['version'] ?? ''),
+            'format' => (string) ($importer['format'] ?? ''),
+            'command' => (string) ($importer['command'] ?? ''),
+            'options' => $importer_options,
+        ],
+        'runtime_resources' => $runtime_resources,
+    ];
+}
+
+function language_fts_import_json(mixed $value): string
+{
+    $json = json_encode(language_fts_import_canonicalize_json_value($value), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($json)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Could not encode pack inventory lock JSON.');
+    }
+
+    return $json . "\n";
+}
+
+function language_fts_import_canonicalize_json_value(mixed $value): mixed
+{
+    if (!is_array($value)) {
+        return $value;
+    }
+
+    if (array_is_list($value)) {
+        return array_map('language_fts_import_canonicalize_json_value', $value);
+    }
+
+    ksort($value, SORT_STRING);
+    foreach ($value as $key => $item) {
+        $value[$key] = language_fts_import_canonicalize_json_value($item);
+    }
+
+    return $value;
 }
 
 /**
