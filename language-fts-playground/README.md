@@ -303,9 +303,10 @@ add_filter(
 
 The root must be a local filesystem path, not a URL or runtime download source.
 Changing pack metadata such as `pack_version`, `pack_date`, provenance, data
-kind, or listed files changes the analyzer fingerprint. The next schema check
-marks the index as requiring a rebuild so stored terms can be regenerated with
-the new resources.
+kind, or listed files changes the analyzer fingerprint. The fingerprint also
+includes content hashes for profile-declared runtime resources, so local TSV
+or text file changes trigger the next schema check to mark the index as
+requiring a rebuild.
 
 See `docs/lexical-resources.md` for the resource contract and
 `tools/import-lexical-source.php` for source import usage. The maintainer flow

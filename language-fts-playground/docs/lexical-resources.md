@@ -322,12 +322,13 @@ filter returns are ignored.
 The analyzer fingerprint includes the effective root plus per-language
 `pack.php` metadata such as `language_id`, `pack_version`, `pack_date`,
 `provenance`, `data_kind`, source/license fields, attribution text, and listed
-file names. It does not hash full TSV contents on normal requests. When the
-fingerprint changes, `ensure_schema()` stores the new fingerprint, marks the
-index as requiring a rebuild, and records the root/fingerprint in admin-visible
-status. If the custom root is missing or pack metadata cannot be read, the
-schema check records an error instead of silently accepting stale analyzer
-assumptions.
+file names. It also hashes profile-declared runtime resource files, so local
+TSV/text content changes are detected without scanning unrelated directories.
+When the fingerprint changes, `ensure_schema()` stores the new fingerprint,
+marks the index as requiring a rebuild, and records the root/fingerprint in
+admin-visible status. If the custom root is missing or pack metadata cannot be
+read, the schema check records an error instead of silently accepting stale
+analyzer assumptions.
 
 ## Build-Time Importer
 

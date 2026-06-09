@@ -187,7 +187,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
     public function pack_fingerprint(): string
     {
         $payload = [
-            'schema' => 'language-fts-playground-lexical-pack-fingerprint-v1',
+            'schema' => 'language-fts-playground-lexical-pack-fingerprint-v2',
             'resource_root' => $this->resource_root,
             'languages' => [],
         ];
@@ -205,6 +205,7 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
                 'license_name' => $metadata['license_name'],
                 'attribution_text' => $metadata['attribution_text'],
                 'files' => array_values($metadata['files']),
+                'runtime_resources' => $this->runtime_resource_fingerprints($language),
             ];
         }
 
@@ -214,6 +215,47 @@ final class Language_FTS_Playground_Lexical_Profile_Repository
         }
 
         return hash('sha256', $json);
+    }
+
+    /**
+     * @return array<int,array{resource:string,file:string,sha256:string}>
+     */
+    private function runtime_resource_fingerprints(string $language): array
+    {
+        $entry = $this->manifest_entry($language);
+        $profile_file = $this->profile_file($entry);
+        $resources = $entry['profile']['resources'] ?? [];
+        if (!is_array($resources)) {
+            throw new UnexpectedValueException('Language profile resources must be an array in ' . $profile_file);
+        }
+
+        $fingerprints = [];
+        foreach ($resources as $resource_key => $resource_file) {
+            if (!is_string($resource_key) || trim($resource_key) === '' || trim($resource_key) !== $resource_key) {
+                throw new UnexpectedValueException('Language profile resources must use non-empty string keys in ' . $profile_file);
+            }
+
+            $path = $this->resource_path($entry['directory'], $resources, $resource_key, $profile_file);
+            $resource_file = trim((string) $resource_file);
+            $digest = hash_file('sha256', $path);
+            if (!is_string($digest)) {
+                throw new RuntimeException("Could not hash language profile resource {$resource_key}: {$path}");
+            }
+
+            $fingerprints[] = [
+                'resource' => $resource_key,
+                'file' => $resource_file,
+                'sha256' => $digest,
+            ];
+        }
+
+        usort(
+            $fingerprints,
+            static fn(array $a, array $b): int => strcmp($a['resource'], $b['resource'])
+                ?: strcmp($a['file'], $b['file'])
+        );
+
+        return $fingerprints;
     }
 
     /**
