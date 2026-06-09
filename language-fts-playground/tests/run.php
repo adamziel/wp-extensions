@@ -5094,6 +5094,10 @@ test_case('WordPress.org readme metadata stays aligned with plugin headers', fun
     assert_contains_text('== Frequently Asked Questions ==', $readme, 'WordPress.org readme has a FAQ section.');
     assert_contains_text('== Screenshots ==', $readme, 'WordPress.org readme has a Screenshots section.');
     assert_contains_text('== Changelog ==', $readme, 'WordPress.org readme has a Changelog section.');
+    $short_description = 'Demo/seed-pack full-text search playground for language-partitioned WordPress search with English, Polish, and German resources.';
+    assert_contains_text("\n\n" . $short_description . "\n\n== Description ==", $readme, 'WordPress.org readme has one short description line before Description.');
+    assert_true(strlen($short_description) <= 150, 'WordPress.org readme short description is at most 150 characters.');
+    assert_true(!preg_match('/[<>\[\]`*_]/', $short_description), 'WordPress.org readme short description has no markup characters.');
     assert_contains_text('demo/seed-pack release candidate', $readme, 'WordPress.org readme keeps demo/seed-pack scope explicit.');
     assert_contains_text('direct ZIP artifact', $readme, 'WordPress.org readme keeps direct-ZIP distribution scope explicit.');
     assert_contains_text('not a WordPress.org/plugin-directory release', $readme, 'WordPress.org readme avoids claiming current directory readiness.');

@@ -287,6 +287,8 @@ function assert_wordpress_org_readme(string $readme, array $metadata): void
         }
     }
 
+    assert_wordpress_org_short_description($readme, 'Release zip readme.txt');
+
     foreach (['demo/seed-pack', 'direct ZIP', 'not a WordPress.org/plugin-directory release', 'WordPress.org submission'] as $phrase) {
         if (false === strpos($readme, $phrase)) {
             throw new RuntimeException('Release zip readme.txt is missing required scope wording: ' . $phrase);
@@ -296,6 +298,59 @@ function assert_wordpress_org_readme(string $readme, array $metadata): void
     if (preg_match('/\b(available|listed|published)\s+on\s+WordPress\.org\b/i', $readme)) {
         throw new RuntimeException('Release zip readme.txt must not claim current WordPress.org availability.');
     }
+}
+
+/**
+ * Verifies the one-line WordPress.org short description before Description.
+ *
+ * @param string $readme Readme contents.
+ * @param string $label  Diagnostic label.
+ * @return string Short description.
+ */
+function assert_wordpress_org_short_description(string $readme, string $label): string
+{
+    $lines = preg_split("/\r\n|\n|\r/", $readme);
+
+    if (!is_array($lines)) {
+        throw new RuntimeException('Unable to split ' . $label . ' into lines.');
+    }
+
+    $description_lines = [];
+
+    foreach ($lines as $line) {
+        $trimmed = trim($line);
+
+        if (preg_match('/^==\s+/', $trimmed)) {
+            break;
+        }
+
+        if (
+            '' === $trimmed ||
+            preg_match('/^===\s*.+\s*===$/', $trimmed) ||
+            preg_match('/^[^:]+:\s*.+$/', $trimmed)
+        ) {
+            continue;
+        }
+
+        $description_lines[] = $trimmed;
+    }
+
+    if (1 !== count($description_lines)) {
+        throw new RuntimeException($label . ' must contain exactly one short description line before the first section.');
+    }
+
+    $short_description = $description_lines[0];
+    $length = strlen($short_description);
+
+    if (150 < $length) {
+        throw new RuntimeException($label . ' short description must be no more than 150 characters; found ' . $length . '.');
+    }
+
+    if (preg_match('/[<>\[\]`*_]/', $short_description)) {
+        throw new RuntimeException($label . ' short description must not contain markup characters.');
+    }
+
+    return $short_description;
 }
 
 /**

@@ -8,8 +8,7 @@ Requires PHP: 8.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Demo/seed-pack full-text search playground for testing language-partitioned
-WordPress search behavior with bundled English, Polish, and German resources.
+Demo/seed-pack full-text search playground for language-partitioned WordPress search with English, Polish, and German resources.
 
 == Description ==
 
