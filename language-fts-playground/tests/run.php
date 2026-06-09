@@ -1348,6 +1348,150 @@ function write_language_fts_temp_pack_metadata(string $language_dir, array $over
 }
 
 /**
+ * @param array<string,mixed> $metadata
+ */
+function write_language_fts_temp_pack_metadata_array(string $language_dir, array $metadata): void
+{
+    file_put_contents(
+        $language_dir . DIRECTORY_SEPARATOR . 'pack.php',
+        "<?php\nreturn " . var_export($metadata, true) . ";\n"
+    );
+}
+
+/**
+ * @return array{resource:string,file:string,sha256:string,bytes:int,generated:bool}
+ */
+function language_fts_temp_runtime_file_record(string $language_dir, string $resource, string $file, bool $generated = false): array
+{
+    $path = $language_dir . DIRECTORY_SEPARATOR . $file;
+
+    return [
+        'resource' => $resource,
+        'file' => $file,
+        'sha256' => (string) hash_file('sha256', $path),
+        'bytes' => (int) filesize($path),
+        'generated' => $generated,
+    ];
+}
+
+/**
+ * @return array<int,array{resource:string,file:string,sha256:string,bytes:int,generated:bool}>
+ */
+function language_fts_temp_runtime_file_records(string $language_dir): array
+{
+    $profile_path = $language_dir . DIRECTORY_SEPARATOR . 'profile.php';
+    $profile = require $profile_path;
+    assert_true(is_array($profile), 'Temporary profile metadata is readable.');
+
+    $records = [
+        language_fts_temp_runtime_file_record($language_dir, 'profile', 'profile.php', false),
+    ];
+    foreach ((array) ($profile['resources'] ?? []) as $resource => $file) {
+        $file = (string) $file;
+        if (is_file($language_dir . DIRECTORY_SEPARATOR . $file)) {
+            $records[] = language_fts_temp_runtime_file_record($language_dir, (string) $resource, $file, false);
+        }
+    }
+    if (is_file($language_dir . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt')) {
+        $records[] = language_fts_temp_runtime_file_record($language_dir, 'license', 'LICENSE.fixture.txt', false);
+    }
+
+    usort(
+        $records,
+        static fn(array $a, array $b): int => strcmp($a['resource'], $b['resource'])
+            ?: strcmp($a['file'], $b['file'])
+    );
+
+    return $records;
+}
+
+/**
+ * @param array<string,mixed> $overrides
+ * @return array<string,mixed>
+ */
+function language_fts_temp_comprehensive_pack_metadata(string $language_dir, array $overrides = []): array
+{
+    $license_path = $language_dir . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt';
+    if (!is_file($license_path)) {
+        file_put_contents($license_path, "Fixture license text.\n");
+    }
+
+    $runtime_files = language_fts_temp_runtime_file_records($language_dir);
+    $files = array_values(array_unique(array_column($runtime_files, 'file')));
+    sort($files, SORT_STRING);
+    $profile_sha256 = (string) hash_file('sha256', $language_dir . DIRECTORY_SEPARATOR . 'profile.php');
+
+    $metadata = [
+        'metadata_schema' => Language_FTS_Playground_Lexical_Pack_Validator::METADATA_SCHEMA_V2,
+        'language_id' => basename($language_dir),
+        'pack_version' => 'fixture-comprehensive-2026-06-09',
+        'pack_date' => '2026-06-09',
+        'data_kind' => 'imported_comprehensive',
+        'source_name' => 'Fixture comprehensive lexical source',
+        'source_url' => 'https://example.test/fixture-comprehensive-source',
+        'license_name' => 'Fixture License 1.0',
+        'attribution_text' => 'Fixture comprehensive attribution.',
+        'provenance' => 'fixture-comprehensive',
+        'files' => $files,
+        'source' => [
+            'name' => 'Fixture comprehensive lexical source',
+            'version' => '2026-06-fixture',
+            'retrieved_at' => '2026-06-09',
+            'artifacts' => [
+                [
+                    'name' => 'fixture-source.json',
+                    'url' => 'https://example.test/fixture-source.json',
+                    'sha256' => str_repeat('a', 64),
+                    'bytes' => 123,
+                ],
+            ],
+        ],
+        'license' => [
+            'identifier' => 'Fixture-1.0',
+            'name' => 'Fixture License 1.0',
+            'url' => 'https://example.test/license',
+            'text_url' => 'https://example.test/license.txt',
+            'text_file' => 'LICENSE.fixture.txt',
+            'attribution' => 'Fixture comprehensive attribution.',
+        ],
+        'provenance_ids' => [
+            'fixture-comprehensive' => [
+                'source' => 'Fixture comprehensive lexical source',
+                'source_version' => '2026-06-fixture',
+                'description' => 'Fixture rows generated from a reviewed source snapshot.',
+            ],
+        ],
+        'normalization' => [
+            'profile_id' => basename($language_dir),
+            'profile_version' => 'language-fts-playground-normalization-fixture-v1',
+            'profile_file' => 'profile.php',
+            'profile_sha256' => $profile_sha256,
+        ],
+        'importer' => [
+            'name' => 'language-fts-playground/tools/import-lexical-source.php',
+            'version' => 'language-fts-playground-lexical-importer-v2',
+            'format' => 'membership-tsv',
+            'command' => 'php language-fts-playground/tools/import-lexical-source.php membership-tsv <source-artifact> <output-dir> --data-kind=imported_comprehensive',
+            'options' => [
+                'data_kind' => 'imported_comprehensive',
+                'language' => basename($language_dir),
+            ],
+        ],
+        'runtime_files' => $runtime_files,
+    ];
+
+    return array_replace_recursive($metadata, $overrides);
+}
+
+/**
+ * @param array<string,mixed> $overrides
+ */
+function write_language_fts_temp_comprehensive_pack_metadata(string $language_dir, array $overrides = []): void
+{
+    write_language_fts_temp_pack_metadata_array($language_dir, language_fts_temp_comprehensive_pack_metadata($language_dir, $overrides));
+}
+
+/**
  * @param array<string,mixed> $report
  * @return array<string,array<string,mixed>>
  */
@@ -1736,6 +1880,31 @@ function language_fts_import_options(array $overrides = []): array
         ],
         $overrides
     );
+}
+
+/**
+ * @param array<string,string> $overrides
+ * @return array<string,string>
+ */
+function language_fts_comprehensive_import_options(string $input_path, array $overrides = []): array
+{
+    return language_fts_import_options(array_merge(
+        [
+            'data_kind' => 'imported_comprehensive',
+            'source_version' => '2026-06-fixture',
+            'source_retrieved_at' => '2026-06-09',
+            'source_artifact_name' => basename($input_path),
+            'source_artifact_url' => 'https://example.test/' . basename($input_path),
+            'source_artifact_sha256' => (string) hash_file('sha256', $input_path),
+            'source_artifact_bytes' => (string) filesize($input_path),
+            'license_id' => 'Fixture-1.0',
+            'license_url' => 'https://example.test/license',
+            'license_text_url' => 'https://example.test/license.txt',
+            'license_text_file' => 'LICENSE.fixture.txt',
+            'normalization_profile_version' => 'language-fts-playground-normalization-fixture-v1',
+        ],
+        $overrides
+    ));
 }
 
 function assert_language_fts_term_rules_rejected(string $label, string $term_rules, string $expected_message): void
@@ -3276,6 +3445,25 @@ test_case('lexical pack validator warns and fails when metadata omits profile re
     }
 });
 
+test_case('lexical pack validator requires v2 audit metadata for comprehensive packs', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir, [
+        'source' => null,
+    ]);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Comprehensive packs missing source metadata fail validation.');
+        assert_contains_text('source must be an array', $warnings, 'The missing comprehensive source section is reported clearly.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('lexical pack validator rejects non-normalized resource keys consistently', function (): void {
     $root = create_language_fts_temp_profile_set([
         'xx' => [
@@ -3300,6 +3488,52 @@ test_case('lexical pack validator rejects non-normalized resource keys consisten
         assert_contains_text('synonym source must be normalized lowercase resource tokens', $warnings, 'Non-normalized pairwise synonym sources are reported.');
         assert_contains_text('term rule append must be normalized lowercase resource tokens', $warnings, 'Non-normalized term rule append literals are reported.');
         assert_contains_text('term rule alternate_replacement must be normalized lowercase resource tokens', $warnings, 'Non-normalized term rule alternate replacements are reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator fails runtime digest and byte mismatches', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir);
+    foreach ($metadata['runtime_files'] as &$runtime_file) {
+        if (($runtime_file['file'] ?? '') === 'profile.php') {
+            $runtime_file['sha256'] = str_repeat('b', 64);
+        }
+        if (($runtime_file['file'] ?? '') === 'stopwords.txt') {
+            $runtime_file['bytes'] = ((int) $runtime_file['bytes']) + 1;
+        }
+    }
+    unset($runtime_file);
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Runtime digest and byte mismatches fail validation.');
+        assert_same('mismatch', $by_id['xx']['metadata']['runtime_digest_status'] ?? null, 'Digest mismatch status is reported in metadata.');
+        assert_contains_text('runtime file sha256 mismatch', $warnings, 'Runtime sha256 mismatch is reported.');
+        assert_contains_text('runtime file byte count mismatch', $warnings, 'Runtime byte count mismatch is reported.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('lexical pack validator fails undeclared comprehensive row provenance', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\trogue-provenance\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    write_language_fts_temp_comprehensive_pack_metadata($language_dir);
+
+    try {
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($root))->validate_all();
+        $by_id = language_fts_pack_status_by_id($report);
+        $warnings = implode("\n", $by_id['xx']['warnings'] ?? []);
+
+        assert_same(false, $report['valid'], 'Undeclared row provenance fails comprehensive pack validation.');
+        assert_contains_text('lexeme provenance must be declared', $warnings, 'The undeclared provenance failure names row provenance.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
@@ -3613,6 +3847,86 @@ test_case('membership importer defaults omitted data kind to curated seed and li
         assert_same(true, $report['valid'], 'Generated importer metadata passes lexical pack validation.');
     } finally {
         remove_language_fts_temp_tree($profile_tree['root']);
+    }
+});
+
+test_case('comprehensive importer requires audit metadata and source digest match', function (): void {
+    $input_path = language_fts_import_fixture_path('membership.tsv');
+    $profile_tree = create_language_fts_temp_import_profile('en');
+    file_put_contents($profile_tree['language_dir'] . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt', "Fixture license text.\n");
+
+    try {
+        $missing_metadata = run_language_fts_importer(
+            'membership-tsv',
+            $input_path,
+            $profile_tree['language_dir'],
+            language_fts_import_options([
+                'data_kind' => 'imported_comprehensive',
+                'provenance' => 'fixture-comprehensive-import',
+            ])
+        );
+        assert_true($missing_metadata['exit_code'] !== 0, 'Comprehensive imports missing audit metadata exit nonzero.');
+        assert_contains_text('Missing required comprehensive metadata option: --source-version', $missing_metadata['output'], 'Missing comprehensive metadata reports the first required option.');
+
+        $digest_mismatch = run_language_fts_importer(
+            'membership-tsv',
+            $input_path,
+            $profile_tree['language_dir'],
+            language_fts_comprehensive_import_options($input_path, [
+                'provenance' => 'fixture-comprehensive-import',
+                'source_artifact_sha256' => str_repeat('c', 64),
+            ])
+        );
+        assert_true($digest_mismatch['exit_code'] !== 0, 'Comprehensive imports with a source digest mismatch exit nonzero.');
+        assert_contains_text('Source artifact sha256 mismatch', $digest_mismatch['output'], 'Source artifact digest mismatch is reported.');
+    } finally {
+        remove_language_fts_temp_tree($profile_tree['root']);
+    }
+});
+
+test_case('comprehensive importer writes deterministic v2 audit metadata', function (): void {
+    $input_path = language_fts_import_fixture_path('membership.tsv');
+    $first_tree = create_language_fts_temp_import_profile('en');
+    $second_tree = create_language_fts_temp_import_profile('en');
+    file_put_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt', "Fixture license text.\n");
+    file_put_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'LICENSE.fixture.txt', "Fixture license text.\n");
+
+    $options = language_fts_comprehensive_import_options($input_path, [
+        'source_name' => 'Deterministic comprehensive fixture',
+        'source_url' => 'https://example.test/deterministic-comprehensive',
+        'license_name' => 'Fixture License 1.0',
+        'attribution' => 'Deterministic comprehensive fixture attribution.',
+        'pack_version' => 'fixture-comprehensive-import-v1',
+        'pack_date' => '2026-06-09',
+        'provenance' => 'fixture-comprehensive-import',
+        'weight' => '0.5',
+    ]);
+
+    try {
+        $first = run_language_fts_importer('membership-tsv', $input_path, $first_tree['language_dir'], $options);
+        $second = run_language_fts_importer('membership-tsv', $input_path, $second_tree['language_dir'], $options);
+
+        assert_same(0, $first['exit_code'], 'First comprehensive import exits successfully. Output: ' . $first['output']);
+        assert_same(0, $second['exit_code'], 'Second comprehensive import exits successfully. Output: ' . $second['output']);
+        assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'synsets.tsv'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'synsets.tsv'), 'Comprehensive synsets output is deterministic.');
+        assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'lexemes.tsv'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'lexemes.tsv'), 'Comprehensive lexemes output is deterministic.');
+        assert_same(file_get_contents($first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php'), file_get_contents($second_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php'), 'Comprehensive pack metadata output is deterministic.');
+
+        $metadata = require $first_tree['language_dir'] . DIRECTORY_SEPARATOR . 'pack.php';
+        assert_same(Language_FTS_Playground_Lexical_Pack_Validator::METADATA_SCHEMA_V2, $metadata['metadata_schema'] ?? null, 'Comprehensive importer writes the v2 metadata schema.');
+        assert_same('imported_comprehensive', $metadata['data_kind'] ?? null, 'Comprehensive importer labels comprehensive output explicitly.');
+        assert_same('fixture-comprehensive-import', $metadata['provenance'] ?? null, 'Comprehensive importer writes the requested provenance.');
+        assert_true(isset($metadata['source'], $metadata['license'], $metadata['provenance_ids'], $metadata['normalization'], $metadata['importer'], $metadata['runtime_files']), 'Comprehensive importer writes all nested audit sections.');
+        assert_true(in_array('LICENSE.fixture.txt', $metadata['files'] ?? [], true), 'Comprehensive metadata lists the local license text file.');
+        assert_contains_text('profile.php', implode("\n", array_column((array) ($metadata['runtime_files'] ?? []), 'file')), 'Comprehensive metadata includes profile.php runtime digest.');
+        assert_not_contains_text($first_tree['language_dir'], (string) ($metadata['importer']['command'] ?? ''), 'Importer command does not include the first temp output path.');
+        assert_not_contains_text($second_tree['language_dir'], (string) ($metadata['importer']['command'] ?? ''), 'Importer command does not include the second temp output path.');
+
+        $report = (new Language_FTS_Playground_Lexical_Pack_Validator($first_tree['root']))->validate_all();
+        assert_same(true, $report['valid'], 'Generated comprehensive metadata validates cleanly.');
+    } finally {
+        remove_language_fts_temp_tree($first_tree['root']);
+        remove_language_fts_temp_tree($second_tree['root']);
     }
 });
 
@@ -6038,6 +6352,41 @@ test_case('admin page renders lexical pack status safely as curated seed data', 
     assert_contains_text('2026-06-08-seed 2026-06-08', $html, 'Admin page shows pack version/date.');
     assert_contains_text('lexemes 34; synsets 1; phrase rows 0; expansions 12', $html, 'Admin page shows compact Polish pack counts.');
     assert_not_contains_text('<script>', $html, 'Admin lexical pack status does not emit raw unsafe markup.');
+});
+
+test_case('admin page escapes comprehensive audit metadata details', function (): void {
+    $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
+    $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
+    $metadata = language_fts_temp_comprehensive_pack_metadata($language_dir, [
+        'source_name' => 'Fixture <script>alert(1)</script> source',
+        'attribution_text' => 'Attribution <script>alert(2)</script>',
+    ]);
+    $metadata['importer']['command'] = 'php import <script>alert(3)</script>';
+    $metadata['provenance_ids']['fixture-comprehensive']['description'] = 'Description <script>alert(4)</script>';
+    write_language_fts_temp_pack_metadata_array($language_dir, $metadata);
+    $normalized_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root($root);
+
+    try {
+        reset_language_fts_plugin_runtime();
+        add_filter(
+            'language_fts_playground_lexical_resource_root',
+            static fn(): string => $normalized_root,
+            10,
+            1
+        );
+
+        ob_start();
+        Language_FTS_Playground_Plugin::render_admin_page();
+        $html = ob_get_clean();
+
+        assert_contains_text('Audit metadata', $html, 'Admin page renders audit metadata details for comprehensive packs.');
+        assert_contains_text('Fixture &lt;script&gt;alert(1)&lt;/script&gt; source', $html, 'Admin page escapes malicious source metadata.');
+        assert_contains_text('php import &lt;script&gt;alert(3)&lt;/script&gt;', $html, 'Admin page escapes malicious importer command metadata.');
+        assert_contains_text('Description &lt;script&gt;alert(4)&lt;/script&gt;', $html, 'Admin page escapes malicious provenance metadata.');
+        assert_not_contains_text('<script>', $html, 'Admin audit metadata details do not emit raw unsafe markup.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
 });
 
 test_case('admin page renders lexical pack status and disables search when custom root is invalid', function (): void {

@@ -20,6 +20,9 @@ final class Language_FTS_Playground_Lexical_Import_Exception extends RuntimeExce
 {
 }
 
+const LANGUAGE_FTS_IMPORT_METADATA_SCHEMA_V2 = 'language-fts-playground-pack-metadata-v2';
+const LANGUAGE_FTS_IMPORTER_VERSION = 'language-fts-playground-lexical-importer-v2';
+
 exit(language_fts_import_main($_SERVER['argv'] ?? []));
 
 /**
@@ -106,7 +109,20 @@ function language_fts_import_usage($stream): void
         "Optional:\n" .
         "  --weight=<0..1>              Default: 0.62\n" .
         "  --data-kind=<kind>           curated_seed or imported_comprehensive. Default: curated_seed\n" .
-        "  --delimiter=<character>      For openthesaurus-text. Default: ;\n"
+        "  --delimiter=<character>      For openthesaurus-text. Default: ;\n" .
+        "Comprehensive metadata options when --data-kind=imported_comprehensive:\n" .
+        "  --source-version=<version>\n" .
+        "  --source-retrieved-at=<YYYY-MM-DD>\n" .
+        "  --source-artifact-name=<name>\n" .
+        "  --source-artifact-url=<url>\n" .
+        "  --source-artifact-sha256=<sha256>\n" .
+        "  --source-artifact-bytes=<bytes>\n" .
+        "  --license-id=<identifier>\n" .
+        "  --license-url=<url>\n" .
+        "  --license-text-url=<url>\n" .
+        "  --license-text-file=<local-file>\n" .
+        "  --normalization-profile-version=<version>\n" .
+        "  --command-artifact-label=<label>  Optional deterministic command input label.\n"
     );
 }
 
@@ -130,6 +146,19 @@ function language_fts_import_parse_options(array $args): array
         'weight' => true,
         'data_kind' => true,
         'delimiter' => true,
+        'source_version' => true,
+        'source_retrieved_at' => true,
+        'source_artifact_name' => true,
+        'source_artifact_url' => true,
+        'source_artifact_sha256' => true,
+        'source_artifact_bytes' => true,
+        'license_id' => true,
+        'license_url' => true,
+        'license_text_url' => true,
+        'license_text_file' => true,
+        'normalization_profile_version' => true,
+        'importer_version' => true,
+        'command_artifact_label' => true,
     ];
 
     for ($i = 0, $count = count($args); $i < $count; $i++) {
@@ -221,10 +250,16 @@ function language_fts_import_config(string $format, string $input_path, string $
         throw new Language_FTS_Playground_Lexical_Import_Exception('Delimiter must be a short non-empty string without tabs or newlines.');
     }
 
+    $output_dir = language_fts_import_prepare_output_dir($output_dir);
+    $comprehensive = [];
+    if ($data_kind === 'imported_comprehensive') {
+        $comprehensive = language_fts_import_comprehensive_config($format, $input_path, $output_dir, $options);
+    }
+
     return [
         'format' => $format,
         'input_path' => $input_path,
-        'output_dir' => language_fts_import_prepare_output_dir($output_dir),
+        'output_dir' => $output_dir,
         'language' => $language,
         'source_name' => language_fts_import_metadata_text((string) $options['source_name'], 'source name'),
         'source_url' => language_fts_import_metadata_text((string) $options['source_url'], 'source URL'),
@@ -236,6 +271,105 @@ function language_fts_import_config(string $format, string $input_path, string $
         'provenance' => language_fts_import_tsv_field((string) $options['provenance'], 'provenance'),
         'weight' => language_fts_import_validate_weight((string) ($options['weight'] ?? '0.62'), 'weight'),
         'delimiter' => $delimiter,
+        'comprehensive' => $comprehensive,
+    ];
+}
+
+/**
+ * @param array<string,string> $options
+ * @return array<string,mixed>
+ */
+function language_fts_import_comprehensive_config(string $format, string $input_path, string $output_dir, array $options): array
+{
+    $required = [
+        'source_version',
+        'source_retrieved_at',
+        'source_artifact_name',
+        'source_artifact_url',
+        'source_artifact_sha256',
+        'source_artifact_bytes',
+        'license_id',
+        'license_url',
+        'license_text_url',
+        'license_text_file',
+        'normalization_profile_version',
+    ];
+    foreach ($required as $key) {
+        if (!isset($options[$key]) || trim((string) $options[$key]) === '') {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('Missing required comprehensive metadata option: --' . str_replace('_', '-', $key));
+        }
+    }
+
+    $source_retrieved_at = trim((string) $options['source_retrieved_at']);
+    if (!language_fts_import_valid_date($source_retrieved_at)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Source retrieved date must be a valid YYYY-MM-DD date.');
+    }
+
+    foreach (['source_artifact_url', 'license_url', 'license_text_url'] as $url_key) {
+        $url = trim((string) $options[$url_key]);
+        if (!language_fts_import_valid_url($url)) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('--' . str_replace('_', '-', $url_key) . ' must be an HTTP(S) URL.');
+        }
+    }
+
+    $source_artifact_sha256 = trim((string) $options['source_artifact_sha256']);
+    if (!language_fts_import_valid_sha256($source_artifact_sha256)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('--source-artifact-sha256 must be 64 lowercase hex characters.');
+    }
+
+    $source_artifact_bytes = language_fts_import_positive_int((string) $options['source_artifact_bytes'], '--source-artifact-bytes');
+    $actual_digest = hash_file('sha256', $input_path);
+    if (!is_string($actual_digest)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Could not compute source artifact digest: ' . $input_path);
+    }
+    if (strtolower($actual_digest) !== $source_artifact_sha256) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Source artifact sha256 mismatch for ' . $input_path . '.');
+    }
+
+    $actual_bytes = filesize($input_path);
+    if (!is_int($actual_bytes) || $actual_bytes !== $source_artifact_bytes) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Source artifact byte count mismatch for ' . $input_path . '.');
+    }
+
+    $license_text_file = language_fts_import_local_file_name((string) $options['license_text_file'], 'license text file');
+    $license_text_path = $output_dir . DIRECTORY_SEPARATOR . $license_text_file;
+    if (!is_file($license_text_path)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('License text file does not exist in output directory: ' . $license_text_path);
+    }
+
+    $profile_file = $output_dir . DIRECTORY_SEPARATOR . 'profile.php';
+    if (!is_file($profile_file)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Comprehensive imports require an existing profile.php in the output directory.');
+    }
+
+    $importer_version = trim((string) ($options['importer_version'] ?? LANGUAGE_FTS_IMPORTER_VERSION));
+    if ($importer_version === '') {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Importer version must be non-empty.');
+    }
+
+    $command_artifact_label = trim((string) ($options['command_artifact_label'] ?? '<source-artifact>'));
+    if ($command_artifact_label === '' || str_contains($command_artifact_label, "\n") || str_contains($command_artifact_label, "\r")) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Command artifact label must be non-empty and single-line.');
+    }
+    if (str_starts_with($command_artifact_label, '/') || str_starts_with($command_artifact_label, '\\') || preg_match('/^[A-Za-z]:[\/\\\\]/', $command_artifact_label) === 1) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Command artifact label must not be a machine-local absolute path.');
+    }
+
+    return [
+        'source_version' => language_fts_import_metadata_text((string) $options['source_version'], 'source version'),
+        'source_retrieved_at' => $source_retrieved_at,
+        'source_artifact_name' => language_fts_import_local_artifact_name((string) $options['source_artifact_name'], 'source artifact name'),
+        'source_artifact_url' => trim((string) $options['source_artifact_url']),
+        'source_artifact_sha256' => $source_artifact_sha256,
+        'source_artifact_bytes' => $source_artifact_bytes,
+        'license_id' => language_fts_import_license_identifier((string) $options['license_id']),
+        'license_url' => trim((string) $options['license_url']),
+        'license_text_url' => trim((string) $options['license_text_url']),
+        'license_text_file' => $license_text_file,
+        'normalization_profile_version' => language_fts_import_metadata_text((string) $options['normalization_profile_version'], 'normalization profile version'),
+        'importer_version' => $importer_version,
+        'command_artifact_label' => $command_artifact_label,
+        'format' => $format,
     ];
 }
 
@@ -451,6 +585,7 @@ function language_fts_import_write_outputs(array $config, array $state): array
     language_fts_import_write_file($synsets_path, implode("\n", $synset_rows) . "\n");
 
     $generated_files = ['synsets.tsv'];
+    $generated_resource_files = ['synsets' => 'synsets.tsv'];
     $lexeme_count = 0;
     $lexemes_path = language_fts_import_output_path((string) $config['output_dir'], 'lexemes.tsv');
     if ($state['lexemes'] !== []) {
@@ -466,20 +601,12 @@ function language_fts_import_write_outputs(array $config, array $state): array
         }
         language_fts_import_write_file($lexemes_path, implode("\n", $lexeme_rows) . "\n");
         $generated_files[] = 'lexemes.tsv';
+        $generated_resource_files['lexemes'] = 'lexemes.tsv';
     }
 
-    $metadata = [
-        'language_id' => $config['language'],
-        'pack_version' => $config['pack_version'],
-        'pack_date' => $config['pack_date'],
-        'source_name' => $config['source_name'],
-        'source_url' => $config['source_url'],
-        'license_name' => $config['license_name'],
-        'attribution_text' => $config['attribution_text'],
-        'provenance' => $config['provenance'],
-        'files' => language_fts_import_pack_file_list((string) $config['output_dir'], $generated_files),
-        'data_kind' => $config['data_kind'],
-    ];
+    $metadata = ((string) $config['data_kind'] === 'imported_comprehensive')
+        ? language_fts_import_comprehensive_metadata($config, $generated_resource_files)
+        : language_fts_import_basic_metadata($config, language_fts_import_pack_file_list((string) $config['output_dir'], $generated_files));
     $pack_path = language_fts_import_output_path((string) $config['output_dir'], 'pack.php');
     language_fts_import_write_file($pack_path, "<?php\ndeclare(strict_types=1);\n\nreturn " . var_export($metadata, true) . ";\n");
 
@@ -489,6 +616,148 @@ function language_fts_import_write_outputs(array $config, array $state): array
         'synsets_path' => $synsets_path,
         'lexemes_path' => $lexemes_path,
         'pack_path' => $pack_path,
+    ];
+}
+
+/**
+ * @param array<string,mixed> $config
+ * @param string[] $files
+ * @return array<string,mixed>
+ */
+function language_fts_import_basic_metadata(array $config, array $files): array
+{
+    $files = array_values(array_unique($files));
+
+    return [
+        'language_id' => $config['language'],
+        'pack_version' => $config['pack_version'],
+        'pack_date' => $config['pack_date'],
+        'source_name' => $config['source_name'],
+        'source_url' => $config['source_url'],
+        'license_name' => $config['license_name'],
+        'attribution_text' => $config['attribution_text'],
+        'provenance' => $config['provenance'],
+        'files' => $files,
+        'data_kind' => $config['data_kind'],
+    ];
+}
+
+/**
+ * @param array<string,mixed> $config
+ * @param array<string,string> $generated_files
+ * @return array<string,mixed>
+ */
+function language_fts_import_comprehensive_metadata(array $config, array $generated_files): array
+{
+    $output_dir = (string) $config['output_dir'];
+    $comprehensive = (array) $config['comprehensive'];
+    $runtime_resource_files = language_fts_import_profile_runtime_files($output_dir, (string) $config['language']);
+    $runtime_resource_files['license'] = (string) $comprehensive['license_text_file'];
+
+    $generated_lookup = array_fill_keys(array_values($generated_files), true);
+    $files = array_values(array_unique(array_values($runtime_resource_files)));
+    sort($files, SORT_STRING);
+
+    $runtime_files = [];
+    foreach ($runtime_resource_files as $resource => $file) {
+        $runtime_files[] = [
+            'resource' => $resource,
+            'file' => $file,
+            'sha256' => language_fts_import_file_sha256($output_dir . DIRECTORY_SEPARATOR . $file),
+            'bytes' => language_fts_import_file_bytes($output_dir . DIRECTORY_SEPARATOR . $file),
+            'generated' => isset($generated_lookup[$file]),
+        ];
+    }
+    usort(
+        $runtime_files,
+        static fn(array $a, array $b): int => strcmp((string) ($a['resource'] ?? ''), (string) ($b['resource'] ?? ''))
+            ?: strcmp((string) ($a['file'] ?? ''), (string) ($b['file'] ?? ''))
+    );
+
+    $source_artifacts = [
+        [
+            'name' => $comprehensive['source_artifact_name'],
+            'url' => $comprehensive['source_artifact_url'],
+            'sha256' => $comprehensive['source_artifact_sha256'],
+            'bytes' => $comprehensive['source_artifact_bytes'],
+        ],
+    ];
+
+    $importer_options = [
+        'attribution' => (string) $config['attribution_text'],
+        'data_kind' => (string) $config['data_kind'],
+        'language' => (string) $config['language'],
+        'license_id' => (string) $comprehensive['license_id'],
+        'license_name' => (string) $config['license_name'],
+        'license_text_file' => (string) $comprehensive['license_text_file'],
+        'license_text_url' => (string) $comprehensive['license_text_url'],
+        'license_url' => (string) $comprehensive['license_url'],
+        'normalization_profile_version' => (string) $comprehensive['normalization_profile_version'],
+        'pack_date' => (string) $config['pack_date'],
+        'pack_version' => (string) $config['pack_version'],
+        'provenance' => (string) $config['provenance'],
+        'source_artifact_bytes' => (string) $comprehensive['source_artifact_bytes'],
+        'source_artifact_name' => (string) $comprehensive['source_artifact_name'],
+        'source_artifact_sha256' => (string) $comprehensive['source_artifact_sha256'],
+        'source_artifact_url' => (string) $comprehensive['source_artifact_url'],
+        'source_name' => (string) $config['source_name'],
+        'source_retrieved_at' => (string) $comprehensive['source_retrieved_at'],
+        'source_url' => (string) $config['source_url'],
+        'source_version' => (string) $comprehensive['source_version'],
+        'weight' => (string) $config['weight'],
+    ];
+    if ((string) $config['format'] === 'openthesaurus-text') {
+        $importer_options['delimiter'] = (string) $config['delimiter'];
+    }
+    ksort($importer_options, SORT_STRING);
+
+    return [
+        'metadata_schema' => LANGUAGE_FTS_IMPORT_METADATA_SCHEMA_V2,
+        'language_id' => $config['language'],
+        'pack_version' => $config['pack_version'],
+        'pack_date' => $config['pack_date'],
+        'data_kind' => $config['data_kind'],
+        'source_name' => $config['source_name'],
+        'source_url' => $config['source_url'],
+        'license_name' => $config['license_name'],
+        'attribution_text' => $config['attribution_text'],
+        'provenance' => $config['provenance'],
+        'files' => $files,
+        'source' => [
+            'name' => $config['source_name'],
+            'version' => $comprehensive['source_version'],
+            'retrieved_at' => $comprehensive['source_retrieved_at'],
+            'artifacts' => $source_artifacts,
+        ],
+        'license' => [
+            'identifier' => $comprehensive['license_id'],
+            'name' => $config['license_name'],
+            'url' => $comprehensive['license_url'],
+            'text_url' => $comprehensive['license_text_url'],
+            'text_file' => $comprehensive['license_text_file'],
+            'attribution' => $config['attribution_text'],
+        ],
+        'provenance_ids' => [
+            (string) $config['provenance'] => [
+                'source' => $config['source_name'],
+                'source_version' => $comprehensive['source_version'],
+                'description' => 'Generated rows from the reviewed source artifact.',
+            ],
+        ],
+        'normalization' => [
+            'profile_id' => $config['language'],
+            'profile_version' => $comprehensive['normalization_profile_version'],
+            'profile_file' => 'profile.php',
+            'profile_sha256' => language_fts_import_file_sha256($output_dir . DIRECTORY_SEPARATOR . 'profile.php'),
+        ],
+        'importer' => [
+            'name' => 'language-fts-playground/tools/import-lexical-source.php',
+            'version' => $comprehensive['importer_version'],
+            'format' => $config['format'],
+            'command' => language_fts_import_canonical_command($config, $comprehensive, $importer_options),
+            'options' => $importer_options,
+        ],
+        'runtime_files' => $runtime_files,
     ];
 }
 
@@ -563,6 +832,99 @@ function language_fts_import_profile_resource_files(string $profile_path): array
     }
 
     return $files;
+}
+
+/**
+ * @return array<string,string>
+ */
+function language_fts_import_profile_runtime_files(string $output_dir, string $language): array
+{
+    $profile_path = $output_dir . DIRECTORY_SEPARATOR . 'profile.php';
+    try {
+        $profile = require $profile_path;
+    } catch (Throwable $throwable) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Could not load output profile for comprehensive imports: ' . $profile_path . ': ' . $throwable->getMessage());
+    }
+    if (!is_array($profile)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Language profile must return an array: ' . $profile_path);
+    }
+
+    if ((string) ($profile['id'] ?? '') !== $language) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Language profile id must match --language for comprehensive imports.');
+    }
+
+    $resources = $profile['resources'] ?? null;
+    if (!is_array($resources)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Language profile resources must be an array for comprehensive imports.');
+    }
+
+    $runtime_files = ['profile' => 'profile.php'];
+    foreach ($resources as $resource => $file) {
+        if (!is_string($resource) || $resource === '') {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('Language profile resource keys must be non-empty strings for comprehensive imports.');
+        }
+        $file = language_fts_import_local_file_name((string) $file, 'profile resource ' . $resource);
+        $path = $output_dir . DIRECTORY_SEPARATOR . $file;
+        if (!is_file($path)) {
+            throw new Language_FTS_Playground_Lexical_Import_Exception('Profile-declared runtime file does not exist after import: ' . $path);
+        }
+        $runtime_files[$resource] = $file;
+    }
+
+    ksort($runtime_files, SORT_STRING);
+
+    return $runtime_files;
+}
+
+function language_fts_import_file_sha256(string $path): string
+{
+    $digest = is_file($path) ? hash_file('sha256', $path) : false;
+    if (!is_string($digest)) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Could not compute file sha256: ' . $path);
+    }
+
+    return strtolower($digest);
+}
+
+function language_fts_import_file_bytes(string $path): int
+{
+    $bytes = is_file($path) ? filesize($path) : false;
+    if (!is_int($bytes) || $bytes <= 0) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('Could not compute positive file byte count: ' . $path);
+    }
+
+    return $bytes;
+}
+
+/**
+ * @param array<string,mixed> $config
+ * @param array<string,mixed> $comprehensive
+ * @param array<string,string> $importer_options
+ */
+function language_fts_import_canonical_command(array $config, array $comprehensive, array $importer_options): string
+{
+    $parts = [
+        'php',
+        'language-fts-playground/tools/import-lexical-source.php',
+        language_fts_import_command_value((string) $config['format']),
+        language_fts_import_command_value((string) $comprehensive['command_artifact_label']),
+        '<output-dir>',
+    ];
+
+    foreach ($importer_options as $key => $value) {
+        $parts[] = '--' . str_replace('_', '-', $key) . '=' . language_fts_import_command_value((string) $value);
+    }
+
+    return implode(' ', $parts);
+}
+
+function language_fts_import_command_value(string $value): string
+{
+    if (preg_match('/^[A-Za-z0-9._:\/?#&=%+@,<>\-]+$/', $value) === 1) {
+        return $value;
+    }
+
+    return "'" . str_replace("'", "'\\''", $value) . "'";
 }
 
 function language_fts_import_output_path(string $output_dir, string $file_name): string
@@ -1118,6 +1480,66 @@ function language_fts_import_metadata_text(string $value, string $label): string
 
     if (str_contains($value, "\n") || str_contains($value, "\r")) {
         throw new Language_FTS_Playground_Lexical_Import_Exception(ucfirst($label) . ' must not contain newlines.');
+    }
+
+    return $value;
+}
+
+function language_fts_import_valid_date(string $date): bool
+{
+    return preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $date, $matches) === 1
+        && checkdate((int) $matches[2], (int) $matches[3], (int) $matches[1]);
+}
+
+function language_fts_import_valid_url(string $url): bool
+{
+    if ($url !== trim($url) || preg_match('/\s/u', $url) === 1) {
+        return false;
+    }
+
+    $parts = parse_url($url);
+
+    return is_array($parts)
+        && isset($parts['scheme'], $parts['host'])
+        && in_array(strtolower((string) $parts['scheme']), ['http', 'https'], true)
+        && trim((string) $parts['host']) !== '';
+}
+
+function language_fts_import_valid_sha256(string $digest): bool
+{
+    return preg_match('/^[a-f0-9]{64}$/', $digest) === 1;
+}
+
+function language_fts_import_positive_int(string $value, string $label): int
+{
+    $value = trim($value);
+    if (preg_match('/^[1-9][0-9]*$/', $value) !== 1) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception($label . ' must be a positive integer.');
+    }
+
+    return (int) $value;
+}
+
+function language_fts_import_local_file_name(string $value, string $label): string
+{
+    $value = trim($value);
+    if ($value === '' || $value !== basename($value) || str_contains($value, '..')) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception(ucfirst($label) . ' must be a local file name.');
+    }
+
+    return $value;
+}
+
+function language_fts_import_local_artifact_name(string $value, string $label): string
+{
+    return language_fts_import_local_file_name($value, $label);
+}
+
+function language_fts_import_license_identifier(string $value): string
+{
+    $value = trim($value);
+    if (preg_match('/^[A-Za-z0-9][A-Za-z0-9.+_-]*(?:-[A-Za-z0-9.+_-]+)*$/', $value) !== 1) {
+        throw new Language_FTS_Playground_Lexical_Import_Exception('License id must be SPDX-like text without whitespace.');
     }
 
     return $value;

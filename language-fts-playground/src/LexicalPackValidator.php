@@ -11,6 +11,7 @@ declare(strict_types=1);
  */
 final class Language_FTS_Playground_Lexical_Pack_Validator
 {
+    public const METADATA_SCHEMA_V2 = 'language-fts-playground-pack-metadata-v2';
     public const DEFAULT_MAX_SYNSET_SIZE = 64;
     public const DEFAULT_MAX_EXPANSIONS_PER_TERM = 128;
 
@@ -184,13 +185,14 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             }
         }
 
-        $metadata = $this->validate_pack_metadata($directory, (string) $status['language_id'], $warnings);
+        $resource_paths = $this->resolve_profile_resources($directory, $profile_file, $resources, $warnings);
+
+        $metadata = $this->validate_pack_metadata($directory, (string) $status['language_id'], $profile_file, $resource_paths, $warnings);
         $status['metadata'] = $metadata['metadata'];
         $status['metadata_valid'] = $metadata['valid'];
         $status['runtime_files_exist'] = $metadata['runtime_files_exist'];
         $status['missing_files'] = $metadata['missing_files'];
 
-        $resource_paths = $this->resolve_profile_resources($directory, $profile_file, $resources, $warnings);
         if ($metadata['metadata']['files'] !== []) {
             $status['metadata_valid'] = $status['metadata_valid'] && $this->validate_pack_files_include_profile_resources(
                 $metadata['metadata']['files'],
@@ -200,32 +202,33 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 $warnings
             );
         }
+        $row_provenance_allow_list = $this->row_provenance_allow_list($metadata['metadata']);
         $expansion_targets = [];
 
         if (isset($resource_paths['stopwords'])) {
             $status['counts']['stopwords'] = $this->validate_stopwords($resource_paths['stopwords'], $warnings, $normalization_folds);
         }
         if (isset($resource_paths['lexemes'])) {
-            $status['counts']['lexeme_rows'] = $this->validate_lexemes($resource_paths['lexemes'], $warnings, $normalization_folds);
+            $status['counts']['lexeme_rows'] = $this->validate_lexemes($resource_paths['lexemes'], $warnings, $normalization_folds, $row_provenance_allow_list);
         }
         if (isset($resource_paths['synonyms'])) {
-            $pairwise = $this->validate_pairwise_synonyms($resource_paths['synonyms'], $warnings, $expansion_targets, $normalization_folds);
+            $pairwise = $this->validate_pairwise_synonyms($resource_paths['synonyms'], $warnings, $expansion_targets, $normalization_folds, $row_provenance_allow_list);
             $status['counts']['pairwise_synonym_rows'] = $pairwise['rows'];
             $status['counts']['pairwise_synonym_expansions'] = $pairwise['expansions'];
         }
         if (isset($resource_paths['synsets'])) {
-            $synsets = $this->validate_synsets($resource_paths['synsets'], $warnings, $expansion_targets, $normalization_folds);
+            $synsets = $this->validate_synsets($resource_paths['synsets'], $warnings, $expansion_targets, $normalization_folds, $row_provenance_allow_list);
             $status['counts']['synset_rows'] = $synsets['rows'];
             $status['counts']['concept_expansions'] = $synsets['expansions'];
             $status['max_synset_size'] = $synsets['max_synset_size'];
         }
         if (isset($resource_paths['synonym_phrases'])) {
-            $phrase_synonyms = $this->validate_synonym_phrases($resource_paths['synonym_phrases'], $warnings, $expansion_targets, $normalization_folds);
+            $phrase_synonyms = $this->validate_synonym_phrases($resource_paths['synonym_phrases'], $warnings, $expansion_targets, $normalization_folds, $row_provenance_allow_list);
             $status['counts']['phrase_synonym_rows'] = $phrase_synonyms['rows'];
             $status['counts']['phrase_synonym_expansions'] = $phrase_synonyms['expansions'];
         }
         if (isset($resource_paths['term_rules'])) {
-            $status['counts']['term_rule_rows'] = $this->validate_term_rules($resource_paths['term_rules'], $warnings, $normalization_folds);
+            $status['counts']['term_rule_rows'] = $this->validate_term_rules($resource_paths['term_rules'], $warnings, $normalization_folds, $row_provenance_allow_list);
         }
         if (isset($resource_paths['protected_terms'])) {
             $status['counts']['protected_term_rows'] = $this->validate_protected_terms($resource_paths['protected_terms'], $warnings, $normalization_folds);
@@ -247,11 +250,12 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
-     * @return array{language_id:string,pack_version:string,pack_date:string,source_name:string,source_url:string,license_name:string,attribution_text:string,provenance:string,files:string[],data_kind:string}
+     * @return array<string,mixed>
      */
     private function empty_metadata(): array
     {
         return [
+            'metadata_schema' => '',
             'language_id' => '',
             'pack_version' => '',
             'pack_date' => '',
@@ -262,19 +266,32 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             'provenance' => '',
             'files' => [],
             'data_kind' => '',
+            'source' => [],
+            'license' => [],
+            'provenance_ids' => [],
+            'normalization' => [],
+            'importer' => [],
+            'runtime_files' => [],
+            'runtime_digest_status' => 'not_declared',
         ];
     }
 
     /**
      * @return array{metadata:array<string,mixed>,valid:bool,runtime_files_exist:bool,missing_files:string[]}
      */
-    private function validate_pack_metadata(string $directory, string $expected_language, array &$warnings): array
-    {
+    private function validate_pack_metadata(
+        string $directory,
+        string $expected_language,
+        string $profile_file,
+        array $resource_paths,
+        array &$warnings
+    ): array {
         $path = $directory . DIRECTORY_SEPARATOR . 'pack.php';
         $metadata = $this->empty_metadata();
         $missing_files = [];
         $valid = true;
         $runtime_files_exist = false;
+        $metadata_warning_count = count($warnings);
 
         if (!is_file($path)) {
             $warnings[] = 'Missing language pack metadata file: ' . $path;
@@ -297,6 +314,16 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             ];
         }
 
+        if (array_key_exists('metadata_schema', $raw)) {
+            $schema = $this->required_string($raw, 'metadata_schema', $path, $warnings);
+            if ($schema !== '') {
+                $metadata['metadata_schema'] = $schema;
+                if ($schema !== self::METADATA_SCHEMA_V2) {
+                    $warnings[] = 'Language pack metadata metadata_schema is not supported in ' . $path;
+                }
+            }
+        }
+
         foreach (['language_id', 'pack_version', 'pack_date', 'source_name', 'source_url', 'license_name', 'attribution_text', 'provenance', 'data_kind'] as $key) {
             $value = $this->required_string($raw, $key, $path, $warnings);
             if ($value === '') {
@@ -314,6 +341,11 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         if ($metadata['pack_date'] !== '' && !$this->is_valid_date($metadata['pack_date'])) {
             $valid = false;
             $warnings[] = 'Language pack metadata pack_date must be a valid YYYY-MM-DD date in ' . $path;
+        }
+
+        if ($metadata['source_url'] !== '' && !$this->is_valid_url($metadata['source_url'])) {
+            $valid = false;
+            $warnings[] = 'Language pack metadata source_url must be an HTTP(S) URL in ' . $path;
         }
 
         if ($metadata['data_kind'] !== '' && !in_array($metadata['data_kind'], ['curated_seed', 'imported_comprehensive'], true)) {
@@ -364,6 +396,61 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
         sort($metadata['files'], SORT_STRING);
         sort($missing_files, SORT_STRING);
+        $files_lookup = array_fill_keys($metadata['files'], true);
+
+        if ($metadata['data_kind'] === 'imported_comprehensive') {
+            if ($metadata['metadata_schema'] !== self::METADATA_SCHEMA_V2) {
+                $warnings[] = 'Language pack metadata imported_comprehensive packs must declare metadata_schema ' . self::METADATA_SCHEMA_V2 . ' in ' . $path;
+            }
+
+            $metadata['source'] = $this->validate_source_metadata($raw['source'] ?? null, $path, $warnings);
+            $metadata['license'] = $this->validate_license_metadata($raw['license'] ?? null, $directory, $files_lookup, $path, $warnings);
+            $metadata['provenance_ids'] = $this->validate_provenance_ids($raw['provenance_ids'] ?? null, $metadata['provenance'], $path, $warnings);
+            $metadata['normalization'] = $this->validate_normalization_metadata($raw['normalization'] ?? null, $directory, $profile_file, $path, $warnings);
+            $metadata['importer'] = $this->validate_importer_metadata($raw['importer'] ?? null, $path, $warnings);
+            $metadata['runtime_files'] = $this->validate_runtime_files_metadata($raw['runtime_files'] ?? null, $directory, $files_lookup, $path, $warnings);
+
+            $required_runtime_files = ['profile' => basename($profile_file)];
+            foreach ($resource_paths as $resource => $resource_path) {
+                $required_runtime_files[(string) $resource] = basename((string) $resource_path);
+            }
+
+            $license_text_file = is_array($metadata['license']) ? (string) ($metadata['license']['text_file'] ?? '') : '';
+            if ($license_text_file !== '') {
+                $required_runtime_files['license'] = $license_text_file;
+            }
+
+            foreach ($required_runtime_files as $resource => $file) {
+                if (!isset($files_lookup[$file])) {
+                    $warnings[] = 'Language pack metadata files must include ' . $file . ' for comprehensive resource ' . $resource . ' in ' . $path;
+                }
+            }
+
+            $runtime_files_by_file = [];
+            $runtime_mismatched = false;
+            foreach ($metadata['runtime_files'] as $record) {
+                if (!is_array($record)) {
+                    continue;
+                }
+                $file = (string) ($record['file'] ?? '');
+                if ($file !== '') {
+                    $runtime_files_by_file[$file] = true;
+                }
+                if (($record['status'] ?? '') === 'mismatch') {
+                    $runtime_mismatched = true;
+                }
+            }
+
+            foreach ($required_runtime_files as $resource => $file) {
+                if (!isset($runtime_files_by_file[$file])) {
+                    $warnings[] = 'Language pack metadata runtime_files must include ' . $file . ' for comprehensive resource ' . $resource . ' in ' . $path;
+                }
+            }
+
+            $metadata['runtime_digest_status'] = $runtime_mismatched ? 'mismatch' : 'ok';
+        }
+
+        $valid = $valid && count($warnings) === $metadata_warning_count;
 
         return [
             'metadata' => $metadata,
@@ -371,6 +458,310 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             'runtime_files_exist' => $runtime_files_exist,
             'missing_files' => $missing_files,
         ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function validate_source_metadata(mixed $source, string $path, array &$warnings): array
+    {
+        if (!is_array($source) || array_is_list($source)) {
+            $warnings[] = 'Language pack metadata source must be an array in ' . $path;
+
+            return [];
+        }
+
+        $metadata = [
+            'name' => $this->metadata_required_string($source, 'name', 'source.name', $path, $warnings),
+            'version' => $this->metadata_required_string($source, 'version', 'source.version', $path, $warnings),
+            'version_url' => $this->metadata_optional_string($source, 'version_url', 'source.version_url', $path, $warnings),
+            'retrieved_at' => $this->metadata_required_string($source, 'retrieved_at', 'source.retrieved_at', $path, $warnings),
+            'artifacts' => [],
+        ];
+
+        if ($metadata['version_url'] !== '' && !$this->is_valid_url($metadata['version_url'])) {
+            $warnings[] = 'Language pack metadata source.version_url must be an HTTP(S) URL in ' . $path;
+        }
+
+        if ($metadata['retrieved_at'] !== '' && !$this->is_valid_date($metadata['retrieved_at'])) {
+            $warnings[] = 'Language pack metadata source.retrieved_at must be a valid YYYY-MM-DD date in ' . $path;
+        }
+
+        $artifacts = $source['artifacts'] ?? null;
+        if (!is_array($artifacts) || $artifacts === []) {
+            $warnings[] = 'Language pack metadata source.artifacts must be a non-empty array in ' . $path;
+
+            return $metadata;
+        }
+
+        foreach ($artifacts as $index => $artifact) {
+            if (!is_array($artifact) || array_is_list($artifact)) {
+                $warnings[] = 'Language pack metadata source.artifacts entries must be arrays in ' . $path;
+                continue;
+            }
+
+            $record = [
+                'name' => $this->metadata_required_string($artifact, 'name', 'source.artifacts[' . (string) $index . '].name', $path, $warnings),
+                'url' => $this->metadata_required_string($artifact, 'url', 'source.artifacts[' . (string) $index . '].url', $path, $warnings),
+                'sha256' => $this->metadata_required_string($artifact, 'sha256', 'source.artifacts[' . (string) $index . '].sha256', $path, $warnings),
+                'bytes' => $artifact['bytes'] ?? null,
+            ];
+
+            if ($record['url'] !== '' && !$this->is_valid_url($record['url'])) {
+                $warnings[] = 'Language pack metadata source artifact URL must be an HTTP(S) URL in ' . $path;
+            }
+            if ($record['sha256'] !== '' && !$this->is_valid_sha256($record['sha256'])) {
+                $warnings[] = 'Language pack metadata source artifact sha256 must be 64 lowercase hex characters in ' . $path;
+            }
+            if (!$this->is_positive_int($record['bytes'])) {
+                $warnings[] = 'Language pack metadata source artifact bytes must be a positive integer in ' . $path;
+                $record['bytes'] = 0;
+            }
+
+            $metadata['artifacts'][] = $record;
+        }
+
+        usort(
+            $metadata['artifacts'],
+            static fn(array $a, array $b): int => strcmp((string) ($a['name'] ?? ''), (string) ($b['name'] ?? ''))
+                ?: strcmp((string) ($a['url'] ?? ''), (string) ($b['url'] ?? ''))
+        );
+
+        return $metadata;
+    }
+
+    /**
+     * @param array<string,bool> $files_lookup
+     * @return array<string,string>
+     */
+    private function validate_license_metadata(mixed $license, string $directory, array $files_lookup, string $path, array &$warnings): array
+    {
+        if (!is_array($license) || array_is_list($license)) {
+            $warnings[] = 'Language pack metadata license must be an array in ' . $path;
+
+            return [];
+        }
+
+        $metadata = [
+            'identifier' => $this->metadata_required_string($license, 'identifier', 'license.identifier', $path, $warnings),
+            'name' => $this->metadata_required_string($license, 'name', 'license.name', $path, $warnings),
+            'url' => $this->metadata_required_string($license, 'url', 'license.url', $path, $warnings),
+            'text_url' => $this->metadata_required_string($license, 'text_url', 'license.text_url', $path, $warnings),
+            'text_file' => $this->metadata_required_string($license, 'text_file', 'license.text_file', $path, $warnings),
+            'attribution' => $this->metadata_required_string($license, 'attribution', 'license.attribution', $path, $warnings),
+        ];
+
+        if ($metadata['identifier'] !== '' && !$this->is_valid_license_identifier($metadata['identifier'])) {
+            $warnings[] = 'Language pack metadata license.identifier must be SPDX-like text without whitespace in ' . $path;
+        }
+        foreach (['url', 'text_url'] as $url_key) {
+            if ($metadata[$url_key] !== '' && !$this->is_valid_url($metadata[$url_key])) {
+                $warnings[] = 'Language pack metadata license.' . $url_key . ' must be an HTTP(S) URL in ' . $path;
+            }
+        }
+        if ($metadata['text_file'] !== '' && !$this->is_local_file_name($metadata['text_file'])) {
+            $warnings[] = 'Language pack metadata license.text_file must be a local file name in ' . $path;
+        } elseif ($metadata['text_file'] !== '') {
+            if (!isset($files_lookup[$metadata['text_file']])) {
+                $warnings[] = 'Language pack metadata files must include license.text_file ' . $metadata['text_file'] . ' in ' . $path;
+            }
+            if (!is_file($directory . DIRECTORY_SEPARATOR . $metadata['text_file'])) {
+                $warnings[] = 'Language pack metadata license.text_file does not exist: ' . $directory . DIRECTORY_SEPARATOR . $metadata['text_file'];
+            }
+        }
+
+        return $metadata;
+    }
+
+    /**
+     * @return array<string,array<string,string>>
+     */
+    private function validate_provenance_ids(mixed $provenance_ids, string $default_provenance, string $path, array &$warnings): array
+    {
+        if (!is_array($provenance_ids) || $provenance_ids === [] || array_is_list($provenance_ids)) {
+            $warnings[] = 'Language pack metadata provenance_ids must be a non-empty keyed array in ' . $path;
+
+            return [];
+        }
+
+        $metadata = [];
+        foreach ($provenance_ids as $id => $record) {
+            $id = is_string($id) ? trim($id) : '';
+            if ($id === '' || preg_match('/\s/u', $id) === 1 || str_contains($id, '#')) {
+                $warnings[] = 'Language pack metadata provenance_ids keys must be non-empty provenance tokens in ' . $path;
+                continue;
+            }
+            if (!is_array($record) || array_is_list($record)) {
+                $warnings[] = 'Language pack metadata provenance_ids.' . $id . ' must be an array in ' . $path;
+                continue;
+            }
+
+            $metadata[$id] = [
+                'source' => $this->metadata_required_string($record, 'source', 'provenance_ids.' . $id . '.source', $path, $warnings),
+                'source_version' => $this->metadata_required_string($record, 'source_version', 'provenance_ids.' . $id . '.source_version', $path, $warnings),
+                'description' => $this->metadata_required_string($record, 'description', 'provenance_ids.' . $id . '.description', $path, $warnings),
+            ];
+        }
+
+        if ($default_provenance !== '' && !isset($metadata[$default_provenance])) {
+            $warnings[] = 'Language pack metadata provenance_ids must declare the top-level provenance ' . $default_provenance . ' in ' . $path;
+        }
+
+        ksort($metadata, SORT_STRING);
+
+        return $metadata;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function validate_normalization_metadata(mixed $normalization, string $directory, string $profile_file, string $path, array &$warnings): array
+    {
+        if (!is_array($normalization) || array_is_list($normalization)) {
+            $warnings[] = 'Language pack metadata normalization must be an array in ' . $path;
+
+            return [];
+        }
+
+        $metadata = [
+            'profile_id' => $this->metadata_required_string($normalization, 'profile_id', 'normalization.profile_id', $path, $warnings),
+            'profile_version' => $this->metadata_required_string($normalization, 'profile_version', 'normalization.profile_version', $path, $warnings),
+            'profile_file' => $this->metadata_required_string($normalization, 'profile_file', 'normalization.profile_file', $path, $warnings),
+            'profile_sha256' => $this->metadata_required_string($normalization, 'profile_sha256', 'normalization.profile_sha256', $path, $warnings),
+        ];
+
+        if ($metadata['profile_file'] !== '' && !$this->is_local_file_name($metadata['profile_file'])) {
+            $warnings[] = 'Language pack metadata normalization.profile_file must be a local file name in ' . $path;
+        } elseif ($metadata['profile_file'] !== '' && $directory . DIRECTORY_SEPARATOR . $metadata['profile_file'] !== $profile_file) {
+            $warnings[] = 'Language pack metadata normalization.profile_file must match profile.php in ' . $path;
+        }
+
+        if ($metadata['profile_sha256'] !== '' && !$this->is_valid_sha256($metadata['profile_sha256'])) {
+            $warnings[] = 'Language pack metadata normalization.profile_sha256 must be 64 lowercase hex characters in ' . $path;
+        } elseif ($metadata['profile_sha256'] !== '') {
+            $actual = $this->file_sha256($profile_file);
+            if ($actual !== null && $actual !== $metadata['profile_sha256']) {
+                $warnings[] = 'Language pack metadata normalization.profile_sha256 does not match installed profile file in ' . $path;
+            }
+        }
+
+        return $metadata;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function validate_importer_metadata(mixed $importer, string $path, array &$warnings): array
+    {
+        if (!is_array($importer) || array_is_list($importer)) {
+            $warnings[] = 'Language pack metadata importer must be an array in ' . $path;
+
+            return [];
+        }
+
+        $metadata = [
+            'name' => $this->metadata_required_string($importer, 'name', 'importer.name', $path, $warnings),
+            'version' => $this->metadata_required_string($importer, 'version', 'importer.version', $path, $warnings),
+            'format' => $this->metadata_required_string($importer, 'format', 'importer.format', $path, $warnings),
+            'command' => $this->metadata_required_string($importer, 'command', 'importer.command', $path, $warnings),
+            'options' => [],
+        ];
+
+        $options = $importer['options'] ?? null;
+        if (!is_array($options) || array_is_list($options)) {
+            $warnings[] = 'Language pack metadata importer.options must be a keyed array in ' . $path;
+        } else {
+            foreach ($options as $key => $value) {
+                if (!is_string($key) || $key === '' || !is_scalar($value)) {
+                    $warnings[] = 'Language pack metadata importer.options must map non-empty string keys to scalar values in ' . $path;
+                    continue;
+                }
+                $metadata['options'][$key] = (string) $value;
+            }
+            ksort($metadata['options'], SORT_STRING);
+        }
+
+        return $metadata;
+    }
+
+    /**
+     * @param array<string,bool> $files_lookup
+     * @return array<int,array<string,mixed>>
+     */
+    private function validate_runtime_files_metadata(mixed $runtime_files, string $directory, array $files_lookup, string $path, array &$warnings): array
+    {
+        if (!is_array($runtime_files) || $runtime_files === []) {
+            $warnings[] = 'Language pack metadata runtime_files must be a non-empty array in ' . $path;
+
+            return [];
+        }
+
+        $metadata = [];
+        $seen = [];
+        foreach ($runtime_files as $index => $runtime_file) {
+            if (!is_array($runtime_file) || array_is_list($runtime_file)) {
+                $warnings[] = 'Language pack metadata runtime_files entries must be arrays in ' . $path;
+                continue;
+            }
+
+            $record = [
+                'resource' => $this->metadata_required_string($runtime_file, 'resource', 'runtime_files[' . (string) $index . '].resource', $path, $warnings),
+                'file' => $this->metadata_required_string($runtime_file, 'file', 'runtime_files[' . (string) $index . '].file', $path, $warnings),
+                'sha256' => $this->metadata_required_string($runtime_file, 'sha256', 'runtime_files[' . (string) $index . '].sha256', $path, $warnings),
+                'bytes' => $runtime_file['bytes'] ?? null,
+                'generated' => (bool) ($runtime_file['generated'] ?? false),
+                'status' => 'ok',
+            ];
+
+            if ($record['resource'] !== '' && preg_match('/^[a-z][a-z0-9_:-]*$/', $record['resource']) !== 1) {
+                $warnings[] = 'Language pack metadata runtime_files resource must be a stable lowercase key in ' . $path;
+            }
+
+            if ($record['file'] !== '' && !$this->is_local_file_name($record['file'])) {
+                $warnings[] = 'Language pack metadata runtime_files file must be a local file name in ' . $path;
+            } elseif ($record['file'] !== '' && !isset($files_lookup[$record['file']])) {
+                $warnings[] = 'Language pack metadata runtime_files file must appear in files: ' . $record['file'] . ' in ' . $path;
+            }
+
+            if ($record['sha256'] !== '' && !$this->is_valid_sha256($record['sha256'])) {
+                $warnings[] = 'Language pack metadata runtime_files sha256 must be 64 lowercase hex characters in ' . $path;
+            }
+            if (!$this->is_positive_int($record['bytes'])) {
+                $warnings[] = 'Language pack metadata runtime_files bytes must be a positive integer in ' . $path;
+                $record['bytes'] = 0;
+            }
+
+            $duplicate_key = $record['resource'] . "\t" . $record['file'];
+            if ($record['resource'] !== '' && $record['file'] !== '' && isset($seen[$duplicate_key])) {
+                $warnings[] = 'Language pack metadata runtime_files contains duplicate resource/file entry ' . $record['resource'] . '/' . $record['file'] . ' in ' . $path;
+            }
+            $seen[$duplicate_key] = true;
+
+            $absolute = $directory . DIRECTORY_SEPARATOR . $record['file'];
+            if ($record['file'] !== '' && is_file($absolute)) {
+                $actual_sha256 = $this->file_sha256($absolute);
+                if ($actual_sha256 !== null && $record['sha256'] !== '' && $actual_sha256 !== $record['sha256']) {
+                    $record['status'] = 'mismatch';
+                    $warnings[] = 'Language pack metadata runtime file sha256 mismatch for ' . $record['file'] . ' in ' . $path;
+                }
+
+                $actual_bytes = filesize($absolute);
+                if (is_int($actual_bytes) && $record['bytes'] !== 0 && $actual_bytes !== (int) $record['bytes']) {
+                    $record['status'] = 'mismatch';
+                    $warnings[] = 'Language pack metadata runtime file byte count mismatch for ' . $record['file'] . ' in ' . $path;
+                }
+            }
+
+            $metadata[] = $record;
+        }
+
+        usort(
+            $metadata,
+            static fn(array $a, array $b): int => strcmp((string) ($a['resource'] ?? ''), (string) ($b['resource'] ?? ''))
+                ?: strcmp((string) ($a['file'] ?? ''), (string) ($b['file'] ?? ''))
+        );
+
+        return $metadata;
     }
 
     /**
@@ -503,8 +894,9 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
     /**
      * @param array<string,string> $normalization_folds
+     * @param array<string,bool>|null $row_provenance_allow_list
      */
-    private function validate_lexemes(string $path, array &$warnings, array $normalization_folds): int
+    private function validate_lexemes(string $path, array &$warnings, array $normalization_folds, array|null $row_provenance_allow_list = null): int
     {
         $count = 0;
         $seen = [];
@@ -528,6 +920,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
             if (array_key_exists(2, $columns) && trim($columns[2]) === '') {
                 $warnings[] = $this->resource_error($path, $line_number + 1, 'lexeme provenance must be non-empty when present');
+            } elseif (array_key_exists(2, $columns)) {
+                $this->validate_row_provenance(trim($columns[2]), $path, $line_number + 1, 'lexeme', $warnings, $row_provenance_allow_list);
+            } elseif ($row_provenance_allow_list !== null) {
+                $warnings[] = $this->resource_error($path, $line_number + 1, 'lexeme provenance must be present for imported_comprehensive packs');
             }
 
             $count++;
@@ -571,8 +967,9 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
     /**
      * @param array<string,string> $normalization_folds
+     * @param array<string,bool>|null $row_provenance_allow_list
      */
-    private function validate_term_rules(string $path, array &$warnings, array $normalization_folds): int
+    private function validate_term_rules(string $path, array &$warnings, array $normalization_folds, array|null $row_provenance_allow_list = null): int
     {
         $count = 0;
         $seen_ids = [];
@@ -589,7 +986,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 continue;
             }
 
-            $id = $this->validate_term_rule_row($columns, $path, $line_number, $warnings, $normalization_folds);
+            $id = $this->validate_term_rule_row($columns, $path, $line_number, $warnings, $normalization_folds, $row_provenance_allow_list);
             if ($id === null) {
                 continue;
             }
@@ -607,8 +1004,9 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     /**
      * @param string[] $columns
      * @param array<string,string> $normalization_folds
+     * @param array<string,bool>|null $row_provenance_allow_list
      */
-    private function validate_term_rule_row(array $columns, string $path, int $line_number, array &$warnings, array $normalization_folds): string|null
+    private function validate_term_rule_row(array $columns, string $path, int $line_number, array &$warnings, array $normalization_folds, array|null $row_provenance_allow_list = null): string|null
     {
         $id = $this->term_rule_id($columns[0], $path, $line_number, $warnings);
         $valid = $id !== null;
@@ -648,7 +1046,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $valid = false;
         }
 
-        if ($this->term_rule_provenance($columns[10], $path, $line_number, $warnings) === null) {
+        if ($this->term_rule_provenance($columns[10], $path, $line_number, $warnings, $row_provenance_allow_list) === null) {
             $valid = false;
         }
 
@@ -667,7 +1065,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         return $id;
     }
 
-    private function term_rule_provenance(string $value, string $path, int $line_number, array &$warnings): string|null
+    /**
+     * @param array<string,bool>|null $row_provenance_allow_list
+     */
+    private function term_rule_provenance(string $value, string $path, int $line_number, array &$warnings, array|null $row_provenance_allow_list = null): string|null
     {
         $provenance = trim($value);
         if ($provenance === '') {
@@ -675,6 +1076,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
 
             return null;
         }
+
+        $this->validate_row_provenance($provenance, $path, $line_number, 'term rule', $warnings, $row_provenance_allow_list);
 
         return $provenance;
     }
@@ -789,9 +1192,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     /**
      * @param array<string,array<string,bool>> $expansion_targets
      * @param array<string,string> $normalization_folds
+     * @param array<string,bool>|null $row_provenance_allow_list
      * @return array{rows:int,expansions:int}
      */
-    private function validate_pairwise_synonyms(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds): array
+    private function validate_pairwise_synonyms(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds, array|null $row_provenance_allow_list = null): array
     {
         $rows = 0;
         $expansions = 0;
@@ -833,6 +1237,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 $warnings[] = $this->resource_error($path, $line_number + 1, 'synonym provenance must be non-empty');
                 continue;
             }
+            $this->validate_row_provenance(trim($columns[4]), $path, $line_number + 1, 'synonym', $warnings, $row_provenance_allow_list);
 
             $rows++;
             foreach ($direction === 'bidirectional' ? [[$source, $target], [$target, $source]] : [[$source, $target]] as $pair) {
@@ -857,9 +1262,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     /**
      * @param array<string,array<string,bool>> $expansion_targets
      * @param array<string,string> $normalization_folds
+     * @param array<string,bool>|null $row_provenance_allow_list
      * @return array{rows:int,expansions:int,max_synset_size:int}
      */
-    private function validate_synsets(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds): array
+    private function validate_synsets(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds, array|null $row_provenance_allow_list = null): array
     {
         $rows = 0;
         $expansions = 0;
@@ -897,6 +1303,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 $warnings[] = $this->resource_error($path, $line_number + 1, 'synset provenance must be non-empty');
                 continue;
             }
+            $this->validate_row_provenance(trim($columns[2]), $path, $line_number + 1, 'synset', $warnings, $row_provenance_allow_list);
 
             $terms = $this->parse_synset_terms($columns[3], $path, $line_number + 1, $warnings, $normalization_folds);
             if ($terms === null) {
@@ -944,9 +1351,10 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     /**
      * @param array<string,array<string,bool>> $expansion_targets
      * @param array<string,string> $normalization_folds
+     * @param array<string,bool>|null $row_provenance_allow_list
      * @return array{rows:int,expansions:int}
      */
-    private function validate_synonym_phrases(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds): array
+    private function validate_synonym_phrases(string $path, array &$warnings, array &$expansion_targets, array $normalization_folds, array|null $row_provenance_allow_list = null): array
     {
         $rows = 0;
         $expansions = 0;
@@ -991,6 +1399,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 $warnings[] = $this->resource_error($path, $line_number + 1, 'synonym phrase provenance must be non-empty');
                 continue;
             }
+            $this->validate_row_provenance(trim($columns[4]), $path, $line_number + 1, 'synonym phrase', $warnings, $row_provenance_allow_list);
 
             $rows++;
             foreach ($direction === 'bidirectional' ? [[$source, $target], [$target, $source]] : [[$source, $target]] as $pair) {
@@ -1147,6 +1556,40 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
     }
 
     /**
+     * @param array<mixed> $data
+     */
+    private function metadata_required_string(array $data, string $key, string $label, string $path, array &$warnings): string
+    {
+        $value = $data[$key] ?? null;
+        if (!is_string($value) || trim($value) === '') {
+            $warnings[] = "Language pack metadata {$label} must be a non-empty string in {$path}";
+
+            return '';
+        }
+
+        return trim($value);
+    }
+
+    /**
+     * @param array<mixed> $data
+     */
+    private function metadata_optional_string(array $data, string $key, string $label, string $path, array &$warnings): string
+    {
+        if (!array_key_exists($key, $data)) {
+            return '';
+        }
+
+        $value = $data[$key];
+        if (!is_string($value) || trim($value) === '') {
+            $warnings[] = "Language pack metadata {$label} must be a non-empty string when present in {$path}";
+
+            return '';
+        }
+
+        return trim($value);
+    }
+
+    /**
      * @return array<string,string>
      */
     private function validate_string_map(mixed $value, string $key, string $path, array &$warnings): array
@@ -1293,6 +1736,42 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             && checkdate((int) $matches[2], (int) $matches[3], (int) $matches[1]);
     }
 
+    private function is_valid_url(string $url): bool
+    {
+        if ($url !== trim($url) || preg_match('/\s/u', $url) === 1) {
+            return false;
+        }
+
+        $parts = parse_url($url);
+
+        return is_array($parts)
+            && isset($parts['scheme'], $parts['host'])
+            && in_array(strtolower((string) $parts['scheme']), ['http', 'https'], true)
+            && trim((string) $parts['host']) !== '';
+    }
+
+    private function is_valid_sha256(string $digest): bool
+    {
+        return preg_match('/^[a-f0-9]{64}$/', $digest) === 1;
+    }
+
+    private function is_positive_int(mixed $value): bool
+    {
+        return is_int($value) && $value > 0;
+    }
+
+    private function is_valid_license_identifier(string $identifier): bool
+    {
+        return preg_match('/^[A-Za-z0-9][A-Za-z0-9.+_-]*(?:-[A-Za-z0-9.+_-]+)*$/', $identifier) === 1;
+    }
+
+    private function file_sha256(string $path): string|null
+    {
+        $digest = is_file($path) ? hash_file('sha256', $path) : false;
+
+        return is_string($digest) ? strtolower($digest) : null;
+    }
+
     private function is_local_file_name(string $name): bool
     {
         return $name !== '' && $name === basename($name) && !str_contains($name, '..');
@@ -1306,5 +1785,42 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
         }
 
         return preg_match('/^[a-z0-9-]+$/', $language) === 1 ? $language : null;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<string,bool>|null
+     */
+    private function row_provenance_allow_list(array $metadata): array|null
+    {
+        if (($metadata['data_kind'] ?? '') !== 'imported_comprehensive') {
+            return null;
+        }
+
+        $allow_list = [];
+        $default = (string) ($metadata['provenance'] ?? '');
+        if ($default !== '') {
+            $allow_list[$default] = true;
+        }
+
+        foreach (array_keys((array) ($metadata['provenance_ids'] ?? [])) as $provenance_id) {
+            $allow_list[(string) $provenance_id] = true;
+        }
+
+        return $allow_list;
+    }
+
+    /**
+     * @param array<string,bool>|null $allow_list
+     */
+    private function validate_row_provenance(string $provenance, string $path, int $line_number, string $label, array &$warnings, array|null $allow_list): void
+    {
+        if ($allow_list === null) {
+            return;
+        }
+
+        if (!isset($allow_list[$provenance])) {
+            $warnings[] = $this->resource_error($path, $line_number, "{$label} provenance must be declared in provenance_ids or match top-level provenance");
+        }
     }
 }
