@@ -645,6 +645,10 @@ final class Language_FTS_Playground_Plugin
         echo '<th>' . esc_html__('Kind', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Source', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('License', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Source version', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('License id', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Runtime digest', 'language-fts-playground') . '</th>';
+        echo '<th>' . esc_html__('Importer', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Version/date', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Counts', 'language-fts-playground') . '</th>';
         echo '<th>' . esc_html__('Warnings', 'language-fts-playground') . '</th>';
@@ -656,6 +660,9 @@ final class Language_FTS_Playground_Plugin
             }
 
             $metadata = isset($language['metadata']) && is_array($language['metadata']) ? $language['metadata'] : [];
+            $source = isset($metadata['source']) && is_array($metadata['source']) ? $metadata['source'] : [];
+            $license = isset($metadata['license']) && is_array($metadata['license']) ? $metadata['license'] : [];
+            $importer = isset($metadata['importer']) && is_array($metadata['importer']) ? $metadata['importer'] : [];
             $counts = isset($language['counts']) && is_array($language['counts']) ? $language['counts'] : [];
             $warnings = array_values(array_map('strval', (array) ($language['warnings'] ?? [])));
             $total_expansions = (int) ($counts['pairwise_synonym_expansions'] ?? 0)
@@ -680,13 +687,87 @@ final class Language_FTS_Playground_Plugin
             echo '<td><code>' . esc_html((string) ($metadata['data_kind'] ?? '')) . '</code></td>';
             echo '<td>' . esc_html((string) ($metadata['source_name'] ?? '')) . '</td>';
             echo '<td>' . esc_html((string) ($metadata['license_name'] ?? '')) . '</td>';
+            echo '<td>' . esc_html(trim((string) ($source['version'] ?? '') . ' ' . (string) ($source['retrieved_at'] ?? ''))) . '</td>';
+            echo '<td><code>' . esc_html((string) ($license['identifier'] ?? '')) . '</code></td>';
+            echo '<td><code>' . esc_html((string) ($metadata['runtime_digest_status'] ?? 'not_declared')) . '</code></td>';
+            echo '<td>' . esc_html((string) ($importer['version'] ?? '')) . '</td>';
             echo '<td>' . esc_html(trim((string) ($metadata['pack_version'] ?? '') . ' ' . (string) ($metadata['pack_date'] ?? ''))) . '</td>';
             echo '<td>' . esc_html($count_text) . '</td>';
-            echo '<td>' . esc_html($warning_text) . '</td>';
+            echo '<td>' . esc_html($warning_text);
+            self::render_lexical_pack_audit_details($metadata);
+            echo '</td>';
             echo '</tr>';
         }
 
         echo '</tbody></table>';
+        echo '</details>';
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private static function render_lexical_pack_audit_details(array $metadata): void
+    {
+        $source = isset($metadata['source']) && is_array($metadata['source']) ? $metadata['source'] : [];
+        $license = isset($metadata['license']) && is_array($metadata['license']) ? $metadata['license'] : [];
+        $normalization = isset($metadata['normalization']) && is_array($metadata['normalization']) ? $metadata['normalization'] : [];
+        $importer = isset($metadata['importer']) && is_array($metadata['importer']) ? $metadata['importer'] : [];
+        $runtime_files = isset($metadata['runtime_files']) && is_array($metadata['runtime_files']) ? $metadata['runtime_files'] : [];
+        $provenance_ids = isset($metadata['provenance_ids']) && is_array($metadata['provenance_ids']) ? $metadata['provenance_ids'] : [];
+
+        if ($source === [] && $license === [] && $normalization === [] && $importer === [] && $runtime_files === [] && $provenance_ids === []) {
+            return;
+        }
+
+        echo '<details style="margin-top:0.5em;">';
+        echo '<summary>' . esc_html__('Audit metadata', 'language-fts-playground') . '</summary>';
+        echo '<dl>';
+
+        $rows = [
+            __('Source URL', 'language-fts-playground') => (string) ($metadata['source_url'] ?? ''),
+            __('Source version', 'language-fts-playground') => (string) ($source['version'] ?? ''),
+            __('Retrieved', 'language-fts-playground') => (string) ($source['retrieved_at'] ?? ''),
+            __('License URL', 'language-fts-playground') => (string) ($license['url'] ?? ''),
+            __('License text URL', 'language-fts-playground') => (string) ($license['text_url'] ?? ''),
+            __('License text file', 'language-fts-playground') => (string) ($license['text_file'] ?? ''),
+            __('Attribution', 'language-fts-playground') => (string) ($metadata['attribution_text'] ?? ''),
+            __('Normalization', 'language-fts-playground') => trim((string) ($normalization['profile_version'] ?? '') . ' ' . (string) ($normalization['profile_sha256'] ?? '')),
+            __('Importer command', 'language-fts-playground') => (string) ($importer['command'] ?? ''),
+        ];
+
+        foreach ($rows as $label => $value) {
+            if ($value === '') {
+                continue;
+            }
+            echo '<dt>' . esc_html((string) $label) . '</dt><dd><code>' . esc_html($value) . '</code></dd>';
+        }
+
+        foreach ((array) ($source['artifacts'] ?? []) as $artifact) {
+            if (!is_array($artifact)) {
+                continue;
+            }
+            $text = trim((string) ($artifact['name'] ?? '') . ' ' . (string) ($artifact['url'] ?? '') . ' ' . (string) ($artifact['sha256'] ?? '') . ' ' . (string) ($artifact['bytes'] ?? ''));
+            if ($text !== '') {
+                echo '<dt>' . esc_html__('Source artifact', 'language-fts-playground') . '</dt><dd><code>' . esc_html($text) . '</code></dd>';
+            }
+        }
+
+        foreach ($runtime_files as $runtime_file) {
+            if (!is_array($runtime_file)) {
+                continue;
+            }
+            $text = trim((string) ($runtime_file['resource'] ?? '') . ' ' . (string) ($runtime_file['file'] ?? '') . ' ' . (string) ($runtime_file['sha256'] ?? '') . ' ' . (string) ($runtime_file['bytes'] ?? ''));
+            if ($text !== '') {
+                echo '<dt>' . esc_html__('Runtime file', 'language-fts-playground') . '</dt><dd><code>' . esc_html($text) . '</code></dd>';
+            }
+        }
+
+        foreach ($provenance_ids as $provenance_id => $record) {
+            $description = is_array($record) ? (string) ($record['description'] ?? '') : '';
+            echo '<dt>' . esc_html__('Provenance id', 'language-fts-playground') . '</dt><dd><code>' . esc_html((string) $provenance_id . ($description !== '' ? ' ' . $description : '')) . '</code></dd>';
+        }
+
+        echo '</dl>';
         echo '</details>';
     }
 
