@@ -45,8 +45,6 @@ function wp_fts_live_benchmark_ms(): float
 
 /**
  * Write benchmark JSON to an optional host-mounted output directory.
- *
- * @param array<string,mixed> $summary
  */
 function wp_fts_live_benchmark_artifact_file(): ?string
 {
