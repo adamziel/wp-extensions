@@ -842,6 +842,56 @@ final class Language_FTS_Playground_Searcher
      */
     private function phrase_filters_removed_all_candidates(array $phrase_filters): bool
     {
+        $query_phrase_filters = [];
+        foreach ($phrase_filters as $filter) {
+            if ((string) ($filter['type'] ?? '') === 'query_phrase') {
+                $query_phrase_filters[] = $filter;
+            }
+        }
+
+        if ($query_phrase_filters !== []) {
+            return $this->conjunctive_phrase_filters_removed_all_candidates($query_phrase_filters);
+        }
+
+        return $this->individual_phrase_filters_removed_all_candidates($phrase_filters);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $phrase_filters
+     */
+    private function conjunctive_phrase_filters_removed_all_candidates(array $phrase_filters): bool
+    {
+        $filter_count = count($phrase_filters);
+        $passed_by_post_id = [];
+        $saw_document = false;
+        foreach ($phrase_filters as $filter) {
+            foreach ((array) ($filter['documents'] ?? []) as $document) {
+                if (!is_array($document)) {
+                    continue;
+                }
+
+                $saw_document = true;
+                if (!empty($document['passed'])) {
+                    $post_id = (int) ($document['post_id'] ?? 0);
+                    $passed_by_post_id[$post_id] = (int) ($passed_by_post_id[$post_id] ?? 0) + 1;
+                }
+            }
+        }
+
+        foreach ($passed_by_post_id as $passed_count) {
+            if ($passed_count === $filter_count) {
+                return false;
+            }
+        }
+
+        return $saw_document;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $phrase_filters
+     */
+    private function individual_phrase_filters_removed_all_candidates(array $phrase_filters): bool
+    {
         $saw_document = false;
         foreach ($phrase_filters as $filter) {
             foreach ((array) ($filter['documents'] ?? []) as $document) {

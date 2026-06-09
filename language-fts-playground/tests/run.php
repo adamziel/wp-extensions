@@ -3006,6 +3006,41 @@ test_case('explain reports field boosts and phrase filter failures', function ()
     assert_same(false, $phrase_partition['phrase_filters'][0]['documents'][0]['passed'] ?? null, 'Phrase filter diagnostics record failed candidates.');
 });
 
+test_case('explain reports when no candidate passes all query phrase filters', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(1, 'en', 'First phrase', '<p>alpha beta only</p>'));
+    $indexer->index_post(fixture_post(2, 'en', 'Second phrase', '<p>gamma delta only</p>'));
+
+    $explain = $searcher->explain('"alpha beta" "gamma delta"', 'en');
+    $partition = $explain['partitions'][0] ?? [];
+
+    assert_same([], $explain['results'] ?? null, 'No document satisfies both query phrases.');
+    assert_true(in_array('phrase_filter_removed_candidates', $explain['no_result_causes'] ?? [], true), 'Top-level explain reports conjunctive phrase filtering as the no-result cause.');
+    assert_true(in_array('phrase_filter_removed_candidates', $partition['no_result_causes'] ?? [], true), 'Partition explain reports conjunctive phrase filtering as the no-result cause.');
+
+    $passed_by_phrase = [];
+    foreach ((array) ($partition['phrase_filters'] ?? []) as $filter) {
+        if (!is_array($filter)) {
+            continue;
+        }
+
+        $phrase = (string) ($filter['phrase'] ?? '');
+        $passed_by_phrase[$phrase] = [];
+        foreach ((array) ($filter['documents'] ?? []) as $document) {
+            if (is_array($document) && !empty($document['passed'])) {
+                $passed_by_phrase[$phrase][] = (int) ($document['post_id'] ?? 0);
+            }
+        }
+    }
+
+    assert_same([1], $passed_by_phrase['alpha beta'] ?? null, 'Phrase diagnostics show the first document passes only the first phrase.');
+    assert_same([2], $passed_by_phrase['gamma delta'] ?? null, 'Phrase diagnostics show the second document passes only the second phrase.');
+});
+
 test_case('reports excerpt field matches with highlighted excerpt snippets', function (): void {
     $storage = new Language_FTS_Playground_Test_Storage();
     $analyzer = new Language_FTS_Playground_Analyzer();
