@@ -285,10 +285,10 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         $max_length = $length + $max_distance;
         $limit = max(1, min(500, $limit));
 
-        $sql = "SELECT DISTINCT term FROM {$this->postings_table} WHERE language = %s AND term_length BETWEEN %d AND %d ORDER BY term ASC LIMIT %d";
+        $sql = "SELECT DISTINCT term FROM {$this->postings_table} WHERE language = %s AND term_length BETWEEN %d AND %d ORDER BY term ASC";
         $rows = $this->result_rows(
             $this->wpdb->get_results(
-                $this->wpdb->prepare($sql, [$language, $min_length, $max_length, $limit]),
+                $this->wpdb->prepare($sql, [$language, $min_length, $max_length]),
                 $this->array_a()
             ),
             'Could not fetch fuzzy candidate terms.'
@@ -297,12 +297,22 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         $terms = [];
         foreach ($rows as $row) {
             $candidate = trim((string) ($row['term'] ?? ''));
-            if ($candidate !== '') {
-                $terms[] = $candidate;
+            if (
+                $candidate === ''
+                || isset($terms[$candidate])
+                || $candidate === $term
+                || levenshtein($term, $candidate) > $max_distance
+            ) {
+                continue;
+            }
+
+            $terms[$candidate] = $candidate;
+            if (count($terms) >= $limit) {
+                break;
             }
         }
 
-        return array_values(array_unique($terms));
+        return array_values($terms);
     }
 
     public function fetch_document_lengths(string $language, array $post_ids): array

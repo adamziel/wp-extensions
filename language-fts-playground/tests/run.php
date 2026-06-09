@@ -193,8 +193,9 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
     public function fetch_candidate_terms(string $language, string $term, int $max_distance, int $limit): array
     {
-        $min_length = max(1, strlen($term) - max(0, $max_distance));
-        $max_length = strlen($term) + max(0, $max_distance);
+        $max_distance = max(0, $max_distance);
+        $min_length = max(1, strlen($term) - $max_distance);
+        $max_length = strlen($term) + $max_distance;
         $limit = max(1, $limit);
         $terms = array_keys($this->postings[$language] ?? []);
         sort($terms, SORT_STRING);
@@ -203,6 +204,10 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         foreach ($terms as $candidate) {
             $length = strlen($candidate);
             if ($length < $min_length || $length > $max_length) {
+                continue;
+            }
+
+            if ($candidate === $term || levenshtein($term, $candidate) > $max_distance) {
                 continue;
             }
 
@@ -1872,6 +1877,28 @@ test_case('storage replacement supports multiple language partitions for one pos
     }
 });
 
+test_case('fuzzy candidate lookup applies the candidate limit after edit-distance filtering', function (): void {
+    foreach ([new Language_FTS_Playground_Test_Storage(), new Language_FTS_Playground_In_Memory_Storage()] as $storage) {
+        $analyzer = new Language_FTS_Playground_Analyzer();
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer, 1.2, 0.75, 4, 2, 1, 0.45);
+
+        $indexer->index_post(fixture_post(611, 'en', 'Length-band noise A', '<p>aaaaa</p>'));
+        $indexer->index_post(fixture_post(612, 'en', 'Length-band noise B', '<p>bbbbb</p>'));
+        $indexer->index_post(fixture_post(613, 'en', 'Edit-distance target', '<p>zzzzr</p>'));
+
+        $candidates = $storage->fetch_candidate_terms('en', 'zzzzq', 1, 2);
+        assert_same(['zzzzr'], $candidates, $storage::class . ' caps fuzzy candidates after edit-distance filtering.');
+
+        $results = $searcher->search('zzzzq~', 'en');
+        assert_same([613], array_column($results, 'post_id'), $storage::class . ' fuzzy search reaches the one-edit target outside the raw length-band prefix.');
+
+        $explain = $searcher->explain('zzzzq~', 'en');
+        $fuzzy_expansion = $explain['partitions'][0]['fuzzy_expansions'][0] ?? [];
+        assert_same('zzzzr', $fuzzy_expansion['candidate_term'] ?? null, $storage::class . ' explain reports the post-filtered fuzzy candidate.');
+    }
+});
+
 test_case('wpdb storage install creates SQLite-compatible indexes and term length migration', function (): void {
     $wpdb = new Language_FTS_Playground_Test_WPDB('sqlite');
     $storage = new Language_FTS_Playground_Wpdb_Storage($wpdb);
@@ -1973,6 +2000,7 @@ test_case('wpdb storage fuzzy candidate lookup uses indexed term lengths', funct
     $prepared = $wpdb->prepared[0]['query'] ?? '';
     assert_contains_text('term_length BETWEEN %d AND %d', $prepared, 'Fuzzy candidate SQL filters by indexed term_length.');
     assert_not_contains_text('LENGTH(term)', $prepared, 'Fuzzy candidate SQL avoids a per-row LENGTH(term) predicate.');
+    assert_not_contains_text('LIMIT %d', $prepared, 'Fuzzy candidate SQL does not truncate the length band before edit-distance filtering.');
 });
 
 test_case('wpdb storage replacement deletes a post once before inserting partitions', function (): void {
@@ -2486,6 +2514,62 @@ test_case('term_rules resource adds configured term keys for indexing and search
         }
 
         assert_same([], $issues, 'term_rules.tsv should add configured term keys during indexing and query analysis.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('term_rules resource contributes conservative automatic routing evidence', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'xx' => [
+            'order' => 10,
+            'term_rules' => "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+                "drop-ing\t5\t/ing$/u\t\ting\t\t3\trequire_vowel\t\t\tfixture-term-rules\n" .
+                "drop-ed\t5\t/ed$/u\t\ted\t\t3\trequire_vowel\t\t\tfixture-term-rules\n",
+        ],
+        'yy' => [
+            'order' => 20,
+        ],
+    ]);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(506, 'xx', 'Term-rule routed target', '<p>glimmer shimmer</p>'));
+
+        $ranked = $analyzer->rank_query_languages('glimmering shimmered');
+        assert_same('xx', $ranked[0]['language'] ?? null, 'Term-rule generated keys rank their resource-backed fake language.');
+        assert_true(in_array('glimmering=>glimmer', $ranked[0]['reasons']['term_rule_keys'] ?? [], true), 'Routing records the generated glimmer term-rule key.');
+        assert_true(in_array('shimmered=>shimmer', $ranked[0]['reasons']['term_rule_keys'] ?? [], true), 'Routing records the generated shimmer term-rule key.');
+
+        $explain = $searcher->explain('glimmering shimmered', 'auto');
+        assert_same('auto_confident_profile_evidence', $explain['language_routing']['strategy'] ?? null, 'Multiple term-rule keys can create conservative confident routing.');
+        assert_same(['xx'], $explain['language_routing']['selected_partitions'] ?? null, 'Term-rule routing selects the resource-backed language.');
+        assert_same([506], array_column($explain['results'] ?? [], 'post_id'), 'The routed term-rule query reaches the indexed base-key document.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('too-short term-rule keys do not create confident automatic routing', function (): void {
+    $root = create_language_fts_temp_profile_set([
+        'xx' => [
+            'order' => 10,
+            'term_rules' => "# id\tmin_term_length\tpattern\tstrip_prefix\tstrip_suffix\tappend\tmin_key_length\tflags\talternate_pattern\talternate_replacement\tprovenance\n" .
+                "drop-ing-short\t4\t/ing$/u\t\ting\t\t1\t\t\t\tfixture-term-rules\n",
+        ],
+        'yy' => [
+            'order' => 20,
+        ],
+    ]);
+
+    try {
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+
+        assert_same([], $analyzer->rank_query_languages('aing'), 'A generated one-character term-rule key is ignored for automatic routing confidence.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
@@ -4551,6 +4635,79 @@ test_case('automatic fallback preflight includes opt-in fuzzy hits outside the f
             count($storage->fetch_postings_languages) < count($enabled),
             'Fuzzy preflight should avoid full fetch_postings() scans for every enabled language. Full postings languages: ' . implode(', ', $storage->fetch_postings_languages)
         );
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('ambiguous automatic fallback considers single-token synonym targets outside the fallback cap', function (): void {
+    $profiles = [];
+    foreach (['qa', 'qb', 'qc', 'qd', 'qe', 'qf', 'qg'] as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+            'lexemes' => "# observed\tcanonical\tprovenance\nrouteprobe\trouteprobe\tfixture\n",
+            'synonyms' => "# source\ttarget\tdirection\tweight\tprovenance\nrouteprobe\troutetarget\tquery_to_index\t0.7\tfixture\n",
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+        $enabled = $analyzer->enabled_languages();
+
+        assert_same('qg', $enabled[6] ?? null, 'The synonym target fake language sits outside the automatic fallback cap.');
+        $ranked = $analyzer->rank_query_languages('routeprobe', 2);
+        assert_same($ranked[0]['score'] ?? null, $ranked[1]['score'] ?? null, 'The fake synonym-source evidence is intentionally ambiguous.');
+
+        $indexer->index_post(fixture_post(404, 'qg', 'Synonym target', '<p>routetarget appears only in QG.</p>'));
+        $explain = $searcher->explain('routeprobe', 'auto');
+        $selected_partitions = array_values(array_map('strval', (array) ($explain['language_routing']['selected_partitions'] ?? [])));
+
+        assert_same('auto_fallback_ambiguous_evidence_bounded_preflight', $explain['language_routing']['strategy'] ?? null, 'The tied profile evidence uses ambiguous bounded fallback.');
+        assert_true(in_array('qg', $selected_partitions, true), 'Bounded preflight selects the over-cap synonym target partition.');
+
+        $results = $searcher->search('routeprobe', 'auto');
+        assert_same([404], array_column($results, 'post_id'), 'Automatic fallback returns the over-cap single-token synonym target.');
+        assert_same('qg', $results[0]['matched_language'] ?? null, 'The synonym fallback result reports the matched fake language.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('ambiguous automatic fallback considers phrase synonym targets outside the fallback cap', function (): void {
+    $profiles = [];
+    foreach (['qa', 'qb', 'qc', 'qd', 'qe', 'qf', 'qg'] as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+            'synonym_phrases' => "# source_terms\ttarget_terms\tdirection\tweight\tprovenance\nportal lookup\tsearch site\tquery_to_index\t0.8\tfixture\n",
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+        $enabled = $analyzer->enabled_languages();
+
+        assert_same('qg', $enabled[6] ?? null, 'The phrase target fake language sits outside the automatic fallback cap.');
+        $ranked = $analyzer->rank_query_languages('portal lookup', 2);
+        assert_same($ranked[0]['score'] ?? null, $ranked[1]['score'] ?? null, 'The fake phrase-source evidence is intentionally ambiguous.');
+
+        $indexer->index_post(fixture_post(405, 'qg', 'Phrase synonym target', '<p>search site appears only in QG.</p>'));
+        $explain = $searcher->explain('portal lookup', 'auto');
+        $selected_partitions = array_values(array_map('strval', (array) ($explain['language_routing']['selected_partitions'] ?? [])));
+
+        assert_same('auto_fallback_ambiguous_evidence_bounded_preflight', $explain['language_routing']['strategy'] ?? null, 'The tied phrase evidence uses ambiguous bounded fallback.');
+        assert_true(in_array('qg', $selected_partitions, true), 'Bounded preflight selects the over-cap phrase synonym target partition.');
+
+        $results = $searcher->search('portal lookup', 'auto');
+        assert_same([405], array_column($results, 'post_id'), 'Automatic fallback returns the over-cap phrase synonym target.');
+        assert_same('qg', $results[0]['matched_language'] ?? null, 'The phrase fallback result reports the matched fake language.');
     } finally {
         remove_language_fts_temp_tree($root);
     }
