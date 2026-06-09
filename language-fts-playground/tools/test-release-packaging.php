@@ -100,7 +100,6 @@ try {
     echo 'Deterministic SHA-256: ' . $first_hash . "\n";
     echo 'Ignored artifact excluded: ' . LANGUAGE_FTS_RELEASE_SLUG . "/static-site-output/\n";
     echo "WordPress.org SVN staging regression: passed\n";
-    exit(0);
 } catch (Throwable $error) {
     fwrite(STDERR, 'Release packaging regression failed: ' . $error->getMessage() . "\n");
     exit(1);

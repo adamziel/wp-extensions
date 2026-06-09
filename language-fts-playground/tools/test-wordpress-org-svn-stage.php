@@ -99,7 +99,6 @@ try {
     );
 
     echo "WordPress.org SVN staging regressions passed.\n";
-    exit(0);
 } catch (Throwable $error) {
     fwrite(STDERR, 'WordPress.org SVN staging regression failed: ' . $error->getMessage() . "\n");
     exit(1);
