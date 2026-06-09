@@ -47,7 +47,7 @@ final class Language_FTS_Playground_Searcher
         $routing = $this->search_language_plan($query, $language, false);
         $results = [];
         foreach ($routing['selected_partitions'] as $partition) {
-            foreach ($this->search_partition($query, $partition) as $result) {
+            foreach ($this->search_partition($query, $partition, false) as $result) {
                 $results[] = $result;
             }
         }
@@ -275,15 +275,15 @@ final class Language_FTS_Playground_Searcher
     /**
      * @return array<int,array<string,mixed>>
      */
-    private function search_partition(string $query, string $language): array
+    private function search_partition(string $query, string $language, bool $include_candidate_enrichment = true): array
     {
-        return $this->evaluate_partition($query, $language)['results'];
+        return $this->evaluate_partition($query, $language, $include_candidate_enrichment)['results'];
     }
 
     /**
      * @return array{results:array<int,array<string,mixed>>,diagnostics:array<string,mixed>}
      */
-    private function evaluate_partition(string $query, string $language): array
+    private function evaluate_partition(string $query, string $language, bool $include_candidate_enrichment = true): array
     {
         $language = $this->analyzer->canonical_language($language);
         $plan = $this->parse_query($query, $language);
@@ -388,8 +388,12 @@ final class Language_FTS_Playground_Searcher
             $this->explain_phrase_synonym_filters($phrase_synonym_expansions, $positions, $candidate_ids)
         );
 
-        $document_fields = $this->storage->fetch_document_fields($language, $candidate_ids);
-        $document_field_metadata = $this->storage->fetch_document_field_metadata($language, $candidate_ids);
+        $document_fields = [];
+        $document_field_metadata = [];
+        if ($include_candidate_enrichment) {
+            $document_fields = $this->storage->fetch_document_fields($language, $candidate_ids);
+            $document_field_metadata = $this->storage->fetch_document_field_metadata($language, $candidate_ids);
+        }
         $average_length = array_sum($document_lengths) / max(1, count($document_lengths));
         $has_lower_priority_match = $plan['fuzzy_terms'] !== [] || $synonym_expansions !== [] || $phrase_synonym_expansions !== [];
         $results = [];
@@ -581,13 +585,16 @@ final class Language_FTS_Playground_Searcher
                     'score' => $score,
                     'matched_terms' => array_keys($matched_terms),
                     'matched_fields' => $matched_field_names,
-                    'snippet' => $this->build_snippet(
-                        $document_fields[$post_id] ?? [],
-                        $matched_field_names,
-                        $terms,
-                        $language
-                    ),
+                    'snippet' => $include_candidate_enrichment
+                        ? $this->build_snippet(
+                            $document_fields[$post_id] ?? [],
+                            $matched_field_names,
+                            $terms,
+                            $language
+                        )
+                        : '',
                     'matched_language' => $language,
+                    '_snippet_terms' => $terms,
                     '_exact_match_count' => $exact_match_count,
                     '_has_lower_priority_match' => $has_lower_priority_match,
                     '_match_classes' => array_keys($match_classes),
@@ -616,8 +623,10 @@ final class Language_FTS_Playground_Searcher
     private function finalize_results(array $results, int $limit): array
     {
         $results = $this->rank_results($results, $limit);
+        $this->hydrate_result_snippets($results);
         foreach ($results as &$result) {
             unset(
+                $result['_snippet_terms'],
                 $result['_exact_match_count'],
                 $result['_has_lower_priority_match'],
                 $result['_match_classes'],
@@ -632,6 +641,52 @@ final class Language_FTS_Playground_Searcher
         unset($result);
 
         return $results;
+    }
+
+    /**
+     * Fetch source field text only after public results have been ranked and
+     * limited, so large candidate sets do not force full document hydration.
+     *
+     * @param array<int,array<string,mixed>> $results
+     */
+    private function hydrate_result_snippets(array &$results): void
+    {
+        if ($results === []) {
+            return;
+        }
+
+        $post_ids_by_language = [];
+        foreach ($results as $result) {
+            $language = (string) ($result['matched_language'] ?? '');
+            $post_id = (int) ($result['post_id'] ?? 0);
+            if ($language === '' || $post_id <= 0) {
+                continue;
+            }
+
+            $post_ids_by_language[$language][$post_id] = $post_id;
+        }
+
+        $fields_by_language = [];
+        foreach ($post_ids_by_language as $language => $post_ids) {
+            $fields_by_language[$language] = $this->storage->fetch_document_fields($language, array_values($post_ids));
+        }
+
+        foreach ($results as &$result) {
+            $language = (string) ($result['matched_language'] ?? '');
+            $post_id = (int) ($result['post_id'] ?? 0);
+            if ($language === '' || $post_id <= 0) {
+                $result['snippet'] = '';
+                continue;
+            }
+
+            $result['snippet'] = $this->build_snippet(
+                $fields_by_language[$language][$post_id] ?? [],
+                array_values(array_map('strval', (array) ($result['matched_fields'] ?? []))),
+                array_values(array_map('strval', (array) ($result['_snippet_terms'] ?? []))),
+                $language
+            );
+        }
+        unset($result);
     }
 
     /**

@@ -23,8 +23,14 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
     public int $clear_count = 0;
     public int $delete_count = 0;
     public int $fetch_term_language_hits_count = 0;
+    public int $fetch_document_fields_count = 0;
+    public int $fetch_document_field_metadata_count = 0;
     /** @var string[] */
     public array $fetch_postings_languages = [];
+    /** @var array<int,array{language:string,post_ids:int[]}> */
+    public array $fetch_document_fields_requests = [];
+    /** @var array<int,array{language:string,post_ids:int[]}> */
+    public array $fetch_document_field_metadata_requests = [];
 
     public function install(): void
     {
@@ -217,6 +223,12 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
     public function fetch_document_fields(string $language, array $post_ids): array
     {
+        $this->fetch_document_fields_count++;
+        $this->fetch_document_fields_requests[] = [
+            'language' => $language,
+            'post_ids' => array_values(array_map('intval', $post_ids)),
+        ];
+
         $fields = [];
         foreach ($post_ids as $post_id) {
             $post_id = (int) $post_id;
@@ -231,6 +243,12 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
 
     public function fetch_document_field_metadata(string $language, array $post_ids): array
     {
+        $this->fetch_document_field_metadata_count++;
+        $this->fetch_document_field_metadata_requests[] = [
+            'language' => $language,
+            'post_ids' => array_values(array_map('intval', $post_ids)),
+        ];
+
         $metadata = [];
         foreach ($post_ids as $post_id) {
             $post_id = (int) $post_id;
@@ -4357,6 +4375,69 @@ test_case('ranks title hits above equal content hits', function (): void {
     assert_same(42, $results[0]['post_id'], 'A title hit outranks an equal content hit even with the higher post ID.');
     assert_same(['title'], $results[0]['matched_fields'], 'The top result reports the title field.');
     assert_same(['content'], $results[1]['matched_fields'], 'The second result reports the content field.');
+});
+
+test_case('public search fetches field text only for final results', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $analyzer = new Language_FTS_Playground_Analyzer();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(101, 'en', 'First orchard', '<p>Orchard match one.</p>'));
+    $indexer->index_post(fixture_post(102, 'en', 'Second orchard', '<p>Orchard match two.</p>'));
+    $indexer->index_post(fixture_post(103, 'en', 'Third orchard', '<p>Orchard match three.</p>'));
+
+    $results = $searcher->search('orchard', 'en', 2);
+
+    assert_same([101, 102], array_column($results, 'post_id'), 'The final limited public result order is stable.');
+    assert_same(1, $storage->fetch_document_fields_count, 'Public search fetches document field text once for the final window.');
+    assert_same(
+        [
+            [
+                'language' => 'en',
+                'post_ids' => [101, 102],
+            ],
+        ],
+        $storage->fetch_document_fields_requests,
+        'Public search fetches field text only for final result IDs.'
+    );
+    assert_same(0, $storage->fetch_document_field_metadata_count, 'Public search does not fetch document field metadata.');
+    assert_contains_text('<mark>orchard</mark>', $results[0]['snippet'], 'Final public results still include highlighted snippets.');
+    assert_contains_text('<mark>orchard</mark>', $results[1]['snippet'], 'Every final public result is snippet-enriched.');
+
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+    $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+    $indexer->index_post(fixture_post(101, 'en', 'First orchard', '<p>Orchard match one.</p>'));
+    $indexer->index_post(fixture_post(102, 'en', 'Second orchard', '<p>Orchard match two.</p>'));
+    $indexer->index_post(fixture_post(103, 'en', 'Third orchard', '<p>Orchard match three.</p>'));
+
+    $explain = $searcher->explain('orchard', 'en', 2);
+
+    assert_same(1, $storage->fetch_document_fields_count, 'Explain keeps fetching candidate field text for diagnostics.');
+    assert_same(
+        [
+            [
+                'language' => 'en',
+                'post_ids' => [101, 102, 103],
+            ],
+        ],
+        $storage->fetch_document_fields_requests,
+        'Explain fetches field text for the complete candidate set.'
+    );
+    assert_same(1, $storage->fetch_document_field_metadata_count, 'Explain keeps fetching candidate field metadata for diagnostics.');
+    assert_same(
+        [
+            [
+                'language' => 'en',
+                'post_ids' => [101, 102, 103],
+            ],
+        ],
+        $storage->fetch_document_field_metadata_requests,
+        'Explain fetches field metadata for the complete candidate set.'
+    );
+    assert_contains_text('<mark>orchard</mark>', $explain['results'][0]['snippet'] ?? '', 'Explain results keep highlighted snippets.');
 });
 
 test_case('explain reports field boosts and phrase filter failures', function (): void {
