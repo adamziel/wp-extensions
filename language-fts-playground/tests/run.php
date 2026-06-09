@@ -4365,6 +4365,85 @@ test_case('automatic fallback uses bounded preflight instead of scanning every l
     }
 });
 
+test_case('automatic fallback returns results when preflight hits reach the partition cap', function (): void {
+    $profiles = [];
+    foreach (['qa', 'qb', 'qc', 'qd', 'qe', 'qf'] as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+            'lexemes' => "# observed\tcanonical\tprovenance\nrouteprobe\trouteprobe\tfixture\n",
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        foreach ($analyzer->enabled_languages() as $offset => $language) {
+            $indexer->index_post(fixture_post(406 + (int) $offset, $language, strtoupper($language) . ' route probe', '<p>routeprobe appears in ' . strtoupper($language) . '.</p>'));
+        }
+
+        $ranked = $analyzer->rank_query_languages('routeprobe', 2);
+        assert_same($ranked[0]['score'] ?? null, $ranked[1]['score'] ?? null, 'The fake routeprobe evidence is intentionally ambiguous before bounded fallback.');
+
+        $results = $searcher->search('routeprobe', 'auto');
+
+        assert_same(['qa', 'qb', 'qc', 'qd', 'qe'], $storage->fetch_postings_languages, 'Preflight hit-bearing fallback searches the capped selected partitions.');
+        assert_same([406, 407, 408, 409, 410], array_column($results, 'post_id'), 'Public automatic search returns capped preflight-hit results instead of losing selected partitions.');
+        assert_same(['qa', 'qb', 'qc', 'qd', 'qe'], array_column($results, 'matched_language'), 'Public automatic search keeps matched-language payloads for the selected hit partitions.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('automatic fallback preflight diagnostics mark order-filled partitions as selected', function (): void {
+    $profiles = [];
+    foreach (['qa', 'qb', 'qc', 'qd', 'qe', 'qf', 'qg'] as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+
+        $indexer->index_post(fixture_post(411, 'qg', 'Order-fill diagnostic target', '<p>routefill appears only in QG.</p>'));
+
+        $explain = $searcher->explain('routefill', 'auto');
+        $selected_partitions = array_values(array_map('strval', (array) ($explain['language_routing']['selected_partitions'] ?? [])));
+        $scored_languages = array_filter(
+            (array) ($explain['language_routing']['preflight']['scored_languages'] ?? []),
+            'is_array'
+        );
+        $diagnostics_by_language = [];
+        foreach ($scored_languages as $candidate) {
+            $diagnostics_by_language[(string) ($candidate['language'] ?? '')] = $candidate;
+        }
+
+        assert_same(['qg', 'qa', 'qb', 'qc', 'qd'], $selected_partitions, 'Bounded fallback selects the hit partition, then fills by enabled order.');
+        assert_same(1, $diagnostics_by_language['qg']['hit_count'] ?? null, 'The preflight-hit partition records its exact hit.');
+        assert_same(0, $diagnostics_by_language['qa']['hit_count'] ?? null, 'QA is selected only by enabled-order fill.');
+        assert_same(true, $diagnostics_by_language['qa']['selected'] ?? null, 'Order-filled QA diagnostics agree with selected_partitions.');
+        assert_same(false, $diagnostics_by_language['qe']['selected'] ?? null, 'Over-cap unselected partitions remain marked unselected.');
+
+        foreach ($diagnostics_by_language as $language => $candidate) {
+            assert_same(
+                in_array($language, $selected_partitions, true),
+                (bool) ($candidate['selected'] ?? false),
+                "Preflight selected diagnostic matches selected_partitions for {$language}."
+            );
+        }
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
 test_case('automatic fallback preflight includes opt-in fuzzy hits outside the fallback cap', function (): void {
     $profiles = [];
     foreach (['qa', 'qb', 'qc', 'qd', 'qe', 'qf', 'qg'] as $offset => $language) {
