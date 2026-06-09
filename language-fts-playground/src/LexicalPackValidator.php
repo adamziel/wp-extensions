@@ -11,27 +11,31 @@ declare(strict_types=1);
  */
 final class Language_FTS_Playground_Lexical_Pack_Validator
 {
-    public const DEFAULT_MAX_SYNSET_SIZE = 64;
-    public const DEFAULT_MAX_EXPANSIONS_PER_TERM = 128;
+    public const DEFAULT_MAX_SYNSET_SIZE = Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_SYNSET_SIZE;
+    public const DEFAULT_MAX_EXPANSIONS_PER_TERM = Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_EXPANSIONS_PER_TERM;
+    public const DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE = Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE;
 
     private string $resource_root;
     private int $max_synset_size;
     private int $max_expansions_per_term;
+    private int $max_phrase_expansions_per_source;
 
     public function __construct(
         string|null $resource_root = null,
         int $max_synset_size = self::DEFAULT_MAX_SYNSET_SIZE,
-        int $max_expansions_per_term = self::DEFAULT_MAX_EXPANSIONS_PER_TERM
+        int $max_expansions_per_term = self::DEFAULT_MAX_EXPANSIONS_PER_TERM,
+        int $max_phrase_expansions_per_source = self::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE
     ) {
         $this->resource_root = Language_FTS_Playground_Lexical_Profile_Repository::normalize_resource_root(
             $resource_root ?? Language_FTS_Playground_Lexical_Profile_Repository::default_resource_root()
         );
         $this->max_synset_size = max(1, $max_synset_size);
         $this->max_expansions_per_term = max(1, $max_expansions_per_term);
+        $this->max_phrase_expansions_per_source = max(1, $max_phrase_expansions_per_source);
     }
 
     /**
-     * @return array{resource_root:string,thresholds:array{max_synset_size:int,max_expansions_per_term:int},valid:bool,warnings:string[],languages:array<int,array<string,mixed>>}
+     * @return array{resource_root:string,thresholds:array{max_synset_size:int,max_expansions_per_term:int,max_phrase_expansions_per_source:int},valid:bool,warnings:string[],languages:array<int,array<string,mixed>>}
      */
     public function validate_all(): array
     {
@@ -40,6 +44,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             'thresholds' => [
                 'max_synset_size' => $this->max_synset_size,
                 'max_expansions_per_term' => $this->max_expansions_per_term,
+                'max_phrase_expansions_per_source' => $this->max_phrase_expansions_per_source,
             ],
             'valid' => true,
             'warnings' => [],
@@ -130,6 +135,7 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             ],
             'max_synset_size' => 0,
             'max_expansion_fanout' => 0,
+            'max_phrase_expansion_fanout' => 0,
             'warnings' => [],
             'valid' => true,
             'order' => 1000,
@@ -200,7 +206,8 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
                 $warnings
             );
         }
-        $expansion_targets = [];
+        $single_token_expansion_targets = [];
+        $phrase_expansion_targets = [];
 
         if (isset($resource_paths['stopwords'])) {
             $status['counts']['stopwords'] = $this->validate_stopwords($resource_paths['stopwords'], $warnings, $normalization_folds);
@@ -209,18 +216,18 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $status['counts']['lexeme_rows'] = $this->validate_lexemes($resource_paths['lexemes'], $warnings, $normalization_folds);
         }
         if (isset($resource_paths['synonyms'])) {
-            $pairwise = $this->validate_pairwise_synonyms($resource_paths['synonyms'], $warnings, $expansion_targets, $normalization_folds);
+            $pairwise = $this->validate_pairwise_synonyms($resource_paths['synonyms'], $warnings, $single_token_expansion_targets, $normalization_folds);
             $status['counts']['pairwise_synonym_rows'] = $pairwise['rows'];
             $status['counts']['pairwise_synonym_expansions'] = $pairwise['expansions'];
         }
         if (isset($resource_paths['synsets'])) {
-            $synsets = $this->validate_synsets($resource_paths['synsets'], $warnings, $expansion_targets, $normalization_folds);
+            $synsets = $this->validate_synsets($resource_paths['synsets'], $warnings, $single_token_expansion_targets, $normalization_folds);
             $status['counts']['synset_rows'] = $synsets['rows'];
             $status['counts']['concept_expansions'] = $synsets['expansions'];
             $status['max_synset_size'] = $synsets['max_synset_size'];
         }
         if (isset($resource_paths['synonym_phrases'])) {
-            $phrase_synonyms = $this->validate_synonym_phrases($resource_paths['synonym_phrases'], $warnings, $expansion_targets, $normalization_folds);
+            $phrase_synonyms = $this->validate_synonym_phrases($resource_paths['synonym_phrases'], $warnings, $phrase_expansion_targets, $normalization_folds);
             $status['counts']['phrase_synonym_rows'] = $phrase_synonyms['rows'];
             $status['counts']['phrase_synonym_expansions'] = $phrase_synonyms['expansions'];
         }
@@ -231,12 +238,20 @@ final class Language_FTS_Playground_Lexical_Pack_Validator
             $status['counts']['protected_term_rows'] = $this->validate_protected_terms($resource_paths['protected_terms'], $warnings, $normalization_folds);
         }
 
-        $status['max_expansion_fanout'] = $this->max_expansion_fanout($expansion_targets);
+        $status['max_expansion_fanout'] = $this->max_expansion_fanout($single_token_expansion_targets);
         if ($status['max_expansion_fanout'] > $this->max_expansions_per_term) {
             $warnings[] = sprintf(
                 'Maximum expansion fanout %d exceeds threshold %d.',
                 $status['max_expansion_fanout'],
                 $this->max_expansions_per_term
+            );
+        }
+        $status['max_phrase_expansion_fanout'] = $this->max_expansion_fanout($phrase_expansion_targets);
+        if ($status['max_phrase_expansion_fanout'] > $this->max_phrase_expansions_per_source) {
+            $warnings[] = sprintf(
+                'Maximum phrase expansion fanout %d exceeds threshold %d.',
+                $status['max_phrase_expansion_fanout'],
+                $this->max_phrase_expansions_per_source
             );
         }
 

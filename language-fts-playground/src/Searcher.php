@@ -34,8 +34,10 @@ final class Language_FTS_Playground_Searcher
         private int $fuzzy_min_length = 4,
         private int $fuzzy_candidate_limit = 128,
         private int $fuzzy_max_distance = 1,
-        private float $fuzzy_score_multiplier = 0.45
+        private float $fuzzy_score_multiplier = 0.45,
+        private int $max_lookup_terms = Language_FTS_Playground_Lexical_Profile_Repository::DEFAULT_MAX_LOOKUP_TERMS
     ) {
+        $this->max_lookup_terms = max(1, $this->max_lookup_terms);
     }
 
     /**
@@ -377,6 +379,7 @@ final class Language_FTS_Playground_Searcher
         $synonym_terms = $this->synonym_terms($synonym_expansions);
         $phrase_synonym_terms = $this->phrase_synonym_terms($phrase_synonym_expansions);
         $terms = $this->unique_terms(array_merge($plan['exact_terms'], $fuzzy_terms, $synonym_terms, $phrase_synonym_terms));
+        $lookup_term_count = count($terms);
         $diagnostics = [
             'language' => $language,
             'analyzed_query' => [
@@ -392,6 +395,11 @@ final class Language_FTS_Playground_Searcher
                 'fuzzy' => $fuzzy_terms,
                 'all' => $terms,
             ],
+            'expansion_caps' => [
+                'max_lookup_terms' => $this->max_lookup_terms,
+                'lookup_term_count' => $lookup_term_count,
+                'truncated' => false,
+            ],
             'synonym_expansions' => $this->explain_synonym_expansions($synonym_expansions),
             'phrase_synonym_expansions' => $this->explain_phrase_synonym_expansions($phrase_synonym_expansions, $language),
             'fuzzy_expansions' => $this->explain_fuzzy_expansions($fuzzy_candidates, $language),
@@ -401,6 +409,15 @@ final class Language_FTS_Playground_Searcher
             'results' => [],
             'no_result_causes' => [],
         ];
+
+        if ($lookup_term_count > $this->max_lookup_terms) {
+            throw new RuntimeException(sprintf(
+                'Lookup term expansion produced %d terms, exceeding runtime cap %d for language %s.',
+                $lookup_term_count,
+                $this->max_lookup_terms,
+                $language
+            ));
+        }
 
         if ($terms === []) {
             $diagnostics['no_result_causes'][] = 'analyzed_query_empty_after_stopwords';

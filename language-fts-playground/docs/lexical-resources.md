@@ -172,7 +172,7 @@ Run the pack validator before committing generated resources:
 ```sh
 php language-fts-playground/tools/validate-lexical-packs.php
 php language-fts-playground/tools/validate-lexical-packs.php --json
-php language-fts-playground/tools/validate-lexical-packs.php --max-synset-size=64 --max-expansions-per-term=128
+php language-fts-playground/tools/validate-lexical-packs.php --max-synset-size=64 --max-expansions-per-term=128 --max-phrase-expansions-per-source=64
 ```
 
 The default output is human-readable. `--json` emits deterministic JSON for CI
@@ -189,13 +189,20 @@ The validator reports, per language:
 - stopword rows, lexeme rows, pairwise synonym rows/expansions, synset rows,
   concept-derived expansions, phrase synonym rows, phrase synonym expansions,
   term rule rows, and protected term rows,
-- max synset size and max unique expansion fanout for any one term,
-- warnings for invalid metadata, missing files, malformed rows, duplicate rows, and broad synsets.
+- max synset size, max unique expansion fanout for any one term, and max
+  unique phrase expansion fanout for any one phrase source,
+- warnings for invalid metadata, missing files, malformed rows, duplicate rows,
+  broad synsets, broad term fanout, and broad phrase fanout.
 
 `--max-synset-size` limits how many canonical keys one concept can contain.
 `--max-expansions-per-term` limits how many unique targets any source term can
 expand to after pairwise rows and concept rows are considered.
+`--max-phrase-expansions-per-source` limits how many unique target phrases any
+source phrase can expand to.
 Broad synsets are dangerous for search quality.
+Runtime profile loading enforces the same hard caps so oversized packs fail
+closed in admin/search paths instead of silently truncating pure PHP expansion
+maps.
 Each term expands to every other term in that concept; a large or vague concept
 can make precise searches match loosely related documents and push exact
 results down.

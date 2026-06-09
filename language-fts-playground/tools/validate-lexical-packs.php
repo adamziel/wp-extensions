@@ -40,7 +40,8 @@ function language_fts_validate_packs_main(array $argv): int
         $validator = new Language_FTS_Playground_Lexical_Pack_Validator(
             $options['resource_root'],
             $options['max_synset_size'],
-            $options['max_expansions_per_term']
+            $options['max_expansions_per_term'],
+            $options['max_phrase_expansions_per_source']
         );
         $report = $validator->validate_all();
     } catch (Throwable $throwable) {
@@ -60,7 +61,7 @@ function language_fts_validate_packs_main(array $argv): int
 
 /**
  * @param string[] $args
- * @return array{json:bool,help:bool,resource_root:string|null,max_synset_size:int,max_expansions_per_term:int}
+ * @return array{json:bool,help:bool,resource_root:string|null,max_synset_size:int,max_expansions_per_term:int,max_phrase_expansions_per_source:int}
  */
 function language_fts_validate_packs_parse_options(array $args): array
 {
@@ -70,6 +71,7 @@ function language_fts_validate_packs_parse_options(array $args): array
         'resource_root' => null,
         'max_synset_size' => Language_FTS_Playground_Lexical_Pack_Validator::DEFAULT_MAX_SYNSET_SIZE,
         'max_expansions_per_term' => Language_FTS_Playground_Lexical_Pack_Validator::DEFAULT_MAX_EXPANSIONS_PER_TERM,
+        'max_phrase_expansions_per_source' => Language_FTS_Playground_Lexical_Pack_Validator::DEFAULT_MAX_PHRASE_EXPANSIONS_PER_SOURCE,
     ];
 
     foreach ($args as $arg) {
@@ -103,6 +105,10 @@ function language_fts_validate_packs_parse_options(array $args): array
                 $options['max_expansions_per_term'] = language_fts_validate_packs_positive_int($value, '--max-expansions-per-term');
                 break;
 
+            case 'max_phrase_expansions_per_source':
+                $options['max_phrase_expansions_per_source'] = language_fts_validate_packs_positive_int($value, '--max-phrase-expansions-per-source');
+                break;
+
             default:
                 throw new InvalidArgumentException('Unknown option: --' . str_replace('_', '-', $name));
         }
@@ -132,6 +138,8 @@ function language_fts_validate_packs_usage($stream): void
         "  --json                         Emit deterministic JSON.\n" .
         "  --max-synset-size=<n>           Fail when any synset contains more than n terms. Default: 64\n" .
         "  --max-expansions-per-term=<n>   Fail when any term expands to more than n unique targets. Default: 128\n" .
+        "  --max-phrase-expansions-per-source=<n>\n" .
+        "                                 Fail when any phrase source expands to more than n unique targets. Default: 64\n" .
         "  --resource-root=<path>          Validate a non-default language resource root.\n"
     );
 }
@@ -144,7 +152,8 @@ function language_fts_validate_packs_print_human(array $report): void
     echo 'Lexical pack validation: ' . (string) ($report['resource_root'] ?? '') . "\n";
     $thresholds = is_array($report['thresholds'] ?? null) ? $report['thresholds'] : [];
     echo 'Thresholds: max synset size ' . (int) ($thresholds['max_synset_size'] ?? 0)
-        . ', max expansions per term ' . (int) ($thresholds['max_expansions_per_term'] ?? 0) . "\n\n";
+        . ', max expansions per term ' . (int) ($thresholds['max_expansions_per_term'] ?? 0)
+        . ', max phrase expansions per source ' . (int) ($thresholds['max_phrase_expansions_per_source'] ?? 0) . "\n\n";
 
     foreach ((array) ($report['warnings'] ?? []) as $warning) {
         echo 'WARN ' . (string) $warning . "\n";
@@ -181,7 +190,8 @@ function language_fts_validate_packs_print_human(array $report): void
             . ', protected terms ' . (int) ($counts['protected_term_rows'] ?? 0)
             . ', total expansions ' . $expansions . "\n";
         echo '  max synset size: ' . (int) ($language['max_synset_size'] ?? 0)
-            . ', max expansion fanout: ' . (int) ($language['max_expansion_fanout'] ?? 0) . "\n";
+            . ', max expansion fanout: ' . (int) ($language['max_expansion_fanout'] ?? 0)
+            . ', max phrase expansion fanout: ' . (int) ($language['max_phrase_expansion_fanout'] ?? 0) . "\n";
 
         if ($warnings === []) {
             echo "  warnings: none\n";
