@@ -61,9 +61,45 @@ try {
     assert_zip_path_absent($first_zip, LANGUAGE_FTS_RELEASE_SLUG . '/tools/');
     assert_zip_path_absent($first_zip, LANGUAGE_FTS_RELEASE_SLUG . '/tests/');
 
+    $svn_stage = $workspace . '/wordpress-org-svn-stage';
+    run_command(
+        [PHP_BINARY, 'tools/build-wordpress-org-svn-stage.php', '--output=' . $svn_stage, '--allow-dirty', '--skip-checks'],
+        $plugin_root,
+        'build WordPress.org SVN staging regression tree'
+    );
+    run_command(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $svn_stage],
+        $plugin_root,
+        'verify WordPress.org SVN staging regression tree'
+    );
+
+    assert_directory_present($svn_stage . '/trunk');
+    assert_directory_present($svn_stage . '/tags/0.3.0');
+    assert_directory_present($svn_stage . '/assets');
+    assert_file_present($svn_stage . '/trunk/language-fts-playground.php');
+    assert_file_present($svn_stage . '/trunk/readme.txt');
+    assert_file_present($svn_stage . '/tags/0.3.0/language-fts-playground.php');
+    assert_file_present($svn_stage . '/tags/0.3.0/readme.txt');
+    assert_path_absent($svn_stage . '/trunk/' . LANGUAGE_FTS_RELEASE_SLUG);
+    assert_path_absent($svn_stage . '/trunk/tools');
+    assert_path_absent($svn_stage . '/trunk/tests');
+    assert_path_absent($svn_stage . '/trunk/.distignore');
+
+    $bad_stage = $workspace . '/bad-wordpress-org-svn-stage';
+    ensure_directory($bad_stage . '/trunk/' . LANGUAGE_FTS_RELEASE_SLUG);
+    ensure_directory($bad_stage . '/tags/0.3.0');
+    ensure_directory($bad_stage . '/assets');
+    run_command_expect_failure(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $bad_stage],
+        $plugin_root,
+        'reject nested plugin root in WordPress.org SVN stage',
+        'trunk/language-fts-playground'
+    );
+
     echo "Release packaging regressions passed.\n";
     echo 'Deterministic SHA-256: ' . $first_hash . "\n";
     echo 'Ignored artifact excluded: ' . LANGUAGE_FTS_RELEASE_SLUG . "/static-site-output/\n";
+    echo "WordPress.org SVN staging regression: passed\n";
     exit(0);
 } catch (Throwable $error) {
     fwrite(STDERR, 'Release packaging regression failed: ' . $error->getMessage() . "\n");
@@ -149,6 +185,42 @@ function assert_zip_path_absent(string $zip_path, string $prefix): void
 }
 
 /**
+ * Requires that a filesystem path exists as a file.
+ *
+ * @param string $path File path.
+ */
+function assert_file_present(string $path): void
+{
+    if (!is_file($path)) {
+        throw new RuntimeException('Expected file was not staged: ' . $path);
+    }
+}
+
+/**
+ * Requires that a filesystem path exists as a directory.
+ *
+ * @param string $path Directory path.
+ */
+function assert_directory_present(string $path): void
+{
+    if (!is_dir($path)) {
+        throw new RuntimeException('Expected directory was not staged: ' . $path);
+    }
+}
+
+/**
+ * Requires that a filesystem path does not exist.
+ *
+ * @param string $path File or directory path.
+ */
+function assert_path_absent(string $path): void
+{
+    if (file_exists($path)) {
+        throw new RuntimeException('Forbidden path was staged: ' . $path);
+    }
+}
+
+/**
  * Runs a command and fails with bounded diagnostics.
  *
  * @param string[] $command Command and arguments.
@@ -193,6 +265,52 @@ function run_command(array $command, string $cwd, string $action): void
 
     if ('' !== trim($stderr)) {
         throw new RuntimeException('Command to ' . $action . " wrote unexpected stderr:\n" . truncate_diagnostic($stderr));
+    }
+}
+
+/**
+ * Runs a command that must fail with an expected diagnostic.
+ *
+ * @param string[] $command Command and arguments.
+ * @param string   $cwd     Working directory.
+ * @param string   $action  Human-readable action.
+ * @param string   $needle  Diagnostic substring expected in stdout/stderr.
+ */
+function run_command_expect_failure(array $command, string $cwd, string $action, string $needle): void
+{
+    $descriptor_spec = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $command_string = implode(' ', array_map('escapeshellarg', $command));
+    $process = proc_open($command_string, $descriptor_spec, $pipes, $cwd);
+
+    if (!is_resource($process)) {
+        throw new RuntimeException('Unable to start command to ' . $action . ': ' . $command_string);
+    }
+
+    fclose($pipes[0]);
+
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    $exit_code = proc_close($process);
+    $diagnostic = (false === $stderr ? '' : $stderr) . "\n" . (false === $stdout ? '' : $stdout);
+
+    if (0 === $exit_code) {
+        throw new RuntimeException('Command unexpectedly passed while trying to ' . $action . '.');
+    }
+
+    if (false === strpos($diagnostic, $needle)) {
+        throw new RuntimeException(
+            'Command failed without expected diagnostic while trying to ' . $action . ".\n" .
+            'Expected: ' . $needle . "\n" .
+            truncate_diagnostic($diagnostic)
+        );
     }
 }
 
