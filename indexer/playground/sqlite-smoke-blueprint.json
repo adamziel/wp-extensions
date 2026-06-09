@@ -1,0 +1,23 @@
+{
+  "$schema": "https://playground.wordpress.net/blueprint-schema.json",
+  "meta": {
+    "title": "Pure PHP FTS Indexer SQLite Smoke",
+    "description": "Runs the mounted Pure PHP FTS Indexer plugin inside WordPress Playground on SQLite and verifies multilingual index/search behavior.",
+    "author": "adamziel"
+  },
+  "preferredVersions": {
+    "php": "8.3",
+    "wp": "latest"
+  },
+  "landingPage": "/wp-admin/plugins.php",
+  "login": true,
+  "siteOptions": {
+    "blogname": "Pure PHP FTS Indexer SQLite Smoke"
+  },
+  "steps": [
+    {
+      "step": "runPHP",
+      "code": "<?php require '/wordpress/wp-content/plugins/indexer/playground/sqlite-smoke.php';"
+    }
+  ]
+}

@@ -58,6 +58,20 @@ SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 The harness reports unsupported Snowball languages as skipped. Skips are
 expected for languages that are not advertised by `WP_FTS_SnowballStemmer`.
 
+## WordPress Playground SQLite Smoke
+
+Run the committed Playground smoke from the repository worktree root:
+
+```sh
+npx @wp-playground/cli@latest run-blueprint --blueprint=indexer/playground/sqlite-smoke-blueprint.json --mount="$(pwd)/indexer:/wordpress/wp-content/plugins/indexer" --blueprint-may-read-adjacent-files
+```
+
+The smoke activates the mounted `indexer` plugin in WordPress Playground,
+asserts SQLite runtime evidence, inserts a small multilingual post set, indexes
+through `WP_FTS_Indexer`, and searches through `WP_FTS_Searcher`. It probes
+Polish stemming/detection, German detection, explicit language override, and
+fallback behavior for text without detector evidence.
+
 ## Optional BM25 Python Reference
 
 Run the Python reference only when the environment has the optional virtualenv

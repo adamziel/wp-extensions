@@ -70,7 +70,7 @@ final class WP_FTS_LanguagePipeline
         );
         $tokenizer = $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null;
         $this->cjkTokenizer = is_callable($tokenizer) ? $tokenizer : null;
-        $this->enableStemming = (bool) ($options['enable_stemming'] ?? false);
+        $this->enableStemming = (bool) ($options['enable_stemming'] ?? true);
         $this->namespaceTerms = (bool) ($options['namespace_terms'] ?? false);
         $this->minTermLen = max(1, (int) ($options['min_term_len'] ?? 2));
         $this->maxTermBytes = max(1, (int) ($options['max_term_bytes'] ?? 255));

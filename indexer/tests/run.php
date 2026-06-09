@@ -983,6 +983,8 @@ final class WP_FTS_Test_WPDB
     public string $posts = 'wp_posts';
     public string $last_error = '';
     public ?string $failQueryPrefix = null;
+    public ?object $dbh = null;
+    public bool $missPreparedTermLookups = false;
 
     /** @var array<int,string> */
     public array $queries = [];
@@ -1205,10 +1207,16 @@ final class WP_FTS_Test_WPDB
     public function get_results(mixed $statement): array
     {
         [$sql, $args] = $this->statement_parts($statement);
+        if ($this->missPreparedTermLookups && $args !== [] && (
+            str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')
+            || str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
+        )) {
+            return [];
+        }
 
         if (str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')) {
             $rows = [];
-            foreach ($args as $term) {
+            foreach ($args === [] ? array_keys($this->terms) : $args as $term) {
                 $term = (string) $term;
                 if (isset($this->terms[$term])) {
                     $rows[] = (object) [
@@ -1222,7 +1230,7 @@ final class WP_FTS_Test_WPDB
 
         if (str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')) {
             $rows = [];
-            foreach ($args as $term) {
+            foreach ($args === [] ? array_keys($this->postings) : $args as $term) {
                 $term = (string) $term;
                 foreach ($this->postings[$term] ?? [] as $docId => $tf) {
                     $rows[] = (object) ['term' => $term, 'doc_id' => (int) $docId, 'tf' => (int) $tf];
@@ -1415,6 +1423,10 @@ final class WP_FTS_Test_WPDB
 
         return [(string) $statement, []];
     }
+}
+
+final class WP_FTS_Test_SQLite_Driver
+{
 }
 
 final class WP_FTS_Test_Language_Aware_Analyzer
@@ -2325,6 +2337,72 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_same(['wroclaw'], $pipeline->analyze('Wrocławiu', 'pl'), 'Polish fallback should run after folding');
 });
 
+test_case('stemming is enabled by default and can be explicitly disabled', function (): void {
+    $defaultPipeline = new WP_FTS_LanguagePipeline();
+    assert_same(['kot'], $defaultPipeline->analyze('kotami', 'pl'), 'default pipeline should use safe built-in stemming');
+
+    $disabledPipeline = new WP_FTS_LanguagePipeline(['enable_stemming' => false]);
+    assert_same(['kotami'], $disabledPipeline->analyze('kotami', 'pl'), 'enable_stemming false should preserve exact normalized terms');
+
+    $defaultAnalyzer = new WP_FTS_Analyzer();
+    assert_same(['wroclaw'], $defaultAnalyzer->analyze_query('Wrocławiu', ['lang' => 'pl']), 'default analyzer should stem through the language pipeline');
+
+    $disabledAnalyzer = new WP_FTS_Analyzer(['enable_stemming' => false]);
+    assert_same(['wroclawiu'], $disabledAnalyzer->analyze_query('Wrocławiu', ['lang' => 'pl']), 'analyzer should keep an explicit no-stemming escape hatch');
+});
+
+test_case('language detector uses deterministic script and lexical evidence', function (): void {
+    $detector = new WP_FTS_LanguageDetector();
+
+    assert_same('pl', $detector->detect_text('Wrocław oraz Łódź'), 'Polish diacritics and stopwords should route to pl');
+    assert_same('de', $detector->detect_text('Führung und Straße'), 'German diacritics and stopwords should route to de');
+    assert_same('zh', $detector->detect_text('搜索引擎'), 'Han script should route to zh');
+    assert_same(null, $detector->detect_text('und'), 'one weak lexical marker should not be enough to guess');
+    assert_same(null, $detector->detect_text('shared alpha beta'), 'weak generic Latin evidence should not guess');
+});
+
+test_case('analyzer auto-detects untagged document and query language gaps', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+
+    $polish = $analyzer->analyze_content('<p>Wrocław oraz Łódź</p>');
+    $polishLangs = test_lang_by_term($polish);
+    assert_same('pl', $polishLangs['wroclaw'] ?? null, 'untagged Polish content should be detected as pl');
+    assert_same('pl', $polishLangs['lodz'] ?? null, 'all terms in a detected Polish segment should use pl');
+
+    $german = $analyzer->analyze_query_occurrences('Führung und Straße');
+    $germanLangs = test_lang_by_term($german);
+    assert_same('de', $germanLangs['fuehrung'] ?? null, 'untagged German query term should be detected as de');
+    assert_same('de', $germanLangs['strasse'] ?? null, 'second German query term should keep detected de');
+
+    $explicit = $analyzer->analyze_query_occurrences('Führung und Straße', ['lang' => 'en']);
+    $explicitLangs = array_values(array_unique(array_column($explicit, 'lang')));
+    assert_same(['en'], $explicitLangs, 'explicit query language should override detector evidence');
+
+    $disabled = new WP_FTS_Analyzer(['default_lang' => 'en', 'auto_detect_language' => false]);
+    $disabledLangs = test_lang_by_term($disabled->analyze_content('<p>Wrocław oraz Łódź</p>'));
+    assert_same('en', $disabledLangs['wroclaw'] ?? null, 'auto_detect_language false should preserve legacy default language routing');
+});
+
+test_case('language detection does not override explicit metadata or segment tags', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+
+    $explicitSegment = test_lang_by_term($analyzer->analyze_content('<p lang="en">Wrocław oraz Łódź</p>'));
+    assert_same('en', $explicitSegment['wroclaw'] ?? null, 'HTML lang matching the fallback language should remain explicit metadata');
+    assert_same('en', $explicitSegment['lodz'] ?? null, 'detector evidence must not override explicit HTML lang');
+
+    $resolverAnalyzer = new WP_FTS_Analyzer([
+        'default_lang' => 'en',
+        'document_language_resolver' => static fn(array $options): string => 'en',
+        'query_language_resolver' => static fn(): string => 'en',
+    ]);
+    $resolverDocument = test_lang_by_term($resolverAnalyzer->analyze_content('<p>Wrocław oraz Łódź</p>'));
+    assert_same('en', $resolverDocument['wroclaw'] ?? null, 'document language resolver should be authoritative metadata');
+
+    $resolverQuery = $resolverAnalyzer->analyze_query_occurrences('Führung und Straße');
+    $resolverQueryLangs = array_values(array_unique(array_column($resolverQuery, 'lang')));
+    assert_same(['en'], $resolverQueryLangs, 'query language resolver should be authoritative metadata');
+});
+
 test_case('analyzer exposes language-tagged compatibility output', function (): void {
     $analyzer = new WP_FTS_Analyzer([
         'default_lang' => 'en-GB',
@@ -2687,6 +2765,49 @@ test_case('language options namespace terms and isolate search partitions', func
     assert_same([], $searcher->search('jablko', ['lang' => 'en_US']), 'English query should not match Polish terms');
 });
 
+test_case('auto-detected document and query languages meet in search', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document(1, '<p>Führung und Straße</p>');
+    $indexer->index_document(2, '<p>guidance and street</p>', ['lang' => 'en']);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([1], array_column($searcher->search('Führung', ['limit' => 10]), 'doc_id'), 'detected German query should find detected German document partition');
+    assert_same([], $searcher->search('Führung', ['lang' => 'en']), 'explicit English query should not leak into detected German partition');
+
+    $terms = array_keys($storage->get_terms([
+        WP_FTS_TermNamespace::namespace_term('de', 'fuehrung'),
+        WP_FTS_TermNamespace::namespace_term('en', 'fuehrung'),
+    ]));
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('de', 'fuehrung'), $terms, true), 'detected document should store the German namespace');
+    assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('en', 'fuehrung'), $terms, true), 'detected document should not fall back to the site/default namespace');
+});
+
+test_case('index_post lets detector fill missing WordPress language metadata', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $post = (object) [
+        'ID' => 77,
+        'post_title' => '',
+        'post_content' => '<p>Führung und Straße</p>',
+        'post_excerpt' => '',
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-06-09 00:00:00',
+    ];
+
+    $indexer->index_post($post);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same([77], array_column($searcher->search('Führung', ['limit' => 10]), 'doc_id'), 'detected German query should find detected German WordPress post content');
+    assert_same([], $searcher->search('Führung', ['lang' => 'en']), 'explicit English query should not override detected German document partition');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('de', 'fuehrung'), $storage->all_terms(), true), 'post without metadata should store detected German terms');
+    assert_same('en', $storage->get_doc(77)['primary_lang'], 'primary hash language should remain the fallback when no deliberate metadata exists');
+});
+
 test_case('searcher preserves analyzer-selected query language', function (): void {
     $analyzer = new WP_FTS_Analyzer(['query_lang' => 'pl']);
     $storage = new WP_FTS_Test_LanguageAwareStorage();
@@ -2884,7 +3005,7 @@ test_case('custom stemmers can be verified per language', function (): void {
     assert_same(['global-strasse'], $pipeline->analyze('Straße', 'de'), 'global custom stemmer should remain the fallback for other languages');
 });
 
-test_case('indexer passes default document language to analyzer as document_lang', function (): void {
+test_case('indexer passes default document language to analyzer as fallback language', function (): void {
     $analyzer = new WP_FTS_Analyzer();
     $storage = new WP_FTS_Test_LanguageAwareStorage();
     $indexer = new WP_FTS_Indexer($storage, $analyzer);
@@ -2892,7 +3013,7 @@ test_case('indexer passes default document language to analyzer as document_lang
     $indexer->index_document(1, '<p>lodz</p>', ['default_lang' => 'pl']);
 
     $terms = $storage->all_terms();
-    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'lodz'), $terms, true), 'default_lang should reach analyzer as document_lang');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'lodz'), $terms, true), 'default_lang should reach analyzer as fallback language');
     assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('en', 'lodz'), $terms, true), 'default_lang should not be lost to analyzer fallback language');
     assert_same(1, (new WP_FTS_Searcher($storage, $analyzer))->search('lodz', ['lang' => 'pl'])[0]['doc_id'] ?? null, 'Polish query should find the default_lang document');
 });

@@ -36,6 +36,8 @@ final class WP_FTS_Analyzer
     private $queryTermLanguageResolver;
 
     private WP_FTS_LanguagePipeline $languagePipeline;
+    private ?WP_FTS_LanguageDetector $languageDetector;
+    private bool $autoDetectLanguage;
     private string $defaultLanguage;
     private ?string $documentLanguage;
     private ?string $queryLanguage;
@@ -53,6 +55,9 @@ final class WP_FTS_Analyzer
      * - `query_term_language_resolver`: deterministic per-query-token language
      *   resolver. It may accept `($token)`, `($token, $options)`, or
      *   `($token, $options, $defaultLang)`.
+     * - `auto_detect_language`: fill language gaps with deterministic script
+     *   and compact lexical evidence. Explicit language options, HTML language
+     *   attributes, and multilingual-plugin metadata still win.
      * - `cjk_tokenizer`: optional segmenter for one CJK script run; the
      *   built-in bigram tokenizer remains the fallback.
      * - `html_processor_factory`: test hook that returns a `WP_HTML_Processor`
@@ -85,6 +90,9 @@ final class WP_FTS_Analyzer
      *   query_language_resolver?:callable|null,
      *   query_term_language_resolver?:callable|null,
      *   term_language_resolver?:callable|null,
+     *   language_detector?:WP_FTS_LanguageDetector|null,
+     *   auto_detect_language?:bool,
+     *   detect_language?:bool,
      *   html_processor_factory?:callable|null
      * } $options
      */
@@ -125,12 +133,17 @@ final class WP_FTS_Analyzer
         $this->queryLanguageResolver = $options['query_language_resolver'] ?? null;
         $termResolver = $options['query_term_language_resolver'] ?? $options['term_language_resolver'] ?? null;
         $this->queryTermLanguageResolver = is_callable($termResolver) ? $termResolver : null;
+        $this->autoDetectLanguage = (bool) ($options['auto_detect_language'] ?? $options['detect_language'] ?? true);
+        $detector = $options['language_detector'] ?? null;
+        $this->languageDetector = $this->autoDetectLanguage
+            ? ($detector instanceof WP_FTS_LanguageDetector ? $detector : new WP_FTS_LanguageDetector())
+            : null;
         $this->languagePipeline = $options['language_pipeline'] ?? new WP_FTS_LanguagePipeline([
             'min_term_len' => (int) ($options['min_term_len'] ?? 2),
             'max_term_bytes' => (int) ($options['max_term_bytes'] ?? 255),
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
             'namespace_terms' => (bool) ($options['namespace_terms'] ?? false),
-            'enable_stemming' => (bool) ($options['enable_stemming'] ?? false),
+            'enable_stemming' => (bool) ($options['enable_stemming'] ?? true),
             'polish_stemming' => (string) ($options['polish_stemming'] ?? 'conservative'),
             'stemmer' => $options['stemmer'] ?? null,
             'stemmers_by_lang' => $options['stemmers_by_lang'] ?? $options['stemmers'] ?? [],
@@ -421,13 +434,15 @@ final class WP_FTS_Analyzer
             return;
         }
 
-        if ($this->queryTermLanguageResolver === null) {
+        if ($this->queryTermLanguageResolver === null && !$this->shouldAutoDetectQueryLanguage($options)) {
             $segments[] = ['text' => $text, 'lang' => $defaultLang];
             return;
         }
 
         foreach ($this->queryRawTokens($text) as $token) {
-            $lang = $this->callQueryTermLanguageResolver($token, $options, $defaultLang) ?? $defaultLang;
+            $lang = $this->callQueryTermLanguageResolver($token, $options, $defaultLang)
+                ?? $this->detectQueryTokenLanguage($token, $options)
+                ?? $defaultLang;
             $segments[] = ['text' => $token, 'lang' => $lang];
         }
     }
@@ -500,6 +515,20 @@ final class WP_FTS_Analyzer
     }
 
     /**
+     * Detect language for a query token when no explicit resolver is configured.
+     *
+     * @param array<string,mixed> $options
+     */
+    private function detectQueryTokenLanguage(string $token, array $options): ?string
+    {
+        if (!$this->shouldAutoDetectQueryLanguage($options) || $this->languageDetector === null) {
+            return null;
+        }
+
+        return $this->languageDetector->detect_text($token) ?? null;
+    }
+
+    /**
      * Extract visible text segments and the language/weight for each segment.
      *
      * WordPress's HTML processor is preferred because it understands browser-like
@@ -508,11 +537,12 @@ final class WP_FTS_Analyzer
      * deterministic for tests and non-WordPress use.
      *
      * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int} $options
-     * @return array<int,array{text:string,weight:float,lang:string}>
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}>
      */
     private function extractHtmlSegments(string $html, array $options): array
     {
         $documentLang = $this->resolveDocumentLanguage($options);
+        $autoDetect = $this->shouldAutoDetectDocumentLanguage($options);
 
         if ($this->htmlProcessorFactory !== null || class_exists('WP_HTML_Processor')) {
             $processor = $this->createProcessor($html);
@@ -521,14 +551,47 @@ final class WP_FTS_Analyzer
                 return trim($plain) === '' ? [] : [[
                     'text' => $plain,
                     'weight' => 1.0,
-                    'lang' => $documentLang,
+                    'lang' => $autoDetect ? $this->detectSegmentLanguage($plain, $documentLang) : $documentLang,
+                    'explicit_lang' => false,
                 ]];
             }
 
-            return $this->extractWithProcessor($processor, $documentLang);
+            return $this->maybeDetectSegmentLanguages($this->extractWithProcessor($processor, $documentLang), $documentLang, $autoDetect);
         }
 
-        return $this->extractWithFallbackParser($html, $documentLang);
+        return $this->maybeDetectSegmentLanguages($this->extractWithFallbackParser($html, $documentLang), $documentLang, $autoDetect);
+    }
+
+    /**
+     * @param array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}> $segments
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}>
+     */
+    private function maybeDetectSegmentLanguages(array $segments, string $documentLang, bool $autoDetect): array
+    {
+        if (!$autoDetect || $this->languageDetector === null) {
+            return $segments;
+        }
+
+        foreach ($segments as &$segment) {
+            if (empty($segment['explicit_lang']) && ($segment['lang'] ?? '') === $documentLang) {
+                $segment['lang'] = $this->detectSegmentLanguage($segment['text'], $documentLang);
+            }
+        }
+        unset($segment);
+
+        return $segments;
+    }
+
+    /**
+     * Detect a segment language, falling back to the resolved document language.
+     */
+    private function detectSegmentLanguage(string $text, string $documentLang): string
+    {
+        if ($this->languageDetector === null) {
+            return $documentLang;
+        }
+
+        return $this->languageDetector->detect_text($text) ?? $documentLang;
     }
 
     /**
@@ -579,12 +642,12 @@ final class WP_FTS_Analyzer
      * processor moves through breadcrumbs, deeper scopes are pruned so optional
      * end tags and implicit closes do not leak a language into following text.
      *
-     * @return array<int,array{text:string,weight:float,lang:string}>
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}>
      */
     private function extractWithProcessor(mixed $processor, string $documentLang): array
     {
         $segments = [];
-        $langByDepth = [0 => $documentLang];
+        $langByDepth = [0 => ['lang' => $documentLang, 'explicit' => false]];
 
         while ($processor->next_token()) {
             $breadcrumbs = method_exists($processor, 'get_breadcrumbs')
@@ -607,7 +670,7 @@ final class WP_FTS_Analyzer
                 unset($langByDepth[$depth]);
                 $lang = $this->processorLangAttribute($processor);
                 if ($lang !== null) {
-                    $langByDepth[$depth] = $lang;
+                    $langByDepth[$depth] = ['lang' => $lang, 'explicit' => true];
                 }
                 continue;
             }
@@ -624,11 +687,13 @@ final class WP_FTS_Analyzer
             if (trim($text) === '') {
                 continue;
             }
+            $scope = $this->currentLanguageScope($langByDepth);
 
             $segments[] = [
                 'text' => $text,
                 'weight' => $this->boostForAncestors($breadcrumbs),
-                'lang' => $this->currentLanguage($langByDepth),
+                'lang' => $scope['lang'],
+                'explicit_lang' => $scope['explicit'],
             ];
         }
 
@@ -645,7 +710,7 @@ final class WP_FTS_Analyzer
      *
      * @param string $html HTML document or fragment.
      * @param string $documentLang Fallback language for text outside scoped tags.
-     * @return array<int,array{text:string,weight:float,lang:string}>
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool}>
      */
     private function extractWithFallbackParser(string $html, string $documentLang): array
     {
@@ -661,6 +726,7 @@ final class WP_FTS_Analyzer
                 'text' => $plain,
                 'weight' => 1.0,
                 'lang' => $documentLang,
+                'explicit_lang' => false,
             ]];
         }
 
@@ -730,11 +796,13 @@ final class WP_FTS_Analyzer
             if (trim($text) === '') {
                 continue;
             }
+            $scope = $this->fallbackCurrentLanguageScope($stack, $documentLang);
 
             $segments[] = [
                 'text' => $text,
                 'weight' => $this->boostForAncestors($ancestors),
-                'lang' => $this->fallbackCurrentLanguage($stack, $documentLang),
+                'lang' => $scope['lang'],
+                'explicit_lang' => $scope['explicit'],
             ];
         }
 
@@ -805,7 +873,8 @@ final class WP_FTS_Analyzer
      *
      * Precedence is explicit caller hints (`lang`, `language`, `document_lang`,
      * `locale`), constructor `document_lang`, custom resolver, per-post
-     * WordPress integrations, site language, then analyzer default.
+     * WordPress integrations, per-call `default_lang`, site language, then
+     * analyzer default.
      *
      * @param array<string,mixed> $options
      * @return string Canonical document language.
@@ -820,6 +889,7 @@ final class WP_FTS_Analyzer
             $this->documentLanguage,
             $this->callLanguageResolver($this->documentLanguageResolver, $options),
             $this->wordpressDocumentLanguage($options),
+            $options['default_lang'] ?? null,
             $this->wordpressSiteLanguage(),
             $this->defaultLanguage,
         ]) ?? 'en';
@@ -829,7 +899,8 @@ final class WP_FTS_Analyzer
      * Resolve the language used for query analysis.
      *
      * Precedence is explicit query hints, constructor `query_lang`, custom
-     * resolver, current WordPress language, site language, then analyzer default.
+     * resolver, current WordPress language, per-call `default_lang`, site
+     * language, then analyzer default.
      *
      * @param array<string,mixed> $options
      * @return string Canonical query language.
@@ -844,6 +915,7 @@ final class WP_FTS_Analyzer
             $this->queryLanguage,
             $this->callLanguageResolver($this->queryLanguageResolver, $options),
             $this->wordpressQueryLanguage(),
+            $options['default_lang'] ?? null,
             $this->wordpressSiteLanguage(),
             $this->defaultLanguage,
         ]) ?? 'en';
@@ -1005,6 +1077,66 @@ final class WP_FTS_Analyzer
     }
 
     /**
+     * Decide whether untagged document text may be language-detected.
+     *
+     * Explicit caller language and constructor/resolver languages remain
+     * authoritative. Site locale and analyzer default are fallbacks, so detector
+     * evidence is allowed to beat them for untagged content.
+     *
+     * @param array<string,mixed> $options
+     */
+    private function shouldAutoDetectDocumentLanguage(array $options): bool
+    {
+        if (!$this->autoDetectLanguage || $this->languageDetector === null) {
+            return false;
+        }
+
+        foreach (['lang', 'language', 'document_lang', 'locale'] as $key) {
+            if (isset($options[$key]) && $this->canonicalLanguage($options[$key]) !== null) {
+                return false;
+            }
+        }
+
+        if ($this->documentLanguage !== null) {
+            return false;
+        }
+
+        if ($this->canonicalLanguage($this->callLanguageResolver($this->documentLanguageResolver, $options)) !== null) {
+            return false;
+        }
+
+        return $this->canonicalLanguage($this->wordpressDocumentLanguage($options)) === null;
+    }
+
+    /**
+     * Decide whether untagged query text may be language-detected.
+     *
+     * @param array<string,mixed> $options
+     */
+    private function shouldAutoDetectQueryLanguage(array $options): bool
+    {
+        if (!$this->autoDetectLanguage || $this->languageDetector === null) {
+            return false;
+        }
+
+        foreach (['lang', 'language', 'query_lang', 'locale'] as $key) {
+            if (isset($options[$key]) && $this->canonicalLanguage($options[$key]) !== null) {
+                return false;
+            }
+        }
+
+        if ($this->queryLanguage !== null) {
+            return false;
+        }
+
+        if ($this->canonicalLanguage($this->callLanguageResolver($this->queryLanguageResolver, $options)) !== null) {
+            return false;
+        }
+
+        return $this->canonicalLanguage($this->wordpressQueryLanguage()) === null;
+    }
+
+    /**
      * Resolve a post's language through common multilingual plugins.
      *
      * Polylang is checked first through `pll_get_post_language($postId,
@@ -1096,7 +1228,7 @@ final class WP_FTS_Analyzer
      * its breadcrumb stack. Pruning by depth keeps `langByDepth` aligned with
      * that canonical tree.
      *
-     * @param array<int,string> $langByDepth
+     * @param array<int,array{lang:string,explicit:bool}> $langByDepth
      */
     private function pruneLanguageStack(array &$langByDepth, int $depth): void
     {
@@ -1110,15 +1242,25 @@ final class WP_FTS_Analyzer
     /**
      * Return the nearest active language scope.
      *
-     * @param array<int,string> $langByDepth Map of processor depth to language.
-     *        Depth 0 always carries the document language.
-     * @return string Language from the deepest active scope.
+     * @param array<int,array{lang:string,explicit:bool}> $langByDepth Map of
+     *        processor depth to language. Depth 0 always carries the fallback
+     *        document language.
+     * @return array{lang:string,explicit:bool} Language from the deepest active
+     *         scope and whether it came from an HTML attribute.
      */
-    private function currentLanguage(array $langByDepth): string
+    private function currentLanguageScope(array $langByDepth): array
     {
         krsort($langByDepth, SORT_NUMERIC);
 
-        return (string) reset($langByDepth);
+        $scope = reset($langByDepth);
+        if (is_array($scope) && isset($scope['lang'])) {
+            return [
+                'lang' => (string) $scope['lang'],
+                'explicit' => (bool) ($scope['explicit'] ?? false),
+            ];
+        }
+
+        return ['lang' => 'en', 'explicit' => false];
     }
 
     /**
@@ -1251,17 +1393,18 @@ final class WP_FTS_Analyzer
      *
      * @param array<int,array{tag:string,lang:?string}> $stack
      * @param string $documentLang Fallback language outside any scoped tag.
-     * @return string Effective language for the current text node.
+     * @return array{lang:string,explicit:bool} Effective language for the
+     *         current text node and whether it came from an HTML attribute.
      */
-    private function fallbackCurrentLanguage(array $stack, string $documentLang): string
+    private function fallbackCurrentLanguageScope(array $stack, string $documentLang): array
     {
         for ($i = count($stack) - 1; $i >= 0; $i--) {
             if ($stack[$i]['lang'] !== null) {
-                return $stack[$i]['lang'];
+                return ['lang' => $stack[$i]['lang'], 'explicit' => true];
             }
         }
 
-        return $documentLang;
+        return ['lang' => $documentLang, 'explicit' => false];
     }
 
     /**

@@ -314,7 +314,10 @@ LIMIT %d",
         $indexOptions = $opts;
         $indexOptions['post_id'] = $postId;
         if (WP_FTS_TermNamespace::language_from_options($indexOptions, null, ['lang', 'language', 'primary_lang', 'document_lang']) === null) {
-            $indexOptions['lang'] = $this->resolve_post_language($post, $opts);
+            $metadataLang = $this->resolve_post_metadata_language($post);
+            if ($metadataLang !== null) {
+                $indexOptions['lang'] = $metadataLang;
+            }
         }
 
         $extracted = $this->postContentExtractor->extract($post, $indexOptions);
@@ -393,9 +396,9 @@ LIMIT %d",
 
         return WP_FTS_TermNamespace::language_from_options(
             $opts,
-            $default,
+            null,
             ['lang', 'language', 'primary_lang', 'document_lang', 'locale']
-        ) ?? $default;
+        ) ?? $this->resolve_post_metadata_language_from_options($opts) ?? $default;
     }
 
     /**
@@ -427,8 +430,8 @@ LIMIT %d",
 
         $analysisOpts = $opts;
         $analysisOpts['default_lang'] = $primaryLang;
-        $analysisOpts['document_lang'] = $primaryLang;
         if (WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'primary_lang', 'document_lang']) !== null) {
+            $analysisOpts['document_lang'] = $primaryLang;
             $analysisOpts['lang'] = $primaryLang;
             $analysisOpts['language'] = $primaryLang;
         }
@@ -638,6 +641,21 @@ LIMIT %d",
             return $explicit;
         }
 
+        return $this->resolve_post_metadata_language($row) ?? WP_FTS_TermNamespace::default_language($opts);
+    }
+
+    /**
+     * Resolve deliberate per-post language metadata from common multilingual plugins.
+     *
+     * Site locale is intentionally not returned here. It remains a fallback
+     * default so the analyzer can still fill untagged language gaps with
+     * detector evidence.
+     *
+     * @param object $row WordPress post-like row with an `ID` property.
+     * @return string|null Canonical language from Polylang/WPML, or null.
+     */
+    private function resolve_post_metadata_language(object $row): ?string
+    {
         $postId = isset($row->ID) ? (int) $row->ID : 0;
         if ($postId > 0 && function_exists('pll_get_post_language')) {
             $lang = pll_get_post_language($postId, 'locale');
@@ -662,7 +680,22 @@ LIMIT %d",
             }
         }
 
-        return WP_FTS_TermNamespace::default_language($opts);
+        return null;
+    }
+
+    /**
+     * Resolve per-post language metadata when callers only supplied a `post_id`.
+     *
+     * @param array<string,mixed> $opts Public document options.
+     */
+    private function resolve_post_metadata_language_from_options(array $opts): ?string
+    {
+        $postId = isset($opts['post_id']) && is_scalar($opts['post_id']) ? (int) $opts['post_id'] : 0;
+        if ($postId <= 0) {
+            return null;
+        }
+
+        return $this->resolve_post_metadata_language((object) ['ID' => $postId]);
     }
 
 }

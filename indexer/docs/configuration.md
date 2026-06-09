@@ -25,23 +25,31 @@ Document language resolution during `wp fts reindex` follows this order:
 1. Explicit `--lang` or `--language`.
 2. Polylang `pll_get_post_language( $post_id, 'locale' )`, when available.
 3. WPML `wpml_post_language_details`, when available.
-4. The WordPress site locale from `get_locale()` or `get_bloginfo( 'language' )`.
-5. The indexer default.
+4. Conservative detector evidence for otherwise untagged content.
+5. The WordPress site locale from `get_locale()` or `get_bloginfo( 'language' )`.
+6. The indexer default.
 
 HTML `lang` and `xml:lang` attributes can route individual content segments into
 their own language partition while the post still has one primary language for
 metadata and change detection.
 
 Query language resolution follows the same idea. Prefer passing `--lang` on
-operational searches so the query and indexed documents use the same partition:
+operational searches when the language is known; otherwise the analyzer may use
+conservative detector evidence to route untagged query tokens into the same
+partition as untagged indexed content:
 
 ```sh
 wp fts search "zamek" --lang=pl-PL
 wp fts search "castle" --lang=en-US
 ```
 
-The current searcher scores one language partition per query. It does not merge
-results across languages.
+The detector is not statistical language detection. It only uses script ranges,
+distinctive Latin letters, and compact lexical evidence to fill gaps. Explicit
+caller options, HTML language attributes, Polylang/WPML metadata, and custom
+language resolvers remain authoritative.
+
+The current searcher scores one language partition per query term. It does not
+merge scores across languages.
 
 ## Analyzer Defaults
 
@@ -80,20 +88,18 @@ options.
 
 ## Stemmers
 
-Stemming is disabled by default. If a PHP caller enables stemming, the pipeline
-uses:
+Stemming is enabled by default. The pipeline uses:
 
 - Snowball through `wamania/php-stemmer` for the allowlisted languages that pass
   the bundled compliance harness: Catalan (`ca`) and Dutch Porter (`nl`);
 - a small conservative Polish suffix stemmer for `pl`;
 - no-op behavior for unsupported languages or missing optional dependencies.
 
-Enable the built-in stemming path programmatically:
+Stemming can be disabled explicitly when exact normalized terms are required:
 
 ```php
 $analyzer = new WP_FTS_Analyzer([
-    'default_lang' => 'nl',
-    'enable_stemming' => true,
+    'enable_stemming' => false,
 ]);
 ```
 
@@ -102,7 +108,6 @@ For Polish, the current mode is intentionally conservative:
 ```php
 $analyzer = new WP_FTS_Analyzer([
     'default_lang' => 'pl',
-    'enable_stemming' => true,
     'polish_stemming' => 'conservative',
 ]);
 ```

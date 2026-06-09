@@ -253,6 +253,28 @@ namespace {
         assert_same([1, $shared], $negativeUpdate['args'], 'old shared term df should be decremented atomically');
     });
 
+    test_case('quality mysql sqlite fallback reads binary namespaced term rows', function (): void {
+        $wpdb = new WP_FTS_Test_WPDB();
+        $wpdb->dbh = new WP_FTS_Test_SQLite_Driver();
+        $wpdb->missPreparedTermLookups = true;
+        $storage = new WP_FTS_Storage_Mysql($wpdb);
+        $plKey = WP_FTS_TermNamespace::namespace_term('pl', 'wroclaw');
+        $deKey = WP_FTS_TermNamespace::namespace_term('de', 'fuehrung');
+
+        $storage->put_term($plKey, 1, WP_FTS_PostingsCodec::encode([401 => 2]));
+        $storage->put_term($deKey, 1, WP_FTS_PostingsCodec::encode([402 => 3]));
+
+        assert_same([$plKey => [401 => 2]], $storage->get_postings([$plKey]), 'SQLite fallback should recover postings when prepared namespaced-key lookup misses');
+
+        $row = $storage->get_terms([$plKey])[$plKey] ?? null;
+        assert_true($row !== null, 'SQLite fallback should recover doc frequency and postings for get_terms');
+        assert_same(1, $row['df'], 'SQLite fallback should preserve term document frequency');
+        assert_same([401 => 2], WP_FTS_PostingsCodec::decode($row['postings']), 'SQLite fallback should preserve exact posting rows');
+
+        $preparedPostings = wp_fts_quality_last_prepared_like($wpdb, 'SELECT term, doc_id, tf FROM wp_fts_postings');
+        assert_same([$plKey], $preparedPostings['args'], 'storage should still attempt the indexed prepared lookup before SQLite fallback');
+    });
+
     test_case('quality mysql document and meta overloads preserve language partitions', function (): void {
         $wpdb = new WP_FTS_Test_WPDB();
         $storage = new WP_FTS_Storage_Mysql($wpdb);

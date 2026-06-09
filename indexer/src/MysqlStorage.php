@@ -19,6 +19,7 @@ final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_
     private string $docLengthsTable;
     private string $docMetaTable;
     private string $metaTable;
+    private ?bool $sqliteRuntime = null;
 
     /**
      * Bind the backend to a WordPress database connection and table prefix.
@@ -168,17 +169,18 @@ ORDER BY term ASC, doc_id ASC",
         );
         $rows = $this->get_results($sql, 'read FTS row postings');
 
-        $postingsByTerm = [];
-        foreach ($rows ?: [] as $row) {
-            $term = (string) $row->term;
-            $docId = (int) $row->doc_id;
-            $tf = max(1, (int) $row->tf);
-            $postingsByTerm[$term][$docId] = $tf;
+        $postingsByTerm = $this->postings_from_rows($rows ?: [], $terms);
+        $missing = array_diff_key(array_fill_keys($terms, true), $postingsByTerm);
+        if ($missing !== [] && $this->is_sqlite_runtime()) {
+            $fallbackRows = $this->get_results(
+                "SELECT term, doc_id, tf FROM {$this->postingsTable} ORDER BY term ASC, doc_id ASC",
+                'read FTS SQLite fallback row postings'
+            );
+            foreach ($this->postings_from_rows($fallbackRows, array_keys($missing)) as $term => $postings) {
+                $postingsByTerm[$term] = $postings;
+            }
         }
-        foreach ($postingsByTerm as &$postings) {
-            ksort($postings, SORT_NUMERIC);
-        }
-        unset($postings);
+
         ksort($postingsByTerm, SORT_STRING);
 
         return $postingsByTerm;
@@ -787,12 +789,109 @@ GROUP BY term",
             ...$terms
         ), 'read FTS document frequencies');
 
-        $docFreqs = [];
-        foreach ($rows ?: [] as $row) {
-            $docFreqs[(string) $row->term] = max(0, (int) $row->doc_freq);
+        $docFreqs = $this->doc_freqs_from_rows($rows ?: [], $terms);
+        $missing = array_diff_key(array_fill_keys($terms, true), $docFreqs);
+        if ($missing !== [] && $this->is_sqlite_runtime()) {
+            $fallbackRows = $this->get_results(
+                "SELECT term, doc_freq FROM {$this->termsTable} ORDER BY term ASC",
+                'read FTS SQLite fallback document frequencies'
+            );
+            foreach ($this->doc_freqs_from_rows($fallbackRows, array_keys($missing)) as $term => $docFreq) {
+                $docFreqs[$term] = $docFreq;
+            }
         }
 
         return $docFreqs;
+    }
+
+    /**
+     * Convert posting rows into a term-keyed map, optionally filtering in PHP.
+     *
+     * The PHP filter is used only for SQLite-backed Playground runtimes where
+     * the MySQL compatibility layer can miss prepared comparisons against term
+     * keys containing the namespace separator byte.
+     *
+     * @param object[] $rows
+     * @param string[] $terms
+     * @return array<string,array<int,int>>
+     */
+    private function postings_from_rows(array $rows, array $terms): array
+    {
+        $lookup = array_fill_keys($terms, true);
+        $postingsByTerm = [];
+        foreach ($rows as $row) {
+            $term = (string) ($row->term ?? '');
+            if ($term === '' || ($lookup !== [] && !isset($lookup[$term]))) {
+                continue;
+            }
+
+            $docId = (int) ($row->doc_id ?? 0);
+            if ($docId <= 0) {
+                continue;
+            }
+
+            $postingsByTerm[$term][$docId] = max(1, (int) ($row->tf ?? 1));
+        }
+
+        foreach ($postingsByTerm as &$postings) {
+            ksort($postings, SORT_NUMERIC);
+        }
+        unset($postings);
+
+        return $postingsByTerm;
+    }
+
+    /**
+     * Convert document-frequency rows into a term-keyed map.
+     *
+     * @param object[] $rows
+     * @param string[] $terms
+     * @return array<string,int>
+     */
+    private function doc_freqs_from_rows(array $rows, array $terms): array
+    {
+        $lookup = array_fill_keys($terms, true);
+        $docFreqs = [];
+        foreach ($rows as $row) {
+            $term = (string) ($row->term ?? '');
+            if ($term === '' || ($lookup !== [] && !isset($lookup[$term]))) {
+                continue;
+            }
+
+            $docFreqs[$term] = max(0, (int) ($row->doc_freq ?? 0));
+        }
+        ksort($docFreqs, SORT_STRING);
+
+        return $docFreqs;
+    }
+
+    /**
+     * Detect WordPress' SQLite integration without issuing SQLite-only SQL.
+     */
+    private function is_sqlite_runtime(): bool
+    {
+        if ($this->sqliteRuntime !== null) {
+            return $this->sqliteRuntime;
+        }
+
+        $signals = [get_class($this->wpdb)];
+        if (isset($this->wpdb->dbh) && is_object($this->wpdb->dbh)) {
+            $signals[] = get_class($this->wpdb->dbh);
+        }
+
+        foreach (['SQLITE_MAIN_FILE', 'SQLITE_PLUGIN', 'SQLITE_DB_DROPIN_VERSION', 'DB_ENGINE'] as $constant) {
+            if (defined($constant)) {
+                $signals[] = (string) constant($constant);
+            }
+        }
+
+        foreach ($signals as $signal) {
+            if (stripos($signal, 'sqlite') !== false) {
+                return $this->sqliteRuntime = true;
+            }
+        }
+
+        return $this->sqliteRuntime = false;
     }
 
     /**

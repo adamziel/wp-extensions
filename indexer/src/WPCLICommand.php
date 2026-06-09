@@ -101,7 +101,8 @@ final class WP_FTS_WPCLI_Command
      *
      * @param string[] $args First positional argument is the query string.
      * @param array<string,mixed> $assoc_args Options for mode, limit, and
-     *        language. Missing language falls back to site locale or `und`.
+     *        language. Missing language lets the analyzer resolve or detect the
+     *        query language.
      */
     public function search(array $args, array $assoc_args): void
     {
@@ -111,11 +112,14 @@ final class WP_FTS_WPCLI_Command
             'mode' => (string) ($assoc_args['mode'] ?? 'OR'),
             'limit' => $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10),
             'offset' => $this->non_negative_int_arg($this->assoc_arg($assoc_args, ['offset'], 0), 0),
-            'lang' => $this->language_arg($this->assoc_arg($assoc_args, ['lang', 'language'], null)),
             'include_total' => true,
             'include_metadata' => true,
             'include_snippets' => array_key_exists('snippet', $assoc_args) || array_key_exists('snippets', $assoc_args),
         ];
+        $langArg = $this->assoc_arg($assoc_args, ['lang', 'language'], null);
+        if ($langArg !== null) {
+            $searchOptions['lang'] = $this->language_arg($langArg);
+        }
 
         $postStatus = $this->assoc_arg($assoc_args, ['post_status', 'post-status'], null);
         if ($postStatus !== null) {

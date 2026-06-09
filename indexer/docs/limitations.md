@@ -36,17 +36,23 @@ caveats operators need to account for.
 
 ## Language Detection
 
-The implementation does not do statistical or automatic language detection.
-Language comes from explicit options, HTML `lang` attributes, Polylang, WPML, or
-the WordPress site locale. If those sources are wrong or missing, terms can be
-stored in the wrong language partition.
+The implementation has conservative gap-only language detection for routing
+untagged content and queries. It is not statistical language detection. Explicit
+options, HTML `lang` / `xml:lang` attributes, Polylang, WPML, and custom
+resolvers remain authoritative; detector evidence can only fill gaps before the
+site locale or analyzer default fallback is used.
 
-Search uses one language partition per query. It does not merge scores across
-multiple languages.
+The detector uses script ranges, distinctive Latin letters, and compact lexical
+evidence. Weak generic Latin text stays on the fallback language, so unsupported
+or ambiguous content can still land in the wrong language partition.
+
+Search uses one language partition per query term. It does not merge scores
+across multiple languages.
 
 ## Supported Stemming
 
-Stemming is disabled by default. When enabled programmatically:
+Stemming is enabled by default and can be disabled with
+`enable_stemming => false`. The built-in stemming path is intentionally narrow:
 
 - Snowball support is intentionally limited to Catalan (`ca`) and Dutch Porter
   (`nl`) because those are the Wamania implementations currently verified by the
@@ -58,6 +64,20 @@ Stemming is disabled by default. When enabled programmatically:
 - Unsupported languages return the original normalized term.
 
 See [Snowball compliance](snowball-compliance.md) for the harness and rationale.
+
+## Multilingual Analyzer Roadmap
+
+The lightweight detector only routes text. Serious multilingual relevance needs
+resource-backed analyzers with fixture gates before they are enabled by default:
+
+- add Snowball-compatible analyzer packs only where the implementation matches
+  official input/output fixtures;
+- port Polish Stempel/Morfologik-style lemmatization behind the existing
+  `stemmer` / `stemmers_by_lang` seam and require dictionary fixture parity;
+- keep per-language analyzer resources opt-in until compliance fixtures and
+  regression corpora pass in CI;
+- add a CJK dictionary tokenizer through the existing `cjk_tokenizer` seam
+  instead of expanding fallback bigrams into claimed word segmentation.
 
 ## CJK Tokenization
 
