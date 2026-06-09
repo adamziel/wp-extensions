@@ -1,0 +1,4 @@
+# Synthetic OpenThesaurus-style ambiguous and broad German groups.
+Bank;Geldinstitut;Kreditinstitut
+Bank;Sitzbank;Parkbank
+Suche;Suchen;Finden;Recherche

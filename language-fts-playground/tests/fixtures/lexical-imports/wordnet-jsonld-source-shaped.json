@@ -1,0 +1,55 @@
+{
+  "@context": "https://globalwordnet.github.io/schemas/wn-json-context-1.4.json",
+  "@graph": {
+    "lexicon-en": {
+      "@context": { "@language": "en" },
+      "@id": "oewn",
+      "@type": "lime:Lexicon",
+      "language": "en",
+      "lexicalEntry": {
+        "oewn-index-v": {
+          "@id": "oewn-index-v",
+          "lemma": [
+            { "writtenForm": "Index" }
+          ],
+          "sense": {
+            "@id": "oewn-index-v-0001-01",
+            "synsetRef": "oewn-index-v-0001"
+          }
+        },
+        "oewn-catalog-v": {
+          "@id": "oewn-catalog-v",
+          "lemma": { "writtenForm": "catalog" },
+          "sense": [
+            {
+              "@id": "oewn-catalog-v-0001-01",
+              "synsetRef": "oewn-index-v-0001"
+            }
+          ]
+        },
+        "oewn-list-v": {
+          "@id": "oewn-list-v",
+          "lemma": { "writtenForm": "list" },
+          "sense": [
+            {
+              "@id": "oewn-list-v-0001-01",
+              "synsetRef": "oewn-index-v-0001"
+            }
+          ]
+        }
+      },
+      "synset": {
+        "oewn-index-v-0001": {
+          "@id": "oewn-index-v-0001",
+          "partOfSpeech": "verb",
+          "members": [
+            { "senseRef": "oewn-index-v-0001-01" },
+            { "target": "oewn-catalog-v-0001-01" },
+            "oewn-list-v-0001-01"
+          ],
+          "confidenceScore": "0.68"
+        }
+      }
+    }
+  }
+}
