@@ -626,7 +626,7 @@ final class SourceItemDocumentProcessor {
 		$metadata  = $item->get_metadata();
 		$extension = isset( $metadata['extension'] ) ? strtolower( (string) $metadata['extension'] ) : strtolower( pathinfo( $item->get_source_uri(), PATHINFO_EXTENSION ) );
 
-		if ( in_array( $extension, array( 'md', 'markdown', 'mdown' ), true ) ) {
+		if ( in_array( $extension, array( 'md', 'markdown', 'mdown', 'mdx', 'mdoc', 'markdoc' ), true ) ) {
 			return 'markdown';
 		}
 
@@ -1923,6 +1923,12 @@ final class SourceItemDocumentProcessor {
 			if ( $markdown_document['detected'] ) {
 				$chunk_metadata['markdown_front_matter'] = true;
 			}
+		}
+
+		$docs_document = $this->normalize_docs_markdown_conventions( $content, $item );
+		$content       = $docs_document['content'];
+		if ( ! empty( $docs_document['metadata'] ) ) {
+			$chunk_metadata = array_merge( $chunk_metadata, $docs_document['metadata'] );
 		}
 
 		$markdown_reference_document = $this->extract_markdown_reference_definitions( $content );
@@ -3585,6 +3591,12 @@ final class SourceItemDocumentProcessor {
 			}
 			if ( $markdown_document['detected'] ) {
 				$metadata['markdown_front_matter'] = true;
+			}
+
+			$docs_document = $this->normalize_docs_markdown_conventions( $content, $item );
+			$content       = $docs_document['content'];
+			if ( ! empty( $docs_document['metadata'] ) ) {
+				$metadata = array_merge( $metadata, $docs_document['metadata'] );
 			}
 
 			$markdown_reference_document = $this->extract_markdown_reference_definitions( $content );
@@ -8425,6 +8437,17 @@ final class SourceItemDocumentProcessor {
 	}
 
 	/**
+	 * Normalizes conservative docs-site Markdown conventions before block parsing.
+	 *
+	 * @param string           $content Markdown content without leading front matter.
+	 * @param ImportSourceItem $item    Source item.
+	 * @return array{content:string,metadata:array<string,mixed>}
+	 */
+	private function normalize_docs_markdown_conventions( $content, ImportSourceItem $item ) {
+		return ( new ImportDocsMarkdownNormalizer() )->normalize( $content, $item );
+	}
+
+	/**
 	 * Extracts conservative leading Markdown front matter metadata.
 	 *
 	 * @param string $content Markdown content.
@@ -8580,7 +8603,7 @@ final class SourceItemDocumentProcessor {
 			}
 
 			$url   = $this->normalize_markdown_link_url( $references[ $id ]['url'] );
-			$alt   = (string) $matches[1];
+			$alt   = $this->decode_markdown_text_entities( $matches[1] );
 			$title = $references[ $id ]['title'];
 			if ( null === $url ) {
 				return null;
@@ -8598,7 +8621,7 @@ final class SourceItemDocumentProcessor {
 			return null;
 		}
 
-		$alt   = (string) $matches[1];
+		$alt   = $this->decode_markdown_text_entities( $matches[1] );
 		$title = isset( $matches[4] ) ? (string) $matches[4] : '';
 
 		return $this->markdown_image_block( $url, $alt, $title );
@@ -8790,7 +8813,7 @@ final class SourceItemDocumentProcessor {
 				if ( '' !== $references[ $id ]['title'] ) {
 					$link .= ' title="' . $this->escape_html( $references[ $id ]['title'] ) . '"';
 				}
-				$link .= '>' . $this->escape_html( $matches[1] ) . '</a>';
+				$link .= '>' . $this->escape_html( $this->decode_markdown_text_entities( $matches[1] ) ) . '</a>';
 
 				$placeholder            = "\x1A" . count( $tokens ) . "\x1A";
 				$tokens[ $placeholder ] = $link;
@@ -8812,7 +8835,7 @@ final class SourceItemDocumentProcessor {
 				if ( isset( $matches[4] ) && '' !== (string) $matches[4] ) {
 					$link .= ' title="' . $this->escape_html( $matches[4] ) . '"';
 				}
-				$link .= '>' . $this->escape_html( $matches[1] ) . '</a>';
+				$link .= '>' . $this->escape_html( $this->decode_markdown_text_entities( $matches[1] ) ) . '</a>';
 
 				$placeholder            = "\x1A" . count( $tokens ) . "\x1A";
 				$tokens[ $placeholder ] = $link;
@@ -8834,6 +8857,16 @@ final class SourceItemDocumentProcessor {
 		}
 
 		return $html;
+	}
+
+	/**
+	 * Decodes Markdown text entities that were used to avoid delimiter ambiguity.
+	 *
+	 * @param string $text Markdown text.
+	 * @return string Plain text.
+	 */
+	private function decode_markdown_text_entities( $text ) {
+		return html_entity_decode( (string) $text, ENT_QUOTES, 'UTF-8' );
 	}
 
 	/**

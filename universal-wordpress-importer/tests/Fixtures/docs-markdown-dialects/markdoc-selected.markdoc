@@ -1,0 +1,23 @@
+# Markdoc Selected Cases
+
+{% callout type="note" title="Internal" %}
+Content inside a skipped Markdoc wrapper should remain Markdown.
+{% /callout %}
+
+Standalone variables should be skipped:
+
+{{ $frontmatter.title }}
+
+Inline text with {{ variable }} should remain because it is contentful prose.
+
+{% table %}
+| Name | Value |
+| --- | --- |
+| alpha | beta |
+{% /table %}
+
+```markdoc
+{% callout type="warning" %}
+{{ $kept }}
+{% /callout %}
+```

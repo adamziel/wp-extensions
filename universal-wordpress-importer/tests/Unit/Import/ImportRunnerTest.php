@@ -5419,6 +5419,136 @@ final class ImportRunnerTest extends TestCase {
 	}
 
 	/**
+	 * Docs-flavored Markdown fixtures import without requiring full MDX support.
+	 *
+	 * @return void
+	 */
+	public function test_runner_prepares_docs_flavored_markdown_sources() {
+		$root = $this->temporary_directory();
+		mkdir( $root . '/_posts' );
+		mkdir( $root . '/src' );
+		mkdir( $root . '/src/content' );
+		mkdir( $root . '/src/content/docs' );
+		mkdir( $root . '/docs' );
+		mkdir( $root . '/vault' );
+		mkdir( $root . '/vault/Guides' );
+		mkdir( $root . '/vault/assets' );
+
+		file_put_contents(
+			$root . '/_posts/2026-06-08-release.md',
+			"---\ntitle: Jekyll Release Notes\nlayout: post\npermalink: /release-notes/\n---\n\n# Release Notes\n\nJekyll body."
+		);
+		file_put_contents(
+			$root . '/src/content/docs/overview.mdoc',
+			"---\ntitle: Astro Overview\n---\n\n# Astro Overview\n\nAstro docs body."
+		);
+		file_put_contents(
+			$root . '/docs/api.mdx',
+			"---\ntitle: Docusaurus API\nsidebar_position: 2\n---\n\nimport {\n  Tabs,\n  TabItem,\n} from '@theme/Tabs';\n\n# Docusaurus API\n\n:::note Stable API\nUse the stable docs path.\n:::\n\n<Tabs>\n</Tabs>\n\nContinue to [Astro](../src/content/docs/overview.mdoc)."
+		);
+		file_put_contents(
+			$root . '/docs/fenced-sample.mdx',
+			"---\ntitle: MDX Fence Fixture\n---\n\n# MDX Fence Fixture\n\n````mdx\n```js\nimport Sample from './sample';\n```\n\nexport controls are configured in Wrangler for the sample.\n[[Guide (v2)|Guide inside fence]]\n````\n\nimport RealComponent from './RealComponent';\nexport const metadata = {\n  title: 'Docs page',\n  sidebar_position: 2,\n};\n\nimport controls are configured by prose.\nexport controls are configured in Wrangler.\n    import indentedCode from './kept';\n\n<Note>Keep this warning.</Note>\n\n<Cards>\n</Cards>"
+		);
+		file_put_contents(
+			$root . '/vault/Concepts.md',
+			"# Concepts\n\nSee [[Guides/Setup|Setup guide]], [[Guide (v2)|Guide [v2]]], and [[Guide [v2]|Guide [stable]]].\n\n![[assets/diagram.png]]\n\n> [!NOTE] Field note\n> Works offline."
+		);
+		file_put_contents(
+			$root . '/vault/Guides/Setup.md',
+			"# Setup\n\nBack to [[../Concepts|Concepts]]."
+		);
+		file_put_contents(
+			$root . '/vault/Guide (v2).md',
+			"# Guide (v2)\n\nBack to [[Concepts]]."
+		);
+		file_put_contents(
+			$root . '/vault/Guide [v2].md',
+			"# Guide [v2]\n\nBack to [[Concepts]]."
+		);
+		file_put_contents( $root . '/vault/assets/diagram.png', 'png-bytes' );
+
+		$session = ImportSession::start_for_source( $root );
+		$posts   = new FakePostGateway();
+		$media   = new FakeMediaGateway();
+		$this->store->save( $session );
+
+		for ( $tick = 0; $tick < 10; ++$tick ) {
+			( new ImportRunner( $this->store, 'unit-test', 60, null, $posts, 'https://local.example.test/', $media ) )->run( $session->get_id() );
+
+			if ( ImportSession::STATUS_DONE === $this->store->find( $session->get_id() )->get_status() ) {
+				break;
+			}
+		}
+
+		$documents = $this->store->list_prepared_documents( $session->get_id(), 20 );
+		$by_title  = array();
+
+		foreach ( $documents as $document ) {
+			$by_title[ $document->get_title() ] = $document;
+		}
+
+		$this->assertSame( ImportSession::STATUS_DONE, $this->store->find( $session->get_id() )->get_status() );
+		$this->assertArrayHasKey( 'Jekyll Release Notes', $by_title );
+		$this->assertArrayHasKey( 'Astro Overview', $by_title );
+		$this->assertArrayHasKey( 'Docusaurus API', $by_title );
+		$this->assertArrayHasKey( 'MDX Fence Fixture', $by_title );
+		$this->assertArrayHasKey( 'Concepts', $by_title );
+		$this->assertArrayHasKey( 'Setup', $by_title );
+		$this->assertArrayHasKey( 'Guide (v2)', $by_title );
+		$this->assertArrayHasKey( 'Guide [v2]', $by_title );
+
+		$jekyll     = $by_title['Jekyll Release Notes'];
+		$astro      = $by_title['Astro Overview'];
+		$docusaurus = $by_title['Docusaurus API'];
+		$fenced     = $by_title['MDX Fence Fixture'];
+		$obsidian   = $by_title['Concepts'];
+		$posts_by_title = $this->posts_by_title( $posts );
+
+		$this->assertContains( 'jekyll', $jekyll->get_metadata()['markdown_docs_flavors'] );
+		$this->assertContains( 'astro', $astro->get_metadata()['markdown_docs_flavors'] );
+		$this->assertContains( 'docusaurus', $docusaurus->get_metadata()['markdown_docs_flavors'] );
+		$this->assertContains( 'obsidian', $obsidian->get_metadata()['markdown_docs_flavors'] );
+		$this->assertSame( 1, $docusaurus->get_metadata()['markdown_docs_admonition_count'] );
+		$this->assertSame( 6, $docusaurus->get_metadata()['markdown_mdx_lines_removed'] );
+		$this->assertStringContainsString( '<blockquote class="wp-block-quote"><p><strong>Note:</strong> Stable API<br>', $docusaurus->get_block_markup() );
+		$this->assertStringNotContainsString( 'Tabs', $docusaurus->get_block_markup() );
+		$this->assertStringNotContainsString( '@theme/Tabs', $docusaurus->get_block_markup() );
+		$this->assertStringNotContainsString( 'Tabs,', $docusaurus->get_block_markup() );
+		$this->assertStringNotContainsString( 'TabItem', $docusaurus->get_block_markup() );
+		$this->assertStringNotContainsString( '<Tabs', $docusaurus->get_block_markup() );
+		$this->assertSame( 7, $fenced->get_metadata()['markdown_mdx_lines_removed'] );
+		$this->assertStringContainsString( 'import Sample from', $fenced->get_block_markup() );
+		$this->assertStringContainsString( 'export controls are configured in Wrangler for the sample.', $fenced->get_block_markup() );
+		$this->assertStringContainsString( '[[Guide (v2)|Guide inside fence]]', $fenced->get_block_markup() );
+		$this->assertStringContainsString( 'import controls are configured by prose.', $fenced->get_block_markup() );
+		$this->assertStringContainsString( 'export controls are configured in Wrangler.', $fenced->get_block_markup() );
+		$this->assertStringContainsString( 'import indentedCode from', $fenced->get_block_markup() );
+		$this->assertStringContainsString( '&lt;Note&gt;Keep this warning.&lt;/Note&gt;', $fenced->get_block_markup() );
+		$this->assertStringNotContainsString( 'RealComponent', $fenced->get_block_markup() );
+		$this->assertStringNotContainsString( 'metadata', $fenced->get_block_markup() );
+		$this->assertStringNotContainsString( 'Docs page', $fenced->get_block_markup() );
+		$this->assertStringNotContainsString( 'sidebar_position', $fenced->get_block_markup() );
+		$this->assertStringNotContainsString( '&lt;Cards', $fenced->get_block_markup() );
+		$this->assertSame( 3, $obsidian->get_metadata()['markdown_obsidian_wikilink_count'] );
+		$this->assertSame( 1, $obsidian->get_metadata()['markdown_obsidian_embed_count'] );
+		$this->assertSame( 1, $obsidian->get_metadata()['markdown_obsidian_callout_count'] );
+		$this->assertStringContainsString( '<figure class="wp-block-image"><img src="https://local.example.test/wp-content/uploads/diagram.png" alt="diagram"/></figure>', $obsidian->get_block_markup() );
+		$this->assertStringContainsString( '<strong>Note:</strong> Field note', $obsidian->get_block_markup() );
+		$this->assertStringNotContainsString( '[[Guides/Setup', $obsidian->get_block_markup() );
+		$this->assertArrayHasKey( 'Concepts', $posts_by_title );
+		$this->assertArrayHasKey( 'Setup', $posts_by_title );
+		$this->assertArrayHasKey( 'Guide (v2)', $posts_by_title );
+		$this->assertArrayHasKey( 'Guide [v2]', $posts_by_title );
+		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Setup']['ID'] ), $posts_by_title['Concepts']['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Guide (v2)']['ID'] ), $posts_by_title['Concepts']['post_content'] );
+		$this->assertStringContainsString( $posts->get_permalink( $posts_by_title['Guide [v2]']['ID'] ), $posts_by_title['Concepts']['post_content'] );
+		$this->assertStringContainsString( '>Guide [v2]<', $posts_by_title['Concepts']['post_content'] );
+		$this->assertStringContainsString( '>Guide [stable]<', $posts_by_title['Concepts']['post_content'] );
+		$this->assertSame( 1, $media->count_attachments() );
+	}
+
+	/**
 	 * Markdown setext headings become native Heading blocks and document titles.
 	 *
 	 * @return void
@@ -5543,7 +5673,7 @@ final class ImportRunnerTest extends TestCase {
 	public function test_runner_infers_markdown_image_blocks() {
 		$source_file = $this->temporary_file(
 			'image.md',
-			"# Image\n\n![Cover alt](images/cover.jpg \"Cover title\")\n\nBody after image."
+			"# Image\n\n![Cover alt](images/cover.jpg \"Cover title\")\n\n![Encoded &amp;lt;tag&amp;gt; &amp;amp; entity](images/encoded.jpg)\n\nBody after image."
 		);
 		$session     = ImportSession::start_for_source( $source_file );
 		$this->store->save( $session );
@@ -5556,6 +5686,7 @@ final class ImportRunnerTest extends TestCase {
 
 		$this->assertStringContainsString( '<!-- wp:image -->', $markup );
 		$this->assertStringContainsString( '<figure class="wp-block-image"><img src="images/cover.jpg" alt="Cover alt" title="Cover title"/></figure>', $markup );
+		$this->assertStringContainsString( '<figure class="wp-block-image"><img src="images/encoded.jpg" alt="Encoded &amp;lt;tag&amp;gt; &amp;amp; entity"/></figure>', $markup );
 		$this->assertStringNotContainsString( '![Cover alt]', $markup );
 		$this->assertSame( $document->get_block_count(), $items[0]->get_metadata()['block_count'] );
 	}

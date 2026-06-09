@@ -1,0 +1,41 @@
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+export const metadata = {
+  title: 'Fixture',
+  sidebar_position: 3,
+};
+
+# Docusaurus Astro Selected Cases
+
+::::info[Parent]
+Parent content with [[Parent Link|parent link]].
+
+:::warning[Child]
+Child content.
+:::
+
+::::
+
+:::tip[Use tabs in docs]
+<Tabs>
+</Tabs>
+Ordinary Markdown inside the admonition.
+:::
+
+<Cards>
+</Cards>
+
+<Note>Keep this contentful component text.</Note>
+
+```mdx
+import Kept from './Kept';
+<Cards>
+[[Fence Link]]
+</Cards>
+```
+
+import prose should survive when it is ordinary text.
+export prose should survive when it is ordinary text.
+
+    import indentedCode from './kept';
