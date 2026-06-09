@@ -14,6 +14,7 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
     private object $wpdb;
     private string $documents_table;
     private string $postings_table;
+    private ?bool $use_mysql_index_prefixes = null;
 
     public function __construct(object $wpdb, string|null $prefix = null)
     {
@@ -42,6 +43,7 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
             "CREATE TABLE IF NOT EXISTS {$this->postings_table} (" .
             'language TEXT NOT NULL, ' .
             'term TEXT NOT NULL, ' .
+            'term_length INTEGER NOT NULL DEFAULT 0, ' .
             'post_id INTEGER NOT NULL, ' .
             'field VARCHAR(32) NOT NULL, ' .
             'tf INTEGER NOT NULL, ' .
@@ -50,6 +52,7 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         );
 
         $this->ensure_schema_columns();
+        $this->ensure_indexes();
     }
 
     public function clear(): void
@@ -124,12 +127,13 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
                         [
                             'language' => $language,
                             'term' => $term,
+                            'term_length' => strlen($term),
                             'post_id' => $post_id,
                             'field' => $field,
                             'tf' => $tf,
                             'positions' => $this->encode_positions((array) ($term_positions[$term] ?? [])),
                         ],
-                        ['%s', '%s', '%d', '%s', '%d', '%s']
+                        ['%s', '%s', '%d', '%d', '%s', '%d', '%s']
                     );
                     if ($inserted === false) {
                         $this->throw_last_error('Could not insert posting.');
@@ -281,7 +285,7 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         $max_length = $length + $max_distance;
         $limit = max(1, min(500, $limit));
 
-        $sql = "SELECT DISTINCT term FROM {$this->postings_table} WHERE language = %s AND LENGTH(term) BETWEEN %d AND %d ORDER BY term ASC LIMIT %d";
+        $sql = "SELECT DISTINCT term FROM {$this->postings_table} WHERE language = %s AND term_length BETWEEN %d AND %d ORDER BY term ASC LIMIT %d";
         $rows = $this->result_rows(
             $this->wpdb->get_results(
                 $this->wpdb->prepare($sql, [$language, $min_length, $max_length, $limit]),
@@ -449,6 +453,131 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         if (!$this->column_exists($this->postings_table, 'positions')) {
             $this->query("ALTER TABLE {$this->postings_table} ADD COLUMN positions TEXT");
         }
+
+        if (!$this->column_exists($this->postings_table, 'term_length')) {
+            $this->query("ALTER TABLE {$this->postings_table} ADD COLUMN term_length INTEGER NOT NULL DEFAULT 0");
+        }
+
+        $this->query("UPDATE {$this->postings_table} SET term_length = LENGTH(term) WHERE term_length = 0 AND term <> ''");
+    }
+
+    private function ensure_indexes(): void
+    {
+        foreach ($this->index_definitions() as $definition) {
+            $index_name = $definition['name'];
+            $table = $definition['table'];
+            if ($this->index_exists($table, $index_name)) {
+                continue;
+            }
+
+            $columns = $this->uses_mysql_index_prefixes()
+                ? $definition['mysql_columns']
+                : $definition['columns'];
+            $this->query("CREATE INDEX {$index_name} ON {$table} ({$columns})");
+        }
+    }
+
+    /**
+     * @return array<int,array{name:string,table:string,columns:string,mysql_columns:string}>
+     */
+    private function index_definitions(): array
+    {
+        return [
+            [
+                'name' => 'lft_docs_lang_post',
+                'table' => $this->documents_table,
+                'columns' => 'language, post_id',
+                'mysql_columns' => 'language(16), post_id',
+            ],
+            [
+                'name' => 'lft_docs_post',
+                'table' => $this->documents_table,
+                'columns' => 'post_id',
+                'mysql_columns' => 'post_id',
+            ],
+            [
+                'name' => 'lft_post_lang_term_post',
+                'table' => $this->postings_table,
+                'columns' => 'language, term, post_id',
+                'mysql_columns' => 'language(16), term(191), post_id',
+            ],
+            [
+                'name' => 'lft_post_lang_post',
+                'table' => $this->postings_table,
+                'columns' => 'language, post_id',
+                'mysql_columns' => 'language(16), post_id',
+            ],
+            [
+                'name' => 'lft_post_post',
+                'table' => $this->postings_table,
+                'columns' => 'post_id',
+                'mysql_columns' => 'post_id',
+            ],
+            [
+                'name' => 'lft_post_lang_len_term',
+                'table' => $this->postings_table,
+                'columns' => 'language, term_length, term',
+                'mysql_columns' => 'language(16), term_length, term(191)',
+            ],
+        ];
+    }
+
+    private function index_exists(string $table, string $index_name): bool
+    {
+        $rows = $this->uses_mysql_index_prefixes()
+            ? $this->wpdb->get_results("SHOW INDEX FROM {$table}", $this->array_a())
+            : $this->wpdb->get_results("PRAGMA index_list({$table})", $this->array_a());
+
+        if ($this->last_error() !== '' || !is_array($rows)) {
+            return false;
+        }
+
+        foreach ($rows as $row) {
+            $name = $this->row_value($row, ['Key_name', 'key_name', 'name']);
+            if ($name === $index_name) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function uses_mysql_index_prefixes(): bool
+    {
+        if ($this->use_mysql_index_prefixes !== null) {
+            return $this->use_mysql_index_prefixes;
+        }
+
+        $rows = $this->wpdb->get_results("PRAGMA index_list({$this->documents_table})", $this->array_a());
+        if ($this->last_error() === '' && is_array($rows)) {
+            $this->use_mysql_index_prefixes = false;
+
+            return false;
+        }
+
+        $rows = $this->wpdb->get_results("SHOW INDEX FROM {$this->documents_table}", $this->array_a());
+
+        $this->use_mysql_index_prefixes = $this->last_error() === '' && is_array($rows);
+
+        return $this->use_mysql_index_prefixes;
+    }
+
+    /**
+     * @param string[] $keys
+     */
+    private function row_value(mixed $row, array $keys): string
+    {
+        foreach ($keys as $key) {
+            if (is_array($row) && array_key_exists($key, $row)) {
+                return (string) $row[$key];
+            }
+
+            if (is_object($row) && isset($row->{$key})) {
+                return (string) $row->{$key};
+            }
+        }
+
+        return '';
     }
 
     private function column_exists(string $table, string $column): bool
