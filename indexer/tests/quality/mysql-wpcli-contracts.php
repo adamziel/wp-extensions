@@ -557,7 +557,7 @@ namespace {
     test_case('quality wp cli search prepares language limit mode and formats rows', function (): void {
         $fake = new WP_FTS_Test_WPDB();
         $plTerm = WP_FTS_TermNamespace::namespace_term('pl-PL', 'zamek');
-        $enTerm = WP_FTS_TermNamespace::namespace_term('en', 'castle');
+        $enTerm = WP_FTS_TermNamespace::namespace_term('en', 'castl');
         $fake->terms[$plTerm] = ['doc_freq' => 2];
         $fake->terms[$enTerm] = ['doc_freq' => 1];
         $fake->postings[$plTerm] = [901 => 3, 902 => 1];

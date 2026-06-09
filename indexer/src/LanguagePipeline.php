@@ -460,7 +460,7 @@ final class WP_FTS_LanguagePipeline
     {
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 2,
+            'version' => 3,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
@@ -473,11 +473,11 @@ final class WP_FTS_LanguagePipeline
             'token_normalizer' => $this->componentSignature($options['token_normalizer'] ?? null),
             'chinese_script_map' => $this->signatureValue($options['chinese_script_map'] ?? []),
             'normalizer' => $this->componentSignature($options['normalizer'] ?? null),
-            'snowball_stemmer' => $this->componentSignature($options['snowball_stemmer'] ?? null),
+            'snowball_stemmer' => $this->componentSignature($options['snowball_stemmer'] ?? $this->snowballStemmer),
             'polish_stemmer' => $this->componentSignature($options['polish_stemmer'] ?? null),
         ];
 
-        return 'wp-fts-language-pipeline-v2:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v3:' . sha1($this->stableJson($payload));
     }
 
     /**

@@ -24,7 +24,7 @@ function wp_fts_snowball_datasets(): array
             'skip_reason' => 'WP_FTS_SnowballStemmer maps nl to Wamania Dutch Porter; the newer official Dutch algorithm is not implemented',
         ],
         'dutch_porter' => ['code' => 'nl', 'name' => 'Dutch Porter'],
-        'english' => ['code' => 'en', 'name' => 'English', 'skip_reason' => $wamaniaDiverges],
+        'english' => ['code' => 'en', 'name' => 'English'],
         'esperanto' => ['code' => 'eo', 'name' => 'Esperanto'],
         'estonian' => ['code' => 'et', 'name' => 'Estonian'],
         'finnish' => ['code' => 'fi', 'name' => 'Finnish', 'skip_reason' => $wamaniaDiverges],
@@ -145,6 +145,7 @@ $results = [
 
 fwrite(STDOUT, "Snowball data: {$dataDir}\n");
 fwrite(STDOUT, 'Wamania available: ' . ($stemmer->is_available() ? 'yes' : 'no') . "\n\n");
+fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n\n");
 
 foreach ($datasets as $dataset => $metadata) {
     $label = wp_fts_language_label($dataset, $metadata);
@@ -161,14 +162,14 @@ foreach ($datasets as $dataset => $metadata) {
     }
 
     if ($code === null || !$stemmer->supports_language($code)) {
-        $reason = $metadata['skip_reason'] ?? 'language is not supported by WP_FTS_SnowballStemmer via Wamania';
+        $reason = $metadata['skip_reason'] ?? 'language is not supported by WP_FTS_SnowballStemmer';
         $results['skip'][] = $label;
         fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
         continue;
     }
 
-    if (!$stemmer->is_available()) {
-        $reason = 'Wamania StemmerManager is unavailable; run composer install first';
+    if (!$stemmer->is_language_available($code)) {
+        $reason = 'language runtime is unavailable; Wamania-backed languages require composer install';
         $results['skip'][] = $label;
         fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
         continue;
