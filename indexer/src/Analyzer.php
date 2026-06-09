@@ -1172,7 +1172,7 @@ final class WP_FTS_Analyzer
 
         if ($postId > 0 && function_exists('pll_get_post_language')) {
             $language = pll_get_post_language($postId, 'locale');
-            if (is_scalar($language)) {
+            if (is_scalar($language) && trim((string) $language) !== '') {
                 return (string) $language;
             }
         }
@@ -1199,7 +1199,7 @@ final class WP_FTS_Analyzer
     {
         if (function_exists('pll_current_language')) {
             $language = pll_current_language('locale');
-            if (is_scalar($language)) {
+            if (is_scalar($language) && trim((string) $language) !== '') {
                 return (string) $language;
             }
         }

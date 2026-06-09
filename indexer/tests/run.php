@@ -1695,6 +1695,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_posts'] = [];
     $GLOBALS['wp_fts_test_get_post_callbacks'] = [];
     $GLOBALS['wp_fts_test_do_blocks'] = [];
+    $GLOBALS['wp_fts_test_filters'] = [];
     $GLOBALS['wp_fts_test_post_types'] = [
         'post' => (object) ['public' => true, 'exclude_from_search' => false],
         'page' => (object) ['public' => true, 'exclude_from_search' => false],
@@ -1877,6 +1878,19 @@ if (!function_exists('wp_is_post_autosave')) {
 if (!function_exists('has_filter')) {
     function has_filter(string $hook_name): bool
     {
+        $filter = $GLOBALS['wp_fts_test_filters'][$hook_name] ?? null;
+        if (is_callable($filter)) {
+            return true;
+        }
+
+        if (is_array($filter)) {
+            foreach ($filter as $callback) {
+                if (is_callable($callback)) {
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 }
@@ -1884,6 +1898,19 @@ if (!function_exists('has_filter')) {
 if (!function_exists('apply_filters')) {
     function apply_filters(string $hook_name, mixed $value, mixed ...$args): mixed
     {
+        $filter = $GLOBALS['wp_fts_test_filters'][$hook_name] ?? null;
+        if (is_callable($filter)) {
+            return $filter($value, ...$args);
+        }
+
+        if (is_array($filter)) {
+            foreach ($filter as $callback) {
+                if (is_callable($callback)) {
+                    $value = $callback($value, ...$args);
+                }
+            }
+        }
+
         return $value;
     }
 }
