@@ -55,8 +55,10 @@ Composer also exposes:
 SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 ```
 
-The harness reports unsupported Snowball languages as skipped. Skips are
-expected for languages that are not advertised by `WP_FTS_SnowballStemmer`.
+The harness reports unsupported Snowball languages as skipped. English (`en`)
+should pass from the bundled generated Snowball/Porter2 implementation even in a
+bare checkout; Wamania-backed Catalan (`ca`) and Dutch Porter (`nl`) skip when
+optional Composer dependencies are absent.
 
 ## WordPress Playground SQLite Smoke
 

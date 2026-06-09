@@ -100,8 +100,11 @@ force existing documents to be rewritten.
 
 Stemming is enabled by default. The pipeline uses:
 
-- Snowball through `wamania/php-stemmer` for the allowlisted languages that pass
-  the bundled compliance harness: Catalan (`ca`) and Dutch Porter (`nl`);
+- bundled generated Snowball English/Porter2 for English (`en` and English
+  locale tags), verified against the official `english` fixture data;
+- Snowball through `wamania/php-stemmer` for optional allowlisted languages that
+  pass the bundled compliance harness when Composer dependencies are installed:
+  Catalan (`ca`) and Dutch Porter (`nl`);
 - a small conservative Polish suffix stemmer for `pl`;
 - no-op behavior for unsupported languages or missing optional dependencies.
 

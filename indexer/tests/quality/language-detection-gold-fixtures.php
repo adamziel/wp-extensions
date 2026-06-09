@@ -88,12 +88,12 @@ test_case('quality language detection gold fixtures keep accented English loanwo
 
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
     $loanwordLangs = test_lang_by_term($analyzer->analyze_content('<p>Beyoncé résumé cafe jalapeño piñata party</p>'));
-    foreach (['beyonce', 'resume', 'cafe', 'jalapeno', 'pinata', 'party'] as $term) {
+    foreach (['beyonc', 'resum', 'cafe', 'jalapeno', 'pinata', 'parti'] as $term) {
         assert_same('en', $loanwordLangs[$term] ?? null, "English loanword content term {$term}");
     }
 
     $queryLangs = test_lang_by_term($analyzer->analyze_query_occurrences('Beyoncé résumé jalapeño piñata'));
-    foreach (['beyonce', 'resume', 'jalapeno', 'pinata'] as $term) {
+    foreach (['beyonc', 'resum', 'jalapeno', 'pinata'] as $term) {
         assert_same('en', $queryLangs[$term] ?? null, "English loanword query term {$term}");
     }
 });
