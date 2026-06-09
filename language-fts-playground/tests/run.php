@@ -643,6 +643,7 @@ function reset_language_fts_wp_state(): void
     $GLOBALS['language_fts_test_scheduled'] = [];
     $GLOBALS['language_fts_test_option_reads'] = [];
     $GLOBALS['language_fts_test_get_option_interceptor'] = null;
+    $GLOBALS['language_fts_test_failed_update_options'] = [];
     $GLOBALS['language_fts_test_current_user_can'] = true;
     $GLOBALS['language_fts_test_last_redirect'] = null;
     $_GET = [];
@@ -666,6 +667,10 @@ function set_language_fts_plugin_runtime(Language_FTS_Playground_Storage_Interfa
     $queue_lock_depth_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'queue_lock_depth');
     $queue_lock_depth_property->setAccessible(true);
     $queue_lock_depth_property->setValue(null, 0);
+
+    $runtime_status_property = new ReflectionProperty(Language_FTS_Playground_Plugin::class, 'runtime_status');
+    $runtime_status_property->setAccessible(true);
+    $runtime_status_property->setValue(null, []);
 }
 
 function reset_language_fts_plugin_runtime(Language_FTS_Playground_Storage_Interface|null $storage = null): Language_FTS_Playground_Storage_Interface
@@ -696,6 +701,10 @@ if (!function_exists('update_option')) {
     function update_option(string $name, mixed $value, mixed $autoload = null): bool
     {
         unset($autoload);
+        if (!empty($GLOBALS['language_fts_test_failed_update_options'][$name])) {
+            return false;
+        }
+
         $old_value = get_option($name, null);
         $GLOBALS['language_fts_test_options'][$name] = $value;
 
@@ -4966,6 +4975,86 @@ test_case('stores lifecycle versions and flags rebuilds on schema or analyzer ch
     assert_same(LANGUAGE_FTS_PLAYGROUND_SCHEMA_VERSION, get_option('language_fts_playground_schema_version'), 'Schema version is stored separately.');
     assert_same(LANGUAGE_FTS_PLAYGROUND_ANALYZER_VERSION, get_option('language_fts_playground_analyzer_version'), 'Analyzer version is stored separately.');
     assert_same(true, get_option('language_fts_playground_rebuild_required'), 'Analyzer/schema changes mark a rebuild as required.');
+});
+
+test_case('failed lifecycle version option writes are reported without claiming an upgrade', function (): void {
+    $storage = reset_language_fts_plugin_runtime();
+    assert_true($storage instanceof Language_FTS_Playground_Test_Storage, 'Test storage is available.');
+    update_option('language_fts_playground_schema_version', 'old-schema');
+    update_option('language_fts_playground_analyzer_version', 'old-analyzer');
+    $GLOBALS['language_fts_test_failed_update_options']['language_fts_playground_schema_version'] = true;
+
+    Language_FTS_Playground_Plugin::ensure_schema();
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same(1, $storage->install_count, 'The schema install is attempted before version persistence fails.');
+    assert_same('old-schema', get_option('language_fts_playground_schema_version'), 'The stale schema version remains visible after the failed write.');
+    assert_same(false, get_option('language_fts_playground_rebuild_required', false), 'A failed version write does not falsely mark a rebuild as persisted.');
+    assert_contains_text('Could not inspect or upgrade the Language FTS analyzer resources.', (string) ($status['last_status'] ?? ''), 'The version persistence failure is surfaced as a lifecycle error.');
+    assert_contains_text('language_fts_playground_schema_version', (string) ($status['last_error'] ?? ''), 'The failed version option name remains visible.');
+});
+
+test_case('failed rebuild option writes keep completed rebuilds visibly required', function (): void {
+    reset_language_fts_plugin_runtime();
+    $GLOBALS['language_fts_test_posts'][904] = fixture_post(904, 'en', 'Rebuild persistence orchard', '<p>orchard rebuild persistence</p>');
+
+    $queued = Language_FTS_Playground_Plugin::queue_rebuild(false);
+    assert_same(1, $queued, 'The fixture post is queued for rebuild.');
+    $GLOBALS['language_fts_test_failed_update_options']['language_fts_playground_rebuild_in_progress'] = true;
+
+    $result = Language_FTS_Playground_Plugin::process_index_queue(1);
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same(1, $result['processed'], 'The queued rebuild item is processed.');
+    assert_same(1, $result['failed'], 'The rebuild state persistence failure is reported in the batch result.');
+    assert_same(0, $result['remaining'], 'The queue itself drains even though rebuild state persistence fails.');
+    assert_same(true, get_option('language_fts_playground_rebuild_required'), 'The rebuild-required flag remains visible after the failed completion write.');
+    assert_same(true, get_option('language_fts_playground_rebuild_in_progress'), 'The stale in-progress flag remains visible for retry/diagnosis.');
+    assert_contains_text('Could not persist completed Language FTS rebuild state.', (string) ($status['last_status'] ?? ''), 'The rebuild persistence failure is recorded in status.');
+    assert_contains_text('language_fts_playground_rebuild_in_progress', (string) ($status['last_error'] ?? ''), 'The failed rebuild option name remains visible.');
+});
+
+test_case('failed queue option writes keep processed items queued for retry', function (): void {
+    reset_language_fts_plugin_runtime();
+    $GLOBALS['language_fts_test_posts'][905] = fixture_post(905, 'en', 'Queue persistence orchard', '<p>orchard queue persistence</p>');
+    Language_FTS_Playground_Plugin::enqueue_posts([905]);
+    $GLOBALS['language_fts_test_scheduled'] = [];
+    $GLOBALS['language_fts_test_failed_update_options']['language_fts_playground_index_queue'] = true;
+
+    $result = Language_FTS_Playground_Plugin::process_index_queue(1);
+    $queue = get_option('language_fts_playground_index_queue', []);
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same(1, $result['processed'], 'The queued item is processed before completion persistence fails.');
+    assert_same(1, $result['indexed'], 'The document write itself succeeds.');
+    assert_same(1, $result['failed'], 'The queue persistence failure is reported in the batch result.');
+    assert_same(1, $result['remaining'], 'The unconfirmed completion remains queued.');
+    assert_true(array_key_exists(905, $queue), 'The processed item remains queued because completion was not durably written.');
+    assert_contains_text('Could not persist completed Language FTS queue items.', (string) ($status['last_status'] ?? ''), 'The queue persistence failure is recorded in status.');
+    assert_contains_text('language_fts_playground_index_queue', (string) ($status['last_error'] ?? ''), 'The failed queue option name remains visible.');
+    assert_true($GLOBALS['language_fts_test_scheduled'] !== [], 'Remaining queue work is scheduled for a later retry.');
+});
+
+test_case('failed status option writes remain visible during current admin rendering', function (): void {
+    reset_language_fts_plugin_runtime();
+    $post = fixture_post(906, 'en', 'Status persistence orchard', '<p>orchard status persistence</p>');
+    $GLOBALS['language_fts_test_posts'][906] = $post;
+    $GLOBALS['language_fts_test_failed_update_options']['language_fts_playground_index_status'] = true;
+
+    Language_FTS_Playground_Plugin::index_saved_post(906, $post, true);
+    $stored_status = get_option('language_fts_playground_index_status', []);
+    $status = Language_FTS_Playground_Plugin::index_status();
+
+    assert_same([], $stored_status, 'The failed status write is not silently stored by the test option backend.');
+    assert_contains_text('Queued a changed post for Language FTS indexing.', (string) ($status['last_status'] ?? ''), 'The attempted status message remains available in memory.');
+    assert_contains_text('language_fts_playground_index_status', (string) ($status['last_error'] ?? ''), 'The failed status option name remains visible.');
+
+    ob_start();
+    Language_FTS_Playground_Plugin::render_admin_page();
+    $html = (string) ob_get_clean();
+
+    assert_contains_text('Language FTS Playground', $html, 'The admin page still renders after a failed status option write.');
+    assert_contains_text('language_fts_playground_index_status', $html, 'The admin status panel surfaces the failed status option write.');
 });
 
 test_case('queues saved public posts and processes bounded batches', function (): void {

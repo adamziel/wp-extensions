@@ -23,6 +23,8 @@ final class Language_FTS_Playground_Plugin
     private static ?Language_FTS_Playground_Analyzer $analyzer = null;
     private static ?string $queue_lock_token = null;
     private static int $queue_lock_depth = 0;
+    /** @var array<string,mixed> */
+    private static array $runtime_status = [];
 
     public static function register_hooks(): void
     {
@@ -299,13 +301,26 @@ final class Language_FTS_Playground_Plugin
         }
 
         if ($completed !== []) {
-            self::complete_queue_items($completed);
+            try {
+                self::complete_queue_items($completed);
+            } catch (Throwable $throwable) {
+                $result['failed']++;
+                $result['last_error'] = $throwable->getMessage();
+                self::record_error(__('Could not persist completed Language FTS queue items.', 'language-fts-playground'), $throwable);
+            }
         }
 
         $result['remaining'] = self::queued_count();
         if (self::rebuild_in_progress() && $result['processed'] > 0 && $result['failed'] === 0 && $result['remaining'] === 0) {
-            self::set_rebuild_in_progress(false);
-            self::set_rebuild_required(false);
+            try {
+                self::set_rebuild_in_progress(false);
+                self::set_rebuild_required(false);
+            } catch (Throwable $throwable) {
+                $result['failed']++;
+                $result['last_error'] = $throwable->getMessage();
+                self::record_error(__('Could not persist completed Language FTS rebuild state.', 'language-fts-playground'), $throwable);
+                $result['remaining'] = self::queued_count();
+            }
         }
 
         if ($result['remaining'] > 0) {
@@ -382,7 +397,12 @@ final class Language_FTS_Playground_Plugin
 
         $status = get_option(self::STATUS_OPTION, []);
 
-        return is_array($status) ? $status : [];
+        $status = is_array($status) ? $status : [];
+        if (self::$runtime_status !== []) {
+            $status = array_merge($status, self::$runtime_status);
+        }
+
+        return $status;
     }
 
     public static function register_admin_page(): void
@@ -1292,7 +1312,15 @@ final class Language_FTS_Playground_Plugin
             $status[(string) $key] = $value;
         }
 
-        self::update_option_value(self::STATUS_OPTION, $status);
+        try {
+            self::update_option_value(self::STATUS_OPTION, $status);
+            self::$runtime_status = [];
+        } catch (Throwable $throwable) {
+            $status_persistence_error = trim('Could not persist Language FTS status option. ' . $throwable->getMessage());
+            $status['last_error'] = trim((string) ($status['last_error'] ?? '') . ' ' . $status_persistence_error);
+            $status['status_persistence_error'] = $status_persistence_error;
+            self::$runtime_status = $status;
+        }
     }
 
     private static function record_error(string $message, Throwable $throwable): void
@@ -1352,8 +1380,17 @@ final class Language_FTS_Playground_Plugin
 
     private static function update_option_value(string $name, mixed $value): void
     {
-        if (function_exists('update_option')) {
-            update_option($name, $value, false);
+        if (!function_exists('update_option')) {
+            return;
+        }
+
+        $updated = update_option($name, $value, false);
+        if ($updated || !function_exists('get_option')) {
+            return;
+        }
+
+        if (get_option($name, null) != $value) {
+            throw new RuntimeException(sprintf('Could not persist Language FTS option "%s".', $name));
         }
     }
 
