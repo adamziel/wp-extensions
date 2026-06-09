@@ -130,6 +130,22 @@ final class Language_FTS_Playground_In_Memory_Storage implements Language_FTS_Pl
         return $result;
     }
 
+    public function fetch_term_language_hits(array $language_terms): array
+    {
+        $hits = [];
+        foreach ($language_terms as $language => $terms) {
+            $language = (string) $language;
+            $hits[$language] = [];
+
+            foreach ($terms as $term) {
+                $term = (string) $term;
+                $hits[$language][$term] = ($this->postings[$language][$term] ?? []) !== [];
+            }
+        }
+
+        return $hits;
+    }
+
     public function fetch_positions(string $language, array $terms, array $post_ids): array
     {
         $post_id_lookup = [];

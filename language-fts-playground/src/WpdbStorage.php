@@ -180,6 +180,57 @@ final class Language_FTS_Playground_Wpdb_Storage implements Language_FTS_Playgro
         return $postings;
     }
 
+    public function fetch_term_language_hits(array $language_terms): array
+    {
+        $normalized_language_terms = [];
+        foreach ($language_terms as $language => $terms) {
+            $language = trim((string) $language);
+            if ($language === '') {
+                continue;
+            }
+
+            if (!isset($normalized_language_terms[$language])) {
+                $normalized_language_terms[$language] = [];
+            }
+
+            foreach ($this->normalize_term_list((array) $terms) as $term) {
+                $normalized_language_terms[$language][$term] = true;
+            }
+        }
+
+        $hits = [];
+        foreach ($normalized_language_terms as $language => $term_lookup) {
+            $terms = array_keys($term_lookup);
+            $hits[$language] = [];
+            foreach ($terms as $term) {
+                $hits[$language][$term] = false;
+            }
+
+            if ($terms === []) {
+                continue;
+            }
+
+            $placeholders = implode(',', array_fill(0, count($terms), '%s'));
+            $sql = "SELECT DISTINCT term FROM {$this->postings_table} WHERE language = %s AND term IN ({$placeholders})";
+            $rows = $this->result_rows(
+                $this->wpdb->get_results(
+                    $this->wpdb->prepare($sql, array_merge([$language], $terms)),
+                    $this->array_a()
+                ),
+                'Could not fetch term language hits.'
+            );
+
+            foreach ($rows as $row) {
+                $term = trim((string) ($row['term'] ?? ''));
+                if ($term !== '' && array_key_exists($term, $hits[$language])) {
+                    $hits[$language][$term] = true;
+                }
+            }
+        }
+
+        return $hits;
+    }
+
     public function fetch_positions(string $language, array $terms, array $post_ids): array
     {
         $terms = $this->normalize_term_list($terms);

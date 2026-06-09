@@ -138,6 +138,22 @@ final class Language_FTS_Playground_Test_Storage implements Language_FTS_Playgro
         return $result;
     }
 
+    public function fetch_term_language_hits(array $language_terms): array
+    {
+        $hits = [];
+        foreach ($language_terms as $language => $terms) {
+            $language = (string) $language;
+            $hits[$language] = [];
+
+            foreach ($terms as $term) {
+                $term = (string) $term;
+                $hits[$language][$term] = ($this->postings[$language][$term] ?? []) !== [];
+            }
+        }
+
+        return $hits;
+    }
+
     public function fetch_positions(string $language, array $terms, array $post_ids): array
     {
         $post_id_lookup = [];
@@ -326,6 +342,12 @@ final class Language_FTS_Playground_Test_Failing_Storage implements Language_FTS
     public function fetch_postings(string $language, array $terms): array
     {
         unset($language, $terms);
+        throw new RuntimeException($this->message);
+    }
+
+    public function fetch_term_language_hits(array $language_terms): array
+    {
+        unset($language_terms);
         throw new RuntimeException($this->message);
     }
 
@@ -3418,6 +3440,105 @@ test_case('automatic search routes strong custom profile evidence to one fake la
         assert_same(['qa'], $storage->fetch_postings_languages, 'Confident automatic routing queries only the ranked fake language partition.');
         assert_same([301], array_column($results, 'post_id'), 'The routed fake-language search returns the selected partition result.');
         assert_same('qa', $results[0]['matched_language'] ?? null, 'The custom routed result reports its matched fake language.');
+    } finally {
+        remove_language_fts_temp_tree($root);
+    }
+});
+
+test_case('storage preflight reports term hits by language', function (): void {
+    $storage = new Language_FTS_Playground_Test_Storage();
+    $storage->replace_document_partitions(
+        401,
+        [
+            [
+                'language' => 'en',
+                'title' => 'English target',
+                'status' => 'publish',
+                'document_length' => 2,
+                'field_term_frequencies' => [
+                    'content' => ['orchard' => 1],
+                ],
+                'field_texts' => [
+                    'content' => 'orchard notes',
+                ],
+                'term_positions' => [
+                    'orchard' => [0],
+                ],
+            ],
+            [
+                'language' => 'pl',
+                'title' => 'Polish target',
+                'status' => 'publish',
+                'document_length' => 2,
+                'field_term_frequencies' => [
+                    'content' => ['wyszukiw' => 1],
+                ],
+                'field_texts' => [
+                    'content' => 'wyszukiw wynik',
+                ],
+                'term_positions' => [
+                    'wyszukiw' => [0],
+                ],
+            ],
+        ]
+    );
+
+    assert_true(
+        method_exists($storage, 'fetch_term_language_hits'),
+        'Storage preflight API fetch_term_language_hits(array $language_terms) should report which requested terms exist in each language partition.'
+    );
+
+    $hits = $storage->fetch_term_language_hits([
+        'en' => ['orchard', 'wyszukiw', 'missing'],
+        'pl' => ['orchard', 'wyszukiw', 'missing'],
+    ]);
+
+    assert_same(
+        [
+            'en' => [
+                'orchard' => true,
+                'wyszukiw' => false,
+                'missing' => false,
+            ],
+            'pl' => [
+                'orchard' => false,
+                'wyszukiw' => true,
+                'missing' => false,
+            ],
+        ],
+        $hits,
+        'Storage preflight returns per-language term hit booleans without fetching full postings payloads.'
+    );
+});
+
+test_case('automatic fallback uses bounded preflight instead of scanning every language', function (): void {
+    $profiles = [];
+    foreach (['qa', 'qb', 'qc', 'qd', 'qe', 'qf', 'qg'] as $offset => $language) {
+        $profiles[$language] = [
+            'order' => ($offset + 1) * 10,
+        ];
+    }
+    $root = create_language_fts_temp_profile_set($profiles);
+
+    try {
+        $storage = new Language_FTS_Playground_Test_Storage();
+        $analyzer = new Language_FTS_Playground_Analyzer(new Language_FTS_Playground_Lexical_Profile_Repository($root));
+        $indexer = new Language_FTS_Playground_Indexer($storage, $analyzer);
+        $searcher = new Language_FTS_Playground_Searcher($storage, $analyzer);
+        $enabled = $analyzer->enabled_languages();
+
+        assert_same('qg', $enabled[6] ?? null, 'The target fake language sits outside a small automatic fallback cap.');
+        $indexer->index_post(fixture_post(402, 'qg', 'Bounded fallback target', '<p>zephyrneedle appears only in QG.</p>'));
+
+        assert_same([], $analyzer->rank_query_languages('zephyrneedle'), 'The unknown query has no profile evidence before storage preflight.');
+        $results = $searcher->search('zephyrneedle', 'auto');
+
+        assert_same([402], array_column($results, 'post_id'), 'Bounded automatic fallback preserves unknown-term recall in later language partitions.');
+        assert_same('qg', $results[0]['matched_language'] ?? null, 'The bounded fallback result reports the matched fake language.');
+        assert_true(
+            count($storage->fetch_postings_languages) < count($enabled),
+            'Bounded preflight should avoid full fetch_postings() scans for every enabled language. Full postings languages: ' . implode(', ', $storage->fetch_postings_languages)
+        );
     } finally {
         remove_language_fts_temp_tree($root);
     }

@@ -23,6 +23,7 @@ final class Language_FTS_Playground_Searcher
     private const AUTO_LANGUAGE_MIN_SCORE = 3.0;
     private const AUTO_LANGUAGE_MIN_LEAD = 1.5;
     private const AUTO_LANGUAGE_MIN_RATIO = 1.35;
+    private const AUTO_LANGUAGE_MAX_PARTITIONS = 5;
 
     public function __construct(
         private Language_FTS_Playground_Storage_Interface $storage,
@@ -101,7 +102,7 @@ final class Language_FTS_Playground_Searcher
     }
 
     /**
-     * @return array{requested_language:string,resolved_language:string,enabled_languages:string[],ranked_candidates:array<int,array{language:string,score:float,reasons:array<string,string[]>}>,selected_partitions:string[],strategy:string,thresholds:array{min_score:float,min_lead:float,min_ratio:float}}
+     * @return array{requested_language:string,resolved_language:string,enabled_languages:string[],ranked_candidates:array<int,array{language:string,score:float,reasons:array<string,string[]>}>,selected_partitions:string[],strategy:string,thresholds:array{min_score:float,min_lead:float,min_ratio:float,max_partitions:int}}
      */
     private function search_language_plan(string $query, string $language, bool $include_explicit_ranking = true): array
     {
@@ -115,6 +116,7 @@ final class Language_FTS_Playground_Searcher
             'min_score' => self::AUTO_LANGUAGE_MIN_SCORE,
             'min_lead' => self::AUTO_LANGUAGE_MIN_LEAD,
             'min_ratio' => self::AUTO_LANGUAGE_MIN_RATIO,
+            'max_partitions' => self::AUTO_LANGUAGE_MAX_PARTITIONS,
         ];
 
         if ($language !== 'auto') {
@@ -129,12 +131,12 @@ final class Language_FTS_Playground_Searcher
             ];
         }
 
-        $strategy = 'auto_fallback_no_evidence';
-        $selected = $enabled;
+        $strategy = 'auto_fallback_no_evidence_bounded_preflight';
+        $selected = null;
         if ($ranked !== []) {
             $top_score = (float) $ranked[0]['score'];
             if ($top_score < self::AUTO_LANGUAGE_MIN_SCORE) {
-                $strategy = 'auto_fallback_low_evidence';
+                $strategy = 'auto_fallback_low_evidence_bounded_preflight';
             } else {
                 $runner_up_score = isset($ranked[1]) ? (float) $ranked[1]['score'] : 0.0;
                 $has_clear_lead = $runner_up_score <= 0.0
@@ -142,7 +144,7 @@ final class Language_FTS_Playground_Searcher
                     || $top_score >= ($runner_up_score * self::AUTO_LANGUAGE_MIN_RATIO);
 
                 if (!$has_clear_lead) {
-                    $strategy = 'auto_fallback_ambiguous_evidence';
+                    $strategy = 'auto_fallback_ambiguous_evidence_bounded_preflight';
                 } else {
                     $enabled_lookup = array_fill_keys($enabled, true);
                     $selected = [];
@@ -158,13 +160,18 @@ final class Language_FTS_Playground_Searcher
                     }
 
                     if ($selected === []) {
-                        $selected = $enabled;
-                        $strategy = 'auto_fallback_no_enabled_candidates';
+                        $selected = null;
+                        $strategy = 'auto_fallback_no_enabled_candidates_bounded_preflight';
                     } else {
+                        $selected = array_slice($selected, 0, self::AUTO_LANGUAGE_MAX_PARTITIONS);
                         $strategy = 'auto_confident_profile_evidence';
                     }
                 }
             }
+        }
+
+        if ($selected === null) {
+            $selected = $this->bounded_fallback_partitions($query, $enabled);
         }
 
         return [
@@ -176,6 +183,81 @@ final class Language_FTS_Playground_Searcher
             'strategy' => $strategy,
             'thresholds' => $thresholds,
         ];
+    }
+
+    /**
+     * @param string[] $enabled
+     * @return string[]
+     */
+    private function bounded_fallback_partitions(string $query, array $enabled): array
+    {
+        $enabled = array_values(array_map('strval', $enabled));
+        if ($enabled === []) {
+            return [];
+        }
+
+        $language_terms = [];
+        foreach ($enabled as $language) {
+            $plan = $this->parse_query($query, $language);
+            $language_terms[$language] = $plan['exact_terms'];
+        }
+
+        $hits = $this->storage->fetch_term_language_hits($language_terms);
+        $scored_languages = [];
+        foreach ($enabled as $index => $language) {
+            $hit_count = 0;
+            foreach ($language_terms[$language] as $term) {
+                if (!empty($hits[$language][$term])) {
+                    $hit_count++;
+                }
+            }
+
+            $scored_languages[] = [
+                'language' => $language,
+                'hit_count' => $hit_count,
+                'enabled_index' => $index,
+            ];
+        }
+
+        if (count($enabled) <= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
+            return $enabled;
+        }
+
+        usort(
+            $scored_languages,
+            static function (array $a, array $b): int {
+                return ((int) $b['hit_count'] <=> (int) $a['hit_count'])
+                    ?: ((int) $a['enabled_index'] <=> (int) $b['enabled_index']);
+            }
+        );
+
+        $selected = [];
+        $selected_lookup = [];
+        foreach ($scored_languages as $candidate) {
+            if ((int) $candidate['hit_count'] <= 0) {
+                continue;
+            }
+
+            $language = (string) $candidate['language'];
+            $selected[] = $language;
+            $selected_lookup[$language] = true;
+            if (count($selected) >= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
+                return $selected;
+            }
+        }
+
+        foreach ($enabled as $language) {
+            if (isset($selected_lookup[$language])) {
+                continue;
+            }
+
+            $selected[] = $language;
+            if (count($selected) >= self::AUTO_LANGUAGE_MAX_PARTITIONS) {
+                break;
+            }
+        }
+
+        return $selected;
     }
 
     /**

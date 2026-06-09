@@ -42,6 +42,12 @@ interface Language_FTS_Playground_Storage_Interface
     public function fetch_postings(string $language, array $terms): array;
 
     /**
+     * @param array<string,string[]> $language_terms
+     * @return array<string,array<string,bool>>
+     */
+    public function fetch_term_language_hits(array $language_terms): array;
+
+    /**
      * @param string[] $terms
      * @param int[] $post_ids
      * @return array<string,array<int,int[]>>
