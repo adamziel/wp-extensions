@@ -396,6 +396,188 @@ final class Language_FTS_Playground_Test_Failing_Storage implements Language_FTS
     }
 }
 
+final class Language_FTS_Playground_Test_WPDB
+{
+    public string $prefix = 'wp_';
+    public string $last_error = '';
+
+    /** @var string[] */
+    public array $queries = [];
+
+    /** @var array<int,array{query:string,args:array<int,mixed>}> */
+    public array $prepared = [];
+
+    /** @var string[] */
+    public array $result_queries = [];
+
+    /** @var array<int,array{table:string,data:array<string,mixed>,format:string[]}> */
+    public array $inserts = [];
+
+    /** @var array<string,string[]> */
+    private array $columns;
+
+    /** @var array<string,string[]> */
+    private array $indexes;
+
+    /** @var string[] */
+    private array $current_columns = [];
+
+    /**
+     * @param array<string,string[]> $columns
+     * @param array<string,string[]> $indexes
+     */
+    public function __construct(private string $driver = 'sqlite', array $columns = [], array $indexes = [])
+    {
+        $this->columns = $columns + [
+            'wp_language_fts_documents' => [
+                'post_id',
+                'language',
+                'title',
+                'status',
+                'document_length',
+                'field_texts',
+                'field_metadata',
+                'updated_at',
+            ],
+            'wp_language_fts_postings' => [
+                'language',
+                'term',
+                'post_id',
+                'field',
+                'tf',
+                'positions',
+            ],
+        ];
+        $this->indexes = $indexes;
+    }
+
+    public function prepare(string $query, mixed ...$args): string
+    {
+        if (count($args) === 1 && is_array($args[0])) {
+            $args = $args[0];
+        }
+
+        $this->prepared[] = ['query' => $query, 'args' => $args];
+        foreach ($args as $arg) {
+            $replacement = is_int($arg) ? (string) $arg : "'" . addslashes((string) $arg) . "'";
+            $query = preg_replace('/%[ds]/', $replacement, $query, 1) ?? $query;
+        }
+
+        return $query;
+    }
+
+    public function query(string $sql): int
+    {
+        $this->last_error = '';
+        $this->queries[] = $sql;
+
+        if (preg_match('/^ALTER TABLE ([A-Za-z0-9_]+) ADD COLUMN ([A-Za-z0-9_]+)/', $sql, $matches) === 1) {
+            $table = $matches[1];
+            $column = $matches[2];
+            if (!in_array($column, $this->columns[$table] ?? [], true)) {
+                $this->columns[$table][] = $column;
+            }
+        }
+
+        if (preg_match('/^CREATE INDEX ([A-Za-z0-9_]+) ON ([A-Za-z0-9_]+)/', $sql, $matches) === 1) {
+            $this->indexes[$matches[2]][] = $matches[1];
+        }
+
+        return 1;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    public function get_results(string $sql, string $output = 'ARRAY_A'): array
+    {
+        unset($output);
+        $this->result_queries[] = $sql;
+
+        if (preg_match('/^SELECT \* FROM ([A-Za-z0-9_]+) WHERE 1 = 0$/', $sql, $matches) === 1) {
+            $this->last_error = '';
+            $this->current_columns = $this->columns[$matches[1]] ?? [];
+
+            return [];
+        }
+
+        if (preg_match('/^SHOW INDEX FROM ([A-Za-z0-9_]+)$/', $sql, $matches) === 1) {
+            if ($this->driver !== 'mysql') {
+                $this->last_error = 'near "SHOW": syntax error';
+
+                return [];
+            }
+
+            $this->last_error = '';
+
+            return array_map(
+                static fn(string $name): array => ['Key_name' => $name],
+                $this->indexes[$matches[1]] ?? []
+            );
+        }
+
+        if (preg_match('/^PRAGMA index_list\(([A-Za-z0-9_]+)\)$/', $sql, $matches) === 1) {
+            if ($this->driver !== 'sqlite') {
+                $this->last_error = 'near "PRAGMA": syntax error';
+
+                return [];
+            }
+
+            $this->last_error = '';
+
+            return array_map(
+                static fn(string $name): array => ['name' => $name],
+                $this->indexes[$matches[1]] ?? []
+            );
+        }
+
+        if (preg_match('/^PRAGMA table_info\(([A-Za-z0-9_]+)\)$/', $sql, $matches) === 1) {
+            $this->last_error = $this->driver === 'sqlite' ? '' : 'near "PRAGMA": syntax error';
+
+            return array_map(
+                static fn(string $name): array => ['name' => $name],
+                $this->columns[$matches[1]] ?? []
+            );
+        }
+
+        if (preg_match('/^SHOW COLUMNS FROM ([A-Za-z0-9_]+)$/', $sql, $matches) === 1) {
+            $this->last_error = $this->driver === 'mysql' ? '' : 'near "SHOW": syntax error';
+
+            return array_map(
+                static fn(string $name): array => ['Field' => $name],
+                $this->columns[$matches[1]] ?? []
+            );
+        }
+
+        $this->last_error = '';
+
+        return [];
+    }
+
+    /**
+     * @return string[]
+     */
+    public function get_col_info(string $type): array
+    {
+        return $type === 'name' ? $this->current_columns : [];
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @param string[] $format
+     */
+    public function insert(string $table, array $data, array $format): int
+    {
+        $this->inserts[] = [
+            'table' => $table,
+            'data' => $data,
+            'format' => $format,
+        ];
+
+        return 1;
+    }
+}
+
 /**
  * @var array<int,array{name:string,fn:callable}>
  */
@@ -1655,6 +1837,109 @@ test_case('storage replacement supports multiple language partitions for one pos
     }
 });
 
+test_case('wpdb storage install creates SQLite-compatible indexes and term length migration', function (): void {
+    $wpdb = new Language_FTS_Playground_Test_WPDB('sqlite');
+    $storage = new Language_FTS_Playground_Wpdb_Storage($wpdb);
+    $storage->install();
+
+    $sql = implode("\n", $wpdb->queries);
+    assert_contains_text('term_length INTEGER NOT NULL DEFAULT 0', $sql, 'Fresh postings schema declares term_length.');
+    assert_contains_text('ALTER TABLE wp_language_fts_postings ADD COLUMN term_length INTEGER NOT NULL DEFAULT 0', $sql, 'Existing postings tables receive term_length.');
+    assert_contains_text("UPDATE wp_language_fts_postings SET term_length = LENGTH(term) WHERE term_length = 0 AND term <> ''", $sql, 'Existing postings rows backfill term_length portably.');
+
+    foreach ([
+        'CREATE INDEX lft_docs_lang_post ON wp_language_fts_documents (language, post_id)',
+        'CREATE INDEX lft_docs_post ON wp_language_fts_documents (post_id)',
+        'CREATE INDEX lft_post_lang_term_post ON wp_language_fts_postings (language, term, post_id)',
+        'CREATE INDEX lft_post_lang_post ON wp_language_fts_postings (language, post_id)',
+        'CREATE INDEX lft_post_post ON wp_language_fts_postings (post_id)',
+        'CREATE INDEX lft_post_lang_len_term ON wp_language_fts_postings (language, term_length, term)',
+    ] as $ddl) {
+        assert_contains_text($ddl, $sql, "SQLite install creates {$ddl}.");
+    }
+    assert_not_contains_text('term(191)', $sql, 'SQLite indexes do not use MySQL prefix lengths.');
+});
+
+test_case('wpdb storage install creates MySQL prefix indexes for text columns', function (): void {
+    $wpdb = new Language_FTS_Playground_Test_WPDB('mysql', [
+        'wp_language_fts_postings' => [
+            'language',
+            'term',
+            'term_length',
+            'post_id',
+            'field',
+            'tf',
+            'positions',
+        ],
+    ]);
+    $storage = new Language_FTS_Playground_Wpdb_Storage($wpdb);
+    $storage->install();
+
+    $sql = implode("\n", $wpdb->queries);
+    assert_contains_text('CREATE INDEX lft_docs_lang_post ON wp_language_fts_documents (language(16), post_id)', $sql, 'MySQL document language index uses a bounded prefix.');
+    assert_contains_text('CREATE INDEX lft_post_lang_term_post ON wp_language_fts_postings (language(16), term(191), post_id)', $sql, 'MySQL posting term index uses bounded prefixes for TEXT columns.');
+    assert_contains_text('CREATE INDEX lft_post_lang_len_term ON wp_language_fts_postings (language(16), term_length, term(191))', $sql, 'MySQL fuzzy candidate index uses term_length and a bounded term prefix.');
+    assert_not_contains_text('ALTER TABLE wp_language_fts_postings ADD COLUMN term_length', $sql, 'Current MySQL schema does not repeat the term_length column migration.');
+});
+
+test_case('wpdb storage install skips indexes that already exist', function (): void {
+    $existing_indexes = [
+        'wp_language_fts_documents' => [
+            'lft_docs_lang_post',
+            'lft_docs_post',
+        ],
+        'wp_language_fts_postings' => [
+            'lft_post_lang_term_post',
+            'lft_post_lang_post',
+            'lft_post_post',
+            'lft_post_lang_len_term',
+        ],
+    ];
+    $wpdb = new Language_FTS_Playground_Test_WPDB(
+        'sqlite',
+        [
+            'wp_language_fts_postings' => [
+                'language',
+                'term',
+                'term_length',
+                'post_id',
+                'field',
+                'tf',
+                'positions',
+            ],
+        ],
+        $existing_indexes
+    );
+    $storage = new Language_FTS_Playground_Wpdb_Storage($wpdb);
+    $storage->install();
+
+    $index_queries = array_values(array_filter(
+        $wpdb->queries,
+        static fn(string $sql): bool => str_starts_with($sql, 'CREATE INDEX')
+    ));
+    assert_same([], $index_queries, 'Install does not recreate existing indexes.');
+});
+
+test_case('wpdb storage fuzzy candidate lookup uses indexed term lengths', function (): void {
+    $wpdb = new Language_FTS_Playground_Test_WPDB('sqlite', [
+        'wp_language_fts_postings' => [
+            'language',
+            'term',
+            'term_length',
+            'post_id',
+            'field',
+            'tf',
+            'positions',
+        ],
+    ]);
+    $storage = new Language_FTS_Playground_Wpdb_Storage($wpdb);
+    $storage->fetch_candidate_terms('en', 'orchrd', 1, 10);
+
+    $prepared = $wpdb->prepared[0]['query'] ?? '';
+    assert_contains_text('term_length BETWEEN %d AND %d', $prepared, 'Fuzzy candidate SQL filters by indexed term_length.');
+    assert_not_contains_text('LENGTH(term)', $prepared, 'Fuzzy candidate SQL avoids a per-row LENGTH(term) predicate.');
+});
+
 test_case('wpdb storage replacement deletes a post once before inserting partitions', function (): void {
     $wpdb = new class {
         public string $prefix = 'wp_';
@@ -1768,6 +2053,7 @@ test_case('wpdb storage replacement deletes a post once before inserting partiti
         'Document partitions persist field metadata JSON.'
     );
     assert_same(['en', 'pl'], array_column(array_column($posting_inserts, 'data'), 'language'), 'Both posting partitions are inserted.');
+    assert_same([6, 8], array_column(array_column($posting_inserts, 'data'), 'term_length'), 'Posting inserts persist byte term lengths for fuzzy lookup.');
 });
 
 test_case('lexical resource root defaults to bundled resources and handles invalid filters safely', function (): void {
