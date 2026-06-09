@@ -453,6 +453,7 @@ final class Language_FTS_Playground_Plugin
             foreach ($analyzer->enabled_languages() as $code) {
                 $language_options[$code] = $analyzer->language_label($code);
             }
+            $analyzer->assert_profiles_loadable();
         } catch (Throwable $throwable) {
             $search_error = sprintf(
                 __('Search is unavailable because lexical resources could not be loaded: %s', 'language-fts-playground'),
@@ -595,8 +596,9 @@ final class Language_FTS_Playground_Plugin
             $resource_root = self::lexical_resource_root();
             require_once __DIR__ . '/LexicalPackValidator.php';
             $report = (new Language_FTS_Playground_Lexical_Pack_Validator($resource_root))->validate_all();
+            $open_attribute = empty($report['valid']) ? ' open' : '';
 
-            echo '<details style="margin-top:1em;">';
+            echo '<details style="margin-top:1em;"' . $open_attribute . '>';
             echo '<summary><strong>' . esc_html__('Lexical pack status', 'language-fts-playground') . '</strong></summary>';
             echo '<p>' . esc_html__('Resource root:', 'language-fts-playground') . ' <code>' . esc_html($resource_root) . '</code></p>';
         } catch (Throwable $throwable) {
