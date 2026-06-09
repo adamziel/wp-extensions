@@ -563,7 +563,7 @@ test_case('quality per-language BM25 stats and boolean search properties are sta
     assert_same(['doc_count' => 4, 'len_sum' => 13], $storage->get_meta('en'), 'English BM25 partition stats');
     assert_same(['doc_count' => 1, 'len_sum' => 4], $storage->get_meta('pl'), 'Polish BM25 partition stats');
     assert_same(['doc_count' => 1, 'len_sum' => 4], $storage->get_meta('de'), 'German BM25 partition stats');
-    assert_same(4, $storage->get_terms([WP_FTS_TermNamespace::namespace_term('en', 'shared')])[WP_FTS_TermNamespace::namespace_term('en', 'shared')]['df'], 'English shared df should stay language-local');
+    assert_same(4, $storage->get_terms([WP_FTS_TermNamespace::namespace_term('en', 'share')])[WP_FTS_TermNamespace::namespace_term('en', 'share')]['df'], 'English shared df should stay language-local');
     assert_same(1, $storage->get_terms([WP_FTS_TermNamespace::namespace_term('pl', 'shared')])[WP_FTS_TermNamespace::namespace_term('pl', 'shared')]['df'], 'Polish shared df should stay language-local');
     assert_same([], $storage->get_terms(['shared']), 'raw shared term should never be stored unnamespaced');
 

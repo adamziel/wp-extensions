@@ -139,6 +139,29 @@ function wp_fts_external_reference_supported_snowball_rows(): array
                 ['line' => 40000, 'input' => 'verlengde', 'output' => 'verlengd'],
             ],
         ],
+        'english' => [
+            'code' => 'en',
+            'rows' => [
+                ['line' => 10, 'input' => "'s", 'output' => "'s"],
+                ['line' => 11, 'input' => "'s'", 'output' => 's'],
+                ['line' => 20, 'input' => 'abandoned', 'output' => 'abandon'],
+                ['line' => 21, 'input' => 'abandoning', 'output' => 'abandon'],
+                ['line' => 835, 'input' => 'agreed', 'output' => 'agre'],
+                ['line' => 2035, 'input' => 'as', 'output' => 'as'],
+                ['line' => 5569, 'input' => 'caresses', 'output' => 'caress'],
+                ['line' => 5778, 'input' => 'cats', 'output' => 'cat'],
+                ['line' => 11964, 'input' => 'early', 'output' => 'earli'],
+                ['line' => 16101, 'input' => 'generously', 'output' => 'generous'],
+                ['line' => 18341, 'input' => 'hopping', 'output' => 'hop'],
+                ['line' => 19762, 'input' => 'inning', 'output' => 'inning'],
+                ['line' => 25049, 'input' => 'news', 'output' => 'news'],
+                ['line' => 28367, 'input' => 'ponies', 'output' => 'poni'],
+                ['line' => 29113, 'input' => 'proceed', 'output' => 'proceed'],
+                ['line' => 34163, 'input' => 'skies', 'output' => 'sky'],
+                ['line' => 37784, 'input' => 'ties', 'output' => 'tie'],
+                ['line' => 40277, 'input' => 'us', 'output' => 'us'],
+            ],
+        ],
     ];
 }
 
@@ -150,8 +173,6 @@ function wp_fts_external_reference_unsupported_boundaries(): array
     $reason = 'Wamania exposes an implementation, but this project does not advertise it as Snowball-compliant against current official data.';
 
     return [
-        'english' => ['code' => 'en', 'line' => 20, 'input' => 'abandoned', 'output' => 'abandon', 'reason' => $reason],
-        'porter' => ['code' => 'en', 'line' => 20, 'input' => 'abandoned', 'output' => 'abandon', 'reason' => 'Porter English is a variant dataset and is not advertised by WP_FTS_SnowballStemmer.'],
         'german' => ['code' => 'de', 'line' => 3, 'input' => 'aalglatten', 'output' => 'aalglatt', 'reason' => $reason],
         'spanish' => ['code' => 'es', 'line' => 2, 'input' => 'aarón', 'output' => 'aaron', 'reason' => $reason],
         'french' => ['code' => 'fr', 'line' => 3, 'input' => 'abaissait', 'output' => 'abaiss', 'reason' => $reason],
@@ -313,7 +334,7 @@ test_case('quality external Snowball fixtures cover advertised supported dataset
             wp_fts_external_reference_assert_true($row['input'] !== '', "{$dataset} row {$row['line']} input should be non-empty");
             wp_fts_external_reference_assert_true($row['output'] !== '', "{$dataset} row {$row['line']} output should be non-empty");
 
-            if ($stemmer->is_available()) {
+            if ($stemmer->is_language_available($code)) {
                 wp_fts_external_reference_assert_same(
                     $row['output'],
                     $stemmer->stem($row['input'], $code),
@@ -322,8 +343,8 @@ test_case('quality external Snowball fixtures cover advertised supported dataset
             }
         }
 
-        if (!$stemmer->is_available()) {
-            wp_fts_external_reference_skip("{$dataset} runtime stem comparison", 'Wamania Snowball classes are not installed in this worktree.');
+        if (!$stemmer->is_language_available($code)) {
+            wp_fts_external_reference_skip("{$dataset} runtime stem comparison", 'The verified runtime for this language is not installed in this worktree.');
         }
     }
 });
@@ -457,7 +478,7 @@ test_case('quality external multilingual tokenization reference corpus stays sta
         'English dialect spellings' => [
             'lang' => 'en',
             'text' => 'colour colours coloured colouring flavour flavours behaviour behaviours organise organises organised organising normalise normalises normalised normalising realise realised recognise recognising',
-            'terms' => ['color', 'colors', 'colored', 'coloring', 'flavor', 'flavors', 'behavior', 'behaviors', 'organize', 'organizes', 'organized', 'organizing', 'normalize', 'normalizes', 'normalized', 'normalizing', 'realize', 'realized', 'recognize', 'recognizing'],
+            'terms' => ['color', 'color', 'color', 'color', 'flavor', 'flavor', 'behavior', 'behavior', 'organiz', 'organiz', 'organiz', 'organiz', 'normal', 'normal', 'normal', 'normal', 'realiz', 'realiz', 'recogn', 'recogn'],
         ],
         'CJK bigrams' => [
             'lang' => 'zh',

@@ -50,12 +50,14 @@ release archive should install production dependencies before the ZIP is built.
 Current runtime dependency:
 
 - `wamania/php-stemmer`, used only when stemming is enabled and the language is
-  supported by the allowlist.
+  one of the optional Wamania-backed allowlist entries: Catalan (`ca`) or Dutch
+  Porter (`nl`).
 
 The plugin bootstrap loads `vendor/autoload.php` only when it exists. Missing
-vendor dependencies do not stop the plugin from loading, but Snowball stemming
-will be unavailable and the Snowball harness will report supported languages as
-skipped.
+vendor dependencies do not stop the plugin from loading. Bundled English
+Snowball/Porter2 stemming remains available without Composer; missing vendor
+dependencies only make the Snowball harness skip Wamania-backed Catalan and
+Dutch Porter runtime comparisons.
 
 ## Build A ZIP
 
