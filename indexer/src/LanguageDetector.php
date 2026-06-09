@@ -87,9 +87,9 @@ final class WP_FTS_LanguageDetector
      */
     public function index_signature(): string
     {
-        return 'wp-fts-language-detector-v1:' . sha1($this->stableJson([
+        return 'wp-fts-language-detector-v2:' . sha1($this->stableJson([
             'contract' => 'wp-fts-language-detector',
-            'version' => 1,
+            'version' => 2,
             'minimum_score' => $this->minimumScore,
             'minimum_lead' => $this->minimumLead,
             'evidence_terms' => $this->sortedStringSetMap($this->evidenceTerms),
@@ -173,19 +173,19 @@ final class WP_FTS_LanguageDetector
     private function score_script_evidence(string $text, array &$scores, array $allowed): void
     {
         $scriptEvidence = [
-            'zh' => '/\p{Han}/u',
-            'ja' => '/[\p{Hiragana}\p{Katakana}]/u',
-            'ko' => '/\p{Hangul}/u',
-            'ru' => '/\p{Cyrillic}/u',
+            'zh' => ['pattern' => '/\p{Han}/u', 'score' => 4],
+            'ja' => ['pattern' => '/[\p{Hiragana}\p{Katakana}]/u', 'score' => 6],
+            'ko' => ['pattern' => '/\p{Hangul}/u', 'score' => 4],
+            'ru' => ['pattern' => '/\p{Cyrillic}/u', 'score' => 4],
         ];
 
-        foreach ($scriptEvidence as $lang => $pattern) {
+        foreach ($scriptEvidence as $lang => $evidence) {
             if ($allowed !== [] && !isset($allowed[$lang])) {
                 continue;
             }
 
-            if (@preg_match($pattern, $text) === 1) {
-                $scores[$lang] = ($scores[$lang] ?? 0) + 4;
+            if (@preg_match($evidence['pattern'], $text) === 1) {
+                $scores[$lang] = ($scores[$lang] ?? 0) + $evidence['score'];
             }
         }
     }
@@ -197,19 +197,21 @@ final class WP_FTS_LanguageDetector
     private function score_distinctive_latin_evidence(string $text, array &$scores, array $allowed): void
     {
         $patterns = [
-            'de' => '/[ÄÖÜäöüß]/u',
-            'es' => '/[Ññ¿¡]/u',
-            'fr' => '/[ÀÂÆÇÈÉÊËÎÏÔŒÙÛŸàâæçèéêëîïôœùûÿ]/u',
-            'pl' => '/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/u',
+            'de' => ['pattern' => '/[ÄÖÜäöüß]/u', 'score' => 3],
+            'es' => ['pattern' => '/[¿¡]/u', 'score' => 3],
+            'es_accent' => ['lang' => 'es', 'pattern' => '/[Ññ]/u', 'score' => 2],
+            'fr' => ['pattern' => '/[ÀÂÆÇÈÉÊËÎÏÔŒÙÛŸàâæçèéêëîïôœùûÿ]/u', 'score' => 2],
+            'pl' => ['pattern' => '/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/u', 'score' => 3],
         ];
 
-        foreach ($patterns as $lang => $pattern) {
+        foreach ($patterns as $key => $evidence) {
+            $lang = $evidence['lang'] ?? $key;
             if ($allowed !== [] && !isset($allowed[$lang])) {
                 continue;
             }
 
-            if (@preg_match($pattern, $text) === 1) {
-                $scores[$lang] = ($scores[$lang] ?? 0) + 3;
+            if (@preg_match($evidence['pattern'], $text) === 1) {
+                $scores[$lang] = ($scores[$lang] ?? 0) + $evidence['score'];
             }
         }
     }
