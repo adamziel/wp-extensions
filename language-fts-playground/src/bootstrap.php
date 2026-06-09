@@ -25,5 +25,6 @@ require_once __DIR__ . '/InMemoryStorage.php';
 require_once __DIR__ . '/WpdbStorage.php';
 require_once __DIR__ . '/Indexer.php';
 require_once __DIR__ . '/Searcher.php';
+require_once __DIR__ . '/SearchBenchmarkCounters.php';
 require_once __DIR__ . '/Demo.php';
 require_once __DIR__ . '/Plugin.php';
