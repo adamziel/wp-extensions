@@ -10,8 +10,7 @@ Future support for `thai_dictionary_tcc_v1` must start with a reviewed source
 lock before any adapter, importer, bundled Thai dictionary, generated TCC rules,
 or production `th` resource pack is committed.
 
-The committed Thai source-candidate lock is evidence only: no dictionary rows,
-TCC/TCC+ rules, or tokenizer adapter are committed.
+The committed Thai source-candidate lock is evidence only: no dictionary rows, TCC/TCC+ rules, or tokenizer adapter are committed.
 
 ## Required Source-Lock Record
 
