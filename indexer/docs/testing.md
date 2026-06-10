@@ -30,6 +30,21 @@ php -n tests/run.php
 
 This verifies the fallback paths used when optional extensions are missing.
 
+## Native Relevance Gold Benchmark
+
+The main harness includes the committed native relevance fixture automatically.
+Run the evaluator directly when you need the per-query metrics table:
+
+```sh
+php tests/relevance-benchmark.php --suite=tests/fixtures/relevance/native-core.json
+php tests/relevance-benchmark.php --suite=tests/fixtures/relevance/native-core.json --json
+php -n tests/relevance-benchmark.php --suite=tests/fixtures/relevance/native-core.json
+```
+
+The fixture is a modest regression gate for the current analyzer/searcher
+contract. It reports recall@5, precision@5, MRR, nDCG@5, and cross-language
+false positives; it is not a production relevance-quality claim.
+
 ## Explicit Check Gate
 
 The integrated quality harness is expected to meet at least 1500 checks:

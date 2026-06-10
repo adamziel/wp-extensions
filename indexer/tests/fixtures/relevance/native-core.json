@@ -1,0 +1,505 @@
+{
+  "schema": "wp-fts-native-relevance-suite-v1",
+  "name": "Native multilingual relevance core",
+  "source": "Committed deterministic fixture for the indexer plugin. This is a first regression gate, not a production relevance quality claim.",
+  "top_k": 5,
+  "thresholds": {
+    "recall_at_5": 0.8,
+    "precision_at_5": 0.18,
+    "mrr": 0.7,
+    "ndcg_at_5": 0.75,
+    "max_cross_language_false_positives": 0
+  },
+  "advisory_thresholds": {
+    "recall_at_5": 0.9,
+    "precision_at_5": 0.25,
+    "mrr": 0.85,
+    "ndcg_at_5": 0.85
+  },
+  "documents": [
+    {
+      "id": "pl-cats-target",
+      "numeric_id": 101,
+      "language": "pl",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "Polska morfologia kot",
+      "content": "<article><p>Wrocław oraz Łódź opisują kotami wyszukiwania. Kotami kotami oraz szukaj.</p></article>"
+    },
+    {
+      "id": "pl-near-miss",
+      "numeric_id": 102,
+      "language": "pl",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "Polski dokument poboczny",
+      "content": "<p>Wrocław i Łódź mają zamek, rzeka oraz most. Brak słowa o zwierzętach.</p>"
+    },
+    {
+      "id": "en-polish-bait",
+      "numeric_id": 103,
+      "language": "en",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "English quoted Polish bait",
+      "content": "<p>The English article quotes Wroclaw Lodz kotami as foreign examples, but it stays in English search space.</p>"
+    },
+    {
+      "id": "de-target",
+      "numeric_id": 201,
+      "language": "de",
+      "family": "german-detection-stemming-boundary",
+      "visibility": "public",
+      "title": "Deutsche Führung Straße",
+      "content": "<p>Führung und Straße bleiben zusammen. Die Suche ist mit Führung Straße klar.</p>"
+    },
+    {
+      "id": "de-boundary-noop",
+      "numeric_id": 202,
+      "language": "de",
+      "family": "german-detection-stemming-boundary",
+      "visibility": "public",
+      "title": "Deutscher Stemming Grenzfall",
+      "content": "<p>Leitung und Wege prüfen den aktuellen no-op Vertrag ohne verified German stemmer.</p>"
+    },
+    {
+      "id": "en-german-bait",
+      "numeric_id": 203,
+      "language": "en",
+      "family": "german-detection-stemming-boundary",
+      "visibility": "public",
+      "title": "English quoted German bait",
+      "content": "<p>This English note quotes Führung Straße and Suche as vocabulary examples only.</p>"
+    },
+    {
+      "id": "en-override",
+      "numeric_id": 301,
+      "language": "en",
+      "family": "english-explicit-override",
+      "visibility": "public",
+      "title": "English override document",
+      "content": "<p>Wroclaw Lodz Fuhrung Strasse color search override English partition. Color search override repeats color.</p>"
+    },
+    {
+      "id": "mixed-core",
+      "numeric_id": 401,
+      "language": "en",
+      "family": "mixed-language-documents",
+      "visibility": "public",
+      "title": "Mixed language document",
+      "content": "<article><p>English bridge harbor alpha signal.</p><p lang=\"pl\">Mieszany segment kotami oraz wyszukiwania Wrocław Łódź.</p><span lang=\"de\">Mischsegment Führung Straße und Suche.</span><nav>hiddennav kotami Führung</nav><script>secretbait kotami Führung</script></article>"
+    },
+    {
+      "id": "mixed-pl-bait",
+      "numeric_id": 402,
+      "language": "pl",
+      "family": "mixed-language-documents",
+      "visibility": "public",
+      "title": "Częściowa polska przynęta",
+      "content": "<p>Wrocław oraz Łódź bez mieszanego segmentu i bez zwierząt.</p>"
+    },
+    {
+      "id": "mixed-de-bait",
+      "numeric_id": 403,
+      "language": "de",
+      "family": "mixed-language-documents",
+      "visibility": "public",
+      "title": "Teilweise deutsche Suche",
+      "content": "<p>Führung Straße Suche ohne den eindeutigen Marker.</p>"
+    },
+    {
+      "id": "rest-hidden-private",
+      "numeric_id": 501,
+      "language": "en",
+      "family": "rest-visible-hidden-ranking",
+      "visibility": "private",
+      "post_status": "private",
+      "title": "Private shared refill",
+      "content": "<p>shared refill shared refill shared refill shared refill hidden private.</p>"
+    },
+    {
+      "id": "rest-password",
+      "numeric_id": 502,
+      "language": "en",
+      "family": "rest-visible-hidden-ranking",
+      "visibility": "password",
+      "post_password": "secret",
+      "title": "Password shared refill",
+      "content": "<p>shared refill shared refill shared refill password hidden.</p>"
+    },
+    {
+      "id": "rest-excluded-type",
+      "numeric_id": 503,
+      "language": "en",
+      "family": "rest-visible-hidden-ranking",
+      "visibility": "excluded_type",
+      "post_type": "secret",
+      "title": "Excluded shared refill",
+      "content": "<p>shared refill shared refill excluded hidden.</p>"
+    },
+    {
+      "id": "rest-public",
+      "numeric_id": 504,
+      "language": "en",
+      "family": "rest-visible-hidden-ranking",
+      "visibility": "public",
+      "post_status": "publish",
+      "post_type": "post",
+      "title": "Public shared refill",
+      "content": "<p>shared refill visible public.</p>"
+    },
+    {
+      "id": "rest-readable-private",
+      "numeric_id": 505,
+      "language": "en",
+      "family": "rest-visible-hidden-ranking",
+      "visibility": "private_readable",
+      "post_status": "private",
+      "post_type": "post",
+      "title": "Readable private shared refill",
+      "content": "<p>shared refill readable private shared refill.</p>"
+    },
+    {
+      "id": "fallback-target",
+      "numeric_id": 601,
+      "family": "fallback-no-evidence",
+      "visibility": "public",
+      "title": "Fallback alpha beta",
+      "content": "<p>alpha beta shared fallback target plain English without detector evidence.</p>"
+    },
+    {
+      "id": "fallback-loanword",
+      "numeric_id": 602,
+      "language": "en",
+      "family": "fallback-no-evidence",
+      "visibility": "public",
+      "title": "Loanword fallback",
+      "content": "<p>Beyoncé résumé cafe jalapeño piñata remain ordinary fallback loanwords.</p>"
+    },
+    {
+      "id": "fallback-unsupported-bait",
+      "numeric_id": 603,
+      "language": "fr",
+      "family": "fallback-no-evidence",
+      "visibility": "public",
+      "title": "Unsupported partition bait",
+      "content": "<p>alpha beta shared words live in French for the unsupported language boundary.</p>"
+    }
+  ],
+  "queries": [
+    {
+      "id": "pl-kot-explicit",
+      "family": "polish-morphology",
+      "query": "kot",
+      "language": "pl",
+      "mode": "OR",
+      "judgments": {
+        "pl-cats-target": 3
+      },
+      "irrelevant": [
+        "pl-near-miss",
+        "en-polish-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-polish-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "pl-cats-target"
+        ]
+      }
+    },
+    {
+      "id": "pl-auto-wroclaw-lodz",
+      "family": "polish-morphology",
+      "query": "Wrocław Łódź kot",
+      "mode": "AND",
+      "judgments": {
+        "pl-cats-target": 3
+      },
+      "irrelevant": [
+        "en-polish-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-polish-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "pl-cats-target"
+        ]
+      }
+    },
+    {
+      "id": "de-auto-fuehrung-strasse",
+      "family": "german-detection-stemming-boundary",
+      "query": "Führung Straße",
+      "mode": "AND",
+      "judgments": {
+        "de-target": 3
+      },
+      "irrelevant": [
+        "en-german-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-german-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "de-target"
+        ]
+      }
+    },
+    {
+      "id": "de-explicit-suche",
+      "family": "german-detection-stemming-boundary",
+      "query": "Deutsche Führung",
+      "language": "de",
+      "mode": "AND",
+      "judgments": {
+        "de-target": 3
+      },
+      "irrelevant": [
+        "en-german-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-german-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "de-target"
+        ]
+      }
+    },
+    {
+      "id": "de-no-verified-stemmer-boundary",
+      "family": "german-detection-stemming-boundary",
+      "query": "Führungen",
+      "language": "de",
+      "mode": "AND",
+      "expect": {
+        "no_results": true
+      }
+    },
+    {
+      "id": "en-explicit-override",
+      "family": "english-explicit-override",
+      "query": "color search override",
+      "language": "en",
+      "mode": "AND",
+      "judgments": {
+        "en-override": 3
+      },
+      "irrelevant": [
+        "pl-cats-target",
+        "de-target"
+      ],
+      "cross_language_irrelevant": [
+        "pl-cats-target",
+        "de-target"
+      ],
+      "expect": {
+        "top_ids": [
+          "en-override"
+        ]
+      }
+    },
+    {
+      "id": "pl-query-does-not-steal-english-override",
+      "family": "english-explicit-override",
+      "query": "Wrocław Łódź kot",
+      "language": "pl",
+      "mode": "AND",
+      "judgments": {
+        "pl-cats-target": 3
+      },
+      "irrelevant": [
+        "en-override"
+      ],
+      "cross_language_irrelevant": [
+        "en-override"
+      ],
+      "expect": {
+        "top_ids": [
+          "pl-cats-target"
+        ]
+      }
+    },
+    {
+      "id": "mixed-polish-segment",
+      "family": "mixed-language-documents",
+      "query": "mieszany segment kot",
+      "language": "pl",
+      "mode": "AND",
+      "judgments": {
+        "mixed-core": 3
+      },
+      "irrelevant": [
+        "mixed-pl-bait",
+        "en-polish-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-polish-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "mixed-core"
+        ]
+      }
+    },
+    {
+      "id": "mixed-german-segment",
+      "family": "mixed-language-documents",
+      "query": "Mischsegment Führung",
+      "language": "de",
+      "mode": "AND",
+      "judgments": {
+        "mixed-core": 3
+      },
+      "irrelevant": [
+        "mixed-de-bait",
+        "en-german-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-german-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "mixed-core"
+        ]
+      }
+    },
+    {
+      "id": "mixed-english-segment",
+      "family": "mixed-language-documents",
+      "query": "bridge harbor alpha",
+      "language": "en",
+      "mode": "AND",
+      "judgments": {
+        "mixed-core": 3
+      },
+      "irrelevant": [
+        "pl-cats-target",
+        "de-target"
+      ],
+      "cross_language_irrelevant": [
+        "pl-cats-target",
+        "de-target"
+      ],
+      "expect": {
+        "top_ids": [
+          "mixed-core"
+        ]
+      }
+    },
+    {
+      "id": "rest-refill-limit-one",
+      "family": "rest-visible-hidden-ranking",
+      "surface": "plugin_rest",
+      "query": "shared refill",
+      "language": "en",
+      "mode": "AND",
+      "limit": 1,
+      "judgments": {
+        "rest-public": 3
+      },
+      "irrelevant": [
+        "rest-hidden-private",
+        "rest-password",
+        "rest-excluded-type",
+        "rest-readable-private"
+      ],
+      "expect": {
+        "top_ids": [
+          "rest-public"
+        ]
+      }
+    },
+    {
+      "id": "rest-alias-limit-two",
+      "family": "rest-visible-hidden-ranking",
+      "surface": "plugin_rest",
+      "rest_alias": true,
+      "query": "shared refill",
+      "language": "en",
+      "mode": "AND",
+      "limit": 2,
+      "judgments": {
+        "rest-public": 3
+      },
+      "irrelevant": [
+        "rest-hidden-private",
+        "rest-password",
+        "rest-excluded-type",
+        "rest-readable-private"
+      ],
+      "expect": {
+        "top_ids": [
+          "rest-public"
+        ]
+      }
+    },
+    {
+      "id": "rest-readable-private-capability",
+      "family": "rest-visible-hidden-ranking",
+      "surface": "plugin_rest",
+      "query": "shared refill readable",
+      "language": "en",
+      "mode": "AND",
+      "limit": 2,
+      "capabilities": {
+        "read_post": [
+          "rest-readable-private"
+        ]
+      },
+      "judgments": {
+        "rest-readable-private": 3
+      },
+      "irrelevant": [
+        "rest-hidden-private",
+        "rest-password",
+        "rest-excluded-type"
+      ]
+    },
+    {
+      "id": "fallback-generic-alpha-beta",
+      "family": "fallback-no-evidence",
+      "query": "alpha beta",
+      "mode": "AND",
+      "judgments": {
+        "fallback-target": 3
+      },
+      "irrelevant": [
+        "fallback-unsupported-bait"
+      ],
+      "cross_language_irrelevant": [
+        "fallback-unsupported-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "fallback-target"
+        ]
+      }
+    },
+    {
+      "id": "fallback-stopword-no-evidence",
+      "family": "fallback-no-evidence",
+      "query": "to be",
+      "language": "en",
+      "mode": "AND",
+      "expect": {
+        "no_results": true
+      }
+    },
+    {
+      "id": "unsupported-language-no-cross-partition",
+      "family": "fallback-no-evidence",
+      "query": "alpha beta",
+      "language": "zz",
+      "mode": "AND",
+      "disable_language_fallback": true,
+      "expect": {
+        "no_results": true
+      }
+    }
+  ]
+}
