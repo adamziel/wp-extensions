@@ -104,7 +104,18 @@ php language-fts-playground/tools/verify-wordpress-org-svn-stage.php \
 The dry-run stage does not upload to WordPress.org, request a slug, create
 directory assets, or prove submission readiness. `--submission-readiness` on
 the SVN stage verifier is a local asset inventory gate for a future approved
-asset set; it still does not contact WordPress.org services. See
+asset set; it still does not contact WordPress.org services. Future approved
+assets must also pass the local source/license manifest verifier before their
+`final/` files are copied with `--assets-source`:
+
+```sh
+php language-fts-playground/tools/verify-wordpress-org-asset-manifest.php \
+  --manifest=/absolute/path/to/approved-wordpress-org-assets/manifest.json
+```
+
+The manifest verifier does not generate assets, read credentials, contact
+WordPress.org, run official validators, run real SVN, or authorize public
+submission. See
 `docs/wordpress-org-svn-staging.md` and
 `docs/wordpress-org-directory-assets.md` for the full runbooks and remaining
 gates.
