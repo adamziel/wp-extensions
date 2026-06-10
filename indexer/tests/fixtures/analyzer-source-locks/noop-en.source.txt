@@ -1,0 +1,5 @@
+WP FTS synthetic no-op analyzer fixture
+format: wp-fts-analyzer-source/v1
+language: en
+behavior: return normalized input unchanged
+third_party_lexical_data: none

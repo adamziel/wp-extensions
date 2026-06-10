@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../src/bootstrap.php';
 require_once __DIR__ . '/../src/LexicalPackValidator.php';
+require_once __DIR__ . '/../src/LexicalSourceLockVerifier.php';
+require_once __DIR__ . '/../src/LexicalSourceCandidateLockVerifier.php';
 
 final class Language_FTS_Playground_Test_Failure extends RuntimeException
 {
@@ -1851,6 +1853,40 @@ function run_language_fts_validator(array $options = [], bool $no_ini = true): a
  * @param array<string,mixed> $options
  * @return array{exit_code:int,output:string}
  */
+function run_language_fts_source_lock_verifier(string $path, array $options = [], bool $no_ini = false): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+    ];
+    if ($no_ini) {
+        $command[] = '-n';
+    }
+    $command[] = escapeshellarg(__DIR__ . '/../tools/verify-lexical-source-lock.php');
+    $command[] = escapeshellarg($path);
+
+    foreach ($options as $key => $value) {
+        $option = '--' . str_replace('_', '-', (string) $key);
+        if ($value === true) {
+            $command[] = escapeshellarg($option);
+        } elseif ($value !== false && $value !== null) {
+            $command[] = escapeshellarg($option . '=' . (string) $value);
+        }
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
 function run_language_fts_evaluator(string $fixture_path, array $options = [], bool $no_ini = false): array
 {
     $command = [
@@ -1861,6 +1897,40 @@ function run_language_fts_evaluator(string $fixture_path, array $options = [], b
     }
     $command[] = escapeshellarg(__DIR__ . '/../tools/evaluate-lexical-pack.php');
     $command[] = escapeshellarg($fixture_path);
+
+    foreach ($options as $key => $value) {
+        $option = '--' . str_replace('_', '-', (string) $key);
+        if ($value === true) {
+            $command[] = escapeshellarg($option);
+        } elseif ($value !== false && $value !== null) {
+            $command[] = escapeshellarg($option . '=' . (string) $value);
+        }
+    }
+
+    $lines = [];
+    $exit_code = 0;
+    exec(implode(' ', $command) . ' 2>&1', $lines, $exit_code);
+
+    return [
+        'exit_code' => $exit_code,
+        'output' => implode("\n", $lines),
+    ];
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array{exit_code:int,output:string}
+ */
+function run_language_fts_source_candidate_lock_verifier(string $path, array $options = [], bool $no_ini = false): array
+{
+    $command = [
+        escapeshellarg(PHP_BINARY),
+    ];
+    if ($no_ini) {
+        $command[] = '-n';
+    }
+    $command[] = escapeshellarg(__DIR__ . '/../tools/verify-lexical-source-candidate-lock.php');
+    $command[] = escapeshellarg($path);
 
     foreach ($options as $key => $value) {
         $option = '--' . str_replace('_', '-', (string) $key);
@@ -4128,6 +4198,253 @@ test_case('lexical pack validator fails mismatched inventory locks', function ()
     }
 });
 
+test_case('OEWN comprehensive source-lock preflight verifies without starting import', function (): void {
+    $path = __DIR__ . '/../review-artifacts/source-locks/oewn-comprehensive-preflight.json';
+    $repo_root = dirname(__DIR__, 2);
+    $verifier = new Language_FTS_Playground_Lexical_Source_Lock_Verifier();
+    $report = $verifier->verify_file($path, true, $repo_root);
+
+    assert_same(true, $report['valid'], 'The OEWN preflight source-lock artifact passes verifier preflight mode.');
+    assert_same(true, $report['blocks_real_import'], 'The OEWN preflight artifact still blocks real import.');
+    assert_same(
+        [
+            'source.version',
+            'source.artifact.name',
+            'source.artifact.url',
+            'source.artifact.sha256',
+            'source.artifact.bytes',
+        ],
+        $report['pending_exact_values'],
+        'The OEWN preflight artifact names only exact future source artifact values as pending.'
+    );
+
+    $lock = json_decode((string) file_get_contents($path), true);
+    assert_true(is_array($lock), 'OEWN preflight JSON decodes.');
+    assert_same(false, $lock['claim_boundaries']['bundled_pack_is_comprehensive_oewn'] ?? null, 'The preflight artifact does not claim the bundled pack is comprehensive OEWN.');
+    assert_same(false, $lock['claim_boundaries']['full_source_import_started'] ?? null, 'The preflight artifact says no full-source import has started.');
+    assert_same(false, $lock['claim_boundaries']['runtime_pack_generated'] ?? null, 'The preflight artifact says no runtime pack was generated.');
+
+    $cli = run_language_fts_source_lock_verifier($path, ['allow_pending_artifact_values' => true]);
+    assert_same(0, $cli['exit_code'], 'The source-lock verifier CLI accepts the OEWN preflight artifact with pending exact values allowed. Output: ' . $cli['output']);
+    assert_contains_text('Blocks real import: yes', $cli['output'], 'The verifier CLI reports that real import remains blocked.');
+
+    $strict_cli = run_language_fts_source_lock_verifier($path);
+    assert_true($strict_cli['exit_code'] !== 0, 'Strict source-lock mode rejects pending exact artifact values.');
+    assert_contains_text('source.version must be a concrete source-lock value before import', $strict_cli['output'], 'Strict mode names the missing exact source version.');
+    assert_contains_text('source.artifact.sha256 must be a concrete source-lock value before import', $strict_cli['output'], 'Strict mode names the missing exact source hash.');
+});
+
+test_case('OEWN source-lock verifier rejects missing preflight gates', function (): void {
+    $path = __DIR__ . '/../review-artifacts/source-locks/oewn-comprehensive-preflight.json';
+    $repo_root = dirname(__DIR__, 2);
+    $base = json_decode((string) file_get_contents($path), true);
+    assert_true(is_array($base), 'OEWN preflight JSON decodes for mutation tests.');
+
+    $cases = [
+        [
+            'source URL',
+            static function (array &$lock): void {
+                unset($lock['source']['url']);
+            },
+            'source.url is required.',
+        ],
+        [
+            'source version',
+            static function (array &$lock): void {
+                unset($lock['source']['version']);
+            },
+            'source.version is required.',
+        ],
+        [
+            'source artifact hash',
+            static function (array &$lock): void {
+                unset($lock['source']['artifact']['sha256']);
+            },
+            'source.artifact.sha256 is required.',
+        ],
+        [
+            'artifact byte count',
+            static function (array &$lock): void {
+                unset($lock['source']['artifact']['bytes']);
+            },
+            'source.artifact.bytes must be a positive integer.',
+        ],
+        [
+            'license notice',
+            static function (array &$lock): void {
+                unset($lock['license']['notice_file']);
+            },
+            'license.notice_file is required.',
+        ],
+        [
+            'provenance id',
+            static function (array &$lock): void {
+                unset($lock['provenance']['id']);
+            },
+            'provenance.id is required.',
+        ],
+        [
+            'importer command',
+            static function (array &$lock): void {
+                unset($lock['importer']['command']);
+            },
+            'importer.command is required.',
+        ],
+        [
+            'normalization profile',
+            static function (array &$lock): void {
+                unset($lock['normalization']['profile_id']);
+            },
+            'normalization.profile_id is required.',
+        ],
+        [
+            'fanout cap',
+            static function (array &$lock): void {
+                unset($lock['fanout_caps']['max_synset_size']);
+            },
+            'fanout_caps.max_synset_size must be a positive integer.',
+        ],
+        [
+            'evaluator fixture path',
+            static function (array &$lock): void {
+                unset($lock['evaluator']['fixture_path']);
+            },
+            'evaluator.fixture_path is required.',
+        ],
+        [
+            'benchmark budget',
+            static function (array &$lock): void {
+                unset($lock['benchmark']['budget']);
+            },
+            'benchmark.budget must be an object.',
+        ],
+    ];
+
+    $verifier = new Language_FTS_Playground_Lexical_Source_Lock_Verifier();
+    foreach ($cases as [$label, $mutate, $expected_error]) {
+        $lock = $base;
+        $mutate($lock);
+        $report = $verifier->verify($lock, 'mutated-' . $label, true, $repo_root);
+
+        assert_same(false, $report['valid'], 'Missing ' . $label . ' fails OEWN source-lock preflight verification.');
+        assert_contains_text($expected_error, implode("\n", $report['errors']), 'Missing ' . $label . ' reports the expected verifier error.');
+    }
+});
+
+test_case('OEWN exact source candidate lock verifies while blocking import', function (): void {
+    $path = __DIR__ . '/../review-artifacts/source-locks/oewn-2025-json-source-candidate.json';
+    $repo_root = dirname(__DIR__, 2);
+    $verifier = new Language_FTS_Playground_Lexical_Source_Candidate_Lock_Verifier();
+    $report = $verifier->verify_file($path, $repo_root);
+
+    assert_same(true, $report['valid'], 'The OEWN source candidate lock passes verifier checks.');
+    assert_same(true, $report['blocks_real_import'], 'The OEWN source candidate lock still blocks real import.');
+    assert_same(
+        [
+            'source.version.full_commit_sha',
+            'source.artifact.sha256',
+            'source.artifact.bytes',
+            'source.artifact.retrieved_at',
+            'source.artifact.archive_member_manifest',
+            'license.notice_files_required',
+            'license.attribution_subjects',
+            'importer.pre_extraction_questions',
+            'gates_before_import.lexical_validator',
+            'gates_before_import.evaluator',
+            'gates_before_import.benchmark',
+        ],
+        $report['pending_before_import'],
+        'The OEWN candidate lock names only review gates that must be resolved before import.'
+    );
+
+    $lock = json_decode((string) file_get_contents($path), true);
+    assert_true(is_array($lock), 'OEWN source candidate JSON decodes.');
+    assert_same('https://en-word.net/static/english-wordnet-2025-json.zip', $lock['source']['artifact']['url'] ?? null, 'The candidate lock records the exact upstream JSON zip URL.');
+    assert_same(false, $lock['claim_boundaries']['source_artifact_downloaded_by_task'] ?? null, 'The candidate lock records that this task did not download OEWN.');
+    assert_same(false, $lock['claim_boundaries']['runtime_pack_generated'] ?? null, 'The candidate lock records that no runtime pack was generated.');
+    assert_true(in_array('open_english_wordnet_plus_2025', $lock['source']['excluded_variants'] ?? [], true), 'The first OEWN candidate excludes the Plus variant.');
+    assert_true(in_array('open_english_namenet_2025', $lock['source']['excluded_variants'] ?? [], true), 'The first OEWN candidate excludes Namenet.');
+
+    $cli = run_language_fts_source_candidate_lock_verifier($path, ['allow_pending_exact_values' => true, 'json' => true]);
+    assert_same(0, $cli['exit_code'], 'The source candidate verifier CLI accepts the OEWN candidate lock. Output: ' . $cli['output']);
+    $cli_report = json_decode($cli['output'], true);
+    assert_true(is_array($cli_report), 'The source candidate verifier CLI emits parseable JSON.');
+    assert_same(true, $cli_report['blocks_real_import'] ?? null, 'The source candidate verifier CLI reports that real import remains blocked.');
+
+    $no_ini_cli = run_language_fts_source_candidate_lock_verifier($path, ['allow_pending_exact_values' => true], true);
+    assert_same(0, $no_ini_cli['exit_code'], 'The source candidate verifier CLI works under php -n. Output: ' . $no_ini_cli['output']);
+    assert_contains_text('Blocks real import: yes', $no_ini_cli['output'], 'The human CLI output keeps the real import boundary visible.');
+});
+
+test_case('OEWN source candidate verifier rejects missing gates and support claims', function (): void {
+    $path = __DIR__ . '/../review-artifacts/source-locks/oewn-2025-json-source-candidate.json';
+    $repo_root = dirname(__DIR__, 2);
+    $base = json_decode((string) file_get_contents($path), true);
+    assert_true(is_array($base), 'OEWN source candidate JSON decodes for mutation tests.');
+
+    $cases = [
+        [
+            'artifact URL',
+            static function (array &$lock): void {
+                unset($lock['source']['artifact']['url']);
+            },
+            'source.artifact.url is required.',
+        ],
+        [
+            'artifact hash marker',
+            static function (array &$lock): void {
+                unset($lock['source']['artifact']['sha256']);
+            },
+            'source.artifact.sha256 must be marked pending_before_import',
+        ],
+        [
+            'license source chain',
+            static function (array &$lock): void {
+                $lock['license']['source_chain_identifiers'] = ['CC-BY-4.0'];
+            },
+            'license.source_chain_identifiers must include WordNet-License-Princeton.',
+        ],
+        [
+            'pre-extraction questions',
+            static function (array &$lock): void {
+                unset($lock['importer']['pre_extraction_questions']);
+            },
+            'importer.pre_extraction_questions must be a non-empty array of strings.',
+        ],
+        [
+            'benchmark gate',
+            static function (array &$lock): void {
+                unset($lock['gates_before_import']['benchmark']);
+            },
+            'gates_before_import.benchmark is required.',
+        ],
+        [
+            'runtime pack claim',
+            static function (array &$lock): void {
+                $lock['claim_boundaries']['runtime_pack_generated'] = true;
+            },
+            'claim_boundaries.runtime_pack_generated must be false.',
+        ],
+        [
+            'Namenet exclusion',
+            static function (array &$lock): void {
+                $lock['source']['excluded_variants'] = ['open_english_wordnet_plus_2025'];
+            },
+            'source.excluded_variants must include open_english_namenet_2025.',
+        ],
+    ];
+
+    $verifier = new Language_FTS_Playground_Lexical_Source_Candidate_Lock_Verifier();
+    foreach ($cases as [$label, $mutate, $expected_error]) {
+        $lock = $base;
+        $mutate($lock);
+        $report = $verifier->verify($lock, 'mutated-' . $label, $repo_root);
+
+        assert_same(false, $report['valid'], 'Missing or invalid ' . $label . ' fails OEWN source candidate verification.');
+        assert_contains_text($expected_error, implode("\n", $report['errors']), 'Missing or invalid ' . $label . ' reports the expected verifier error.');
+    }
+});
+
 test_case('lexical pack validator requires runtime resource and file pairs', function (): void {
     $root = create_language_fts_temp_profile_tree("# observed\tcanonical\tprovenance\nalpha\talpha\tfixture-comprehensive\n");
     $language_dir = $root . DIRECTORY_SEPARATOR . 'xx';
@@ -5437,6 +5754,13 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('curated seed', $docs, 'Lexical docs describe shipped resources as seed data.');
     assert_contains_text('not a comprehensive synonym database', $docs, 'Lexical docs do not imply comprehensive databases are shipped.');
     assert_contains_text('Open English WordNet', $docs, 'Lexical docs mention Open English WordNet source caveats.');
+    assert_contains_text('OEWN Source-Lock Preflight', $docs, 'Lexical docs describe the OEWN source-lock preflight.');
+    assert_contains_text('Current bundled/indexer data is not a comprehensive OEWN pack', $docs, 'Lexical docs keep the OEWN comprehensive boundary explicit.');
+    assert_contains_text('No full-source', $docs, 'Lexical docs state that no OEWN full-source import has started.');
+    assert_contains_text('OEWN import has begun', $docs, 'Lexical docs state that no OEWN full-source import has started.');
+    assert_contains_text('OEWN 2025 JSON Source Candidate Lock', $docs, 'Lexical docs describe the OEWN exact source candidate lock.');
+    assert_contains_text('english-wordnet-2025-json.zip', $docs, 'Lexical docs name the exact candidate artifact without vendoring it.');
+    assert_contains_text('The task did not download OEWN data', $docs, 'Lexical docs keep the OEWN no-download boundary explicit.');
     assert_contains_text('JSON-LD excerpts with an `@graph`', $docs, 'Lexical docs describe the supported WordNet JSON-LD shape.');
     assert_contains_text('simple project fixture', $docs, 'Lexical docs distinguish simple WordNet-like fixtures from JSON-LD source excerpts.');
     assert_contains_text('OpenThesaurus', $docs, 'Lexical docs mention OpenThesaurus source caveats.');
@@ -5453,6 +5777,12 @@ test_case('lexical resource docs keep comprehensive source caveats explicit', fu
     assert_contains_text('Broad synsets are dangerous', $docs, 'Lexical docs explain broad synset search-quality risk.');
     assert_contains_text('Lexical pack status', $docs, 'Lexical docs explain the admin pack status table.');
     assert_contains_text('seed data unless', $readme, 'README keeps the shipped-data limitation explicit.');
+    assert_contains_text('source-lock preflight artifact', $readme, 'README documents the OEWN source-lock preflight artifact.');
+    assert_contains_text('Current bundled/indexer data is not a comprehensive OEWN pack', $readme, 'README keeps the OEWN comprehensive boundary explicit.');
+    assert_contains_text('No full-source', $readme, 'README states that no OEWN full-source import has started.');
+    assert_contains_text('OEWN source-candidate lock', $readme, 'README documents the OEWN source-candidate lock.');
+    assert_contains_text('No OEWN source archive or generated OEWN', $readme, 'README keeps the OEWN source archive boundary explicit.');
+    assert_contains_text('runtime pack is bundled', $readme, 'README keeps the OEWN runtime pack boundary explicit.');
     assert_contains_text('validate-lexical-packs.php', $readme, 'README documents the validation CLI.');
     assert_contains_text('evaluate-lexical-pack.php', $readme, 'README documents the relevance evaluator CLI.');
     assert_contains_text('search-benchmark-counters.php', $readme, 'README documents the search benchmark counter CLI.');

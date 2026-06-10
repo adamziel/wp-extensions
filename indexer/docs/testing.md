@@ -79,6 +79,20 @@ body, excerpt, and content fields. The benchmark is pure-PHP generated evidence
 only: it does not use live MySQL, does not replay production traffic, and does
 not commit generated corpora, caches, logs, or archives.
 
+## Analyzer Source-Lock Manifests
+
+Analyzer, stemmer, tokenizer, and lemmatizer packs must have a source-lock
+manifest before real lexical data is imported. Validate the committed synthetic
+no-op fixture and any future manifests with:
+
+```sh
+php tools/validate-analyzer-source-lock.php
+php tools/validate-analyzer-source-lock.php tests/fixtures/analyzer-source-locks/noop-en.source-lock.json
+```
+
+The normal PHP harness also includes the source-lock quality test through
+`tests/quality/*.php` discovery.
+
 ## Explicit Check Gate
 
 The integrated quality harness is expected to meet at least 1500 checks:
@@ -113,6 +127,47 @@ current official Snowball data checkout, a source tree without `vendor/` should
 report `1 pass, 36 skip, 0 fail`; after installing production dependencies from
 `composer.lock`, English, Catalan, and Dutch Porter should pass, for
 `3 pass, 34 skip, 0 fail`.
+
+## Polish Lemmatizer Source-Lock Pilot
+
+The Polish source-lock pilot verifies metadata gates for a future
+Morfologik-style lemmatizer candidate without downloading or committing lexical
+data:
+
+```sh
+php tests/quality/polish-lemmatizer-source-lock.php
+```
+
+The main harness discovers the same verifier automatically.
+
+## Tokenizer Source-Lock Verifier
+
+Run the Thai tokenizer source-lock verifier directly when changing the
+source-lock schema, fixtures, or future candidate metadata:
+
+```sh
+php tools/verify-tokenizer-source-lock.php --allow-test-fixtures tests/fixtures/tokenizer-source-lock/complete-test-fixture.json
+php tools/verify-tokenizer-source-lock.php --expect-invalid tests/fixtures/tokenizer-source-lock/incomplete-missing-approval.json
+```
+
+The committed fixtures are metadata-only. They do not include Thai dictionary
+rows, TCC rules, third-party tokenizer data, or a production tokenizer adapter.
+
+## Thai Tokenizer Source-Candidate Lock
+
+Run the metadata-only Thai tokenizer source-candidate verifier when changing the
+candidate lock, schema, or future source-lock docs:
+
+```sh
+php indexer/tools/verify-thai-tokenizer-source-candidate-lock.php \
+  indexer/review-artifacts/source-locks/thai-tokenizer-source-candidate-preflight.json \
+  --allow-pending-exact-values
+```
+
+This preflight does not currently ship real Thai segmentation. It records the
+preferred source family and the exact artifact, license, source-chain, and
+clean-room fields still missing before adapter work. No dictionary rows,
+TCC/TCC+ rules, or tokenizer adapter are committed.
 
 ## WordPress Playground SQLite Smoke
 

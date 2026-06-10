@@ -431,6 +431,33 @@ filter decisions, relevance evaluator results, fanout/memory checks, and admin
 status or validator JSON evidence. Do not download or vendor third-party lexical
 databases into this repository without a separate review and promotion decision.
 
+### OEWN Source-Lock Preflight
+
+The repository includes a maintainer preflight artifact for a possible future
+Open English WordNet comprehensive-pack pilot:
+
+```sh
+php language-fts-playground/tools/verify-lexical-source-lock.php \
+  language-fts-playground/review-artifacts/source-locks/oewn-comprehensive-preflight.json \
+  --allow-pending-artifact-values
+```
+
+That command verifies the source-lock gate shape before any OEWN data is
+downloaded or imported. It requires the OEWN source URL, CC BY 4.0 license and
+notice plan, provenance id, importer command, English normalization profile,
+fanout caps, evaluator fixture path, and benchmark budget. The preflight file
+allows only the exact future source artifact values to remain pending: selected
+OEWN version, artifact name, artifact URL, SHA-256, and byte count.
+
+Run the same verifier without `--allow-pending-artifact-values` only after a
+future source-lock task fills those exact artifact values from a reviewed local
+artifact. Strict mode fails while any source version, artifact URL, artifact
+hash, or artifact byte count is still pending.
+
+Current bundled/indexer data is not a comprehensive OEWN pack. No full-source
+OEWN import has begun, no OEWN runtime lexical pack has been generated, and no
+comprehensive English lexical support is claimed by this preflight.
+
 ## Relevance Evaluation
 
 Validation proves the compact files are well-formed. Relevance evaluation gives
@@ -714,6 +741,43 @@ Open English WordNet is a lexical network grouping English words into synsets.
 Its GitHub README describes GWN-LMF, JSON, RDF, and WNDB formats and identifies
 the license as CC-BY 4.0:
 `https://github.com/globalwordnet/english-wordnet`.
+The repository license also says the resource is derived from Princeton WordNet
+and requires attribution to both Princeton WordNet and the Open English WordNet
+team. Preserve both notice chains before any generated pack is committed.
+
+### OEWN 2025 JSON Source Candidate Lock
+
+`review-artifacts/source-locks/oewn-2025-json-source-candidate.json` records a
+metadata-only source-candidate lock for the first future comprehensive English
+pack candidate. The preferred candidate family is the core Open English WordNet
+2025 Edition JSON release, with canonical upstream locations at
+`https://en-word.net/` and
+`https://github.com/globalwordnet/english-wordnet/releases/tag/2025-edition`.
+The exact candidate artifact named by the release page is
+`english-wordnet-2025-json.zip` at
+`https://en-word.net/static/english-wordnet-2025-json.zip`.
+
+The task did not download OEWN data, commit the source archive, import rows, or
+generate runtime lexical packs. Current bundled/indexer data is still curated
+seed data, not a comprehensive OEWN pack. The source-candidate lock explicitly
+excludes Open English WordNet Plus and Open English Namenet from this first
+candidate because those variants add proper-noun data that needs separate
+review.
+
+Before any real OEWN import, maintainers must fill the pending fields in the
+lock: full tag commit SHA, artifact SHA-256, byte count, retrieval timestamp,
+zip member manifest, notice files, attribution text, pre-extraction plan,
+deterministic importer command, validator/evaluator results, fanout caps, and
+benchmark gates. Verify the metadata-only lock with:
+
+```sh
+php language-fts-playground/tools/verify-lexical-source-candidate-lock.php \
+  language-fts-playground/review-artifacts/source-locks/oewn-2025-json-source-candidate.json \
+  --allow-pending-exact-values
+```
+
+Passing the verifier means the candidate evidence is complete enough to keep
+review moving. It does not approve an import or change support claims.
 
 OpenThesaurus German publishes text-format and MySQL downloads. Its download
 page states the data is available under CC BY-SA 4.0 or LGPL:

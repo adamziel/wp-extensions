@@ -268,6 +268,18 @@ override or supplement concept-derived expansions. Use `synonym_phrases.tsv`
 when the relationship needs a source or target sequence such as an acronym,
 product alias, organization name, or phrase.
 
+The OEWN comprehensive-pack lane has only a source-lock preflight artifact at
+`language-fts-playground/review-artifacts/source-locks/oewn-comprehensive-preflight.json`.
+Current bundled/indexer data is not a comprehensive OEWN pack. No full-source
+OEWN import has begun, and comprehensive English lexical support is not claimed.
+Verify the preflight gate with:
+
+```sh
+php language-fts-playground/tools/verify-lexical-source-lock.php \
+  language-fts-playground/review-artifacts/source-locks/oewn-comprehensive-preflight.json \
+  --allow-pending-artifact-values
+```
+
 For build-time imports, use the PHP-only importer:
 
 ```sh
@@ -403,6 +415,11 @@ copyright and disclaimer notices. Those sources are not bundled here. Current
 shipped resources remain seed data unless a generated comprehensive pack is
 committed after source-specific normalization, license review, attribution
 review, pack-size review, and relevance testing.
+An OEWN source-candidate lock lives at
+`review-artifacts/source-locks/oewn-2025-json-source-candidate.json` for future
+comprehensive English pack review. No OEWN source archive or generated OEWN
+runtime pack is bundled, and the current plugin does not claim comprehensive
+English lexical support.
 
 ## Supported Analyzer Behavior
 
