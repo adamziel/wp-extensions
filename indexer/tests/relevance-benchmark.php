@@ -727,6 +727,7 @@ final class WP_FTS_Relevance_Benchmark
             'english-explicit-override',
             'mixed-language-documents',
             'rest-visible-hidden-ranking',
+            'wordpress-field-ranking',
             'fallback-no-evidence',
         ];
         $missingFamilies = [];
@@ -737,14 +738,14 @@ final class WP_FTS_Relevance_Benchmark
         }
 
         $failures = [];
-        if ($documentCount < 12) {
-            $failures[] = 'fixture composition failed: expected at least 12 documents';
+        if ($documentCount < 30) {
+            $failures[] = 'fixture composition failed: expected at least 30 documents';
         }
-        if ($retrievalQueryCount < 10) {
-            $failures[] = 'fixture composition failed: expected at least 10 retrieval queries';
+        if ($retrievalQueryCount < 20) {
+            $failures[] = 'fixture composition failed: expected at least 20 retrieval queries';
         }
-        if ($crossLanguageCheckCount < 4) {
-            $failures[] = 'fixture composition failed: expected at least 4 cross-language bait checks';
+        if ($crossLanguageCheckCount < 18) {
+            $failures[] = 'fixture composition failed: expected at least 18 cross-language bait checks';
         }
         foreach ($missingFamilies as $family) {
             $failures[] = "fixture composition failed: missing family {$family}";
