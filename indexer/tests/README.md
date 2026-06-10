@@ -37,11 +37,37 @@ is unavailable the command exits successfully with a `SKIP:` line so the normal
 suite remains dependency-light.
 
 The real harness creates generated temporary FTS tables, exercises `dbDelta()`
-creation/migration, binary `VARBINARY` terms and `LONGBLOB` postings through
+creation/migration, binary `VARBINARY` terms and row postings through
 `$wpdb->prepare()`, MySQL commit/rollback behavior, a simulated activation
 schema-version write for the current baseline, and a real `wp fts reindex`
 process using `--require=tests/integration/wpcli-require.php`. It deletes its
 temporary post, option, and generated FTS tables in a cleanup block.
+
+Run the guarded real WordPress/MySQL production-path proof against a disposable
+site only:
+
+```sh
+WP_FTS_WP_PATH=/path/to/wordpress \
+WP_FTS_WP_CLI=wp \
+WP_FTS_WP_URL=http://127.0.0.1:8088 \
+WP_FTS_PROOF_HTTP_BASE=http://127.0.0.1:8088 \
+WP_FTS_MYSQL_PROOF_ALLOW_DISPOSABLE=1 \
+php tests/integration/real-mysql-production-proof.php
+```
+
+The proof activates the plugin, asserts MySQL/MariaDB and InnoDB runtime
+evidence, seeds multilingual and stale-hidden posts, reindexes through WP-CLI,
+probes `wp fts search`, calls the public REST route over HTTP, checks REST alias
+and invalid-mode behavior, captures sanitized row counts and EXPLAIN JSON, and
+then deletes the generated proof posts. It exits with `SKIP:` unless both
+`WP_FTS_WP_PATH` and the disposable-site opt-in are present.
+
+The Docker helper provisions a throwaway MariaDB + WordPress + WP-CLI stack and
+runs both real MySQL lanes:
+
+```sh
+tools/run-real-mysql-production-proof.sh
+```
 
 Run the optional concurrent indexing diagnostic:
 
