@@ -14,6 +14,7 @@
   },
   "scripts": {
     "test": "php tests/run.php",
+    "test:bm25-reference": "php tests/bm25-reference-gate.php --json",
     "test:snowball": "php tests/snowball-compliance.php",
     "test:integration:real": "php tests/integration/real-wordpress-mysql.php",
     "test:integration:concurrent": "php tests/integration/concurrent-indexing.php"

@@ -13,6 +13,18 @@ an optional batch count. On this integrated branch, the standard harness and
 Composer test entry points default to a minimum of 1500 executed checks/scenarios.
 Set `WP_FTS_MIN_CHECKS` only when a local or CI lane needs an explicit override.
 
+Run the deterministic native BM25 reference gate:
+
+```sh
+php tests/bm25-reference-gate.php --json
+composer test:bm25-reference
+```
+
+The gate is also loaded by `tests/run.php`. It has no optional dependencies and
+compares a field-boosted four-document fixture against a local Lucene-style BM25
+oracle, including weighted postings, OR rankings, AND narrowing, and score
+deltas.
+
 Run the optional external BM25 reference harness:
 
 ```sh
