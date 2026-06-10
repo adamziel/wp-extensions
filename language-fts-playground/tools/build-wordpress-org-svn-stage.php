@@ -143,6 +143,8 @@ function assert_required_source_paths(string $plugin_root): void
         'readme.txt',
         'docs/lexical-resources.md',
         'docs/release-packaging.md',
+        'docs/wordpress-org-directory-assets.md',
+        'docs/wordpress-org-svn-staging.md',
         'playground/blueprint.json',
     ];
     $required_directories = [
