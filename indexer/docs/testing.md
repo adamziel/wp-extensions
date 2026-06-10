@@ -73,6 +73,19 @@ SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 The harness reports unsupported Snowball languages as skipped. Skips are
 expected for languages that are not advertised by `WP_FTS_SnowballStemmer`.
 
+## Tokenizer Source-Lock Verifier
+
+Run the Thai tokenizer source-lock verifier directly when changing the
+source-lock schema, fixtures, or future candidate metadata:
+
+```sh
+php tools/verify-tokenizer-source-lock.php --allow-test-fixtures tests/fixtures/tokenizer-source-lock/complete-test-fixture.json
+php tools/verify-tokenizer-source-lock.php --expect-invalid tests/fixtures/tokenizer-source-lock/incomplete-missing-approval.json
+```
+
+The committed fixtures are metadata-only. They do not include Thai dictionary
+rows, TCC rules, third-party tokenizer data, or a production tokenizer adapter.
+
 ## WordPress Playground SQLite Smoke
 
 Run the committed Playground smoke from the repository worktree root:

@@ -106,6 +106,9 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
   a plugin archive and how Composer dependencies are handled.
 - [Snowball compliance](docs/snowball-compliance.md) explains the dedicated
   Snowball fixture harness.
+- [Tokenizer source locks](docs/tokenizer-source-locks.md) documents the
+  pre-coding gate for any future Thai TCC/dictionary tokenizer. The current
+  plugin does not ship real Thai or CJK word segmentation.
 
 ## Current Caveats
 
