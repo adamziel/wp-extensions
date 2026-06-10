@@ -16,6 +16,7 @@
     "test": "php tests/run.php",
     "test:snowball": "php tests/snowball-compliance.php",
     "test:integration:real": "php tests/integration/real-wordpress-mysql.php",
+    "test:integration:mysql-proof": "php tests/integration/real-mysql-production-proof.php",
     "test:integration:concurrent": "php tests/integration/concurrent-indexing.php"
   }
 }
