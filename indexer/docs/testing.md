@@ -121,6 +121,37 @@ database. In the default unconfigured environment, `tests/run.php` still uses
 MySQL and WP-CLI fakes/contracts for broad coverage and the real integration
 contract safely reports an explicit skip.
 
+## Real MySQL Production-Path Proof
+
+Use the disposable Docker lane when Docker image pulls and the local daemon are
+available:
+
+```sh
+tools/run-real-mysql-production-proof.sh
+```
+
+The helper copies this plugin into a temporary directory, installs Composer
+dependencies there, starts WordPress on MariaDB, activates the plugin, runs the
+existing real-MySQL integration harness, and then runs the production-path proof.
+The proof writes only sanitized evidence: source SHA, MySQL/MariaDB runtime,
+InnoDB table engines, WP-CLI/REST probe status, row counts, EXPLAIN JSON, and
+timing summaries. It destroys the Docker volume and temporary plugin copy on
+exit.
+
+For an already installed disposable WordPress site backed by MySQL/MariaDB, run:
+
+```sh
+WP_FTS_WP_PATH=/path/to/wordpress \
+WP_FTS_WP_CLI=wp \
+WP_FTS_WP_URL=http://127.0.0.1:8088 \
+WP_FTS_PROOF_HTTP_BASE=http://127.0.0.1:8088 \
+WP_FTS_MYSQL_PROOF_ALLOW_DISPOSABLE=1 \
+php tests/integration/real-mysql-production-proof.php
+```
+
+Do not set `WP_FTS_MYSQL_PROOF_ALLOW_DISPOSABLE=1` for production or shared
+staging data. Without that explicit opt-in the proof exits with `SKIP:`.
+
 ## Diff And Status Checks
 
 From the repository worktree root, always run:

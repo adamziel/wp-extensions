@@ -13,11 +13,13 @@ if (is_string($wpFtsRealPrefix) && preg_match('/^[A-Za-z0-9_]+$/', $wpFtsRealPre
         }
     };
 
-    if (class_exists('WP_CLI') && method_exists('WP_CLI', 'add_wp_hook')) {
-        WP_CLI::add_wp_hook('after_wp_load', $wpFtsApplyPrefix);
-    } else {
-        $wpFtsApplyPrefix();
+    if (class_exists('WP_CLI') && method_exists('WP_CLI', 'add_hook')) {
+        WP_CLI::add_hook('after_wp_load', $wpFtsApplyPrefix);
     }
+    if (class_exists('WP_CLI') && method_exists('WP_CLI', 'add_wp_hook')) {
+        WP_CLI::add_wp_hook('plugins_loaded', $wpFtsApplyPrefix);
+    }
+    $wpFtsApplyPrefix();
 }
 
 unset($wpFtsApplyPrefix, $wpFtsRealPrefix);

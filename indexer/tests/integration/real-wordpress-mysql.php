@@ -6,8 +6,9 @@ declare(strict_types=1);
  *
  * Direct PHP execution is the public entry point. It discovers a WordPress
  * install through WP-CLI, skips clearly when unavailable, and then re-enters
- * this same file through `wp eval-file` so real `$wpdb`, `dbDelta()`, and
- * WP-CLI command execution are exercised without affecting the default suite.
+ * this same file through `wp eval` + `require` so real `$wpdb`, `dbDelta()`,
+ * and WP-CLI command execution are exercised without affecting the default
+ * suite.
  */
 
 const WP_FTS_REAL_INTEGRATION_SCHEMA_VERSION = 'simulated-1';
@@ -53,7 +54,7 @@ function wp_fts_real_integration_run_from_shell(): int
     }
 
     $result = wp_fts_real_integration_process(
-        array_merge($baseCommand, ['eval-file', __FILE__]),
+        array_merge($baseCommand, ['eval', 'require ' . var_export(__FILE__, true) . ';']),
         ['WP_FTS_REAL_INTEGRATION_INSIDE' => '1']
     );
 
@@ -127,9 +128,14 @@ PRIMARY KEY  (doc_id)
     wp_fts_real_integration_assert_column($wpdb, $tables['docs'], 'is_deleted');
     wp_fts_real_integration_assert_index($wpdb, $tables['docs'], 'lang');
     wp_fts_real_integration_assert_index($wpdb, $tables['docs'], 'is_deleted');
+    wp_fts_real_integration_assert_column($wpdb, $tables['postings'], 'tf');
+    wp_fts_real_integration_assert_index($wpdb, $tables['postings'], 'PRIMARY');
+    wp_fts_real_integration_assert_index($wpdb, $tables['postings'], 'doc_id');
     wp_fts_real_integration_assert_column($wpdb, $tables['doc_lengths'], 'doc_len');
     wp_fts_real_integration_assert_index($wpdb, $tables['doc_lengths'], 'lang');
-    wp_fts_real_integration_assert_column($wpdb, $tables['terms'], 'postings');
+    wp_fts_real_integration_assert_column($wpdb, $tables['terms'], 'doc_freq');
+    wp_fts_real_integration_assert_column($wpdb, $tables['docmeta'], 'search_text');
+    wp_fts_real_integration_assert_index($wpdb, $tables['docmeta'], 'post_type_status_date');
 
     echo "ok dbDelta created and migrated FTS tables\n";
 }
@@ -139,23 +145,36 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
     $storage = new WP_FTS_Storage_Mysql($wpdb, $prefix);
     $tables = wp_fts_real_integration_tables($prefix);
     $termsTable = wp_fts_real_integration_identifier($tables['terms']);
+    $postingsTable = wp_fts_real_integration_identifier($tables['postings']);
 
     $binaryTerm = "pl\x1ebin\x00term\xff";
-    $binaryPostings = "\x00\xff" . WP_FTS_PostingsCodec::encode([7 => 1, 130 => 300]) . "\x1e\x00";
+    $binaryPostings = WP_FTS_PostingsCodec::encode([7 => 1, 130 => 300]);
     $storage->put_term($binaryTerm, 1, $binaryPostings);
 
     $row = $storage->get_terms([$binaryTerm])[$binaryTerm] ?? null;
     wp_fts_real_integration_assert($row !== null, 'binary term should be readable after put_term().');
-    wp_fts_real_integration_assert_same(1, $row['df'], 'binary term doc frequency should round trip.');
-    wp_fts_real_integration_assert_same($binaryPostings, $row['postings'], 'binary postings should round trip through LONGBLOB.');
+    wp_fts_real_integration_assert_same(2, $row['df'], 'binary term doc frequency should reflect decoded row postings.');
+    wp_fts_real_integration_assert_same($binaryPostings, $row['postings'], 'binary postings should round trip through the compatibility blob API.');
 
     $hexRow = $wpdb->get_row($wpdb->prepare(
-        "SELECT HEX(term) AS term_hex, HEX(postings) AS postings_hex FROM `{$termsTable}` WHERE term = %s",
+        "SELECT HEX(term) AS term_hex, doc_freq FROM `{$termsTable}` WHERE term = %s",
         $binaryTerm
     ));
     wp_fts_real_integration_assert($hexRow !== null, 'binary row should be selectable with a prepared term predicate.');
     wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $hexRow->term_hex, 'VARBINARY term bytes should be stored exactly.');
-    wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryPostings)), (string) $hexRow->postings_hex, 'LONGBLOB postings bytes should be stored exactly.');
+    wp_fts_real_integration_assert_same(2, (int) $hexRow->doc_freq, 'term row should store document frequency only.');
+
+    $postingRows = $wpdb->get_results($wpdb->prepare(
+        "SELECT HEX(term) AS term_hex, doc_id, tf FROM `{$postingsTable}` WHERE term = %s ORDER BY doc_id ASC",
+        $binaryTerm
+    ));
+    wp_fts_real_integration_assert(is_array($postingRows) && count($postingRows) === 2, 'binary postings should be stored as two row postings.');
+    wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $postingRows[0]->term_hex, 'first row posting should keep exact term bytes.');
+    wp_fts_real_integration_assert_same(7, (int) $postingRows[0]->doc_id, 'first row posting doc id should round trip.');
+    wp_fts_real_integration_assert_same(1, (int) $postingRows[0]->tf, 'first row posting tf should round trip.');
+    wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $postingRows[1]->term_hex, 'second row posting should keep exact term bytes.');
+    wp_fts_real_integration_assert_same(130, (int) $postingRows[1]->doc_id, 'second row posting doc id should round trip.');
+    wp_fts_real_integration_assert_same(300, (int) $postingRows[1]->tf, 'second row posting tf should round trip.');
 
     $codecTerm = WP_FTS_TermNamespace::namespace_term('pl', 'zamek');
     $codecPostings = WP_FTS_PostingsCodec::encode([1001 => 2, 1005 => 7]);
@@ -164,7 +183,7 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
     wp_fts_real_integration_assert($codecRow !== null, 'codec term should be readable.');
     wp_fts_real_integration_assert_same([1001 => 2, 1005 => 7], WP_FTS_PostingsCodec::decode($codecRow['postings']), 'encoded postings should decode after MySQL storage.');
 
-    echo "ok binary VARBINARY terms and prepared LONGBLOB postings round trip\n";
+    echo "ok binary VARBINARY terms and prepared row postings round trip\n";
 }
 
 function wp_fts_real_integration_transactions(object $wpdb, string $prefix): void
@@ -285,8 +304,10 @@ function wp_fts_real_integration_tables(string $prefix): array
 {
     return [
         'terms' => $prefix . 'fts_terms',
+        'postings' => $prefix . 'fts_postings',
         'docs' => $prefix . 'fts_docs',
         'doc_lengths' => $prefix . 'fts_doc_lengths',
+        'docmeta' => $prefix . 'fts_docmeta',
         'meta' => $prefix . 'fts_meta',
     ];
 }
