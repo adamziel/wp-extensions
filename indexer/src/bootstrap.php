@@ -22,6 +22,7 @@ $wp_fts_files = [
     __DIR__ . '/Stemmer.php',
     __DIR__ . '/LanguageDetector.php',
     __DIR__ . '/TokenizerSourceLockVerifier.php',
+    __DIR__ . '/TokenizerSourceCandidateLockVerifier.php',
     __DIR__ . '/LanguagePipeline.php',
     __DIR__ . '/Analyzer.php',
     __DIR__ . '/PostContentExtractor.php',

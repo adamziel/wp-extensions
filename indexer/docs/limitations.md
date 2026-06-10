@@ -90,11 +90,16 @@ one-character run is kept as one token. Longer CJK runs become overlapping
 bigrams. This improves basic recall without external dictionaries, but it does
 not understand words, compounds, or language-specific segmentation rules.
 
+## Thai Tokenization
+
 The plugin does not currently ship real Thai segmentation or a production
-non-space tokenizer adapter. Future `thai_dictionary_tcc_v1` work requires a
+non-space tokenizer adapter. The repository has a metadata-only source-candidate
+preflight for a future `thai_dictionary_tcc_v1` adapter, but no dictionary rows,
+TCC/TCC+ rules, or tokenizer adapter are committed. Future work requires a
 reviewed source lock for the exact dictionary artifact and TCC/TCC+ rule source
 before code, importers, bundled data, or support claims are added. See
-[Tokenizer source locks](tokenizer-source-locks.md).
+[Tokenizer source locks](tokenizer-source-locks.md) for the pending source,
+license, clean-room, and verification gates.
 
 ## Search Features
 

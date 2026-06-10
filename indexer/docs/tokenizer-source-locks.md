@@ -10,6 +10,9 @@ Future support for `thai_dictionary_tcc_v1` must start with a reviewed source
 lock before any adapter, importer, bundled Thai dictionary, generated TCC rules,
 or production `th` resource pack is committed.
 
+The committed Thai source-candidate lock is evidence only: no dictionary rows,
+TCC/TCC+ rules, or tokenizer adapter are committed.
+
 ## Required Source-Lock Record
 
 The source lock is a local JSON metadata record with this identity:
@@ -77,6 +80,42 @@ php indexer/tools/verify-tokenizer-source-lock.php --expect-invalid indexer/test
 ```
 
 Do not use `--allow-test-fixtures` for production source-lock approval.
+
+## Thai Candidate Preflight
+
+The current repository-side artifact is:
+
+```text
+indexer/review-artifacts/source-locks/thai-tokenizer-source-candidate-preflight.json
+```
+
+It is a candidate preflight only. It names the preferred first source family as
+PyThaiNLP's `thai_words()` / `words_th.txt` dictionary family with a future
+clean-room TCC or TCC+ boundary implementation. It also records why other
+families are not first-choice candidates for this branch.
+
+The artifact intentionally leaves exact identity values pending for a future
+approved source lock:
+
+- dictionary immutable release or commit;
+- dictionary artifact name, URL, SHA-256, and byte count;
+- dictionary license identifier, name, authoritative URL, and text URL;
+- exact TCC or TCC+ variant;
+- clean-room TCC/TCC+ rule artifact name, URL, SHA-256, and byte count;
+- copyright holder, attribution text, source-chain evidence, clean-room author,
+  rights basis, and maintainer/legal approval.
+
+Those missing fields are blockers. The preflight may pass only when pending
+exact values are explicitly allowed:
+
+```sh
+php indexer/tools/verify-thai-tokenizer-source-candidate-lock.php \
+  indexer/review-artifacts/source-locks/thai-tokenizer-source-candidate-preflight.json \
+  --allow-pending-exact-values
+```
+
+Run strict mode without `--allow-pending-exact-values` before adapter work. It
+must fail until every pending field is replaced by concrete reviewed evidence.
 
 ## No-Go Conditions Before Coding
 

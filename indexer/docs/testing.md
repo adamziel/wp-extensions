@@ -150,6 +150,22 @@ php tools/verify-tokenizer-source-lock.php --expect-invalid tests/fixtures/token
 The committed fixtures are metadata-only. They do not include Thai dictionary
 rows, TCC rules, third-party tokenizer data, or a production tokenizer adapter.
 
+## Thai Tokenizer Source-Candidate Lock
+
+Run the metadata-only Thai tokenizer source-candidate verifier when changing the
+candidate lock, schema, or future source-lock docs:
+
+```sh
+php indexer/tools/verify-thai-tokenizer-source-candidate-lock.php \
+  indexer/review-artifacts/source-locks/thai-tokenizer-source-candidate-preflight.json \
+  --allow-pending-exact-values
+```
+
+This preflight does not currently ship real Thai segmentation. It records the
+preferred source family and the exact artifact, license, source-chain, and
+clean-room fields still missing before adapter work. No dictionary rows,
+TCC/TCC+ rules, or tokenizer adapter are committed.
+
 ## WordPress Playground SQLite Smoke
 
 Run the committed Playground smoke from the repository worktree root:

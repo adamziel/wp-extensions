@@ -17,6 +17,10 @@ The plugin stores its own MySQL tables. It does not use MySQL `FULLTEXT`, does
 not replace WordPress core search automatically, and keeps the index as derived
 data that can be rebuilt from WordPress content.
 
+The plugin does not currently ship real Thai segmentation. Future Thai
+dictionary/TCC tokenizer work is blocked on the metadata gates in
+[Tokenizer source locks](docs/tokenizer-source-locks.md).
+
 ## Quickstart
 
 Install the `indexer` directory as the plugin root. Do not install the whole
