@@ -2353,7 +2353,7 @@ test_case('analyzer skips unsafe regions and applies boosts', function (): void 
     assert_true(!in_array('secret_token', $terms, true), 'script bodies must not be indexed');
     assert_true(!in_array('hidden', $terms, true), 'style bodies must not be indexed');
     assert_true(!in_array('navword', $terms, true), 'nav descendants must not be indexed');
-    assert_same(4.0, $weights['visible'], 'h1 boost should use max-over-ancestors');
+    assert_same(4.0, $weights['visibl'], 'h1 boost should use max-over-ancestors');
     assert_same(1.0, $weights['normal'], 'paragraph text should use default boost');
     assert_same(2.0, $weights['bold'], 'strong boost should be applied');
     assert_same(1.5, $weights['soft'], 'em boost should be applied');
@@ -2405,7 +2405,7 @@ test_case('language normalizer applies dialect and language-specific folding map
 
     $pipeline = new WP_FTS_LanguagePipeline();
     assert_same(
-        ['color', 'organize', 'organizing'],
+        ['color', 'organiz', 'organiz'],
         $pipeline->analyze('colour organise organising', 'en-GB'),
         'English dialect spellings should normalize before stemming'
     );
@@ -2456,7 +2456,10 @@ test_case('custom stemmers preserve callable arity compatibility', function (): 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
     $snowball = new WP_FTS_SnowballStemmer();
     assert_same('kotami', $snowball->stem('kotami', 'pl'), 'Snowball adapter should no-op unsupported languages');
-    assert_same('running', $snowball->stem('running', 'en'), 'Snowball adapter should no-op non-compliant Wamania algorithms');
+    assert_true($snowball->supports_language('en-US'), 'Snowball adapter should advertise verified English support');
+    assert_true($snowball->is_language_available('en'), 'English Snowball stemmer should be bundled without Wamania');
+    assert_contains('Snowball English (Porter2)', $snowball->source_identity('en'), 'English stemmer should expose its variant identity');
+    assert_same('run', $snowball->stem('running', 'en'), 'Snowball adapter should use the verified English implementation');
 
     if ($snowball->is_available()) {
         assert_true($snowball->supports_language('ca'), 'Snowball adapter should advertise compliant Catalan support');
@@ -2470,6 +2473,7 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     ]);
     assert_same(['kot'], $pipeline->analyze('kotami', 'pl'), 'Polish conservative suffix strategy should be available');
     assert_same(['wroclaw'], $pipeline->analyze('Wrocławiu', 'pl'), 'Polish fallback should run after folding');
+    assert_same(['run', 'run', 'runner'], $pipeline->analyze('running runs runner', 'en'), 'English Snowball stemming should be available by default');
 });
 
 test_case('stemming is enabled by default and can be explicitly disabled', function (): void {
@@ -2813,7 +2817,7 @@ test_case('indexed search matches brute-force oracle on generated corpora', func
 
 test_case('T8 per-language analyzer fixtures are enforced when language pipelines exist', function (): void {
     $fixtures = [
-        ['English normalization', 'en', 'running runs runner', ['running', 'runs', 'runner']],
+        ['English normalization', 'en', 'running runs runner', ['run', 'run', 'runner']],
         ['Polish folding', 'pl', 'Wrocław Łódź zażółć', ['wroclaw', 'lodz', 'zazolc']],
         ['German folding', 'de', 'Straße Ärger Öl', ['strasse', 'aerger', 'oel']],
         ['Turkish dotted I folding', 'tr', 'Isparta İstanbul ışık', ['ısparta', 'istanbul', 'ısık']],
@@ -2955,7 +2959,7 @@ test_case('language options namespace terms and isolate search partitions', func
     $indexer->index_document(2, '<p>shared jablko</p>', ['lang' => 'pl']);
 
     $terms = $storage->all_terms();
-    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('en-US', 'shared'), $terms, true), 'English shared term should be namespaced');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('en-US', 'share'), $terms, true), 'English shared term should be namespaced');
     assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'shared'), $terms, true), 'Polish shared term should be namespaced');
     assert_true(!in_array('shared', $terms, true), 'raw unnamespaced term should not be stored');
 
@@ -3114,7 +3118,7 @@ test_case('multilingual query plan searches inline language-tagged terms', funct
     assert_same(
         [
             ['term' => 'zamek', 'lang' => 'pl'],
-            ['term' => 'castle', 'lang' => 'en'],
+            ['term' => 'castl', 'lang' => 'en'],
         ],
         $analyzer->analyze_query_occurrences('pl:zamek en:castle'),
         'inline query language tags should scope individual terms'
@@ -3225,7 +3229,7 @@ test_case('query term language resolver can build bilingual plans deterministica
     assert_same(
         [
             ['term' => 'zamek', 'lang' => 'pl'],
-            ['term' => 'castle', 'lang' => 'en'],
+            ['term' => 'castl', 'lang' => 'en'],
         ],
         $analyzer->analyze_query_occurrences('zamek castle'),
         'resolver should tag otherwise untagged query tokens'

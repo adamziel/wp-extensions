@@ -19,6 +19,7 @@ $wp_fts_files = [
     __DIR__ . '/Utf8.php',
     __DIR__ . '/StorageCompat.php',
     __DIR__ . '/Normalizer.php',
+    __DIR__ . '/EnglishSnowballStemmer.php',
     __DIR__ . '/Stemmer.php',
     __DIR__ . '/LanguageDetector.php',
     __DIR__ . '/LanguagePipeline.php',

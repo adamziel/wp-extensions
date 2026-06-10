@@ -150,22 +150,35 @@ test_case('quality corpus routes inherited element languages across HTML shapes'
 
 test_case('quality corpus excludes unsafe regions with language attributes', function (): void {
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $expectedVisible = [
+        'script' => ['visiblescript', 'afterscript'],
+        'style' => ['visiblestyl', 'afterstyl'],
+        'template' => ['visibletempl', 'aftertempl'],
+        'svg' => ['visiblesvg', 'aftersvg'],
+    ];
+    $expectedSecret = [
+        'script' => 'secretscript',
+        'style' => 'secretstyl',
+        'template' => 'secrettempl',
+        'svg' => 'secretsvg',
+    ];
+
     foreach (['script', 'style', 'template', 'svg'] as $tag) {
         record_check("unsafe {$tag} language scenario");
         $html = '<article lang=en><p>visible' . $tag . '</p><' . $tag . ' lang=pl>secret' . $tag .
             '</' . $tag . '><p>after' . $tag . '</p></article>';
         $terms = test_terms($analyzer->analyze_content($html));
 
-        assert_true(in_array('visible' . $tag, $terms, true), "{$tag} visible prefix should be indexed");
-        assert_true(in_array('after' . $tag, $terms, true), "{$tag} visible suffix should be indexed");
-        assert_true(!in_array('secret' . $tag, $terms, true), "{$tag} body should be excluded");
+        assert_true(in_array($expectedVisible[$tag][0], $terms, true), "{$tag} visible prefix should be indexed");
+        assert_true(in_array($expectedVisible[$tag][1], $terms, true), "{$tag} visible suffix should be indexed");
+        assert_true(!in_array($expectedSecret[$tag], $terms, true), "{$tag} body should be excluded");
     }
 
     $terms = test_terms($analyzer->analyze_content(
         '<article><!-- <p lang=pl>secretcomment</p> --><p>visiblecomment</p></article>'
     ));
-    assert_true(in_array('visiblecomment', $terms, true), 'visible comment sibling should be indexed');
-    assert_true(!in_array('secretcomment', $terms, true), 'comment bodies should be excluded');
+    assert_true(in_array('visiblecom', $terms, true), 'visible comment sibling should be indexed');
+    assert_true(!in_array('secretcom', $terms, true), 'comment bodies should be excluded');
 });
 
 test_case('quality corpus keeps processor extraction in parity with fallback extraction', function (): void {
@@ -291,8 +304,8 @@ test_case('quality corpus applies language-specific folding including no-mbstrin
 test_case('quality corpus exposes query occurrence output while preserving plain terms', function (): void {
     $analyzer = new WP_FTS_Analyzer();
     $cases = [
-        ['en-US', 'colour apple', ['color', 'apple']],
-        ['en-GB', 'organise colour', ['organize', 'color']],
+        ['en-US', 'colour apple', ['color', 'appl']],
+        ['en-GB', 'organise colour', ['organiz', 'color']],
         ['pl-PL', 'Łódź Wrocław', ['lodz', 'wroclaw']],
         ['de-DE', 'Straße Öl', ['strasse', 'oel']],
         ['tr-TR', 'İstanbul Iğdır', ['istanbul', 'ıgdır']],

@@ -55,9 +55,9 @@ one term's scores across multiple languages.
 Stemming is enabled by default and can be disabled with
 `enable_stemming => false`. The built-in stemming path is intentionally narrow:
 
-- Snowball support is intentionally limited to Catalan (`ca`) and Dutch Porter
-  (`nl`) because those are the Wamania implementations currently verified by the
-  Snowball fixture harness.
+- Advertised Snowball support is exactly Catalan (`ca`), bundled generated
+  English Porter2 (`en`), and Dutch Porter (`nl`), because those are the
+  implementations currently verified by the Snowball fixture harness.
 - Wamania exposes other language classes, but this branch treats unsupported or
   divergent algorithms as no-ops instead of claiming compliance.
 - Polish (`pl`) uses a conservative local suffix stemmer, not a full Snowball or
