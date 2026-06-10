@@ -93,7 +93,8 @@ The verifier checks:
 - no `.git`, `.github`, `.cao`, `dist`, `tests`, `tools`, generated zips, logs,
   smoke artifacts, or review artifacts;
 - no `assets/` directory inside `trunk/` or `tags/<version>/`;
-- supported top-level asset filenames and fixed dimensions for banners/icons.
+- supported top-level asset filenames, matching image formats, fixed dimensions
+  for banners/icons, and optional submission-readiness asset coverage.
 
 For a machine-readable review artifact:
 
@@ -111,6 +112,7 @@ If approved GPL-compatible directory assets exist, pass their source directory:
 
 ```sh
 php language-fts-playground/tools/build-wordpress-org-svn-stage.php \
+  --output=language-fts-playground/dist/wordpress-org-svn-stage \
   --assets-source=/absolute/path/to/approved-assets \
   --replace
 ```
@@ -129,8 +131,14 @@ assets are added, remove the placeholder screenshots wording before validating
 the stage.
 
 `--strict-assets` on the verifier requires at least the launch banner,
-128-by-128 icon, and one screenshot. Do not use strict mode until the final
-approved assets exist.
+128-by-128 icon, and one screenshot. `--submission-readiness` additionally
+requires the high-resolution banner, 256-by-256 icon, contiguous screenshot
+numbering starting at `screenshot-1`, matching image formats, and matching
+readme captions. Both modes are local checks only; neither uploads to SVN or
+contacts WordPress.org services.
+
+See `docs/wordpress-org-directory-assets.md` for the asset inventory, source
+and license runbook, and the remaining external submission gates.
 
 ## Regression Checks
 
@@ -142,8 +150,10 @@ php language-fts-playground/tools/test-wordpress-org-svn-stage.php
 
 The regression script builds a temporary stage, writes a manifest, and verifies
 that the verifier rejects nested plugin roots under both `trunk/` and
-`tags/<version>/`, payload-level `assets/`, a forbidden `tools/` directory, and
-unsupported asset filenames.
+`tags/<version>/`, payload-level `assets/`, a forbidden `tools/` directory,
+unsupported asset filenames, missing or misplaced submission-readiness assets,
+wrong banner/icon dimensions, and image formats that do not match filenames.
+It also verifies a complete generated local fixture with `--submission-readiness`.
 
 ## Release Rehearsal Notes
 

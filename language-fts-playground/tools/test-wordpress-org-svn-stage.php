@@ -98,6 +98,57 @@ try {
         'Unsupported WordPress.org asset filename'
     );
 
+    assert_command_fails(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $stage, '--submission-readiness'],
+        $plugin_root,
+        'reject missing submission-readiness assets',
+        'Submission readiness mode requires: banner-772x250.png'
+    );
+
+    assert_command_fails(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $payload_assets_stage, '--submission-readiness'],
+        $plugin_root,
+        'reject misplaced submission-readiness assets',
+        'must not contain assets'
+    );
+
+    $dimension_stage = copy_stage_fixture($stage, $workspace . '/dimension-stage');
+    write_png_fixture($dimension_stage . '/assets/banner-772x250.png', 771, 250);
+    assert_command_fails(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $dimension_stage],
+        $plugin_root,
+        'reject wrong banner dimensions',
+        'WordPress.org asset has wrong dimensions'
+    );
+
+    $format_stage = copy_stage_fixture($stage, $workspace . '/format-stage');
+    write_png_fixture($format_stage . '/assets/screenshot-1.jpg', 1024, 768);
+    assert_command_fails(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $format_stage],
+        $plugin_root,
+        'reject image format mismatch',
+        'WordPress.org asset format does not match filename'
+    );
+
+    $partial_assets_stage = copy_stage_fixture($stage, $workspace . '/partial-assets-stage');
+    add_submission_readiness_assets($partial_assets_stage, false);
+    add_screenshot_captions($partial_assets_stage);
+    assert_command_fails(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $partial_assets_stage, '--submission-readiness'],
+        $plugin_root,
+        'reject incomplete submission-readiness asset inventory',
+        'Submission readiness mode requires: icon-256x256.png'
+    );
+
+    $ready_assets_stage = copy_stage_fixture($stage, $workspace . '/ready-assets-stage');
+    add_submission_readiness_assets($ready_assets_stage, true);
+    add_screenshot_captions($ready_assets_stage);
+    run_command(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $ready_assets_stage, '--submission-readiness'],
+        $plugin_root,
+        'verify complete submission-readiness asset inventory'
+    );
+
     $drift_stage = copy_stage_fixture($stage, $workspace . '/drift-stage');
     write_file($drift_stage . '/tags/0.3.0/README.md', "tag drift\n");
     assert_command_fails(
@@ -127,6 +178,73 @@ function copy_stage_fixture(string $source, string $target): string
     copy_tree($source, $target);
 
     return $target;
+}
+
+/**
+ * Adds generated local-only image fixtures to a copied stage.
+ *
+ * @param string $stage        Stage root.
+ * @param bool   $include_icon Whether to include the complete required icon set.
+ */
+function add_submission_readiness_assets(string $stage, bool $include_icon): void
+{
+    write_png_fixture($stage . '/assets/banner-772x250.png', 772, 250);
+    write_png_fixture($stage . '/assets/banner-1544x500.png', 1544, 500);
+    write_png_fixture($stage . '/assets/icon-128x128.png', 128, 128);
+
+    if ($include_icon) {
+        write_png_fixture($stage . '/assets/icon-256x256.png', 256, 256);
+    }
+
+    write_png_fixture($stage . '/assets/screenshot-1.png', 1024, 768);
+}
+
+/**
+ * Replaces placeholder screenshot text with one numbered caption in both payloads.
+ *
+ * @param string $stage Stage root.
+ */
+function add_screenshot_captions(string $stage): void
+{
+    foreach (['trunk/readme.txt', 'tags/0.3.0/readme.txt'] as $relative) {
+        $path = $stage . '/' . $relative;
+        $readme = read_file($path);
+        $readme = str_replace(
+            "No screenshot image assets are bundled in this P0 readiness branch. Future\n" .
+            "WordPress.org submission work should add directory screenshot assets and update\n" .
+            "this section with matching captions before publication.",
+            '1. Language FTS Playground admin screen showing the local demo search controls.',
+            $readme
+        );
+        write_file($path, $readme);
+    }
+}
+
+/**
+ * Writes a tiny PNG header fixture with the requested dimensions.
+ *
+ * @param string $path   File path.
+ * @param int    $width  Image width.
+ * @param int    $height Image height.
+ */
+function write_png_fixture(string $path, int $width, int $height): void
+{
+    $contents = "\x89PNG\r\n\x1a\n" .
+        png_chunk('IHDR', pack('NNCCCCC', $width, $height, 8, 2, 0, 0, 0)) .
+        png_chunk('IEND', '');
+    write_file($path, $contents);
+}
+
+/**
+ * Builds a PNG chunk.
+ *
+ * @param string $type PNG chunk type.
+ * @param string $data PNG chunk data.
+ * @return string Encoded chunk.
+ */
+function png_chunk(string $type, string $data): string
+{
+    return pack('N', strlen($data)) . $type . $data . pack('N', hexdec(hash('crc32b', $type . $data)));
 }
 
 /**
@@ -299,6 +417,23 @@ function copy_tree(string $source, string $target): void
             throw new RuntimeException('Unable to copy fixture file: ' . $source_path);
         }
     }
+}
+
+/**
+ * Reads a file.
+ *
+ * @param string $path File path.
+ * @return string File contents.
+ */
+function read_file(string $path): string
+{
+    $contents = file_get_contents($path);
+
+    if (false === $contents) {
+        throw new RuntimeException('Unable to read fixture file: ' . $path);
+    }
+
+    return $contents;
 }
 
 /**
