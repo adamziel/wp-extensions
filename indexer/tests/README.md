@@ -13,6 +13,23 @@ an optional batch count. On this integrated branch, the standard harness and
 Composer test entry points default to a minimum of 1500 executed checks/scenarios.
 Set `WP_FTS_MIN_CHECKS` only when a local or CI lane needs an explicit override.
 
+Run the native production-scale generated-corpus benchmark directly when you need
+its counters:
+
+```sh
+php tests/production-scale-benchmark.php
+php tests/production-scale-benchmark.php --profile=expanded
+php tests/production-scale-benchmark.php --json
+php -n tests/production-scale-benchmark.php
+```
+
+The default `pr-safe` profile is small enough for the normal PHP harness, and
+the optional `expanded` profile uses a larger deterministic generated corpus.
+The output is pure-PHP generated evidence over WordPress-shaped title, body,
+excerpt, and content fields. It is not live MySQL proof, does not replay
+production traffic, and does not generate or require committed corpora, caches,
+logs, or archives.
+
 Run the optional external BM25 reference harness:
 
 ```sh

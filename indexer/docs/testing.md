@@ -45,6 +45,24 @@ The fixture is a modest regression gate for the current analyzer/searcher
 contract. It reports recall@5, precision@5, MRR, nDCG@5, and cross-language
 false positives; it is not a production relevance-quality claim.
 
+## Native Production-Scale Generated Benchmark
+
+The main harness includes the PR-safe native production-scale benchmark gates.
+Run the benchmark directly when you need the indexed-document, token, postings,
+materialized-row, result-window hydration, and memory-delta counters:
+
+```sh
+php tests/production-scale-benchmark.php
+php tests/production-scale-benchmark.php --profile=expanded
+php tests/production-scale-benchmark.php --json
+php -n tests/production-scale-benchmark.php
+```
+
+Both profiles generate deterministic WordPress-shaped documents across title,
+body, excerpt, and content fields. The benchmark is pure-PHP generated evidence
+only: it does not use live MySQL, does not replay production traffic, and does
+not commit generated corpora, caches, logs, or archives.
+
 ## Explicit Check Gate
 
 The integrated quality harness is expected to meet at least 1500 checks:
