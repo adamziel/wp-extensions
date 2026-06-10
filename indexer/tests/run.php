@@ -504,6 +504,40 @@ function test_run_harness_with_environment(array $env): array
     ];
 }
 
+/**
+ * @param array<int,string> $command
+ * @return array{exit:int,stdout:string,stderr:string}
+ */
+function test_run_subprocess(array $command, ?string $cwd = null): array
+{
+    if (!function_exists('proc_open')) {
+        mark_pending('proc_open() is unavailable, so this subprocess test cannot run in this PHP build.');
+    }
+
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $process = proc_open($command, $descriptors, $pipes, $cwd ?? dirname(__DIR__));
+    if (!is_resource($process)) {
+        mark_pending('Could not start a PHP subprocess.');
+    }
+
+    fclose($pipes[0]);
+    $stdout = (string) stream_get_contents($pipes[1]);
+    $stderr = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exit = proc_close($process);
+
+    return [
+        'exit' => is_int($exit) ? $exit : 1,
+        'stdout' => $stdout,
+        'stderr' => $stderr,
+    ];
+}
+
 function test_bm25_score(int $tf, int $docLen, int $docCount, int $docFreq, float $avgDocLen, float $k1 = 1.2, float $b = 0.75): float
 {
     $idf = log(1.0 + (($docCount - $docFreq + 0.5) / ($docFreq + 0.5)));
@@ -691,6 +725,110 @@ function remove_directory_tree(string $directory): void
         unlink($path->getPathname());
     }
     rmdir($directory);
+}
+
+function write_synthetic_full_analyzer_pack(string $directory, int $rows, int $shards): string
+{
+    if ($rows < 1 || $shards < 1) {
+        throw new WP_FTS_TestFailure('Synthetic analyzer pack requires positive row and shard counts.');
+    }
+    if (!mkdir($directory . '/runtime', 0777, true) && !is_dir($directory . '/runtime')) {
+        throw new WP_FTS_TestFailure("Could not create synthetic analyzer runtime directory: {$directory}");
+    }
+
+    file_put_contents($directory . '/NOTICE.txt', "Synthetic BSD-2-Clause analyzer pack fixture for tests.\n");
+
+    $runtimeFiles = [];
+    $runtimeDigest = hash_init('sha256');
+    $nextRow = 0;
+    for ($shard = 1; $shard <= $shards; $shard++) {
+        $remainingRows = $rows - $nextRow;
+        $remainingShards = $shards - $shard + 1;
+        $rowsInShard = intdiv($remainingRows + $remainingShards - 1, $remainingShards);
+        $relativePath = sprintf('runtime/%04d.tsv', $shard);
+        $path = $directory . '/' . $relativePath;
+        $handle = fopen($path, 'wb');
+        if (!is_resource($handle)) {
+            throw new WP_FTS_TestFailure("Could not write synthetic analyzer runtime shard: {$path}");
+        }
+
+        $firstSurface = null;
+        $lastSurface = null;
+        for ($i = 0; $i < $rowsInShard; $i++, $nextRow++) {
+            $surface = sprintf('surface%08d', $nextRow);
+            $lemma = sprintf('lemma%08d', $nextRow);
+            $line = $surface . "\t" . $lemma . "\n";
+            if (fwrite($handle, $line) === false) {
+                fclose($handle);
+                throw new WP_FTS_TestFailure("Could not write synthetic analyzer runtime row: {$path}");
+            }
+            hash_update($runtimeDigest, $line);
+            $firstSurface ??= $surface;
+            $lastSurface = $surface;
+        }
+        fclose($handle);
+
+        $sha = hash_file('sha256', $path);
+        if (!is_string($sha) || !is_string($firstSurface) || !is_string($lastSurface)) {
+            throw new WP_FTS_TestFailure("Could not finalize synthetic analyzer runtime shard: {$path}");
+        }
+        $runtimeFiles[] = [
+            'path' => $relativePath,
+            'sha256' => $sha,
+            'rows' => $rowsInShard,
+            'first_surface' => $firstSurface,
+            'last_surface' => $lastSurface,
+        ];
+    }
+
+    $manifest = [
+        'schema_version' => 1,
+        'pack_id' => 'pl-polimorf-synthetic-full-streaming-fixture',
+        'language' => 'pl',
+        'version' => 'streaming-regression-v1',
+        'fixture_only' => false,
+        'default_enabled' => false,
+        'capabilities' => [
+            'dictionary-lemmatizer',
+            'ambiguous-form-noop',
+            'normalized-runtime-rows',
+            'sharded-runtime-files',
+        ],
+        'runtime' => [
+            'format' => 'wp-fts-polish-lemma-tsv-v1',
+            'normalization' => 'WP_FTS_Normalizer pl with fold_diacritics=true',
+            'ambiguity_policy' => 'ambiguous_surface_noop',
+            'total_rows' => $rows,
+            'total_sha256' => hash_final($runtimeDigest),
+            'files' => $runtimeFiles,
+        ],
+        'source' => [
+            'name' => 'Synthetic PoliMorf streaming validator fixture',
+            'version' => 'test',
+            'url' => 'urn:wp-fts:test:synthetic-polimorf-streaming-validator',
+            'artifact_sha256' => str_repeat('a', 64),
+            'byte_count' => 1,
+        ],
+        'license' => [
+            'spdx_id' => 'BSD-2-Clause',
+            'notice_path' => 'NOTICE.txt',
+        ],
+        'attribution' => [
+            'notice_path' => 'NOTICE.txt',
+        ],
+        'provenance' => [
+            'no_runtime_network_access' => true,
+            'no_full_third_party_dictionary_dump' => false,
+        ],
+    ];
+
+    $json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    if (!is_string($json)) {
+        throw new WP_FTS_TestFailure('Could not encode synthetic analyzer pack manifest.');
+    }
+    file_put_contents($directory . '/manifest.json', $json . "\n");
+
+    return $directory . '/manifest.json';
 }
 
 /**
@@ -2515,9 +2653,57 @@ test_case('polish Morfologik fixture pack validates manifest digests and rows', 
     assert_same('pl', $result['manifest']['language'], 'fixture pack language should be Polish');
     assert_true($result['manifest']['fixture_only'] === true, 'fixture pack should be explicitly fixture-only');
     assert_true($result['manifest']['default_enabled'] === false, 'fixture pack should not be default-enabled');
+    assert_same(true, $result['rows_collected'], 'fixture pack should retain rows for eager lookup tests');
+    assert_same(9, $result['runtime_rows'], 'fixture pack runtime row count should be exposed');
     assert_same(9, count($result['rows']), 'fixture pack should expose the reviewed tiny row set');
     assert_same(9, $result['runtime_files']['runtime.tsv']['rows'] ?? null, 'runtime row count should match manifest');
     assert_same(hash_file('sha256', $result['runtime_files']['runtime.tsv']['path']), $result['runtime_files']['runtime.tsv']['sha256'], 'runtime digest should match local file content');
+
+    $streamedFixture = (new WP_FTS_AnalyzerPackValidator(3))->validate(WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest());
+    assert_same(false, $streamedFixture['rows_collected'], 'validator should stream when a fixture exceeds the collection cap');
+    assert_same([], $streamedFixture['rows'], 'streamed fixture validation should not retain partial row arrays');
+    assert_same(9, $streamedFixture['runtime_rows'], 'streamed fixture validation should still count every runtime row');
+
+    $lazyFixture = WP_FTS_PolishMorfologikLemmatizer::from_manifest_file(
+        WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest(),
+        new WP_FTS_AnalyzerPackValidator(3)
+    );
+    assert_same('kot', $lazyFixture->stem('kotami', 'pl'), 'lemmatizer should lazy-load fixture rows when row collection is capped');
+});
+
+test_case('polish full analyzer pack validation streams rows without retaining runtime arrays', function (): void {
+    $out = temp_directory_path('polimorf_validator_streaming');
+    try {
+        $manifest = write_synthetic_full_analyzer_pack($out, 60000, 3);
+        $validator = new WP_FTS_AnalyzerPackValidator();
+        $result = $validator->validate($manifest);
+
+        assert_same('pl-polimorf-synthetic-full-streaming-fixture', $result['manifest']['pack_id'], 'synthetic full pack id should validate');
+        assert_same(false, $result['rows_collected'], 'full pack validation should stream rows instead of retaining row arrays');
+        assert_same([], $result['rows'], 'full pack validation should not return retained row arrays');
+        assert_same(60000, array_sum(array_map(static fn(array $file): int => (int) $file['rows'], $result['runtime_files'])), 'full pack runtime row count should match manifest');
+
+        $cli = test_run_subprocess(
+            [
+                PHP_BINARY,
+                '-n',
+                '-d',
+                'memory_limit=24M',
+                dirname(__DIR__) . '/tools/validate-analyzer-pack.php',
+                $manifest,
+            ],
+            dirname(__DIR__)
+        );
+        assert_same(0, $cli['exit'], 'validator CLI should pass synthetic full pack under php -n with a low memory limit: ' . $cli['stderr']);
+
+        $summary = json_decode($cli['stdout'], true, 512, JSON_THROW_ON_ERROR);
+        assert_same('ok', $summary['status'] ?? null, 'validator CLI should report ok status for synthetic full pack');
+        assert_same(false, $summary['metadata_only'] ?? null, 'validator CLI default should remain full validation mode');
+        assert_same(60000, $summary['runtime_rows'] ?? null, 'validator CLI should report streamed runtime row count');
+        assert_same(false, $summary['rows_collected'] ?? null, 'validator CLI should use streaming row validation');
+    } finally {
+        remove_directory_tree($out);
+    }
 });
 
 test_case('polish PoliMorf importer deterministically generates sharded full-pack shape', function (): void {

@@ -45,7 +45,10 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
         $metadata = $validator->validate($manifestPath, false);
         $eager = (bool) $metadata['manifest']['fixture_only'] && self::runtime_rows_count($metadata) <= self::EAGER_ROW_LIMIT;
         if ($eager) {
-            return new self($validator->validate($manifestPath, true), false);
+            $validation = $validator->validate($manifestPath, true);
+            if (($validation['rows_collected'] ?? true) === true) {
+                return new self($validation, false);
+            }
         }
 
         return new self($metadata, true);

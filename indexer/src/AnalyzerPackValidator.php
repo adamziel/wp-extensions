@@ -12,6 +12,18 @@ final class WP_FTS_AnalyzerPackValidator
 {
     private const MANIFEST_SCHEMA_VERSION = 1;
     private const POLISH_RUNTIME_FORMAT = 'wp-fts-polish-lemma-tsv-v1';
+    private const DEFAULT_MAX_COLLECTED_RUNTIME_ROWS = 50000;
+
+    private int $maxCollectedRuntimeRows;
+
+    public function __construct(int $maxCollectedRuntimeRows = self::DEFAULT_MAX_COLLECTED_RUNTIME_ROWS)
+    {
+        if ($maxCollectedRuntimeRows < 1) {
+            throw new InvalidArgumentException('Analyzer pack row collection cap must be positive.');
+        }
+
+        $this->maxCollectedRuntimeRows = $maxCollectedRuntimeRows;
+    }
 
     /**
      * Return the bundled Polish fixture manifest path.
@@ -24,11 +36,19 @@ final class WP_FTS_AnalyzerPackValidator
     /**
      * Validate a pack manifest and all referenced runtime files.
      *
+     * Fixture packs may return their tiny reviewed row set for eager tests and
+     * lookup construction. Non-fixture full packs, and any pack above the bounded
+     * collection cap, are streamed so the validator enforces the same file, count,
+     * digest, sort, and uniqueness invariants without retaining the whole
+     * dictionary in memory.
+     *
      * @return array{
      *   manifest_path:string,
      *   manifest_sha256:string,
      *   manifest:array<string,mixed>,
      *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
+     *   runtime_rows:int,
+     *   rows_collected:bool,
      *   runtime_files:array<string,array{sha256:string,rows:int,path:string,first_surface?:string,last_surface?:string}>
      * }
      */
@@ -41,6 +61,9 @@ final class WP_FTS_AnalyzerPackValidator
         $packDir = dirname($manifestPath);
         $this->validate_manifest_pack_files($manifest, $packDir);
         $rows = [];
+        $collectRuntimeRows = $collectRows
+            && (bool) $manifest['fixture_only']
+            && $this->declared_runtime_rows($manifest) <= $this->maxCollectedRuntimeRows;
         $runtimeFiles = [];
         $previousKey = null;
         $totalRows = 0;
@@ -52,17 +75,12 @@ final class WP_FTS_AnalyzerPackValidator
                 throw new RuntimeException("Runtime digest mismatch for {$file['path']}.");
             }
 
-            $fileResult = $this->parse_runtime_rows($runtimePath, $collectRows, $previousKey, $runtimeDigest);
+            $fileResult = $this->parse_runtime_rows($runtimePath, $collectRuntimeRows, $previousKey, $runtimeDigest, $rows);
             if ($fileResult['rows_count'] !== (int) $file['rows']) {
                 throw new RuntimeException("Runtime row count mismatch for {$file['path']}.");
             }
             $this->validate_runtime_file_range($file, $fileResult, (string) $file['path']);
 
-            if ($collectRows) {
-                foreach ($fileResult['rows'] as $row) {
-                    $rows[] = $row;
-                }
-            }
             $runtimeFile = [
                 'sha256' => $digest,
                 'rows' => $fileResult['rows_count'],
@@ -99,6 +117,8 @@ final class WP_FTS_AnalyzerPackValidator
             'manifest_sha256' => $manifestDigest,
             'manifest' => $manifest,
             'rows' => $rows,
+            'runtime_rows' => $totalRows,
+            'rows_collected' => $collectRuntimeRows,
             'runtime_files' => $runtimeFiles,
         ];
     }
@@ -210,8 +230,8 @@ final class WP_FTS_AnalyzerPackValidator
      *
      * @param string|null $previousGlobalKey Previous row key from earlier files.
      * @param HashContext $runtimeDigest Digest context for normalized data rows.
+     * @param array<int,array{surface:string,lemma:string,file:string,line:int}> $rows
      * @return array{
-     *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
      *   rows_count:int,
      *   first_surface:?string,
      *   last_surface:?string
@@ -219,9 +239,10 @@ final class WP_FTS_AnalyzerPackValidator
      */
     private function parse_runtime_rows(
         string $path,
-        bool $collectRows,
+        bool &$collectRows,
         ?string &$previousGlobalKey,
-        HashContext $runtimeDigest
+        HashContext $runtimeDigest,
+        array &$rows
     ): array
     {
         $handle = fopen($path, 'rb');
@@ -229,7 +250,6 @@ final class WP_FTS_AnalyzerPackValidator
             throw new RuntimeException("Could not read analyzer pack runtime file {$path}.");
         }
 
-        $rows = [];
         $previousKey = null;
         $normalizer = new WP_FTS_Normalizer();
         $lineNumber = 0;
@@ -271,6 +291,12 @@ final class WP_FTS_AnalyzerPackValidator
             hash_update($runtimeDigest, $key . "\n");
 
             if ($collectRows) {
+                if (count($rows) >= $this->maxCollectedRuntimeRows) {
+                    $rows = [];
+                    $collectRows = false;
+                    continue;
+                }
+
                 $rows[] = [
                     'surface' => $surface,
                     'lemma' => $lemma,
@@ -283,11 +309,23 @@ final class WP_FTS_AnalyzerPackValidator
         fclose($handle);
 
         return [
-            'rows' => $rows,
             'rows_count' => $rowsCount,
             'first_surface' => $firstSurface,
             'last_surface' => $lastSurface,
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     */
+    private function declared_runtime_rows(array $manifest): int
+    {
+        $rows = 0;
+        foreach ($manifest['runtime']['files'] as $file) {
+            $rows += (int) $file['rows'];
+        }
+
+        return $rows;
     }
 
     /**

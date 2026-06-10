@@ -21,7 +21,7 @@ foreach ($args as $arg) {
 $manifest ??= WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest();
 
 try {
-    $result = (new WP_FTS_AnalyzerPackValidator())->validate((string) $manifest, !$metadataOnly);
+    $result = (new WP_FTS_AnalyzerPackValidator())->validate((string) $manifest, false);
     $summary = [
         'status' => 'ok',
         'pack_id' => $result['manifest']['pack_id'],
@@ -30,6 +30,8 @@ try {
         'fixture_only' => $result['manifest']['fixture_only'],
         'metadata_only' => $metadataOnly,
         'manifest_sha256' => $result['manifest_sha256'],
+        'runtime_rows' => $result['runtime_rows'],
+        'rows_collected' => $result['rows_collected'],
         'runtime_files' => array_map(
             static fn(array $file): array => [
                 'sha256' => $file['sha256'],
