@@ -295,20 +295,51 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
         if (!is_string($pluginRoot)) {
             throw new RuntimeException('Could not resolve plugin root for output-path safety checks.');
         }
+        $repositoryRoot = $this->resolve_repository_root($pluginRoot);
         $candidate = $this->canonical_candidate_path($path);
         if ($candidate === $pluginRoot || str_starts_with($candidate, $pluginRoot . DIRECTORY_SEPARATOR)) {
             throw new RuntimeException("{$label} must be outside the committed plugin repository/package by default: {$path}");
         }
+        if ($candidate === $repositoryRoot || str_starts_with($candidate, $repositoryRoot . DIRECTORY_SEPARATOR)) {
+            throw new RuntimeException("{$label} must be outside the committed Git repository worktree by default: {$path}");
+        }
+    }
+
+    private function resolve_repository_root(string $pluginRoot): string
+    {
+        $current = $pluginRoot;
+        while (true) {
+            $gitEntry = $current . DIRECTORY_SEPARATOR . '.git';
+            if (is_dir($gitEntry) || is_file($gitEntry)) {
+                return $current;
+            }
+
+            $parent = dirname($current);
+            if ($parent === $current) {
+                break;
+            }
+            $current = $parent;
+        }
+
+        $fallback = realpath(dirname($pluginRoot));
+        if (!is_string($fallback)) {
+            throw new RuntimeException('Could not resolve repository root for output-path safety checks.');
+        }
+
+        return $fallback;
     }
 
     private function canonical_candidate_path(string $path): string
     {
-        $existing = $path;
+        $absolutePath = $this->absolute_path($path);
+        $existing = $absolutePath;
+        $suffix = [];
         while (!file_exists($existing)) {
             $parent = dirname($existing);
             if ($parent === $existing) {
                 break;
             }
+            array_unshift($suffix, basename($existing));
             $existing = $parent;
         }
 
@@ -316,12 +347,41 @@ final class WP_FTS_PolishPolimorfExternalPackBuilder
         if (!is_string($real)) {
             throw new RuntimeException("Could not resolve path safety root for {$path}.");
         }
-        $suffix = trim(substr($path, strlen($existing)), DIRECTORY_SEPARATOR);
-        if ($suffix === '') {
-            return $real;
+        foreach ($suffix as $part) {
+            if ($part === '' || $part === '.') {
+                continue;
+            }
+            if ($part === '..') {
+                $real = dirname($real);
+                continue;
+            }
+            $real .= DIRECTORY_SEPARATOR . $part;
         }
 
-        return $real . DIRECTORY_SEPARATOR . $suffix;
+        return $real;
+    }
+
+    private function absolute_path(string $path): string
+    {
+        if ($path === '') {
+            throw new RuntimeException('Could not resolve empty path for output-path safety checks.');
+        }
+        if ($this->is_absolute_path($path)) {
+            return $path;
+        }
+
+        $cwd = getcwd();
+        if (!is_string($cwd)) {
+            throw new RuntimeException("Could not resolve current working directory for {$path}.");
+        }
+
+        return $cwd . DIRECTORY_SEPARATOR . $path;
+    }
+
+    private function is_absolute_path(string $path): bool
+    {
+        return str_starts_with($path, DIRECTORY_SEPARATOR)
+            || preg_match('/^[A-Za-z]:[\\\\\\/]/', $path) === 1;
     }
 
     private function reject_secret_path(string $path, string $label): void

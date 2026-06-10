@@ -28,6 +28,16 @@ function wp_fts_ppew_fixture_source(): string
     return dirname(__DIR__) . '/fixtures/polimorf-importer/sample-polimorf.tab';
 }
 
+function wp_fts_ppew_plugin_root(): string
+{
+    return dirname(__DIR__, 2);
+}
+
+function wp_fts_ppew_repository_root(): string
+{
+    return dirname(wp_fts_ppew_plugin_root());
+}
+
 function wp_fts_ppew_temp_dir(string $suffix): string
 {
     return sys_get_temp_dir() . '/wp_fts_ppew_' . getmypid() . '_' . $suffix . '_' . bin2hex(random_bytes(4));
@@ -93,6 +103,132 @@ function wp_fts_ppew_check(bool $condition, string $message, array &$errors): vo
     if (!$condition) {
         $errors[] = $message;
     }
+}
+
+/**
+ * @return string[]
+ */
+function wp_fts_ppew_case_rejects_output_inside_plugin_root(): array
+{
+    $errors = [];
+    $out = wp_fts_ppew_plugin_root() . '/ppew-plugin-output-' . getmypid() . '-' . bin2hex(random_bytes(4));
+    try {
+        (new WP_FTS_PolishPolimorfExternalPackBuilder())->build(
+            wp_fts_ppew_fixture_options($out, ['expect_source_bytes' => 1])
+        );
+        $errors[] = 'output inside plugin root should fail before source verification';
+    } catch (RuntimeException $e) {
+        wp_fts_ppew_check(str_contains($e->getMessage(), 'plugin repository/package'), 'plugin-root output failure should name plugin package boundary', $errors);
+        wp_fts_ppew_check(!str_contains($e->getMessage(), 'Source byte count mismatch'), 'plugin-root output failure should happen before source verification', $errors);
+    } finally {
+        wp_fts_ppew_remove_tree($out);
+    }
+
+    return $errors;
+}
+
+/**
+ * @return string[]
+ */
+function wp_fts_ppew_case_rejects_output_inside_repository_root(): array
+{
+    $errors = [];
+    $repoRoot = wp_fts_ppew_repository_root();
+    $outName = 'ppew-repo-output-' . getmypid() . '-' . bin2hex(random_bytes(4));
+    $out = $repoRoot . '/' . $outName;
+    $cwd = getcwd();
+    try {
+        if (!is_string($cwd) || !chdir($repoRoot)) {
+            throw new RuntimeException("Could not enter repository root fixture: {$repoRoot}");
+        }
+        (new WP_FTS_PolishPolimorfExternalPackBuilder())->build(
+            wp_fts_ppew_fixture_options($outName, ['expect_source_bytes' => 1])
+        );
+        $errors[] = 'output inside repository root should fail before source verification';
+    } catch (RuntimeException $e) {
+        wp_fts_ppew_check(str_contains($e->getMessage(), 'Git repository worktree'), 'repo-root output failure should name Git worktree boundary', $errors);
+        wp_fts_ppew_check(!str_contains($e->getMessage(), 'Source byte count mismatch'), 'repo-root output failure should happen before source verification', $errors);
+    } finally {
+        if (is_string($cwd)) {
+            chdir($cwd);
+        }
+        wp_fts_ppew_remove_tree($out);
+    }
+
+    return $errors;
+}
+
+/**
+ * @return string[]
+ */
+function wp_fts_ppew_case_rejects_cache_inside_repository_root(): array
+{
+    $errors = [];
+    $repoRoot = wp_fts_ppew_repository_root();
+    $cacheName = 'ppew-repo-cache-' . getmypid() . '-' . bin2hex(random_bytes(4));
+    $cache = $repoRoot . '/' . $cacheName;
+    $out = wp_fts_ppew_temp_dir('cache_boundary_out');
+    $cwd = getcwd();
+    try {
+        if (!is_string($cwd) || !chdir($repoRoot)) {
+            throw new RuntimeException("Could not enter repository root fixture: {$repoRoot}");
+        }
+        (new WP_FTS_PolishPolimorfExternalPackBuilder())->build([
+            'download' => true,
+            'acknowledge_license' => 'BSD-2-Clause',
+            'cache_dir' => $cacheName,
+            'out' => $out,
+        ]);
+        $errors[] = 'cache inside repository root should fail before download setup';
+    } catch (RuntimeException $e) {
+        wp_fts_ppew_check(str_contains($e->getMessage(), 'Git repository worktree'), 'repo-root cache failure should name Git worktree boundary', $errors);
+        wp_fts_ppew_check(!str_contains($e->getMessage(), 'allow_url_fopen'), 'repo-root cache failure should happen before download setup', $errors);
+    } finally {
+        if (is_string($cwd)) {
+            chdir($cwd);
+        }
+        wp_fts_ppew_remove_tree($cache);
+        wp_fts_ppew_remove_tree($out);
+    }
+
+    return $errors;
+}
+
+/**
+ * @return string[]
+ */
+function wp_fts_ppew_case_allows_safe_external_cache_path_to_reach_source_verification(): array
+{
+    $errors = [];
+    $cache = wp_fts_ppew_temp_dir('safe_cache');
+    $out = wp_fts_ppew_temp_dir('safe_cache_out');
+    try {
+        if (!mkdir($cache, 0777, true) && !is_dir($cache)) {
+            throw new RuntimeException("Could not create safe cache fixture: {$cache}");
+        }
+        $cachedSource = $cache . '/' . WP_FTS_PolishPolimorfExternalPackBuilder::APPROVED_SOURCE_FILE;
+        if (!copy(wp_fts_ppew_fixture_source(), $cachedSource)) {
+            throw new RuntimeException("Could not seed safe cache fixture: {$cachedSource}");
+        }
+
+        (new WP_FTS_PolishPolimorfExternalPackBuilder())->build([
+            'download' => true,
+            'acknowledge_license' => 'BSD-2-Clause',
+            'cache_dir' => $cache,
+            'out' => $out,
+            'expect_source_sha256' => str_repeat('0', 64),
+            'expect_source_bytes' => 1,
+        ]);
+        $errors[] = 'safe external cache path should advance past repository boundary checks';
+    } catch (RuntimeException $e) {
+        wp_fts_ppew_check(str_contains($e->getMessage(), 'Source byte count mismatch'), 'safe external cache path should reach source verification without network', $errors);
+        wp_fts_ppew_check(!str_contains($e->getMessage(), 'Git repository worktree'), 'safe external cache path should not fail repository boundary checks', $errors);
+    } finally {
+        wp_fts_ppew_remove_tree($cache);
+        wp_fts_ppew_remove_tree($out);
+    }
+
+    return $errors;
 }
 
 /**
@@ -233,6 +369,10 @@ function wp_fts_ppew_case_refuses_non_empty_output(): array
 function wp_fts_ppew_run_verifier(): array
 {
     return array_merge(
+        wp_fts_ppew_case_rejects_output_inside_plugin_root(),
+        wp_fts_ppew_case_rejects_output_inside_repository_root(),
+        wp_fts_ppew_case_rejects_cache_inside_repository_root(),
+        wp_fts_ppew_case_allows_safe_external_cache_path_to_reach_source_verification(),
         wp_fts_ppew_case_builds_local_fixture_and_stays_offline(),
         wp_fts_ppew_case_rejects_source_identity_mismatch(),
         wp_fts_ppew_case_requires_download_license_acknowledgement(),
@@ -241,6 +381,22 @@ function wp_fts_ppew_run_verifier(): array
 }
 
 if (function_exists('test_case')) {
+    test_case('quality Polish PoliMorf external pack workflow rejects output inside plugin root', function (): void {
+        assert_same([], wp_fts_ppew_case_rejects_output_inside_plugin_root(), 'external pack workflow should reject plugin-root output paths');
+    });
+
+    test_case('quality Polish PoliMorf external pack workflow rejects output inside repository root', function (): void {
+        assert_same([], wp_fts_ppew_case_rejects_output_inside_repository_root(), 'external pack workflow should reject repo-root output paths');
+    });
+
+    test_case('quality Polish PoliMorf external pack workflow rejects cache inside repository root', function (): void {
+        assert_same([], wp_fts_ppew_case_rejects_cache_inside_repository_root(), 'external pack workflow should reject repo-root cache paths');
+    });
+
+    test_case('quality Polish PoliMorf external pack workflow allows safe external cache boundary', function (): void {
+        assert_same([], wp_fts_ppew_case_allows_safe_external_cache_path_to_reach_source_verification(), 'external pack workflow should allow safe external cache paths past boundary checks');
+    });
+
     test_case('quality Polish PoliMorf external pack workflow builds local fixture and stays offline', function (): void {
         assert_same([], wp_fts_ppew_case_builds_local_fixture_and_stays_offline(), 'external pack local fixture workflow should pass');
     });
