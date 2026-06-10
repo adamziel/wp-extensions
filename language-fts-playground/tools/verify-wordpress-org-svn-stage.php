@@ -9,6 +9,7 @@ $options = getopt(
     [
         'stage:',
         'strict-assets',
+        'submission-readiness',
         'manifest-json:',
         'allow-svn-metadata',
         'help',
@@ -16,23 +17,25 @@ $options = getopt(
 );
 
 if (isset($options['help'])) {
-    echo "Usage: php tools/verify-wordpress-org-svn-stage.php [--stage=dist/wordpress-org-svn-stage] [--strict-assets] [--manifest-json=path] [--allow-svn-metadata]\n";
+    echo "Usage: php tools/verify-wordpress-org-svn-stage.php [--stage=dist/wordpress-org-svn-stage] [--strict-assets] [--submission-readiness] [--manifest-json=path] [--allow-svn-metadata]\n";
     echo "\n";
     echo "Checks a dry-run WordPress.org Plugin Directory SVN stage for top-level\n";
     echo "trunk/, tags/<version>/, and assets/ layout, forbidden release paths,\n";
-    echo "version metadata agreement, and supported directory asset filenames.\n";
+    echo "version metadata agreement, supported directory asset filenames, image\n";
+    echo "formats, dimensions, and optional submission-readiness asset coverage.\n";
     exit(0);
 }
 
 $plugin_root = dirname(__DIR__);
 $stage = isset($options['stage']) ? (string) $options['stage'] : 'dist/wordpress-org-svn-stage';
-$strict_assets = isset($options['strict-assets']);
+$submission_readiness = isset($options['submission-readiness']);
+$strict_assets = isset($options['strict-assets']) || $submission_readiness;
 $allow_svn_metadata = isset($options['allow-svn-metadata']);
 $manifest_json = isset($options['manifest-json']) ? (string) $options['manifest-json'] : null;
 
 try {
     $stage_root = absolute_path($stage, $plugin_root);
-    $summary = verify_wordpress_org_svn_stage($stage_root, $strict_assets, $allow_svn_metadata);
+    $summary = verify_wordpress_org_svn_stage($stage_root, $strict_assets, $submission_readiness, $allow_svn_metadata);
 
     if (null !== $manifest_json) {
         write_manifest_json(absolute_path($manifest_json, $plugin_root), $stage_root, $summary);
@@ -45,6 +48,7 @@ try {
     echo 'Tag files: ' . $summary['tag_files'] . "\n";
     echo 'Assets: ' . count($summary['assets']) . "\n";
     echo 'Strict assets: ' . ($strict_assets ? 'yes' : 'no') . "\n";
+    echo 'Submission readiness assets: ' . ($submission_readiness ? 'yes' : 'no') . "\n";
     exit(0);
 } catch (Throwable $error) {
     fwrite(STDERR, 'WordPress.org SVN stage failed: ' . $error->getMessage() . "\n");
@@ -54,12 +58,13 @@ try {
 /**
  * Verifies a WordPress.org SVN staging tree.
  *
- * @param string $stage_root         Absolute stage root path.
- * @param bool   $strict_assets      Whether launch assets are required.
- * @param bool   $allow_svn_metadata Whether .svn directories are ignored.
- * @return array{stage_root:string,version:string,trunk_files:int,tag_files:int,assets:string[],paths:string[]}
+ * @param string $stage_root           Absolute stage root path.
+ * @param bool   $strict_assets        Whether launch assets are required.
+ * @param bool   $submission_readiness Whether all launch submission assets are required.
+ * @param bool   $allow_svn_metadata   Whether .svn directories are ignored.
+ * @return array{stage_root:string,version:string,trunk_files:int,tag_files:int,assets:string[],asset_details:array<string,array{name:string,width:int,height:int,format:string,mime:string}>,paths:string[]}
  */
-function verify_wordpress_org_svn_stage(string $stage_root, bool $strict_assets, bool $allow_svn_metadata): array
+function verify_wordpress_org_svn_stage(string $stage_root, bool $strict_assets, bool $submission_readiness, bool $allow_svn_metadata): array
 {
     $real_stage = realpath($stage_root);
 
@@ -118,7 +123,8 @@ function verify_wordpress_org_svn_stage(string $stage_root, bool $strict_assets,
     $tag_files = list_relative_files($tag, $tag, $allow_svn_metadata);
     assert_payloads_match($trunk, $tag, $trunk_files, $tag_files, $version);
 
-    $asset_files = verify_assets($assets, $strict_assets);
+    $asset_summary = verify_assets($assets, $strict_assets, $submission_readiness);
+    $asset_files = $asset_summary['files'];
     verify_screenshot_captions($trunk . '/readme.txt', $asset_files, 'trunk/readme.txt');
     verify_screenshot_captions($tag . '/readme.txt', $asset_files, 'tags/' . $version . '/readme.txt');
 
@@ -128,6 +134,7 @@ function verify_wordpress_org_svn_stage(string $stage_root, bool $strict_assets,
         'trunk_files' => count($trunk_files),
         'tag_files' => count($tag_files),
         'assets' => $asset_files,
+        'asset_details' => $asset_summary['details'],
         'paths' => list_relative_files($stage_root, $stage_root, $allow_svn_metadata),
     ];
 }
@@ -242,6 +249,8 @@ function required_payload_files(): array
         'readme.txt',
         'docs/lexical-resources.md',
         'docs/release-packaging.md',
+        'docs/wordpress-org-directory-assets.md',
+        'docs/wordpress-org-svn-staging.md',
         'playground/blueprint.json',
         'src/bootstrap.php',
         'src/Analyzer.php',
@@ -333,13 +342,14 @@ function assert_no_forbidden_paths(string $path, string $stage_root, bool $allow
 }
 
 /**
- * Verifies top-level assets/ filenames and selected dimensions.
+ * Verifies top-level assets/ filenames, image formats, and selected dimensions.
  *
  * @param string $assets        Absolute assets directory.
  * @param bool   $strict_assets Whether launch assets are required.
- * @return string[] Asset filenames.
+ * @param bool   $submission_readiness Whether all launch submission assets are required.
+ * @return array{files:string[],details:array<string,array{name:string,width:int,height:int,format:string,mime:string}>} Asset summary.
  */
-function verify_assets(string $assets, bool $strict_assets): array
+function verify_assets(string $assets, bool $strict_assets, bool $submission_readiness): array
 {
     $items = scandir($assets);
 
@@ -348,6 +358,7 @@ function verify_assets(string $assets, bool $strict_assets): array
     }
 
     $files = [];
+    $details = [];
 
     foreach ($items as $item) {
         if ('.' === $item || '..' === $item) {
@@ -368,11 +379,16 @@ function verify_assets(string $assets, bool $strict_assets): array
             throw new RuntimeException('Unsupported WordPress.org asset filename: ' . $item);
         }
 
-        assert_asset_dimensions($path, $item);
+        $details[$item] = inspect_asset_image($path, $item);
         $files[] = $item;
     }
 
     sort($files, SORT_STRING);
+    ksort($details, SORT_STRING);
+
+    if ($submission_readiness) {
+        assert_submission_readiness_assets($files);
+    }
 
     if ($strict_assets) {
         foreach (['banner-772x250.png', 'icon-128x128.png'] as $required) {
@@ -386,7 +402,10 @@ function verify_assets(string $assets, bool $strict_assets): array
         }
     }
 
-    return $files;
+    return [
+        'files' => $files,
+        'details' => $details,
+    ];
 }
 
 /**
@@ -409,12 +428,13 @@ function is_allowed_asset_filename(string $filename): bool
 }
 
 /**
- * Verifies fixed-size banner and icon dimensions when assets are present.
+ * Inspects an image asset and verifies its filename, format, and dimensions.
  *
  * @param string $path     Absolute asset path.
  * @param string $filename Asset filename.
+ * @return array{name:string,width:int,height:int,format:string,mime:string} Asset details.
  */
-function assert_asset_dimensions(string $path, string $filename): void
+function inspect_asset_image(string $path, string $filename): array
 {
     $expected = [
         'banner-772x250.png' => [772, 250],
@@ -422,27 +442,117 @@ function assert_asset_dimensions(string $path, string $filename): void
         'icon-128x128.png' => [128, 128],
         'icon-256x256.png' => [256, 256],
     ];
-
-    if (!isset($expected[$filename])) {
-        if (false === getimagesize($path)) {
-            throw new RuntimeException('WordPress.org screenshot asset is not a readable image: ' . $filename);
-        }
-
-        return;
-    }
-
+    $expected_format = expected_image_format($filename);
     $size = getimagesize($path);
 
-    if (!is_array($size) || !isset($size[0], $size[1])) {
+    if (!is_array($size) || !isset($size[0], $size[1], $size[2], $size['mime'])) {
         throw new RuntimeException('Unable to inspect WordPress.org asset dimensions: ' . $filename);
     }
 
-    if ([$size[0], $size[1]] !== $expected[$filename]) {
+    if ($size[2] !== $expected_format['type']) {
+        throw new RuntimeException(
+            'WordPress.org asset format does not match filename: ' . $filename .
+            ' expected ' . $expected_format['label'] . ', found ' . image_type_label((int) $size[2]) . '.'
+        );
+    }
+
+    if (isset($expected[$filename]) && [$size[0], $size[1]] !== $expected[$filename]) {
         throw new RuntimeException(
             'WordPress.org asset has wrong dimensions: ' . $filename .
             ' expected ' . $expected[$filename][0] . 'x' . $expected[$filename][1] .
             ', found ' . $size[0] . 'x' . $size[1] . '.'
         );
+    }
+
+    return [
+        'name' => $filename,
+        'width' => (int) $size[0],
+        'height' => (int) $size[1],
+        'format' => $expected_format['label'],
+        'mime' => (string) $size['mime'],
+    ];
+}
+
+/**
+ * Returns the image type required by a WordPress.org asset filename.
+ *
+ * @param string $filename Asset filename.
+ * @return array{type:int,label:string} Required image type.
+ */
+function expected_image_format(string $filename): array
+{
+    if ('.png' === substr($filename, -4)) {
+        return [
+            'type' => IMAGETYPE_PNG,
+            'label' => 'PNG',
+        ];
+    }
+
+    if ('.jpg' === substr($filename, -4)) {
+        return [
+            'type' => IMAGETYPE_JPEG,
+            'label' => 'JPEG',
+        ];
+    }
+
+    throw new RuntimeException('Unsupported WordPress.org asset image format: ' . $filename);
+}
+
+/**
+ * Converts a PHP image type constant to a readable label.
+ *
+ * @param int $type PHP image type constant.
+ * @return string Image label.
+ */
+function image_type_label(int $type): string
+{
+    if (IMAGETYPE_PNG === $type) {
+        return 'PNG';
+    }
+
+    if (IMAGETYPE_JPEG === $type) {
+        return 'JPEG';
+    }
+
+    return 'type ' . $type;
+}
+
+/**
+ * Requires the full local asset set expected before a real submission push.
+ *
+ * @param string[] $files Asset filenames.
+ */
+function assert_submission_readiness_assets(array $files): void
+{
+    foreach (['banner-772x250.png', 'banner-1544x500.png', 'icon-128x128.png', 'icon-256x256.png'] as $required) {
+        if (!in_array($required, $files, true)) {
+            throw new RuntimeException('Submission readiness mode requires: ' . $required);
+        }
+    }
+
+    $numbers = [];
+
+    foreach ($files as $file) {
+        if (preg_match('/^screenshot-([1-9][0-9]*)\.(?:png|jpg)$/', $file, $matches)) {
+            $numbers[] = (int) $matches[1];
+        }
+    }
+
+    if ([] === $numbers) {
+        throw new RuntimeException('Submission readiness mode requires at least one screenshot asset.');
+    }
+
+    sort($numbers, SORT_NUMERIC);
+
+    if ($numbers !== array_values(array_unique($numbers))) {
+        throw new RuntimeException('Submission readiness mode requires one image file per screenshot number.');
+    }
+
+    $expected = range(1, count($numbers));
+
+    if ($numbers !== $expected) {
+        $missing = array_values(array_diff($expected, $numbers));
+        throw new RuntimeException('Submission readiness mode requires contiguous screenshot numbering starting at screenshot-1; missing screenshot-' . $missing[0] . '.');
     }
 }
 
@@ -665,7 +775,7 @@ function list_relative_files(string $root, string $base, bool $allow_svn_metadat
  *
  * @param string $manifest_path Absolute manifest path.
  * @param string $stage_root    Absolute stage root path.
- * @param array{stage_root:string,version:string,trunk_files:int,tag_files:int,assets:string[],paths:string[]} $summary Verification summary.
+ * @param array{stage_root:string,version:string,trunk_files:int,tag_files:int,assets:string[],asset_details:array<string,array{name:string,width:int,height:int,format:string,mime:string}>,paths:string[]} $summary Verification summary.
  */
 function write_manifest_json(string $manifest_path, string $stage_root, array $summary): void
 {
