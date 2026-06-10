@@ -1,0 +1,252 @@
+{
+  "schema": "wp-fts-thai-tokenizer-source-candidate-lock-v1",
+  "lock_kind": "thai_tokenizer_exact_source_candidate_preflight",
+  "status": "candidate_preflight_only",
+  "tokenizer_id": "thai_dictionary_tcc_v1",
+  "tokenizer_type": "thai_tcc_dictionary_segmenter",
+  "language_id": "th",
+  "data_kind": "reference_only",
+  "preferred_candidate_source_family": {
+    "name": "PyThaiNLP Thai word-list/newmm source family with clean-room TCC or TCC+ boundary rules",
+    "reasoning": [
+      "PyThaiNLP is a maintained Thai NLP project with public repository history, public documentation, and documented dictionary-based newmm tokenization behavior.",
+      "PyThaiNLP documentation identifies thai_words() as the base word set used by newmm revision utilities and links the word-list identity to words_th.txt.",
+      "PyThaiNLP documentation exposes TCC, TCC+ and ETCC behavior as subword tokenization choices, giving reviewable behavior references while still requiring a clean-room project-owned rule implementation.",
+      "The source family is suitable for a first candidate lock because it can be evaluated as dictionary-based Thai segmentation constrained by explicit subword boundaries without committing data or adapter code in this task."
+    ],
+    "not_selected_alternatives": [
+      "ICU dictionary data is not selected because this task needs an exact redistributable source chain before any dictionary data or tokenizer adapter is introduced.",
+      "Volubilis-derived word lists are not selected for the first candidate because the observed corpus-license chain includes CC-BY-SA language that needs a separate redistribution decision.",
+      "JTCC grammar or PyThaiNLP regex/rule code is not selected as implementation material because this task requires clean-room TCC/TCC+ work before adapter coding."
+    ]
+  },
+  "dictionary": {
+    "source_family": "PyThaiNLP corpus Thai words",
+    "candidate_source_name": "PyThaiNLP words_th.txt via pythainlp.corpus.thai_words()",
+    "upstream_project_url": "https://github.com/PyThaiNLP/pythainlp",
+    "upstream_documentation_url": "https://pythainlp.org/dev-docs/api/corpus.html",
+    "upstream_path": "pythainlp/corpus/words_th.txt",
+    "version_ref": {
+      "pending_exact_value": true,
+      "required_by": "future approved Thai tokenizer source lock",
+      "description": "Select the exact PyThaiNLP release tag or immutable commit containing the reviewed words_th.txt artifact."
+    },
+    "retrieval_method": "Manual maintainer review only; no dictionary artifact was downloaded, vendored, transformed, or committed by this task.",
+    "source_chain_status": "Candidate source family only. The exact release/commit, artifact URL, digest, byte count, and corpus-license chain remain unresolved.",
+    "artifact": {
+      "name": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Record the exact reviewed dictionary artifact file name."
+      },
+      "url": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Record the exact immutable artifact URL for the selected PyThaiNLP word-list source."
+      },
+      "sha256": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Compute SHA-256 outside the repository from the reviewed dictionary artifact."
+      },
+      "bytes": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Record the byte count outside the repository from the reviewed dictionary artifact."
+      }
+    },
+    "license": {
+      "identifier": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Resolve the exact license identifier for the selected words_th.txt artifact and its upstream source chain."
+      },
+      "name": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Resolve the exact license name for the selected dictionary artifact."
+      },
+      "url": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Record the authoritative license URL for the selected dictionary artifact."
+      },
+      "text_url": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Record the authoritative license text URL for the selected dictionary artifact."
+      },
+      "notice_file": "LICENSE.thai-tokenizer-dictionary.txt",
+      "compatibility_status": "Unapproved. GPL-2.0-or-later compatibility, WordPress.org redistribution, attribution, notice, and share-alike obligations must be reviewed before import.",
+      "attribution_status": "Unapproved. Exact copyright holder and attribution text must be recorded before generated tokenizer resources are committed."
+    },
+    "missing_exact_identity_fields": [
+      "dictionary.version_ref",
+      "dictionary.artifact.name",
+      "dictionary.artifact.url",
+      "dictionary.artifact.sha256",
+      "dictionary.artifact.bytes",
+      "dictionary.license.identifier",
+      "dictionary.license.name",
+      "dictionary.license.url",
+      "dictionary.license.text_url",
+      "dictionary copyright holder and attribution text",
+      "dictionary source-chain evidence for every upstream contributor or bundled corpus source"
+    ]
+  },
+  "tcc_rules": {
+    "source_family": "Published Thai Character Cluster behavior references plus clean-room project-owned rule artifact",
+    "variant": {
+      "pending_exact_value": true,
+      "required_by": "future approved Thai tokenizer source lock",
+      "description": "Choose tcc or tcc_plus after reviewing behavior, license, quality, and clean-room implementation requirements."
+    },
+    "source_chain_status": "Candidate behavior references only. No TCC rules, regexes, grammars, or third-party implementation code were copied by this task.",
+    "candidate_sources": [
+      "PyThaiNLP tokenize documentation for TCC, TCC+, ETCC, and dictionary/newmm behavior: https://pythainlp.org/docs/4.0/api/tokenize.html",
+      "Theeramunkong et al. 2000 Character cluster based Thai information retrieval citation as referenced by PyThaiNLP and tccseg documentation.",
+      "tccseg README as an MIT-licensed behavior reference that cites Theeramunkong et al. and PyThaiNLP revision lineage: https://github.com/tchayintr/tccseg",
+      "Thai NLP resource survey identifying TCC, ETCC, PyThaiNLP, and JTCC relationships: https://aclanthology.org/2022.lrec-1.697.pdf"
+    ],
+    "rule_artifact": {
+      "name": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Record the exact project-owned clean-room TCC/TCC+ rule artifact name before adapter work."
+      },
+      "url": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Record the exact reviewed local or upstream rule-spec source URL before adapter work."
+      },
+      "sha256": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Compute SHA-256 for the reviewed clean-room rule artifact before adapter work."
+      },
+      "bytes": {
+        "pending_exact_value": true,
+        "required_by": "future approved Thai tokenizer source lock",
+        "description": "Record the reviewed clean-room rule artifact byte count before adapter work."
+      }
+    },
+    "clean_room_implementation_approach": "Project-owned PHP implementation from reviewed behavior requirements only; no upstream implementation code, regex list, ANTLR grammar, generated tables, or tokenizer data may be copied without separate approval.",
+    "subword_boundary_notice": "TCC and TCC+ boundaries are subword boundaries and are not Thai word segmentation.",
+    "clean_room": {
+      "references_consulted": [
+        "PyThaiNLP public documentation pages for tokenizer and corpus behavior.",
+        "PyThaiNLP public corpus-license page for source-chain questions.",
+        "tccseg public README for candidate behavior/source-lineage notes.",
+        "LREC 2022 Thai NLP resource survey for TCC, ETCC, PyThaiNLP, and JTCC relationship context."
+      ],
+      "local_implementation_author_requirement": "A future implementation author must document that they did not copy PyThaiNLP, JTCC, tccseg, ICU, or other third-party rule code or grammar.",
+      "no_upstream_code_copied": true,
+      "no_upstream_regex_or_grammar_copied": true,
+      "notes": "This candidate lock records source questions only. It is not a TCC implementation specification."
+    },
+    "missing_exact_identity_fields": [
+      "tcc_rules.variant",
+      "tcc_rules.rule_artifact.name",
+      "tcc_rules.rule_artifact.url",
+      "tcc_rules.rule_artifact.sha256",
+      "tcc_rules.rule_artifact.bytes",
+      "clean-room author and review signoff",
+      "rule-source rights basis and redistribution decision"
+    ]
+  },
+  "normalization_policy": {
+    "unicode_normalization": "NFC",
+    "utf8_validation": "reject malformed UTF-8",
+    "blank_and_control_policy": "reject blank dictionary rows and unsupported control characters",
+    "duplicate_policy": "deduplicate exact normalized token surfaces before trie generation",
+    "sort_order": "binary stable sort after normalization",
+    "tie_break_policy": "longest dictionary match constrained by selected TCC/TCC+ boundaries, then stable lexical order",
+    "max_token_bytes": 128,
+    "max_source_bytes": 8388608,
+    "max_generated_rows": 250000,
+    "max_thai_run_bytes": 4096
+  },
+  "license_source_chain_questions": [
+    {
+      "id": "dictionary-license-exactness",
+      "question": "Which exact license applies to the selected words_th.txt artifact after tracing PyThaiNLP corpus-license notes and any upstream corpus contributors?",
+      "required_resolution": "Record authoritative license identifier, text URL, notice file, copyright holder, attribution text, and GPL-2.0-or-later compatibility approval.",
+      "blocks_adapter": true
+    },
+    {
+      "id": "dictionary-sharealike-risk",
+      "question": "Do any selected dictionary rows derive from CC-BY-SA or other reciprocal data sources such as Volubilis, and are those obligations acceptable for a WordPress.org plugin package?",
+      "required_resolution": "Either exclude those rows with documented filters or obtain explicit approval and notices before import.",
+      "blocks_adapter": true
+    },
+    {
+      "id": "tcc-clean-room-source",
+      "question": "What exact TCC or TCC+ rule source can be used without copying PyThaiNLP regexes, JTCC grammar, ICU tables, or other third-party implementation material?",
+      "required_resolution": "Commit only a reviewed project-owned clean-room rule artifact with digest, byte count, author statement, and rights basis.",
+      "blocks_adapter": true
+    },
+    {
+      "id": "support-claim-boundary",
+      "question": "What tokenizer fixtures, search regressions, performance gates, and documentation changes must pass before any Thai segmentation support claim is made?",
+      "required_resolution": "Require deterministic token stream fixtures, search relevance fixtures, memory/performance limits, docs review, and release packaging checks.",
+      "blocks_adapter": true
+    }
+  ],
+  "sources_inspected": [
+    {
+      "label": "PyThaiNLP repository README",
+      "url": "https://github.com/PyThaiNLP/pythainlp",
+      "evidence": "Identifies PyThaiNLP as the maintained source family and states Apache-2.0 for tools with data/model license claims that still require per-artifact confirmation."
+    },
+    {
+      "label": "PyThaiNLP corpus API documentation",
+      "url": "https://pythainlp.org/dev-docs/api/corpus.html",
+      "evidence": "Documents thai_words(), words_th.txt identity, corpus download behavior, and newmm dictionary revision utilities using thai_words() as the base set."
+    },
+    {
+      "label": "PyThaiNLP corpus license page",
+      "url": "https://github.com/PyThaiNLP/pythainlp/blob/dev/pythainlp/corpus/corpus_license.md",
+      "evidence": "Lists corpus files including words_th.txt and records mixed license/source-chain statements that must be resolved before import."
+    },
+    {
+      "label": "PyThaiNLP tokenizer API documentation",
+      "url": "https://pythainlp.org/docs/4.0/api/tokenize.html",
+      "evidence": "Documents TCC, TCC+, ETCC, and newmm behavior as candidate behavior references without authorizing code or regex copying."
+    },
+    {
+      "label": "tccseg repository README",
+      "url": "https://github.com/tchayintr/tccseg",
+      "evidence": "Provides an MIT-licensed TCC segmenter reference and cites Theeramunkong et al. 2000 plus PyThaiNLP lineage."
+    },
+    {
+      "label": "LREC 2022 Thai NLP resource survey",
+      "url": "https://aclanthology.org/2022.lrec-1.697.pdf",
+      "evidence": "Describes TCC, ETCC, PyThaiNLP, JTCC, dictionary-based segmentation, and Thai word-tokenization context."
+    }
+  ],
+  "claim_boundaries": {
+    "dictionary_data_committed": false,
+    "tcc_rule_data_committed": false,
+    "tokenizer_adapter_coded": false,
+    "runtime_tokenizer_registered": false,
+    "real_thai_segmentation_shipped": false,
+    "user_facing_thai_support_claimed": false
+  },
+  "remaining_no_go_conditions_before_adapter": [
+    "Do not download, vendor, commit, or transform words_th.txt or any other Thai dictionary rows until the exact artifact identity and license chain are approved.",
+    "Do not copy PyThaiNLP, JTCC, tccseg, ICU, or other third-party tokenizer implementation code, regexes, grammars, generated tables, or rule data without a separate approval.",
+    "Do not bundle CC-BY-SA or other reciprocal dictionary data without explicit compatibility, attribution, notice, and redistribution approval.",
+    "Do not register thai_dictionary_tcc_v1 or claim real Thai segmentation until deterministic token stream fixtures and search regressions pass.",
+    "Do not allow runtime network fetches for dictionary, TCC/TCC+, license, or model resources.",
+    "Do not use unpinned branches, mutable URLs, or undocumented generated artifacts as tokenizer sources.",
+    "Do not describe fallback CJK bigrams or synthetic non-space readiness fixtures as Thai word segmentation.",
+    "Do not proceed without maintainer/legal signoff for GPL-2.0-or-later compatibility and WordPress.org package redistribution."
+  ],
+  "future_verification_plan": {
+    "source_lock_command": "php indexer/tools/verify-thai-tokenizer-source-candidate-lock.php indexer/review-artifacts/source-locks/thai-tokenizer-source-candidate-preflight.json --allow-pending-exact-values",
+    "documentation_file": "indexer/docs/tokenizer-source-locks.md",
+    "tokenizer_fixture_requirement": "Add deterministic Thai token stream fixtures covering offsets, positions, TCC/TCC+ boundary constraints, longest-match dictionary tie breaks, unknown Thai runs, mixed scripts, and malformed UTF-8 rejection.",
+    "search_regression_requirement": "Add Thai search fixtures for phrase matching, highlighting, AND/OR behavior, unknown terms, ranking, and explicit no-fuzzy behavior if the tokenizer disables fuzzy expansion.",
+    "performance_requirement": "Gate dictionary load memory, trie build time, maximum Thai run bytes, maximum generated rows, and index/search time on representative Thai documents before enabling the adapter."
+  }
+}
