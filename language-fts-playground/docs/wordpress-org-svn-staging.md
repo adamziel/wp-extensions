@@ -113,7 +113,7 @@ If approved GPL-compatible directory assets exist, pass their source directory:
 ```sh
 php language-fts-playground/tools/build-wordpress-org-svn-stage.php \
   --output=language-fts-playground/dist/wordpress-org-svn-stage \
-  --assets-source=/absolute/path/to/approved-assets \
+  --assets-source=/absolute/path/to/approved-wordpress-org-assets/final \
   --replace
 ```
 
@@ -137,8 +137,22 @@ numbering starting at `screenshot-1`, matching image formats, and matching
 readme captions. Both modes are local checks only; neither uploads to SVN or
 contacts WordPress.org services.
 
-See `docs/wordpress-org-directory-assets.md` for the asset inventory, source
-and license runbook, and the remaining external submission gates.
+Before using `--assets-source`, run the source/license manifest verifier:
+
+```sh
+php language-fts-playground/tools/verify-wordpress-org-asset-manifest.php \
+  --manifest=/absolute/path/to/approved-wordpress-org-assets/manifest.json
+```
+
+That manifest verifier checks the retained source evidence and SHA-256 values
+for the final local files. The SVN stage verifier then checks the copied stage
+layout and submission-readiness captions. Both tools remain local-only; neither
+generates assets, contacts WordPress.org, runs official validators, reads
+credentials, performs real SVN operations, or authorizes public submission.
+
+See `docs/wordpress-org-directory-assets.md` for the manifest format, asset
+inventory, source and license runbook, and the remaining external submission
+gates.
 
 ## Regression Checks
 
@@ -148,12 +162,22 @@ Run the focused staging regressions:
 php language-fts-playground/tools/test-wordpress-org-svn-stage.php
 ```
 
+Run the focused source/license manifest regressions:
+
+```sh
+php language-fts-playground/tools/test-wordpress-org-asset-manifest.php
+```
+
 The regression script builds a temporary stage, writes a manifest, and verifies
 that the verifier rejects nested plugin roots under both `trunk/` and
 `tags/<version>/`, payload-level `assets/`, a forbidden `tools/` directory,
 unsupported asset filenames, missing or misplaced submission-readiness assets,
 wrong banner/icon dimensions, and image formats that do not match filenames.
 It also verifies a complete generated local fixture with `--submission-readiness`.
+
+The asset manifest regression script creates temporary generated image/source
+fixtures and verifies complete, missing-asset, wrong-dimension, checksum,
+missing-evidence, non-contiguous screenshot, and unapproved-entry outcomes.
 
 ## Release Rehearsal Notes
 
