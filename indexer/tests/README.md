@@ -30,6 +30,19 @@ excerpt, and content fields. It is not live MySQL proof, does not replay
 production traffic, and does not generate or require committed corpora, caches,
 logs, or archives.
 
+Run the deterministic native BM25 reference gate:
+
+```sh
+php tests/bm25-reference-gate.php --json
+php -n tests/bm25-reference-gate.php --json
+composer test:bm25-reference
+```
+
+The gate is also loaded by `tests/run.php`. It has no optional dependencies and
+compares a field-boosted four-document fixture against a local Lucene-style BM25
+oracle, including weighted postings, OR rankings, AND narrowing, and score
+deltas.
+
 Run the optional external BM25 reference harness:
 
 ```sh

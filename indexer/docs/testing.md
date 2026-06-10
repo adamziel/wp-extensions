@@ -30,6 +30,22 @@ php -n tests/run.php
 
 This verifies the fallback paths used when optional extensions are missing.
 
+## Native BM25 Reference Gate
+
+The deterministic BM25 gate is included in the main PHP harness and can also be
+run directly for a focused JSON report:
+
+```sh
+php tests/bm25-reference-gate.php --json
+composer test:bm25-reference
+```
+
+It indexes a fixed four-document field fixture through the production native
+indexer/searcher and compares weighted postings, OR rankings, AND narrowing, and
+scores against a local Lucene-style BM25 oracle. This proves the native scoring
+boundary for a small auditable case; it does not replace the broader native
+relevance fixture or the optional external Python/library reference.
+
 ## Native Relevance Gold Benchmark
 
 The main harness includes the committed native relevance fixture automatically.
