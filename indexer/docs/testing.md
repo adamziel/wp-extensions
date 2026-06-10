@@ -73,6 +73,18 @@ SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 The harness reports unsupported Snowball languages as skipped. Skips are
 expected for languages that are not advertised by `WP_FTS_SnowballStemmer`.
 
+## Polish Lemmatizer Source-Lock Pilot
+
+The Polish source-lock pilot verifies metadata gates for a future
+Morfologik-style lemmatizer candidate without downloading or committing lexical
+data:
+
+```sh
+php tests/quality/polish-lemmatizer-source-lock.php
+```
+
+The main harness discovers the same verifier automatically.
+
 ## WordPress Playground SQLite Smoke
 
 Run the committed Playground smoke from the repository worktree root:
