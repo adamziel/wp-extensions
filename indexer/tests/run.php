@@ -2474,11 +2474,109 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_same(['kot'], $pipeline->analyze('kotami', 'pl'), 'Polish conservative suffix strategy should be available');
     assert_same(['wroclaw'], $pipeline->analyze('Wrocławiu', 'pl'), 'Polish fallback should run after folding');
     assert_same(['run', 'run', 'runner'], $pipeline->analyze('running runs runner', 'en'), 'English Snowball stemming should be available by default');
+
+    $verifiedPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_stemming' => 'verified',
+    ]);
+    assert_same(['samochod'], $verifiedPipeline->analyze('samochody', 'pl'), 'Polish verified mode should stem mapped fixture rows');
+    assert_same(['danie'], $verifiedPipeline->analyze('danie', 'pl'), 'Polish verified mode should protect ambiguous rows');
+});
+
+test_case('polish Morfologik fixture pack validates manifest digests and rows', function (): void {
+    $validator = new WP_FTS_AnalyzerPackValidator();
+    $result = $validator->validate(WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest());
+
+    assert_same('pl-morfologik-polimorf-fixture', $result['manifest']['pack_id'], 'fixture pack id should be stable');
+    assert_same('pl', $result['manifest']['language'], 'fixture pack language should be Polish');
+    assert_true($result['manifest']['fixture_only'] === true, 'fixture pack should be explicitly fixture-only');
+    assert_true($result['manifest']['default_enabled'] === false, 'fixture pack should not be default-enabled');
+    assert_same(9, count($result['rows']), 'fixture pack should expose the reviewed tiny row set');
+    assert_same(9, $result['runtime_files']['runtime.tsv']['rows'] ?? null, 'runtime row count should match manifest');
+    assert_same(hash_file('sha256', $result['runtime_files']['runtime.tsv']['path']), $result['runtime_files']['runtime.tsv']['sha256'], 'runtime digest should match local file content');
+});
+
+test_case('polish Morfologik fixture lemmatizer maps rows and preserves ambiguous forms', function (): void {
+    $lemmatizer = WP_FTS_PolishMorfologikLemmatizer::from_manifest_file(
+        WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest()
+    );
+
+    assert_same('pl-morfologik-polimorf-fixture', $lemmatizer->pack_id(), 'lemmatizer should expose fixture pack identity');
+    assert_true($lemmatizer->is_fixture_only(), 'lemmatizer should expose fixture-only status');
+    assert_same('kot', $lemmatizer->stem('kotami', 'pl'), 'instrumental plural form should collapse to lemma');
+    assert_same('wroclaw', $lemmatizer->stem('wroclawiu', 'pl-PL'), 'locative form should collapse to lemma');
+    assert_same('ksiazka', $lemmatizer->stem('ksiazkach', 'pl'), 'plural locative form should collapse to lemma');
+    assert_same('drogi', $lemmatizer->stem('drogi', 'pl'), 'ambiguous forms should remain unchanged');
+    assert_same('zielonymi', $lemmatizer->stem('zielonymi', 'pl'), 'missing forms should remain unchanged');
+    assert_same('kotami', $lemmatizer->stem('kotami', 'en'), 'non-Polish language partitions should remain unchanged');
+});
+
+test_case('polish lemma pack is opt-in and invalid packs fall back to suffix stemming', function (): void {
+    $defaultPipeline = new WP_FTS_LanguagePipeline(['enable_stemming' => true]);
+    assert_same(['zamk'], $defaultPipeline->analyze('zamkach', 'pl'), 'default Polish suffix fallback should remain unchanged');
+
+    $packPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_lemma_pack' => true,
+    ]);
+    assert_same(['zamek'], $packPipeline->analyze('zamkach', 'pl'), 'enabled fixture pack should use dictionary lemma rows');
+    assert_same(['zielonymi'], $packPipeline->analyze('zielonymi', 'pl'), 'enabled fixture pack should not suffix-stem missing rows');
+    assert_same(['drogi'], $packPipeline->analyze('drogi', 'pl'), 'enabled fixture pack should no-op ambiguous rows');
+
+    $packOverridesVerifiedPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_lemma_pack' => true,
+        'polish_stemming' => 'verified',
+    ]);
+    assert_same(['samochody'], $packOverridesVerifiedPipeline->analyze('samochody', 'pl'), 'valid lemma pack should take precedence over verified Polish stemming for missing pack rows');
+    assert_same(['zamek'], $packOverridesVerifiedPipeline->analyze('zamkach', 'pl'), 'valid lemma pack should keep using dictionary lemma rows when polish_stemming is also set');
+
+    $invalidPackPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_lemma_pack' => __DIR__ . '/missing-pack/manifest.json',
+    ]);
+    assert_same(['zamk'], $invalidPackPipeline->analyze('zamkach', 'pl'), 'missing opt-in pack should fall back to conservative suffix stemming');
+
+    $invalidPackVerifiedPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_lemma_pack' => __DIR__ . '/missing-pack/manifest.json',
+        'polish_stemming' => 'verified',
+    ]);
+    assert_same(['samochod'], $invalidPackVerifiedPipeline->analyze('samochody', 'pl'), 'invalid opt-in pack should fall back to the selected Polish stemming mode');
+
+    $disabledAnalyzer = new WP_FTS_Analyzer(['polish_lemma_pack' => false]);
+    assert_same(['zamk'], $disabledAnalyzer->analyze_query('zamkach', ['lang' => 'pl']), 'disabled pack should preserve analyzer default fallback behavior');
+});
+
+test_case('enabled polish lemma pack lets indexed and query inflections meet', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'default_lang' => 'pl',
+        'polish_lemma_pack' => true,
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(501, '<p>Notatki o książkach oraz kotami w zamkach.</p>', ['lang' => 'pl']);
+
+    $terms = $storage->all_terms();
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'ksiazka'), $terms, true), 'lemma pack should store normalized Polish lemma for document form');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'zamek'), $terms, true), 'lemma pack should store dictionary lemma instead of suffix stem');
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([501], array_column($searcher->search('książka', ['lang' => 'pl', 'mode' => 'AND']), 'doc_id'), 'query lemma should meet indexed inflected document form');
+    assert_same([501], array_column($searcher->search('zamek kot', ['lang' => 'pl', 'mode' => 'AND']), 'doc_id'), 'multiple query lemmas should meet indexed inflected forms');
+
+    $fallbackAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'pl']);
+    $fallbackStorage = new WP_FTS_Storage_InMemory();
+    $fallbackIndexer = new WP_FTS_Indexer($fallbackStorage, $fallbackAnalyzer);
+    $fallbackIndexer->index_document(502, '<p>Notatki o książkach.</p>', ['lang' => 'pl']);
+    $fallbackSearcher = new WP_FTS_Searcher($fallbackStorage, $fallbackAnalyzer);
+    assert_same([], $fallbackSearcher->search('książka', ['lang' => 'pl']), 'fallback suffix stemmer should remain unchanged when pack is not enabled');
 });
 
 test_case('stemming is enabled by default and can be explicitly disabled', function (): void {
     $defaultPipeline = new WP_FTS_LanguagePipeline();
     assert_same(['kot'], $defaultPipeline->analyze('kotami', 'pl'), 'default pipeline should use safe built-in stemming');
+    assert_same(['samochody'], $defaultPipeline->analyze('samochody', 'pl'), 'default Polish mode should remain conservative');
 
     $disabledPipeline = new WP_FTS_LanguagePipeline(['enable_stemming' => false]);
     assert_same(['kotami'], $disabledPipeline->analyze('kotami', 'pl'), 'enable_stemming false should preserve exact normalized terms');

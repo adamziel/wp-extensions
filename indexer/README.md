@@ -115,6 +115,11 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
 - [Tokenizer source locks](docs/tokenizer-source-locks.md) documents the
   pre-coding gate for any future Thai TCC/dictionary tokenizer. The current
   plugin does not ship real Thai or CJK word segmentation.
+- [Polish fixture pack](docs/polish-morfologik-fixture-pack.md) explains the
+  opt-in Morfologik/PoliMorf-compatible lemmatizer contract slice.
+- [Polish verified stemmer](docs/polish-verified-stemmer.md) explains the
+  opt-in fixture-backed Polish stemmer slice and how it differs from
+  dictionary lemmatization.
 
 ## Current Caveats
 

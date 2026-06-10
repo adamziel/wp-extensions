@@ -12,7 +12,7 @@ final class WP_FTS_LanguagePipeline
 {
     private WP_FTS_Normalizer $normalizer;
     private WP_FTS_SnowballStemmer $snowballStemmer;
-    private WP_FTS_PolishStemmer $polishStemmer;
+    private WP_FTS_Stemmer $polishStemmer;
     private ?WP_FTS_Stemmer $customStemmer;
     /** @var array<string,WP_FTS_Stemmer> */
     private array $customStemmersByLanguage;
@@ -38,7 +38,9 @@ final class WP_FTS_LanguagePipeline
      * @param array{
      *   normalizer?:WP_FTS_Normalizer,
      *   snowball_stemmer?:WP_FTS_SnowballStemmer,
-     *   polish_stemmer?:WP_FTS_PolishStemmer,
+     *   polish_stemmer?:WP_FTS_Stemmer,
+     *   polish_lemma_pack?:bool|string|array<string,mixed>|null,
+     *   polish_lemmatizer_pack?:bool|string|array<string,mixed>|null,
      *   stemmer?:WP_FTS_Stemmer|callable|null,
      *   stemmers_by_lang?:array<string,WP_FTS_Stemmer|callable|null>,
      *   stemmers?:array<string,WP_FTS_Stemmer|callable|null>,
@@ -62,9 +64,10 @@ final class WP_FTS_LanguagePipeline
             'chinese_script_map' => $options['chinese_script_map'] ?? [],
         ]);
         $this->snowballStemmer = $options['snowball_stemmer'] ?? new WP_FTS_SnowballStemmer();
-        $this->polishStemmer = $options['polish_stemmer'] ?? new WP_FTS_PolishStemmer(
-            (string) ($options['polish_stemming'] ?? 'conservative')
-        );
+        $configuredPolishStemmer = $options['polish_stemmer'] ?? null;
+        $this->polishStemmer = $configuredPolishStemmer instanceof WP_FTS_Stemmer
+            ? $configuredPolishStemmer
+            : $this->default_polish_stemmer($options);
         $this->customStemmer = $this->normalize_custom_stemmer($options['stemmer'] ?? null);
         $this->customStemmersByLanguage = $this->normalize_custom_stemmers_by_language(
             $options['stemmers_by_lang'] ?? $options['stemmers'] ?? []
@@ -458,6 +461,10 @@ final class WP_FTS_LanguagePipeline
      */
     private function buildIndexSignature(array $options, mixed $tokenizer): string
     {
+        $polishMode = strtolower(trim((string) ($options['polish_stemming'] ?? 'conservative')));
+        if (!in_array($polishMode, ['conservative', 'verified', 'none'], true)) {
+            $polishMode = 'conservative';
+        }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
             'version' => 3,
@@ -466,7 +473,7 @@ final class WP_FTS_LanguagePipeline
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
             'namespace_terms' => $this->namespaceTerms,
             'enable_stemming' => $this->enableStemming,
-            'polish_stemming' => (string) ($options['polish_stemming'] ?? 'conservative'),
+            'polish_stemming' => $polishMode,
             'stemmer' => $this->componentSignature($options['stemmer'] ?? null),
             'stemmers_by_lang' => $this->stemmersByLanguageSignature($options['stemmers_by_lang'] ?? $options['stemmers'] ?? []),
             'cjk_tokenizer' => $this->componentSignature($tokenizer),
@@ -476,8 +483,53 @@ final class WP_FTS_LanguagePipeline
             'snowball_stemmer' => $this->componentSignature($options['snowball_stemmer'] ?? $this->snowballStemmer),
             'polish_stemmer' => $this->componentSignature($options['polish_stemmer'] ?? null),
         ];
+        $polishLemmaPackSignature = $this->polishLemmaPackSignature($options);
+        if ($polishLemmaPackSignature !== null) {
+            $payload['polish_lemma_pack'] = $polishLemmaPackSignature;
+        }
+
+        if ($polishMode === 'verified') {
+            $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
+        }
 
         return 'wp-fts-language-pipeline-v3:' . sha1($this->stableJson($payload));
+    }
+
+    /**
+     * Build the default Polish stemmer, optionally using a validated lemma pack.
+     *
+     * Invalid or missing opt-in packs return the conservative suffix stemmer so
+     * runtime indexing remains available when resources are absent.
+     *
+     * @param array<string,mixed> $options
+     */
+    private function default_polish_stemmer(array $options): WP_FTS_Stemmer
+    {
+        $packOption = $options['polish_lemma_pack'] ?? $options['polish_lemmatizer_pack'] ?? false;
+        $lemmaPack = WP_FTS_PolishMorfologikLemmatizer::from_pack_option($packOption);
+        if ($lemmaPack !== null) {
+            return $lemmaPack;
+        }
+
+        return new WP_FTS_PolishStemmer((string) ($options['polish_stemming'] ?? 'conservative'));
+    }
+
+    /**
+     * Return the enabled Polish lemma pack signature, if a valid pack is active.
+     *
+     * @param array<string,mixed> $options
+     */
+    private function polishLemmaPackSignature(array $options): ?string
+    {
+        if (!array_key_exists('polish_lemma_pack', $options) && !array_key_exists('polish_lemmatizer_pack', $options)) {
+            return null;
+        }
+
+        if ($this->polishStemmer instanceof WP_FTS_PolishMorfologikLemmatizer) {
+            return $this->polishStemmer->index_signature();
+        }
+
+        return null;
     }
 
     /**
