@@ -105,21 +105,66 @@ php -n tools/validate-analyzer-pack.php resources/analyzer-packs/pl-morfologik-p
 The validator checks manifest shape, runtime row normalization, duplicate rows,
 ambiguous no-op handling, and declared checksums for the bundled fixture pack.
 
-Run the deterministic full PoliMorf importer against a disposable local copy of
-the CLARIN-PL artifact, never inside the repository:
+Run the package-safe external pack workflow tests directly when changing the
+builder, importer options, validation boundary, or docs:
 
 ```sh
-php tools/import-polish-polimorf-lemmatizer.php \
+php tests/quality/polish-polimorf-external-pack-workflow.php
+php -n tests/quality/polish-polimorf-external-pack-workflow.php
+```
+
+Those focused tests use the synthetic source-shaped PoliMorf fixture. They
+cover local fixture builds, source hash and byte-count mismatches, missing
+download acknowledgement, non-empty output refusal, generated pack validation,
+lemmatizer lookup from the generated pack, and the no-runtime-network-access
+boundary.
+
+Build the synthetic fixture pack from the command line into a disposable
+external directory:
+
+```sh
+php tools/build-polish-polimorf-external-pack.php \
+  --source=tests/fixtures/polimorf-importer/sample-polimorf.tab \
+  --out=/tmp/pl-polimorf-fixture-external \
+  --expect-source-sha256="$(php -r 'echo hash_file("sha256", "tests/fixtures/polimorf-importer/sample-polimorf.tab");')" \
+  --expect-source-bytes="$(php -r 'echo filesize("tests/fixtures/polimorf-importer/sample-polimorf.tab");')" \
+  --pack-id=pl-polimorf-external-fixture \
+  --version=fixture-external-v1 \
+  --source-url=urn:wp-fts:test:polimorf-external-pack \
+  --source-name="WP FTS source-shaped PoliMorf external pack fixture" \
+  --source-version=fixture \
+  --max-rows-per-file=2 \
+  --chunk-rows=2
+php tools/validate-analyzer-pack.php \
+  /tmp/pl-polimorf-fixture-external/manifest.json
+```
+
+Run the full external builder against a disposable local copy of the CLARIN-PL
+artifact, never inside the repository:
+
+```sh
+php tools/build-polish-polimorf-external-pack.php \
   --source=/tmp/polimorf-20180722.tab.gz \
   --out=/tmp/pl-polimorf-20180722-full
 php tools/validate-analyzer-pack.php \
   /tmp/pl-polimorf-20180722-full/manifest.json --metadata-only
 ```
 
-Repeat the import into a second disposable directory and compare
-`manifest.json`, `SOURCE.lock.json`, and runtime shards when changing importer
-logic. The generated full runtime pack is third-party data and must not be
-committed until packaging review approves its size and redistribution boundary.
+The builder can optionally download the approved public artifact only with an
+explicit license acknowledgement:
+
+```sh
+php tools/build-polish-polimorf-external-pack.php \
+  --download \
+  --cache-dir=/tmp/wp-fts-polimorf-cache \
+  --out=/tmp/pl-polimorf-20180722-full \
+  --acknowledge-license=BSD-2-Clause
+```
+
+Repeat the build into a second disposable directory and compare `manifest.json`,
+`SOURCE.lock.json`, and runtime shards when changing importer logic. The source
+archive, extracted TSV, generated runtime pack, cache files, and temporary files
+are third-party or generated data and must not be committed or bundled.
 
 ## Polish Verified Stemmer Fixtures
 

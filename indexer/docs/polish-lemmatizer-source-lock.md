@@ -71,7 +71,10 @@ also rejects accidental committed dictionary/runtime keys in the pilot fixture.
 
 ## Claim Boundary
 
-Documentation and release notes must continue to describe Polish support as the
-current conservative suffix fallback until a separate reviewed task ships a real
-source-locked pack. Passing this pilot only means the repository knows which
-questions must be locked before coding a Polish lemmatizer.
+Documentation and release notes must continue to distinguish bundled Polish
+support from externally generated packs. The bundled default remains the current
+conservative suffix fallback, plus the tiny opt-in fixture pack that proves the
+Morfologik/PoliMorf-compatible runtime contract. A full PoliMorf pack can be
+generated with the external builder after verifying the approved source
+artifact, but the source archive, extracted TSV, and generated runtime shards
+are not committed or bundled, and the pack remains opt-in and default-disabled.

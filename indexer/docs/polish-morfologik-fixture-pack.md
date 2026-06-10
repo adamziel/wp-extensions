@@ -26,27 +26,52 @@ php tools/validate-analyzer-pack.php
 php -n tools/validate-analyzer-pack.php
 ```
 
-The repository also includes a deterministic local importer for the full
-CLARIN-PL PoliMorf TSV artifact:
+The repository also includes a package-safe external builder for the full
+CLARIN-PL PoliMorf TSV artifact. It verifies the exact approved source
+SHA-256 and byte count, checks gzip integrity when gzip tooling is available,
+runs the deterministic importer and validator, and writes the generated runtime
+pack to an operator-chosen directory outside the plugin package:
 
 ```sh
-php tools/import-polish-polimorf-lemmatizer.php \
+php tools/build-polish-polimorf-external-pack.php \
   --source=/tmp/polimorf-20180722.tab.gz \
   --out=/tmp/pl-polimorf-20180722-full
-php tools/validate-analyzer-pack.php \
-  /tmp/pl-polimorf-20180722-full/manifest.json --metadata-only
 ```
 
-The importer writes a full-pack manifest, notice, source-lock evidence, and
-sharded runtime TSV files. Generated full packs remain opt-in and
-`default_enabled: false`. The generated third-party runtime pack is not committed
-to this repository yet; packaging needs an explicit size and redistribution
-review before the runtime data ships in a plugin archive.
+The builder can also download the approved public CLARIN-PL artifact into a
+caller-chosen cache directory, but only with an explicit license
+acknowledgement:
+
+```sh
+php tools/build-polish-polimorf-external-pack.php \
+  --download \
+  --cache-dir=/tmp/wp-fts-polimorf-cache \
+  --out=/tmp/pl-polimorf-20180722-full \
+  --acknowledge-license=BSD-2-Clause
+```
+
+The builder writes a full-pack manifest, notice, source-lock evidence, and
+sharded runtime TSV files. The summary includes the generated manifest path,
+source-lock path, runtime row/file/byte counts, runtime digest, and
+configuration examples for `polish_lemma_pack` and `polish_lemmatizer_pack`.
+Generated full packs remain opt-in and `default_enabled: false`.
+
+Configure an externally generated pack by path:
+
+```php
+$analyzer = new WP_FTS_Analyzer([
+    'default_lang' => 'pl',
+    'polish_lemma_pack' => '/tmp/pl-polimorf-20180722-full/manifest.json',
+]);
+```
+
+The full source archive, extracted TSV, and generated third-party runtime pack
+are not committed or bundled in this repository. Users or build systems must
+generate and install the pack externally before enabling it.
 
 Before a real Morfologik/PoliMorf import can be distributed or default-enabled,
 the project still needs:
 
-- packaging approval for the generated full runtime size;
 - final redistribution review for the generated notice and attribution text;
 - larger reviewed gold fixtures for ambiguous and inflected forms;
 - WordPress Playground smoke coverage;

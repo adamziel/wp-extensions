@@ -153,7 +153,13 @@ existing conservative Polish suffix stemmer. Validate the fixture with
 `php tools/validate-analyzer-pack.php`.
 
 A generated full PoliMorf pack can also be supplied by path after running the
-local importer outside the repository:
+external builder outside the repository:
+
+```sh
+php tools/build-polish-polimorf-external-pack.php \
+  --source=/tmp/polimorf-20180722.tab.gz \
+  --out=/tmp/pl-polimorf-20180722-full
+```
 
 ```php
 $analyzer = new WP_FTS_Analyzer([
@@ -162,9 +168,21 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
+The alias `polish_lemmatizer_pack` accepts the same boolean, manifest path,
+pack directory, or option array shape:
+
+```php
+$analyzer = new WP_FTS_Analyzer([
+    'default_lang' => 'pl',
+    'polish_lemmatizer_pack' => '/tmp/pl-polimorf-20180722-full/manifest.json',
+]);
+```
+
 Full generated packs stay opt-in and default-disabled. The full CLARIN-PL
-runtime data is not bundled in this repository until packaging and
-redistribution review approve the generated third-party pack size.
+source archive, extracted TSV, and generated runtime shards are not bundled in
+this repository or plugin package. Users or build systems must generate and
+install the external pack before enabling either `polish_lemma_pack` or
+`polish_lemmatizer_pack`.
 
 Enable the verified Polish stemmer slice when fixture-backed stemming is more
 important than preserving the exact default suffix-only behavior:

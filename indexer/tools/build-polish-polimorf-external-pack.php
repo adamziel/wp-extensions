@@ -1,0 +1,464 @@
+<?php
+declare(strict_types=1);
+
+require_once __DIR__ . '/import-polish-polimorf-lemmatizer.php';
+
+/**
+ * Builds an opt-in Polish PoliMorf runtime pack outside the plugin package.
+ *
+ * This wrapper owns the package-safety checks around the deterministic importer:
+ * source identity verification, explicit download acknowledgement, output-path
+ * guardrails, validation, and an operator-facing build summary.
+ */
+final class WP_FTS_PolishPolimorfExternalPackBuilder
+{
+    public const APPROVED_SOURCE_URL = 'https://clarin-pl.eu/dspace/bitstream/handle/11321/577/polimorf-20180722.tab.gz?isAllowed=y&sequence=1';
+    public const APPROVED_SOURCE_SHA256 = '2b1f07224c434c8710def382d497cf8221d5764e8d683d2ad34242810ab72746';
+    public const APPROVED_SOURCE_BYTES = 41550540;
+    public const APPROVED_SOURCE_FILE = 'polimorf-20180722.tab.gz';
+
+    /**
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    public function build(array $options): array
+    {
+        $download = $this->bool_option($options['download'] ?? false);
+        $source = $this->resolve_source($options, $download);
+        $outDir = $this->required_string($options, 'out');
+
+        $this->reject_secret_path($outDir, 'output directory');
+        $this->assert_external_directory($outDir, 'output directory', $this->bool_option($options['allow_repo_output'] ?? false));
+        $this->prepare_output_directory($outDir, $this->bool_option($options['replace_output'] ?? false));
+
+        $expectedSha = $this->expected_sha256($options);
+        $expectedBytes = $this->expected_bytes($options);
+        $sourceVerification = $this->verify_source($source, $expectedSha, $expectedBytes);
+
+        $importOptions = [
+            'source' => $source,
+            'out' => $outDir,
+            'pack_id' => (string) ($options['pack_id'] ?? 'pl-polimorf-20180722-full'),
+            'version' => (string) ($options['version'] ?? '2018.07.22-external-pack-v1'),
+            'source_url' => (string) ($options['source_url'] ?? self::APPROVED_SOURCE_URL),
+            'source_name' => (string) ($options['source_name'] ?? 'PoliMorf Polish morphological dictionary'),
+            'source_version' => (string) ($options['source_version'] ?? '2018.07.22'),
+            'source_retrieval_note' => (string) ($options['source_retrieval_note'] ?? 'External pack workflow verified the source SHA-256 and byte count before import; generated runtime data is installed outside the plugin package.'),
+            'fixture_only' => $this->bool_option($options['fixture_only'] ?? false),
+            'importer_commit' => (string) ($options['importer_commit'] ?? 'external-pack-workflow'),
+        ];
+        foreach (['max_rows_per_file', 'chunk_rows', 'tmp_dir'] as $key) {
+            if (array_key_exists($key, $options)) {
+                if ($key === 'tmp_dir') {
+                    $this->reject_secret_path((string) $options[$key], 'temporary directory');
+                }
+                $importOptions[$key] = $options[$key];
+            }
+        }
+
+        $importSummary = (new WP_FTS_PolishPolimorfImporter())->import($importOptions);
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate((string) $importSummary['manifest'], false);
+
+        return $this->build_summary($download ? 'download' : 'local', $sourceVerification, $importSummary, $validation);
+    }
+
+    /**
+     * @param string[] $argv
+     * @return array<string,mixed>
+     */
+    public static function parse_cli_options(array $argv): array
+    {
+        return WP_FTS_PolishPolimorfImporter::parse_cli_options($argv);
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     */
+    private function resolve_source(array $options, bool $download): string
+    {
+        $hasSource = isset($options['source']) && is_scalar($options['source']) && trim((string) $options['source']) !== '';
+        if ($download && $hasSource) {
+            throw new RuntimeException('Use either --source or --download, not both.');
+        }
+        if (!$download && !$hasSource) {
+            throw new RuntimeException('Missing required option --source, or pass --download with --cache-dir and --acknowledge-license=BSD-2-Clause.');
+        }
+
+        if (!$download) {
+            $source = (string) $options['source'];
+            $this->reject_secret_path($source, 'source artifact');
+            if (!is_file($source)) {
+                throw new RuntimeException("Source artifact does not exist: {$source}");
+            }
+
+            return $source;
+        }
+
+        $acknowledgement = isset($options['acknowledge_license']) && is_scalar($options['acknowledge_license'])
+            ? trim((string) $options['acknowledge_license'])
+            : '';
+        if ($acknowledgement !== 'BSD-2-Clause') {
+            throw new RuntimeException('Download mode requires --acknowledge-license=BSD-2-Clause.');
+        }
+
+        $cacheDir = $this->required_string($options, 'cache_dir');
+        $this->reject_secret_path($cacheDir, 'cache directory');
+        $this->assert_external_directory($cacheDir, 'cache directory', $this->bool_option($options['allow_repo_cache'] ?? false));
+        if (is_file($cacheDir)) {
+            throw new RuntimeException("Cache path is a file: {$cacheDir}");
+        }
+        if (!is_dir($cacheDir) && !mkdir($cacheDir, 0777, true)) {
+            throw new RuntimeException("Could not create cache directory: {$cacheDir}");
+        }
+
+        $source = rtrim($cacheDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . self::APPROVED_SOURCE_FILE;
+        $this->reject_secret_path($source, 'downloaded source artifact');
+        if (is_file($source)) {
+            return $source;
+        }
+
+        $this->download_approved_source($source);
+
+        return $source;
+    }
+
+    private function download_approved_source(string $target): void
+    {
+        if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
+            throw new RuntimeException('Download mode requires allow_url_fopen; alternatively download the approved artifact separately and pass --source.');
+        }
+
+        $context = stream_context_create([
+            'http' => [
+                'method' => 'GET',
+                'header' => "User-Agent: wp-fts-polimorf-external-pack-builder/1\r\n",
+                'timeout' => 60,
+            ],
+        ]);
+        $input = fopen(self::APPROVED_SOURCE_URL, 'rb', false, $context);
+        if (!is_resource($input)) {
+            throw new RuntimeException('Could not download approved PoliMorf source artifact.');
+        }
+
+        $partial = $target . '.partial';
+        $this->reject_secret_path($partial, 'partial download path');
+        $output = fopen($partial, 'wb');
+        if (!is_resource($output)) {
+            fclose($input);
+            throw new RuntimeException("Could not write partial download: {$partial}");
+        }
+
+        try {
+            while (!feof($input)) {
+                $chunk = fread($input, 1048576);
+                if ($chunk === false) {
+                    throw new RuntimeException('Could not read source download stream.');
+                }
+                if ($chunk !== '' && fwrite($output, $chunk) === false) {
+                    throw new RuntimeException('Could not write source download stream.');
+                }
+            }
+        } finally {
+            fclose($input);
+            fclose($output);
+        }
+
+        if (!rename($partial, $target)) {
+            @unlink($partial);
+            throw new RuntimeException("Could not finalize downloaded source artifact: {$target}");
+        }
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function verify_source(string $source, string $expectedSha, int $expectedBytes): array
+    {
+        $bytes = filesize($source);
+        if (!is_int($bytes)) {
+            throw new RuntimeException("Could not measure source artifact size: {$source}");
+        }
+        if ($bytes !== $expectedBytes) {
+            throw new RuntimeException("Source byte count mismatch for {$source}: expected {$expectedBytes}, got {$bytes}.");
+        }
+
+        $sha = hash_file('sha256', $source);
+        if (!is_string($sha)) {
+            throw new RuntimeException("Could not hash source artifact: {$source}");
+        }
+        if (!hash_equals($expectedSha, $sha)) {
+            throw new RuntimeException("Source SHA-256 mismatch for {$source}: expected {$expectedSha}, got {$sha}.");
+        }
+
+        return [
+            'path' => $source,
+            'sha256' => $sha,
+            'bytes' => $bytes,
+            'expected_sha256' => $expectedSha,
+            'expected_bytes' => $expectedBytes,
+            'gzip_integrity' => $this->verify_gzip_integrity($source),
+        ];
+    }
+
+    /**
+     * @return array{status:string,method:string|null}
+     */
+    private function verify_gzip_integrity(string $source): array
+    {
+        if (!str_ends_with(strtolower($source), '.gz')) {
+            return ['status' => 'not_applicable', 'method' => null];
+        }
+
+        if (function_exists('gzopen')) {
+            $handle = gzopen($source, 'rb');
+            if (!is_resource($handle)) {
+                throw new RuntimeException("Could not open gzip source for integrity check: {$source}");
+            }
+            while (!gzeof($handle)) {
+                $chunk = gzread($handle, 1048576);
+                if ($chunk === false) {
+                    gzclose($handle);
+                    throw new RuntimeException("Gzip integrity check failed for {$source}.");
+                }
+            }
+            gzclose($handle);
+
+            return ['status' => 'passed', 'method' => 'php-zlib'];
+        }
+
+        foreach (['/usr/bin/gzip', '/bin/gzip'] as $gzip) {
+            if (!is_file($gzip) || !is_executable($gzip)) {
+                continue;
+            }
+            $exit = $this->run_gzip_test($gzip, $source);
+            if ($exit !== 0) {
+                throw new RuntimeException("Gzip integrity check failed for {$source}.");
+            }
+
+            return ['status' => 'passed', 'method' => $gzip];
+        }
+
+        return ['status' => 'skipped_no_available_tooling', 'method' => null];
+    }
+
+    private function run_gzip_test(string $gzip, string $source): int
+    {
+        $process = proc_open(
+            [$gzip, '-t', $source],
+            [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ],
+            $pipes
+        );
+        if (!is_resource($process)) {
+            throw new RuntimeException('Could not start gzip integrity check.');
+        }
+        foreach ($pipes as $pipe) {
+            fclose($pipe);
+        }
+
+        return proc_close($process);
+    }
+
+    private function prepare_output_directory(string $outDir, bool $replaceOutput): void
+    {
+        if (is_file($outDir)) {
+            throw new RuntimeException("Output path is a file: {$outDir}");
+        }
+        if (!is_dir($outDir)) {
+            return;
+        }
+
+        $iterator = new FilesystemIterator($outDir, FilesystemIterator::SKIP_DOTS);
+        if (!$iterator->valid()) {
+            return;
+        }
+        if (!$replaceOutput) {
+            throw new RuntimeException("Output directory must be empty: {$outDir}");
+        }
+        if (!is_file($outDir . DIRECTORY_SEPARATOR . 'manifest.json') || !is_file($outDir . DIRECTORY_SEPARATOR . 'SOURCE.lock.json') || !is_dir($outDir . DIRECTORY_SEPARATOR . 'runtime')) {
+            throw new RuntimeException('Refusing to replace a non-empty output directory that does not look like a generated analyzer pack.');
+        }
+
+        $this->remove_tree($outDir);
+    }
+
+    private function assert_external_directory(string $path, string $label, bool $allowRepoPath): void
+    {
+        if ($allowRepoPath) {
+            return;
+        }
+
+        $pluginRoot = realpath(dirname(__DIR__));
+        if (!is_string($pluginRoot)) {
+            throw new RuntimeException('Could not resolve plugin root for output-path safety checks.');
+        }
+        $candidate = $this->canonical_candidate_path($path);
+        if ($candidate === $pluginRoot || str_starts_with($candidate, $pluginRoot . DIRECTORY_SEPARATOR)) {
+            throw new RuntimeException("{$label} must be outside the committed plugin repository/package by default: {$path}");
+        }
+    }
+
+    private function canonical_candidate_path(string $path): string
+    {
+        $existing = $path;
+        while (!file_exists($existing)) {
+            $parent = dirname($existing);
+            if ($parent === $existing) {
+                break;
+            }
+            $existing = $parent;
+        }
+
+        $real = realpath($existing);
+        if (!is_string($real)) {
+            throw new RuntimeException("Could not resolve path safety root for {$path}.");
+        }
+        $suffix = trim(substr($path, strlen($existing)), DIRECTORY_SEPARATOR);
+        if ($suffix === '') {
+            return $real;
+        }
+
+        return $real . DIRECTORY_SEPARATOR . $suffix;
+    }
+
+    private function reject_secret_path(string $path, string $label): void
+    {
+        $normalized = str_replace('\\', '/', $path);
+        $basename = basename($normalized);
+        $lower = strtolower($normalized);
+        $lowerBase = strtolower($basename);
+        if (
+            $lowerBase === '.env'
+            || str_ends_with($lowerBase, '.pem')
+            || str_contains($lower, '/.ssh/')
+            || str_contains($lower, '/.aws/')
+            || str_contains($lower, '/credentials')
+            || str_contains($lower, 'private-token')
+            || str_contains($lower, 'secret-token')
+        ) {
+            throw new RuntimeException("Refusing to use {$label} because it looks like credentials or a secret file: {$path}");
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     */
+    private function expected_sha256(array $options): string
+    {
+        $value = (string) ($options['expect_source_sha256'] ?? self::APPROVED_SOURCE_SHA256);
+        if (preg_match('/^[a-f0-9]{64}$/', $value) !== 1) {
+            throw new RuntimeException('--expect-source-sha256 must be a lower-case 64-character SHA-256 digest.');
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     */
+    private function expected_bytes(array $options): int
+    {
+        $raw = $options['expect_source_bytes'] ?? self::APPROVED_SOURCE_BYTES;
+        if (!is_int($raw) && (!is_string($raw) || preg_match('/^[1-9][0-9]*$/', $raw) !== 1)) {
+            throw new RuntimeException('--expect-source-bytes must be a positive integer.');
+        }
+
+        return (int) $raw;
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     */
+    private function required_string(array $options, string $key): string
+    {
+        if (!isset($options[$key]) || !is_scalar($options[$key]) || trim((string) $options[$key]) === '') {
+            throw new RuntimeException("Missing required option --" . str_replace('_', '-', $key) . '.');
+        }
+
+        return (string) $options[$key];
+    }
+
+    private function bool_option(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_scalar($value)) {
+            return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $source
+     * @param array<string,mixed> $importSummary
+     * @param array<string,mixed> $validation
+     * @return array<string,mixed>
+     */
+    private function build_summary(string $mode, array $source, array $importSummary, array $validation): array
+    {
+        $manifestPath = (string) $importSummary['manifest'];
+        $sourceLockPath = (string) $importSummary['source_lock'];
+
+        return [
+            'status' => 'ok',
+            'mode' => $mode,
+            'source' => $source,
+            'manifest_path' => $manifestPath,
+            'source_lock_path' => $sourceLockPath,
+            'manifest_sha256' => $importSummary['manifest_sha256'],
+            'pack_id' => $importSummary['pack_id'],
+            'runtime' => [
+                'rows' => $importSummary['runtime']['rows'],
+                'files' => $importSummary['runtime']['files'],
+                'bytes' => $importSummary['runtime']['bytes'],
+                'sha256' => $importSummary['runtime']['sha256'],
+            ],
+            'validation' => [
+                'status' => 'ok',
+                'manifest_sha256' => $validation['manifest_sha256'],
+                'runtime_files' => count($validation['runtime_files']),
+            ],
+            'configuration_example' => [
+                'polish_lemma_pack' => $manifestPath,
+                'polish_lemmatizer_pack' => $manifestPath,
+            ],
+            'package_boundary' => 'The full PoliMorf runtime pack is generated and installed externally, is opt-in, remains default-disabled, and is not committed or bundled in the plugin repository/package.',
+            'runtime_network_access' => false,
+        ];
+    }
+
+    private function remove_tree(string $directory): void
+    {
+        if (!is_dir($directory)) {
+            return;
+        }
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($iterator as $path) {
+            if ($path->isDir()) {
+                rmdir($path->getPathname());
+            } else {
+                unlink($path->getPathname());
+            }
+        }
+        rmdir($directory);
+    }
+}
+
+if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath((string) $argv[0]) === __FILE__) {
+    try {
+        $options = WP_FTS_PolishPolimorfExternalPackBuilder::parse_cli_options(array_slice($argv, 1));
+        $summary = (new WP_FTS_PolishPolimorfExternalPackBuilder())->build($options);
+        echo json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), "\n";
+    } catch (Throwable $e) {
+        fwrite(STDERR, "Polish PoliMorf external pack build failed: {$e->getMessage()}\n");
+        exit(1);
+    }
+}
