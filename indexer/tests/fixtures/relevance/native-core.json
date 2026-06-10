@@ -1,7 +1,7 @@
 {
   "schema": "wp-fts-native-relevance-suite-v1",
   "name": "Native multilingual relevance core",
-  "source": "Committed deterministic fixture for the indexer plugin. This is a first regression gate, not a production relevance quality claim.",
+  "source": "Expanded committed deterministic fixture for the indexer plugin. This is a regression gate, not a production relevance quality claim.",
   "top_k": 5,
   "thresholds": {
     "recall_at_5": 0.8,
@@ -158,6 +158,133 @@
       "post_type": "post",
       "title": "Readable private shared refill",
       "content": "<p>shared refill readable private shared refill.</p>"
+    },
+    {
+      "id": "wp-title-rank-target",
+      "numeric_id": 701,
+      "language": "en",
+      "family": "wordpress-field-ranking",
+      "visibility": "public",
+      "title": "Editorial beacon ranking",
+      "excerpt": "Concise WordPress title-field target.",
+      "content": "<p>Body text discusses import schedules without the ranking phrase.</p>"
+    },
+    {
+      "id": "wp-excerpt-rank-secondary",
+      "numeric_id": 702,
+      "language": "en",
+      "family": "wordpress-field-ranking",
+      "visibility": "public",
+      "title": "Excerpt field note",
+      "excerpt": "Editorial beacon ranking",
+      "content": "<p>Body text discusses import schedules without the ranking phrase.</p>"
+    },
+    {
+      "id": "wp-body-rank-bait",
+      "numeric_id": 703,
+      "language": "en",
+      "family": "wordpress-field-ranking",
+      "visibility": "public",
+      "title": "Body field note",
+      "excerpt": "A short unrelated excerpt.",
+      "content": "<p>Editorial beacon ranking appears only in ordinary post body text.</p>"
+    },
+    {
+      "id": "pl-documents-target",
+      "numeric_id": 711,
+      "language": "pl",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "Polskie archiwum",
+      "content": "<p>Katalog z raportami raportami wspiera wyszukiwania i szukaj.</p>"
+    },
+    {
+      "id": "pl-documents-near-miss",
+      "numeric_id": 712,
+      "language": "pl",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "Polska notatka poboczna",
+      "content": "<p>Notatka opisuje procedury bez rzeczownika z testowaną końcówką.</p>"
+    },
+    {
+      "id": "en-polish-documents-bait",
+      "numeric_id": 713,
+      "language": "en",
+      "family": "polish-morphology",
+      "visibility": "public",
+      "title": "English raportami quotation",
+      "content": "<p>An English glossary quotes raportami and archiwum as foreign examples.</p>"
+    },
+    {
+      "id": "de-folding-target",
+      "numeric_id": 721,
+      "language": "de",
+      "family": "german-detection-stemming-boundary",
+      "visibility": "public",
+      "title": "Ärger Öl Straße",
+      "content": "<p>Ärger Öl Straße bleiben ein deutscher Faltungsfall.</p>"
+    },
+    {
+      "id": "de-folding-near-miss",
+      "numeric_id": 722,
+      "language": "de",
+      "family": "german-detection-stemming-boundary",
+      "visibility": "public",
+      "title": "Ärger ohne Öl",
+      "content": "<p>Ärger beschreibt eine Route ohne den Straßenbegriff.</p>"
+    },
+    {
+      "id": "en-german-folding-bait",
+      "numeric_id": 723,
+      "language": "en",
+      "family": "german-detection-stemming-boundary",
+      "visibility": "public",
+      "title": "English German folding bait",
+      "content": "<p>The English article quotes Ärger Öl Straße as vocabulary examples only.</p>"
+    },
+    {
+      "id": "mixed-field-expanded",
+      "numeric_id": 731,
+      "language": "en",
+      "family": "mixed-language-documents",
+      "visibility": "public",
+      "fields": [
+        {
+          "name": "title",
+          "text": "Fielded multilingual bridge",
+          "boost": 5.0
+        },
+        {
+          "name": "excerpt",
+          "text": "rzadki segment dokumentami",
+          "html": "<p lang=\"pl\">rzadki segment dokumentami</p>",
+          "boost": 2.0
+        },
+        {
+          "name": "content",
+          "text": "English stable harbor. Seltenes Ärger Öl Segment.",
+          "html": "<article><p lang=\"en\">English stable harbor.</p><p lang=\"de\">Seltenes Ärger Öl Segment.</p></article>",
+          "boost": 1.0
+        }
+      ]
+    },
+    {
+      "id": "fallback-default-field-target",
+      "numeric_id": 741,
+      "family": "fallback-no-evidence",
+      "visibility": "public",
+      "title": "Quartz glyph vector",
+      "content": "<p>Quartz glyph vector terms have no strong detector evidence.</p>"
+    },
+    {
+      "id": "fallback-default-unsupported-bait",
+      "numeric_id": 742,
+      "language": "fr",
+      "family": "fallback-no-evidence",
+      "visibility": "public",
+      "title": "Quartz glyph vector bait",
+      "content": "<p>Quartz glyph vector terms live in French for fallback isolation.</p>"
     },
     {
       "id": "fallback-target",
@@ -459,6 +586,152 @@
         "rest-password",
         "rest-excluded-type"
       ]
+    },
+    {
+      "id": "wp-field-title-excerpt-body-ranking",
+      "family": "wordpress-field-ranking",
+      "query": "editorial beacon ranking",
+      "language": "en",
+      "mode": "AND",
+      "judgments": {
+        "wp-title-rank-target": 3,
+        "wp-excerpt-rank-secondary": 2,
+        "wp-body-rank-bait": 1
+      },
+      "expect": {
+        "top_ids": [
+          "wp-title-rank-target",
+          "wp-excerpt-rank-secondary",
+          "wp-body-rank-bait"
+        ]
+      }
+    },
+    {
+      "id": "pl-raportami-default-stem",
+      "family": "polish-morphology",
+      "query": "raport",
+      "language": "pl",
+      "mode": "OR",
+      "judgments": {
+        "pl-documents-target": 3
+      },
+      "irrelevant": [
+        "pl-documents-near-miss",
+        "en-polish-documents-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-polish-documents-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "pl-documents-target"
+        ]
+      }
+    },
+    {
+      "id": "de-ascii-folded-query",
+      "family": "german-detection-stemming-boundary",
+      "query": "Aerger Oel Strasse",
+      "language": "de",
+      "mode": "AND",
+      "judgments": {
+        "de-folding-target": 3
+      },
+      "irrelevant": [
+        "de-folding-near-miss",
+        "en-german-folding-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-german-folding-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "de-folding-target"
+        ]
+      }
+    },
+    {
+      "id": "de-detected-umlaut-folding",
+      "family": "german-detection-stemming-boundary",
+      "query": "Ärger Öl Straße",
+      "mode": "AND",
+      "judgments": {
+        "de-folding-target": 3
+      },
+      "irrelevant": [
+        "de-folding-near-miss",
+        "en-german-folding-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-german-folding-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "de-folding-target"
+        ]
+      }
+    },
+    {
+      "id": "mixed-field-polish-excerpt",
+      "family": "mixed-language-documents",
+      "query": "rzadki segment dokument",
+      "language": "pl",
+      "mode": "AND",
+      "judgments": {
+        "mixed-field-expanded": 3
+      },
+      "irrelevant": [
+        "en-polish-documents-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-polish-documents-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "mixed-field-expanded"
+        ]
+      }
+    },
+    {
+      "id": "mixed-field-german-content",
+      "family": "mixed-language-documents",
+      "query": "Seltenes Aerger Oel",
+      "language": "de",
+      "mode": "AND",
+      "judgments": {
+        "mixed-field-expanded": 3
+      },
+      "irrelevant": [
+        "en-german-folding-bait"
+      ],
+      "cross_language_irrelevant": [
+        "en-german-folding-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "mixed-field-expanded"
+        ]
+      }
+    },
+    {
+      "id": "fallback-ambiguous-default-field",
+      "family": "fallback-no-evidence",
+      "query": "quartz glyph vector",
+      "mode": "AND",
+      "judgments": {
+        "fallback-default-field-target": 3
+      },
+      "irrelevant": [
+        "fallback-default-unsupported-bait"
+      ],
+      "cross_language_irrelevant": [
+        "fallback-default-unsupported-bait"
+      ],
+      "expect": {
+        "top_ids": [
+          "fallback-default-field-target"
+        ]
+      }
     },
     {
       "id": "fallback-generic-alpha-beta",

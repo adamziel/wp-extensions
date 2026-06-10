@@ -88,9 +88,9 @@ test_case('quality native relevance gold benchmark passes committed fixture', fu
         assert_true((bool) $threshold['passed'], 'native relevance threshold should pass: ' . (string) $threshold['metric']);
     }
 
-    assert_true((int) $result['documents']['count'] >= 12, 'native relevance fixture should include at least 12 documents');
-    assert_true((int) $result['queries']['retrieval_count'] >= 10, 'native relevance fixture should include at least 10 retrieval queries');
-    assert_true((int) $metrics['cross_language_bait_checks'] >= 4, 'native relevance fixture should include at least four cross-language bait checks');
+    assert_true((int) $result['documents']['count'] >= 30, 'native relevance fixture should include the expanded 30-document corpus');
+    assert_true((int) $result['queries']['retrieval_count'] >= 20, 'native relevance fixture should include at least 20 retrieval queries');
+    assert_true((int) $metrics['cross_language_bait_checks'] >= 18, 'native relevance fixture should include expanded cross-language bait checks');
     assert_same(0, (int) $metrics['cross_language_false_positive_count'], 'native relevance fixture should not allow cross-language false positives');
     assert_same(0, (int) $metrics['no_result_expectation_failures'], 'native relevance no-result expectations should pass');
     assert_same(0, (int) $metrics['top_id_expectation_failures'], 'native relevance top-id expectations should pass');
@@ -100,6 +100,18 @@ test_case('quality native relevance gold benchmark passes committed fixture', fu
     }
     foreach ($result['query_results'] as $query) {
         assert_same([], $query['failures'], 'native relevance query should have no expectation failures: ' . (string) $query['id']);
+    }
+
+    $queryIds = array_column($result['query_results'], 'id');
+    foreach ([
+        'wp-field-title-excerpt-body-ranking',
+        'pl-raportami-default-stem',
+        'de-ascii-folded-query',
+        'de-detected-umlaut-folding',
+        'mixed-field-polish-excerpt',
+        'fallback-ambiguous-default-field',
+    ] as $queryId) {
+        assert_true(in_array($queryId, $queryIds, true), "native relevance fixture should include expanded probe {$queryId}");
     }
 
     record_check('native relevance benchmark query rows', count($result['query_results']));
