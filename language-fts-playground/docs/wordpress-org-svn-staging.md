@@ -56,7 +56,8 @@ wordpress-org-svn-stage/
 ```
 
 The plugin files live directly under `trunk/` and `tags/<version>/`. There must
-not be a nested `trunk/language-fts-playground/` directory.
+not be nested `trunk/language-fts-playground/` or
+`tags/<version>/language-fts-playground/` directories.
 
 ## Rebuild An Existing Generated Stage
 
@@ -85,7 +86,7 @@ php language-fts-playground/tools/verify-wordpress-org-svn-stage.php \
 The verifier checks:
 
 - top-level `assets/`, `tags/`, and `trunk/` directories;
-- no nested plugin root under `trunk/`;
+- no nested plugin root under `trunk/` or `tags/<version>/`;
 - one `tags/<version>/` directory matching the plugin header version;
 - plugin header version, version constant, and readme `Stable tag` alignment;
 - required runtime files, docs, bundled language resources, and Blueprint;
@@ -140,8 +141,9 @@ php language-fts-playground/tools/test-wordpress-org-svn-stage.php
 ```
 
 The regression script builds a temporary stage, writes a manifest, and verifies
-that the verifier rejects a nested plugin root, payload-level `assets/`, a
-forbidden `tools/` directory, and unsupported asset filenames.
+that the verifier rejects nested plugin roots under both `trunk/` and
+`tags/<version>/`, payload-level `assets/`, a forbidden `tools/` directory, and
+unsupported asset filenames.
 
 ## Release Rehearsal Notes
 

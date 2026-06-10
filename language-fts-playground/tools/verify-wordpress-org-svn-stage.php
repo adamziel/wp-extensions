@@ -94,6 +94,11 @@ function verify_wordpress_org_svn_stage(string $stage_root, bool $strict_assets,
     }
 
     $tag = $tags . '/' . $version;
+    assert_path_absent(
+        $tag . '/language-fts-playground',
+        'SVN tag must contain plugin files directly, not a nested plugin root: tags/' . $version . '/language-fts-playground.'
+    );
+
     $tag_metadata = inspect_payload_metadata($tag, 'tags/' . $version);
     assert_payload_metadata_is_consistent($tag_metadata, 'tags/' . $version);
 

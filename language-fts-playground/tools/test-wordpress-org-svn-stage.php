@@ -57,7 +57,16 @@ try {
     assert_command_fails(
         [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $nested_stage],
         $plugin_root,
-        'reject nested plugin root staging',
+        'reject trunk nested plugin root staging',
+        'nested plugin root'
+    );
+
+    $tag_nested_stage = copy_stage_fixture($stage, $workspace . '/tag-nested-stage');
+    ensure_directory($tag_nested_stage . '/tags/0.3.0/language-fts-playground');
+    assert_command_fails(
+        [PHP_BINARY, 'tools/verify-wordpress-org-svn-stage.php', '--stage=' . $tag_nested_stage],
+        $plugin_root,
+        'reject tag nested plugin root staging',
         'nested plugin root'
     );
 
