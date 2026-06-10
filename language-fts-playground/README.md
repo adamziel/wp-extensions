@@ -415,6 +415,11 @@ copyright and disclaimer notices. Those sources are not bundled here. Current
 shipped resources remain seed data unless a generated comprehensive pack is
 committed after source-specific normalization, license review, attribution
 review, pack-size review, and relevance testing.
+An OEWN source-candidate lock lives at
+`review-artifacts/source-locks/oewn-2025-json-source-candidate.json` for future
+comprehensive English pack review. No OEWN source archive or generated OEWN
+runtime pack is bundled, and the current plugin does not claim comprehensive
+English lexical support.
 
 ## Supported Analyzer Behavior
 
