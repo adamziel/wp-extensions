@@ -65,6 +65,9 @@ Stemming is enabled by default and can be disabled with
 - Unsupported languages return the original normalized term.
 
 See [Snowball compliance](snowball-compliance.md) for the harness and rationale.
+See [Polish lemmatizer source-lock pilot](polish-lemmatizer-source-lock.md) for
+the pre-implementation gates required before any Stempel or Morfologik-style
+Polish pack can be imported.
 
 ## Multilingual Analyzer Roadmap
 

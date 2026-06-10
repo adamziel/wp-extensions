@@ -1,0 +1,60 @@
+{
+  "schema": "wp-fts-polish-lemmatizer-source-lock-pilot-v1",
+  "pack": {
+    "language": "pl",
+    "stage": "lemmatizer",
+    "candidate_family": "morfologik-style-polish-dictionary",
+    "runtime_pack_committed": false,
+    "third_party_lexical_data_committed": false,
+    "source_identity": {
+      "source_id": "pl-morfologik-candidate-unselected",
+      "source_name": "Morfologik-style Polish dictionary candidate",
+      "upstream_family": "morfologik-polimorf-sgjp",
+      "canonical_artifact": "PENDING_EXACT_ARTIFACT_SELECTION",
+      "artifact_version": "PENDING_EXACT_VERSION_OR_COMMIT",
+      "source_url": "PENDING_EXACT_SOURCE_URL",
+      "artifact_type": "dictionary-or-fsa-release",
+      "selection_status": "candidate-only"
+    },
+    "license": {
+      "spdx_id": "PENDING_EXACT_LICENSE_REVIEW",
+      "license_url": "PENDING_EXACT_LICENSE_URL",
+      "license_text": "PENDING: record exact upstream license text or committed notice path before any import.",
+      "notice_required": true,
+      "redistribution_status": "pending-review"
+    },
+    "artifact": {
+      "sha256": "PENDING_APPROVED_SOURCE_DOWNLOAD_SHA256",
+      "byte_count": "PENDING_APPROVED_SOURCE_DOWNLOAD_BYTE_COUNT",
+      "hash_status": "not-downloaded"
+    },
+    "importer": {
+      "provenance_id": "pl-morfologik-source-lock-pilot-v1",
+      "command": "php indexer/tools/import-polish-lemmatizer.php --source=<approved-artifact> --source-lock=indexer/resources/analyzer-packs/pl/morfologik/SOURCE.lock.json --out=<runtime-pack>",
+      "implementation_status": "not-implemented",
+      "determinism_requirements": [
+        "Importer commit is recorded in the final source lock.",
+        "Input hashes, normalized row count, runtime digest, and analyzer signature component are recorded before enabling the pack.",
+        "Generated rows are sorted deterministically and duplicate/conflicting normalized forms are rejected."
+      ]
+    },
+    "policies": {
+      "ambiguity_policy": {
+        "decision": "unresolved-before-import",
+        "required_fixture": "ambiguous forms must prove either no-op unless every accepted lemma normalizes identically, or one deterministic canonical lemma with retained provenance."
+      },
+      "no_op_fallback_policy": {
+        "behavior": "unsupported language, missing pack, invalid pack, out-of-vocabulary form, and unresolved ambiguity return the original normalized term.",
+        "required_fixture": "OOV, unsupported-language, invalid-pack, missing-pack, and ambiguity fallback cases must be asserted before runtime integration."
+      }
+    },
+    "current_runtime": {
+      "behavior": "Polish currently uses the conservative local suffix fallback in WP_FTS_PolishStemmer, not a verified Stempel or Morfologik lemmatizer.",
+      "default_status": "conservative_suffix_fallback"
+    },
+    "future_pack_gate": {
+      "default_status_before_full_lock": "fixture-or-experimental-only",
+      "claim_boundary": "Do not claim shipped Polish dictionary lemmatization until exact source identity, license, source artifact hash, importer provenance, ambiguity/OOV policy, runtime digest, fixture parity, and packaging notices pass review."
+    }
+  }
+}
