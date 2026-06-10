@@ -70,6 +70,11 @@ The default analyzer:
 - tokenizes CJK script runs into single characters for one-character runs and
   overlapping bigrams for longer runs.
 
+The CJK path is fallback n-gram retrieval, not dictionary word segmentation.
+The plugin does not ship a Thai tokenizer, Thai dictionary, TCC/TCC+ rules, or a
+production non-space tokenizer adapter. Any future Thai adapter must pass the
+[tokenizer source-lock](tokenizer-source-locks.md) gate first.
+
 Programmatic callers can tune these options:
 
 ```php

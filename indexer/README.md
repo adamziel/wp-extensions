@@ -108,6 +108,9 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
   Snowball fixture harness.
 - [Analyzer source locks](docs/analyzer-source-locks.md) define the manifest
   schema required before future analyzer or lemmatizer data imports.
+- [Tokenizer source locks](docs/tokenizer-source-locks.md) documents the
+  pre-coding gate for any future Thai TCC/dictionary tokenizer. The current
+  plugin does not ship real Thai or CJK word segmentation.
 
 ## Current Caveats
 
