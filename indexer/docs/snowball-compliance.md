@@ -30,6 +30,15 @@ For convenience, Composer also exposes:
 SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 ```
 
+Expected counts with the current official dataset inventory are:
+
+- without `vendor/`: `0 pass, 37 skip, 0 fail`;
+- with `vendor/` installed from the committed `composer.lock`: `2 pass, 35 skip, 0 fail`.
+
+The two passing runtime datasets are Catalan and Dutch Porter. Any `fail` result
+means a fixture, algorithm, or advertised-language contract regressed; missing
+Wamania classes are reported as dependency skips, not algorithm failures.
+
 This is a Snowball stemmer compliance suite for the multilingual full-text
 pipeline. Lucene `analysis/common` remains the broader analyzer reference for
 tokenization, filtering, and language analysis behavior, but this harness does
