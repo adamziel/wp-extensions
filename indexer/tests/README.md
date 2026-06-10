@@ -13,6 +13,14 @@ an optional batch count. On this integrated branch, the standard harness and
 Composer test entry points default to a minimum of 1500 executed checks/scenarios.
 Set `WP_FTS_MIN_CHECKS` only when a local or CI lane needs an explicit override.
 
+The analyzer source-lock quality test validates the synthetic no-op manifest in
+`tests/fixtures/analyzer-source-locks/` and proves unsafe no-op metadata is
+rejected. Run the verifier directly when changing manifests:
+
+```sh
+php tools/validate-analyzer-source-lock.php
+```
+
 Run the optional external BM25 reference harness:
 
 ```sh

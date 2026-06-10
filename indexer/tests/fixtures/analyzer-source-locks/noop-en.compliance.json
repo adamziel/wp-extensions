@@ -1,0 +1,24 @@
+{
+  "format": "wp-fts-analyzer-compliance-fixture/v1",
+  "pack_id": "fixture-noop-en",
+  "cases": [
+    {
+      "input": "Running",
+      "expected_output": "running",
+      "language": "en",
+      "reason": "The no-op pack may rely on existing normalization but must not stem or lemmatize."
+    },
+    {
+      "input": "runner",
+      "expected_output": "runner",
+      "language": "en",
+      "reason": "No analyzer pack claim may be inferred without source-locked lexical data."
+    },
+    {
+      "input": "unsupported-made-up-token",
+      "expected_output": "unsupported-made-up-token",
+      "language": "en",
+      "reason": "Unsupported and OOV terms remain unchanged after normalization."
+    }
+  ]
+}

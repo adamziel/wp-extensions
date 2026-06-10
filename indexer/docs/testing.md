@@ -45,6 +45,20 @@ The fixture is a modest regression gate for the current analyzer/searcher
 contract. It reports recall@5, precision@5, MRR, nDCG@5, and cross-language
 false positives; it is not a production relevance-quality claim.
 
+## Analyzer Source-Lock Manifests
+
+Analyzer, stemmer, tokenizer, and lemmatizer packs must have a source-lock
+manifest before real lexical data is imported. Validate the committed synthetic
+no-op fixture and any future manifests with:
+
+```sh
+php tools/validate-analyzer-source-lock.php
+php tools/validate-analyzer-source-lock.php tests/fixtures/analyzer-source-locks/noop-en.source-lock.json
+```
+
+The normal PHP harness also includes the source-lock quality test through
+`tests/quality/*.php` discovery.
+
 ## Explicit Check Gate
 
 The integrated quality harness is expected to meet at least 1500 checks:
