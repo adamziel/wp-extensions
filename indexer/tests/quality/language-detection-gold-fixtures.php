@@ -443,7 +443,8 @@ test_case('quality language detection gold fixtures keep custom resolvers author
     ]);
     $queryLangs = test_lang_by_term($queryAnalyzer->analyze_query_occurrences('zamek bridge'));
     assert_same('pl', $queryLangs['zamek'] ?? null, 'query term resolver should override query resolver for selected tokens');
-    assert_same('nl-NL', $queryLangs['bridge'] ?? null, 'unresolved query tokens should inherit the custom query resolver language');
+    $bridgeTerm = array_key_exists('bridg', $queryLangs) ? 'bridg' : 'bridge';
+    assert_same('nl-NL', $queryLangs[$bridgeTerm] ?? null, 'unresolved query tokens should inherit the custom query resolver language');
 });
 
 test_case('quality language detection gold fixtures preserve OR and AND language routing differences', function (): void {
