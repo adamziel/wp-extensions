@@ -20,6 +20,8 @@ $wp_fts_files = [
     __DIR__ . '/StorageCompat.php',
     __DIR__ . '/Normalizer.php',
     __DIR__ . '/Stemmer.php',
+    __DIR__ . '/AnalyzerPackValidator.php',
+    __DIR__ . '/PolishMorfologikLemmatizer.php',
     __DIR__ . '/LanguageDetector.php',
     __DIR__ . '/LanguagePipeline.php',
     __DIR__ . '/Analyzer.php',

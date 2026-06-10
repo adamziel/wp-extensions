@@ -60,8 +60,9 @@ Stemming is enabled by default and can be disabled with
   Snowball fixture harness.
 - Wamania exposes other language classes, but this branch treats unsupported or
   divergent algorithms as no-ops instead of claiming compliance.
-- Polish (`pl`) uses a conservative local suffix stemmer, not a full Snowball or
-  dictionary lemmatizer.
+- Polish (`pl`) uses a conservative local suffix stemmer by default. An opt-in
+  Morfologik/PoliMorf-compatible fixture pack exists to prove dictionary
+  lemmatizer wiring, but it is not comprehensive and is not default-enabled.
 - Unsupported languages return the original normalized term.
 
 See [Snowball compliance](snowball-compliance.md) for the harness and rationale.
@@ -75,6 +76,8 @@ resource-backed analyzers with fixture gates before they are enabled by default:
   official input/output fixtures;
 - port Polish Stempel/Morfologik-style lemmatization behind the existing
   `stemmer` / `stemmers_by_lang` seam and require dictionary fixture parity;
+  the bundled Polish fixture pack is only the first contract slice, not a full
+  import;
 - keep per-language analyzer resources opt-in until compliance fixtures and
   regression corpora pass in CI;
 - add a CJK dictionary tokenizer through the existing `cjk_tokenizer` seam

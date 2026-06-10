@@ -106,6 +106,8 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
   a plugin archive and how Composer dependencies are handled.
 - [Snowball compliance](docs/snowball-compliance.md) explains the dedicated
   Snowball fixture harness.
+- [Polish fixture pack](docs/polish-morfologik-fixture-pack.md) explains the
+  opt-in Morfologik/PoliMorf-compatible lemmatizer contract slice.
 
 ## Current Caveats
 

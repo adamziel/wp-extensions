@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "pack_id": "pl-morfologik-polimorf-fixture",
+  "language": "pl",
+  "version": "0.1.0-fixture",
+  "fixture_only": true,
+  "default_enabled": false,
+  "capabilities": [
+    "dictionary-lemmatizer",
+    "ambiguous-form-noop",
+    "normalized-runtime-rows"
+  ],
+  "runtime": {
+    "format": "wp-fts-polish-lemma-tsv-v1",
+    "normalization": "WP_FTS_Normalizer pl with fold_diacritics=true",
+    "files": [
+      {
+        "path": "runtime.tsv",
+        "sha256": "8d9817efd68d1f1472cc75b1aa03fd78c1a1a787f923511fdb7cb6e0da5398cb",
+        "rows": 9
+      }
+    ]
+  },
+  "source": {
+    "family": "Morfologik/PoliMorf-compatible Polish morphological dictionaries",
+    "source_lock": "No full source artifact is vendored in this fixture slice.",
+    "fixture_boundary": "Hand-reviewed fixture rows only; not comprehensive lexical coverage."
+  },
+  "license": {
+    "fixture_rows": "Project fixture data for analyzer-contract testing only.",
+    "future_source_review_required": true,
+    "notes": "A full import requires exact upstream artifact, digest, license compatibility review, and attribution before distribution."
+  },
+  "attribution": {
+    "note": "Names Morfologik/PoliMorf only as the intended compatible source family. This pack does not redistribute those projects' dictionary dumps."
+  },
+  "provenance": {
+    "local_note": "PROVENANCE.md",
+    "no_runtime_network_access": true,
+    "no_full_third_party_dictionary_dump": true
+  }
+}
