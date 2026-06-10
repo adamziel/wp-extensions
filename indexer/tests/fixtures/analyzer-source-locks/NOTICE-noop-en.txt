@@ -1,0 +1,4 @@
+WP FTS synthetic no-op analyzer source-lock fixture.
+
+This fixture contains no third-party lexical data. It exists only to validate
+the source-lock schema, verifier, no-op behavior, and release-claim boundary.
