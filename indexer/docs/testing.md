@@ -105,6 +105,22 @@ php -n tools/validate-analyzer-pack.php resources/analyzer-packs/pl-morfologik-p
 The validator checks manifest shape, runtime row normalization, duplicate rows,
 ambiguous no-op handling, and declared checksums for the bundled fixture pack.
 
+Run the deterministic full PoliMorf importer against a disposable local copy of
+the CLARIN-PL artifact, never inside the repository:
+
+```sh
+php tools/import-polish-polimorf-lemmatizer.php \
+  --source=/tmp/polimorf-20180722.tab.gz \
+  --out=/tmp/pl-polimorf-20180722-full
+php tools/validate-analyzer-pack.php \
+  /tmp/pl-polimorf-20180722-full/manifest.json --metadata-only
+```
+
+Repeat the import into a second disposable directory and compare
+`manifest.json`, `SOURCE.lock.json`, and runtime shards when changing importer
+logic. The generated full runtime pack is third-party data and must not be
+committed until packaging review approves its size and redistribution boundary.
+
 ## Polish Verified Stemmer Fixtures
 
 The opt-in Polish verified stemmer slice has a standalone fixture validator:

@@ -65,6 +65,10 @@ Stemming is enabled by default and can be disabled with
   `polish_stemming`; otherwise `polish_stemming => 'verified'` can enable a
   compact fixture-backed stemmer slice. Neither path is a full Snowball,
   Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
+- A full CLARIN-PL PoliMorf importer exists for local evidence generation, but
+  the generated third-party runtime pack is not committed or packaged yet. It
+  must remain opt-in and default-disabled until package-size and redistribution
+  review approve shipping the generated data.
 - Unsupported languages return the original normalized term.
 
 See [Snowball compliance](snowball-compliance.md) for the harness and rationale.
@@ -85,8 +89,9 @@ resource-backed analyzers with fixture gates before they are enabled by default:
   official input/output fixtures;
 - port Polish Stempel/Morfologik-style lemmatization behind the existing
   `stemmer` / `stemmers_by_lang` seam and require dictionary fixture parity;
-  the bundled Polish fixture pack is only the first contract slice, not a full
-  import;
+  the bundled Polish fixture pack is only the committed contract slice, while
+  the full PoliMorf import remains an unbundled generated artifact pending
+  packaging review;
 - keep per-language analyzer resources opt-in until compliance fixtures and
   regression corpora pass in CI;
 - add a CJK dictionary tokenizer through the existing `cjk_tokenizer` seam

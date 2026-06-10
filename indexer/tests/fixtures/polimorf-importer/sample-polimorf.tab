@@ -1,0 +1,12 @@
+#!DICT-ID wp-fts-polimorf-importer-fixture
+#<COPYRIGHT>
+Synthetic source-shaped PoliMorf fixture for importer tests.
+Redistribution allowed for WP FTS tests.
+#</COPYRIGHT>
+KOTAMI	kot	subst:pl:inst:m2		_
+książkach	książka	subst:pl:loc:f		_
+Drogi	droga	subst:sg:gen:f		_
+drogi	drogi	adj:pl:nom:m1		_
+Wrocławiu	Wrocław	subst:sg:loc:m3		_
+za krótki	krótki	adj:sg:nom:m1		_
+kolorowym	kolorowy	adj:sg:inst:m3		_

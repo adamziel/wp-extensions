@@ -1,0 +1,65 @@
+{
+  "schema_version": "wp-fts-polish-polimorf-full-import-evidence/v1",
+  "status": "generated-runtime-not-committed",
+  "pack": {
+    "id": "pl-polimorf-20180722-full",
+    "language": "pl",
+    "kind": "lemmatizer",
+    "fixture_only": false,
+    "default_enabled": false,
+    "runtime_pack_committed": false
+  },
+  "source": {
+    "name": "PoliMorf",
+    "version": "2018.07.22",
+    "handle_url": "https://clarin-pl.eu/dspace/handle/11321/577",
+    "artifact_url": "https://clarin-pl.eu/dspace/bitstream/handle/11321/577/polimorf-20180722.tab.gz?isAllowed=y&sequence=1",
+    "file": "polimorf-20180722.tab.gz",
+    "artifact_sha256": "2b1f07224c434c8710def382d497cf8221d5764e8d683d2ad34242810ab72746",
+    "byte_count": 41550540,
+    "license_spdx_id": "BSD-2-Clause",
+    "availability": "public",
+    "retrieval_note": "Local Task 812 evidence used a disposable /tmp copy of the CLARIN-PL gzip; the source archive is not committed."
+  },
+  "source_shape": {
+    "decompressed_lines": 7374578,
+    "metadata_lines_before_lexical_rows": 32,
+    "five_column_rows": 7374546,
+    "non_five_column_rows_after_lexical_rows": 0,
+    "columns": {
+      "format": "polimorf-five-column-tab",
+      "surface_column": 0,
+      "lemma_column": 1,
+      "tag_column": 2,
+      "qualifier_column": 3,
+      "flags_column": 4
+    }
+  },
+  "generated_runtime": {
+    "generated_by": "indexer/tools/import-polish-polimorf-lemmatizer.php",
+    "generated_with_importer_commit": "task812-local-evidence-before-final-branch-sha",
+    "manifest_sha256": "407649954cf1701b809049e5e3771d9fcce3f7ccadb8d9ae983e45d1834ca2c7",
+    "row_count": 4748648,
+    "file_count": 48,
+    "runtime_byte_count": 117149568,
+    "pack_byte_count": 117170689,
+    "runtime_sha256": "4ca60c36adeaa46ad93a499075707c5ac8782928496e23642401e4ddfc84e27f",
+    "skipped_invalid_tokens": 12362,
+    "accepted_source_rows": 7362184,
+    "determinism": {
+      "second_import_manifest_sha256": "407649954cf1701b809049e5e3771d9fcce3f7ccadb8d9ae983e45d1834ca2c7",
+      "second_import_runtime_sha256": "4ca60c36adeaa46ad93a499075707c5ac8782928496e23642401e4ddfc84e27f",
+      "output_tree_comparison": "byte-identical"
+    }
+  },
+  "behavior": {
+    "oov_policy": "return_original_normalized_term",
+    "ambiguity_policy": "ambiguous_surface_noop",
+    "unsupported_language_policy": "return_original_normalized_term",
+    "normalization": "WP_FTS_Normalizer pl with fold_diacritics=true"
+  },
+  "blocker": {
+    "reason": "Generated third-party runtime pack is 117149568 bytes across 48 shards, before release packaging overhead.",
+    "required_decision": "Approve an external/downloaded pack workflow or approve committing and shipping the generated BSD-2-Clause runtime data in the plugin package."
+  }
+}

@@ -669,6 +669,30 @@ function temp_index_path(string $suffix): string
     return sys_get_temp_dir() . '/wp_fts_' . getmypid() . '_' . $suffix . '_' . bin2hex(random_bytes(4)) . '.json';
 }
 
+function temp_directory_path(string $suffix): string
+{
+    return sys_get_temp_dir() . '/wp_fts_' . getmypid() . '_' . $suffix . '_' . bin2hex(random_bytes(4));
+}
+
+function remove_directory_tree(string $directory): void
+{
+    if (!is_dir($directory)) {
+        return;
+    }
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($iterator as $path) {
+        if ($path->isDir()) {
+            rmdir($path->getPathname());
+            continue;
+        }
+        unlink($path->getPathname());
+    }
+    rmdir($directory);
+}
+
 /**
  * @return array<string,callable():WP_FTS_Storage>
  */
@@ -2494,6 +2518,88 @@ test_case('polish Morfologik fixture pack validates manifest digests and rows', 
     assert_same(9, count($result['rows']), 'fixture pack should expose the reviewed tiny row set');
     assert_same(9, $result['runtime_files']['runtime.tsv']['rows'] ?? null, 'runtime row count should match manifest');
     assert_same(hash_file('sha256', $result['runtime_files']['runtime.tsv']['path']), $result['runtime_files']['runtime.tsv']['sha256'], 'runtime digest should match local file content');
+});
+
+test_case('polish PoliMorf importer deterministically generates sharded full-pack shape', function (): void {
+    require_once __DIR__ . '/../tools/import-polish-polimorf-lemmatizer.php';
+
+    $source = __DIR__ . '/fixtures/polimorf-importer/sample-polimorf.tab';
+    $outA = temp_directory_path('polimorf_import_a');
+    $outB = temp_directory_path('polimorf_import_b');
+    $options = [
+        'source' => $source,
+        'pack_id' => 'pl-polimorf-importer-fixture',
+        'version' => 'fixture-import-v1',
+        'source_url' => 'urn:wp-fts:test:polimorf-importer-fixture',
+        'source_name' => 'WP FTS source-shaped PoliMorf importer fixture',
+        'source_version' => 'fixture',
+        'max_rows_per_file' => 2,
+        'chunk_rows' => 2,
+        'fixture_only' => false,
+        'importer_commit' => 'test-commit',
+    ];
+
+    try {
+        $summaryA = (new WP_FTS_PolishPolimorfImporter())->import($options + ['out' => $outA]);
+        $summaryB = (new WP_FTS_PolishPolimorfImporter())->import($options + ['out' => $outB]);
+
+        assert_same(6, $summaryA['runtime']['rows'], 'importer should normalize and deduplicate accepted surface lemma rows');
+        assert_same(3, $summaryA['runtime']['files'], 'importer should shard runtime rows without splitting an ambiguous surface');
+        assert_same(1, $summaryA['stats']['skipped_invalid_tokens'], 'importer should skip multi-token source rows');
+        assert_same($summaryA['runtime']['sha256'], $summaryB['runtime']['sha256'], 'second import should produce the same runtime digest');
+        assert_same(
+            file_get_contents($outA . '/manifest.json'),
+            file_get_contents($outB . '/manifest.json'),
+            'second import should produce byte-identical manifest JSON'
+        );
+        assert_same(
+            file_get_contents($outA . '/SOURCE.lock.json'),
+            file_get_contents($outB . '/SOURCE.lock.json'),
+            'second import should produce byte-identical source-lock JSON'
+        );
+
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($outA . '/manifest.json', false);
+        assert_same('pl-polimorf-importer-fixture', $validation['manifest']['pack_id'], 'generated full-pack manifest should validate');
+        assert_true($validation['manifest']['fixture_only'] === false, 'generated importer manifest should support full-pack shape');
+        assert_same(6, $validation['manifest']['runtime']['total_rows'], 'generated manifest should record runtime rows');
+        assert_same($summaryA['runtime']['sha256'], $validation['manifest']['runtime']['total_sha256'], 'generated manifest should record runtime digest');
+    } finally {
+        remove_directory_tree($outA);
+        remove_directory_tree($outB);
+    }
+});
+
+test_case('polish PoliMorf sharded lemmatizer lazy-loads rows and preserves ambiguity', function (): void {
+    require_once __DIR__ . '/../tools/import-polish-polimorf-lemmatizer.php';
+
+    $out = temp_directory_path('polimorf_lazy');
+    try {
+        (new WP_FTS_PolishPolimorfImporter())->import([
+            'source' => __DIR__ . '/fixtures/polimorf-importer/sample-polimorf.tab',
+            'out' => $out,
+            'pack_id' => 'pl-polimorf-importer-fixture',
+            'version' => 'fixture-import-v1',
+            'source_url' => 'urn:wp-fts:test:polimorf-importer-fixture',
+            'source_name' => 'WP FTS source-shaped PoliMorf importer fixture',
+            'source_version' => 'fixture',
+            'max_rows_per_file' => 2,
+            'chunk_rows' => 2,
+            'fixture_only' => false,
+            'importer_commit' => 'test-commit',
+        ]);
+
+        $lemmatizer = WP_FTS_PolishMorfologikLemmatizer::from_manifest_file($out . '/manifest.json');
+        assert_same('pl-polimorf-importer-fixture', $lemmatizer->pack_id(), 'lazy lemmatizer should expose generated pack identity');
+        assert_true(!$lemmatizer->is_fixture_only(), 'lazy lemmatizer should expose full-pack status');
+        assert_same('kot', $lemmatizer->stem('kotami', 'pl'), 'lazy lemmatizer should map a row from a later shard');
+        assert_same('ksiazka', $lemmatizer->stem('ksiazkach', 'pl'), 'lazy lemmatizer should map normalized diacritic-folded rows');
+        assert_same('wroclaw', $lemmatizer->stem('wroclawiu', 'pl-PL'), 'lazy lemmatizer should respect Polish language subtags');
+        assert_same('drogi', $lemmatizer->stem('drogi', 'pl'), 'lazy lemmatizer should no-op ambiguous surfaces');
+        assert_same('brak', $lemmatizer->stem('brak', 'pl'), 'lazy lemmatizer should no-op OOV forms');
+        assert_same('kotami', $lemmatizer->stem('kotami', 'en'), 'lazy lemmatizer should no-op unsupported languages');
+    } finally {
+        remove_directory_tree($out);
+    }
 });
 
 test_case('polish Morfologik fixture lemmatizer maps rows and preserves ambiguous forms', function (): void {

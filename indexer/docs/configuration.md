@@ -152,6 +152,20 @@ the analyzer uses the selected `polish_stemming` mode, which defaults to the
 existing conservative Polish suffix stemmer. Validate the fixture with
 `php tools/validate-analyzer-pack.php`.
 
+A generated full PoliMorf pack can also be supplied by path after running the
+local importer outside the repository:
+
+```php
+$analyzer = new WP_FTS_Analyzer([
+    'default_lang' => 'pl',
+    'polish_lemma_pack' => '/tmp/pl-polimorf-20180722-full/manifest.json',
+]);
+```
+
+Full generated packs stay opt-in and default-disabled. The full CLARIN-PL
+runtime data is not bundled in this repository until packaging and
+redistribution review approve the generated third-party pack size.
+
 Enable the verified Polish stemmer slice when fixture-backed stemming is more
 important than preserving the exact default suffix-only behavior:
 

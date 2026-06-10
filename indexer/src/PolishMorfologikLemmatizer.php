@@ -9,31 +9,28 @@ declare(strict_types=1);
  */
 final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
 {
+    private const EAGER_ROW_LIMIT = 50000;
+    private const MAX_CACHED_SHARDS = 4;
+
     /** @var array<string,string> */
     private array $lemmaBySurface = [];
     /** @var array<string,bool> */
     private array $ambiguousSurfaces = [];
+    /** @var array<string,array{lemma_by_surface:array<string,string>,ambiguous_surfaces:array<string,bool>}> */
+    private array $shardCache = [];
+    /** @var string[] */
+    private array $shardCacheOrder = [];
+    private bool $lazy;
     private string $indexSignature;
 
     /**
      * @param array<string,mixed> $validation Result from WP_FTS_AnalyzerPackValidator::validate().
      */
-    private function __construct(private array $validation)
+    private function __construct(private array $validation, bool $lazy)
     {
-        $lemmasBySurface = [];
-        foreach ($validation['rows'] as $row) {
-            $lemmasBySurface[$row['surface']][$row['lemma']] = true;
-        }
-
-        foreach ($lemmasBySurface as $surface => $lemmas) {
-            $lemmaList = array_keys($lemmas);
-            sort($lemmaList, SORT_STRING);
-            if (count($lemmaList) === 1) {
-                $this->lemmaBySurface[$surface] = $lemmaList[0];
-                continue;
-            }
-
-            $this->ambiguousSurfaces[$surface] = true;
+        $this->lazy = $lazy;
+        if (!$lazy) {
+            $this->build_eager_lookup($validation['rows']);
         }
 
         $this->indexSignature = $this->build_index_signature($validation);
@@ -45,8 +42,13 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
     public static function from_manifest_file(string $manifestPath, ?WP_FTS_AnalyzerPackValidator $validator = null): self
     {
         $validator ??= new WP_FTS_AnalyzerPackValidator();
+        $metadata = $validator->validate($manifestPath, false);
+        $eager = (bool) $metadata['manifest']['fixture_only'] && self::runtime_rows_count($metadata) <= self::EAGER_ROW_LIMIT;
+        if ($eager) {
+            return new self($validator->validate($manifestPath, true), false);
+        }
 
-        return new self($validator->validate($manifestPath));
+        return new self($metadata, true);
     }
 
     /**
@@ -76,6 +78,10 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
     {
         if ($this->base_language($language) !== 'pl') {
             return $term;
+        }
+
+        if ($this->lazy) {
+            return $this->lookup_lazy($term);
         }
 
         if (isset($this->ambiguousSurfaces[$term])) {
@@ -143,6 +149,138 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string,mixed> $validation
+     */
+    private static function runtime_rows_count(array $validation): int
+    {
+        $rows = 0;
+        foreach ($validation['runtime_files'] as $file) {
+            $rows += (int) $file['rows'];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<int,array{surface:string,lemma:string,file:string,line:int}> $rows
+     */
+    private function build_eager_lookup(array $rows): void
+    {
+        $lemmasBySurface = [];
+        foreach ($rows as $row) {
+            $lemmasBySurface[$row['surface']][$row['lemma']] = true;
+        }
+
+        foreach ($lemmasBySurface as $surface => $lemmas) {
+            $lemmaList = array_keys($lemmas);
+            sort($lemmaList, SORT_STRING);
+            if (count($lemmaList) === 1) {
+                $this->lemmaBySurface[$surface] = $lemmaList[0];
+                continue;
+            }
+
+            $this->ambiguousSurfaces[$surface] = true;
+        }
+    }
+
+    private function lookup_lazy(string $term): string
+    {
+        $lemmas = [];
+        foreach ($this->candidate_runtime_files($term) as $file) {
+            $shard = $this->load_runtime_file((string) $file['path']);
+            if (isset($shard['ambiguous_surfaces'][$term])) {
+                return $term;
+            }
+            if (isset($shard['lemma_by_surface'][$term])) {
+                $lemmas[$shard['lemma_by_surface'][$term]] = true;
+            }
+        }
+
+        if (count($lemmas) !== 1) {
+            return $term;
+        }
+
+        return array_key_first($lemmas);
+    }
+
+    /**
+     * @return array<int,array{path:string,rows:int,sha256:string,first_surface?:string,last_surface?:string}>
+     */
+    private function candidate_runtime_files(string $term): array
+    {
+        $candidates = [];
+        foreach ($this->validation['runtime_files'] as $file) {
+            $first = $file['first_surface'] ?? null;
+            $last = $file['last_surface'] ?? null;
+            if (is_string($first) && is_string($last) && (strcmp($term, $first) < 0 || strcmp($term, $last) > 0)) {
+                continue;
+            }
+            $candidates[] = $file;
+        }
+
+        return $candidates;
+    }
+
+    /**
+     * @return array{lemma_by_surface:array<string,string>,ambiguous_surfaces:array<string,bool>}
+     */
+    private function load_runtime_file(string $path): array
+    {
+        if (isset($this->shardCache[$path])) {
+            return $this->shardCache[$path];
+        }
+
+        $lemmasBySurface = [];
+        $handle = fopen($path, 'rb');
+        if (!is_resource($handle)) {
+            return [
+                'lemma_by_surface' => [],
+                'ambiguous_surfaces' => [],
+            ];
+        }
+
+        while (($line = fgets($handle)) !== false) {
+            $line = rtrim((string) $line, "\n");
+            $line = rtrim($line, "\r");
+            if ($line === '' || $line[0] === '#') {
+                continue;
+            }
+            $columns = explode("\t", $line);
+            if (count($columns) !== 2) {
+                continue;
+            }
+            $lemmasBySurface[$columns[0]][$columns[1]] = true;
+        }
+        fclose($handle);
+
+        $lemmaBySurface = [];
+        $ambiguousSurfaces = [];
+        foreach ($lemmasBySurface as $surface => $lemmas) {
+            $lemmaList = array_keys($lemmas);
+            sort($lemmaList, SORT_STRING);
+            if (count($lemmaList) === 1) {
+                $lemmaBySurface[$surface] = $lemmaList[0];
+                continue;
+            }
+            $ambiguousSurfaces[$surface] = true;
+        }
+
+        $this->shardCache[$path] = [
+            'lemma_by_surface' => $lemmaBySurface,
+            'ambiguous_surfaces' => $ambiguousSurfaces,
+        ];
+        $this->shardCacheOrder[] = $path;
+        while (count($this->shardCacheOrder) > self::MAX_CACHED_SHARDS) {
+            $oldest = array_shift($this->shardCacheOrder);
+            if (is_string($oldest)) {
+                unset($this->shardCache[$oldest]);
+            }
+        }
+
+        return $this->shardCache[$path];
     }
 
     /**
