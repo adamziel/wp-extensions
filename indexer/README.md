@@ -108,6 +108,9 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
   Snowball fixture harness.
 - [Polish fixture pack](docs/polish-morfologik-fixture-pack.md) explains the
   opt-in Morfologik/PoliMorf-compatible lemmatizer contract slice.
+- [Polish verified stemmer](docs/polish-verified-stemmer.md) explains the
+  opt-in fixture-backed Polish stemmer slice and how it differs from
+  dictionary lemmatization.
 
 ## Current Caveats
 

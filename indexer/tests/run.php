@@ -2470,6 +2470,13 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     ]);
     assert_same(['kot'], $pipeline->analyze('kotami', 'pl'), 'Polish conservative suffix strategy should be available');
     assert_same(['wroclaw'], $pipeline->analyze('Wrocławiu', 'pl'), 'Polish fallback should run after folding');
+
+    $verifiedPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_stemming' => 'verified',
+    ]);
+    assert_same(['samochod'], $verifiedPipeline->analyze('samochody', 'pl'), 'Polish verified mode should stem mapped fixture rows');
+    assert_same(['danie'], $verifiedPipeline->analyze('danie', 'pl'), 'Polish verified mode should protect ambiguous rows');
 });
 
 test_case('polish Morfologik fixture pack validates manifest digests and rows', function (): void {
@@ -2512,11 +2519,26 @@ test_case('polish lemma pack is opt-in and invalid packs fall back to suffix ste
     assert_same(['zielonymi'], $packPipeline->analyze('zielonymi', 'pl'), 'enabled fixture pack should not suffix-stem missing rows');
     assert_same(['drogi'], $packPipeline->analyze('drogi', 'pl'), 'enabled fixture pack should no-op ambiguous rows');
 
+    $packOverridesVerifiedPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_lemma_pack' => true,
+        'polish_stemming' => 'verified',
+    ]);
+    assert_same(['samochody'], $packOverridesVerifiedPipeline->analyze('samochody', 'pl'), 'valid lemma pack should take precedence over verified Polish stemming for missing pack rows');
+    assert_same(['zamek'], $packOverridesVerifiedPipeline->analyze('zamkach', 'pl'), 'valid lemma pack should keep using dictionary lemma rows when polish_stemming is also set');
+
     $invalidPackPipeline = new WP_FTS_LanguagePipeline([
         'enable_stemming' => true,
         'polish_lemma_pack' => __DIR__ . '/missing-pack/manifest.json',
     ]);
     assert_same(['zamk'], $invalidPackPipeline->analyze('zamkach', 'pl'), 'missing opt-in pack should fall back to conservative suffix stemming');
+
+    $invalidPackVerifiedPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'polish_lemma_pack' => __DIR__ . '/missing-pack/manifest.json',
+        'polish_stemming' => 'verified',
+    ]);
+    assert_same(['samochod'], $invalidPackVerifiedPipeline->analyze('samochody', 'pl'), 'invalid opt-in pack should fall back to the selected Polish stemming mode');
 
     $disabledAnalyzer = new WP_FTS_Analyzer(['polish_lemma_pack' => false]);
     assert_same(['zamk'], $disabledAnalyzer->analyze_query('zamkach', ['lang' => 'pl']), 'disabled pack should preserve analyzer default fallback behavior');
@@ -2550,6 +2572,7 @@ test_case('enabled polish lemma pack lets indexed and query inflections meet', f
 test_case('stemming is enabled by default and can be explicitly disabled', function (): void {
     $defaultPipeline = new WP_FTS_LanguagePipeline();
     assert_same(['kot'], $defaultPipeline->analyze('kotami', 'pl'), 'default pipeline should use safe built-in stemming');
+    assert_same(['samochody'], $defaultPipeline->analyze('samochody', 'pl'), 'default Polish mode should remain conservative');
 
     $disabledPipeline = new WP_FTS_LanguagePipeline(['enable_stemming' => false]);
     assert_same(['kotami'], $disabledPipeline->analyze('kotami', 'pl'), 'enable_stemming false should preserve exact normalized terms');

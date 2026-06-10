@@ -102,7 +102,9 @@ Stemming is enabled by default. The pipeline uses:
 
 - Snowball through `wamania/php-stemmer` for the allowlisted languages that pass
   the bundled compliance harness: Catalan (`ca`) and Dutch Porter (`nl`);
-- a small conservative Polish suffix stemmer for `pl`;
+- a small conservative Polish suffix stemmer for `pl` by default;
+- an opt-in verified Polish fixture slice with protected ambiguous rows and
+  conservative fallback;
 - no-op behavior for unsupported languages or missing optional dependencies.
 
 Stemming can be disabled explicitly when exact normalized terms are required:
@@ -122,6 +124,10 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
+The built-in Polish path gives a valid opt-in lemma pack precedence over the
+selected `polish_stemming` mode. If no valid pack is configured, the selected
+mode runs; unknown mode values normalize to the conservative fallback.
+
 An opt-in Polish fixture pack proves the Morfologik/PoliMorf-compatible
 dictionary lemmatizer contract without shipping a full third-party dictionary:
 
@@ -134,8 +140,24 @@ $analyzer = new WP_FTS_Analyzer([
 
 The fixture pack maps only its reviewed normalized runtime rows. Ambiguous and
 missing forms remain unchanged. If the pack is disabled, missing, or invalid,
-the analyzer falls back to the existing conservative Polish suffix stemmer.
-Validate the fixture with `php tools/validate-analyzer-pack.php`.
+the analyzer uses the selected `polish_stemming` mode, which defaults to the
+existing conservative Polish suffix stemmer. Validate the fixture with
+`php tools/validate-analyzer-pack.php`.
+
+Enable the verified Polish stemmer slice when fixture-backed stemming is more
+important than preserving the exact default suffix-only behavior:
+
+```php
+$analyzer = new WP_FTS_Analyzer([
+    'default_lang' => 'pl',
+    'polish_stemming' => 'verified',
+]);
+```
+
+The verified mode is still a stemmer. It maps a compact set of reviewed Polish
+inflection forms to stems, protects ambiguous rows, and then falls back to the
+conservative suffix stemmer for unknown terms. It is separate from a
+Morfologik/PoliMorf lemmatizer pack, and it does not vendor a full dictionary.
 
 Disable the Polish suffix stemmer while keeping other analyzer behavior:
 

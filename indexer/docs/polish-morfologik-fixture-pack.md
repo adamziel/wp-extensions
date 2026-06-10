@@ -16,7 +16,8 @@ $analyzer = new WP_FTS_Analyzer([
 When enabled and valid, the pack maps normalized Polish surface forms from its
 local TSV rows to normalized lemma keys. Ambiguous rows and missing forms return
 the original normalized token. When the pack is disabled, missing, or invalid,
-the existing conservative Polish suffix stemmer remains the fallback.
+the selected `polish_stemming` mode runs; without an explicit mode, that remains
+the existing conservative Polish suffix stemmer.
 
 Validate the bundled fixture locally:
 

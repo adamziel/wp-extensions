@@ -45,6 +45,30 @@ The fixture is a modest regression gate for the current analyzer/searcher
 contract. It reports recall@5, precision@5, MRR, nDCG@5, and cross-language
 false positives; it is not a production relevance-quality claim.
 
+## Polish Analyzer Pack Validation
+
+Validate the opt-in Polish Morfologik/PoliMorf fixture pack directly:
+
+```sh
+php tools/validate-analyzer-pack.php resources/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json
+php -n tools/validate-analyzer-pack.php resources/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json
+```
+
+The validator checks manifest shape, runtime row normalization, duplicate rows,
+ambiguous no-op handling, and declared checksums for the bundled fixture pack.
+
+## Polish Verified Stemmer Fixtures
+
+The opt-in Polish verified stemmer slice has a standalone fixture validator:
+
+```sh
+php tests/polish-verified-stemmer-fixtures.php
+php -n tests/polish-verified-stemmer-fixtures.php
+```
+
+The same fixture rows are also covered by `tests/run.php` through
+`tests/quality/polish-verified-stemmer.php`.
+
 ## Explicit Check Gate
 
 The integrated quality harness is expected to meet at least 1500 checks:
