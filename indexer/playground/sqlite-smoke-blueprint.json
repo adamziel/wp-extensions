@@ -11,13 +11,30 @@
   },
   "landingPage": "/wp-admin/plugins.php",
   "login": true,
+  "extraLibraries": ["wp-cli"],
   "siteOptions": {
     "blogname": "Pure PHP FTS Indexer SQLite Smoke"
   },
   "steps": [
     {
+      "step": "wp-cli",
+      "command": "wp plugin activate indexer"
+    },
+    {
       "step": "runPHP",
-      "code": "<?php require '/wordpress/wp-content/plugins/indexer/playground/sqlite-smoke.php';"
+      "code": "<?php define('WP_FTS_PLAYGROUND_SMOKE_MODE', 'setup'); require '/wordpress/wp-content/plugins/indexer/playground/sqlite-smoke.php';"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp fts reindex --post_status=publish --post_type=post --lang=en --batch_size=10"
+    },
+    {
+      "step": "wp-cli",
+      "command": "wp fts search playgroundcliword --lang=en --limit=5 --post_status=publish --post_type=post --snippet"
+    },
+    {
+      "step": "runPHP",
+      "code": "<?php define('WP_FTS_PLAYGROUND_SMOKE_MODE', 'post-wpcli'); require '/wordpress/wp-content/plugins/indexer/playground/sqlite-smoke.php';"
     }
   ]
 }
