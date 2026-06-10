@@ -9,5 +9,4 @@
 __pycache__
 tests
 goal.md
-composer.lock
 vendor/bin

@@ -7,6 +7,7 @@ root. The archive should expand to:
 indexer/
   indexer.php
   composer.json
+  composer.lock
   README.md
   docs/
   src/
@@ -25,6 +26,7 @@ Ship:
 - `indexer.php`;
 - `src/*.php`;
 - `composer.json`;
+- `composer.lock`;
 - `README.md`;
 - `docs/*.md`;
 - runtime Composer dependencies under `vendor/` for release archives.
@@ -35,7 +37,6 @@ Do not ship:
 - `.cao/` task and review artifacts;
 - `tests/`;
 - `goal.md`;
-- `composer.lock`, unless a future release policy starts tracking it;
 - `vendor/bin`;
 - local caches, logs, and temporary files.
 
@@ -43,9 +44,10 @@ The `.distignore` file in this directory encodes that packaging boundary.
 
 ## Composer Dependency Handling
 
-The source tree tracks `composer.json` and ignores `vendor/` and
-`composer.lock`. WordPress does not run Composer for installed plugins, so a
-release archive should install production dependencies before the ZIP is built.
+The source tree tracks `composer.json` and `composer.lock`, and ignores
+`vendor/`. WordPress does not run Composer for installed plugins, so a release
+archive should install production dependencies from the committed lockfile
+before the ZIP is built.
 
 Current runtime dependency:
 
@@ -72,7 +74,7 @@ rsync -a --delete \
 
 composer install --no-dev --optimize-autoloader --working-dir="$BUILD/indexer"
 
-( cd "$BUILD" && zip -r wp-fts-indexer.zip indexer -x 'indexer/composer.lock' 'indexer/vendor/bin/*' )
+( cd "$BUILD" && zip -r wp-fts-indexer.zip indexer -x 'indexer/vendor/bin/*' )
 ```
 
 Inspect the archive contents:

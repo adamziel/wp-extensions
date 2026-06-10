@@ -145,6 +145,14 @@ $results = [
 
 fwrite(STDOUT, "Snowball data: {$dataDir}\n");
 fwrite(STDOUT, 'Wamania available: ' . ($stemmer->is_available() ? 'yes' : 'no') . "\n\n");
+fwrite(
+    STDOUT,
+    'Dependency status: ' . (
+        $stemmer->is_available()
+            ? 'wamania/php-stemmer available; supported-language comparisons will run'
+            : 'wamania/php-stemmer missing; supported-language comparisons will be reported as SKIP'
+    ) . "\n\n"
+);
 
 foreach ($datasets as $dataset => $metadata) {
     $label = wp_fts_language_label($dataset, $metadata);
@@ -168,7 +176,7 @@ foreach ($datasets as $dataset => $metadata) {
     }
 
     if (!$stemmer->is_available()) {
-        $reason = 'Wamania StemmerManager is unavailable; run composer install first';
+        $reason = 'Wamania StemmerFactory is unavailable; run composer install first';
         $results['skip'][] = $label;
         fwrite(STDOUT, "[SKIP] {$label}: {$reason}\n");
         continue;
