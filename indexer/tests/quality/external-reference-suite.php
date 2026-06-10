@@ -143,6 +143,49 @@ function wp_fts_external_reference_supported_snowball_rows(): array
 }
 
 /**
+ * @return string[]
+ */
+function wp_fts_external_reference_snowball_language_codes(): array
+{
+    return [
+        'ar',
+        'ca',
+        'cs',
+        'da',
+        'de',
+        'el',
+        'en',
+        'eo',
+        'es',
+        'et',
+        'eu',
+        'fa',
+        'fi',
+        'fr',
+        'ga',
+        'hi',
+        'hu',
+        'hy',
+        'id',
+        'it',
+        'lt',
+        'ne',
+        'nl',
+        'no',
+        'pl',
+        'pt',
+        'ro',
+        'ru',
+        'sr',
+        'st',
+        'sv',
+        'ta',
+        'tr',
+        'yi',
+    ];
+}
+
+/**
  * @return array<string,array{code:string,line:int,input:string,output:string,reason:string}>
  */
 function wp_fts_external_reference_unsupported_boundaries(): array
@@ -326,6 +369,26 @@ test_case('quality external Snowball fixtures cover advertised supported dataset
             wp_fts_external_reference_skip("{$dataset} runtime stem comparison", 'Wamania Snowball classes are not installed in this worktree.');
         }
     }
+});
+
+test_case('quality external Snowball advertised language allowlist stays exact', function (): void {
+    $stemmer = new WP_FTS_SnowballStemmer();
+    $advertised = [
+        'ca' => true,
+        'nl' => true,
+    ];
+
+    foreach (wp_fts_external_reference_snowball_language_codes() as $code) {
+        wp_fts_external_reference_assert_same(
+            isset($advertised[$code]),
+            $stemmer->supports_language($code),
+            "Snowball language {$code} advertised support should match compliance allowlist"
+        );
+    }
+
+    wp_fts_external_reference_assert_true($stemmer->supports_language('ca-ES'), 'Catalan locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true($stemmer->supports_language('nl_BE'), 'Dutch locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true(!$stemmer->supports_language('en-US'), 'Unsupported locale tags should remain no-ops');
 });
 
 test_case('quality external unsupported Snowball boundaries stay documented no-ops', function (): void {
