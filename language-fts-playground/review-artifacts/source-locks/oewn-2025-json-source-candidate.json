@@ -1,0 +1,156 @@
+{
+  "schema": "language-fts-playground-lexical-source-candidate-lock-v1",
+  "lock_kind": "oewn_exact_source_candidate_lock",
+  "status": "candidate_only",
+  "language_id": "en",
+  "data_kind": "imported_comprehensive",
+  "source": {
+    "family_id": "open_english_wordnet_core",
+    "name": "Open English WordNet",
+    "why_preferred": "Open English WordNet is the canonical open English wordnet already supported by the repository's wordnet-json importer shape; use the core 2025 JSON release before considering Plus or Namenet variants.",
+    "canonical_upstream": {
+      "website": "https://en-word.net/",
+      "repository": "https://github.com/globalwordnet/english-wordnet",
+      "release_url": "https://github.com/globalwordnet/english-wordnet/releases/tag/2025-edition"
+    },
+    "version": {
+      "label": "2025 Edition",
+      "tag": "2025-edition",
+      "release_date": "2025-12-31",
+      "full_commit_sha": {
+        "pending_before_import": true,
+        "required_by": "source review",
+        "description": "Record the immutable full Git commit SHA for the 2025-edition tag before import."
+      }
+    },
+    "artifact": {
+      "name": "english-wordnet-2025-json.zip",
+      "url": "https://en-word.net/static/english-wordnet-2025-json.zip",
+      "format": "wordnet-json-zip",
+      "sha256": {
+        "pending_before_import": true,
+        "required_by": "artifact review",
+        "description": "Compute SHA-256 from the reviewed local artifact outside the repository."
+      },
+      "bytes": {
+        "pending_before_import": true,
+        "required_by": "artifact review",
+        "description": "Record byte count from the reviewed local artifact outside the repository."
+      },
+      "retrieved_at": {
+        "pending_before_import": true,
+        "required_by": "artifact review",
+        "description": "Record the UTC retrieval date/time used for the reviewed artifact."
+      },
+      "archive_member_manifest": {
+        "pending_before_import": true,
+        "required_by": "pre-extraction review",
+        "description": "Record zip member names, per-member hashes, and the exact JSON member selected for import."
+      }
+    },
+    "excluded_variants": [
+      "open_english_wordnet_plus_2025",
+      "open_english_namenet_2025"
+    ]
+  },
+  "license": {
+    "primary_identifier": "CC-BY-4.0",
+    "source_chain_identifiers": [
+      "WordNet-License-Princeton",
+      "CC-BY-4.0"
+    ],
+    "notice_files_required": [
+      "LICENSE.oewn.txt",
+      "WNDB_License.txt"
+    ],
+    "attribution_subjects": [
+      "Princeton WordNet",
+      "Open English WordNet Team"
+    ],
+    "open_questions": [
+      "Confirm whether the JSON zip contains LICENSE.md and WNDB_License.txt or whether notices must be copied from the matching tagged repository tree.",
+      "Confirm the exact attribution text required in pack.php and public docs for both Princeton WordNet and the Open English WordNet Team.",
+      "Confirm WordPress.org package redistribution compatibility for the source-chain notices before committing generated runtime files."
+    ]
+  },
+  "importer": {
+    "tool": "language-fts-playground/tools/import-lexical-source.php",
+    "format": "wordnet-json",
+    "requires_zip_extraction": true,
+    "command_template": "php language-fts-playground/tools/import-lexical-source.php wordnet-json \"$OEWN_EXTRACTED_JSON\" \"$LANGUAGE_FTS_OEWN_OUTPUT_DIR\" --language=en --data-kind=imported_comprehensive --source-name=\"Open English WordNet\" --source-url=\"https://github.com/globalwordnet/english-wordnet\" --source-version=\"2025 Edition\" --source-retrieved-at=\"$OEWN_RETRIEVED_AT\" --source-artifact-name=english-wordnet-2025-json.zip --source-artifact-url=https://en-word.net/static/english-wordnet-2025-json.zip --source-artifact-sha256=\"$OEWN_SHA256\" --source-artifact-bytes=\"$OEWN_BYTES\" --license-name=\"Creative Commons Attribution 4.0 International plus Princeton WordNet source notice\" --license-id=CC-BY-4.0 --license-url=https://creativecommons.org/licenses/by/4.0/ --license-text-url=https://creativecommons.org/licenses/by/4.0/legalcode.txt --license-text-file=LICENSE.oewn.txt --normalization-profile-version=language-fts-playground-normalization-v1 --attribution=\"$OEWN_ATTRIBUTION\" --pack-version=\"$OEWN_PACK_VERSION\" --pack-date=\"$OEWN_PACK_DATE\" --provenance=oewn-2025-core-reviewed --command-artifact-label=oewn-2025-json-source-artifact",
+    "pre_extraction_questions": [
+      "Verify the selected JSON member has the Global Wordnet JSON-LD shape already handled by the importer or document a deterministic pre-extraction step.",
+      "Decide whether the current JSON importer can handle the full artifact in memory or whether a streaming/pre-extracted membership pass is required.",
+      "Verify that core 2025 rows are imported and Plus/Namenet proper-noun extensions are excluded from this first comprehensive English pack.",
+      "Run the import twice from the same reviewed artifact and compare generated runtime outputs and pack.lock.json byte for byte."
+    ]
+  },
+  "gates_before_import": {
+    "lexical_validator": "php language-fts-playground/tools/validate-lexical-packs.php --resource-root=\"$LANGUAGE_FTS_OEWN_RESOURCE_ROOT\" --json",
+    "evaluator": "php language-fts-playground/tools/evaluate-lexical-pack.php language-fts-playground/tests/fixtures/lexical-eval/coverage-suite.json --resource-root=\"$LANGUAGE_FTS_OEWN_RESOURCE_ROOT\" --min-recall-at-5=1.0 --min-precision-at-5=0.2 --min-mrr=1.0 --min-ndcg-at-5=1.0",
+    "benchmark": "php language-fts-playground/tools/search-benchmark-counters.php --suite=pr-smoke --languages=3 --json --fail-on-gate",
+    "runtime_fanout_caps": {
+      "max_synset_size": 64,
+      "max_expansions_per_term": 128,
+      "max_phrase_expansions_per_source": 64
+    },
+    "determinism": [
+      "Generated profile resources are byte-for-byte stable across two imports.",
+      "pack.lock.json records all runtime files, source artifact fields, license notices, importer command, and normalization profile evidence."
+    ]
+  },
+  "pending_before_import": [
+    "source.version.full_commit_sha",
+    "source.artifact.sha256",
+    "source.artifact.bytes",
+    "source.artifact.retrieved_at",
+    "source.artifact.archive_member_manifest",
+    "license.notice_files_required",
+    "license.attribution_subjects",
+    "importer.pre_extraction_questions",
+    "gates_before_import.lexical_validator",
+    "gates_before_import.evaluator",
+    "gates_before_import.benchmark"
+  ],
+  "claim_boundaries": {
+    "bundled_pack_is_comprehensive_oewn": false,
+    "source_artifact_downloaded_by_task": false,
+    "source_artifact_committed": false,
+    "full_source_import_started": false,
+    "runtime_pack_generated": false,
+    "comprehensive_english_support_claimed": false
+  },
+  "real_import_no_go_conditions": [
+    "Do not download, vendor, or commit english-wordnet-2025-json.zip in this repository.",
+    "Do not generate or commit OEWN runtime lexical packs until exact artifact hashes, byte counts, notices, and deterministic import output are reviewed.",
+    "Do not include Open English WordNet Plus or Open English Namenet in the first core OEWN candidate import.",
+    "Do not claim comprehensive English lexical support until validator, evaluator, fanout, benchmark, license, and package-size gates pass."
+  ],
+  "evidence_sources": [
+    {
+      "title": "Open English WordNet repository README",
+      "url": "https://github.com/globalwordnet/english-wordnet",
+      "used_for": "canonical project identity, release list, core/Plus/Namenet distinction, license summary"
+    },
+    {
+      "title": "Open English WordNet 2025 GitHub release",
+      "url": "https://github.com/globalwordnet/english-wordnet/releases/tag/2025-edition",
+      "used_for": "2025 Edition tag, release date, JSON artifact URL, Plus/Namenet exclusion boundary"
+    },
+    {
+      "title": "Open English WordNet website",
+      "url": "https://en-word.net/",
+      "used_for": "canonical website and CC-BY 4.0 project statement"
+    },
+    {
+      "title": "Open English WordNet LICENSE.md",
+      "url": "https://github.com/globalwordnet/english-wordnet/blob/main/LICENSE.md",
+      "used_for": "Princeton WordNet and Open English WordNet source-chain notice requirements"
+    },
+    {
+      "title": "Global Wordnet Formats",
+      "url": "https://globalwordnet.github.io/schemas/",
+      "used_for": "Global Wordnet format and license metadata expectations"
+    }
+  ]
+}
