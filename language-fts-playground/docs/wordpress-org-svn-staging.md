@@ -112,6 +112,7 @@ If approved GPL-compatible directory assets exist, pass their source directory:
 
 ```sh
 php language-fts-playground/tools/build-wordpress-org-svn-stage.php \
+  --output=language-fts-playground/dist/wordpress-org-svn-stage \
   --assets-source=/absolute/path/to/approved-assets \
   --replace
 ```

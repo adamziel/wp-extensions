@@ -82,6 +82,7 @@ After approved local assets exist, stage them from a separate source directory:
 
 ```sh
 php language-fts-playground/tools/build-wordpress-org-svn-stage.php \
+  --output=language-fts-playground/dist/wordpress-org-svn-stage \
   --assets-source=/absolute/path/to/approved-wordpress-org-assets \
   --replace
 ```
