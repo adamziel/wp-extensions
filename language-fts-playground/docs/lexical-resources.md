@@ -431,6 +431,33 @@ filter decisions, relevance evaluator results, fanout/memory checks, and admin
 status or validator JSON evidence. Do not download or vendor third-party lexical
 databases into this repository without a separate review and promotion decision.
 
+### OEWN Source-Lock Preflight
+
+The repository includes a maintainer preflight artifact for a possible future
+Open English WordNet comprehensive-pack pilot:
+
+```sh
+php language-fts-playground/tools/verify-lexical-source-lock.php \
+  language-fts-playground/review-artifacts/source-locks/oewn-comprehensive-preflight.json \
+  --allow-pending-artifact-values
+```
+
+That command verifies the source-lock gate shape before any OEWN data is
+downloaded or imported. It requires the OEWN source URL, CC BY 4.0 license and
+notice plan, provenance id, importer command, English normalization profile,
+fanout caps, evaluator fixture path, and benchmark budget. The preflight file
+allows only the exact future source artifact values to remain pending: selected
+OEWN version, artifact name, artifact URL, SHA-256, and byte count.
+
+Run the same verifier without `--allow-pending-artifact-values` only after a
+future source-lock task fills those exact artifact values from a reviewed local
+artifact. Strict mode fails while any source version, artifact URL, artifact
+hash, or artifact byte count is still pending.
+
+Current bundled/indexer data is not a comprehensive OEWN pack. No full-source
+OEWN import has begun, no OEWN runtime lexical pack has been generated, and no
+comprehensive English lexical support is claimed by this preflight.
+
 ## Relevance Evaluation
 
 Validation proves the compact files are well-formed. Relevance evaluation gives

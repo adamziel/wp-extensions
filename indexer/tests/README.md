@@ -43,6 +43,14 @@ compares a field-boosted four-document fixture against a local Lucene-style BM25
 oracle, including weighted postings, OR rankings, AND narrowing, and score
 deltas.
 
+The analyzer source-lock quality test validates the synthetic no-op manifest in
+`tests/fixtures/analyzer-source-locks/` and proves unsafe no-op metadata is
+rejected. Run the verifier directly when changing manifests:
+
+```sh
+php tools/validate-analyzer-source-lock.php
+```
+
 Run the optional external BM25 reference harness:
 
 ```sh

@@ -1,0 +1,7 @@
+{
+  "format": "wp-fts-analyzer-runtime/v1",
+  "pack_id": "fixture-noop-en",
+  "language": "en",
+  "noop": true,
+  "rows": []
+}

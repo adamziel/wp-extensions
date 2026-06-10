@@ -1,0 +1,47 @@
+{
+  "schema_version": "wp-fts-analyzer-source-lock/v1",
+  "pack": {
+    "id": "fixture-noop-en",
+    "language": "en",
+    "kind": "noop",
+    "status": "fixture"
+  },
+  "source": {
+    "name": "WP FTS synthetic no-op analyzer fixture",
+    "url": "urn:wp-fts:synthetic:no-op-analyzer",
+    "version": "2026-06-10",
+    "artifact_path": "noop-en.source.txt",
+    "artifact_sha256": "84bc33329819c871ec8de2fdd4329f9cc63789b3578a0b6047864c95966e452c",
+    "license": {
+      "spdx_id": "LicenseRef-WP-FTS-Synthetic-Fixture",
+      "notice_path": "NOTICE-noop-en.txt"
+    }
+  },
+  "importer": {
+    "command": "not-applicable: synthetic no-op fixture; no lexical import is performed",
+    "commit": "not-applicable-synthetic-fixture"
+  },
+  "analyzer": {
+    "signature": "wp-fts-noop-en-fixture;normalizer=WP_FTS_Normalizer;terms=0",
+    "runtime_digest_sha256": "7303160bb200c7128eb1a6a0e0407c5b7206a5e5aa4d293ce4ff949a9ce413db"
+  },
+  "runtime": {
+    "path": "noop-en.runtime.json",
+    "digest_sha256": "7303160bb200c7128eb1a6a0e0407c5b7206a5e5aa4d293ce4ff949a9ce413db",
+    "row_count": 0,
+    "contains_third_party_data": false
+  },
+  "behavior": {
+    "noop": true,
+    "oov_policy": "return_original_normalized_term",
+    "ambiguity_policy": "not_applicable_no_lexical_rows"
+  },
+  "compliance": {
+    "fixture_path": "noop-en.compliance.json",
+    "expected_result": "all cases keep the existing normalized token unchanged"
+  },
+  "release": {
+    "default_enabled": false,
+    "claim_boundary": "Fixture-only no-op analyzer metadata. This is not evidence for English stemming, lemmatization, or dictionary support."
+  }
+}

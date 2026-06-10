@@ -1,0 +1,82 @@
+{
+  "metadata_kind": "tokenizer_source_lock_test_fixture",
+  "fixture_only": true,
+  "test_fixture_note": "Synthetic verifier fixture only. This is not an approved Thai tokenizer source lock and must not be used to import data.",
+  "status": "test_fixture_complete",
+  "source_lock_version": 1,
+  "tokenizer_id": "thai_dictionary_tcc_v1",
+  "tokenizer_type": "thai_tcc_dictionary_segmenter",
+  "language_id": "th",
+  "dictionary": {
+    "source_id": "example-thai-dictionary-fixture",
+    "source_name": "Example Thai dictionary fixture metadata",
+    "upstream_url": "https://example.invalid/thai-dictionary-fixture.txt",
+    "upstream_repository_owner": "example-fixtures",
+    "upstream_path": "fixtures/thai-dictionary-fixture.txt",
+    "version_ref": "fixture-commit-0000000000000000000000000000000000000000",
+    "retrieved_at": "2026-06-10T00:00:00Z",
+    "retrieval_method": "not retrieved; synthetic fixture metadata",
+    "byte_count": 123,
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "data_kind": "curated_seed",
+    "source_chain_evidence": "Synthetic test fixture with no upstream data chain.",
+    "license": {
+      "id": "LicenseRef-FixtureOnly",
+      "name": "Fixture-only metadata, no redistributable data",
+      "url": "https://example.invalid/license",
+      "text_file": "LICENSE.fixture-only.txt",
+      "copyright_holder": "Fixture metadata authors",
+      "attribution_text": "Fixture-only metadata for verifier tests.",
+      "notice_obligations": "Do not ship as an approved tokenizer source lock."
+    }
+  },
+  "tcc_rules": {
+    "variant": "project_fixture",
+    "local_version_id": "thai_tcc_rules_fixture_v1",
+    "source_id": "example-tcc-rules-fixture",
+    "citation_or_url": "https://example.invalid/tcc-rules-fixture",
+    "source_version_or_date": "fixture-2026-06-10",
+    "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "license_or_rights_basis": "Fixture-only metadata; no rule text or grammar copied.",
+    "implementation_approach": "clean_room_project_owned",
+    "subword_boundary_notice": "TCC clusters are subword boundaries, not Thai word segmentation.",
+    "clean_room": {
+      "references_consulted": [
+        "Synthetic fixture reference"
+      ],
+      "local_implementation_author": "Fixture verifier",
+      "no_upstream_code_copied": true,
+      "no_upstream_grammar_copied": true,
+      "notes": "Fixture-only record; no TCC implementation exists."
+    }
+  },
+  "normalization_policy": {
+    "unicode_normalization": "NFC",
+    "utf8_validation": "reject malformed UTF-8",
+    "blank_and_control_policy": "reject blank rows and unsupported controls",
+    "duplicate_policy": "deduplicate exact normalized tokens",
+    "sort_order": "binary stable sort after normalization",
+    "tie_break_policy": "longest match, then stable lexical order",
+    "max_token_bytes": 128,
+    "max_source_bytes": 1048576,
+    "max_generated_rows": 100000,
+    "max_thai_run_bytes": 4096
+  },
+  "approval": {
+    "wordpress_gpl2_or_later_compatible": true,
+    "wordpress_org_package_redistribution_approved": true,
+    "approved_by": "Fixture verifier only",
+    "approved_at": "2026-06-10T00:00:00Z",
+    "notes": "Test fixture approval only; not valid for production data."
+  },
+  "no_go_conditions": {
+    "no_runtime_network_fetches": true,
+    "no_unpinned_artifacts": true,
+    "no_apache2_code_or_rules_copied": true,
+    "no_gpl3_code_or_grammar_copied": true,
+    "no_cc_by_sa_data_bundled_without_separate_approval": true,
+    "no_production_adapter_before_this_lock_is_approved": true,
+    "no_full_thai_or_cjk_support_claim": true
+  },
+  "clean_room_implementation_notes": "Fixture only. Production work still needs a separately reviewed source lock before code, importers, resources, or adapter registration."
+}

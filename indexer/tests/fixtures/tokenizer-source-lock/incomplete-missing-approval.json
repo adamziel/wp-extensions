@@ -1,0 +1,12 @@
+{
+  "metadata_kind": "tokenizer_source_lock",
+  "status": "draft",
+  "source_lock_version": 1,
+  "tokenizer_id": "thai_dictionary_tcc_v1",
+  "tokenizer_type": "thai_tcc_dictionary_segmenter",
+  "language_id": "th",
+  "dictionary": {
+    "source_id": "incomplete-fixture",
+    "upstream_url": "https://example.invalid/incomplete.txt"
+  }
+}
