@@ -12,18 +12,28 @@ runtime lemmatizer contract:
 - all runtime rows are already normalized with the plugin default Polish token
   normalization (`fold_diacritics => true`).
 
-The `wyszukiwac` rows are source-derived from the locally generated external
-PoliMorf pack `pl-polimorf-20180722-full`:
+The `wyszukiwac`, `wpis`, and `kierowac` rows are source-derived excerpts
+from locally generated external PoliMorf pack evidence for
+`pl-polimorf-20180722-full`:
 
 - `wyszukiwanie	wyszukiwac`
 - `wyszukiwania	wyszukiwac`
 - `wyszukujemy	wyszukiwac`
 - `wyszukiwali	wyszukiwac`
+- `wpis	wpis`
+- `wpisach	wpis`
+- `wpisami	wpis`
+- `wpisy	wpis`
+- `kierowac	kierowac`
+- `kierowania	kierowac`
+- `kierowanie	kierowac`
+- `kierujemy	kierowac`
 
 That external pack was generated from the PoliMorf Polish morphological
 dictionary `polimorf-20180722.tab.gz` with source SHA-256
 `2b1f07224c434c8710def382d497cf8221d5764e8d683d2ad34242810ab72746`;
-the full generated runtime remains outside the plugin package.
+the full generated runtime remains outside the plugin package and is not
+bundled by this fixture.
 
 The intended future source family is Morfologik/PoliMorf-compatible Polish
 morphological dictionaries. Before a comprehensive pack can ship or become a

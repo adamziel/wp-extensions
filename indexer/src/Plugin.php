@@ -425,11 +425,11 @@ final class WP_FTS_Plugin
                 'post_type' => 'post',
             ],
             [
-                'post_title' => 'FTS Sandbox: Polish Lodz Search',
-                'post_name' => 'wp-fts-sandbox-polish-lodz-search',
+                'post_title' => 'FTS Sandbox: Polish Lemmatizer Demo',
+                'post_name' => 'wp-fts-sandbox-polish-lemmatizer-demo',
                 'lang' => 'pl',
-                'post_content' => '<p>Wrocław oraz Łódź pokazują, jak wyszukujemy polskie wpisy i kierujemy zapytania.</p>',
-                'post_excerpt' => 'Polish language demo for Lodz, Wroclaw, and search routing.',
+                'post_content' => '<p>W książkach i zamkach wyszukujemy wpisy oraz kierujemy katalog.</p>',
+                'post_excerpt' => 'Polish lemmatizer demo for pack-backed book, castle, entry, and routing forms.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
@@ -660,6 +660,7 @@ final class WP_FTS_Plugin
 
         echo '<h2>Search</h2>';
         echo '<p>Suggested English stemming query: <code>run</code></p>';
+        echo '<p>Suggested Polish lemmatizer queries: <code>wyszukiwanie</code>, <code>wpis</code>, <code>kierować</code>, <code>zamek</code></p>';
         echo '<form method="get" action="' . self::esc_url(self::admin_tools_url()) . '">';
         echo '<input type="hidden" name="page" value="' . self::esc_attr(self::ADMIN_PAGE_SLUG) . '">';
         echo '<label for="wp-fts-sandbox-query">Query</label> ';
