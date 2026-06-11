@@ -428,7 +428,7 @@ final class WP_FTS_Plugin
                 'post_title' => 'FTS Sandbox: Polish Lodz Search',
                 'post_name' => 'wp-fts-sandbox-polish-lodz-search',
                 'lang' => 'pl',
-                'post_content' => '<p>Wrocław oraz Łódź pokazują jak działa szukaj i wyszukaj w polskich wpisach.</p>',
+                'post_content' => '<p>Wrocław oraz Łódź pokazują, jak wyszukujemy polskie wpisy i kierujemy zapytania.</p>',
                 'post_excerpt' => 'Polish language demo for Lodz, Wroclaw, and search routing.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
@@ -613,12 +613,12 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Use the verified Polish fixture slice for the admin demo corpus.
+     * Use the bundled opt-in Polish lemmatizer fixture pack for the admin demo corpus.
      */
     private static function sandbox_analyzer(): WP_FTS_Analyzer
     {
         return new WP_FTS_Analyzer([
-            'polish_stemming' => 'verified',
+            'polish_lemmatizer_pack' => true,
         ]);
     }
 

@@ -2423,6 +2423,11 @@ test_case('admin sandbox demo indexing supports requested and detected languages
         assert_same('en', $metadata[$demoPostIds[0]]['language'] ?? null, 'index action should forward English demo language metadata');
         assert_same('pl', $metadata[$demoPostIds[1]]['language'] ?? null, 'index action should forward Polish demo language metadata');
         assert_same('de', $metadata[$demoPostIds[2]]['language'] ?? null, 'index action should forward German demo language metadata');
+        $polishSearchLemma = WP_FTS_TermNamespace::namespace_term('pl', 'wyszukiwac');
+        assert_true(isset($fake->terms[$polishSearchLemma]), 'sandbox indexing should store the Polish lemmatizer-pack search lemma');
+        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'wyszukujemy')]), 'sandbox indexing should not store the exact Polish document search surface');
+        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'wyszukiwanie')]), 'sandbox indexing should not store the exact Polish query search surface');
+        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'wyszuk')]), 'sandbox indexing should not depend on the removed verified-stemmer search family');
 
         $search = static function (string $query, string $language): string {
             $_POST = [];
@@ -2450,7 +2455,7 @@ test_case('admin sandbox demo indexing supports requested and detected languages
         $polishMorphologyHtml = $search('wyszukiwanie', 'pl');
         assert_contains('Requested query language: <code>pl</code>', $polishMorphologyHtml, 'explicit Polish morphology search should report the requested language');
         assert_contains('Resolved query language: <code>pl</code>', $polishMorphologyHtml, 'explicit Polish morphology search should report the resolved language');
-        assert_contains('FTS Sandbox: Polish Lodz Search', $polishMorphologyHtml, 'verified Polish stemming should match wyszukiwanie to the wyszukaj demo post');
+        assert_contains('FTS Sandbox: Polish Lodz Search', $polishMorphologyHtml, 'pack-backed Polish lemmatizer should match wyszukiwanie to the wyszukujemy demo post');
 
         $germanHtml = $search('Fuehrung', 'de');
         assert_contains('Requested query language: <code>de</code>', $germanHtml, 'explicit German search should report the requested language');
@@ -3027,7 +3032,19 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     ]);
     assert_same(['samochod'], $verifiedPipeline->analyze('samochody', 'pl'), 'Polish verified mode should stem mapped fixture rows');
     assert_same(['danie'], $verifiedPipeline->analyze('danie', 'pl'), 'Polish verified mode should protect ambiguous rows');
-    assert_same(['wyszuk', 'wyszuk', 'wyszuk'], $verifiedPipeline->analyze('wyszukiwanie wyszukiwania wyszukaj', 'pl'), 'Polish verified mode should align sandbox search-family rows');
+});
+
+test_case('polish verified stemmer excludes sandbox wyszukac family', function (): void {
+    $groupIds = [];
+    foreach (WP_FTS_PolishVerifiedStemmerData::reference_groups() as $group) {
+        $groupIds[] = (string) $group['id'];
+    }
+    assert_true(!in_array('verb-wyszukac', $groupIds, true), 'verified Polish fixture data should not carry the sandbox wyszukac family');
+
+    $stemMap = WP_FTS_PolishVerifiedStemmerData::stem_map();
+    foreach (['wyszukiwanie', 'wyszukiwania', 'wyszukujemy', 'wyszukiwali'] as $term) {
+        assert_true(!isset($stemMap[$term]), "verified Polish fixture data should not map {$term}");
+    }
 });
 
 test_case('polish Morfologik fixture pack validates manifest digests and rows', function (): void {
@@ -3039,15 +3056,22 @@ test_case('polish Morfologik fixture pack validates manifest digests and rows', 
     assert_true($result['manifest']['fixture_only'] === true, 'fixture pack should be explicitly fixture-only');
     assert_true($result['manifest']['default_enabled'] === false, 'fixture pack should not be default-enabled');
     assert_same(true, $result['rows_collected'], 'fixture pack should retain rows for eager lookup tests');
-    assert_same(9, $result['runtime_rows'], 'fixture pack runtime row count should be exposed');
-    assert_same(9, count($result['rows']), 'fixture pack should expose the reviewed tiny row set');
-    assert_same(9, $result['runtime_files']['runtime.tsv']['rows'] ?? null, 'runtime row count should match manifest');
+    assert_same(13, $result['runtime_rows'], 'fixture pack runtime row count should be exposed');
+    assert_same(13, count($result['rows']), 'fixture pack should expose the reviewed tiny row set');
+    assert_same(13, $result['runtime_files']['runtime.tsv']['rows'] ?? null, 'runtime row count should match manifest');
     assert_same(hash_file('sha256', $result['runtime_files']['runtime.tsv']['path']), $result['runtime_files']['runtime.tsv']['sha256'], 'runtime digest should match local file content');
+    $rowsBySurfaceLemma = [];
+    foreach ($result['rows'] as $row) {
+        $rowsBySurfaceLemma[$row['surface'] . "\t" . $row['lemma']] = true;
+    }
+    foreach (['wyszukiwanie', 'wyszukiwania', 'wyszukujemy', 'wyszukiwali'] as $surface) {
+        assert_true(isset($rowsBySurfaceLemma[$surface . "\twyszukiwac"]), "{$surface} should come from the lemmatizer pack fixture rows");
+    }
 
     $streamedFixture = (new WP_FTS_AnalyzerPackValidator(3))->validate(WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest());
     assert_same(false, $streamedFixture['rows_collected'], 'validator should stream when a fixture exceeds the collection cap');
     assert_same([], $streamedFixture['rows'], 'streamed fixture validation should not retain partial row arrays');
-    assert_same(9, $streamedFixture['runtime_rows'], 'streamed fixture validation should still count every runtime row');
+    assert_same(13, $streamedFixture['runtime_rows'], 'streamed fixture validation should still count every runtime row');
 
     $lazyFixture = WP_FTS_PolishMorfologikLemmatizer::from_manifest_file(
         WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest(),
@@ -3183,6 +3207,8 @@ test_case('polish Morfologik fixture lemmatizer maps rows and preserves ambiguou
     assert_same('kot', $lemmatizer->stem('kotami', 'pl'), 'instrumental plural form should collapse to lemma');
     assert_same('wroclaw', $lemmatizer->stem('wroclawiu', 'pl-PL'), 'locative form should collapse to lemma');
     assert_same('ksiazka', $lemmatizer->stem('ksiazkach', 'pl'), 'plural locative form should collapse to lemma');
+    assert_same('wyszukiwac', $lemmatizer->stem('wyszukiwanie', 'pl'), 'source-derived search nominal form should collapse to lemma');
+    assert_same('wyszukiwac', $lemmatizer->stem('wyszukujemy', 'pl'), 'source-derived finite search form should collapse to lemma');
     assert_same('drogi', $lemmatizer->stem('drogi', 'pl'), 'ambiguous forms should remain unchanged');
     assert_same('zielonymi', $lemmatizer->stem('zielonymi', 'pl'), 'missing forms should remain unchanged');
     assert_same('kotami', $lemmatizer->stem('kotami', 'en'), 'non-Polish language partitions should remain unchanged');
@@ -3199,6 +3225,7 @@ test_case('polish lemma pack is opt-in and invalid packs fall back to suffix ste
     assert_same(['zamek'], $packPipeline->analyze('zamkach', 'pl'), 'enabled fixture pack should use dictionary lemma rows');
     assert_same(['zielonymi'], $packPipeline->analyze('zielonymi', 'pl'), 'enabled fixture pack should not suffix-stem missing rows');
     assert_same(['drogi'], $packPipeline->analyze('drogi', 'pl'), 'enabled fixture pack should no-op ambiguous rows');
+    assert_same(['wyszukiwac', 'wyszukiwac'], $packPipeline->analyze('wyszukiwanie wyszukujemy', 'pl'), 'enabled fixture pack should use source-derived search lemma rows');
 
     $packOverridesVerifiedPipeline = new WP_FTS_LanguagePipeline([
         'enable_stemming' => true,
@@ -3232,15 +3259,17 @@ test_case('enabled polish lemma pack lets indexed and query inflections meet', f
     ]);
     $storage = new WP_FTS_Storage_InMemory();
     $indexer = new WP_FTS_Indexer($storage, $analyzer);
-    $indexer->index_document(501, '<p>Notatki o książkach oraz kotami w zamkach.</p>', ['lang' => 'pl']);
+    $indexer->index_document(501, '<p>Notatki o książkach oraz kotami w zamkach, gdzie wyszukujemy raporty.</p>', ['lang' => 'pl']);
 
     $terms = $storage->all_terms();
     assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'ksiazka'), $terms, true), 'lemma pack should store normalized Polish lemma for document form');
     assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'zamek'), $terms, true), 'lemma pack should store dictionary lemma instead of suffix stem');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'wyszukiwac'), $terms, true), 'lemma pack should store source-derived search lemma instead of the document surface form');
 
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
     assert_same([501], array_column($searcher->search('książka', ['lang' => 'pl', 'mode' => 'AND']), 'doc_id'), 'query lemma should meet indexed inflected document form');
     assert_same([501], array_column($searcher->search('zamek kot', ['lang' => 'pl', 'mode' => 'AND']), 'doc_id'), 'multiple query lemmas should meet indexed inflected forms');
+    assert_same([501], array_column($searcher->search('wyszukiwanie', ['lang' => 'pl', 'mode' => 'AND']), 'doc_id'), 'pack-backed query nominal form should meet indexed finite verb form');
 
     $fallbackAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'pl']);
     $fallbackStorage = new WP_FTS_Storage_InMemory();

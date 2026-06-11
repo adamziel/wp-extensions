@@ -138,18 +138,6 @@ final class WP_FTS_PolishVerifiedStemmerData
                 ['source' => 'szukania', 'term' => 'szukania'],
             ],
         ],
-        [
-            'id' => 'verb-wyszukac',
-            'stem' => 'wyszuk',
-            'note' => 'Sandbox search-family slice for nominal and imperative forms.',
-            'forms' => [
-                ['source' => 'wyszukać', 'term' => 'wyszukac'],
-                ['source' => 'wyszukam', 'term' => 'wyszukam'],
-                ['source' => 'wyszukiwanie', 'term' => 'wyszukiwanie'],
-                ['source' => 'wyszukiwania', 'term' => 'wyszukiwania'],
-                ['source' => 'wyszukaj', 'term' => 'wyszukaj'],
-            ],
-        ],
     ];
 
     private const PROTECTED_ROWS = [
