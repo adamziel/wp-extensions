@@ -2354,9 +2354,22 @@ test_case('authorized admin sandbox render includes search form and nonce-protec
 
     assert_contains('Pure PHP FTS Sandbox', $html, 'sandbox page should render for authorized admins');
     assert_contains('name="wp_fts_sandbox_query"', $html, 'sandbox page should include the search query field');
+    assert_contains('name="wp_fts_sandbox_lang"', $html, 'sandbox page should include the query language selector');
+    assert_contains('value="auto"', $html, 'sandbox language selector should include automatic detection');
+    assert_contains('value="en"', $html, 'sandbox language selector should include English');
+    assert_contains('value="pl"', $html, 'sandbox language selector should include Polish');
+    assert_contains('value="de"', $html, 'sandbox language selector should include German');
     assert_contains('name="wp_fts_sandbox_nonce"', $html, 'sandbox page should include action nonces');
     assert_contains('value="nonce-wp_fts_sandbox_admin_action"', $html, 'sandbox page should render the expected nonce value in the fake harness');
     assert_contains('Suggested English stemming query: <code>run</code>', $html, 'sandbox page should suggest the stemming demo query');
+    assert_contains('<th scope="col">Language</th>', $html, 'sandbox demo table should include a language column');
+    assert_contains('<th scope="col">Content preview</th>', $html, 'sandbox demo table should include a content preview column');
+    assert_contains('English (en)', $html, 'sandbox demo table should identify the English demo row');
+    assert_contains('Polish (pl)', $html, 'sandbox demo table should identify the Polish demo row');
+    assert_contains('German (de)', $html, 'sandbox demo table should identify the German demo row');
+    assert_contains('The athlete is running', $html, 'sandbox demo table should preview the English demo content');
+    assert_contains('Wrocław oraz Łódź', $html, 'sandbox demo table should preview the Polish demo content');
+    assert_contains('Führung und Straße', $html, 'sandbox demo table should preview the German demo content');
 });
 
 test_case('unauthorized admin sandbox render is blocked safely', function (): void {
@@ -2377,7 +2390,7 @@ test_case('unauthorized admin sandbox render is blocked safely', function (): vo
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_action"'), 'unauthorized sandbox page should not render mutating action controls');
 });
 
-test_case('admin sandbox demo indexing supports English stemming search', function (): void {
+test_case('admin sandbox demo indexing supports requested and detected languages', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -2406,16 +2419,131 @@ test_case('admin sandbox demo indexing supports English stemming search', functi
         $indexHtml = wp_fts_test_capture_admin_sandbox();
         assert_contains('Processed 3 demo post(s) into the FTS index.', $indexHtml, 'index action should report the processed demo corpus');
         assert_true($fake->terms !== [], 'index action should write FTS terms for the demo corpus');
+        $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($demoPostIds);
+        assert_same('en', $metadata[$demoPostIds[0]]['language'] ?? null, 'index action should forward English demo language metadata');
+        assert_same('pl', $metadata[$demoPostIds[1]]['language'] ?? null, 'index action should forward Polish demo language metadata');
+        assert_same('de', $metadata[$demoPostIds[2]]['language'] ?? null, 'index action should forward German demo language metadata');
 
-        $_POST = [];
-        $_GET = [
-            'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
-            'wp_fts_sandbox_query' => 'run',
-            'wp_fts_sandbox_search' => '1',
+        $search = static function (string $query, string $language): string {
+            $_POST = [];
+            $_GET = [
+                'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
+                'wp_fts_sandbox_query' => $query,
+                'wp_fts_sandbox_lang' => $language,
+                'wp_fts_sandbox_search' => '1',
+            ];
+
+            return wp_fts_test_capture_admin_sandbox();
+        };
+
+        $englishHtml = $search('run', 'en');
+        assert_contains('Search returned', $englishHtml, 'English search action should report result count');
+        assert_contains('Requested query language: <code>en</code>', $englishHtml, 'explicit English search should report the requested language');
+        assert_contains('Resolved query language: <code>en</code>', $englishHtml, 'explicit English search should report the resolved language');
+        assert_contains('FTS Sandbox: Running Notes', $englishHtml, 'explicit English search should find the English demo post');
+
+        $polishHtml = $search('lodz', 'pl');
+        assert_contains('Requested query language: <code>pl</code>', $polishHtml, 'explicit Polish search should report the requested language');
+        assert_contains('Resolved query language: <code>pl</code>', $polishHtml, 'explicit Polish search should report the resolved language');
+        assert_contains('FTS Sandbox: Polish Lodz Search', $polishHtml, 'explicit Polish search should find the Polish demo post');
+
+        $germanHtml = $search('Fuehrung', 'de');
+        assert_contains('Requested query language: <code>de</code>', $germanHtml, 'explicit German search should report the requested language');
+        assert_contains('Resolved query language: <code>de</code>', $germanHtml, 'explicit German search should report the resolved language');
+        assert_contains('FTS Sandbox: German Fuehrung', $germanHtml, 'explicit German search should find the German demo post');
+
+        $autoHtml = $search('Wrocław Łódź', 'auto');
+        assert_contains('Requested query language: <code>auto</code>', $autoHtml, 'automatic search should report the requested language');
+        assert_contains('Resolved query language: <code>pl</code>', $autoHtml, 'automatic non-English search should report the detected language');
+        assert_contains('FTS Sandbox: Polish Lodz Search', $autoHtml, 'automatic Polish search should find the Polish demo post');
+        assert_true(!str_contains($autoHtml, 'Resolved query language: <code>en</code>'), 'automatic non-English search should not hard-code English as the resolved language');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin sandbox demo refresh preserves language order after recreated post', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $refreshDemo = static function (): string {
+        $_GET = [];
+        $_POST = [
+            'wp_fts_sandbox_action' => 'refresh_demo',
+            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
         ];
-        $searchHtml = wp_fts_test_capture_admin_sandbox();
-        assert_contains('Search returned', $searchHtml, 'search action should report result count');
-        assert_contains('FTS Sandbox: Running Notes', $searchHtml, 'query run should find the demo post containing running');
+
+        return wp_fts_test_capture_admin_sandbox();
+    };
+    $renderSandbox = static function (): string {
+        $_GET = [];
+        $_POST = [];
+
+        return wp_fts_test_capture_admin_sandbox();
+    };
+    $indexDemo = static function (): string {
+        $_GET = [];
+        $_POST = [
+            'wp_fts_sandbox_action' => 'index_demo',
+            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
+        ];
+
+        return wp_fts_test_capture_admin_sandbox();
+    };
+    $assertDemoRows = static function (string $html, array $postIds): void {
+        $fragments = [
+            sprintf('<td>%d</td><td>FTS Sandbox: Running Notes</td><td>English (en)</td><td>The athlete is running', $postIds[0]),
+            sprintf('<td>%d</td><td>FTS Sandbox: Polish Lodz Search</td><td>Polish (pl)</td><td>Wrocław oraz Łódź', $postIds[1]),
+            sprintf('<td>%d</td><td>FTS Sandbox: German Fuehrung</td><td>German (de)</td><td>Führung und Straße', $postIds[2]),
+        ];
+        $lastPosition = -1;
+        foreach ($fragments as $fragment) {
+            $position = strpos($html, $fragment);
+            assert_true($position !== false, 'sandbox demo table should keep title, language, and preview aligned for ' . $fragment);
+            $position = is_int($position) ? $position : -1;
+            assert_true($position > $lastPosition, 'sandbox demo table should preserve English, Polish, German corpus order');
+            $lastPosition = $position;
+        }
+    };
+
+    try {
+        $refreshDemo();
+        $initialPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
+        assert_same(3, count($initialPostIds), 'initial refresh should create the three demo posts');
+
+        unset($GLOBALS['wp_fts_test_posts'][$initialPostIds[0]]);
+
+        $secondRefreshHtml = $refreshDemo();
+        $refreshedPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
+        assert_same(3, count($refreshedPostIds), 'second refresh should still track the three demo posts');
+        assert_contains('Demo posts are ready', $secondRefreshHtml, 'second refresh should report recreated demo posts');
+        assert_true($refreshedPostIds[0] !== $initialPostIds[0], 'missing English demo post should be recreated with a new ID');
+        assert_same($initialPostIds[1], $refreshedPostIds[1], 'second refresh should keep the existing Polish demo post ID');
+        assert_same($initialPostIds[2], $refreshedPostIds[2], 'second refresh should keep the existing German demo post ID');
+        assert_true($refreshedPostIds[0] > $refreshedPostIds[1], 'regression setup should store a recreated English ID before older lower IDs');
+
+        $readHtml = $renderSandbox();
+        assert_contains('Demo post IDs: ' . implode(', ', $refreshedPostIds) . '.', $readHtml, 'sandbox should display demo IDs in stored corpus order');
+        $assertDemoRows($readHtml, $refreshedPostIds);
+
+        $indexHtml = $indexDemo();
+        assert_contains('Processed 3 demo post(s) into the FTS index.', $indexHtml, 'index action should process the refreshed demo corpus');
+        $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($refreshedPostIds);
+        assert_same('en', $metadata[$refreshedPostIds[0]]['language'] ?? null, 'index action should align recreated English demo metadata');
+        assert_same('pl', $metadata[$refreshedPostIds[1]]['language'] ?? null, 'index action should align existing Polish demo metadata');
+        assert_same('de', $metadata[$refreshedPostIds[2]]['language'] ?? null, 'index action should align existing German demo metadata');
+        assert_same('en', $fake->docs[$refreshedPostIds[0]]['lang'] ?? null, 'index action should use English options for the recreated demo document');
+        assert_same('pl', $fake->docs[$refreshedPostIds[1]]['lang'] ?? null, 'index action should use Polish options for the existing demo document');
+        assert_same('de', $fake->docs[$refreshedPostIds[2]]['lang'] ?? null, 'index action should use German options for the existing demo document');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;

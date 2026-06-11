@@ -25,6 +25,7 @@ final class WP_FTS_Plugin
     private const ADMIN_NONCE_FIELD = 'wp_fts_sandbox_nonce';
     private const ADMIN_ACTION_FIELD = 'wp_fts_sandbox_action';
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
+    private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
     private const VISIBILITY_REFILL_MIN_BATCH = 10;
     private const VISIBILITY_REFILL_MULTIPLIER = 4;
@@ -295,25 +296,26 @@ final class WP_FTS_Plugin
 
         $search_submitted = self::sandbox_search_submitted();
         $query = self::sandbox_search_query();
+        $selected_language = self::sandbox_selected_language();
         if ($query === '' && !$search_submitted) {
             $query = 'run';
         }
 
-        $results = [];
+        $results = self::empty_sandbox_search_results($selected_language);
         if ($search_submitted) {
             if ($query === '') {
                 $messages[] = ['error', 'Enter a search query before running the sandbox search.'];
             } else {
                 try {
-                    $results = self::sandbox_search_results($query);
-                    $messages[] = ['info', sprintf('Search returned %d result(s).', count($results))];
+                    $results = self::sandbox_search_results($query, $selected_language);
+                    $messages[] = ['info', sprintf('Search returned %d result(s).', count($results['results']))];
                 } catch (Throwable $e) {
                     $messages[] = ['error', 'Could not run the sandbox search: ' . $e->getMessage()];
                 }
             }
         }
 
-        self::render_admin_sandbox_page($messages, $demo_post_ids, $query, $search_submitted, $results);
+        self::render_admin_sandbox_page($messages, $demo_post_ids, $query, $selected_language, $search_submitted, $results);
     }
 
     /**
@@ -358,15 +360,14 @@ final class WP_FTS_Plugin
         }
 
         $ids = [];
+        $seen = [];
         foreach ($raw as $post_id) {
             $post_id = (int) $post_id;
-            if ($post_id > 0) {
-                $ids[$post_id] = true;
+            if ($post_id > 0 && !isset($seen[$post_id])) {
+                $ids[] = $post_id;
+                $seen[$post_id] = true;
             }
         }
-
-        $ids = array_keys($ids);
-        sort($ids, SORT_NUMERIC);
 
         return $ids;
     }
@@ -389,6 +390,7 @@ final class WP_FTS_Plugin
             if ($existing_id > 0 && self::post_object($existing_id) !== null) {
                 $post_data['ID'] = $existing_id;
             }
+            unset($post_data['lang']);
 
             $result = wp_insert_post($post_data, true);
             if (self::is_wordpress_error($result)) {
@@ -416,28 +418,42 @@ final class WP_FTS_Plugin
             [
                 'post_title' => 'FTS Sandbox: Running Notes',
                 'post_name' => 'wp-fts-sandbox-running-notes',
-                'post_content' => '<p>The athlete is running every morning before a short recovery run while the team tracks route notes and training progress.</p>',
+                'lang' => 'en',
+                'post_content' => '<p>The athlete is running every morning before a short recovery run while the orchard team tracks route notes and search progress.</p>',
                 'post_excerpt' => 'English stemming demo for runners and running.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
             [
-                'post_title' => 'FTS Sandbox: Indexing Checklist',
-                'post_name' => 'wp-fts-sandbox-indexing-checklist',
-                'post_content' => '<p>Refresh the demo posts, build the index, and compare ranked search scores in wp-admin.</p>',
-                'post_excerpt' => 'Operational demo content for the browser sandbox.',
+                'post_title' => 'FTS Sandbox: Polish Lodz Search',
+                'post_name' => 'wp-fts-sandbox-polish-lodz-search',
+                'lang' => 'pl',
+                'post_content' => '<p>Wrocław oraz Łódź pokazują jak działa szukaj i wyszukaj w polskich wpisach.</p>',
+                'post_excerpt' => 'Polish language demo for Lodz, Wroclaw, and search routing.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
             [
-                'post_title' => 'FTS Sandbox: WordPress Search Signals',
-                'post_name' => 'wp-fts-sandbox-wordpress-search-signals',
-                'post_content' => '<p>Titles, excerpts, and post content all contribute terms to the pure PHP full-text search index.</p>',
-                'post_excerpt' => 'A compact document for comparing search result scores.',
+                'post_title' => 'FTS Sandbox: German Fuehrung',
+                'post_name' => 'wp-fts-sandbox-german-fuehrung',
+                'lang' => 'de',
+                'post_content' => '<p>Führung und Straße zeigen die Suche mit deutschen Begriffen, Fuehrung-Faltung und Indexsignalen.</p>',
+                'post_excerpt' => 'German language demo for Fuehrung, Suche, and stemming.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
         ];
+    }
+
+    /**
+     * Return the language configured for a demo corpus row.
+     */
+    private static function sandbox_demo_language(int $offset): string
+    {
+        $post = self::sandbox_demo_posts()[$offset] ?? null;
+        $language = is_array($post) && is_scalar($post['lang'] ?? null) ? (string) $post['lang'] : 'en';
+
+        return array_key_exists($language, self::sandbox_language_labels()) && $language !== 'auto' ? $language : 'en';
     }
 
     /**
@@ -453,10 +469,15 @@ final class WP_FTS_Plugin
         }
 
         $processed = 0;
-        foreach ($post_ids as $post_id) {
+        foreach ($post_ids as $offset => $post_id) {
             $post = self::post_object($post_id);
             if ($post !== null && self::is_indexable_post($post)) {
-                self::index_post($post);
+                $language = self::sandbox_demo_language((int) $offset);
+                self::index_post($post, [
+                    'lang' => $language,
+                    'document_lang' => $language,
+                    'metadata' => ['language' => $language],
+                ]);
                 $processed++;
                 continue;
             }
@@ -488,21 +509,107 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @return array<int,array{post_id:int,title:string,score:float}>
+     * Read and allowlist the sandbox query language.
      */
-    private static function sandbox_search_results(string $query): array
+    private static function sandbox_selected_language(): string
     {
-        $results = [];
-        foreach (self::search($query, ['lang' => 'en', 'limit' => 10]) as $row) {
-            $post_id = (int) $row['doc_id'];
-            $results[] = [
-                'post_id' => $post_id,
-                'title' => self::post_title($post_id),
-                'score' => (float) $row['score'],
-            ];
+        $language = self::sanitize_key(self::request_text_value($_GET, self::ADMIN_LANG_FIELD, 20));
+
+        return array_key_exists($language, self::sandbox_language_labels()) ? $language : 'auto';
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private static function sandbox_language_labels(): array
+    {
+        return [
+            'auto' => 'Automatic',
+            'en' => 'English',
+            'pl' => 'Polish',
+            'de' => 'German',
+        ];
+    }
+
+    /**
+     * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
+     */
+    private static function empty_sandbox_search_results(string $selected_language): array
+    {
+        return [
+            'requested_lang' => $selected_language,
+            'query_lang' => '',
+            'total' => 0,
+            'results' => [],
+        ];
+    }
+
+    /**
+     * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
+     */
+    private static function sandbox_search_results(string $query, string $selected_language): array
+    {
+        $limit = 10;
+        $storage = self::storage(false);
+        $searcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer());
+        $search_options = [
+            'mode' => 'OR',
+            'limit' => $limit,
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+            'highlight' => true,
+            'snippet_length' => 180,
+        ];
+        if ($selected_language !== 'auto') {
+            $search_options['lang'] = $selected_language;
+            $search_options['query_lang'] = $selected_language;
         }
 
-        return $results;
+        $visible = [];
+        $offset = 0;
+        $total = 0;
+        $query_language = '';
+        $batch_limit = self::visibility_refill_batch_limit($limit);
+        while (count($visible) < $limit && $offset < self::VISIBILITY_REFILL_MAX_SCAN) {
+            $search_options['limit'] = min($batch_limit, self::VISIBILITY_REFILL_MAX_SCAN - $offset);
+            $search_options['offset'] = $offset;
+            $payload = $searcher->search($query, $search_options);
+            $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
+            $total = is_numeric($payload['total'] ?? null) ? (int) $payload['total'] : $total;
+            if (is_scalar($payload['query_lang'] ?? null) && trim((string) $payload['query_lang']) !== '') {
+                $query_language = (string) $payload['query_lang'];
+            }
+            if ($rows === []) {
+                break;
+            }
+
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $post_id = (int) ($row['doc_id'] ?? $row['post_id'] ?? 0);
+                if ($post_id <= 0 || !self::can_read_post_result($post_id)) {
+                    continue;
+                }
+                $visible[] = self::sandbox_result_row($row, $storage, $post_id);
+                if (count($visible) >= $limit) {
+                    break;
+                }
+            }
+
+            if (count($rows) < $search_options['limit']) {
+                break;
+            }
+            $offset += $search_options['limit'];
+        }
+
+        return [
+            'requested_lang' => $selected_language,
+            'query_lang' => $query_language,
+            'total' => $total,
+            'results' => $visible,
+        ];
     }
 
     /**
@@ -510,9 +617,9 @@ final class WP_FTS_Plugin
      *
      * @param array<int,array{0:string,1:string}> $messages
      * @param int[] $demo_post_ids
-     * @param array<int,array{post_id:int,title:string,score:float}> $results
+     * @param array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>} $results
      */
-    private static function render_admin_sandbox_page(array $messages, array $demo_post_ids, string $query, bool $search_submitted, array $results): void
+    private static function render_admin_sandbox_page(array $messages, array $demo_post_ids, string $query, string $selected_language, bool $search_submitted, array $results): void
     {
         echo '<div class="wrap">';
         echo '<h1>Pure PHP FTS Sandbox</h1>';
@@ -539,6 +646,7 @@ final class WP_FTS_Plugin
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ACTION_FIELD) . '" value="index_demo">';
         echo '<button type="submit" class="button button-primary">Build demo index</button>';
         echo '</form>';
+        self::render_sandbox_demo_posts_table(self::sandbox_demo_post_rows($demo_post_ids));
 
         echo '<h2>Search</h2>';
         echo '<p>Suggested English stemming query: <code>run</code></p>';
@@ -546,6 +654,13 @@ final class WP_FTS_Plugin
         echo '<input type="hidden" name="page" value="' . self::esc_attr(self::ADMIN_PAGE_SLUG) . '">';
         echo '<label for="wp-fts-sandbox-query">Query</label> ';
         echo '<input id="wp-fts-sandbox-query" type="search" class="regular-text" name="' . self::esc_attr(self::ADMIN_QUERY_FIELD) . '" value="' . self::esc_attr($query) . '"> ';
+        echo '<label for="wp-fts-sandbox-lang">Query language</label> ';
+        echo '<select id="wp-fts-sandbox-lang" name="' . self::esc_attr(self::ADMIN_LANG_FIELD) . '">';
+        foreach (self::sandbox_language_labels() as $language => $label) {
+            $selected = $selected_language === $language ? ' selected="selected"' : '';
+            echo '<option value="' . self::esc_attr($language) . '"' . $selected . '>' . self::esc_html($label) . '</option>';
+        }
+        echo '</select> ';
         echo '<button type="submit" class="button button-primary" name="' . self::esc_attr(self::ADMIN_SEARCH_FIELD) . '" value="1">Search</button>';
         echo '</form>';
 
@@ -557,24 +672,48 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{post_id:int,title:string,score:float}> $results
+     * @param array<int,array{post_id:int,title:string,language:string,preview:string}> $rows
+     */
+    private static function render_sandbox_demo_posts_table(array $rows): void
+    {
+        echo '<h3>Demo posts</h3>';
+        echo '<table class="widefat striped">';
+        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Language</th><th scope="col">Content preview</th></tr></thead>';
+        echo '<tbody>';
+        foreach ($rows as $row) {
+            echo '<tr>';
+            echo '<td>' . ($row['post_id'] > 0 ? self::esc_html((string) $row['post_id']) : '&mdash;') . '</td>';
+            echo '<td>' . self::esc_html($row['title']) . '</td>';
+            echo '<td>' . self::esc_html($row['language']) . '</td>';
+            echo '<td>' . self::esc_html($row['preview']) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    /**
+     * @param array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>} $results
      */
     private static function render_sandbox_results(array $results): void
     {
         echo '<h2>Results</h2>';
-        if ($results === []) {
+        echo '<p>Requested query language: <code>' . self::esc_html($results['requested_lang']) . '</code>. ';
+        echo 'Resolved query language: <code>' . self::esc_html($results['query_lang'] !== '' ? $results['query_lang'] : 'unknown') . '</code>.</p>';
+        if ($results['results'] === []) {
             echo '<p>No results matched the current index.</p>';
             return;
         }
 
         echo '<table class="widefat striped">';
-        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Score</th></tr></thead>';
+        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Score</th><th scope="col">Language</th><th scope="col">Snippet</th></tr></thead>';
         echo '<tbody>';
-        foreach ($results as $row) {
+        foreach ($results['results'] as $row) {
             echo '<tr>';
             echo '<td>' . self::esc_html((string) $row['post_id']) . '</td>';
             echo '<td>' . self::esc_html($row['title']) . '</td>';
             echo '<td>' . self::esc_html(number_format($row['score'], 6, '.', '')) . '</td>';
+            echo '<td><code>' . self::esc_html($row['language']) . '</code></td>';
+            echo '<td>' . self::esc_html_preserving_marks($row['snippet']) . '</td>';
             echo '</tr>';
         }
         echo '</tbody></table>';
@@ -590,6 +729,78 @@ final class WP_FTS_Plugin
         $class = $classes[$type] ?? 'notice-info';
 
         echo '<div class="notice ' . self::esc_attr($class) . '"><p>' . self::esc_html($message) . '</p></div>';
+    }
+
+    /**
+     * Build rows for the demo corpus table from saved posts when available.
+     *
+     * @param int[] $demo_post_ids
+     * @return array<int,array{post_id:int,title:string,language:string,preview:string}>
+     */
+    private static function sandbox_demo_post_rows(array $demo_post_ids): array
+    {
+        $rows = [];
+        foreach (self::sandbox_demo_posts() as $offset => $post_data) {
+            $post_id = (int) ($demo_post_ids[$offset] ?? 0);
+            $post = $post_id > 0 ? self::post_object($post_id) : null;
+            $language = self::sandbox_demo_language((int) $offset);
+            $language_label = self::sandbox_language_labels()[$language] ?? strtoupper($language);
+            $title = $post !== null && isset($post->post_title) && trim((string) $post->post_title) !== ''
+                ? (string) $post->post_title
+                : (string) ($post_data['post_title'] ?? '(untitled)');
+            $content = $post !== null && isset($post->post_content)
+                ? (string) $post->post_content
+                : (string) ($post_data['post_content'] ?? '');
+
+            $rows[] = [
+                'post_id' => $post_id,
+                'title' => $title,
+                'language' => sprintf('%s (%s)', $language_label, $language),
+                'preview' => self::sanitize_text($content),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Normalize a raw searcher row for sandbox display.
+     *
+     * @param array<string,mixed> $row
+     * @return array{post_id:int,title:string,score:float,language:string,snippet:string}
+     */
+    private static function sandbox_result_row(array $row, WP_FTS_Storage $storage, int $post_id): array
+    {
+        $metadata = WP_FTS_StorageCompat::get_doc_metadata($storage, [$post_id]);
+        $meta = $metadata[$post_id] ?? [];
+        $doc = $storage->get_doc($post_id);
+        $language = '';
+        foreach ([
+            $row['language'] ?? null,
+            $meta['language'] ?? null,
+            $meta['lang'] ?? null,
+            $doc['primary_lang'] ?? null,
+        ] as $candidate) {
+            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                $language = (string) $candidate;
+                break;
+            }
+        }
+
+        $title = is_scalar($row['title'] ?? null) && trim((string) $row['title']) !== ''
+            ? (string) $row['title']
+            : self::post_title($post_id);
+        $snippet = is_scalar($row['snippet'] ?? null) && trim((string) $row['snippet']) !== ''
+            ? (string) $row['snippet']
+            : (string) ($meta['search_text'] ?? $meta['excerpt'] ?? '');
+
+        return [
+            'post_id' => $post_id,
+            'title' => $title,
+            'score' => (float) ($row['score'] ?? 0.0),
+            'language' => $language !== '' ? $language : 'unknown',
+            'snippet' => $snippet,
+        ];
     }
 
     private static function render_sandbox_nonce_field(): void
@@ -809,11 +1020,13 @@ final class WP_FTS_Plugin
 
     /**
      * Index one WordPress post object.
+     *
+     * @param array<string,mixed> $opts
      */
-    private static function index_post(object $post): void
+    private static function index_post(object $post, array $opts = []): void
     {
         self::maybe_upgrade_schema();
-        (new WP_FTS_Indexer(self::storage(false), new WP_FTS_Analyzer()))->index_post($post);
+        (new WP_FTS_Indexer(self::storage(false), new WP_FTS_Analyzer()))->index_post($post, $opts);
     }
 
     /**
@@ -1110,6 +1323,15 @@ final class WP_FTS_Plugin
         }
 
         return self::esc_attr($value);
+    }
+
+    private static function esc_html_preserving_marks(string $value): string
+    {
+        $open = '@@WP_FTS_MARK_OPEN@@';
+        $close = '@@WP_FTS_MARK_CLOSE@@';
+        $value = str_replace(['<mark>', '</mark>'], [$open, $close], $value);
+
+        return str_replace([$open, $close], ['<mark>', '</mark>'], self::esc_html($value));
     }
 
     /**
