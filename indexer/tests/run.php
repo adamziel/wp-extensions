@@ -1887,7 +1887,9 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_scheduled'] = [];
     $GLOBALS['wp_fts_test_cleared_hooks'] = [];
     $GLOBALS['wp_fts_test_rest_routes'] = [];
+    $GLOBALS['wp_fts_test_admin_pages'] = [];
     $GLOBALS['wp_fts_test_posts'] = [];
+    $GLOBALS['wp_fts_test_next_post_id'] = 1000;
     $GLOBALS['wp_fts_test_get_post_callbacks'] = [];
     $GLOBALS['wp_fts_test_do_blocks'] = [];
     $GLOBALS['wp_fts_test_filters'] = [];
@@ -2014,6 +2016,97 @@ if (!function_exists('register_rest_route')) {
     }
 }
 
+if (!function_exists('add_management_page')) {
+    function add_management_page(string $page_title, string $menu_title, string $capability, string $menu_slug, mixed $callback = '', mixed ...$unused): string
+    {
+        $GLOBALS['wp_fts_test_admin_pages'][] = [
+            'page_title' => $page_title,
+            'menu_title' => $menu_title,
+            'capability' => $capability,
+            'menu_slug' => $menu_slug,
+            'callback' => $callback,
+        ];
+
+        return 'tools_page_' . $menu_slug;
+    }
+}
+
+if (!function_exists('admin_url')) {
+    function admin_url(string $path = ''): string
+    {
+        return '/wp-admin/' . ltrim($path, '/');
+    }
+}
+
+if (!function_exists('wp_create_nonce')) {
+    function wp_create_nonce(string $action = '-1'): string
+    {
+        return 'nonce-' . $action;
+    }
+}
+
+if (!function_exists('wp_verify_nonce')) {
+    function wp_verify_nonce(string $nonce, string $action = '-1'): int|false
+    {
+        return $nonce === wp_create_nonce($action) ? 1 : false;
+    }
+}
+
+if (!function_exists('wp_unslash')) {
+    function wp_unslash(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            return array_map('wp_unslash', $value);
+        }
+
+        return is_string($value) ? stripslashes($value) : $value;
+    }
+}
+
+if (!function_exists('sanitize_text_field')) {
+    function sanitize_text_field(string $value): string
+    {
+        return trim(strip_tags($value));
+    }
+}
+
+if (!function_exists('sanitize_key')) {
+    function sanitize_key(string $value): string
+    {
+        $value = strtolower($value);
+        $key = '';
+        for ($i = 0, $len = strlen($value); $i < $len; $i++) {
+            $char = $value[$i];
+            if (($char >= 'a' && $char <= 'z') || ($char >= '0' && $char <= '9') || $char === '_' || $char === '-') {
+                $key .= $char;
+            }
+        }
+
+        return $key;
+    }
+}
+
+if (!function_exists('esc_html')) {
+    function esc_html(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+    }
+}
+
+if (!function_exists('esc_attr')) {
+    function esc_attr(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+    }
+}
+
+if (!function_exists('esc_url')) {
+    function esc_url(string $value): string
+    {
+        return esc_attr($value);
+    }
+}
+
 if (!function_exists('get_post')) {
     function get_post(int|object $post): ?object
     {
@@ -2028,6 +2121,50 @@ if (!function_exists('get_post')) {
         }
 
         return $GLOBALS['wp_fts_test_posts'][$post_id] ?? null;
+    }
+}
+
+if (!function_exists('get_the_title')) {
+    function get_the_title(int|object $post): string
+    {
+        $post = get_post($post);
+
+        return is_object($post) && isset($post->post_title) ? (string) $post->post_title : '';
+    }
+}
+
+if (!function_exists('wp_insert_post')) {
+    function wp_insert_post(array $postarr, bool $wp_error = false): int|WP_Error
+    {
+        $post_id = isset($postarr['ID']) ? (int) $postarr['ID'] : (int) $GLOBALS['wp_fts_test_next_post_id']++;
+        if ($post_id <= 0) {
+            return $wp_error ? new WP_Error('invalid_post_id', 'Invalid post ID.') : 0;
+        }
+
+        $existing = $GLOBALS['wp_fts_test_posts'][$post_id] ?? (object) [];
+        $post = (object) array_merge((array) $existing, [
+            'ID' => $post_id,
+            'post_title' => (string) ($postarr['post_title'] ?? ($existing->post_title ?? '')),
+            'post_name' => (string) ($postarr['post_name'] ?? ($existing->post_name ?? '')),
+            'post_content' => (string) ($postarr['post_content'] ?? ($existing->post_content ?? '')),
+            'post_excerpt' => (string) ($postarr['post_excerpt'] ?? ($existing->post_excerpt ?? '')),
+            'post_status' => (string) ($postarr['post_status'] ?? ($existing->post_status ?? 'draft')),
+            'post_type' => (string) ($postarr['post_type'] ?? ($existing->post_type ?? 'post')),
+            'post_password' => (string) ($postarr['post_password'] ?? ($existing->post_password ?? '')),
+            'post_date_gmt' => (string) ($postarr['post_date_gmt'] ?? ($existing->post_date_gmt ?? '2026-06-11 00:00:00')),
+            'post_date' => (string) ($postarr['post_date'] ?? ($existing->post_date ?? '2026-06-11 00:00:00')),
+        ]);
+        $GLOBALS['wp_fts_test_posts'][$post_id] = $post;
+        ksort($GLOBALS['wp_fts_test_posts'], SORT_NUMERIC);
+
+        return $post_id;
+    }
+}
+
+if (!function_exists('is_wp_error')) {
+    function is_wp_error(mixed $value): bool
+    {
+        return $value instanceof WP_Error;
     }
 }
 
@@ -2119,6 +2256,20 @@ if (!function_exists('do_blocks')) {
     }
 }
 
+function wp_fts_test_capture_admin_sandbox(): string
+{
+    ob_start();
+    try {
+        WP_FTS_Plugin::render_admin_sandbox();
+        $html = ob_get_clean();
+
+        return is_string($html) ? $html : '';
+    } catch (Throwable $e) {
+        ob_end_clean();
+        throw $e;
+    }
+}
+
 wp_fts_test_reset_wordpress_fakes();
 
 test_case('plugin bootstrap registers WordPress lifecycle hooks and preserves CLI-only bootstrap', function (): void {
@@ -2160,6 +2311,7 @@ PHP;
     sort($hooks, SORT_STRING);
     $expectedHooks = [
         WP_FTS_Plugin::CRON_HOOK,
+        'admin_menu',
         'before_delete_post',
         'rest_api_init',
         'save_post',
@@ -2170,6 +2322,105 @@ PHP;
     sort($expectedHooks, SORT_STRING);
     assert_same($expectedHooks, $hooks, 'bootstrap should register bounded runtime hooks in WordPress context');
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
+});
+
+test_case('admin menu registration exposes a Tools FTS sandbox page', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+
+    WP_FTS_Plugin::register_admin_menu();
+    $page = $GLOBALS['wp_fts_test_admin_pages'][0] ?? null;
+
+    assert_same('FTS Sandbox', $page['page_title'] ?? null, 'admin page should use a clear page title');
+    assert_same('FTS Sandbox', $page['menu_title'] ?? null, 'admin page should use a clear Tools menu label');
+    assert_same(WP_FTS_Plugin::ADMIN_CAPABILITY, $page['capability'] ?? null, 'admin page should require the configured capability');
+    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, $page['menu_slug'] ?? null, 'admin page should use the stable sandbox slug');
+    assert_same([WP_FTS_Plugin::class, 'render_admin_sandbox'], $page['callback'] ?? null, 'admin page should render through the plugin callback');
+});
+
+test_case('authorized admin sandbox render includes search form and nonce-protected actions', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $_GET = [];
+    $_POST = [];
+
+    try {
+        $html = wp_fts_test_capture_admin_sandbox();
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+    }
+
+    assert_contains('Pure PHP FTS Sandbox', $html, 'sandbox page should render for authorized admins');
+    assert_contains('name="wp_fts_sandbox_query"', $html, 'sandbox page should include the search query field');
+    assert_contains('name="wp_fts_sandbox_nonce"', $html, 'sandbox page should include action nonces');
+    assert_contains('value="nonce-wp_fts_sandbox_admin_action"', $html, 'sandbox page should render the expected nonce value in the fake harness');
+    assert_contains('Suggested English stemming query: <code>run</code>', $html, 'sandbox page should suggest the stemming demo query');
+});
+
+test_case('unauthorized admin sandbox render is blocked safely', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $_GET = [];
+    $_POST = [];
+
+    try {
+        $html = wp_fts_test_capture_admin_sandbox();
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+    }
+
+    assert_contains('You do not have permission to use the FTS sandbox.', $html, 'sandbox page should show a safe unauthorized message');
+    assert_true(!str_contains($html, 'name="wp_fts_sandbox_action"'), 'unauthorized sandbox page should not render mutating action controls');
+});
+
+test_case('admin sandbox demo indexing supports English stemming search', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    try {
+        $_GET = [];
+        $_POST = [
+            'wp_fts_sandbox_action' => 'refresh_demo',
+            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
+        ];
+        $refreshHtml = wp_fts_test_capture_admin_sandbox();
+        $demoPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
+        assert_same(3, count($demoPostIds), 'refresh action should create the three demo posts');
+        assert_contains('Demo posts are ready', $refreshHtml, 'refresh action should report created demo posts');
+
+        $_POST = [
+            'wp_fts_sandbox_action' => 'index_demo',
+            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
+        ];
+        $indexHtml = wp_fts_test_capture_admin_sandbox();
+        assert_contains('Processed 3 demo post(s) into the FTS index.', $indexHtml, 'index action should report the processed demo corpus');
+        assert_true($fake->terms !== [], 'index action should write FTS terms for the demo corpus');
+
+        $_POST = [];
+        $_GET = [
+            'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
+            'wp_fts_sandbox_query' => 'run',
+            'wp_fts_sandbox_search' => '1',
+        ];
+        $searchHtml = wp_fts_test_capture_admin_sandbox();
+        assert_contains('Search returned', $searchHtml, 'search action should report result count');
+        assert_contains('FTS Sandbox: Running Notes', $searchHtml, 'query run should find the demo post containing running');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('activation repairs schema stores version and surfaces database failures', function (): void {

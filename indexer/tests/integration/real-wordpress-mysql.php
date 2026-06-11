@@ -124,20 +124,25 @@ PRIMARY KEY  (doc_id)
         wp_fts_real_integration_assert_table_exists($wpdb, $table);
     }
 
+    wp_fts_real_integration_assert_column($wpdb, $tables['terms'], 'doc_freq');
+    wp_fts_real_integration_assert_column($wpdb, $tables['postings'], 'term');
+    wp_fts_real_integration_assert_column($wpdb, $tables['postings'], 'doc_id');
+    wp_fts_real_integration_assert_column($wpdb, $tables['postings'], 'tf');
+    wp_fts_real_integration_assert_index($wpdb, $tables['postings'], 'doc_id');
     wp_fts_real_integration_assert_column($wpdb, $tables['docs'], 'content_hash');
     wp_fts_real_integration_assert_column($wpdb, $tables['docs'], 'is_deleted');
     wp_fts_real_integration_assert_index($wpdb, $tables['docs'], 'lang');
     wp_fts_real_integration_assert_index($wpdb, $tables['docs'], 'is_deleted');
-    wp_fts_real_integration_assert_column($wpdb, $tables['postings'], 'tf');
-    wp_fts_real_integration_assert_index($wpdb, $tables['postings'], 'PRIMARY');
-    wp_fts_real_integration_assert_index($wpdb, $tables['postings'], 'doc_id');
     wp_fts_real_integration_assert_column($wpdb, $tables['doc_lengths'], 'doc_len');
     wp_fts_real_integration_assert_index($wpdb, $tables['doc_lengths'], 'lang');
-    wp_fts_real_integration_assert_column($wpdb, $tables['terms'], 'doc_freq');
-    wp_fts_real_integration_assert_column($wpdb, $tables['docmeta'], 'search_text');
+    wp_fts_real_integration_assert_column($wpdb, $tables['docmeta'], 'post_type');
+    wp_fts_real_integration_assert_column($wpdb, $tables['docmeta'], 'post_status');
+    wp_fts_real_integration_assert_column($wpdb, $tables['docmeta'], 'post_date_gmt');
     wp_fts_real_integration_assert_index($wpdb, $tables['docmeta'], 'post_type_status_date');
+    wp_fts_real_integration_assert_column($wpdb, $tables['meta'], 'k');
+    wp_fts_real_integration_assert_column($wpdb, $tables['meta'], 'v');
 
-    echo "ok dbDelta created and migrated FTS tables\n";
+    echo "ok dbDelta created and migrated six FTS row-postings tables\n";
 }
 
 function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix): void
@@ -148,33 +153,36 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
     $postingsTable = wp_fts_real_integration_identifier($tables['postings']);
 
     $binaryTerm = "pl\x1ebin\x00term\xff";
-    $binaryPostings = WP_FTS_PostingsCodec::encode([7 => 1, 130 => 300]);
-    $storage->put_term($binaryTerm, 1, $binaryPostings);
+    $binaryPostingMap = [7 => 1, 130 => 300];
+    $binaryPostings = WP_FTS_PostingsCodec::encode($binaryPostingMap);
+    $storage->put_term($binaryTerm, count($binaryPostingMap), $binaryPostings);
 
     $row = $storage->get_terms([$binaryTerm])[$binaryTerm] ?? null;
     wp_fts_real_integration_assert($row !== null, 'binary term should be readable after put_term().');
-    wp_fts_real_integration_assert_same(2, $row['df'], 'binary term doc frequency should reflect decoded row postings.');
+    wp_fts_real_integration_assert_same(count($binaryPostingMap), $row['df'], 'binary term doc frequency should round trip.');
     wp_fts_real_integration_assert_same($binaryPostings, $row['postings'], 'binary postings should round trip through the compatibility blob API.');
 
-    $hexRow = $wpdb->get_row($wpdb->prepare(
+    $termRow = $wpdb->get_row($wpdb->prepare(
         "SELECT HEX(term) AS term_hex, doc_freq FROM `{$termsTable}` WHERE term = %s",
         $binaryTerm
     ));
-    wp_fts_real_integration_assert($hexRow !== null, 'binary row should be selectable with a prepared term predicate.');
-    wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $hexRow->term_hex, 'VARBINARY term bytes should be stored exactly.');
-    wp_fts_real_integration_assert_same(2, (int) $hexRow->doc_freq, 'term row should store document frequency only.');
+    wp_fts_real_integration_assert($termRow !== null, 'binary term row should be selectable with a prepared term predicate.');
+    wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $termRow->term_hex, 'VARBINARY term bytes should be stored exactly.');
+    wp_fts_real_integration_assert_same(count($binaryPostingMap), (int) $termRow->doc_freq, 'terms table should store document frequency only.');
 
     $postingRows = $wpdb->get_results($wpdb->prepare(
         "SELECT HEX(term) AS term_hex, doc_id, tf FROM `{$postingsTable}` WHERE term = %s ORDER BY doc_id ASC",
         $binaryTerm
     ));
-    wp_fts_real_integration_assert(is_array($postingRows) && count($postingRows) === 2, 'binary postings should be stored as two row postings.');
-    wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $postingRows[0]->term_hex, 'first row posting should keep exact term bytes.');
-    wp_fts_real_integration_assert_same(7, (int) $postingRows[0]->doc_id, 'first row posting doc id should round trip.');
-    wp_fts_real_integration_assert_same(1, (int) $postingRows[0]->tf, 'first row posting tf should round trip.');
-    wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $postingRows[1]->term_hex, 'second row posting should keep exact term bytes.');
-    wp_fts_real_integration_assert_same(130, (int) $postingRows[1]->doc_id, 'second row posting doc id should round trip.');
-    wp_fts_real_integration_assert_same(300, (int) $postingRows[1]->tf, 'second row posting tf should round trip.');
+    $postingRows = is_array($postingRows) ? $postingRows : [];
+    wp_fts_real_integration_assert_same(count($binaryPostingMap), count($postingRows), 'row postings table should store one row per document.');
+
+    $actualPostingMap = [];
+    foreach ($postingRows as $postingRow) {
+        wp_fts_real_integration_assert_same(strtoupper(bin2hex($binaryTerm)), (string) $postingRow->term_hex, 'row posting term bytes should be stored exactly.');
+        $actualPostingMap[(int) $postingRow->doc_id] = (int) $postingRow->tf;
+    }
+    wp_fts_real_integration_assert_same($binaryPostingMap, $actualPostingMap, 'row postings should store decoded document frequencies exactly.');
 
     $codecTerm = WP_FTS_TermNamespace::namespace_term('pl', 'zamek');
     $codecPostings = WP_FTS_PostingsCodec::encode([1001 => 2, 1005 => 7]);
@@ -182,8 +190,9 @@ function wp_fts_real_integration_binary_round_trips(object $wpdb, string $prefix
     $codecRow = $storage->get_terms([$codecTerm])[$codecTerm] ?? null;
     wp_fts_real_integration_assert($codecRow !== null, 'codec term should be readable.');
     wp_fts_real_integration_assert_same([1001 => 2, 1005 => 7], WP_FTS_PostingsCodec::decode($codecRow['postings']), 'encoded postings should decode after MySQL storage.');
+    wp_fts_real_integration_assert_same([1001 => 2, 1005 => 7], $storage->get_postings([$codecTerm])[$codecTerm] ?? null, 'encoded postings should be readable from the row postings table.');
 
-    echo "ok binary VARBINARY terms and prepared row postings round trip\n";
+    echo "ok binary VARBINARY terms and row postings round trip\n";
 }
 
 function wp_fts_real_integration_transactions(object $wpdb, string $prefix): void

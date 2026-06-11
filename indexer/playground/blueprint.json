@@ -2,14 +2,14 @@
   "$schema": "https://playground.wordpress.net/blueprint-schema.json",
   "meta": {
     "title": "Pure PHP FTS Indexer Preview",
-    "description": "Installs and activates the Pure PHP FTS Indexer plugin from the indexer subdirectory.",
+    "description": "Installs and activates the Pure PHP FTS Indexer plugin and opens the wp-admin FTS sandbox.",
     "author": "adamziel"
   },
   "preferredVersions": {
     "php": "8.3",
     "wp": "latest"
   },
-  "landingPage": "/wp-admin/plugins.php",
+  "landingPage": "/wp-admin/tools.php?page=wp-fts-sandbox",
   "login": true,
   "siteOptions": {
     "blogname": "Pure PHP FTS Indexer Preview"

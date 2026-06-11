@@ -3,9 +3,13 @@
 [![Preview in WordPress Playground](https://playground.wordpress.net/badge.svg)](https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/blueprint.json)
 
 The Playground preview installs and activates the plugin from the `indexer/`
-subdirectory and opens the logged-in Plugins screen. Playground runs on SQLite;
-the production indexing workflow still depends on WordPress with MySQL and
-WP-CLI for schema creation, reindexing, and search operations.
+subdirectory and opens the logged-in Tools > FTS Sandbox page at
+`/wp-admin/tools.php?page=wp-fts-sandbox`. Use the sandbox buttons to create or
+refresh the demo posts, build the demo index, and search for `run` to exercise
+the English stemming path against a post containing `running`. Playground runs
+on SQLite; the production indexing workflow still depends on WordPress with
+MySQL and WP-CLI for full-site schema creation, reindexing, and search
+operations.
 
 Pure PHP FTS Indexer is an experimental WordPress plugin that builds a custom
 full-text index over WordPress posts. It can be managed through WP-CLI, updated
