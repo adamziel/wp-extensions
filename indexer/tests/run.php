@@ -2447,6 +2447,11 @@ test_case('admin sandbox demo indexing supports requested and detected languages
         assert_contains('Resolved query language: <code>pl</code>', $polishHtml, 'explicit Polish search should report the resolved language');
         assert_contains('FTS Sandbox: Polish Lodz Search', $polishHtml, 'explicit Polish search should find the Polish demo post');
 
+        $polishMorphologyHtml = $search('wyszukiwanie', 'pl');
+        assert_contains('Requested query language: <code>pl</code>', $polishMorphologyHtml, 'explicit Polish morphology search should report the requested language');
+        assert_contains('Resolved query language: <code>pl</code>', $polishMorphologyHtml, 'explicit Polish morphology search should report the resolved language');
+        assert_contains('FTS Sandbox: Polish Lodz Search', $polishMorphologyHtml, 'verified Polish stemming should match wyszukiwanie to the wyszukaj demo post');
+
         $germanHtml = $search('Fuehrung', 'de');
         assert_contains('Requested query language: <code>de</code>', $germanHtml, 'explicit German search should report the requested language');
         assert_contains('Resolved query language: <code>de</code>', $germanHtml, 'explicit German search should report the resolved language');
@@ -3022,6 +3027,7 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     ]);
     assert_same(['samochod'], $verifiedPipeline->analyze('samochody', 'pl'), 'Polish verified mode should stem mapped fixture rows');
     assert_same(['danie'], $verifiedPipeline->analyze('danie', 'pl'), 'Polish verified mode should protect ambiguous rows');
+    assert_same(['wyszuk', 'wyszuk', 'wyszuk'], $verifiedPipeline->analyze('wyszukiwanie wyszukiwania wyszukaj', 'pl'), 'Polish verified mode should align sandbox search-family rows');
 });
 
 test_case('polish Morfologik fixture pack validates manifest digests and rows', function (): void {

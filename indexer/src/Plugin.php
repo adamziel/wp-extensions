@@ -477,7 +477,7 @@ final class WP_FTS_Plugin
                     'lang' => $language,
                     'document_lang' => $language,
                     'metadata' => ['language' => $language],
-                ]);
+                ], self::sandbox_analyzer());
                 $processed++;
                 continue;
             }
@@ -551,7 +551,7 @@ final class WP_FTS_Plugin
     {
         $limit = 10;
         $storage = self::storage(false);
-        $searcher = new WP_FTS_Searcher($storage, new WP_FTS_Analyzer());
+        $searcher = new WP_FTS_Searcher($storage, self::sandbox_analyzer());
         $search_options = [
             'mode' => 'OR',
             'limit' => $limit,
@@ -610,6 +610,16 @@ final class WP_FTS_Plugin
             'total' => $total,
             'results' => $visible,
         ];
+    }
+
+    /**
+     * Use the verified Polish fixture slice for the admin demo corpus.
+     */
+    private static function sandbox_analyzer(): WP_FTS_Analyzer
+    {
+        return new WP_FTS_Analyzer([
+            'polish_stemming' => 'verified',
+        ]);
     }
 
     /**
@@ -1023,10 +1033,10 @@ final class WP_FTS_Plugin
      *
      * @param array<string,mixed> $opts
      */
-    private static function index_post(object $post, array $opts = []): void
+    private static function index_post(object $post, array $opts = [], ?WP_FTS_Analyzer $analyzer = null): void
     {
         self::maybe_upgrade_schema();
-        (new WP_FTS_Indexer(self::storage(false), new WP_FTS_Analyzer()))->index_post($post, $opts);
+        (new WP_FTS_Indexer(self::storage(false), $analyzer ?? new WP_FTS_Analyzer()))->index_post($post, $opts);
     }
 
     /**
