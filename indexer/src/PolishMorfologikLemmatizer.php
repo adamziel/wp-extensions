@@ -10,16 +10,16 @@ declare(strict_types=1);
 final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
 {
     private const EAGER_ROW_LIMIT = 50000;
-    private const MAX_CACHED_SHARDS = 4;
+    private const MAX_LAZY_LOOKUP_CACHE_ENTRIES = 2048;
 
     /** @var array<string,string> */
     private array $lemmaBySurface = [];
     /** @var array<string,bool> */
     private array $ambiguousSurfaces = [];
-    /** @var array<string,array{lemma_by_surface:array<string,string>,ambiguous_surfaces:array<string,bool>}> */
-    private array $shardCache = [];
+    /** @var array<string,string> */
+    private array $lazyLookupCache = [];
     /** @var string[] */
-    private array $shardCacheOrder = [];
+    private array $lazyLookupCacheOrder = [];
     private bool $lazy;
     private string $indexSignature;
 
@@ -191,22 +191,32 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
 
     private function lookup_lazy(string $term): string
     {
+        if (array_key_exists($term, $this->lazyLookupCache)) {
+            return $this->lazyLookupCache[$term];
+        }
+
         $lemmas = [];
         foreach ($this->candidate_runtime_files($term) as $file) {
-            $shard = $this->load_runtime_file($file);
-            if (isset($shard['ambiguous_surfaces'][$term])) {
-                return $term;
-            }
-            if (isset($shard['lemma_by_surface'][$term])) {
-                $lemmas[$shard['lemma_by_surface'][$term]] = true;
+            foreach ($this->lookup_runtime_file($file, $term) as $lemma) {
+                $lemmas[$lemma] = true;
+                if (count($lemmas) > 1) {
+                    $this->cache_lazy_lookup($term, $term);
+
+                    return $term;
+                }
             }
         }
 
         if (count($lemmas) !== 1) {
+            $this->cache_lazy_lookup($term, $term);
+
             return $term;
         }
 
-        return array_key_first($lemmas);
+        $lemma = (string) array_key_first($lemmas);
+        $this->cache_lazy_lookup($term, $lemma);
+
+        return $lemma;
     }
 
     /**
@@ -229,64 +239,64 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
 
     /**
      * @param array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string} $file
-     * @return array{lemma_by_surface:array<string,string>,ambiguous_surfaces:array<string,bool>}
+     * @return string[]
      */
-    private function load_runtime_file(array $file): array
+    private function lookup_runtime_file(array $file, string $term): array
     {
         $path = (string) $file['path'];
-        if (isset($this->shardCache[$path])) {
-            return $this->shardCache[$path];
-        }
-
-        $lemmasBySurface = [];
+        $lemmas = [];
         $compression = isset($file['compression']) ? (string) $file['compression'] : null;
         $handle = $this->open_runtime_file($path, $compression);
         if (!is_resource($handle)) {
-            return [
-                'lemma_by_surface' => [],
-                'ambiguous_surfaces' => [],
-            ];
+            return [];
         }
 
-        while (($line = $this->read_runtime_line($handle, $compression)) !== false) {
-            $line = rtrim((string) $line, "\n");
-            $line = rtrim($line, "\r");
-            if ($line === '' || $line[0] === '#') {
-                continue;
+        try {
+            while (($line = $this->read_runtime_line($handle, $compression)) !== false) {
+                $line = rtrim((string) $line, "\n");
+                $line = rtrim($line, "\r");
+                if ($line === '' || $line[0] === '#') {
+                    continue;
+                }
+                $columns = explode("\t", $line);
+                if (count($columns) !== 2) {
+                    continue;
+                }
+                $comparison = strcmp($columns[0], $term);
+                if ($comparison > 0) {
+                    break;
+                }
+                if ($comparison < 0) {
+                    continue;
+                }
+                $lemmas[$columns[1]] = true;
             }
-            $columns = explode("\t", $line);
-            if (count($columns) !== 2) {
-                continue;
-            }
-            $lemmasBySurface[$columns[0]][$columns[1]] = true;
-        }
-        $this->close_runtime_file($handle, $compression);
-
-        $lemmaBySurface = [];
-        $ambiguousSurfaces = [];
-        foreach ($lemmasBySurface as $surface => $lemmas) {
-            $lemmaList = array_keys($lemmas);
-            sort($lemmaList, SORT_STRING);
-            if (count($lemmaList) === 1) {
-                $lemmaBySurface[$surface] = $lemmaList[0];
-                continue;
-            }
-            $ambiguousSurfaces[$surface] = true;
+        } finally {
+            $this->close_runtime_file($handle, $compression);
         }
 
-        $this->shardCache[$path] = [
-            'lemma_by_surface' => $lemmaBySurface,
-            'ambiguous_surfaces' => $ambiguousSurfaces,
-        ];
-        $this->shardCacheOrder[] = $path;
-        while (count($this->shardCacheOrder) > self::MAX_CACHED_SHARDS) {
-            $oldest = array_shift($this->shardCacheOrder);
+        $result = array_keys($lemmas);
+        sort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    private function cache_lazy_lookup(string $surface, string $result): void
+    {
+        if (array_key_exists($surface, $this->lazyLookupCache)) {
+            $this->lazyLookupCache[$surface] = $result;
+
+            return;
+        }
+
+        $this->lazyLookupCache[$surface] = $result;
+        $this->lazyLookupCacheOrder[] = $surface;
+        while (count($this->lazyLookupCacheOrder) > self::MAX_LAZY_LOOKUP_CACHE_ENTRIES) {
+            $oldest = array_shift($this->lazyLookupCacheOrder);
             if (is_string($oldest)) {
-                unset($this->shardCache[$oldest]);
+                unset($this->lazyLookupCache[$oldest]);
             }
         }
-
-        return $this->shardCache[$path];
     }
 
     /**

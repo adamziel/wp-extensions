@@ -3312,6 +3312,102 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
     }
 });
 
+test_case('polish compressed full playground lookup and snippets stay under 128M', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for compressed full pack low-memory lookup smoke',
+        'PHP zlib gzip support is unavailable, so compressed full pack low-memory lookup smoke is skipped.'
+    );
+
+    $bootstrap = (string) realpath(__DIR__ . '/../src/bootstrap.php');
+    $manifest = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+    $code = str_replace(
+        ['__BOOTSTRAP__', '__MANIFEST__'],
+        [var_export($bootstrap, true), var_export($manifest, true)],
+        <<<'PHP'
+require __BOOTSTRAP__;
+
+if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+    fwrite(STDERR, "gzip support unavailable\n");
+    exit(77);
+}
+
+$fail = static function (string $message): never {
+    fwrite(STDERR, $message . "\n");
+    exit(1);
+};
+
+$analyzer = new WP_FTS_Analyzer([
+    'default_lang' => 'pl',
+    'polish_lemma_pack' => __MANIFEST__,
+]);
+
+foreach ([
+    'prowadzilismy' => 'prowadzic',
+    'zabralibysmy' => 'zabrac',
+    'domach' => 'dom',
+    'psach' => 'pies',
+    'samochodami' => 'samochod',
+] as $surface => $lemma) {
+    $terms = $analyzer->analyze_query($surface, ['lang' => 'pl']);
+    if ($terms !== [$lemma]) {
+        $fail($surface . ' mapped to ' . json_encode($terms));
+    }
+}
+
+$storage = new WP_FTS_Storage_InMemory();
+$indexer = new WP_FTS_Indexer($storage, $analyzer);
+$text = 'W domach przy psach prowadzilismy notatki i zabralibysmy katalog samochodami.';
+$indexer->index_document_fields(941, [['name' => 'content', 'text' => $text]], [
+    'lang' => 'pl',
+    'metadata' => [
+        'post_id' => 941,
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'title' => 'Compressed full Polish memory smoke',
+        'search_text' => $text,
+        'language' => 'pl',
+    ],
+]);
+
+$searcher = new WP_FTS_Searcher($storage, $analyzer);
+foreach ([
+    'prowadzic' => '<mark>prowadzilismy</mark>',
+    'zabrac' => '<mark>zabralibysmy</mark>',
+    'samochod' => '<mark>samochodami</mark>',
+    'dom' => '<mark>domach</mark>',
+] as $query => $expectedMark) {
+    $payload = $searcher->search($query, [
+        'lang' => 'pl',
+        'mode' => 'AND',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 180,
+    ]);
+    $snippet = (string) ($payload['results'][0]['snippet'] ?? '');
+    if (($payload['total'] ?? null) !== 1 || !str_contains($snippet, $expectedMark)) {
+        $fail($query . ' snippet mismatch: ' . $snippet);
+    }
+}
+
+echo 'peak_bytes=' . memory_get_peak_usage(true) . "\n";
+PHP
+    );
+
+    $result = test_run_subprocess(
+        [PHP_BINARY, '-d', 'memory_limit=128M', '-r', $code],
+        dirname(__DIR__)
+    );
+    if ($result['exit'] === 77) {
+        mark_pending('Child PHP runtime lacks gzip support, so compressed full pack low-memory lookup smoke is skipped.');
+    }
+
+    assert_same(0, $result['exit'], 'full compressed pack lookup and snippet search should stay below 128M: ' . $result['stderr']);
+    assert_contains('peak_bytes=', $result['stdout'], 'low-memory lookup smoke should report peak memory usage');
+});
+
 test_case('polish PoliMorf importer deterministically generates sharded full-pack shape', function (): void {
     require_once __DIR__ . '/../tools/import-polish-polimorf-lemmatizer.php';
 
@@ -3585,18 +3681,25 @@ test_case('admin sandbox full Polish pack maps full-only forms and highlights su
     ]);
 
     $searcher = new WP_FTS_Searcher($storage, $analyzer);
-    $payload = $searcher->search('prowadzic', [
-        'lang' => 'pl',
-        'mode' => 'AND',
-        'include_total' => true,
-        'include_metadata' => true,
-        'include_snippets' => true,
-        'highlight' => true,
-        'snippet_length' => 180,
-    ]);
+    foreach ([
+        'prowadzic' => '<mark>prowadzilismy</mark>',
+        'zabrac' => '<mark>zabralibysmy</mark>',
+        'samochod' => '<mark>samochodami</mark>',
+        'dom' => '<mark>domach</mark>',
+    ] as $query => $expectedMark) {
+        $payload = $searcher->search($query, [
+            'lang' => 'pl',
+            'mode' => 'AND',
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+            'highlight' => true,
+            'snippet_length' => 180,
+        ]);
 
-    assert_same(1, $payload['total'], 'full-pack-only query lemma should find the indexed sandbox-style Polish document');
-    assert_contains('<mark>prowadzilismy</mark>', (string) ($payload['results'][0]['snippet'] ?? ''), 'full-pack-only snippet should mark the matched document surface');
+        assert_same(1, $payload['total'], 'full-pack-only query lemma should find the indexed sandbox-style Polish document for ' . $query);
+        assert_contains($expectedMark, (string) ($payload['results'][0]['snippet'] ?? ''), 'full-pack-only snippet should mark the matched document surface for ' . $query);
+    }
 });
 
 test_case('stemming is enabled by default and can be explicitly disabled', function (): void {
