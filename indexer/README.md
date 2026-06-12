@@ -1,35 +1,28 @@
 # Pure PHP FTS Indexer
 
-[![Preview in WordPress Playground](https://playground.wordpress.net/badge.svg)](https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/blueprint.json)
-
-The Playground preview installs and activates the plugin from the `indexer/`
-subdirectory and opens the logged-in Tools > FTS Sandbox page at
-`/wp-admin/tools.php?page=wp-fts-sandbox`. Use the sandbox buttons to create or
-refresh the demo posts, build the demo index, and search for `run` to exercise
-the English stemming path against a post containing `running`. Playground runs
-on SQLite; the production indexing workflow still depends on WordPress with
-MySQL and WP-CLI for full-site schema creation, reindexing, and search
-operations.
+[![Try in Playground](https://github.com/WordPress/action-wp-playground-pr-preview/raw/main/assets/playground-preview-button.svg)](https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/blueprint.json)
 
 Pure PHP FTS Indexer is an experimental WordPress plugin that builds a custom
-full-text index over WordPress posts. It can be managed through WP-CLI, updated
-incrementally by WordPress post lifecycle hooks, queried through `wp fts search`,
-and exposed through the plugin's REST/search helpers with WordPress visibility
-checks.
+full-text index for WordPress posts. It indexes post content into derived FTS
+tables, keeps those tables current from WordPress post lifecycle hooks, and can
+be managed or queried with WP-CLI.
 
-The plugin stores its own MySQL tables. It does not use MySQL `FULLTEXT`, does
-not replace WordPress core search automatically, and keeps the index as derived
-data that can be rebuilt from WordPress content.
+The Playground preview opens the admin-only Tools > FTS Sandbox page. The
+sandbox prepares demo posts and indexes them automatically, shows indexed posts
+with pagination, lets you run language-aware searches, and indexes new or
+updated published posts when they are saved. Playground is useful for trying the
+workflow quickly; production validation still needs a real WordPress/MySQL
+environment.
 
-The plugin does not currently ship real Thai segmentation. Future Thai
-dictionary/TCC tokenizer work is blocked on the metadata gates in
-[Tokenizer source locks](docs/tokenizer-source-locks.md).
+The plugin does not use MySQL `FULLTEXT`, does not replace WordPress front-end
+search automatically, and treats the index as rebuildable data derived from
+WordPress content.
 
 ## Quickstart
 
 Install the `indexer` directory as the plugin root. Do not install the whole
 monorepo under `wp-content/plugins`, because WordPress will not discover
-`indexer/indexer.php` from a nested monorepo checkout.
+`indexer/indexer.php` from a nested checkout.
 
 ```sh
 rsync -a --delete /path/to/wp-extensions/indexer/ /path/to/wordpress/wp-content/plugins/indexer/
@@ -39,65 +32,101 @@ wp plugin activate indexer
 ```
 
 Activation creates or repairs the `fts_*` tables and schedules the bounded
-runtime queue processor. Run the first reindex to backfill existing posts:
+runtime queue processor. Run a first reindex to backfill existing published
+content:
 
 ```sh
 wp fts reindex --post_type=post,page --post_status=publish --batch_size=200
 ```
 
-The command reports the number of posts it processed:
-
-```text
-Success: Indexed 42 posts.
-```
-
-Run a search:
+Run a search with the language you expect:
 
 ```sh
 wp fts search "example query" --lang=en --limit=5
 ```
 
-Search output is a table with WordPress post IDs, BM25 scores, totals, and
-stored post metadata:
+The output includes WordPress post IDs, BM25 scores, totals, stored metadata,
+and optional snippets. `score` is relative to the current query and language
+partition; it is not a percentage and should not be compared across unrelated
+queries.
 
-```text
-+--------+--------------------+-------+---------+-----------+-------------+---------------------+---------------+
-| doc_id | score              | total | post_id | post_type | post_status | post_date_gmt       | title         |
-+--------+--------------------+-------+---------+-----------+-------------+---------------------+---------------+
-| 123    | 1.742318907412998  | 2     | 123     | post      | publish     | 2026-06-07 00:00:00 | Example Post  |
-| 98     | 0.9146134028443131 | 2     | 98      | page      | publish     | 2026-06-06 00:00:00 | Example Page  |
-+--------+--------------------+-------+---------+-----------+-------------+---------------------+---------------+
-```
+## Architecture
 
-`doc_id` is the WordPress post ID. `score` is a relative BM25 score for that
-query and language partition; it is not a percentage and should not be compared
-across unrelated queries. Use WordPress to inspect a result:
+- WordPress activation, post-save/status/delete hooks, cron, REST, and WP-CLI
+  wire into `WP_FTS_Indexer`.
+- `WP_FTS_PostContentExtractor` extracts title, content, excerpt, rendered
+  block deltas, taxonomy terms, and configured custom fields into weighted
+  fields plus bounded result metadata.
+- `WP_FTS_Analyzer` strips non-visible HTML, normalizes and tokenizes text,
+  routes language gaps, and stems or lemmatizes through the language pipeline.
+- Terms are stored under language namespaces, so English, Polish, German, and
+  other partitions do not share collection statistics by accident.
+- `WP_FTS_Searcher` scores matches with BM25 and can filter by stored WordPress
+  metadata such as post type, status, and date.
+- MySQL is the normal WordPress backend. File storage supports small local,
+  test, Playground, and SQLite-oriented contexts where a full MySQL-backed site
+  is not available.
 
-```sh
-wp post get 123 --field=post_title
-```
+The index is derived state. Rebuild it after content imports, analyzer changes,
+language-routing changes, or environment moves where the FTS tables were not
+restored with WordPress content.
+
+## Language And Morphology
+
+Language routing is explicit-first. Use `wp fts reindex --lang=...` or
+`wp fts search --lang=...` when you know the language. In wp-admin, the `FTS
+Language` post field can pin indexing for a post. Polylang/WPML metadata and
+HTML `lang`/`xml:lang` scopes are also honored, with HTML scopes able to route
+individual content segments.
+
+Automatic detection is conservative gap filling, not statistical language
+detection. It uses script ranges, distinctive Latin letters, and compact lexical
+evidence only when stronger language signals are absent. Unsupported or
+ambiguous languages fall back conservatively instead of guessing aggressively.
+
+The default pipeline includes bundled Snowball/Porter2 stemming for English.
+Catalan and Dutch can use the optional Wamania-backed Snowball stemmers when
+Composer dependencies are present and the compliance harness accepts them.
+Polish morphology uses configured lemmatizer/analyzer packs where available;
+it is not driven by hard-coded word families. Missing packs, unsupported
+languages, and ambiguous forms keep conservative behavior.
+
+The analyzer also provides CJK fallback tokenization with single characters and
+overlapping bigrams. The plugin does not currently ship Thai or CJK dictionary
+segmentation.
+
+## Snippets And Highlighting
+
+Snippets come from bounded plain-text metadata extracted during indexing, not
+from live post rendering at search time. This keeps result hydration predictable
+and avoids storing unbounded source text.
+
+When highlighting is enabled, the highlighter compares snippet tokens through
+the same analyzer path used for the query. That means a result can highlight the
+matched document surface form even when the query form and document form differ
+through stemming or lemmatizer equivalence.
 
 ## Common Commands
 
 ```sh
-# Index only published posts, using the site or multilingual plugin language.
+# Index published posts using site, post, or multilingual-plugin language hints.
 wp fts reindex
 
-# Index posts and pages in a forced language partition.
-wp fts reindex --post_type=post,page --lang=pl-PL
+# Index posts and pages into an explicit language partition.
+wp fts reindex --post_type=post,page --post_status=publish --lang=pl-PL
 
-# Limit a catch-up run while testing.
+# Limit a smoke or catch-up run.
 wp fts reindex --limit=100 --batch_size=25
 
-# Require all query terms.
-wp fts search "fast durable search" --mode=AND --limit=10 --lang=en
+# Require every analyzed query term to match.
+wp fts search "fast durable search" --mode=AND --lang=en --limit=10
 
-# Tombstone one document and later compact tombstones out of postings.
+# Filter by stored WordPress metadata and include snippets.
+wp fts search "fast durable search" --post_type=post,page --post_status=publish --snippet
+
+# Tombstone one document and compact tombstones later.
 wp fts delete 123
 wp fts optimize
-
-# Filter by stored product metadata and include snippets.
-wp fts search "fast durable search" --post_type=post,page --post_status=publish --snippet
 ```
 
 ## Documentation
@@ -115,7 +144,7 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
 - [Snowball compliance](docs/snowball-compliance.md) explains the dedicated
   Snowball fixture harness.
 - [Analyzer source locks](docs/analyzer-source-locks.md) define the manifest
-  schema required before future analyzer or lemmatizer data imports.
+  schema required before analyzer or lemmatizer data imports.
 - [Tokenizer source locks](docs/tokenizer-source-locks.md) documents the
   pre-coding gate for any future Thai TCC/dictionary tokenizer. The current
   plugin does not ship real Thai or CJK word segmentation.
@@ -127,17 +156,16 @@ wp fts search "fast durable search" --post_type=post,page --post_status=publish 
 
 ## Current Caveats
 
-The current implementation is suitable for development and hardening work, not
-for an unattended large production rollout. The plugin now registers activation,
-deactivation, uninstall, post-save/status/delete, cron, REST, and WP-CLI hooks;
-runtime saves queue bounded incremental indexing and tombstone invisible or
-protected posts. Full and incremental post indexing use the same extractor path
-for title, content, excerpt, rendered block deltas, terms, selected custom
-fields, field boosts, and stored metadata. MySQL postings are row based to avoid
-whole-blob term rewrites, and schema repair/version checks surface database
-write failures.
+This branch is suitable for development and hardening work, not unattended large
+production rollout. Validate schema creation, write throughput, batch sizes,
+language choices, metadata filters, backups, and restore behavior in the target
+environment before using it for production search.
 
-Remaining caveats still matter: it does not replace core front-end search by
-itself, there is no settings screen, custom field indexing must be configured,
-shortcode rendering is opt-in, and live WordPress/MySQL behavior still needs
-environment-specific validation before production rollout.
+Current caveats:
+
+- no automatic front-end search replacement;
+- no settings screen;
+- custom field indexing must be configured;
+- shortcode rendering is opt-in;
+- no Thai or CJK dictionary segmentation;
+- no honest prefix or phrase search unless an extension supplies that backend.
