@@ -103,7 +103,7 @@ final class WP_FTS_Searcher
             if ($pageMetadata === []) {
                 $pageMetadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, $pageIds);
             }
-            $page = $this->enrich_results($page, $pageMetadata, $query, $opts);
+            $page = $this->enrich_results($page, $pageMetadata, $query, $opts, $groups, $responseLang);
         }
 
         $this->strip_internal_rank($page);
@@ -675,15 +675,17 @@ final class WP_FTS_Searcher
      *
      * @param array<int,array<string,mixed>> $results
      * @param array<int,array<string,mixed>> $metadata
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
      * @return array<int,array<string,mixed>>
      */
-    private function enrich_results(array $results, array $metadata, string $query, array $opts): array
+    private function enrich_results(array $results, array $metadata, string $query, array $opts, array $queryGroups, string $queryLang): array
     {
         $includeMetadata = !empty($opts['include_metadata']);
         $includeSnippets = !empty($opts['include_snippets']) || !empty($opts['snippets']);
         foreach ($results as &$row) {
             $docId = (int) $row['doc_id'];
             $meta = $metadata[$docId] ?? [];
+            $doc = $includeSnippets ? $this->storage->get_doc($docId) : null;
             if ($includeMetadata) {
                 foreach (['post_id', 'post_type', 'post_status', 'post_date_gmt', 'title', 'excerpt'] as $key) {
                     $row[$key] = $meta[$key] ?? ($key === 'post_id' ? 0 : '');
@@ -694,7 +696,11 @@ final class WP_FTS_Searcher
                     (string) ($meta['search_text'] ?? $meta['excerpt'] ?? $meta['title'] ?? ''),
                     $query,
                     max(40, (int) ($opts['snippet_length'] ?? 180)),
-                    !empty($opts['highlight'])
+                    !empty($opts['highlight']),
+                    $opts,
+                    $queryGroups,
+                    $queryLang,
+                    $this->snippet_result_language($row, $meta, $doc, $opts, $queryLang)
                 );
             }
         }
@@ -795,7 +801,7 @@ final class WP_FTS_Searcher
     /**
      * Build a compact snippet from stored plain text.
      */
-    private function snippet(string $text, string $query, int $length, bool $highlight): string
+    private function snippet(string $text, string $query, int $length, bool $highlight, array $opts = [], array $queryGroups = [], string $queryLang = '', string $resultLang = ''): string
     {
         $text = trim(preg_replace('/\s+/u', ' ', strip_tags($text)) ?? $text);
         if ($text === '') {
@@ -803,12 +809,30 @@ final class WP_FTS_Searcher
         }
 
         $terms = $this->snippet_terms($query);
+        $queryKeys = $highlight ? $this->snippet_query_keys($queryGroups) : [];
+        $analysisCache = [];
         $start = 0;
+        $literalPositionFound = false;
         foreach ($terms as $term) {
             $position = stripos($text, $term);
             if ($position !== false) {
                 $start = max(0, $position - intdiv($length, 3));
+                $literalPositionFound = true;
                 break;
+            }
+        }
+        if (!$literalPositionFound && $highlight && $queryKeys !== []) {
+            $position = $this->first_analyzed_snippet_match_position(
+                $text,
+                $queryKeys,
+                $opts,
+                $queryGroups,
+                $queryLang,
+                $resultLang,
+                $analysisCache
+            );
+            if ($position !== null) {
+                $start = max(0, $position - intdiv($length, 3));
             }
         }
 
@@ -824,12 +848,199 @@ final class WP_FTS_Searcher
             return $snippet;
         }
 
-        foreach ($terms as $term) {
-            $quoted = preg_quote($term, '/');
-            $snippet = preg_replace('/(' . $quoted . ')/i', '<mark>$1</mark>', $snippet) ?? $snippet;
+        return $this->highlight_snippet_terms(
+            $snippet,
+            array_fill_keys($terms, true),
+            $queryKeys,
+            $opts,
+            $queryGroups,
+            $queryLang,
+            $resultLang,
+            $analysisCache
+        );
+    }
+
+    /**
+     * Resolve the best language hint for analyzing plain snippet tokens.
+     *
+     * @param array<string,mixed> $row
+     * @param array<string,mixed> $meta
+     * @param array<string,mixed>|null $doc
+     */
+    private function snippet_result_language(array $row, array $meta, ?array $doc, array $opts, string $queryLang): string
+    {
+        foreach ([
+            $row['language'] ?? null,
+            $row['lang'] ?? null,
+            $row['primary_lang'] ?? null,
+            $meta['language'] ?? null,
+            $meta['lang'] ?? null,
+            $meta['primary_lang'] ?? null,
+            $doc['primary_lang'] ?? null,
+            $doc['lang'] ?? null,
+            $doc['language'] ?? null,
+            WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']),
+            $queryLang,
+        ] as $candidate) {
+            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $candidate);
+            }
         }
 
-        return $snippet;
+        return WP_FTS_TermNamespace::default_language($opts);
+    }
+
+    /**
+     * Flatten analyzed query alternatives into the stored term-key lookup.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     * @return array<string,bool>
+     */
+    private function snippet_query_keys(array $queryGroups): array
+    {
+        $keys = [];
+        foreach ($queryGroups as $group) {
+            foreach ($group as $candidate) {
+                if (($candidate['key'] ?? '') !== '') {
+                    $keys[$candidate['key']] = true;
+                }
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
+     * Find the first snippet token whose analyzed key matches the query plan.
+     *
+     * @param array<string,bool> $queryKeys
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     * @param array<string,array<string,bool>> $analysisCache
+     */
+    private function first_analyzed_snippet_match_position(string $text, array $queryKeys, array $opts, array $queryGroups, string $queryLang, string $resultLang, array &$analysisCache): ?int
+    {
+        $matched = preg_match_all('/[\p{L}\p{N}_-]+/u', $text, $matches, PREG_OFFSET_CAPTURE);
+        if ($matched === false || $matched === 0) {
+            return null;
+        }
+
+        foreach ($matches[0] as $match) {
+            $token = (string) $match[0];
+            if ($this->snippet_token_matches_query($token, $queryKeys, $opts, $queryGroups, $queryLang, $resultLang, $analysisCache)) {
+                return (int) $match[1];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Wrap matching surface tokens without reprocessing already inserted tags.
+     *
+     * @param array<string,bool> $literalTerms
+     * @param array<string,bool> $queryKeys
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     * @param array<string,array<string,bool>> $analysisCache
+     */
+    private function highlight_snippet_terms(string $snippet, array $literalTerms, array $queryKeys, array $opts, array $queryGroups, string $queryLang, string $resultLang, array &$analysisCache): string
+    {
+        $matched = preg_match_all('/[\p{L}\p{N}_-]+/u', $snippet, $matches, PREG_OFFSET_CAPTURE);
+        if ($matched === false || $matched === 0) {
+            return $snippet;
+        }
+
+        $highlighted = '';
+        $cursor = 0;
+        foreach ($matches[0] as $match) {
+            $token = (string) $match[0];
+            $offset = (int) $match[1];
+            $length = strlen($token);
+            $matchesLiteral = isset($literalTerms[strtolower($token)]);
+            $matchesAnalyzer = $queryKeys !== []
+                && $this->snippet_token_matches_query($token, $queryKeys, $opts, $queryGroups, $queryLang, $resultLang, $analysisCache);
+
+            $highlighted .= substr($snippet, $cursor, $offset - $cursor);
+            $highlighted .= ($matchesLiteral || $matchesAnalyzer) ? '<mark>' . $token . '</mark>' : $token;
+            $cursor = $offset + $length;
+        }
+
+        return $highlighted . substr($snippet, $cursor);
+    }
+
+    /**
+     * Compare one original snippet token against analyzed query term keys.
+     *
+     * @param array<string,bool> $queryKeys
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     * @param array<string,array<string,bool>> $analysisCache
+     */
+    private function snippet_token_matches_query(string $token, array $queryKeys, array $opts, array $queryGroups, string $queryLang, string $resultLang, array &$analysisCache): bool
+    {
+        foreach ($this->snippet_analysis_languages($opts, $queryGroups, $queryLang, $resultLang) as $lang) {
+            foreach ($this->snippet_token_keys($token, $lang, $opts, $analysisCache) as $key => $_) {
+                if (isset($queryKeys[$key])) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Return explicit/result languages only; do not guess every supported language.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     * @return string[]
+     */
+    private function snippet_analysis_languages(array $opts, array $queryGroups, string $queryLang, string $resultLang): array
+    {
+        $languages = [];
+        foreach ([$resultLang, WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']), $queryLang] as $candidate) {
+            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                $languages[WP_FTS_TermNamespace::canonicalize_lang((string) $candidate)] = true;
+            }
+        }
+
+        foreach ($this->languages_from_options($opts, ['langs', 'languages']) as $lang) {
+            $languages[$lang] = true;
+        }
+
+        foreach ($queryGroups as $group) {
+            foreach ($group as $candidate) {
+                if (($candidate['lang'] ?? '') !== '') {
+                    $languages[WP_FTS_TermNamespace::canonicalize_lang($candidate['lang'])] = true;
+                }
+            }
+        }
+
+        return array_keys($languages);
+    }
+
+    /**
+     * Analyze one plain snippet token under an explicit language and return term keys.
+     *
+     * @param array<string,array<string,bool>> $analysisCache
+     * @return array<string,bool>
+     */
+    private function snippet_token_keys(string $token, string $lang, array $opts, array &$analysisCache): array
+    {
+        $cacheKey = $lang . "\0" . strtolower($token);
+        if (isset($analysisCache[$cacheKey])) {
+            return $analysisCache[$cacheKey];
+        }
+
+        $keys = [];
+        $occurrences = $this->analyze_query($token, $this->with_query_language($opts, $lang));
+        foreach ($this->groups_from_occurrences($occurrences, $lang, 0, $lang) as $group) {
+            foreach ($group as $candidate) {
+                $keys[$candidate['key']] = true;
+            }
+        }
+
+        $analysisCache[$cacheKey] = $keys;
+
+        return $keys;
     }
 
     /**

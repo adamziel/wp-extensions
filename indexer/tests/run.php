@@ -2473,6 +2473,12 @@ test_case('admin sandbox demo indexing supports requested and detected languages
             assert_contains('Requested query language: <code>pl</code>', $polishMorphologyHtml, 'explicit Polish morphology search should report the requested language for ' . $query);
             assert_contains('Resolved query language: <code>pl</code>', $polishMorphologyHtml, 'explicit Polish morphology search should report the resolved language for ' . $query);
             assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $polishMorphologyHtml, $message);
+            if ($query === 'wyszukiwanie') {
+                assert_contains('<mark>wyszukujemy</mark>', $polishMorphologyHtml, 'sandbox results should mark the finite document search form for wyszukiwanie');
+            } elseif ($query === 'wpis') {
+                assert_contains('<mark>wpisy</mark>', $polishMorphologyHtml, 'sandbox results should mark the plural document entry form for wpis');
+                assert_true(!str_contains($polishMorphologyHtml, '<mark>wpis</mark>y'), 'sandbox results should not split the Polish entry document form');
+            }
         }
 
         $germanHtml = $search('Fuehrung', 'de');
@@ -3328,6 +3334,58 @@ test_case('enabled polish lemma pack lets indexed and query inflections meet', f
     assert_same([], $fallbackSearcher->search('wyszukiwanie', ['lang' => 'pl']), 'fallback suffix stemmer should not match search nominal and finite forms without the pack');
     assert_same([], $fallbackSearcher->search('wpis', ['lang' => 'pl']), 'fallback suffix stemmer should not match entry lemma and plural forms without the pack');
     assert_same([], $fallbackSearcher->search('kierować', ['lang' => 'pl']), 'fallback suffix stemmer should not match routing infinitive and finite forms without the pack');
+});
+
+test_case('polish lemma pack snippets highlight matched document surface forms', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'default_lang' => 'pl',
+        'polish_lemma_pack' => true,
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $text = 'Notatki o książkach i zamkach, gdzie wyszukujemy wpisy oraz kierujemy raporty.';
+    $indexer->index_document_fields(701, [['name' => 'content', 'text' => $text]], [
+        'lang' => 'pl',
+        'metadata' => [
+            'post_id' => 701,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'title' => 'Polish snippet',
+            'search_text' => $text,
+            'language' => 'pl',
+        ],
+    ]);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    foreach ([
+        'wpis' => '<mark>wpisy</mark>',
+        'kierować' => '<mark>kierujemy</mark>',
+        'wyszukiwanie' => '<mark>wyszukujemy</mark>',
+        'zamek' => '<mark>zamkach</mark>',
+    ] as $query => $expectedMark) {
+        $payload = $searcher->search($query, [
+            'lang' => 'pl',
+            'mode' => 'AND',
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+            'highlight' => true,
+            'snippet_length' => 180,
+        ]);
+
+        assert_same(1, $payload['total'], 'lemma-backed snippet query should match the indexed Polish document for ' . $query);
+        $snippet = (string) ($payload['results'][0]['snippet'] ?? '');
+        assert_contains($expectedMark, $snippet, 'lemma-backed snippet should mark the original document surface for ' . $query);
+    }
+
+    $wpisPayload = $searcher->search('wpis', [
+        'lang' => 'pl',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+    ]);
+    assert_true(!str_contains((string) ($wpisPayload['results'][0]['snippet'] ?? ''), '<mark>wpis</mark>y'), 'snippet highlighter should not split a matched Polish surface token');
 });
 
 test_case('stemming is enabled by default and can be explicitly disabled', function (): void {
