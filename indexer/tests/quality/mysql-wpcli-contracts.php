@@ -690,9 +690,11 @@ namespace {
         sort($hooks, SORT_STRING);
         $expectedHooks = [
             WP_FTS_Plugin::CRON_HOOK,
+            'add_meta_boxes',
             'admin_menu',
             'before_delete_post',
             'rest_api_init',
+            'save_post',
             'save_post',
             'transition_post_status',
             'trashed_post',

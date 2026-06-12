@@ -19,6 +19,7 @@ final class WP_FTS_Plugin
     public const ADMIN_PAGE_SLUG = 'wp-fts-sandbox';
     public const ADMIN_CAPABILITY = 'manage_options';
     public const SANDBOX_DEMO_POSTS_OPTION = 'wp_fts_sandbox_demo_post_ids';
+    public const LANGUAGE_META_KEY = '_wp_fts_index_language';
     public const DEFAULT_BATCH_SIZE = 25;
     public const MAX_SEARCH_LIMIT = 50;
     private const ADMIN_NONCE_ACTION = 'wp_fts_sandbox_admin_action';
@@ -27,6 +28,11 @@ final class WP_FTS_Plugin
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
+    private const ADMIN_POSTS_PAGE_FIELD = 'wp_fts_sandbox_posts_page';
+    private const POST_LANGUAGE_FIELD = 'wp_fts_post_language';
+    private const POST_LANGUAGE_NONCE_ACTION = 'wp_fts_post_language';
+    private const POST_LANGUAGE_NONCE_FIELD = 'wp_fts_post_language_nonce';
+    private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
     private const VISIBILITY_REFILL_MIN_BATCH = 10;
     private const VISIBILITY_REFILL_MULTIPLIER = 4;
     private const VISIBILITY_REFILL_MAX_SCAN = 250;
@@ -48,6 +54,8 @@ final class WP_FTS_Plugin
         add_action(self::CRON_HOOK, [self::class, 'process_queue'], 10, 0);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
+        add_action('add_meta_boxes', [self::class, 'register_language_meta_box'], 10, 0);
+        add_action('save_post', [self::class, 'save_post_language_override'], 5, 3);
     }
 
     /**
@@ -268,6 +276,81 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Add the optional per-post language override control to searchable post types.
+     */
+    public static function register_language_meta_box(): void
+    {
+        if (!function_exists('add_meta_box')) {
+            return;
+        }
+
+        foreach (self::language_meta_box_post_types() as $post_type) {
+            add_meta_box(
+                'wp-fts-post-language',
+                'FTS Language',
+                [self::class, 'render_language_meta_box'],
+                $post_type,
+                'side',
+                'default'
+            );
+        }
+    }
+
+    /**
+     * Render a compact language selector for the post edit screen.
+     *
+     * @param mixed $post WordPress post object.
+     */
+    public static function render_language_meta_box(mixed $post): void
+    {
+        $post_id = is_object($post) && isset($post->ID) ? (int) $post->ID : 0;
+        $selected_language = self::post_language_override($post_id) ?? 'auto';
+        $nonce = function_exists('wp_create_nonce') ? (string) wp_create_nonce(self::POST_LANGUAGE_NONCE_ACTION) : '';
+
+        echo '<input type="hidden" name="' . self::esc_attr(self::POST_LANGUAGE_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
+        echo '<p><label for="wp-fts-post-language">Post language</label></p>';
+        echo '<select id="wp-fts-post-language" name="' . self::esc_attr(self::POST_LANGUAGE_FIELD) . '" style="width:100%;">';
+        foreach (self::sandbox_language_labels() as $language => $label) {
+            $selected = $selected_language === $language ? ' selected="selected"' : '';
+            echo '<option value="' . self::esc_attr($language) . '"' . $selected . '>' . self::esc_html($label) . '</option>';
+        }
+        echo '</select>';
+        echo '<p class="description">Automatic detection is the default. Choose a language to pin indexing for this post.</p>';
+    }
+
+    /**
+     * Persist the optional post language override before the normal save hook indexes the post.
+     *
+     * @param mixed $post WordPress post object from the save hook.
+     */
+    public static function save_post_language_override(int $post_id, mixed $post = null, mixed ...$unused): void
+    {
+        if (!self::is_normal_post_id($post_id)) {
+            return;
+        }
+
+        if (!array_key_exists(self::POST_LANGUAGE_FIELD, $_POST) && !array_key_exists(self::POST_LANGUAGE_NONCE_FIELD, $_POST)) {
+            return;
+        }
+
+        if (!self::verify_post_language_nonce()) {
+            return;
+        }
+
+        if (!function_exists('current_user_can') || !current_user_can('edit_post', $post_id)) {
+            return;
+        }
+
+        $language = self::sanitize_post_language_override(self::request_text_value($_POST, self::POST_LANGUAGE_FIELD, 20));
+        if ($language === '') {
+            self::delete_post_language_override($post_id);
+            return;
+        }
+
+        self::set_post_language_override($post_id, $language);
+    }
+
+    /**
      * Render the admin-only FTS sandbox page.
      */
     public static function render_admin_sandbox(): void
@@ -341,7 +424,14 @@ final class WP_FTS_Plugin
             }
         }
 
-        self::render_admin_sandbox_page($messages, $demo_post_ids, $query, $selected_language, $search_submitted, $results);
+        try {
+            $indexed_posts = self::sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
+        } catch (Throwable $e) {
+            $messages[] = ['error', 'Could not read indexed posts: ' . $e->getMessage()];
+            $indexed_posts = self::empty_sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
+        }
+
+        self::render_admin_sandbox_page($messages, $indexed_posts, $query, $selected_language, $search_submitted, $results);
     }
 
     /**
@@ -350,6 +440,93 @@ final class WP_FTS_Plugin
     private static function can_manage_admin_sandbox(): bool
     {
         return function_exists('current_user_can') && current_user_can(self::ADMIN_CAPABILITY);
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function language_meta_box_post_types(): array
+    {
+        $types = [];
+        if (function_exists('get_post_types')) {
+            $raw_types = get_post_types(['public' => true], 'names');
+            if (is_array($raw_types)) {
+                foreach ($raw_types as $key => $value) {
+                    $type = is_scalar($value) ? (string) $value : (is_scalar($key) ? (string) $key : '');
+                    if ($type !== '') {
+                        $types[$type] = true;
+                    }
+                }
+            }
+        }
+
+        if ($types === []) {
+            $types = ['post' => true, 'page' => true];
+        }
+
+        foreach (array_keys($types) as $type) {
+            if (function_exists('get_post_type_object')) {
+                $post_type = get_post_type_object((string) $type);
+                if (!is_object($post_type) || (isset($post_type->public) && !$post_type->public) || (isset($post_type->exclude_from_search) && $post_type->exclude_from_search)) {
+                    unset($types[$type]);
+                }
+            }
+        }
+
+        $result = array_keys($types);
+        sort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    private static function verify_post_language_nonce(): bool
+    {
+        $nonce = self::request_text_value($_POST, self::POST_LANGUAGE_NONCE_FIELD, 200);
+        if ($nonce === '' || !function_exists('wp_verify_nonce')) {
+            return false;
+        }
+
+        return wp_verify_nonce($nonce, self::POST_LANGUAGE_NONCE_ACTION) !== false;
+    }
+
+    private static function post_language_override(int $post_id): ?string
+    {
+        if ($post_id <= 0 || !function_exists('get_post_meta')) {
+            return null;
+        }
+
+        $raw = get_post_meta($post_id, self::LANGUAGE_META_KEY, true);
+        if (!is_scalar($raw)) {
+            return null;
+        }
+
+        $language = self::sanitize_post_language_override((string) $raw);
+
+        return $language !== '' ? $language : null;
+    }
+
+    private static function set_post_language_override(int $post_id, string $language): void
+    {
+        if (function_exists('update_post_meta')) {
+            update_post_meta($post_id, self::LANGUAGE_META_KEY, $language);
+        }
+    }
+
+    private static function delete_post_language_override(int $post_id): void
+    {
+        if (function_exists('delete_post_meta')) {
+            delete_post_meta($post_id, self::LANGUAGE_META_KEY);
+        }
+    }
+
+    private static function sanitize_post_language_override(string $language): string
+    {
+        $language = self::sanitize_key($language);
+        if ($language === '' || $language === 'auto') {
+            return '';
+        }
+
+        return array_key_exists($language, self::sandbox_language_labels()) ? $language : '';
     }
 
     /**
@@ -858,10 +1035,10 @@ final class WP_FTS_Plugin
      * Render the wp-admin sandbox surface.
      *
      * @param array<int,array{0:string,1:string}> $messages
-     * @param int[] $demo_post_ids
+     * @param array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}>} $indexed_posts
      * @param array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>} $results
      */
-    private static function render_admin_sandbox_page(array $messages, array $demo_post_ids, string $query, string $selected_language, bool $search_submitted, array $results): void
+    private static function render_admin_sandbox_page(array $messages, array $indexed_posts, string $query, string $selected_language, bool $search_submitted, array $results): void
     {
         echo '<div class="wrap">';
         echo '<h1>Pure PHP FTS Sandbox</h1>';
@@ -870,25 +1047,9 @@ final class WP_FTS_Plugin
             self::render_sandbox_notice($message[0], $message[1]);
         }
 
-        echo '<h2>Demo content</h2>';
-        echo '<p>';
-        echo $demo_post_ids === []
-            ? 'No demo posts have been created yet.'
-            : 'Demo post IDs: ' . self::esc_html(implode(', ', $demo_post_ids)) . '.';
-        echo '</p>';
-
-        echo '<form method="post" action="' . self::esc_url(self::admin_page_url()) . '" style="display:inline-block;margin-right:8px;">';
-        self::render_sandbox_nonce_field();
-        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ACTION_FIELD) . '" value="refresh_demo">';
-        echo '<button type="submit" class="button">Create or refresh demo posts</button>';
-        echo '</form>';
-
-        echo '<form method="post" action="' . self::esc_url(self::admin_page_url()) . '" style="display:inline-block;">';
-        self::render_sandbox_nonce_field();
-        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ACTION_FIELD) . '" value="index_demo">';
-        echo '<button type="submit" class="button button-primary">Build demo index</button>';
-        echo '</form>';
-        self::render_sandbox_demo_posts_table(self::sandbox_demo_post_rows($demo_post_ids));
+        echo '<h2>Indexed posts</h2>';
+        echo '<p>The sandbox prepares demo posts and indexes them automatically. Automatic detection is the default; choose a language on the post edit screen to pin indexing for that post.</p>';
+        self::render_sandbox_indexed_posts_table($indexed_posts, $query, $selected_language, $search_submitted);
 
         echo '<h2>Search</h2>';
         echo '<p>Suggested English stemming query: <code>run</code></p>';
@@ -915,23 +1076,48 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{post_id:int,title:string,language:string,preview:string}> $rows
+     * @param array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}>} $page
      */
-    private static function render_sandbox_demo_posts_table(array $rows): void
+    private static function render_sandbox_indexed_posts_table(array $page, string $query, string $selected_language, bool $search_submitted): void
     {
-        echo '<h3>Demo posts</h3>';
+        if ($page['total'] <= 0) {
+            echo '<p>No indexed posts are available yet.</p>';
+            return;
+        }
+
+        $start = (($page['page'] - 1) * $page['per_page']) + 1;
+        $end = min($page['total'], $start + count($page['rows']) - 1);
+        echo '<p>Showing ' . self::esc_html((string) $start) . '-' . self::esc_html((string) $end) . ' of ' . self::esc_html((string) $page['total']) . ' indexed post(s).</p>';
+
         echo '<table class="widefat striped">';
-        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Language</th><th scope="col">Content preview</th></tr></thead>';
+        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Language</th><th scope="col">Indexed length</th><th scope="col">Content preview</th></tr></thead>';
         echo '<tbody>';
-        foreach ($rows as $row) {
+        foreach ($page['rows'] as $row) {
             echo '<tr>';
-            echo '<td>' . ($row['post_id'] > 0 ? self::esc_html((string) $row['post_id']) : '&mdash;') . '</td>';
+            echo '<td>' . self::esc_html((string) $row['post_id']) . '</td>';
             echo '<td>' . self::esc_html($row['title']) . '</td>';
+            echo '<td><code>' . self::esc_html($row['post_type']) . '</code></td>';
+            echo '<td><code>' . self::esc_html($row['post_status']) . '</code></td>';
             echo '<td>' . self::esc_html($row['language']) . '</td>';
+            echo '<td>' . self::esc_html((string) $row['length']) . '</td>';
             echo '<td>' . self::esc_html($row['preview']) . '</td>';
             echo '</tr>';
         }
         echo '</tbody></table>';
+
+        if ($page['total_pages'] <= 1) {
+            return;
+        }
+
+        echo '<p class="tablenav-pages">';
+        echo '<span class="displaying-num">Page ' . self::esc_html((string) $page['page']) . ' of ' . self::esc_html((string) $page['total_pages']) . '</span> ';
+        if ($page['page'] > 1) {
+            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] - 1, $query, $selected_language, $search_submitted)) . '">Previous</a> ';
+        }
+        if ($page['page'] < $page['total_pages']) {
+            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] + 1, $query, $selected_language, $search_submitted)) . '">Next</a>';
+        }
+        echo '</p>';
     }
 
     /**
@@ -974,36 +1160,173 @@ final class WP_FTS_Plugin
         echo '<div class="notice ' . self::esc_attr($class) . '"><p>' . self::esc_html($message) . '</p></div>';
     }
 
-    /**
-     * Build rows for the demo corpus table from saved posts when available.
-     *
-     * @param int[] $demo_post_ids
-     * @return array<int,array{post_id:int,title:string,language:string,preview:string}>
-     */
-    private static function sandbox_demo_post_rows(array $demo_post_ids): array
+    private static function sandbox_indexed_posts_page_number(): int
     {
-        $rows = [];
-        foreach (self::sandbox_demo_posts() as $offset => $post_data) {
-            $post_id = (int) ($demo_post_ids[$offset] ?? 0);
-            $post = $post_id > 0 ? self::post_object($post_id) : null;
-            $language = self::sandbox_demo_language((int) $offset);
-            $language_label = self::sandbox_language_labels()[$language] ?? strtoupper($language);
-            $title = $post !== null && isset($post->post_title) && trim((string) $post->post_title) !== ''
-                ? (string) $post->post_title
-                : (string) ($post_data['post_title'] ?? '(untitled)');
-            $content = $post !== null && isset($post->post_content)
-                ? (string) $post->post_content
-                : (string) ($post_data['post_content'] ?? '');
-
-            $rows[] = [
-                'post_id' => $post_id,
-                'title' => $title,
-                'language' => sprintf('%s (%s)', $language_label, $language),
-                'preview' => self::sanitize_text($content),
-            ];
+        $raw = self::request_text_value($_GET, self::ADMIN_POSTS_PAGE_FIELD, 12);
+        if ($raw === '' || preg_match('/^[1-9][0-9]*$/', $raw) !== 1) {
+            return 1;
         }
 
-        return $rows;
+        return max(1, (int) $raw);
+    }
+
+    /**
+     * @return array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}>}
+     */
+    private static function empty_sandbox_indexed_posts_page(int $page = 1): array
+    {
+        return [
+            'page' => max(1, $page),
+            'per_page' => self::SANDBOX_INDEXED_POSTS_PER_PAGE,
+            'total' => 0,
+            'total_pages' => 1,
+            'rows' => [],
+        ];
+    }
+
+    /**
+     * Read the current indexed-post list from storage state, not the demo option.
+     *
+     * @return array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}>}
+     */
+    private static function sandbox_indexed_posts_page(int $page): array
+    {
+        $storage = self::storage(false);
+        $post_ids = array_values(array_unique(array_filter(
+            array_map('intval', $storage->all_doc_ids(false)),
+            static fn(int $post_id): bool => $post_id > 0
+        )));
+        sort($post_ids, SORT_NUMERIC);
+
+        $per_page = self::SANDBOX_INDEXED_POSTS_PER_PAGE;
+        $total = count($post_ids);
+        $total_pages = max(1, (int) ceil($total / $per_page));
+        $page = min(max(1, $page), $total_pages);
+        $page_ids = array_slice($post_ids, ($page - 1) * $per_page, $per_page);
+        $metadata = WP_FTS_StorageCompat::get_doc_metadata($storage, $page_ids);
+
+        $rows = [];
+        foreach ($page_ids as $post_id) {
+            $doc = $storage->get_doc($post_id);
+            if ($doc === null || (bool) ($doc['deleted'] ?? false)) {
+                continue;
+            }
+            $rows[] = self::sandbox_indexed_post_row($post_id, $metadata[$post_id] ?? [], $doc);
+        }
+
+        return [
+            'page' => $page,
+            'per_page' => $per_page,
+            'total' => $total,
+            'total_pages' => $total_pages,
+            'rows' => $rows,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,mixed> $doc
+     * @return array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}
+     */
+    private static function sandbox_indexed_post_row(int $post_id, array $metadata, array $doc): array
+    {
+        $post = self::post_object($post_id);
+        $post_type = self::metadata_or_post_value($metadata, $post, 'post_type');
+        $post_status = self::metadata_or_post_value($metadata, $post, 'post_status');
+        $lengths = WP_FTS_StorageCompat::doc_lang_lengths($doc, self::sandbox_indexed_language($metadata, $doc, 'en'));
+        $preview = (string) ($metadata['search_text'] ?? $metadata['excerpt'] ?? '');
+        if ($preview === '' && $post !== null && isset($post->post_content)) {
+            $preview = (string) $post->post_content;
+        }
+
+        return [
+            'post_id' => $post_id,
+            'title' => self::metadata_title($metadata, $post_id),
+            'post_type' => $post_type !== '' ? $post_type : 'unknown',
+            'post_status' => $post_status !== '' ? $post_status : 'unknown',
+            'language' => self::sandbox_indexed_post_language_display($metadata, $doc, $lengths),
+            'length' => array_sum($lengths),
+            'preview' => self::sanitize_text($preview),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param object|null $post
+     */
+    private static function metadata_or_post_value(array $metadata, ?object $post, string $field): string
+    {
+        if (isset($metadata[$field]) && is_scalar($metadata[$field]) && trim((string) $metadata[$field]) !== '') {
+            return (string) $metadata[$field];
+        }
+
+        if ($post !== null && isset($post->{$field}) && is_scalar($post->{$field}) && trim((string) $post->{$field}) !== '') {
+            return (string) $post->{$field};
+        }
+
+        return '';
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private static function metadata_title(array $metadata, int $post_id): string
+    {
+        if (isset($metadata['title']) && is_scalar($metadata['title']) && trim((string) $metadata['title']) !== '') {
+            return (string) $metadata['title'];
+        }
+
+        return self::post_title($post_id);
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,mixed> $doc
+     * @param array<string,int> $lengths
+     */
+    private static function sandbox_indexed_post_language_display(array $metadata, array $doc, array $lengths): string
+    {
+        $languages = array_keys($lengths);
+        if ($languages === []) {
+            $languages[] = self::sandbox_indexed_language($metadata, $doc, 'en');
+        }
+
+        $display = [];
+        foreach ($languages as $language) {
+            $display[] = self::sandbox_language_display($language);
+        }
+
+        return implode(', ', array_values(array_unique($display)));
+    }
+
+    private static function sandbox_language_display(string $language): string
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language);
+        if ($language === '') {
+            return 'unknown';
+        }
+
+        $label = self::sandbox_language_labels()[$language] ?? strtoupper($language);
+
+        return sprintf('%s (%s)', $label, $language);
+    }
+
+    private static function sandbox_indexed_posts_page_url(int $page, string $query, string $selected_language, bool $search_submitted): string
+    {
+        $params = [
+            'page' => self::ADMIN_PAGE_SLUG,
+            self::ADMIN_POSTS_PAGE_FIELD => (string) max(1, $page),
+        ];
+
+        if ($search_submitted) {
+            if ($query !== '') {
+                $params[self::ADMIN_QUERY_FIELD] = $query;
+            }
+            $params[self::ADMIN_LANG_FIELD] = $selected_language;
+            $params[self::ADMIN_SEARCH_FIELD] = '1';
+        }
+
+        return self::admin_tools_url() . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
     }
 
     /**

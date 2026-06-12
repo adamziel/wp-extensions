@@ -685,6 +685,11 @@ LIMIT %d",
     private function resolve_post_metadata_language(object $row): ?string
     {
         $postId = isset($row->ID) ? (int) $row->ID : 0;
+        $override = $this->resolve_plugin_post_language_override($postId);
+        if ($override !== null) {
+            return $override;
+        }
+
         if ($postId > 0 && function_exists('pll_get_post_language')) {
             $lang = pll_get_post_language($postId, 'locale');
             if (is_scalar($lang) && trim((string) $lang) !== '') {
@@ -709,6 +714,23 @@ LIMIT %d",
         }
 
         return null;
+    }
+
+    private function resolve_plugin_post_language_override(int $postId): ?string
+    {
+        if ($postId <= 0 || !function_exists('get_post_meta')) {
+            return null;
+        }
+
+        $metaKey = class_exists('WP_FTS_Plugin') ? WP_FTS_Plugin::LANGUAGE_META_KEY : '_wp_fts_index_language';
+        $lang = get_post_meta($postId, $metaKey, true);
+        if (!is_scalar($lang) || trim((string) $lang) === '') {
+            return null;
+        }
+
+        $lang = WP_FTS_TermNamespace::canonicalize_lang((string) $lang);
+
+        return $lang !== '' && $lang !== 'auto' ? $lang : null;
     }
 
     /**
