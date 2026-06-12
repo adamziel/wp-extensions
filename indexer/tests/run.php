@@ -3312,6 +3312,83 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
     }
 });
 
+test_case('polish compressed full pack snippets stay within playground memory limit', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for compressed full pack snippet memory validation',
+        'PHP zlib gzip support is unavailable, so compressed full pack snippet memory validation is skipped.'
+    );
+
+    $code = <<<'PHP'
+require 'src/bootstrap.php';
+
+$analyzer = new WP_FTS_Analyzer([
+    'default_lang' => 'pl',
+    'polish_lemma_pack' => WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest(),
+]);
+$storage = new WP_FTS_Storage_InMemory();
+$indexer = new WP_FTS_Indexer($storage, $analyzer);
+$text = 'W domach przy psach prowadzilismy notatki, samochodami odwiedzalismy katalog i zabralibysmy wpisy z zamkach.';
+$indexer->index_document_fields(941, [['name' => 'content', 'text' => $text]], [
+    'lang' => 'pl',
+    'metadata' => [
+        'post_id' => 941,
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'title' => 'Compressed full Polish memory guard',
+        'search_text' => $text,
+        'language' => 'pl',
+    ],
+]);
+
+$searcher = new WP_FTS_Searcher($storage, $analyzer);
+foreach ([
+    'prowadzic' => '<mark>prowadzilismy</mark>',
+    'zabrac' => '<mark>zabralibysmy</mark>',
+    'samochod' => '<mark>samochodami</mark>',
+    'dom' => '<mark>domach</mark>',
+    'pies' => '<mark>psach</mark>',
+] as $query => $expectedMark) {
+    $payload = $searcher->search($query, [
+        'lang' => 'pl',
+        'mode' => 'AND',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 180,
+    ]);
+
+    if (($payload['total'] ?? 0) !== 1) {
+        fwrite(STDERR, 'No result for ' . $query . "\n");
+        exit(10);
+    }
+
+    $snippet = (string) ($payload['results'][0]['snippet'] ?? '');
+    if (!str_contains($snippet, $expectedMark)) {
+        fwrite(STDERR, 'Missing highlight for ' . $query . ': ' . $snippet . "\n");
+        exit(11);
+    }
+}
+
+echo "ok\n";
+PHP;
+
+    $cli = test_run_subprocess(
+        [
+            PHP_BINARY,
+            '-d',
+            'memory_limit=128M',
+            '-r',
+            $code,
+        ],
+        dirname(__DIR__)
+    );
+
+    assert_same(0, $cli['exit'], 'compressed full pack snippets should not exhaust the Playground-sized PHP memory limit: ' . $cli['stderr']);
+    assert_contains('ok', $cli['stdout'], 'compressed full pack low-memory snippet smoke should complete');
+});
+
 test_case('polish PoliMorf importer deterministically generates sharded full-pack shape', function (): void {
     require_once __DIR__ . '/../tools/import-polish-polimorf-lemmatizer.php';
 
