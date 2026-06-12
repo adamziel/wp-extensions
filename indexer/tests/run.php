@@ -2559,6 +2559,30 @@ test_case('sandbox demo post save immediately refreshes index with sandbox analy
         ]);
         assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $html, 'edited Polish demo content should be searchable immediately after the post-save hook');
         assert_contains('<mark>miastach</mark>', $html, 'edited Polish demo content should highlight the matched inflected surface immediately');
+
+        $newPost = (object) [
+            'ID' => 904,
+            'post_title' => 'Custom Polish Ocean',
+            'post_content' => '<p>Łódź oraz Wrocław opisują życie w oceanach.</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-12 00:00:00',
+        ];
+        $GLOBALS['wp_fts_test_posts'][904] = $newPost;
+
+        WP_FTS_Plugin::handle_post_save(904, $newPost, true);
+
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'new published posts should not wait for the background queue in the sandbox preview');
+        assert_true(isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'ocean')]), 'new published Polish posts should be indexed through the lemmatizer pack');
+
+        $newPostHtml = $render([
+            'wp_fts_sandbox_query' => 'ocean',
+            'wp_fts_sandbox_lang' => 'pl',
+            'wp_fts_sandbox_search' => '1',
+        ]);
+        assert_contains('Custom Polish Ocean', $newPostHtml, 'new published posts should be searchable immediately in the sandbox');
+        assert_contains('<mark>oceanach</mark>', $newPostHtml, 'new published posts should highlight matched inflected Polish surfaces immediately');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -2831,7 +2855,7 @@ test_case('deactivation and uninstall keep index data while clearing operational
     }
 });
 
-test_case('runtime post hooks queue bounded indexing and tombstone invisible posts', function (): void {
+test_case('runtime post hooks index visible posts immediately and tombstone invisible posts', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -2857,26 +2881,22 @@ test_case('runtime post hooks queue bounded indexing and tombstone invisible pos
     try {
         WP_FTS_Plugin::handle_post_save(101, $post, true);
         WP_FTS_Plugin::handle_post_save(101, $post, true);
-        assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'save hooks should queue each post id only once');
-        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'save hook should schedule background processing');
-
-        assert_same(1, WP_FTS_Plugin::process_queue(1), 'queue processor should process a bounded batch');
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'processed ids should leave the queue');
-        assert_true(isset($fake->docs[101]) && $fake->docs[101]['is_deleted'] === 0, 'queue processing should write an active document');
-        assert_true($fake->terms !== [], 'queue processing should write term postings');
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'save hooks should not require background queue processing for visible posts');
+        assert_true(isset($fake->docs[101]) && $fake->docs[101]['is_deleted'] === 0, 'save hooks should write an active document immediately');
+        assert_true($fake->terms !== [], 'save hooks should write term postings immediately');
         assert_same([101], array_column(WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'doc_id'), 'search helper should expose the indexed public post');
-        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeExcerptSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include extracted excerpts');
-        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeCustomSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include selected custom fields');
-        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeRenderedSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include rendered-only block output');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeExcerptSignal', ['limit' => 10]), 'doc_id'), 'immediate indexing should include extracted excerpts');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeCustomSignal', ['limit' => 10]), 'doc_id'), 'immediate indexing should include selected custom fields');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeRenderedSignal', ['limit' => 10]), 'doc_id'), 'immediate indexing should include rendered-only block output');
         $filtered = (new WP_FTS_Searcher(WP_FTS_Plugin::storage(false), new WP_FTS_Analyzer()))->search('Needle', [
             'lang' => 'en',
             'include_total' => true,
             'post_status' => 'publish',
         ]);
-        assert_same(1, $filtered['total'], 'queued indexing should write metadata usable by status filters');
-        assert_contains('RuntimeExcerptSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep excerpt text for snippets');
-        assert_contains('RuntimeCustomSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep custom field text for snippets');
-        assert_contains('RuntimeRenderedSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep rendered text for snippets');
+        assert_same(1, $filtered['total'], 'immediate indexing should write metadata usable by status filters');
+        assert_contains('RuntimeExcerptSignal', $fake->docMeta[101]['search_text'] ?? '', 'immediate metadata should keep excerpt text for snippets');
+        assert_contains('RuntimeCustomSignal', $fake->docMeta[101]['search_text'] ?? '', 'immediate metadata should keep custom field text for snippets');
+        assert_contains('RuntimeRenderedSignal', $fake->docMeta[101]['search_text'] ?? '', 'immediate metadata should keep rendered text for snippets');
 
         $post->post_status = 'draft';
         WP_FTS_Plugin::handle_status_transition('draft', 'publish', $post);

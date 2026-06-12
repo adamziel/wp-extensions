@@ -141,7 +141,10 @@ final class WP_FTS_Plugin
             return;
         }
 
-        self::queue_post($post_id);
+        if ($post !== null) {
+            self::index_post($post, [], self::runtime_analyzer());
+            self::remove_from_queue([$post_id]);
+        }
     }
 
     /**
@@ -165,7 +168,8 @@ final class WP_FTS_Plugin
                 return;
             }
 
-            self::queue_post($post_id);
+            self::index_post($post, [], self::runtime_analyzer());
+            self::remove_from_queue([$post_id]);
             return;
         }
 
@@ -207,7 +211,7 @@ final class WP_FTS_Plugin
         foreach ($batch as $post_id) {
             $post = self::post_object($post_id);
             if ($post !== null && self::is_indexable_post($post)) {
-                self::index_post($post);
+                self::index_post($post, [], self::runtime_analyzer());
             } else {
                 self::tombstone_post($post_id);
             }
@@ -827,6 +831,14 @@ final class WP_FTS_Plugin
      */
     private static function sandbox_analyzer(): WP_FTS_Analyzer
     {
+        return self::runtime_analyzer();
+    }
+
+    /**
+     * Use the same analyzer for runtime indexing and product searches.
+     */
+    private static function runtime_analyzer(): WP_FTS_Analyzer
+    {
         return new WP_FTS_Analyzer([
             'polish_lemmatizer_pack' => self::sandbox_polish_lemmatizer_pack(),
         ]);
@@ -1133,7 +1145,7 @@ final class WP_FTS_Plugin
             $search_options['lang'] = (string) $opts['lang'];
         }
 
-        $searcher = new WP_FTS_Searcher(self::storage(false), new WP_FTS_Analyzer());
+        $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
         $visible = [];
         $offset = 0;
         $batch_limit = self::visibility_refill_batch_limit($limit);
@@ -1284,7 +1296,7 @@ final class WP_FTS_Plugin
     private static function index_post(object $post, array $opts = [], ?WP_FTS_Analyzer $analyzer = null): void
     {
         self::maybe_upgrade_schema();
-        (new WP_FTS_Indexer(self::storage(false), $analyzer ?? new WP_FTS_Analyzer()))->index_post($post, $opts);
+        (new WP_FTS_Indexer(self::storage(false), $analyzer ?? self::runtime_analyzer()))->index_post($post, $opts);
     }
 
     /**
