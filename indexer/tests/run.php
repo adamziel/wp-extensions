@@ -3279,6 +3279,39 @@ test_case('polish full analyzer pack validation streams rows without retaining r
     }
 });
 
+test_case('polish compressed full playground pack validates and lazy-loads full-only forms', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for compressed full pack validation',
+        'PHP zlib gzip support is unavailable, so compressed full pack validation is skipped.'
+    );
+
+    $manifest = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+    assert_true(is_file($manifest), 'compressed full playground pack manifest should be bundled');
+
+    $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifest, false);
+    assert_same('pl-polimorf-20180722-full', $validation['manifest']['pack_id'], 'compressed full pack id should match the generated PoliMorf pack');
+    assert_same(false, $validation['manifest']['fixture_only'], 'compressed full pack should not be fixture-only');
+    assert_same(false, $validation['rows_collected'], 'compressed full pack validation should stream without retaining rows');
+    assert_same(4748648, $validation['runtime_rows'], 'compressed full pack should expose the full generated row count');
+    assert_same('4ca60c36adeaa46ad93a499075707c5ac8782928496e23642401e4ddfc84e27f', $validation['manifest']['runtime']['total_sha256'], 'compressed full pack should keep the normalized uncompressed runtime digest');
+    assert_same(48, count($validation['runtime_files']), 'compressed full pack should keep the 48 generated runtime shards');
+    assert_same(WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP, $validation['runtime_files']['runtime/0001.tsv.gz']['compression'] ?? null, 'compressed runtime metadata should identify gzip shards');
+
+    $lemmatizer = WP_FTS_PolishMorfologikLemmatizer::from_manifest_file($manifest);
+    assert_same('pl-polimorf-20180722-full', $lemmatizer->pack_id(), 'lazy full lemmatizer should expose the compressed pack identity');
+    assert_true(!$lemmatizer->is_fixture_only(), 'lazy full lemmatizer should expose full-pack status');
+    foreach ([
+        'prowadzilismy' => 'prowadzic',
+        'zabralibysmy' => 'zabrac',
+        'domach' => 'dom',
+        'psach' => 'pies',
+        'samochodami' => 'samochod',
+    ] as $surface => $lemma) {
+        assert_same($lemma, $lemmatizer->stem($surface, 'pl'), "{$surface} should map through a compressed full-pack-only shard");
+    }
+});
+
 test_case('polish PoliMorf importer deterministically generates sharded full-pack shape', function (): void {
     require_once __DIR__ . '/../tools/import-polish-polimorf-lemmatizer.php';
 
@@ -3512,6 +3545,58 @@ test_case('polish lemma pack snippets highlight matched document surface forms',
         'highlight' => true,
     ]);
     assert_true(!str_contains((string) ($wpisPayload['results'][0]['snippet'] ?? ''), '<mark>wpis</mark>y'), 'snippet highlighter should not split a matched Polish surface token');
+});
+
+test_case('admin sandbox full Polish pack maps full-only forms and highlights surfaces', function (): void {
+    $sandboxAnalyzer = new ReflectionMethod(WP_FTS_Plugin::class, 'sandbox_analyzer');
+    $sandboxAnalyzer->setAccessible(true);
+    $analyzer = $sandboxAnalyzer->invoke(null);
+    assert_true($analyzer instanceof WP_FTS_Analyzer, 'sandbox analyzer should be constructible');
+
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_same(['wpis'], $analyzer->analyze_query('wpisy', ['lang' => 'pl']), 'sandbox should fall back to the fixture pack when gzip is unavailable');
+        assert_same(['prowadzilismy'], $analyzer->analyze_query('prowadzilismy', ['lang' => 'pl']), 'gzip fallback should not pretend to know full-pack-only forms');
+        return;
+    }
+
+    foreach ([
+        'prowadzilismy' => ['prowadzic'],
+        'zabralibysmy' => ['zabrac'],
+        'domach' => ['dom'],
+        'psach' => ['pies'],
+        'samochodami' => ['samochod'],
+    ] as $surface => $expectedTerms) {
+        assert_same($expectedTerms, $analyzer->analyze_query($surface, ['lang' => 'pl']), "sandbox analyzer should map {$surface} through the compressed full pack");
+    }
+
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $text = 'W domach przy psach prowadzilismy notatki i zabralibysmy katalog samochodami.';
+    $indexer->index_document_fields(940, [['name' => 'content', 'text' => $text]], [
+        'lang' => 'pl',
+        'metadata' => [
+            'post_id' => 940,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'title' => 'Compressed full Polish sandbox',
+            'search_text' => $text,
+            'language' => 'pl',
+        ],
+    ]);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $payload = $searcher->search('prowadzic', [
+        'lang' => 'pl',
+        'mode' => 'AND',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 180,
+    ]);
+
+    assert_same(1, $payload['total'], 'full-pack-only query lemma should find the indexed sandbox-style Polish document');
+    assert_contains('<mark>prowadzilismy</mark>', (string) ($payload['results'][0]['snippet'] ?? ''), 'full-pack-only snippet should mark the matched document surface');
 });
 
 test_case('stemming is enabled by default and can be explicitly disabled', function (): void {

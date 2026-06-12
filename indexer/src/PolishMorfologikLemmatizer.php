@@ -42,7 +42,7 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
     public static function from_manifest_file(string $manifestPath, ?WP_FTS_AnalyzerPackValidator $validator = null): self
     {
         $validator ??= new WP_FTS_AnalyzerPackValidator();
-        $metadata = $validator->validate($manifestPath, false);
+        $metadata = $validator->validate_metadata($manifestPath, false);
         $eager = (bool) $metadata['manifest']['fixture_only'] && self::runtime_rows_count($metadata) <= self::EAGER_ROW_LIMIT;
         if ($eager) {
             $validation = $validator->validate($manifestPath, true);
@@ -193,7 +193,7 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
     {
         $lemmas = [];
         foreach ($this->candidate_runtime_files($term) as $file) {
-            $shard = $this->load_runtime_file((string) $file['path']);
+            $shard = $this->load_runtime_file($file);
             if (isset($shard['ambiguous_surfaces'][$term])) {
                 return $term;
             }
@@ -210,7 +210,7 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
     }
 
     /**
-     * @return array<int,array{path:string,rows:int,sha256:string,first_surface?:string,last_surface?:string}>
+     * @return array<int,array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string}>
      */
     private function candidate_runtime_files(string $term): array
     {
@@ -228,16 +228,19 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
     }
 
     /**
+     * @param array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string} $file
      * @return array{lemma_by_surface:array<string,string>,ambiguous_surfaces:array<string,bool>}
      */
-    private function load_runtime_file(string $path): array
+    private function load_runtime_file(array $file): array
     {
+        $path = (string) $file['path'];
         if (isset($this->shardCache[$path])) {
             return $this->shardCache[$path];
         }
 
         $lemmasBySurface = [];
-        $handle = fopen($path, 'rb');
+        $compression = isset($file['compression']) ? (string) $file['compression'] : null;
+        $handle = $this->open_runtime_file($path, $compression);
         if (!is_resource($handle)) {
             return [
                 'lemma_by_surface' => [],
@@ -245,7 +248,7 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
             ];
         }
 
-        while (($line = fgets($handle)) !== false) {
+        while (($line = $this->read_runtime_line($handle, $compression)) !== false) {
             $line = rtrim((string) $line, "\n");
             $line = rtrim($line, "\r");
             if ($line === '' || $line[0] === '#') {
@@ -257,7 +260,7 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
             }
             $lemmasBySurface[$columns[0]][$columns[1]] = true;
         }
-        fclose($handle);
+        $this->close_runtime_file($handle, $compression);
 
         $lemmaBySurface = [];
         $ambiguousSurfaces = [];
@@ -287,6 +290,52 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
     }
 
     /**
+     * Open a runtime shard without materializing the full compressed pack.
+     *
+     * @return resource|null
+     */
+    private function open_runtime_file(string $path, ?string $compression): mixed
+    {
+        if ($compression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+                return null;
+            }
+            $handle = gzopen($path, 'rb');
+
+            return is_resource($handle) ? $handle : null;
+        }
+
+        $handle = fopen($path, 'rb');
+
+        return is_resource($handle) ? $handle : null;
+    }
+
+    /**
+     * @param resource $handle
+     */
+    private function read_runtime_line(mixed $handle, ?string $compression): string|false
+    {
+        if ($compression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            return gzgets($handle);
+        }
+
+        return fgets($handle);
+    }
+
+    /**
+     * @param resource $handle
+     */
+    private function close_runtime_file(mixed $handle, ?string $compression): void
+    {
+        if ($compression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            gzclose($handle);
+            return;
+        }
+
+        fclose($handle);
+    }
+
+    /**
      * @param array<string,mixed> $validation
      */
     private function build_index_signature(array $validation): string
@@ -297,6 +346,9 @@ final class WP_FTS_PolishMorfologikLemmatizer implements WP_FTS_Stemmer
                 'sha256' => $file['sha256'],
                 'rows' => $file['rows'],
             ];
+            if (isset($file['compression'])) {
+                $runtime[$relativePath]['compression'] = $file['compression'];
+            }
         }
         ksort($runtime, SORT_STRING);
 

@@ -448,7 +448,7 @@ final class WP_FTS_Plugin
                 'post_title' => 'FTS Sandbox: Polish Lemmatizer Demo',
                 'post_name' => 'wp-fts-sandbox-polish-lemmatizer-demo',
                 'lang' => 'pl',
-                'post_content' => '<p>W książkach i zamkach wyszukujemy wpisy oraz kierujemy katalog.</p>',
+                'post_content' => '<p>W książkach i zamkach wyszukujemy wpisy oraz kierujemy katalog. W domach przy psach prowadziliśmy notatki i zabralibyśmy katalog samochodami.</p>',
                 'post_excerpt' => 'Polish lemmatizer demo for pack-backed book, castle, entry, and routing forms.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
@@ -792,13 +792,23 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Use the bundled opt-in Polish lemmatizer fixture pack for the admin demo corpus.
+     * Use the full compressed Polish lemmatizer pack for the admin demo corpus when available.
      */
     private static function sandbox_analyzer(): WP_FTS_Analyzer
     {
         return new WP_FTS_Analyzer([
-            'polish_lemmatizer_pack' => true,
+            'polish_lemmatizer_pack' => self::sandbox_polish_lemmatizer_pack(),
         ]);
+    }
+
+    private static function sandbox_polish_lemmatizer_pack(): bool|string
+    {
+        $manifestPath = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+        if (is_file($manifestPath) && WP_FTS_AnalyzerPackValidator::gzip_available()) {
+            return $manifestPath;
+        }
+
+        return true;
     }
 
     /**

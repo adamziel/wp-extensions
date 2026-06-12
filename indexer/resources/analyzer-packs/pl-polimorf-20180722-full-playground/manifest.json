@@ -1,0 +1,452 @@
+{
+    "schema_version": 1,
+    "pack_id": "pl-polimorf-20180722-full",
+    "language": "pl",
+    "version": "2018.07.22-external-pack-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "compressed-runtime-files"
+    ],
+    "runtime": {
+        "format": "wp-fts-polish-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer pl with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 4748648,
+        "total_sha256": "4ca60c36adeaa46ad93a499075707c5ac8782928496e23642401e4ddfc84e27f",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "7d2d9e98202567b594aef49d287b2d51c042d54e532df783cbd3562f0a607d7e",
+                "rows": 100000,
+                "first_surface": "a",
+                "last_surface": "balkanskosciom",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0002.tsv.gz",
+                "sha256": "57879c2c0287720e59ff88553f6d612be2ef929fcaab3c40402510cd57b18f46",
+                "rows": 100000,
+                "first_surface": "balkansku",
+                "last_surface": "burdonowosciom",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0003.tsv.gz",
+                "sha256": "77beabb82084883ffe23075d9b244e6e99683b650a44ba88d8eb48f712b27817",
+                "rows": 100000,
+                "first_surface": "burdonowy",
+                "last_surface": "czynili",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0004.tsv.gz",
+                "sha256": "edcaa4f994c40b00fb1d7fef0838b2431892e895a388f393b5962be69eef946a",
+                "rows": 100000,
+                "first_surface": "czyniliby",
+                "last_surface": "dotaskalbys",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0005.tsv.gz",
+                "sha256": "d443f8ca250f049afced305ec9696a59349b25a23c458056d55976954ad91985",
+                "rows": 100000,
+                "first_surface": "dotaskalem",
+                "last_surface": "eutanazyjnemu",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0006.tsv.gz",
+                "sha256": "ace9014e1595f3cb05b2aeae96afdc2a3f5bd82e2602d403469f795ec0731e73",
+                "rows": 100000,
+                "first_surface": "eutanazyjni",
+                "last_surface": "golarn",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0007.tsv.gz",
+                "sha256": "fa561b3ce1981ec1da43e850d56144e75486ce5e9c61e7f1496226c643e7fd3b",
+                "rows": 100000,
+                "first_surface": "golarni",
+                "last_surface": "inkwirentami",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0008.tsv.gz",
+                "sha256": "2240e63e221f5d677a9c230b210d44bf08a7f6036d8151d587ca420f02d23c83",
+                "rows": 100000,
+                "first_surface": "inkwirentem",
+                "last_surface": "keru",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0009.tsv.gz",
+                "sha256": "f03df687e4001da204b55c1530fa82e6da18b170cd76cbbb6abe1d90f8b8d4eb",
+                "rows": 100000,
+                "first_surface": "kery",
+                "last_surface": "kremlinologiem",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0010.tsv.gz",
+                "sha256": "c79f99da627c3f218e609f23944502efcc02630438b884e696c6bed01662c3e9",
+                "rows": 100000,
+                "first_surface": "kremlinologii",
+                "last_surface": "lopatacze",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0011.tsv.gz",
+                "sha256": "18b16b4dc5886c0c279c54f6e47af85c19f6ad689868df6274a7e865734dcdb3",
+                "rows": 100000,
+                "first_surface": "lopataczem",
+                "last_surface": "milujac",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0012.tsv.gz",
+                "sha256": "735ceadef64d2b53629875af7826faddef40da9ee07a17150385e32a0320d8d8",
+                "rows": 100000,
+                "first_surface": "milujaca",
+                "last_surface": "najuporczywsza",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0013.tsv.gz",
+                "sha256": "0ea1b2620ebeee5c088ef90b7a4a923b7cdbf093ce452a96347fd50c15a8b97d",
+                "rows": 100000,
+                "first_surface": "najuporczywsze",
+                "last_surface": "nieapollinskiego",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0014.tsv.gz",
+                "sha256": "6bfb6b0030096676e35e5792bc8c6cadbc9c1f74a713a0feaecd8506b6c1490e",
+                "rows": 100000,
+                "first_surface": "nieapollinskiej",
+                "last_surface": "niedniowkowi",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0015.tsv.gz",
+                "sha256": "6357117a53e5692db37b354f0a0259be3c82dec51ee81c2e6e40ddf34aa96c23",
+                "rows": 100000,
+                "first_surface": "niedniowkowosc",
+                "last_surface": "nieharnasiowy",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0016.tsv.gz",
+                "sha256": "f1fd7d60af00d091d6dde9331e94f7e784cb18073f1ac60b5b4949e296532d3f",
+                "rows": 100000,
+                "first_surface": "nieharnasiowych",
+                "last_surface": "niekwapionosciach",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0017.tsv.gz",
+                "sha256": "6cbbf4b0cb85dbb5c5cf9d3035cd5fd9da69a1dda7f6590df4109b4db84d0966",
+                "rows": 100001,
+                "first_surface": "niekwapionosciami",
+                "last_surface": "nienawiedzeni",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0018.tsv.gz",
+                "sha256": "9fd65f231e1c514266502112130dc5f3c403849216c1b7146a5c7b595e356e9e",
+                "rows": 100000,
+                "first_surface": "nienawiedzenia",
+                "last_surface": "nieotepienne",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0019.tsv.gz",
+                "sha256": "8552b298bb8bc0678ef0d11c444b7ca320eacd4dd923159fde819cfd2bde0cff",
+                "rows": 100000,
+                "first_surface": "nieotepiennego",
+                "last_surface": "nieporozswiecania",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0020.tsv.gz",
+                "sha256": "031a24dfaff27a79136eec1783cf02a7057bd6e0759ed19e2b71b748928faa90",
+                "rows": 100000,
+                "first_surface": "nieporozswiecaniach",
+                "last_surface": "nieprzyparta",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0021.tsv.gz",
+                "sha256": "a5c03b433988dd227d8f2e65be15907f9c0ffa3460df45f2875b8483f08cf019",
+                "rows": 100000,
+                "first_surface": "nieprzyparte",
+                "last_surface": "niesielskosciami",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0022.tsv.gz",
+                "sha256": "b23048f8742b031d412db2e826a7f72d9bb1e62303d2c1b07b7255350ce0435d",
+                "rows": 100000,
+                "first_surface": "niesielskosciom",
+                "last_surface": "nietrasowanemu",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0023.tsv.gz",
+                "sha256": "8777aa6dde8fc46d9474c3ef60d90a8ae85573e0953f9625f4da1e0399df384a",
+                "rows": 100000,
+                "first_surface": "nietrasowani",
+                "last_surface": "niewroniego",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0024.tsv.gz",
+                "sha256": "bad31a939c16fa44b1f61f2a25ab905951f5c53907441055388d54a15363c02d",
+                "rows": 100000,
+                "first_surface": "niewroniej",
+                "last_surface": "niezamszana",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0025.tsv.gz",
+                "sha256": "79c2ea062d8d15b4564f5a127cbb2600549a11737fc1aa7f12bbe4ce8766f18b",
+                "rows": 100000,
+                "first_surface": "niezamszane",
+                "last_surface": "nowozelandczycy",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0026.tsv.gz",
+                "sha256": "24f537bc02dac3c83a859b97ec7829b14ef91a01d691148e0ddbcd92ced91626",
+                "rows": 100000,
+                "first_surface": "nowozelandczyk",
+                "last_surface": "odludziu",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0027.tsv.gz",
+                "sha256": "0d187219ea00e42babb5f1d36631a5b53daf13d7d0fcd493db5e004d99dba1e1",
+                "rows": 100000,
+                "first_surface": "odludztw",
+                "last_surface": "opiesnilbys",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0028.tsv.gz",
+                "sha256": "73b46fe40b6999fb1a0b301bd720feddf29fe9747098a1fe8ff8660b152e7823",
+                "rows": 100000,
+                "first_surface": "opiesnilem",
+                "last_surface": "pawiowym",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0029.tsv.gz",
+                "sha256": "6d93d47dc48b9a7c5c73e0550fc2cca031522a9251d1adf0a6510741a74000a6",
+                "rows": 100001,
+                "first_surface": "pawiowymi",
+                "last_surface": "podlesnymi",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0030.tsv.gz",
+                "sha256": "8de37d1b8faa6a59d979d26f4e9ac41297837f13a2206042ebe2b21fc9d2f365",
+                "rows": 100000,
+                "first_surface": "podleszczyk",
+                "last_surface": "ponawieszala",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0031.tsv.gz",
+                "sha256": "9f553ff30980288753802d5304d2f2324b4a1de03c3e0ab752253904d4df6a9d",
+                "rows": 100000,
+                "first_surface": "ponawieszalaby",
+                "last_surface": "powylatuj",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0032.tsv.gz",
+                "sha256": "a1ad3cf1f5aab64f6215fc00a21d94c3bbec1bbe90ba0eeb9f9d6070f25b94cc",
+                "rows": 100000,
+                "first_surface": "powylatuja",
+                "last_surface": "przedziurawieniom",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0033.tsv.gz",
+                "sha256": "9a4ae187c7c3b6dcc550fb42dac4b901c68e9b31d28ed1b469b2edbf6843bfc4",
+                "rows": 100000,
+                "first_surface": "przedziurawieniu",
+                "last_surface": "przyglodzilibysmy",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0034.tsv.gz",
+                "sha256": "1f6b36082878170e77ad4a0b3f271f8caa8f71e3e3a0fee0921ee7f5276df2a3",
+                "rows": 100000,
+                "first_surface": "przyglodziliscie",
+                "last_surface": "relikwiowi",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0035.tsv.gz",
+                "sha256": "a1401ed8912e1d1bfcb084366458324bfaf6a4e35d2f35b4ffdc49d59cf033c1",
+                "rows": 100000,
+                "first_surface": "relikwiowo",
+                "last_surface": "rozprostowalem",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0036.tsv.gz",
+                "sha256": "66418bad207e92a51d3c72bc3216c1d2498bfcb96f13cc9e00da7b240d382013",
+                "rows": 100000,
+                "first_surface": "rozprostowales",
+                "last_surface": "sepnosciom",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0037.tsv.gz",
+                "sha256": "50e3062c627459d3f3619a8a90da95a4b412bcc25641c605a91af35e9355ce10",
+                "rows": 100000,
+                "first_surface": "sepny",
+                "last_surface": "spektru",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0038.tsv.gz",
+                "sha256": "80ac0c82dd2a725a41fb69296a580b976fd00c75f9178cf26c1389fee4dd4ed8",
+                "rows": 100000,
+                "first_surface": "spektrum",
+                "last_surface": "swiniarkach",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0039.tsv.gz",
+                "sha256": "3c7fd75cdc604aeebe3674e75241d4d5949755cda74c8de534047d1788ce49d7",
+                "rows": 100000,
+                "first_surface": "swiniarkami",
+                "last_surface": "topor",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0040.tsv.gz",
+                "sha256": "0b452479b0de46bf97aaa693e2fb3f5c16c30b7e2292b50390f5e055395a15d5",
+                "rows": 100000,
+                "first_surface": "topora",
+                "last_surface": "umawiajacymi",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0041.tsv.gz",
+                "sha256": "8d84812d46227b923625de9173b9e0ee4a7a1d113bb8b25672ea4d9efb1f8bf7",
+                "rows": 100000,
+                "first_surface": "umawiajcie",
+                "last_surface": "wasisci",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0042.tsv.gz",
+                "sha256": "9995939c24a14ec84a35e5cbf143dd3838bc80eab2b6490a8ff23713e2420891",
+                "rows": 100000,
+                "first_surface": "wasisk",
+                "last_surface": "wsiewalibyscie",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0043.tsv.gz",
+                "sha256": "64b8738d9ee91bd194f67867c1747cf54d3c284cadf213d6d55e090cd2db7f69",
+                "rows": 100000,
+                "first_surface": "wsiewalibysmy",
+                "last_surface": "wymazecie",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0044.tsv.gz",
+                "sha256": "f63a70b20ad9d76008c935d178d46c5d4ac11056c0dc88184ecb8352ad5321c0",
+                "rows": 100000,
+                "first_surface": "wymazem",
+                "last_surface": "wzrodzilbys",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0045.tsv.gz",
+                "sha256": "9fbbcdf484fabbe11d751f95ba20bd6e4425850e26eb6fe0fb026bdf1900b286",
+                "rows": 100000,
+                "first_surface": "wzrodzilem",
+                "last_surface": "zanitowano",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0046.tsv.gz",
+                "sha256": "dd1ad2d8cb2e725857a5f8c7f54491be4e8f89075f9d695e62ef8d816982493e",
+                "rows": 100000,
+                "first_surface": "zanitowany",
+                "last_surface": "zdelabializowalabys",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0047.tsv.gz",
+                "sha256": "75e42f89d7ee16484096d7291bf5566d83244758a49355839be985b906a9195f",
+                "rows": 100000,
+                "first_surface": "zdelabializowalam",
+                "last_surface": "zollach",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0048.tsv.gz",
+                "sha256": "962816bc004ce163ca76bc725acfdff9c397b3e3db1299ce808e96baef8f81ef",
+                "rows": 48646,
+                "first_surface": "zollami",
+                "last_surface": "zzyzniwszy",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "PoliMorf Polish morphological dictionary",
+        "version": "2018.07.22",
+        "file": "polimorf-20180722.tab.gz",
+        "url": "https://clarin-pl.eu/dspace/bitstream/handle/11321/577/polimorf-20180722.tab.gz?isAllowed=y&sequence=1",
+        "artifact_sha256": "2b1f07224c434c8710def382d497cf8221d5764e8d683d2ad34242810ab72746",
+        "byte_count": 41550540,
+        "retrieval_note": "External pack workflow verified the source SHA-256 and byte count before import; generated runtime data is installed outside the plugin package.",
+        "column_model": {
+            "format": "polimorf-five-column-tab",
+            "surface_column": 0,
+            "lemma_column": 1,
+            "tag_column": 2,
+            "qualifier_column": 3,
+            "flags_column": 4
+        },
+        "parse_stats": {
+            "source_lines": 7374578,
+            "metadata_lines": 32,
+            "lexical_rows": 7374546,
+            "invalid_column_rows": 0,
+            "skipped_invalid_tokens": 12362,
+            "accepted_source_rows": 7362184
+        }
+    },
+    "license": {
+        "spdx_id": "BSD-2-Clause",
+        "license_url": "https://opensource.org/licenses/BSD-2-Clause",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "PoliMorf is distributed by CLARIN-PL and includes Morfeusz SGJP and Morfologik-derived data."
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-polish-polimorf-lemmatizer.php",
+        "importer_commit": "fdde5bf5d9f9750a1262291a60d49171d2204dee",
+        "importer_command": "php indexer/tools/import-polish-polimorf-lemmatizer.php --source=<artifact> --out=<pack-dir> --pack-id=pl-polimorf-20180722-full --version=2018.07.22-external-pack-v1 --source-url=https://clarin-pl.eu/dspace/bitstream/handle/11321/577/polimorf-20180722.tab.gz?isAllowed=y&sequence=1",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false
+    }
+}

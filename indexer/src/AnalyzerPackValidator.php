@@ -13,6 +13,7 @@ final class WP_FTS_AnalyzerPackValidator
     private const MANIFEST_SCHEMA_VERSION = 1;
     private const POLISH_RUNTIME_FORMAT = 'wp-fts-polish-lemma-tsv-v1';
     private const DEFAULT_MAX_COLLECTED_RUNTIME_ROWS = 50000;
+    public const RUNTIME_COMPRESSION_GZIP = 'gzip';
 
     private int $maxCollectedRuntimeRows;
 
@@ -34,6 +35,102 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
+     * Return the bundled compressed full Polish pack used by the Playground sandbox.
+     */
+    public static function default_polish_playground_full_manifest(): string
+    {
+        return dirname(__DIR__) . '/resources/analyzer-packs/pl-polimorf-20180722-full-playground/manifest.json';
+    }
+
+    /**
+     * Report whether this PHP runtime can stream gzip-compressed runtime shards.
+     */
+    public static function gzip_available(): bool
+    {
+        return function_exists('gzopen') && function_exists('gzgets') && function_exists('gzclose');
+    }
+
+    /**
+     * Validate manifest shape, pack-local file references, optional compressed
+     * file digests, and declared runtime metadata without parsing all runtime rows.
+     *
+     * Use this for runtime construction of full packs; call validate() when a
+     * full row/digest audit is required.
+     *
+     * @return array{
+     *   manifest_path:string,
+     *   manifest_sha256:string,
+     *   manifest:array<string,mixed>,
+     *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
+     *   runtime_rows:int,
+     *   rows_collected:bool,
+     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string}>
+     * }
+     */
+    public function validate_metadata(string $manifestPath, bool $verifyRuntimeFileDigests = true): array
+    {
+        $manifestData = $this->load_validated_manifest($manifestPath);
+        $manifestPath = $manifestData['path'];
+        $manifest = $manifestData['manifest'];
+        $packDir = dirname($manifestPath);
+
+        $runtimeFiles = [];
+        $totalRows = 0;
+        foreach ($manifest['runtime']['files'] as $file) {
+            $runtimePath = $this->runtime_file_path($packDir, $file['path']);
+            $compression = $this->runtime_file_compression($file);
+            $this->ensure_runtime_compression_available($compression);
+            $digest = (string) $file['sha256'];
+            if ($verifyRuntimeFileDigests) {
+                $computedDigest = hash_file('sha256', $runtimePath);
+                if (!is_string($computedDigest) || $computedDigest !== $digest) {
+                    throw new RuntimeException("Runtime digest mismatch for {$file['path']}.");
+                }
+                $digest = $computedDigest;
+            }
+
+            $runtimeFile = [
+                'sha256' => $digest,
+                'rows' => (int) $file['rows'],
+                'path' => $runtimePath,
+            ];
+            if ($compression !== null) {
+                $runtimeFile['compression'] = $compression;
+            }
+            if (isset($file['first_surface'])) {
+                $runtimeFile['first_surface'] = (string) $file['first_surface'];
+            }
+            if (isset($file['last_surface'])) {
+                $runtimeFile['last_surface'] = (string) $file['last_surface'];
+            }
+            $runtimeFiles[(string) $file['path']] = $runtimeFile;
+            $totalRows += (int) $file['rows'];
+        }
+
+        if ($totalRows < 1) {
+            throw new RuntimeException('Analyzer pack runtime must contain at least one row.');
+        }
+        if (isset($manifest['runtime']['total_rows']) && $manifest['runtime']['total_rows'] !== $totalRows) {
+            throw new RuntimeException('Analyzer pack runtime total_rows mismatch.');
+        }
+
+        $manifestDigest = hash_file('sha256', $manifestPath);
+        if (!is_string($manifestDigest)) {
+            throw new RuntimeException('Could not compute manifest digest.');
+        }
+
+        return [
+            'manifest_path' => $manifestPath,
+            'manifest_sha256' => $manifestDigest,
+            'manifest' => $manifest,
+            'rows' => [],
+            'runtime_rows' => $totalRows,
+            'rows_collected' => false,
+            'runtime_files' => $runtimeFiles,
+        ];
+    }
+
+    /**
      * Validate a pack manifest and all referenced runtime files.
      *
      * Fixture packs may return their tiny reviewed row set for eager tests and
@@ -49,17 +146,16 @@ final class WP_FTS_AnalyzerPackValidator
      *   rows:array<int,array{surface:string,lemma:string,file:string,line:int}>,
      *   runtime_rows:int,
      *   rows_collected:bool,
-     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,first_surface?:string,last_surface?:string}>
+     *   runtime_files:array<string,array{sha256:string,rows:int,path:string,compression?:string,first_surface?:string,last_surface?:string}>
      * }
      */
     public function validate(string $manifestPath, bool $collectRows = true): array
     {
-        $manifestPath = $this->canonical_file($manifestPath, 'manifest');
-        $manifest = $this->read_manifest($manifestPath);
-        $this->validate_manifest_shape($manifest);
+        $manifestData = $this->load_validated_manifest($manifestPath);
+        $manifestPath = $manifestData['path'];
+        $manifest = $manifestData['manifest'];
 
         $packDir = dirname($manifestPath);
-        $this->validate_manifest_pack_files($manifest, $packDir);
         $rows = [];
         $collectRuntimeRows = $collectRows
             && (bool) $manifest['fixture_only']
@@ -70,12 +166,14 @@ final class WP_FTS_AnalyzerPackValidator
         $runtimeDigest = hash_init('sha256');
         foreach ($manifest['runtime']['files'] as $file) {
             $runtimePath = $this->runtime_file_path($packDir, $file['path']);
+            $compression = $this->runtime_file_compression($file);
+            $this->ensure_runtime_compression_available($compression);
             $digest = hash_file('sha256', $runtimePath);
             if (!is_string($digest) || $digest !== $file['sha256']) {
                 throw new RuntimeException("Runtime digest mismatch for {$file['path']}.");
             }
 
-            $fileResult = $this->parse_runtime_rows($runtimePath, $collectRuntimeRows, $previousKey, $runtimeDigest, $rows);
+            $fileResult = $this->parse_runtime_rows($runtimePath, $compression, $collectRuntimeRows, $previousKey, $runtimeDigest, $rows);
             if ($fileResult['rows_count'] !== (int) $file['rows']) {
                 throw new RuntimeException("Runtime row count mismatch for {$file['path']}.");
             }
@@ -86,6 +184,9 @@ final class WP_FTS_AnalyzerPackValidator
                 'rows' => $fileResult['rows_count'],
                 'path' => $runtimePath,
             ];
+            if ($compression !== null) {
+                $runtimeFile['compression'] = $compression;
+            }
             if ($fileResult['first_surface'] !== null) {
                 $runtimeFile['first_surface'] = $fileResult['first_surface'];
             }
@@ -222,6 +323,14 @@ final class WP_FTS_AnalyzerPackValidator
             if (isset($file['first_surface'], $file['last_surface']) && strcmp((string) $file['first_surface'], (string) $file['last_surface']) > 0) {
                 throw new RuntimeException('Analyzer pack runtime file surface range is invalid.');
             }
+            if (array_key_exists('compression', $file)) {
+                if ($file['compression'] !== self::RUNTIME_COMPRESSION_GZIP) {
+                    throw new RuntimeException('Analyzer pack runtime compression is not supported.');
+                }
+                if (!str_ends_with((string) $file['path'], '.gz')) {
+                    throw new RuntimeException('Analyzer pack gzip runtime files must use a .gz path.');
+                }
+            }
         }
     }
 
@@ -239,16 +348,14 @@ final class WP_FTS_AnalyzerPackValidator
      */
     private function parse_runtime_rows(
         string $path,
+        ?string $compression,
         bool &$collectRows,
         ?string &$previousGlobalKey,
         HashContext $runtimeDigest,
         array &$rows
     ): array
     {
-        $handle = fopen($path, 'rb');
-        if (!is_resource($handle)) {
-            throw new RuntimeException("Could not read analyzer pack runtime file {$path}.");
-        }
+        $handle = $this->open_runtime_file($path, $compression);
 
         $previousKey = null;
         $normalizer = new WP_FTS_Normalizer();
@@ -256,7 +363,7 @@ final class WP_FTS_AnalyzerPackValidator
         $rowsCount = 0;
         $firstSurface = null;
         $lastSurface = null;
-        while (($line = fgets($handle)) !== false) {
+        while (($line = $this->read_runtime_line($handle, $compression)) !== false) {
             $lineNumber++;
             $line = rtrim((string) $line, "\n");
             $line = rtrim($line, "\r");
@@ -276,11 +383,11 @@ final class WP_FTS_AnalyzerPackValidator
 
             $key = $surface . "\t" . $lemma;
             if ($previousKey !== null && strcmp($previousKey, $key) >= 0) {
-                fclose($handle);
+                $this->close_runtime_file($handle, $compression);
                 throw new RuntimeException("Runtime rows in {$path} must be unique and sorted by surface then lemma.");
             }
             if ($previousGlobalKey !== null && strcmp($previousGlobalKey, $key) >= 0) {
-                fclose($handle);
+                $this->close_runtime_file($handle, $compression);
                 throw new RuntimeException('Analyzer pack runtime rows must be globally unique and sorted.');
             }
             $previousKey = $key;
@@ -306,7 +413,7 @@ final class WP_FTS_AnalyzerPackValidator
             }
         }
 
-        fclose($handle);
+        $this->close_runtime_file($handle, $compression);
 
         return [
             'rows_count' => $rowsCount,
@@ -381,6 +488,90 @@ final class WP_FTS_AnalyzerPackValidator
         }
 
         $this->pack_relative_file_path($packDir, (string) $manifest['license']['notice_path'], 'license notice');
+    }
+
+    /**
+     * @return array{path:string,manifest:array<string,mixed>}
+     */
+    private function load_validated_manifest(string $manifestPath): array
+    {
+        $manifestPath = $this->canonical_file($manifestPath, 'manifest');
+        $manifest = $this->read_manifest($manifestPath);
+        $this->validate_manifest_shape($manifest);
+        $this->validate_manifest_pack_files($manifest, dirname($manifestPath));
+
+        return [
+            'path' => $manifestPath,
+            'manifest' => $manifest,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $file
+     */
+    private function runtime_file_compression(array $file): ?string
+    {
+        return isset($file['compression']) ? (string) $file['compression'] : null;
+    }
+
+    private function ensure_runtime_compression_available(?string $compression): void
+    {
+        if ($compression === null) {
+            return;
+        }
+        if ($compression === self::RUNTIME_COMPRESSION_GZIP && self::gzip_available()) {
+            return;
+        }
+
+        throw new RuntimeException('Analyzer pack gzip-compressed runtime files require PHP zlib gzip support.');
+    }
+
+    /**
+     * @return resource
+     */
+    private function open_runtime_file(string $path, ?string $compression): mixed
+    {
+        if ($compression === self::RUNTIME_COMPRESSION_GZIP) {
+            $this->ensure_runtime_compression_available($compression);
+            $handle = gzopen($path, 'rb');
+            if (!is_resource($handle)) {
+                throw new RuntimeException("Could not read analyzer pack gzip runtime file {$path}.");
+            }
+
+            return $handle;
+        }
+
+        $handle = fopen($path, 'rb');
+        if (!is_resource($handle)) {
+            throw new RuntimeException("Could not read analyzer pack runtime file {$path}.");
+        }
+
+        return $handle;
+    }
+
+    /**
+     * @param resource $handle
+     */
+    private function read_runtime_line(mixed $handle, ?string $compression): string|false
+    {
+        if ($compression === self::RUNTIME_COMPRESSION_GZIP) {
+            return gzgets($handle);
+        }
+
+        return fgets($handle);
+    }
+
+    /**
+     * @param resource $handle
+     */
+    private function close_runtime_file(mixed $handle, ?string $compression): void
+    {
+        if ($compression === self::RUNTIME_COMPRESSION_GZIP) {
+            gzclose($handle);
+            return;
+        }
+
+        fclose($handle);
     }
 
     private function validate_normalized_runtime_token(

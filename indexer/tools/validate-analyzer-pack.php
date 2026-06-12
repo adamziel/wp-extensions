@@ -21,7 +21,10 @@ foreach ($args as $arg) {
 $manifest ??= WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest();
 
 try {
-    $result = (new WP_FTS_AnalyzerPackValidator())->validate((string) $manifest, false);
+    $validator = new WP_FTS_AnalyzerPackValidator();
+    $result = $metadataOnly
+        ? $validator->validate_metadata((string) $manifest)
+        : $validator->validate((string) $manifest, false);
     $summary = [
         'status' => 'ok',
         'pack_id' => $result['manifest']['pack_id'],
