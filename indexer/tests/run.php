@@ -2338,6 +2338,11 @@ test_case('admin menu registration exposes a Tools FTS sandbox page', function (
 });
 
 test_case('authorized admin sandbox render includes search form and nonce-protected actions', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
     $oldGet = $_GET;
@@ -2350,9 +2355,13 @@ test_case('authorized admin sandbox render includes search form and nonce-protec
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
+        $wpdb = $oldWpdb;
     }
 
     assert_contains('Pure PHP FTS Sandbox', $html, 'sandbox page should render for authorized admins');
+    assert_contains('Demo posts and FTS index are ready', $html, 'authorized first render should auto-seed the demo corpus and index');
+    assert_same(3, count($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? []), 'authorized first render should create the three demo posts');
+    assert_true($fake->terms !== [], 'authorized first render should build FTS terms for the demo corpus');
     assert_contains('name="wp_fts_sandbox_query"', $html, 'sandbox page should include the search query field');
     assert_contains('name="wp_fts_sandbox_lang"', $html, 'sandbox page should include the query language selector');
     assert_contains('value="auto"', $html, 'sandbox language selector should include automatic detection');
@@ -2374,6 +2383,11 @@ test_case('authorized admin sandbox render includes search form and nonce-protec
 });
 
 test_case('unauthorized admin sandbox render is blocked safely', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $oldGet = $_GET;
     $oldPost = $_POST;
@@ -2385,10 +2399,122 @@ test_case('unauthorized admin sandbox render is blocked safely', function (): vo
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
+        $wpdb = $oldWpdb;
     }
 
     assert_contains('You do not have permission to use the FTS sandbox.', $html, 'sandbox page should show a safe unauthorized message');
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_action"'), 'unauthorized sandbox page should not render mutating action controls');
+    assert_same([], $GLOBALS['wp_fts_test_posts'], 'unauthorized sandbox render should not create demo posts');
+    assert_same([], $GLOBALS['wp_fts_test_options'], 'unauthorized sandbox render should not write demo options');
+    assert_same([], $fake->terms, 'unauthorized sandbox render should not build FTS terms');
+});
+
+test_case('authorized admin sandbox POST actions require nonce before demo mutation', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    try {
+        $_GET = [];
+        $_POST = [
+            'wp_fts_sandbox_action' => 'refresh_demo',
+            'wp_fts_sandbox_nonce' => 'bad-nonce',
+        ];
+        $badNonceHtml = wp_fts_test_capture_admin_sandbox();
+        assert_contains('The sandbox action could not be verified.', $badNonceHtml, 'bad nonce POST should report verification failure');
+        assert_same([], $GLOBALS['wp_fts_test_posts'], 'bad nonce POST should not create demo posts');
+        assert_same([], $GLOBALS['wp_fts_test_options'], 'bad nonce POST should not write demo options');
+        assert_same([], $fake->terms, 'bad nonce POST should not build FTS terms');
+
+        $_POST = [
+            'wp_fts_sandbox_action' => 'unsupported_demo_action',
+        ];
+        wp_fts_test_capture_admin_sandbox();
+        assert_same([], $GLOBALS['wp_fts_test_posts'], 'unsupported POST action should not fall through to auto-seed');
+        assert_same([], $GLOBALS['wp_fts_test_options'], 'unsupported POST action should not write demo options');
+        assert_same([], $fake->terms, 'unsupported POST action should not build FTS terms');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('initial authorized sandbox page load auto-seeds and automatic demo searches use supported partitions', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $render = static function (array $get = []): string {
+        $_POST = [];
+        $_GET = array_merge(['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG], $get);
+
+        return wp_fts_test_capture_admin_sandbox();
+    };
+    $search = static function (string $query, string $language = 'auto') use ($render): string {
+        return $render([
+            'wp_fts_sandbox_query' => $query,
+            'wp_fts_sandbox_lang' => $language,
+            'wp_fts_sandbox_search' => '1',
+        ]);
+    };
+
+    try {
+        $initialHtml = $render();
+        $demoPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
+        assert_same(3, count($demoPostIds), 'initial authorized page load should create the three demo posts without POST');
+        assert_contains('Demo posts and FTS index are ready', $initialHtml, 'initial authorized page load should report the one-time auto-seed');
+        assert_true($fake->terms !== [], 'initial authorized page load should build the demo index without POST');
+        $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($demoPostIds);
+        assert_same('en', $metadata[$demoPostIds[0]]['language'] ?? null, 'auto-seeded English demo metadata should be indexed');
+        assert_same('pl', $metadata[$demoPostIds[1]]['language'] ?? null, 'auto-seeded Polish demo metadata should be indexed');
+        assert_same('de', $metadata[$demoPostIds[2]]['language'] ?? null, 'auto-seeded German demo metadata should be indexed');
+
+        $secondHtml = $render();
+        assert_true(!str_contains($secondHtml, 'Demo posts and FTS index are ready'), 'ready sandbox should not repeat the first-load auto-seed notice');
+
+        $runHtml = $search('run');
+        assert_contains('Requested query language: <code>auto</code>', $runHtml, 'automatic run search should report auto request');
+        assert_contains('Resolved query language: <code>en</code>', $runHtml, 'automatic run search should resolve from English results');
+        assert_contains('FTS Sandbox: Running Notes', $runHtml, 'automatic run search should find the English demo post');
+
+        $wpisHtml = $search('wpis');
+        assert_contains('Requested query language: <code>auto</code>', $wpisHtml, 'automatic wpis search should report auto request');
+        assert_contains('Resolved query language: <code>pl</code>', $wpisHtml, 'automatic wpis search should resolve from Polish results');
+        assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $wpisHtml, 'automatic wpis search should find the Polish demo post');
+        assert_contains('<mark>wpisy</mark>', $wpisHtml, 'automatic wpis search should highlight the pack-backed Polish document form');
+
+        $routeHtml = $search('kierować');
+        assert_contains('Resolved query language: <code>pl</code>', $routeHtml, 'automatic kierować search should resolve from Polish results');
+        assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $routeHtml, 'automatic kierować search should find the Polish demo post');
+        assert_contains('<mark>kierujemy</mark>', $routeHtml, 'automatic kierować search should highlight the pack-backed Polish document form');
+
+        $germanHtml = $search('Fuehrung');
+        assert_contains('Resolved query language: <code>de</code>', $germanHtml, 'automatic Fuehrung search should resolve from German results');
+        assert_contains('FTS Sandbox: German Fuehrung', $germanHtml, 'automatic Fuehrung search should find the German demo post');
+
+        $explicitEnglishWpisHtml = $search('wpis', 'en');
+        assert_contains('Requested query language: <code>en</code>', $explicitEnglishWpisHtml, 'explicit English wpis search should report the requested language');
+        assert_contains('Resolved query language: <code>en</code>', $explicitEnglishWpisHtml, 'explicit English wpis search should keep the requested partition authoritative');
+        assert_contains('No results matched the current index.', $explicitEnglishWpisHtml, 'explicit English wpis search should not leak into the Polish partition');
+        assert_true(!str_contains($explicitEnglishWpisHtml, '<td><code>pl</code></td>'), 'explicit English wpis search should not render a Polish result row');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('admin sandbox demo indexing supports requested and detected languages', function (): void {

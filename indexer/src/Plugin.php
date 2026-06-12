@@ -268,6 +268,7 @@ final class WP_FTS_Plugin
 
         $messages = [];
         $demo_post_ids = self::sandbox_demo_post_ids();
+        $post_action_submitted = self::sandbox_post_action_submitted();
         $action = self::sandbox_post_action();
 
         if ($action !== '') {
@@ -291,6 +292,17 @@ final class WP_FTS_Plugin
                 } catch (Throwable $e) {
                     $messages[] = ['error', 'Could not build the demo index: ' . $e->getMessage()];
                 }
+            }
+        }
+        if ($action === '' && !$post_action_submitted) {
+            try {
+                $auto_seeded = self::maybe_auto_seed_sandbox_demo($demo_post_ids);
+                $demo_post_ids = $auto_seeded['post_ids'];
+                if ($auto_seeded['created'] || $auto_seeded['indexed']) {
+                    $messages[] = ['success', self::sandbox_auto_seed_message($auto_seeded)];
+                }
+            } catch (Throwable $e) {
+                $messages[] = ['error', 'Could not prepare the demo sandbox automatically: ' . $e->getMessage()];
             }
         }
 
@@ -334,6 +346,14 @@ final class WP_FTS_Plugin
         $action = self::sanitize_key(self::request_text_value($_POST, self::ADMIN_ACTION_FIELD, 40));
 
         return in_array($action, ['refresh_demo', 'index_demo'], true) ? $action : '';
+    }
+
+    /**
+     * Detect any submitted sandbox POST action, including unsupported values.
+     */
+    private static function sandbox_post_action_submitted(): bool
+    {
+        return self::request_text_value($_POST, self::ADMIN_ACTION_FIELD, 40) !== '';
     }
 
     /**
@@ -492,6 +512,123 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Ensure the authorized sandbox starts with a usable demo corpus and index.
+     *
+     * @param int[] $demo_post_ids
+     * @return array{post_ids:int[],created:bool,indexed:bool,processed:int}
+     */
+    private static function maybe_auto_seed_sandbox_demo(array $demo_post_ids): array
+    {
+        $created = false;
+        $indexed = false;
+        $processed = 0;
+
+        if (!self::sandbox_demo_posts_are_available($demo_post_ids)) {
+            $demo_post_ids = self::create_or_refresh_sandbox_demo_posts();
+            $created = true;
+        }
+
+        if (!self::sandbox_demo_index_is_current($demo_post_ids)) {
+            $index_result = self::index_sandbox_demo_posts();
+            $demo_post_ids = $index_result['post_ids'];
+            $processed = $index_result['processed'];
+            $indexed = true;
+        }
+
+        return [
+            'post_ids' => $demo_post_ids,
+            'created' => $created,
+            'indexed' => $indexed,
+            'processed' => $processed,
+        ];
+    }
+
+    /**
+     * @param array{post_ids:int[],created:bool,indexed:bool,processed:int} $auto_seeded
+     */
+    private static function sandbox_auto_seed_message(array $auto_seeded): string
+    {
+        if ($auto_seeded['created'] && $auto_seeded['indexed']) {
+            return sprintf('Demo posts and FTS index are ready (%d post(s) indexed).', $auto_seeded['processed']);
+        }
+
+        if ($auto_seeded['created']) {
+            return 'Demo posts are ready.';
+        }
+
+        return sprintf('Demo FTS index is ready (%d post(s) indexed).', $auto_seeded['processed']);
+    }
+
+    /**
+     * @param int[] $post_ids
+     */
+    private static function sandbox_demo_posts_are_available(array $post_ids): bool
+    {
+        if (count($post_ids) !== count(self::sandbox_demo_posts())) {
+            return false;
+        }
+
+        foreach ($post_ids as $post_id) {
+            if ((int) $post_id <= 0 || self::post_object((int) $post_id) === null) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param int[] $post_ids
+     */
+    private static function sandbox_demo_index_is_current(array $post_ids): bool
+    {
+        if (!self::sandbox_demo_posts_are_available($post_ids)) {
+            return false;
+        }
+
+        try {
+            $storage = self::storage(false);
+            $metadata = WP_FTS_StorageCompat::get_doc_metadata($storage, $post_ids);
+            foreach ($post_ids as $offset => $post_id) {
+                $post_id = (int) $post_id;
+                $expected_language = self::sandbox_demo_language((int) $offset);
+                $doc = $storage->get_doc($post_id);
+                if ($doc === null || (bool) ($doc['deleted'] ?? false)) {
+                    return false;
+                }
+
+                $lengths = WP_FTS_StorageCompat::doc_lang_lengths($doc, $expected_language);
+                if (($lengths[$expected_language] ?? 0) <= 0) {
+                    return false;
+                }
+
+                if (!isset($metadata[$post_id]) || self::sandbox_indexed_language($metadata[$post_id], $doc, $expected_language) !== $expected_language) {
+                    return false;
+                }
+            }
+        } catch (Throwable) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @param array<string,mixed> $doc
+     */
+    private static function sandbox_indexed_language(array $metadata, array $doc, string $fallback): string
+    {
+        foreach ([$metadata['language'] ?? null, $metadata['lang'] ?? null, $doc['primary_lang'] ?? null, $doc['lang'] ?? null] as $candidate) {
+            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $candidate, $fallback);
+            }
+        }
+
+        return WP_FTS_TermNamespace::canonicalize_lang($fallback);
+    }
+
+    /**
      * Read the GET search state.
      */
     private static function sandbox_search_submitted(): bool
@@ -532,6 +669,45 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * @return string[]
+     */
+    private static function sandbox_auto_search_languages(): array
+    {
+        return array_values(array_filter(
+            array_keys(self::sandbox_language_labels()),
+            static fn(string $language): bool => $language !== 'auto'
+        ));
+    }
+
+    /**
+     * @param array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}> $results
+     */
+    private static function sandbox_resolved_query_language(string $selected_language, string $searcher_language, array $results): string
+    {
+        if ($selected_language !== 'auto') {
+            return $searcher_language !== '' ? $searcher_language : $selected_language;
+        }
+
+        $result_languages = [];
+        foreach ($results as $row) {
+            $candidate = trim((string) ($row['language'] ?? ''));
+            if ($candidate === '') {
+                continue;
+            }
+            $language = WP_FTS_TermNamespace::canonicalize_lang($candidate);
+            if ($language !== '' && array_key_exists($language, self::sandbox_language_labels()) && $language !== 'auto') {
+                $result_languages[$language] = true;
+            }
+        }
+
+        if (count($result_languages) === 1) {
+            return (string) array_key_first($result_languages);
+        }
+
+        return 'auto';
+    }
+
+    /**
      * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
      */
     private static function empty_sandbox_search_results(string $selected_language): array
@@ -564,6 +740,8 @@ final class WP_FTS_Plugin
         if ($selected_language !== 'auto') {
             $search_options['lang'] = $selected_language;
             $search_options['query_lang'] = $selected_language;
+        } else {
+            $search_options['languages'] = self::sandbox_auto_search_languages();
         }
 
         $visible = [];
@@ -603,6 +781,7 @@ final class WP_FTS_Plugin
             }
             $offset += $search_options['limit'];
         }
+        $query_language = self::sandbox_resolved_query_language($selected_language, $query_language, $visible);
 
         return [
             'requested_lang' => $selected_language,
