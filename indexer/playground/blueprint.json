@@ -18,11 +18,8 @@
     {
       "step": "installPlugin",
       "pluginData": {
-        "resource": "git:directory",
-        "url": "https://github.com/adamziel/wp-extensions",
-        "path": "indexer",
-        "ref": "main",
-        "refType": "branch"
+        "resource": "url",
+        "url": "https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/indexer-preview.zip?v=20260612-sandbox-preview"
       },
       "options": {
         "activate": true,
