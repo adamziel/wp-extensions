@@ -2517,6 +2517,55 @@ test_case('initial authorized sandbox page load auto-seeds and automatic demo se
     }
 });
 
+test_case('sandbox demo post save immediately refreshes index with sandbox analyzer', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $render = static function (array $get = []): string {
+        $_POST = [];
+        $_GET = array_merge(['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG], $get);
+
+        return wp_fts_test_capture_admin_sandbox();
+    };
+
+    try {
+        $render();
+        $demoPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
+        assert_same(3, count($demoPostIds), 'sandbox save-hook regression should start from the three seeded demo posts');
+
+        $polishPostId = (int) $demoPostIds[1];
+        $polishPost = $GLOBALS['wp_fts_test_posts'][$polishPostId] ?? null;
+        assert_true(is_object($polishPost), 'sandbox save-hook regression should locate the Polish demo post');
+        $polishPost->post_content .= ' <p>Dopisane miastach powinno być widoczne od razu.</p>';
+        $GLOBALS['wp_fts_test_posts'][$polishPostId] = $polishPost;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [$polishPostId];
+
+        WP_FTS_Plugin::handle_post_save($polishPostId, $polishPost, true);
+
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'sandbox demo post save should remove its stale background queue entry');
+        assert_true(isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'miasto')]), 'sandbox demo post save should index the edited Polish form through the lemmatizer pack');
+
+        $html = $render([
+            'wp_fts_sandbox_query' => 'miasto',
+            'wp_fts_sandbox_lang' => 'pl',
+            'wp_fts_sandbox_search' => '1',
+        ]);
+        assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $html, 'edited Polish demo content should be searchable immediately after the post-save hook');
+        assert_contains('<mark>miastach</mark>', $html, 'edited Polish demo content should highlight the matched inflected surface immediately');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('admin sandbox demo indexing supports requested and detected languages', function (): void {
     global $wpdb;
 

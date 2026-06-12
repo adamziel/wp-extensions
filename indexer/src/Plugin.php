@@ -133,6 +133,11 @@ final class WP_FTS_Plugin
         $post = self::post_object($post_id, is_object($post) ? $post : null);
         if ($post !== null && !self::is_indexable_post($post)) {
             self::tombstone_post($post_id);
+            self::remove_from_queue([$post_id]);
+            return;
+        }
+
+        if ($post !== null && self::index_sandbox_demo_post_if_known($post_id, $post)) {
             return;
         }
 
@@ -156,12 +161,17 @@ final class WP_FTS_Plugin
         }
 
         if (self::is_indexable_post($post)) {
+            if (self::index_sandbox_demo_post_if_known($post_id, $post)) {
+                return;
+            }
+
             self::queue_post($post_id);
             return;
         }
 
         if ($old_status !== $new_status) {
             self::tombstone_post($post_id);
+            self::remove_from_queue([$post_id]);
         }
     }
 
@@ -498,11 +508,13 @@ final class WP_FTS_Plugin
                     'document_lang' => $language,
                     'metadata' => ['language' => $language],
                 ], self::sandbox_analyzer());
+                self::remove_from_queue([$post_id]);
                 $processed++;
                 continue;
             }
 
             self::tombstone_post($post_id);
+            self::remove_from_queue([$post_id]);
         }
 
         return [
@@ -626,6 +638,25 @@ final class WP_FTS_Plugin
         }
 
         return WP_FTS_TermNamespace::canonicalize_lang($fallback);
+    }
+
+    private static function index_sandbox_demo_post_if_known(int $post_id, object $post): bool
+    {
+        $demo_post_ids = self::sandbox_demo_post_ids();
+        $offset = array_search($post_id, $demo_post_ids, true);
+        if ($offset === false) {
+            return false;
+        }
+
+        $language = self::sandbox_demo_language((int) $offset);
+        self::index_post($post, [
+            'lang' => $language,
+            'document_lang' => $language,
+            'metadata' => ['language' => $language],
+        ], self::sandbox_analyzer());
+        self::remove_from_queue([$post_id]);
+
+        return true;
     }
 
     /**
@@ -1156,6 +1187,33 @@ final class WP_FTS_Plugin
         }
 
         self::schedule_queue_processor();
+    }
+
+    /**
+     * Remove ids that were indexed synchronously from the background queue.
+     *
+     * @param int[] $post_ids
+     */
+    private static function remove_from_queue(array $post_ids): void
+    {
+        $remove = [];
+        foreach ($post_ids as $post_id) {
+            $post_id = (int) $post_id;
+            if ($post_id > 0) {
+                $remove[$post_id] = true;
+            }
+        }
+        if ($remove === []) {
+            return;
+        }
+
+        $queue = [];
+        foreach (self::pending_queue() as $post_id) {
+            if (!isset($remove[$post_id])) {
+                $queue[] = $post_id;
+            }
+        }
+        self::set_option(self::QUEUE_OPTION, $queue);
     }
 
     /**
