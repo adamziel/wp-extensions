@@ -105,11 +105,13 @@ their own language partitions; Urdu also strips only common plural-oblique
 endings, including common feminine, masculine, and Arabic-loan plural forms.
 Persian-like text is not merged into Urdu routing. Polish morphology
 uses configured lemmatizer/analyzer packs where available; it is not driven by
-hard-coded word families. Missing packs, unsupported languages, baseline
-languages without verified morphology, and ambiguous forms keep conservative
-behavior. Chinese uses fallback CJK n-grams; none of these paths claim
-dictionary segmentation, dictionary lemmatization, or hard-coded word-family
-matching.
+hard-coded word families. Generic per-language lemma-pack infrastructure is
+available for future source-approved packs, but the only committed non-Polish
+pack is a synthetic test fixture. Missing packs, unsupported languages,
+baseline languages without verified morphology, and ambiguous forms keep
+conservative behavior. Chinese uses fallback CJK n-grams; none of these paths
+claim dictionary segmentation, dictionary lemmatization, or hard-coded
+word-family matching.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus deterministic

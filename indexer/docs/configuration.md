@@ -221,6 +221,30 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
+The same analyzer-pack runtime can be configured per language for future
+source-approved packs:
+
+```php
+$analyzer = new WP_FTS_Analyzer([
+    'lemma_packs_by_lang' => [
+        'bn' => '/srv/wp-fts-packs/bn-approved-lemma-pack/manifest.json',
+    ],
+]);
+```
+
+The alias `lemmatizer_packs_by_lang` accepts the same map shape. Each enabled
+pack must validate locally and its manifest `language` must match the configured
+language key. A valid pack takes precedence over the built-in baseline or
+Snowball path for that language. Missing, invalid, or language-mismatched packs
+are ignored so the existing fallback analyzer remains available. Enabled packs
+participate in the language-pipeline signature, so unchanged documents are
+rewritten when a pack changes.
+
+The repository includes a tiny `bn` synthetic fixture only to test this generic
+runtime contract. It is project-owned artificial data, default-disabled, and not
+Bengali dictionary or morphology coverage. Real Bengali, Urdu, and CJK lexical
+packs remain source-lock gated and are not bundled.
+
 Full generated packs stay opt-in and default-disabled. The full CLARIN-PL
 source archive, extracted TSV, and generated runtime shards are not bundled in
 this repository or plugin package. Users or build systems must generate and

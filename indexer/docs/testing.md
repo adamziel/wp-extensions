@@ -121,6 +121,18 @@ php -n tools/validate-analyzer-pack.php resources/analyzer-packs/pl-morfologik-p
 The validator checks manifest shape, runtime row normalization, duplicate rows,
 ambiguous no-op handling, and declared checksums for the bundled fixture pack.
 
+Validate the generic non-Polish lemma-pack runtime with the bundled synthetic
+Bengali contract fixture:
+
+```sh
+php tools/validate-analyzer-pack.php resources/analyzer-packs/bn-synthetic-lemma-fixture/manifest.json
+php -n tools/validate-analyzer-pack.php resources/analyzer-packs/bn-synthetic-lemma-fixture/manifest.json
+```
+
+This fixture is project-owned artificial data for runtime-contract testing
+only. It does not claim Bengali dictionary quality, Bengali lemmatization, or
+source-backed lexical coverage.
+
 Run the package-safe external pack workflow tests directly when changing the
 builder, importer options, validation boundary, or docs:
 

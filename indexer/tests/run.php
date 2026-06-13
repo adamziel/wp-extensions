@@ -3499,6 +3499,81 @@ test_case('polish verified stemmer excludes sandbox wyszukac family', function (
     }
 });
 
+test_case('generic synthetic Bengali lemma pack validates and routes by language', function (): void {
+    $manifest = WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest();
+    $validator = new WP_FTS_AnalyzerPackValidator();
+    $result = $validator->validate($manifest);
+
+    assert_same('bn-synthetic-lemma-fixture', $result['manifest']['pack_id'], 'synthetic Bengali fixture pack id should be stable');
+    assert_same('bn', $result['manifest']['language'], 'synthetic fixture should declare Bengali language routing');
+    assert_same(WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV, $result['manifest']['runtime']['format'], 'synthetic fixture should use the generic lemma TSV runtime format');
+    assert_true($result['manifest']['fixture_only'] === true, 'synthetic fixture must be fixture-only');
+    assert_true($result['manifest']['default_enabled'] === false, 'synthetic fixture must not be default-enabled');
+    assert_same(true, $result['rows_collected'], 'tiny synthetic fixture should retain rows for eager lookup tests');
+    assert_same(7, $result['runtime_rows'], 'synthetic fixture row count should validate');
+
+    $provenance = file_get_contents(dirname($manifest) . '/PROVENANCE.md');
+    assert_true(is_string($provenance), 'synthetic fixture provenance should be readable');
+    assert_contains('project-owned synthetic test data', $provenance, 'synthetic fixture provenance should identify project-owned rows');
+    assert_contains('not a Bengali dictionary', $provenance, 'synthetic fixture should not claim Bengali dictionary coverage');
+    assert_contains('No Bengali, Urdu, CJK, Jieba, Anvay, UrduHack, spaCy, Apertium', $provenance, 'synthetic fixture should reject real third-party lexical sources');
+
+    $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest);
+    assert_same('bn', $pack->language(), 'generic lemma pack should expose manifest language');
+    assert_same('bn', $pack->base_language_code(), 'generic lemma pack should expose base language routing');
+    assert_same('কক', $pack->stem('ককগ', 'bn'), 'generic lemma pack should map matching Bengali-script synthetic rows');
+    assert_same('সিনথ000লেমা', $pack->stem('সিনথ000গুলো', 'bn'), 'generic lemma pack should map synthetic suffix-shaped rows');
+    assert_same('ঘঘক', $pack->stem('ঘঘক', 'bn'), 'generic lemma pack should preserve ambiguous synthetic surfaces');
+    assert_same('ককগ', $pack->stem('ককগ', 'ur'), 'generic lemma pack should no-op other language partitions');
+    assert_same('ককগ', $pack->stem('ককগ', 'pl'), 'generic lemma pack should not leak into Polish');
+    assert_same(null, WP_FTS_LanguageLemmaPack::from_pack_option($manifest, 'en'), 'language-mismatched pack options should be rejected safely');
+});
+
+test_case('generic lemma packs by language beat baseline and fall back safely', function (): void {
+    $manifest = WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest();
+    $baseline = new WP_FTS_LanguagePipeline(['enable_stemming' => true]);
+    $packPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'lemma_packs_by_lang' => [
+            'bn' => $manifest,
+        ],
+    ]);
+    $aliasPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'lemmatizer_packs_by_lang' => [
+            'bn' => $manifest,
+        ],
+    ]);
+    $missingPackPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'lemma_packs_by_lang' => [
+            'bn' => __DIR__ . '/missing-bn-pack/manifest.json',
+        ],
+    ]);
+
+    assert_same(['কক'], $baseline->analyze('ককগুলো', 'bn'), 'Bengali baseline should strip the synthetic suffix-shaped key');
+    assert_same(['ককক'], $packPipeline->analyze('ককগুলো', 'bn'), 'generic Bengali pack should take precedence over the baseline for configured language');
+    assert_same(['সিনথ000লেমা'], $packPipeline->analyze('সিনথ000গুলো', 'bn'), 'generic Bengali pack should map the synthetic suffix-shaped fixture row');
+    assert_same(['ককক'], $aliasPipeline->analyze('ককগুলো', 'bn'), 'lemmatizer_packs_by_lang alias should load the same generic pack');
+    assert_same(['কক'], $missingPackPipeline->analyze('ককগুলো', 'bn'), 'missing generic pack should fall back to Bengali baseline safely');
+    assert_same(['ককগুলো'], $packPipeline->analyze('ককগুলো', 'ur'), 'Bengali pack should not affect Urdu partition');
+    assert_same(['ককগ'], $packPipeline->analyze('ককগ', 'pl'), 'Bengali pack should not affect Polish partition');
+
+    $defaultSignature = $baseline->index_signature();
+    $packSignature = $packPipeline->index_signature();
+    assert_true($defaultSignature !== $packSignature, 'language pipeline signature should change when a generic pack is enabled');
+    assert_contains('wp-fts-language-pipeline-v15:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
+
+    $defaultAnalyzer = new WP_FTS_Analyzer();
+    $packAnalyzer = new WP_FTS_Analyzer([
+        'lemma_packs_by_lang' => [
+            'bn' => $manifest,
+        ],
+    ]);
+    assert_same(['ককক'], $packAnalyzer->analyze_query('ককগুলো', ['lang' => 'bn']), 'analyzer should pass generic pack options into the language pipeline');
+    assert_true($defaultAnalyzer->index_signature() !== $packAnalyzer->index_signature(), 'analyzer signature should change when a generic pack is enabled');
+});
+
 test_case('polish Morfologik fixture pack validates manifest digests and rows', function (): void {
     $validator = new WP_FTS_AnalyzerPackValidator();
     $result = $validator->validate(WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest());

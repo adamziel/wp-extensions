@@ -477,7 +477,7 @@ test_case('quality corpus exposes Bengali Urdu baseline signature changes', func
         'baseline Bengali Urdu stemmer signature should identify v2 suffix rules'
     );
     assert_true(
-        str_contains($pipeline->index_signature(), 'wp-fts-language-pipeline-v14:'),
+        str_contains($pipeline->index_signature(), 'wp-fts-language-pipeline-v15:'),
         'language pipeline signature should bump for Bengali Urdu baseline behavior'
     );
     assert_true(

@@ -10,6 +10,12 @@ This scaffold intentionally includes only a synthetic no-op fixture under
 Stempel, Morfologik, PoliMorf, WordNet, OEWN, Snowball data, or any other
 third-party lexical dataset.
 
+Runtime lemma packs use the local analyzer-pack manifest plus normalized
+surface-to-lemma TSV rows. New source-approved packs should use the neutral
+`wp-fts-lemma-tsv-v1` runtime format and declare the manifest `language` they
+serve. The committed synthetic Bengali fixture only proves that runtime
+contract; it is not a source lock for real Bengali lexical data.
+
 ## Required Manifest Fields
 
 Use schema version `wp-fts-analyzer-source-lock/v1`. The verifier requires these

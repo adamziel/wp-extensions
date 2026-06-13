@@ -11,7 +11,8 @@ declare(strict_types=1);
 final class WP_FTS_AnalyzerPackValidator
 {
     private const MANIFEST_SCHEMA_VERSION = 1;
-    private const POLISH_RUNTIME_FORMAT = 'wp-fts-polish-lemma-tsv-v1';
+    public const RUNTIME_FORMAT_LEMMA_TSV = 'wp-fts-lemma-tsv-v1';
+    public const RUNTIME_FORMAT_POLISH_LEGACY_TSV = 'wp-fts-polish-lemma-tsv-v1';
     private const DEFAULT_MAX_COLLECTED_RUNTIME_ROWS = 50000;
     public const RUNTIME_COMPRESSION_GZIP = 'gzip';
 
@@ -40,6 +41,14 @@ final class WP_FTS_AnalyzerPackValidator
     public static function default_polish_playground_full_manifest(): string
     {
         return dirname(__DIR__) . '/resources/analyzer-packs/pl-polimorf-20180722-full-playground/manifest.json';
+    }
+
+    /**
+     * Return the bundled synthetic Bengali fixture manifest path.
+     */
+    public static function default_synthetic_bengali_fixture_manifest(): string
+    {
+        return dirname(__DIR__) . '/resources/analyzer-packs/bn-synthetic-lemma-fixture/manifest.json';
     }
 
     /**
@@ -173,7 +182,15 @@ final class WP_FTS_AnalyzerPackValidator
                 throw new RuntimeException("Runtime digest mismatch for {$file['path']}.");
             }
 
-            $fileResult = $this->parse_runtime_rows($runtimePath, $compression, $collectRuntimeRows, $previousKey, $runtimeDigest, $rows);
+            $fileResult = $this->parse_runtime_rows(
+                $runtimePath,
+                $compression,
+                (string) $manifest['language'],
+                $collectRuntimeRows,
+                $previousKey,
+                $runtimeDigest,
+                $rows
+            );
             if ($fileResult['rows_count'] !== (int) $file['rows']) {
                 throw new RuntimeException("Runtime row count mismatch for {$file['path']}.");
             }
@@ -258,7 +275,7 @@ final class WP_FTS_AnalyzerPackValidator
     {
         $this->require_int($manifest, 'schema_version', self::MANIFEST_SCHEMA_VERSION);
         $this->require_non_empty_string($manifest, 'pack_id');
-        $this->require_string_value($manifest, 'language', 'pl');
+        $this->require_language_tag($manifest, 'language');
         $this->require_non_empty_string($manifest, 'version');
         $this->require_bool_field($manifest, 'fixture_only');
         $this->require_bool($manifest, 'default_enabled', false);
@@ -283,7 +300,7 @@ final class WP_FTS_AnalyzerPackValidator
         if (!isset($manifest['runtime']) || !is_array($manifest['runtime'])) {
             throw new RuntimeException('Analyzer pack manifest missing runtime object.');
         }
-        if (($manifest['runtime']['format'] ?? null) !== self::POLISH_RUNTIME_FORMAT) {
+        if (!in_array($manifest['runtime']['format'] ?? null, self::supported_runtime_formats(), true)) {
             throw new RuntimeException('Analyzer pack runtime format is not supported.');
         }
         if (isset($manifest['runtime']['total_sha256']) && (!is_string($manifest['runtime']['total_sha256']) || strlen($manifest['runtime']['total_sha256']) !== 64 || !$this->is_hex_digest($manifest['runtime']['total_sha256']))) {
@@ -349,6 +366,7 @@ final class WP_FTS_AnalyzerPackValidator
     private function parse_runtime_rows(
         string $path,
         ?string $compression,
+        string $language,
         bool &$collectRows,
         ?string &$previousGlobalKey,
         HashContext $runtimeDigest,
@@ -378,8 +396,8 @@ final class WP_FTS_AnalyzerPackValidator
 
             $surface = trim($columns[0]);
             $lemma = trim($columns[1]);
-            $this->validate_normalized_runtime_token($surface, $normalizer, $path, $lineNumber, 'surface');
-            $this->validate_normalized_runtime_token($lemma, $normalizer, $path, $lineNumber, 'lemma');
+            $this->validate_normalized_runtime_token($surface, $normalizer, $language, $path, $lineNumber, 'surface');
+            $this->validate_normalized_runtime_token($lemma, $normalizer, $language, $path, $lineNumber, 'lemma');
 
             $key = $surface . "\t" . $lemma;
             if ($previousKey !== null && strcmp($previousKey, $key) >= 0) {
@@ -577,6 +595,7 @@ final class WP_FTS_AnalyzerPackValidator
     private function validate_normalized_runtime_token(
         string $token,
         WP_FTS_Normalizer $normalizer,
+        string $language,
         string $path,
         int $lineNumber,
         string $column
@@ -587,8 +606,8 @@ final class WP_FTS_AnalyzerPackValidator
         if (strpbrk($token, " \t\r\n") !== false || str_contains($token, WP_FTS_TermNamespace::SEPARATOR)) {
             throw new RuntimeException("Runtime {$column} at {$path}:{$lineNumber} must be one normalized token.");
         }
-        if ($normalizer->normalize_token($token, 'pl') !== $token) {
-            throw new RuntimeException("Runtime {$column} at {$path}:{$lineNumber} is not normalized for Polish.");
+        if ($normalizer->normalize_token($token, $language) !== $token) {
+            throw new RuntimeException("Runtime {$column} at {$path}:{$lineNumber} is not normalized for {$language}.");
         }
     }
 
@@ -678,10 +697,18 @@ final class WP_FTS_AnalyzerPackValidator
     /**
      * @param array<string,mixed> $manifest
      */
-    private function require_string_value(array $manifest, string $field, string $expected): void
+    private function require_language_tag(array $manifest, string $field): void
     {
-        if (($manifest[$field] ?? null) !== $expected) {
-            throw new RuntimeException("Analyzer pack manifest field {$field} must be {$expected}.");
+        if (!isset($manifest[$field]) || !is_string($manifest[$field])) {
+            throw new RuntimeException("Analyzer pack manifest field {$field} must be a language tag.");
+        }
+
+        $language = trim($manifest[$field]);
+        if (
+            $language === ''
+            || preg_match('/^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8}){0,3}$/', $language) !== 1
+        ) {
+            throw new RuntimeException("Analyzer pack manifest field {$field} must be a valid language tag.");
         }
     }
 
@@ -711,6 +738,17 @@ final class WP_FTS_AnalyzerPackValidator
         }
 
         throw new RuntimeException("Analyzer pack manifest field {$field} must include {$required}.");
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function supported_runtime_formats(): array
+    {
+        return [
+            self::RUNTIME_FORMAT_LEMMA_TSV,
+            self::RUNTIME_FORMAT_POLISH_LEGACY_TSV,
+        ];
     }
 
     private function is_absolute_path(string $path): bool

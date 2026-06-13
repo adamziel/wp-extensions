@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "pack_id": "bn-synthetic-lemma-fixture",
+  "language": "bn",
+  "version": "0.1.0-synthetic",
+  "fixture_only": true,
+  "default_enabled": false,
+  "capabilities": [
+    "dictionary-lemmatizer",
+    "ambiguous-form-noop",
+    "normalized-runtime-rows",
+    "synthetic-test-data"
+  ],
+  "runtime": {
+    "format": "wp-fts-lemma-tsv-v1",
+    "normalization": "WP_FTS_Normalizer bn with fold_diacritics=true",
+    "ambiguity_policy": "ambiguous_surface_noop",
+    "total_rows": 7,
+    "files": [
+      {
+        "path": "runtime.tsv",
+        "sha256": "b7c2c189ade67476d8699dfaf54615921a3e449c7e856e88fea30e41cc038cc8",
+        "rows": 7,
+        "first_surface": "ককগ",
+        "last_surface": "সিনথ000গুলো"
+      }
+    ]
+  },
+  "source": {
+    "family": "Project-owned synthetic Bengali-script analyzer fixture",
+    "source_lock": "No external source artifact; rows are artificial test keys created for this repository.",
+    "fixture_boundary": "Synthetic infrastructure fixture only; not Bengali linguistic coverage."
+  },
+  "license": {
+    "fixture_rows": "Project-owned synthetic test data.",
+    "future_source_review_required": true,
+    "notes": "A real Bengali pack requires exact upstream artifact, digest, license compatibility review, attribution, and source-lock approval before distribution."
+  },
+  "attribution": {
+    "note": "No third-party lexical source is used by this synthetic fixture."
+  },
+  "provenance": {
+    "local_note": "PROVENANCE.md",
+    "no_runtime_network_access": true,
+    "no_full_third_party_dictionary_dump": true
+  }
+}

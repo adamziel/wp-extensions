@@ -19,6 +19,8 @@ final class WP_FTS_LanguagePipeline
     private ?WP_FTS_Stemmer $customStemmer;
     /** @var array<string,WP_FTS_Stemmer> */
     private array $customStemmersByLanguage;
+    /** @var array<string,WP_FTS_LanguageLemmaPack> */
+    private array $lemmaPacksByLanguage;
     /** @var callable|null */
     private $cjkTokenizer;
     private bool $enableStemming;
@@ -45,6 +47,8 @@ final class WP_FTS_LanguagePipeline
      *   polish_stemmer?:WP_FTS_Stemmer,
      *   polish_lemma_pack?:bool|string|array<string,mixed>|null,
      *   polish_lemmatizer_pack?:bool|string|array<string,mixed>|null,
+     *   lemma_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   lemmatizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
      *   stemmer?:WP_FTS_Stemmer|callable|null,
      *   stemmers_by_lang?:array<string,WP_FTS_Stemmer|callable|null>,
      *   stemmers?:array<string,WP_FTS_Stemmer|callable|null>,
@@ -76,6 +80,9 @@ final class WP_FTS_LanguagePipeline
         $this->customStemmer = $this->normalize_custom_stemmer($options['stemmer'] ?? null);
         $this->customStemmersByLanguage = $this->normalize_custom_stemmers_by_language(
             $options['stemmers_by_lang'] ?? $options['stemmers'] ?? []
+        );
+        $this->lemmaPacksByLanguage = $this->normalize_lemma_packs_by_language(
+            $this->lemma_pack_options_by_language($options)
         );
         $tokenizer = $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null;
         $this->cjkTokenizer = is_callable($tokenizer) ? $tokenizer : null;
@@ -404,6 +411,11 @@ final class WP_FTS_LanguagePipeline
     private function stem_for_language(string $term, string $language): string
     {
         $base = $this->base_language($language);
+        $lemmaPack = $this->lemma_pack_for_language($language);
+        if ($lemmaPack !== null) {
+            return $lemmaPack->stem($term, $language);
+        }
+
         if ($base === 'pl') {
             return $this->polishStemmer->stem($term, $language);
         }
@@ -460,6 +472,64 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Merge generic lemma-pack option aliases. `lemma_packs_by_lang` wins when
+     * both aliases provide the same language key.
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private function lemma_pack_options_by_language(array $options): array
+    {
+        $packs = [];
+        if (isset($options['lemmatizer_packs_by_lang']) && is_array($options['lemmatizer_packs_by_lang'])) {
+            $packs = $options['lemmatizer_packs_by_lang'];
+        }
+        if (isset($options['lemma_packs_by_lang']) && is_array($options['lemma_packs_by_lang'])) {
+            $packs = array_replace($packs, $options['lemma_packs_by_lang']);
+        }
+        if (
+            !array_key_exists('pl', $packs)
+            && (array_key_exists('polish_lemma_pack', $options) || array_key_exists('polish_lemmatizer_pack', $options))
+        ) {
+            $packs['pl'] = $options['polish_lemma_pack'] ?? $options['polish_lemmatizer_pack'] ?? false;
+        }
+
+        return $packs;
+    }
+
+    /**
+     * Normalize a language-to-lemma-pack map.
+     *
+     * @param mixed $packs
+     * @return array<string,WP_FTS_LanguageLemmaPack>
+     */
+    private function normalize_lemma_packs_by_language(mixed $packs): array
+    {
+        if (!is_array($packs)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($packs as $language => $option) {
+            $canonicalLanguage = $this->canonicalize_language((string) $language);
+            if ($canonicalLanguage === 'und') {
+                continue;
+            }
+
+            $defaultManifest = $this->base_language($canonicalLanguage) === 'pl'
+                ? WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest()
+                : null;
+            $pack = WP_FTS_LanguageLemmaPack::from_pack_option($option, $canonicalLanguage, $defaultManifest);
+            if ($pack !== null) {
+                $normalized[$canonicalLanguage] = $pack;
+            }
+        }
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
+    }
+
+    /**
      * Return a custom stemmer for a full language tag or its base language.
      */
     private function custom_stemmer_for_language(string $language): ?WP_FTS_Stemmer
@@ -468,6 +538,18 @@ final class WP_FTS_LanguagePipeline
 
         return $this->customStemmersByLanguage[$language]
             ?? $this->customStemmersByLanguage[$this->base_language($language)]
+            ?? null;
+    }
+
+    /**
+     * Return an enabled lemma pack for a full language tag or its base language.
+     */
+    private function lemma_pack_for_language(string $language): ?WP_FTS_LanguageLemmaPack
+    {
+        $language = $this->canonicalize_language($language);
+
+        return $this->lemmaPacksByLanguage[$language]
+            ?? $this->lemmaPacksByLanguage[$this->base_language($language)]
             ?? null;
     }
 
@@ -484,7 +566,7 @@ final class WP_FTS_LanguagePipeline
         }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 14,
+            'version' => 15,
             'cjk_max_ngram_length' => self::CJK_MAX_NGRAM_LENGTH,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
@@ -502,53 +584,28 @@ final class WP_FTS_LanguagePipeline
             'baseline_stemmer' => $this->componentSignature($options['baseline_stemmer'] ?? $this->baselineStemmer),
             'polish_stemmer' => $this->componentSignature($options['polish_stemmer'] ?? null),
         ];
-        $polishLemmaPackSignature = $this->polishLemmaPackSignature($options);
-        if ($polishLemmaPackSignature !== null) {
-            $payload['polish_lemma_pack'] = $polishLemmaPackSignature;
+        $lemmaPackSignatures = $this->lemmaPacksByLanguageSignature();
+        if ($lemmaPackSignatures !== []) {
+            $payload['lemma_packs_by_lang'] = $lemmaPackSignatures;
         }
-
         if ($polishMode === 'verified') {
             $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
         }
 
-        return 'wp-fts-language-pipeline-v14:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v15:' . sha1($this->stableJson($payload));
     }
 
     /**
-     * Build the default Polish stemmer, optionally using a validated lemma pack.
+     * Build the default Polish stemmer.
      *
-     * Invalid or missing opt-in packs return the conservative suffix stemmer so
-     * runtime indexing remains available when resources are absent.
+     * Lemma packs are resolved through the generic language-pack map so the
+     * selected Polish mode remains the fallback for invalid or missing packs.
      *
      * @param array<string,mixed> $options
      */
     private function default_polish_stemmer(array $options): WP_FTS_Stemmer
     {
-        $packOption = $options['polish_lemma_pack'] ?? $options['polish_lemmatizer_pack'] ?? false;
-        $lemmaPack = WP_FTS_PolishMorfologikLemmatizer::from_pack_option($packOption);
-        if ($lemmaPack !== null) {
-            return $lemmaPack;
-        }
-
         return new WP_FTS_PolishStemmer((string) ($options['polish_stemming'] ?? 'conservative'));
-    }
-
-    /**
-     * Return the enabled Polish lemma pack signature, if a valid pack is active.
-     *
-     * @param array<string,mixed> $options
-     */
-    private function polishLemmaPackSignature(array $options): ?string
-    {
-        if (!array_key_exists('polish_lemma_pack', $options) && !array_key_exists('polish_lemmatizer_pack', $options)) {
-            return null;
-        }
-
-        if ($this->polishStemmer instanceof WP_FTS_PolishMorfologikLemmatizer) {
-            return $this->polishStemmer->index_signature();
-        }
-
-        return null;
     }
 
     /**
@@ -569,6 +626,20 @@ final class WP_FTS_LanguagePipeline
             }
 
             $result[$lang] = $this->componentSignature($stemmer);
+        }
+        ksort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function lemmaPacksByLanguageSignature(): array
+    {
+        $result = [];
+        foreach ($this->lemmaPacksByLanguage as $language => $pack) {
+            $result[$language] = $pack->index_signature();
         }
         ksort($result, SORT_STRING);
 

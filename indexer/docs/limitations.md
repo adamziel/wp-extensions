@@ -82,6 +82,11 @@ Stemming is enabled by default and can be disabled with
   `polish_stemming`; otherwise `polish_stemming => 'verified'` can enable a
   compact fixture-backed stemmer slice. Neither path is a full Snowball,
   Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
+- Generic opt-in lemma-pack infrastructure exists through
+  `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` for future
+  source-approved packs. The only committed non-Polish pack is a tiny synthetic
+  `bn` contract fixture for tests; it is not Bengali dictionary or morphology
+  coverage and is not enabled by default.
 - Hindi (`hi`) uses the bundled generated Snowball stemmer verified against the
   official 65,118-line Hindi fixture data. Bengali (`bn`) uses deterministic
   local suffix stemming for common classifier, plural, genitive, dative, and
@@ -119,10 +124,10 @@ resource-backed analyzers with fixture gates before they are enabled by default:
 
 - add Snowball-compatible analyzer packs only where the implementation matches
   official input/output fixtures;
-- port Polish Stempel/Morfologik-style lemmatization behind the existing
-  `stemmer` / `stemmers_by_lang` seam and require dictionary fixture parity;
-  the bundled Polish fixture pack is only the committed contract slice, while
-  the full PoliMorf pack remains an unbundled external generated artifact;
+- port source-approved lemmatizer/analyzer packs through the opt-in
+  `lemma_packs_by_lang` runtime and require dictionary fixture parity; the
+  bundled Polish fixture pack is only the committed contract slice, while the
+  full PoliMorf pack remains an unbundled external generated artifact;
 - keep per-language analyzer resources opt-in until compliance fixtures and
   regression corpora pass in CI;
 - add a CJK dictionary tokenizer through the existing `cjk_tokenizer` seam
