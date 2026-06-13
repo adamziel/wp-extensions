@@ -4082,7 +4082,8 @@ test_case('analyzer carries document and element language tags', function (): vo
     assert_same('pl', $langs['wroclaw'], 'nested Polish segment should keep lang');
     assert_same('zh-Hant', $langs['搜'], 'CJK unigrams should carry segment lang');
     assert_same('zh-Hant', $langs['中文'], 'unquoted script lang should be canonicalized');
-    assert_same('zh-Hant', $langs['搜索'], 'CJK bigrams should carry segment lang');
+    assert_same('zh-Hant', $langs['搜索'], 'CJK n-grams should carry segment lang');
+    assert_same('zh-Hant', $langs['中文搜索'], 'longer CJK n-grams should carry segment lang');
 
     $namespaced = $analyzer->weighted_term_frequencies($occurrences, ['namespace_terms' => true]);
     assert_true(isset($namespaced["pl\x1elodz"]), 'weighted frequencies should optionally namespace by language');
@@ -4193,7 +4194,7 @@ test_case('tokenizer handles mixed script runs and CJK min length', function ():
     $analyzer = new WP_FTS_Analyzer(['min_term_len' => 3]);
 
     assert_same(['abc', '東', '京', '東京', 'def'], $analyzer->analyze_query('abc東京def', ['lang' => 'ja']), 'mixed Latin/CJK runs should split by script');
-    assert_same(['中', '文', '搜', '索', '中文', '文搜', '搜索', '日'], $analyzer->analyze_query('中文搜索 日 x', ['lang' => 'zh-Hans']), 'CJK n-grams and single chars should bypass min length');
+    assert_same(['中', '文', '搜', '索', '中文', '文搜', '搜索', '中文搜', '文搜索', '中文搜索', '日'], $analyzer->analyze_query('中文搜索 日 x', ['lang' => 'zh-Hans']), 'CJK n-grams and single chars should bypass min length');
 });
 
 test_case('analyzer tolerates invalid UTF-8 without optional extensions', function (): void {
@@ -4318,7 +4319,7 @@ test_case('T8 per-language analyzer fixtures are enforced when language pipeline
         ['Polish folding', 'pl', 'Wrocław Łódź zażółć', ['wroclaw', 'lodz', 'zazolc']],
         ['German folding', 'de', 'Straße Ärger Öl', ['strasse', 'aerger', 'oel']],
         ['Turkish dotted I folding', 'tr', 'Isparta İstanbul ışık', ['ısparta', 'istanbul', 'ısık']],
-        ['CJK fallback n-grams', 'zh-Hans', '搜索引擎', ['搜', '索', '引', '擎', '搜索', '索引', '引擎']],
+        ['CJK fallback n-grams', 'zh-Hans', '搜索引擎', ['搜', '索', '引', '擎', '搜索', '索引', '引擎', '搜索引', '索引擎', '搜索引擎']],
     ];
 
     foreach ($fixtures as [$label, $lang, $input, $expectedTerms]) {
@@ -4751,24 +4752,24 @@ test_case('CJK tokenizer hooks override fallback n-grams while preserving fallba
     $fallback = new WP_FTS_Analyzer([
         'cjk_tokenizer' => static fn(string $run, string $lang): array => [],
     ]);
-    assert_same(['中', '文', '搜', '索', '中文', '文搜', '搜索'], $fallback->analyze_query('中文搜索', ['lang' => 'zh-Hans']), 'empty custom CJK tokenizer output should fall back to n-grams');
+    assert_same(['中', '文', '搜', '索', '中文', '文搜', '搜索', '中文搜', '文搜索', '中文搜索'], $fallback->analyze_query('中文搜索', ['lang' => 'zh-Hans']), 'empty custom CJK tokenizer output should fall back to n-grams');
 });
 
 test_case('Chinese normalization hooks are explicit and default script behavior is unchanged', function (): void {
     $default = new WP_FTS_Analyzer();
-    assert_same(['繁', '體', '搜', '索', '繁體', '體搜', '搜索'], $default->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'default Chinese script handling should not pretend broad conversion');
+    assert_same(['繁', '體', '搜', '索', '繁體', '體搜', '搜索', '繁體搜', '體搜索', '繁體搜索'], $default->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'default Chinese script handling should not pretend broad conversion');
 
     $mapped = new WP_FTS_Analyzer([
         'chinese_script_map' => [
             'zh-Hant' => ['體' => '体'],
         ],
     ]);
-    assert_same(['繁', '体', '搜', '索', '繁体', '体搜', '搜索'], $mapped->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'explicit Chinese script map should normalize configured characters');
+    assert_same(['繁', '体', '搜', '索', '繁体', '体搜', '搜索', '繁体搜', '体搜索', '繁体搜索'], $mapped->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'explicit Chinese script map should normalize configured characters');
 
     $hooked = new WP_FTS_Analyzer([
         'token_normalizer' => static fn(string $term, string $lang): string => $lang === 'zh-Hant' ? strtr($term, ['體' => '体']) : $term,
     ]);
-    assert_same(['繁', '体', '搜', '索', '繁体', '体搜', '搜索'], $hooked->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'token_normalizer should provide a deterministic script-conversion hook');
+    assert_same(['繁', '体', '搜', '索', '繁体', '体搜', '搜索', '繁体搜', '体搜索', '繁体搜索'], $hooked->analyze_query('繁體搜索', ['lang' => 'zh-Hant']), 'token_normalizer should provide a deterministic script-conversion hook');
 });
 
 test_case('custom stemmers can be verified per language', function (): void {

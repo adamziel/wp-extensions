@@ -739,7 +739,12 @@ test_case('quality external multilingual tokenization reference corpus stays sta
         'CJK fallback n-grams' => [
             'lang' => 'zh',
             'text' => '東京大学検索品質',
-            'terms' => ['東', '京', '大', '学', '検', '索', '品', '質', '東京', '京大', '大学', '学検', '検索', '索品', '品質'],
+            'terms' => [
+                '東', '京', '大', '学', '検', '索', '品', '質',
+                '東京', '京大', '大学', '学検', '検索', '索品', '品質',
+                '東京大', '京大学', '大学検', '学検索', '検索品', '索品質',
+                '東京大学', '京大学検', '大学検索', '学検索品', '検索品質',
+            ],
         ],
         'Mixed script runs' => [
             'lang' => 'en',
@@ -787,6 +792,9 @@ test_case('quality external multilingual HTML lang corpus routes snippets by seg
         ['term' => '東京', 'lang' => 'zh-Hans'],
         ['term' => '京大', 'lang' => 'zh-Hans'],
         ['term' => '大学', 'lang' => 'zh-Hans'],
+        ['term' => '東京大', 'lang' => 'zh-Hans'],
+        ['term' => '京大学', 'lang' => 'zh-Hans'],
+        ['term' => '東京大学', 'lang' => 'zh-Hans'],
     ];
 
     wp_fts_external_reference_assert_same(count($expected), count($records), 'HTML lang corpus record count');

@@ -98,8 +98,8 @@ Stemming is enabled by default and can be disabled with
   and operators must install it externally before enabling
   `polish_lemma_pack` or `polish_lemmatizer_pack`.
 - Unsupported languages return the original normalized term.
-- Chinese (`zh`) continues to use CJK fallback n-grams without dictionary
-  segmentation.
+- Chinese (`zh`) continues to use deterministic CJK fallback n-grams up to 4
+  characters without dictionary segmentation.
 
 See [Snowball compliance](snowball-compliance.md) for the harness and rationale.
 See [Polish lemmatizer source-lock pilot](polish-lemmatizer-source-lock.md) for
@@ -130,9 +130,9 @@ resource-backed analyzers with fixture gates before they are enabled by default:
 
 CJK script runs use a fallback tokenizer, not dictionary segmentation. A
 one-character run is kept as one token. Longer CJK runs emit character unigrams
-plus overlapping bigrams. This improves basic recall without external
-dictionaries, but it does not understand words, compounds, or language-specific
-segmentation rules.
+plus deterministic overlapping n-grams up to 4 characters. This improves basic
+retrieval evidence without external dictionaries, but it does not understand
+words, compounds, or language-specific segmentation rules.
 
 ## Thai Tokenization
 

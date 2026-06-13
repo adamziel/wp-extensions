@@ -65,8 +65,8 @@ Bengali (`bn`) strips only common classifier, plural, and case suffixes. Arabic
 inside their own partitions. Arabic and Hindi then use generated Snowball
 algorithms verified against official fixture data, while Urdu strips only common
 plural-oblique endings. This is still not full lemmatization, dictionary
-segmentation, or query expansion. Chinese (`zh`) remains fallback CJK n-gram
-retrieval.
+segmentation, or query expansion. Chinese (`zh`) remains deterministic fallback
+CJK n-gram retrieval up to 4 characters.
 
 The current searcher scores each query term inside one resolved language
 partition. It can route different terms to different partitions, but it does not
@@ -91,7 +91,7 @@ The default analyzer:
 - drops non-CJK terms shorter than 2 characters;
 - rejects stored term keys over 255 bytes;
 - tokenizes one-character CJK script runs as-is and longer CJK runs into
-  character unigrams plus overlapping bigrams.
+  character unigrams plus deterministic overlapping n-grams up to 4 characters.
 
 The CJK path is fallback n-gram retrieval, not dictionary word segmentation.
 The plugin does not ship a Thai tokenizer, Thai dictionary, TCC/TCC+ rules, or a

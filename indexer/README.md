@@ -111,9 +111,9 @@ dictionary segmentation, dictionary lemmatization, or hard-coded word-family
 matching.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
-kept as-is and longer runs emitted as character unigrams plus overlapping
-bigrams. The plugin does not currently ship Thai or CJK dictionary
-segmentation.
+kept as-is and longer runs emitted as character unigrams plus deterministic
+overlapping n-grams up to 4 characters. The plugin does not currently ship Thai
+or CJK dictionary segmentation.
 
 ## Snippets And Highlighting
 

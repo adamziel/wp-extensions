@@ -30,6 +30,20 @@ php -n tests/run.php
 
 This verifies the fallback paths used when optional extensions are missing.
 
+## Analyzer Language Quality
+
+Run the analyzer language corpus directly when changing language tokenization,
+normalization, or CJK fallback behavior:
+
+```sh
+php tests/quality/analyzer-language-corpus.php
+```
+
+Chinese/CJK fallback expectations cover one-character runs plus deterministic
+overlapping n-grams up to 4 characters. These tests assert retrieval-oriented
+n-gram tokenization only, not dictionary segmentation or third-party tokenizer
+data.
+
 ## Native BM25 Reference Gate
 
 The deterministic BM25 gate is included in the main PHP harness and can also be

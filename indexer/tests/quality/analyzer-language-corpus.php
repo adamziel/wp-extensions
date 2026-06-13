@@ -252,6 +252,9 @@ test_case('quality corpus routes inherited element languages across HTML shapes'
                 '中文' => ['zh-Hans'],
                 '文搜' => ['zh-Hans'],
                 '搜索' => ['zh-Hans'],
+                '中文搜' => ['zh-Hans'],
+                '文搜索' => ['zh-Hans'],
+                '中文搜索' => ['zh-Hans'],
                 'color' => ['en-GB'],
             ],
         ],
@@ -348,7 +351,8 @@ test_case('quality corpus keeps processor extraction in parity with fallback ext
 test_case('quality corpus tokenizes mixed scripts punctuation numbers emoji and invalid bytes', function (): void {
     $cases = [
         ['ja', 3, 'abc東京def', ['abc', '東', '京', '東京', 'def'], 'mixed Latin and Japanese'],
-        ['zh-Hans', 3, '中文搜索 日 x', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '日'], 'CJK n-grams bypass minimum length'],
+        ['zh-Hans', 3, '中文搜索 日 x', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '中文搜', '文搜索', '中文搜索', '日'], 'CJK n-grams bypass minimum length'],
+        ['zh-Hans', 3, '搜索系统', ['搜', '索', '系', '统', '搜索', '索系', '系统', '搜索系', '索系统', '搜索系统'], 'CJK bounded n-grams include longer query evidence'],
         ['en', 2, "don't-stop re-enter", ['don', 'stop', 're', 'enter'], 'apostrophe and hyphen boundaries'],
         ['en', 2, 'v2_0 release42 🚀 emoji', ['v2_0', 'release42', 'emoji'], 'numbers underscores and emoji'],
         ['fr', 2, "Cafe\u{0301} deja\u{0300}", ['caf', 'dej'], 'Latin combining marks'],
@@ -442,8 +446,8 @@ test_case('quality corpus exposes query occurrence output while preserving plain
         ['pl-PL', 'Łódź Wrocław', ['lodz', 'wroclaw']],
         ['de-DE', 'Straße Öl', ['strasse', 'oel']],
         ['tr-TR', 'İstanbul Iğdır', ['istanbul', 'ıgdır']],
-        ['zh-Hans', '中文搜索', ['中', '文', '搜', '索', '中文', '文搜', '搜索']],
-        ['zh-Hant', '繁體搜索', ['繁', '體', '搜', '索', '繁體', '體搜', '搜索']],
+        ['zh-Hans', '中文搜索', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '中文搜', '文搜索', '中文搜索']],
+        ['zh-Hant', '繁體搜索', ['繁', '體', '搜', '索', '繁體', '體搜', '搜索', '繁體搜', '體搜索', '繁體搜索']],
     ];
 
     foreach ($cases as [$lang, $query, $expectedTerms]) {

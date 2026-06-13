@@ -391,6 +391,30 @@ test_case('quality top spoken language relevance keeps Urdu routing clear of Per
     assert_same(null, $detector->detect_text('فارسی جستجو'), 'Persian-like bait should not auto-route to Urdu');
 });
 
+test_case('quality top spoken language relevance ranks longer Chinese n-gram evidence above bait', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    $targetId = 3101;
+    $baitId = 3102;
+    $indexer->index_document($targetId, '<article><p>搜索系统质量指标</p></article>', ['lang' => 'zh']);
+    $indexer->index_document($baitId, '<article><p>搜索工具系统报告</p></article>', ['lang' => 'zh']);
+
+    $results = $searcher->search('搜索系统', [
+        'lang' => 'zh',
+        'mode' => 'OR',
+        'limit' => 5,
+    ]);
+    $ids = wp_fts_tslr_result_ids($results);
+    $scores = array_column($results, 'score', 'doc_id');
+
+    assert_same($targetId, $ids[0] ?? null, 'exact Chinese phrase-containing target should rank first');
+    assert_true(in_array($baitId, $ids, true), 'same-language bait sharing characters and bigrams should remain eligible in OR mode');
+    assert_true((float) ($scores[$targetId] ?? 0.0) > (float) ($scores[$baitId] ?? 0.0), 'longer Chinese n-grams should add specific ranking evidence');
+});
+
 if ($wp_fts_tslr_direct) {
     $failures = 0;
     $start = microtime(true);

@@ -10,6 +10,8 @@ declare(strict_types=1);
  */
 final class WP_FTS_LanguagePipeline
 {
+    private const CJK_MAX_NGRAM_LENGTH = 4;
+
     private WP_FTS_Normalizer $normalizer;
     private WP_FTS_SnowballStemmer $snowballStemmer;
     private WP_FTS_BaselineLanguageStemmer $baselineStemmer;
@@ -174,7 +176,8 @@ final class WP_FTS_LanguagePipeline
      * Normalize one raw token and apply stemming/length filters.
      *
      * CJK tokens skip stemming and Latin minimum-length pruning because the CJK
-     * tokenizer already emits single characters and bigrams as lexical units.
+     * tokenizer already emits single characters and bounded n-grams as lexical
+     * units.
      *
      * @param string $rawToken Token text before case folding and dialect maps.
      * @param string $language Language used for normalization and stemming.
@@ -283,8 +286,9 @@ final class WP_FTS_LanguagePipeline
      * Build CJK tokens from a single CJK script run.
      *
      * Single-character runs are kept as-is. Longer runs emit character
-     * unigrams plus overlapping bigrams, which gives query-time matching more
-     * fallback recall without requiring a dictionary segmenter.
+     * unigrams plus overlapping n-grams up to a small bounded length, which
+     * gives query-time matching more specific fallback evidence without
+     * requiring a dictionary segmenter.
      *
      * @param string $run CJK-only text run.
      * @return string[]
@@ -338,7 +342,8 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
-     * Built-in CJK fallback tokenizer using unigrams and overlapping bigrams.
+     * Built-in CJK fallback tokenizer using overlapping n-grams up to a bounded
+     * max length.
      *
      * @param string $run CJK-only text run.
      * @return string[]
@@ -351,9 +356,12 @@ final class WP_FTS_LanguagePipeline
             return $chars;
         }
 
-        $tokens = $chars;
-        for ($i = 0; $i < $count - 1; $i++) {
-            $tokens[] = $chars[$i] . $chars[$i + 1];
+        $tokens = [];
+        $maxLength = min(self::CJK_MAX_NGRAM_LENGTH, $count);
+        for ($length = 1; $length <= $maxLength; $length++) {
+            for ($i = 0; $i <= $count - $length; $i++) {
+                $tokens[] = implode('', array_slice($chars, $i, $length));
+            }
         }
 
         return $tokens;
@@ -476,7 +484,8 @@ final class WP_FTS_LanguagePipeline
         }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 12,
+            'version' => 13,
+            'cjk_max_ngram_length' => self::CJK_MAX_NGRAM_LENGTH,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
@@ -502,7 +511,7 @@ final class WP_FTS_LanguagePipeline
             $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
         }
 
-        return 'wp-fts-language-pipeline-v12:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v13:' . sha1($this->stableJson($payload));
     }
 
     /**
