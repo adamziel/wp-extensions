@@ -3385,9 +3385,20 @@ test_case('baseline top-language stemmer applies deterministic local rules', fun
     assert_same('mang', $stemmer->stem('mangent', 'fr'), 'French common verb surface should stem conservatively');
     assert_same('mang', $stemmer->stem('manger', 'fr'), 'French infinitive should share the common verb stem');
     assert_same('francais', $stemmer->stem('francais', 'fr'), 'French final-s guard should preserve singular ais endings');
+    assert_same('किताब', $stemmer->stem('किताबें', 'hi'), 'Hindi plural -en should strip with length guard');
+    assert_same('किताब', $stemmer->stem('किताबों', 'hi-IN'), 'Hindi oblique plural -on should strip with length guard');
+    assert_same('लड़की', $stemmer->stem('लड़कियाँ', 'hi'), 'Hindi -iyan plural should share the singular baseline');
+    assert_same('लड़की', $stemmer->stem('लड़कियों', 'hi'), 'Hindi -iyon oblique plural should share the singular baseline');
+    assert_same('भाषा', $stemmer->stem('भाषाएँ', 'hi'), 'Hindi -aen plural should preserve the final aa baseline');
     assert_same('pesquis', $stemmer->stem('pesquisando', 'pt-BR'), 'Portuguese gerund should stem to the same baseline as the infinitive');
     assert_same('pesquis', $stemmer->stem('pesquisar', 'pt'), 'Portuguese infinitive should stem conservatively');
     assert_same('portugues', $stemmer->stem('portugues', 'pt'), 'Portuguese final-s guard should preserve singular ues endings');
+    assert_same('শব্দ', $stemmer->stem('শব্দগুলো', 'bn'), 'Bengali classifier plural -gulo should strip with length guard');
+    assert_same('শব্দ', $stemmer->stem('শব্দগুলিতে', 'bn-BD'), 'Bengali classifier locative -gulite should strip with length guard');
+    assert_same('লেখা', $stemmer->stem('লেখাগুলোর', 'bn'), 'Bengali classifier genitive -gular should strip with length guard');
+    assert_same('শিক্ষক', $stemmer->stem('শিক্ষকদের', 'bn'), 'Bengali plural/genitive -der should strip with length guard');
+    assert_same('সূচি', $stemmer->stem('সূচিতে', 'bn'), 'Bengali locative -te should strip when the stem stays non-trivial');
+    assert_same('হতে', $stemmer->stem('হতে', 'bn'), 'Bengali short-stem guard should preserve tiny -te words');
     assert_same('cari', $stemmer->stem('mencari', 'id'), 'Indonesian meN- prefix should strip with length guard');
     assert_same('cari', $stemmer->stem('pencarian', 'id-ID'), 'Indonesian peN- prefix and -an suffix should strip with length guard');
     assert_same('dengan', $stemmer->stem('dengan', 'id'), 'Indonesian suffix stripping should keep short unprefixed stems intact');
@@ -3401,7 +3412,7 @@ test_case('baseline top-language stemmer applies deterministic local rules', fun
     assert_same('فہرست', $stemmer->stem('فہرستوں', 'ur'), 'Urdu plural-oblique -on should strip without letter rewrites');
     assert_same('فارسی', $stemmer->stem('فارسی', 'ur'), 'Urdu baseline should preserve Persian-like letters and words');
     assert_same('kotami', $stemmer->stem('kotami', 'pl'), 'baseline stemmer should no-op unsupported languages');
-    assert_contains('wp-fts-baseline-language-stemmer:v2:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
+    assert_contains('wp-fts-baseline-language-stemmer:v3:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
 });
 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
@@ -3427,7 +3438,9 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_same(['run', 'run', 'runner'], $pipeline->analyze('running runs runner', 'en'), 'English Snowball stemming should be available by default');
     assert_same(['busc', 'busc'], $pipeline->analyze('buscar buscando', 'es'), 'Spanish baseline stemming should be available by default');
     assert_same(['mang', 'mang'], $pipeline->analyze('manger mangent', 'fr'), 'French baseline stemming should be available by default');
+    assert_same(['किताब', 'किताब', 'लड़की', 'लड़की', 'भाषा'], $pipeline->analyze('किताबें किताबों लड़कियाँ लड़कियों भाषाएँ', 'hi'), 'Hindi baseline stemming should be available by default');
     assert_same(['pesquis', 'pesquis'], $pipeline->analyze('pesquisar pesquisando', 'pt'), 'Portuguese baseline stemming should be available by default');
+    assert_same(['শব্দ', 'শব্দ', 'শিক্ষক', 'সূচি'], $pipeline->analyze('শব্দগুলো শব্দগুলিতে শিক্ষকদের সূচিতে', 'bn'), 'Bengali baseline stemming should be available by default');
     assert_same(['cari', 'cari'], $pipeline->analyze('mencari pencarian', 'id'), 'Indonesian baseline stemming should be available by default');
     assert_same(['بحث', 'بحث', 'فهرس'], $pipeline->analyze('البحث للبحث والفهرسة', 'ar'), 'Arabic baseline stemming should be available by default');
     assert_same(['کتاب', 'فہرست'], $pipeline->analyze('کتابیں فہرستوں', 'ur'), 'Urdu baseline stemming should be available by default');

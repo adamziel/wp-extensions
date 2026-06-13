@@ -52,11 +52,12 @@ Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`), with existing Polish
 (`pl`), German (`de`), and Russian (`ru`) routing kept available where present.
 This support is selectable/detectable language partitioning plus a small
 baseline analyzer improvement for selected languages. Spanish, French,
-Portuguese, and Indonesian have deterministic suffix/affix stemming rules;
-Arabic and Urdu strip Arabic-script marks and tatweel in their own partitions.
-Arabic additionally has a narrow article/clitic/suffix light stemmer, and Urdu
-strips common plural-oblique suffixes. These are not full morphology,
-dictionary segmentation, or hard-coded word-family expansion.
+Portuguese, and Indonesian have deterministic suffix/affix stemming rules,
+while Hindi and Bengali have deterministic suffix rules. Arabic and Urdu strip
+Arabic-script marks and tatweel in their own partitions. Arabic additionally
+has a narrow article/clitic/suffix light stemmer, and Urdu strips common
+plural-oblique suffixes. These are not full morphology, dictionary
+segmentation, or hard-coded word-family expansion.
 
 Search can route different query terms to different language partitions. Each
 term still scores inside one resolved partition, and the searcher does not merge
@@ -80,6 +81,11 @@ Stemming is enabled by default and can be disabled with
 - Spanish (`es`), French (`fr`), Portuguese (`pt`), and Indonesian (`id`) use a
   deterministic local baseline stemmer for common suffix/affix forms. This is a
   recall baseline, not a Snowball-compliant or dictionary-backed analyzer.
+- Hindi (`hi`) uses deterministic local suffix stemming for common
+  plural/oblique endings, and Bengali (`bn`) uses deterministic local suffix
+  stemming for common classifier, plural, and case endings. These are recall
+  baselines, not Snowball-compliant, lemmatizer-backed, or dictionary-backed
+  analyzers.
 - Arabic (`ar`) and Urdu (`ur`) normalize away Arabic-script combining
   marks/harakat and tatweel. Arabic strips only a narrow set of common
   article/clitic prefixes and suffixes; Urdu strips only common plural-oblique
@@ -93,9 +99,8 @@ Stemming is enabled by default and can be disabled with
   and operators must install it externally before enabling
   `polish_lemma_pack` or `polish_lemmatizer_pack`.
 - Unsupported languages return the original normalized term.
-- Chinese (`zh`) continues to use CJK fallback n-grams, and Hindi (`hi`) and
-  Bengali (`bn`) continue to rely on current tokenization and normalization
-  without stemming, lemmatization, or dictionary segmentation.
+- Chinese (`zh`) continues to use CJK fallback n-grams without dictionary
+  segmentation.
 
 See [Snowball compliance](snowball-compliance.md) for the harness and rationale.
 See [Polish lemmatizer source-lock pilot](polish-lemmatizer-source-lock.md) for

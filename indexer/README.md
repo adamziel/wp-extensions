@@ -97,17 +97,18 @@ Catalan and Dutch can use the optional Wamania-backed Snowball stemmers when
 Composer dependencies are present and the compliance harness accepts them.
 Spanish, French, Portuguese, and Indonesian use deterministic local baseline
 stemming for common suffix or affix forms so simple inflection searches can
-match without a dictionary pack. Arabic and Urdu strip Arabic-script combining
-marks/harakat and tatweel inside their own language partitions. Arabic also
-uses a narrow light stemmer for common article/clitic prefixes and suffixes;
-Urdu strips only common plural-oblique endings. These rules do not rewrite
-letters across Arabic, Persian, or Urdu, and Persian-like text is not merged
-into Urdu routing. Polish morphology uses configured lemmatizer/analyzer packs
-where available; it is not driven by hard-coded word families. Missing packs,
-unsupported languages, baseline languages without verified morphology, and
-ambiguous forms keep conservative behavior. Chinese uses fallback CJK n-grams,
-while Hindi and Bengali use current script tokenization/normalization; none of
-those paths claim dictionary segmentation or morphology.
+match without a dictionary pack. Hindi strips only common plural/oblique
+suffixes, and Bengali strips only common classifier, plural, and case suffixes.
+Arabic and Urdu strip Arabic-script combining marks/harakat and tatweel inside
+their own language partitions. Arabic also uses a narrow light stemmer for
+common article/clitic prefixes and suffixes; Urdu strips only common
+plural-oblique endings. These rules do not rewrite letters across Arabic,
+Persian, or Urdu, and Persian-like text is not merged into Urdu routing. Polish
+morphology uses configured lemmatizer/analyzer packs where available; it is not
+driven by hard-coded word families. Missing packs, unsupported languages,
+baseline languages without verified morphology, and ambiguous forms keep
+conservative behavior. Chinese uses fallback CJK n-grams; none of these paths
+claim dictionary segmentation or morphology.
 
 The analyzer also provides CJK fallback tokenization with single characters and
 overlapping bigrams. The plugin does not currently ship Thai or CJK dictionary

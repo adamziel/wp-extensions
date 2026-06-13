@@ -62,7 +62,9 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
         return match ($this->base_language($language)) {
             'es' => $this->stem_spanish($term),
             'fr' => $this->stem_french($term),
+            'hi' => $this->stem_hindi($term),
             'pt' => $this->stem_portuguese($term),
+            'bn' => $this->stem_bengali($term),
             'id' => $this->stem_indonesian($term),
             'ar' => $this->stem_arabic($term),
             'ur' => $this->stem_urdu($term),
@@ -75,10 +77,12 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
      */
     public function index_signature(): string
     {
-        return 'wp-fts-baseline-language-stemmer:v2:' . sha1(implode('|', [
+        return 'wp-fts-baseline-language-stemmer:v3:' . sha1(implode('|', [
             'es=suffix:plural,verb,adverb:v1',
             'fr=suffix:plural,verb,adjective,adverb:v1',
+            'hi=suffix:plural-oblique:v1',
             'pt=suffix:plural,verb,adverb:v1',
+            'bn=suffix:classifier-plural-case:v1',
             'id=affix:meN,peN,ber,ter,di,ke,se,kan,an,i,nya:v1',
             'ar=affix:article-clitic-plural-pronoun:v1',
             'ur=suffix:plural-oblique:v1',
@@ -240,6 +244,40 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
     }
 
     /**
+     * Hindi: strip only common plural/oblique suffixes with length guards.
+     */
+    private function stem_hindi(string $term): string
+    {
+        return $this->strip_suffix_rules($term, [
+            ['ियों', 'ी', 3],
+            ['ियाँ', 'ी', 3],
+            ['ाओं', 'ा', 3],
+            ['ाएँ', 'ा', 3],
+            ['यों', '', 3],
+            ['याँ', '', 3],
+            ['एँ', '', 3],
+            ['ों', '', 3],
+            ['ें', '', 3],
+        ]);
+    }
+
+    /**
+     * Bengali: strip common classifier, plural, and case suffixes only.
+     */
+    private function stem_bengali(string $term): string
+    {
+        return $this->strip_suffix_rules($term, [
+            ['গুলোতে', '', 2],
+            ['গুলিতে', '', 2],
+            ['গুলোর', '', 2],
+            ['গুলো', '', 2],
+            ['গুলি', '', 2],
+            ['দের', '', 3],
+            ['তে', '', 3],
+        ]);
+    }
+
+    /**
      * @param array<int,array{0:string,1:string,2:int}> $rules
      */
     private function strip_prefix_rules(string $term, array $rules): string
@@ -329,11 +367,20 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
     }
 
     /**
-     * Count characters with mbstring when present and bytes otherwise.
+     * Count UTF-8 characters with mbstring or PCRE before falling back to bytes.
      */
     private function char_length(string $term): int
     {
-        return function_exists('mb_strlen') ? mb_strlen($term, 'UTF-8') : strlen($term);
+        if (function_exists('mb_strlen')) {
+            return mb_strlen($term, 'UTF-8');
+        }
+
+        $chars = [];
+        if (preg_match_all('/./us', $term, $chars) !== false) {
+            return count($chars[0]);
+        }
+
+        return strlen($term);
     }
 
     /**
