@@ -388,9 +388,9 @@ final class WP_FTS_LanguagePipeline
      * Route stemming to the language-specific adapter.
      *
      * Polish keeps its analyzer-pack/conservative precedence. Spanish, French,
-     * Portuguese, and Indonesian use the local baseline stemmer. Other enabled
-     * languages go through the Snowball adapter, which returns the original term
-     * when the language is unsupported.
+     * Portuguese, Indonesian, Arabic, and Urdu use the local baseline stemmer.
+     * Other enabled languages go through the Snowball adapter, which returns
+     * the original term when the language is unsupported.
      */
     private function stem_for_language(string $term, string $language): string
     {
@@ -399,7 +399,7 @@ final class WP_FTS_LanguagePipeline
             return $this->polishStemmer->stem($term, $language);
         }
 
-        if (in_array($base, ['es', 'fr', 'pt', 'id'], true)) {
+        if (in_array($base, ['es', 'fr', 'pt', 'id', 'ar', 'ur'], true)) {
             return $this->baselineStemmer->stem($term, $language);
         }
 
@@ -475,7 +475,7 @@ final class WP_FTS_LanguagePipeline
         }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 4,
+            'version' => 5,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
@@ -501,7 +501,7 @@ final class WP_FTS_LanguagePipeline
             $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
         }
 
-        return 'wp-fts-language-pipeline-v4:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v5:' . sha1($this->stableJson($payload));
     }
 
     /**

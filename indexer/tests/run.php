@@ -3391,8 +3391,17 @@ test_case('baseline top-language stemmer applies deterministic local rules', fun
     assert_same('cari', $stemmer->stem('mencari', 'id'), 'Indonesian meN- prefix should strip with length guard');
     assert_same('cari', $stemmer->stem('pencarian', 'id-ID'), 'Indonesian peN- prefix and -an suffix should strip with length guard');
     assert_same('dengan', $stemmer->stem('dengan', 'id'), 'Indonesian suffix stripping should keep short unprefixed stems intact');
+    assert_same('بحث', $stemmer->stem('البحث', 'ar'), 'Arabic definite article should strip with length guard');
+    assert_same('بحث', $stemmer->stem('للبحث', 'ar'), 'Arabic lam article prefix should strip with length guard');
+    assert_same('فهرس', $stemmer->stem('والفهرسة', 'ar'), 'Arabic clitic article and taa marbuta should strip conservatively');
+    assert_same('كلم', $stemmer->stem('كلمات', 'ar'), 'Arabic plural -at should share the same baseline as singular taa marbuta');
+    assert_same('كلم', $stemmer->stem('كلمة', 'ar'), 'Arabic taa marbuta should strip with length guard');
+    assert_same('باحث', $stemmer->stem('باحثون', 'ar'), 'Arabic masculine plural suffix should strip with length guard');
+    assert_same('کتاب', $stemmer->stem('کتابیں', 'ur'), 'Urdu plural -en should strip without letter rewrites');
+    assert_same('فہرست', $stemmer->stem('فہرستوں', 'ur'), 'Urdu plural-oblique -on should strip without letter rewrites');
+    assert_same('فارسی', $stemmer->stem('فارسی', 'ur'), 'Urdu baseline should preserve Persian-like letters and words');
     assert_same('kotami', $stemmer->stem('kotami', 'pl'), 'baseline stemmer should no-op unsupported languages');
-    assert_contains('wp-fts-baseline-language-stemmer:v1:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
+    assert_contains('wp-fts-baseline-language-stemmer:v2:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
 });
 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
@@ -3420,6 +3429,8 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_same(['mang', 'mang'], $pipeline->analyze('manger mangent', 'fr'), 'French baseline stemming should be available by default');
     assert_same(['pesquis', 'pesquis'], $pipeline->analyze('pesquisar pesquisando', 'pt'), 'Portuguese baseline stemming should be available by default');
     assert_same(['cari', 'cari'], $pipeline->analyze('mencari pencarian', 'id'), 'Indonesian baseline stemming should be available by default');
+    assert_same(['بحث', 'بحث', 'فهرس'], $pipeline->analyze('البحث للبحث والفهرسة', 'ar'), 'Arabic baseline stemming should be available by default');
+    assert_same(['کتاب', 'فہرست'], $pipeline->analyze('کتابیں فہرستوں', 'ur'), 'Urdu baseline stemming should be available by default');
 
     $verifiedPipeline = new WP_FTS_LanguagePipeline([
         'enable_stemming' => true,

@@ -62,10 +62,12 @@ This now includes deterministic baseline analyzer behavior for a subset:
 Spanish (`es`), French (`fr`), Portuguese (`pt`), and Indonesian (`id`) get
 small local suffix/affix stemming rules, while Arabic (`ar`) and Urdu (`ur`)
 strip Arabic-script combining marks/harakat and tatweel inside their own
-partitions. This is still not full lemmatization, dictionary segmentation, or
-query expansion. Chinese (`zh`) remains fallback CJK n-gram retrieval, and
-Hindi (`hi`) and Bengali (`bn`) remain current script tokenization and
-normalization without morphology claims.
+partitions. Arabic also strips a narrow set of common article/clitic prefixes
+and suffixes, and Urdu strips only common plural-oblique endings. This is still
+not full lemmatization, dictionary segmentation, or query expansion. Chinese
+(`zh`) remains fallback CJK n-gram retrieval, and Hindi (`hi`) and Bengali
+(`bn`) remain current script tokenization and normalization without morphology
+claims.
 
 The current searcher scores each query term inside one resolved language
 partition. It can route different terms to different partitions, but it does not
@@ -82,6 +84,9 @@ The default analyzer:
 - folds diacritics by default;
 - strips Arabic-script combining marks/harakat and tatweel for Arabic (`ar`)
   and Urdu (`ur`) only;
+- applies conservative Arabic (`ar`) article/clitic/suffix stemming and Urdu
+  (`ur`) plural-oblique suffix stemming without Arabic/Persian/Urdu letter
+  rewrites;
 - drops non-CJK terms shorter than 2 characters;
 - rejects stored term keys over 255 bytes;
 - tokenizes CJK script runs into single characters for one-character runs and
@@ -126,6 +131,10 @@ Stemming is enabled by default. The pipeline uses:
   locale tags), verified against the official `english` fixture data;
 - deterministic local baseline stemming for common Spanish (`es`), French
   (`fr`), Portuguese (`pt`), and Indonesian (`id`) suffix/affix forms;
+- deterministic Arabic (`ar`) light stemming for common definite
+  article/clitic prefixes and suffixes, with letters preserved;
+- deterministic Urdu (`ur`) light stemming for common plural-oblique endings,
+  with Arabic/Persian/Urdu letters preserved;
 - Snowball through `wamania/php-stemmer` for optional allowlisted languages that
   pass the bundled compliance harness when Composer dependencies are installed:
   Catalan (`ca`) and Dutch Porter (`nl`);

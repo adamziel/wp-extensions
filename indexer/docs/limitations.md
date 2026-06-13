@@ -54,8 +54,9 @@ This support is selectable/detectable language partitioning plus a small
 baseline analyzer improvement for selected languages. Spanish, French,
 Portuguese, and Indonesian have deterministic suffix/affix stemming rules;
 Arabic and Urdu strip Arabic-script marks and tatweel in their own partitions.
-These are not full morphology, dictionary segmentation, or hard-coded
-word-family expansion.
+Arabic additionally has a narrow article/clitic/suffix light stemmer, and Urdu
+strips common plural-oblique suffixes. These are not full morphology,
+dictionary segmentation, or hard-coded word-family expansion.
 
 Search can route different query terms to different language partitions. Each
 term still scores inside one resolved partition, and the searcher does not merge
@@ -80,8 +81,10 @@ Stemming is enabled by default and can be disabled with
   deterministic local baseline stemmer for common suffix/affix forms. This is a
   recall baseline, not a Snowball-compliant or dictionary-backed analyzer.
 - Arabic (`ar`) and Urdu (`ur`) normalize away Arabic-script combining
-  marks/harakat and tatweel. Letters are preserved, and Persian-like text is
-  not merged into Urdu routing.
+  marks/harakat and tatweel. Arabic strips only a narrow set of common
+  article/clitic prefixes and suffixes; Urdu strips only common plural-oblique
+  suffixes. Letters are preserved across Arabic/Persian/Urdu families, and
+  Persian-like text is not merged into Urdu routing.
 - A full CLARIN-PL PoliMorf external pack builder exists for local/offline
   generation. It verifies the approved source artifact, writes the generated
   runtime pack outside the plugin package, and validates the resulting manifest.

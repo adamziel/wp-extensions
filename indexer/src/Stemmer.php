@@ -64,6 +64,8 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
             'fr' => $this->stem_french($term),
             'pt' => $this->stem_portuguese($term),
             'id' => $this->stem_indonesian($term),
+            'ar' => $this->stem_arabic($term),
+            'ur' => $this->stem_urdu($term),
             default => $term,
         };
     }
@@ -73,11 +75,13 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
      */
     public function index_signature(): string
     {
-        return 'wp-fts-baseline-language-stemmer:v1:' . sha1(implode('|', [
+        return 'wp-fts-baseline-language-stemmer:v2:' . sha1(implode('|', [
             'es=suffix:plural,verb,adverb:v1',
             'fr=suffix:plural,verb,adjective,adverb:v1',
             'pt=suffix:plural,verb,adverb:v1',
             'id=affix:meN,peN,ber,ter,di,ke,se,kan,an,i,nya:v1',
+            'ar=affix:article-clitic-plural-pronoun:v1',
+            'ur=suffix:plural-oblique:v1',
         ]));
     }
 
@@ -192,6 +196,66 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
         }
 
         return $stem;
+    }
+
+    /**
+     * Arabic: strip common article/clitic prefixes, then one light suffix.
+     */
+    private function stem_arabic(string $term): string
+    {
+        $stem = $this->strip_prefix_rules($term, [
+            ['وال', '', 3],
+            ['بال', '', 3],
+            ['كال', '', 3],
+            ['فال', '', 3],
+            ['ولل', '', 3],
+            ['فلل', '', 3],
+            ['لل', '', 3],
+            ['ال', '', 3],
+        ]);
+
+        return $this->strip_suffix_rules($stem, [
+            ['ات', '', 3],
+            ['ون', '', 3],
+            ['ين', '', 3],
+            ['ان', '', 3],
+            ['ها', '', 3],
+            ['هم', '', 3],
+            ['نا', '', 3],
+            ['كم', '', 3],
+            ['ة', '', 3],
+            ['ه', '', 3],
+        ]);
+    }
+
+    /**
+     * Urdu: keep letters intact and only strip common plural-oblique suffixes.
+     */
+    private function stem_urdu(string $term): string
+    {
+        return $this->strip_suffix_rules($term, [
+            ['وں', '', 3],
+            ['یں', '', 3],
+        ]);
+    }
+
+    /**
+     * @param array<int,array{0:string,1:string,2:int}> $rules
+     */
+    private function strip_prefix_rules(string $term, array $rules): string
+    {
+        foreach ($rules as [$prefix, $replacement, $minStemLength]) {
+            if (!str_starts_with($term, $prefix)) {
+                continue;
+            }
+
+            $candidate = $replacement . substr($term, strlen($prefix));
+            if ($this->char_length($candidate) >= $minStemLength) {
+                return $candidate;
+            }
+        }
+
+        return $term;
     }
 
     /**

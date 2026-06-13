@@ -164,7 +164,7 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'Arabic script search span',
             'text' => 'هذا نص عربي للبحث والفهرسة',
             'lang' => 'ar',
-            'terms' => ['هذا', 'عربي', 'للبحث', 'والفهرسة'],
+            'terms' => ['هذا', 'عربي', 'بحث', 'فهرس'],
         ],
         [
             'label' => 'French lexical search span',
