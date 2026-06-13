@@ -12,6 +12,7 @@ final class WP_FTS_LanguagePipeline
 {
     private WP_FTS_Normalizer $normalizer;
     private WP_FTS_SnowballStemmer $snowballStemmer;
+    private WP_FTS_BaselineLanguageStemmer $baselineStemmer;
     private WP_FTS_Stemmer $polishStemmer;
     private ?WP_FTS_Stemmer $customStemmer;
     /** @var array<string,WP_FTS_Stemmer> */
@@ -38,6 +39,7 @@ final class WP_FTS_LanguagePipeline
      * @param array{
      *   normalizer?:WP_FTS_Normalizer,
      *   snowball_stemmer?:WP_FTS_SnowballStemmer,
+     *   baseline_stemmer?:WP_FTS_BaselineLanguageStemmer,
      *   polish_stemmer?:WP_FTS_Stemmer,
      *   polish_lemma_pack?:bool|string|array<string,mixed>|null,
      *   polish_lemmatizer_pack?:bool|string|array<string,mixed>|null,
@@ -64,6 +66,7 @@ final class WP_FTS_LanguagePipeline
             'chinese_script_map' => $options['chinese_script_map'] ?? [],
         ]);
         $this->snowballStemmer = $options['snowball_stemmer'] ?? new WP_FTS_SnowballStemmer();
+        $this->baselineStemmer = $options['baseline_stemmer'] ?? new WP_FTS_BaselineLanguageStemmer();
         $configuredPolishStemmer = $options['polish_stemmer'] ?? null;
         $this->polishStemmer = $configuredPolishStemmer instanceof WP_FTS_Stemmer
             ? $configuredPolishStemmer
@@ -384,15 +387,20 @@ final class WP_FTS_LanguagePipeline
     /**
      * Route stemming to the language-specific adapter.
      *
-     * Polish uses the conservative local stemmer. Other enabled languages go
-     * through the Snowball adapter, which returns the original term when the
-     * language is unsupported.
+     * Polish keeps its analyzer-pack/conservative precedence. Spanish, French,
+     * Portuguese, and Indonesian use the local baseline stemmer. Other enabled
+     * languages go through the Snowball adapter, which returns the original term
+     * when the language is unsupported.
      */
     private function stem_for_language(string $term, string $language): string
     {
         $base = $this->base_language($language);
         if ($base === 'pl') {
             return $this->polishStemmer->stem($term, $language);
+        }
+
+        if (in_array($base, ['es', 'fr', 'pt', 'id'], true)) {
+            return $this->baselineStemmer->stem($term, $language);
         }
 
         return $this->snowballStemmer->stem($term, $language);
@@ -467,7 +475,7 @@ final class WP_FTS_LanguagePipeline
         }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 3,
+            'version' => 4,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
@@ -481,6 +489,7 @@ final class WP_FTS_LanguagePipeline
             'chinese_script_map' => $this->signatureValue($options['chinese_script_map'] ?? []),
             'normalizer' => $this->componentSignature($options['normalizer'] ?? null),
             'snowball_stemmer' => $this->componentSignature($options['snowball_stemmer'] ?? $this->snowballStemmer),
+            'baseline_stemmer' => $this->componentSignature($options['baseline_stemmer'] ?? $this->baselineStemmer),
             'polish_stemmer' => $this->componentSignature($options['polish_stemmer'] ?? null),
         ];
         $polishLemmaPackSignature = $this->polishLemmaPackSignature($options);
@@ -492,7 +501,7 @@ final class WP_FTS_LanguagePipeline
             $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
         }
 
-        return 'wp-fts-language-pipeline-v3:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v4:' . sha1($this->stableJson($payload));
     }
 
     /**

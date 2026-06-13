@@ -3322,6 +3322,9 @@ test_case('language normalizer applies dialect and language-specific folding map
     assert_same('ıgdır', $normalizer->normalize_token('Iğdır', 'tr-TR'), 'Turkish dotless i must not fold to ASCII i');
     assert_same('istanbul', $normalizer->normalize_token('İstanbul', 'tr'), 'Turkish dotted capital I should normalize to i');
     assert_same('zh-Hant', $normalizer->canonicalize_language('zh_TW'), 'Chinese region should canonicalize to script key');
+    assert_same('البحث', $normalizer->normalize_token("اَلْبَحْثُ", 'ar'), 'Arabic harakat should strip without changing letters');
+    assert_same('تلاش', $normalizer->normalize_token("تَلاشـ", 'ur'), 'Urdu harakat and tatweel should strip without changing letters');
+    assert_same("تَلاشـ", $normalizer->normalize_token("تَلاشـ", 'fa'), 'unsupported Persian partition should not inherit Urdu mark normalization');
 
     $pipeline = new WP_FTS_LanguagePipeline();
     assert_same(
@@ -3373,6 +3376,25 @@ test_case('custom stemmers preserve callable arity compatibility', function (): 
     assert_same(['1:color'], $variadic->analyze('colour', 'en-GB'), 'variadic custom stemmers should receive language');
 });
 
+test_case('baseline top-language stemmer applies deterministic local rules', function (): void {
+    $stemmer = new WP_FTS_BaselineLanguageStemmer();
+
+    assert_same('busc', $stemmer->stem('buscando', 'es-MX'), 'Spanish gerund should stem to the same baseline as the infinitive');
+    assert_same('busc', $stemmer->stem('buscar', 'es'), 'Spanish infinitive should stem conservatively');
+    assert_same('dato', $stemmer->stem('datos', 'es'), 'Spanish plurals should shed a final plural s');
+    assert_same('mang', $stemmer->stem('mangent', 'fr'), 'French common verb surface should stem conservatively');
+    assert_same('mang', $stemmer->stem('manger', 'fr'), 'French infinitive should share the common verb stem');
+    assert_same('francais', $stemmer->stem('francais', 'fr'), 'French final-s guard should preserve singular ais endings');
+    assert_same('pesquis', $stemmer->stem('pesquisando', 'pt-BR'), 'Portuguese gerund should stem to the same baseline as the infinitive');
+    assert_same('pesquis', $stemmer->stem('pesquisar', 'pt'), 'Portuguese infinitive should stem conservatively');
+    assert_same('portugues', $stemmer->stem('portugues', 'pt'), 'Portuguese final-s guard should preserve singular ues endings');
+    assert_same('cari', $stemmer->stem('mencari', 'id'), 'Indonesian meN- prefix should strip with length guard');
+    assert_same('cari', $stemmer->stem('pencarian', 'id-ID'), 'Indonesian peN- prefix and -an suffix should strip with length guard');
+    assert_same('dengan', $stemmer->stem('dengan', 'id'), 'Indonesian suffix stripping should keep short unprefixed stems intact');
+    assert_same('kotami', $stemmer->stem('kotami', 'pl'), 'baseline stemmer should no-op unsupported languages');
+    assert_contains('wp-fts-baseline-language-stemmer:v1:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
+});
+
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
     $snowball = new WP_FTS_SnowballStemmer();
     assert_same('kotami', $snowball->stem('kotami', 'pl'), 'Snowball adapter should no-op unsupported languages');
@@ -3394,6 +3416,10 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_same(['kot'], $pipeline->analyze('kotami', 'pl'), 'Polish conservative suffix strategy should be available');
     assert_same(['wroclaw'], $pipeline->analyze('Wrocławiu', 'pl'), 'Polish fallback should run after folding');
     assert_same(['run', 'run', 'runner'], $pipeline->analyze('running runs runner', 'en'), 'English Snowball stemming should be available by default');
+    assert_same(['busc', 'busc'], $pipeline->analyze('buscar buscando', 'es'), 'Spanish baseline stemming should be available by default');
+    assert_same(['mang', 'mang'], $pipeline->analyze('manger mangent', 'fr'), 'French baseline stemming should be available by default');
+    assert_same(['pesquis', 'pesquis'], $pipeline->analyze('pesquisar pesquisando', 'pt'), 'Portuguese baseline stemming should be available by default');
+    assert_same(['cari', 'cari'], $pipeline->analyze('mencari pencarian', 'id'), 'Indonesian baseline stemming should be available by default');
 
     $verifiedPipeline = new WP_FTS_LanguagePipeline([
         'enable_stemming' => true,

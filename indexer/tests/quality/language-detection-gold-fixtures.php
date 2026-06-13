@@ -158,7 +158,7 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'Spanish lexical search span',
             'text' => 'la busqueda en espanol usa datos claros',
             'lang' => 'es',
-            'terms' => ['busqueda', 'espanol', 'datos', 'claros'],
+            'terms' => ['busqueda', 'espanol', 'dato', 'claro'],
         ],
         [
             'label' => 'Arabic script search span',
@@ -170,7 +170,7 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'French lexical search span',
             'text' => 'la recherche en francais utilise des donnees claires',
             'lang' => 'fr',
-            'terms' => ['recherche', 'francais', 'donnees', 'claires'],
+            'terms' => ['recherche', 'francais', 'donne', 'clair'],
         ],
         [
             'label' => 'Bengali script search span',
@@ -182,13 +182,13 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'Portuguese lexical search span',
             'text' => 'a pesquisa em portugues usa dados claros',
             'lang' => 'pt',
-            'terms' => ['pesquisa', 'portugues', 'dados', 'claros'],
+            'terms' => ['pesquisa', 'portugues', 'dado', 'claro'],
         ],
         [
             'label' => 'Indonesian lexical search span',
             'text' => 'pencarian bahasa indonesia dengan data jelas',
             'lang' => 'id',
-            'terms' => ['pencarian', 'bahasa', 'indonesia', 'data', 'jelas'],
+            'terms' => ['cari', 'bahasa', 'indonesia', 'data', 'jelas'],
         ],
         [
             'label' => 'Urdu script search span',

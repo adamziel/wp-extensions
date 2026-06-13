@@ -193,6 +193,10 @@ final class WP_FTS_Normalizer
             return $this->normalize_chinese_dialect($token, $language);
         }
 
+        if ($base === 'ar' || $base === 'ur') {
+            return $this->normalize_arabic_script_marks($token);
+        }
+
         return $token;
     }
 
@@ -251,6 +255,132 @@ final class WP_FTS_Normalizer
         }
 
         return $token;
+    }
+
+    /**
+     * Strip Arabic-script combining marks and tatweel without changing letters.
+     *
+     * Arabic, Urdu, and Persian share script code ranges. This map therefore
+     * removes only marks/kashida and deliberately does not rewrite letters such
+     * as Urdu do-chashmi heh or Persian yeh/kaf.
+     */
+    private function normalize_arabic_script_marks(string $token): string
+    {
+        return strtr($token, $this->arabic_script_mark_map());
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function arabic_script_mark_map(): array
+    {
+        static $map = null;
+        if ($map !== null) {
+            return $map;
+        }
+
+        $map = [
+            "\u{0610}" => '',
+            "\u{0611}" => '',
+            "\u{0612}" => '',
+            "\u{0613}" => '',
+            "\u{0614}" => '',
+            "\u{0615}" => '',
+            "\u{0616}" => '',
+            "\u{0617}" => '',
+            "\u{0618}" => '',
+            "\u{0619}" => '',
+            "\u{061a}" => '',
+            "\u{0640}" => '',
+            "\u{064b}" => '',
+            "\u{064c}" => '',
+            "\u{064d}" => '',
+            "\u{064e}" => '',
+            "\u{064f}" => '',
+            "\u{0650}" => '',
+            "\u{0651}" => '',
+            "\u{0652}" => '',
+            "\u{0653}" => '',
+            "\u{0654}" => '',
+            "\u{0655}" => '',
+            "\u{0656}" => '',
+            "\u{0657}" => '',
+            "\u{0658}" => '',
+            "\u{0659}" => '',
+            "\u{065a}" => '',
+            "\u{065b}" => '',
+            "\u{065c}" => '',
+            "\u{065d}" => '',
+            "\u{065e}" => '',
+            "\u{065f}" => '',
+            "\u{0670}" => '',
+            "\u{06d6}" => '',
+            "\u{06d7}" => '',
+            "\u{06d8}" => '',
+            "\u{06d9}" => '',
+            "\u{06da}" => '',
+            "\u{06db}" => '',
+            "\u{06dc}" => '',
+            "\u{06df}" => '',
+            "\u{06e0}" => '',
+            "\u{06e1}" => '',
+            "\u{06e2}" => '',
+            "\u{06e3}" => '',
+            "\u{06e4}" => '',
+            "\u{06e7}" => '',
+            "\u{06e8}" => '',
+            "\u{06ea}" => '',
+            "\u{06eb}" => '',
+            "\u{06ec}" => '',
+            "\u{06ed}" => '',
+            "\u{08d3}" => '',
+            "\u{08d4}" => '',
+            "\u{08d5}" => '',
+            "\u{08d6}" => '',
+            "\u{08d7}" => '',
+            "\u{08d8}" => '',
+            "\u{08d9}" => '',
+            "\u{08da}" => '',
+            "\u{08db}" => '',
+            "\u{08dc}" => '',
+            "\u{08dd}" => '',
+            "\u{08de}" => '',
+            "\u{08df}" => '',
+            "\u{08e0}" => '',
+            "\u{08e1}" => '',
+            "\u{08e2}" => '',
+            "\u{08e3}" => '',
+            "\u{08e4}" => '',
+            "\u{08e5}" => '',
+            "\u{08e6}" => '',
+            "\u{08e7}" => '',
+            "\u{08e8}" => '',
+            "\u{08e9}" => '',
+            "\u{08ea}" => '',
+            "\u{08eb}" => '',
+            "\u{08ec}" => '',
+            "\u{08ed}" => '',
+            "\u{08ee}" => '',
+            "\u{08ef}" => '',
+            "\u{08f0}" => '',
+            "\u{08f1}" => '',
+            "\u{08f2}" => '',
+            "\u{08f3}" => '',
+            "\u{08f4}" => '',
+            "\u{08f5}" => '',
+            "\u{08f6}" => '',
+            "\u{08f7}" => '',
+            "\u{08f8}" => '',
+            "\u{08f9}" => '',
+            "\u{08fa}" => '',
+            "\u{08fb}" => '',
+            "\u{08fc}" => '',
+            "\u{08fd}" => '',
+            "\u{08fe}" => '',
+            "\u{08ff}" => '',
+        ];
+
+        return $map;
     }
 
     /**

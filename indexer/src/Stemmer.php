@@ -42,6 +42,249 @@ final class WP_FTS_NoopStemmer implements WP_FTS_Stemmer
 }
 
 /**
+ * Deterministic baseline stemmer for top spoken languages without full packs.
+ *
+ * This is intentionally smaller than a Snowball or dictionary lemmatizer. It
+ * applies conservative suffix/affix rules that improve first-pass recall for
+ * common forms while avoiding word-family dictionaries or query expansion.
+ */
+final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
+{
+    /**
+     * Stem one normalized term for supported baseline languages.
+     *
+     * @param string $term Normalized term text.
+     * @param string $language Canonical or locale-style language tag.
+     * @return string Baseline stem, or original term for unsupported languages.
+     */
+    public function stem(string $term, string $language): string
+    {
+        return match ($this->base_language($language)) {
+            'es' => $this->stem_spanish($term),
+            'fr' => $this->stem_french($term),
+            'pt' => $this->stem_portuguese($term),
+            'id' => $this->stem_indonesian($term),
+            default => $term,
+        };
+    }
+
+    /**
+     * Stable descriptor for stale-index detection.
+     */
+    public function index_signature(): string
+    {
+        return 'wp-fts-baseline-language-stemmer:v1:' . sha1(implode('|', [
+            'es=suffix:plural,verb,adverb:v1',
+            'fr=suffix:plural,verb,adjective,adverb:v1',
+            'pt=suffix:plural,verb,adverb:v1',
+            'id=affix:meN,peN,ber,ter,di,ke,se,kan,an,i,nya:v1',
+        ]));
+    }
+
+    /**
+     * Spanish: light plural, common verb, and adverb suffix handling.
+     */
+    private function stem_spanish(string $term): string
+    {
+        return $this->strip_suffix_rules($term, [
+            ['amientos', '', 5],
+            ['imientos', '', 5],
+            ['amiento', '', 5],
+            ['imiento', '', 5],
+            ['aciones', 'acion', 6],
+            ['mente', '', 5],
+            ['ando', '', 4],
+            ['iendo', '', 4],
+            ['yendo', '', 4],
+            ['aron', '', 4],
+            ['ieron', '', 4],
+            ['amos', '', 4],
+            ['emos', '', 4],
+            ['imos', '', 4],
+            ['ado', '', 4],
+            ['ido', '', 4],
+            ['an', '', 4],
+            ['en', '', 4],
+            ['ar', '', 3],
+            ['er', '', 3],
+            ['ir', '', 3],
+            ['es', '', 4],
+            ['s', '', 4, ['is']],
+        ]);
+    }
+
+    /**
+     * French: light plural/adjective endings, common verb endings, and adverbs.
+     */
+    private function stem_french(string $term): string
+    {
+        return $this->strip_suffix_rules($term, [
+            ['ements', '', 5],
+            ['ement', '', 5],
+            ['ment', '', 5],
+            ['aient', '', 4],
+            ['ions', '', 4],
+            ['iez', '', 4],
+            ['ant', '', 4],
+            ['ent', '', 4],
+            ['ons', '', 4],
+            ['er', '', 3],
+            ['ir', '', 3],
+            ['re', '', 3],
+            ['ez', '', 3],
+            ['es', '', 4],
+            ['s', '', 4, ['ais', 'ois', 'ous', 'us']],
+        ]);
+    }
+
+    /**
+     * Portuguese: light plural, common verb, and adverb suffix handling.
+     */
+    private function stem_portuguese(string $term): string
+    {
+        return $this->strip_suffix_rules($term, [
+            ['amentos', '', 5],
+            ['imentos', '', 5],
+            ['amento', '', 5],
+            ['imento', '', 5],
+            ['mente', '', 5],
+            ['ando', '', 4],
+            ['endo', '', 4],
+            ['indo', '', 4],
+            ['aram', '', 4],
+            ['eram', '', 4],
+            ['iram', '', 4],
+            ['amos', '', 4],
+            ['emos', '', 4],
+            ['imos', '', 4],
+            ['ado', '', 4],
+            ['ido', '', 4],
+            ['am', '', 4],
+            ['em', '', 4],
+            ['ar', '', 4],
+            ['er', '', 4],
+            ['ir', '', 4],
+            ['s', '', 4, ['ais', 'eis', 'ois', 'ues']],
+        ]);
+    }
+
+    /**
+     * Indonesian: strip one common derivational prefix, then one or two suffixes.
+     */
+    private function stem_indonesian(string $term): string
+    {
+        $stem = $this->strip_indonesian_prefix($term);
+        $removedPrefix = $stem !== $term;
+        $anMinLength = $removedPrefix ? 4 : 5;
+
+        for ($i = 0; $i < 2; $i++) {
+            $next = $this->strip_suffix_rules($stem, [
+                ['kan', '', 4],
+                ['nya', '', 4],
+                ['an', '', $anMinLength],
+                ['i', '', 4],
+            ]);
+
+            if ($next === $stem) {
+                break;
+            }
+            $stem = $next;
+        }
+
+        return $stem;
+    }
+
+    /**
+     * @param array<int,array{0:string,1:string,2:int,3?:string[]}> $rules
+     */
+    private function strip_suffix_rules(string $term, array $rules): string
+    {
+        foreach ($rules as $rule) {
+            [$suffix, $replacement, $minStemLength] = $rule;
+            $protectedEndings = $rule[3] ?? [];
+            if (!str_ends_with($term, $suffix)) {
+                continue;
+            }
+            if ($this->has_any_suffix($term, $protectedEndings)) {
+                continue;
+            }
+
+            $candidate = substr($term, 0, -strlen($suffix)) . $replacement;
+            if ($this->char_length($candidate) >= $minStemLength) {
+                return $candidate;
+            }
+        }
+
+        return $term;
+    }
+
+    private function strip_indonesian_prefix(string $term): string
+    {
+        foreach ([
+            ['meny', 's', 4],
+            ['peny', 's', 4],
+            ['meng', '', 4],
+            ['peng', '', 4],
+            ['men', '', 4],
+            ['mem', '', 4],
+            ['pen', '', 4],
+            ['pem', '', 4],
+            ['ber', '', 4],
+            ['ter', '', 4],
+            ['me', '', 4],
+            ['pe', '', 4],
+            ['di', '', 4],
+            ['ke', '', 4],
+            ['se', '', 4],
+        ] as [$prefix, $replacement, $minStemLength]) {
+            if (!str_starts_with($term, $prefix)) {
+                continue;
+            }
+
+            $candidate = $replacement . substr($term, strlen($prefix));
+            if ($this->char_length($candidate) >= $minStemLength) {
+                return $candidate;
+            }
+        }
+
+        return $term;
+    }
+
+    /**
+     * @param string[] $suffixes
+     */
+    private function has_any_suffix(string $term, array $suffixes): bool
+    {
+        foreach ($suffixes as $suffix) {
+            if ($suffix !== '' && str_ends_with($term, $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Count characters with mbstring when present and bytes otherwise.
+     */
+    private function char_length(string $term): int
+    {
+        return function_exists('mb_strlen') ? mb_strlen($term, 'UTF-8') : strlen($term);
+    }
+
+    /**
+     * Reduce a language tag to the lower-case primary language subtag.
+     */
+    private function base_language(string $language): string
+    {
+        $language = strtolower(str_replace('_', '-', trim($language)));
+        $separator = strpos($language, '-');
+
+        return $separator === false ? $language : substr($language, 0, $separator);
+    }
+}
+
+/**
  * Adapts a user callable to the stemmer interface.
  *
  * Legacy callers often supplied one-argument callbacks such as `metaphone`.
