@@ -205,21 +205,24 @@ SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 
 The harness reports unsupported Snowball languages as skipped. Skips are
 expected for languages that are not advertised by `WP_FTS_SnowballStemmer`.
-Arabic (`ar`), English (`en`), Spanish (`es`), French (`fr`), Portuguese (`pt`),
-and Indonesian (`id`) should pass from the bundled generated Snowball
-implementations even in a bare checkout; Wamania-backed Catalan (`ca`) and
-Dutch Porter (`nl`) skip when optional Composer dependencies are absent. With
-the current official Snowball data checkout, a source tree without `vendor/`
-should report `6 pass, 31 skip, 0 fail`; after installing production
-dependencies from `composer.lock`, Arabic, English, Spanish, French, Portuguese,
-Indonesian, Catalan, and Dutch Porter should pass, for `8 pass, 29 skip, 0 fail`.
+Arabic (`ar`), English (`en`), Spanish (`es`), French (`fr`), Hindi (`hi`),
+Portuguese (`pt`), and Indonesian (`id`) should pass from the bundled generated
+Snowball implementations even in a bare checkout; Wamania-backed Catalan (`ca`)
+and Dutch Porter (`nl`) skip when optional Composer dependencies are absent.
+With the current official Snowball data checkout, a source tree without `vendor/`
+should report `7 pass, 30 skip, 0 fail`; after installing production
+dependencies from `composer.lock`, Arabic, English, Spanish, French, Hindi,
+Portuguese, Indonesian, Catalan, and Dutch Porter should pass, for
+`9 pass, 28 skip, 0 fail`.
 
-The bundled Arabic, Portuguese, and Indonesian ports also have direct
+The bundled Arabic, Hindi, Portuguese, and Indonesian ports also have direct
 full-fixture validators:
 
 ```sh
 php tests/arabic-snowball-fixtures.php
 php -n tests/arabic-snowball-fixtures.php
+php tests/hindi-snowball-fixtures.php
+php -n tests/hindi-snowball-fixtures.php
 php tests/portuguese-snowball-fixtures.php
 php -n tests/portuguese-snowball-fixtures.php
 php tests/indonesian-snowball-fixtures.php

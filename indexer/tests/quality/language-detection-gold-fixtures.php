@@ -152,7 +152,7 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'Hindi Devanagari search span',
             'text' => 'यह हिंदी खोज के लिए स्पष्ट पाठ है',
             'lang' => 'hi',
-            'terms' => ['यह', 'हिंदी', 'खोज', 'स्पष्ट', 'पाठ'],
+            'terms' => ['यह', 'हिंद', 'खोज', 'स्पष्ट', 'पाठ'],
         ],
         [
             'label' => 'Spanish lexical search span',

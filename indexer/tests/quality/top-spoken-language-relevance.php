@@ -125,7 +125,7 @@ function wp_fts_tslr_cases(): array
             'bait' => 'हिंदी खोज',
         ],
         [
-            'id' => 'hi-explicit-token-baseline',
+            'id' => 'hi-explicit-token-snowball',
             'lang' => 'hi',
             'target_id' => 1006,
             'bait_id' => 2006,
@@ -135,7 +135,7 @@ function wp_fts_tslr_cases(): array
             'bait' => 'स्पष्ट पाठ',
         ],
         [
-            'id' => 'hi-plural-oblique-baseline',
+            'id' => 'hi-plural-oblique-snowball',
             'lang' => 'hi',
             'target_id' => 1024,
             'bait_id' => 2024,
@@ -145,14 +145,14 @@ function wp_fts_tslr_cases(): array
             'bait' => 'किताब सूची किताबें सूचियों',
         ],
         [
-            'id' => 'hi-aaen-iyan-baseline',
+            'id' => 'hi-official-suffix-snowball',
             'lang' => 'hi',
             'target_id' => 1025,
             'bait_id' => 2025,
-            'target' => 'भाषाएँ और लड़कियाँ स्पष्ट उदाहरण हैं',
-            'query' => 'भाषा लड़की',
+            'target' => 'अधिनियमों और कब्रें स्पष्ट उदाहरण हैं',
+            'query' => 'अधिनियम कब्र',
             'bait_lang' => 'en',
-            'bait' => 'भाषा लड़की भाषाएँ लड़कियाँ',
+            'bait' => 'अधिनियम कब्र अधिनियमों कब्रें',
         ],
         [
             'id' => 'es-snowball-buscar-buscando',

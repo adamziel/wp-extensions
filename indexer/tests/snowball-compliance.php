@@ -148,6 +148,7 @@ fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n");
 fwrite(STDOUT, 'Arabic source: ' . $stemmer->source_identity('ar') . "\n");
 fwrite(STDOUT, 'Spanish source: ' . $stemmer->source_identity('es') . "\n");
 fwrite(STDOUT, 'French source: ' . $stemmer->source_identity('fr') . "\n");
+fwrite(STDOUT, 'Hindi source: ' . $stemmer->source_identity('hi') . "\n");
 fwrite(STDOUT, 'Portuguese source: ' . $stemmer->source_identity('pt') . "\n");
 fwrite(STDOUT, 'Indonesian source: ' . $stemmer->source_identity('id') . "\n\n");
 

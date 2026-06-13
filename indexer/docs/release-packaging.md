@@ -58,10 +58,10 @@ Current runtime dependency:
 The plugin bootstrap loads `vendor/autoload.php` only when it exists. Missing
 vendor dependencies do not stop the plugin from loading. Bundled English
 Snowball/Porter2, bundled Arabic Snowball, bundled Spanish Snowball, bundled
-French Snowball, bundled Portuguese Snowball, and bundled Indonesian Snowball
-stemming remain available without Composer; missing vendor dependencies only
-make the Snowball harness skip Wamania-backed Catalan and Dutch Porter runtime
-comparisons.
+French Snowball, bundled Hindi Snowball, bundled Portuguese Snowball, and
+bundled Indonesian Snowball stemming remain available without Composer; missing
+vendor dependencies only make the Snowball harness skip Wamania-backed Catalan
+and Dutch Porter runtime comparisons.
 
 ## Build A ZIP
 

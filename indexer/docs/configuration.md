@@ -58,15 +58,15 @@ English (`en`), Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic
 (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`),
 and Urdu (`ur`). Polish (`pl`), German (`de`), and Russian (`ru`) remain
 available where the existing analyzer and detector routes already support them.
-This now includes bundled generated Snowball stemming for Arabic (`ar`),
-Spanish (`es`), French (`fr`), Portuguese (`pt`), and Indonesian (`id`). Hindi
-(`hi`) strips only common plural/oblique suffixes, and Bengali (`bn`) strips
-only common classifier, plural, and case suffixes. Arabic (`ar`) and Urdu (`ur`)
-strip Arabic-script combining marks/harakat and tatweel inside their own
-partitions. Arabic then uses the generated Snowball algorithm verified against
-official compressed fixture data, while Urdu strips only common plural-oblique
-endings. This is still not full lemmatization, dictionary segmentation, or
-query expansion. Chinese (`zh`) remains fallback CJK n-gram retrieval.
+This now includes bundled generated Snowball stemming for Arabic (`ar`), Hindi
+(`hi`), Spanish (`es`), French (`fr`), Portuguese (`pt`), and Indonesian (`id`).
+Bengali (`bn`) strips only common classifier, plural, and case suffixes. Arabic
+(`ar`) and Urdu (`ur`) strip Arabic-script combining marks/harakat and tatweel
+inside their own partitions. Arabic and Hindi then use generated Snowball
+algorithms verified against official fixture data, while Urdu strips only common
+plural-oblique endings. This is still not full lemmatization, dictionary
+segmentation, or query expansion. Chinese (`zh`) remains fallback CJK n-gram
+retrieval.
 
 The current searcher scores each query term inside one resolved language
 partition. It can route different terms to different partitions, but it does not
@@ -83,9 +83,9 @@ The default analyzer:
 - folds diacritics by default;
 - strips Arabic-script combining marks/harakat and tatweel for Arabic (`ar`)
   and Urdu (`ur`) only;
-- applies bundled generated Snowball stemming for Arabic (`ar`);
-- applies conservative Hindi (`hi`) plural/oblique suffix stemming and Bengali
-  (`bn`) classifier/plural/case suffix stemming;
+- applies bundled generated Snowball stemming for Arabic (`ar`) and Hindi
+  (`hi`);
+- applies conservative Bengali (`bn`) classifier/plural/case suffix stemming;
 - applies Urdu (`ur`) plural-oblique suffix stemming without Arabic/Persian/Urdu
   letter rewrites;
 - drops non-CJK terms shorter than 2 characters;
@@ -136,11 +136,12 @@ Stemming is enabled by default. The pipeline uses:
   tags), verified against the official `spanish` fixture data;
 - bundled generated Snowball French for French (`fr` and French locale tags),
   verified against the official `french` fixture data;
+- bundled generated Snowball Hindi for Hindi (`hi` and Hindi locale tags),
+  verified against the official `hindi` fixture data;
 - bundled generated Snowball Portuguese for Portuguese (`pt` and Portuguese
   locale tags), verified against the official `portuguese` fixture data;
 - bundled generated Snowball Indonesian for Indonesian (`id` and Indonesian
   locale tags), verified against the official `indonesian` fixture data;
-- deterministic Hindi (`hi`) light stemming for common plural/oblique suffixes;
 - deterministic Bengali (`bn`) light stemming for common classifier, plural,
   and case suffixes;
 - deterministic Urdu (`ur`) light stemming for common plural-oblique endings,

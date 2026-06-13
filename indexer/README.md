@@ -93,12 +93,13 @@ German (`de`), and Russian (`ru`) remain available for explicit routing and
 existing detector support where present.
 
 The default pipeline includes bundled generated Snowball stemming for English
-Porter2, Arabic, Spanish, French, Portuguese, and Indonesian. Arabic is verified
-against the official compressed Snowball data, not a local article/clitic
-baseline or hard-coded word-family map. Catalan and Dutch can use the optional
+Porter2, Arabic, Hindi, Spanish, French, Portuguese, and Indonesian. Arabic is
+verified against the official compressed Snowball data, and Hindi is verified
+against the official 65,118-line Snowball data, not local light suffix baselines
+or hard-coded word-family maps. Catalan and Dutch can use the optional
 Wamania-backed Snowball stemmers when Composer dependencies are present and the
-compliance harness accepts them. Hindi strips only common plural/oblique
-suffixes, and Bengali strips only common classifier, plural, and case suffixes.
+compliance harness accepts them. Bengali strips only common classifier, plural,
+and case suffixes.
 Arabic and Urdu strip Arabic-script combining marks/harakat and tatweel inside
 their own language partitions; Urdu also strips only common plural-oblique
 endings. Persian-like text is not merged into Urdu routing. Polish morphology

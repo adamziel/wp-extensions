@@ -23,6 +23,7 @@ $wp_fts_files = [
     __DIR__ . '/ArabicSnowballStemmer.php',
     __DIR__ . '/SpanishSnowballStemmer.php',
     __DIR__ . '/FrenchSnowballStemmer.php',
+    __DIR__ . '/HindiSnowballStemmer.php',
     __DIR__ . '/PortugueseSnowballStemmer.php',
     __DIR__ . '/IndonesianSnowballStemmer.php',
     __DIR__ . '/PolishVerifiedStemmerData.php',

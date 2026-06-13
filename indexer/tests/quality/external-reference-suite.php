@@ -296,6 +296,23 @@ function wp_fts_external_reference_supported_snowball_rows(): array
                 ['line' => 21653, 'input' => 'ôtées', 'output' => 'ôté'],
             ],
         ],
+        'hindi' => [
+            'code' => 'hi',
+            'rows' => [
+                ['line' => 1, 'input' => 'ं', 'output' => 'ं'],
+                ['line' => 10, 'input' => 'अँगूठा', 'output' => 'अँगूठ'],
+                ['line' => 100, 'input' => 'अंग्रेज़ी', 'output' => 'अंग्रेज़'],
+                ['line' => 1000, 'input' => 'अधिनियमों', 'output' => 'अधिनियम'],
+                ['line' => 5000, 'input' => 'इंडिया', 'output' => 'इंडिय'],
+                ['line' => 10000, 'input' => 'कब्रें', 'output' => 'कब्र'],
+                ['line' => 20000, 'input' => 'जलपान', 'output' => 'जलपान'],
+                ['line' => 30000, 'input' => 'नैणी', 'output' => 'नैण'],
+                ['line' => 40000, 'input' => 'बैरिस्टर', 'output' => 'बैरिस्टर'],
+                ['line' => 50000, 'input' => 'लीचिंग', 'output' => 'लीचिंग'],
+                ['line' => 60000, 'input' => 'सेवानिवृत्त', 'output' => 'सेवानिवृत्त'],
+                ['line' => 65118, 'input' => '९९९', 'output' => '९९९'],
+            ],
+        ],
         'portuguese' => [
             'code' => 'pt',
             'rows' => [
@@ -562,6 +579,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
         'en' => true,
         'es' => true,
         'fr' => true,
+        'hi' => true,
         'id' => true,
         'nl' => true,
         'pt' => true,
@@ -580,6 +598,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     wp_fts_external_reference_assert_true($stemmer->supports_language('en-US'), 'English locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('es-MX'), 'Spanish locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('fr-FR'), 'French locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true($stemmer->supports_language('hi-IN'), 'Hindi locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('id-ID'), 'Indonesian locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('nl_BE'), 'Dutch locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('pt-BR'), 'Portuguese locale tags should inherit supported base language');
