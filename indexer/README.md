@@ -93,12 +93,12 @@ German (`de`), and Russian (`ru`) remain available for explicit routing and
 existing detector support where present.
 
 The default pipeline includes bundled generated Snowball stemming for English
-Porter2, Spanish, and French. Catalan and Dutch can use the optional Wamania-backed
-Snowball stemmers when Composer dependencies are present and the compliance
-harness accepts them. Portuguese and Indonesian use deterministic local
-baseline stemming for common suffix or affix forms so simple inflection searches
-can match without a dictionary pack. Hindi strips only common plural/oblique
-suffixes, and Bengali strips only common classifier, plural, and case suffixes.
+Porter2, Spanish, French, and Portuguese. Catalan and Dutch can use the optional
+Wamania-backed Snowball stemmers when Composer dependencies are present and the
+compliance harness accepts them. Indonesian uses deterministic local baseline
+stemming for common affix forms so simple inflection searches can match without
+a dictionary pack. Hindi strips only common plural/oblique suffixes, and Bengali
+strips only common classifier, plural, and case suffixes.
 Arabic and Urdu strip Arabic-script combining marks/harakat and tatweel inside
 their own language partitions. Arabic also uses a narrow light stemmer for
 common article/clitic prefixes and suffixes; Urdu strips only common

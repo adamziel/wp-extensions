@@ -182,7 +182,7 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'Portuguese lexical search span',
             'text' => 'a pesquisa em portugues usa dados claros',
             'lang' => 'pt',
-            'terms' => ['pesquisa', 'portugues', 'dado', 'claro'],
+            'terms' => ['pesquis', 'portugu', 'dad', 'clar'],
         ],
         [
             'label' => 'Indonesian lexical search span',

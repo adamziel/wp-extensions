@@ -265,7 +265,7 @@ function wp_fts_tslr_cases(): array
             'bait' => 'শিক্ষক লেখা শিক্ষকদের লেখাগুলোর',
         ],
         [
-            'id' => 'pt-infinitive-inflected',
+            'id' => 'pt-infinitive-inflected-snowball',
             'lang' => 'pt',
             'target_id' => 1016,
             'bait_id' => 2016,
@@ -275,7 +275,7 @@ function wp_fts_tslr_cases(): array
             'bait' => 'pesquisar pesquisando',
         ],
         [
-            'id' => 'pt-plural-adjective-baseline',
+            'id' => 'pt-plural-adjective-snowball',
             'lang' => 'pt',
             'target_id' => 1017,
             'bait_id' => 2017,

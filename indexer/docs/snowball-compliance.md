@@ -10,20 +10,25 @@ adapter advertises:
 - English (`en`) through a bundled generated PHP Snowball English/Porter2 path;
 - Spanish (`es`) through a bundled generated PHP Snowball Spanish path;
 - French (`fr`) through a bundled generated PHP Snowball French path;
+- Portuguese (`pt`) through a bundled generated PHP Snowball Portuguese path;
 - Catalan (`ca`) and Dutch Porter (`nl`) through `wamania/php-stemmer` only when
   that optional Composer package is installed.
 
-The bundled English, Spanish, and French implementations are generated from
-`algorithms/english.sbl`, `algorithms/spanish.sbl`, and
-`algorithms/french.sbl` by Snowball 3.1.1. English is verified against
+The bundled English, Spanish, French, and Portuguese implementations are
+generated from `algorithms/english.sbl`, `algorithms/spanish.sbl`,
+`algorithms/french.sbl`, and `algorithms/portuguese.sbl` by Snowball 3.1.1.
+English is verified against
 `snowballstem/snowball-data` commit
 `13803281da204fbd56be5b6f62d3efb98f4d74c2`; Spanish is verified against the
 local official `spanish/voc.txt` and `spanish/output.txt` fixtures with 28,378
 line pairs; French is verified against the local official `french/voc.txt` and
-`french/output.txt` fixtures with 21,653 line pairs. The source identities exposed by
+`french/output.txt` fixtures with 21,653 line pairs; Portuguese is verified
+against the local official `portuguese/voc.txt` and `portuguese/output.txt`
+fixtures with 32,016 line pairs. The source identities exposed by
 `WP_FTS_SnowballStemmer::source_identity('en')`,
-`WP_FTS_SnowballStemmer::source_identity('es')`, and
-`WP_FTS_SnowballStemmer::source_identity('fr')` record the Snowball source
+`WP_FTS_SnowballStemmer::source_identity('es')`,
+`WP_FTS_SnowballStemmer::source_identity('fr')`, and
+`WP_FTS_SnowballStemmer::source_identity('pt')` record the Snowball source
 commit used for the generated PHP reference. Wamania exposes additional language
 classes, but those implementations currently diverge from the current official
 Snowball outputs, so the adapter treats them as unsupported instead of claiming
@@ -50,13 +55,13 @@ SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 
 Expected counts with the current official dataset inventory are:
 
-- without `vendor/`: `3 pass, 34 skip, 0 fail`;
-- with `vendor/` installed from the committed `composer.lock`: `5 pass, 32 skip, 0 fail`.
+- without `vendor/`: `4 pass, 33 skip, 0 fail`;
+- with `vendor/` installed from the committed `composer.lock`: `6 pass, 31 skip, 0 fail`.
 
-The passing runtime datasets are bundled English, Spanish, and French, plus
-Catalan and Dutch Porter when Wamania is installed. Any `fail` result means a fixture,
-algorithm, or advertised-language contract regressed; missing Wamania classes
-are reported as dependency skips, not algorithm failures.
+The passing runtime datasets are bundled English, Spanish, French, and
+Portuguese, plus Catalan and Dutch Porter when Wamania is installed. Any `fail`
+result means a fixture, algorithm, or advertised-language contract regressed;
+missing Wamania classes are reported as dependency skips, not algorithm failures.
 
 This is a Snowball stemmer compliance suite for the multilingual full-text
 pipeline. Lucene `analysis/common` remains the broader analyzer reference for
@@ -64,8 +69,9 @@ tokenization, filtering, and language analysis behavior, but this harness does
 not claim compatibility with Lucene's unit test suite unless that suite is run
 separately.
 
-The bundled generated English, Spanish, and French paths preserve the Snowball
-BSD-3-Clause notice in `src/EnglishSnowballStemmer.php` and
-`src/SpanishSnowballStemmer.php`, and `src/FrenchSnowballStemmer.php`. Missing
-Composer dependencies do not affect bundled English, Spanish, or French
-compliance; they only skip Wamania-backed Catalan and Dutch Porter runtime comparisons.
+The bundled generated English, Spanish, French, and Portuguese paths preserve
+the Snowball BSD-3-Clause notice in `src/EnglishSnowballStemmer.php`,
+`src/SpanishSnowballStemmer.php`, `src/FrenchSnowballStemmer.php`, and
+`src/PortugueseSnowballStemmer.php`. Missing Composer dependencies do not affect
+bundled English, Spanish, French, or Portuguese compliance; they only skip
+Wamania-backed Catalan and Dutch Porter runtime comparisons.

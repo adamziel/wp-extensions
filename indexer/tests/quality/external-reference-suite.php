@@ -281,6 +281,23 @@ function wp_fts_external_reference_supported_snowball_rows(): array
                 ['line' => 21653, 'input' => 'ôtées', 'output' => 'ôté'],
             ],
         ],
+        'portuguese' => [
+            'code' => 'pt',
+            'rows' => [
+                ['line' => 5, 'input' => 'aacho', 'output' => 'aach'],
+                ['line' => 31, 'input' => 'abandonar', 'output' => 'abandon'],
+                ['line' => 33, 'input' => 'abandonaram', 'output' => 'abandon'],
+                ['line' => 253, 'input' => 'ação', 'output' => 'açã'],
+                ['line' => 381, 'input' => 'ações', 'output' => 'açõ'],
+                ['line' => 6109, 'input' => 'claros', 'output' => 'clar'],
+                ['line' => 8464, 'input' => 'dados', 'output' => 'dad'],
+                ['line' => 23464, 'input' => 'pesquisa', 'output' => 'pesquis'],
+                ['line' => 23472, 'input' => 'pesquisar', 'output' => 'pesquis'],
+                ['line' => 25513, 'input' => 'rapidamente', 'output' => 'rapid'],
+                ['line' => 30831, 'input' => 'úteis', 'output' => 'úte'],
+                ['line' => 32016, 'input' => 'zumbido', 'output' => 'zumb'],
+            ],
+        ],
     ];
 }
 
@@ -339,7 +356,6 @@ function wp_fts_external_reference_unsupported_boundaries(): array
         'italian' => ['code' => 'it', 'line' => 5, 'input' => 'abakoumova', 'output' => 'abakoumov', 'reason' => $reason],
         'danish' => ['code' => 'da', 'line' => 3, 'input' => 'aabenbaringen', 'output' => 'aabenbaring', 'reason' => $reason],
         'swedish' => ['code' => 'sv', 'line' => 2, 'input' => 'aaele', 'output' => 'aael', 'reason' => $reason],
-        'portuguese' => ['code' => 'pt', 'line' => 5, 'input' => 'aacho', 'output' => 'aach', 'reason' => $reason],
         'russian' => ['code' => 'ru', 'line' => 2, 'input' => 'абиссинию', 'output' => 'абиссин', 'reason' => $reason],
         'norwegian' => ['code' => 'no', 'line' => 3, 'input' => 'aabakken', 'output' => 'aabakk', 'reason' => $reason],
         'finnish' => ['code' => 'fi', 'line' => 4, 'input' => 'aachenin', 'output' => 'aachen', 'reason' => $reason],
@@ -517,6 +533,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
         'es' => true,
         'fr' => true,
         'nl' => true,
+        'pt' => true,
     ];
 
     foreach (wp_fts_external_reference_snowball_language_codes() as $code) {
@@ -532,6 +549,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     wp_fts_external_reference_assert_true($stemmer->supports_language('es-MX'), 'Spanish locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('fr-FR'), 'French locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('nl_BE'), 'Dutch locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true($stemmer->supports_language('pt-BR'), 'Portuguese locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true(!$stemmer->supports_language('it-IT'), 'Unsupported locale tags should remain no-ops');
 });
 

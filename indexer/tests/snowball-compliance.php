@@ -43,7 +43,7 @@ function wp_fts_snowball_datasets(): array
         'persian' => ['code' => 'fa', 'name' => 'Persian'],
         'polish' => ['code' => 'pl', 'name' => 'Polish'],
         'porter' => ['code' => 'en', 'name' => 'Porter English', 'variant' => true],
-        'portuguese' => ['code' => 'pt', 'name' => 'Portuguese', 'skip_reason' => $wamaniaDiverges],
+        'portuguese' => ['code' => 'pt', 'name' => 'Portuguese'],
         'romanian' => ['code' => 'ro', 'name' => 'Romanian', 'skip_reason' => $wamaniaDiverges],
         'russian' => ['code' => 'ru', 'name' => 'Russian', 'skip_reason' => $wamaniaDiverges],
         'serbian' => ['code' => 'sr', 'name' => 'Serbian'],
@@ -155,7 +155,8 @@ fwrite(
 );
 fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n");
 fwrite(STDOUT, 'Spanish source: ' . $stemmer->source_identity('es') . "\n");
-fwrite(STDOUT, 'French source: ' . $stemmer->source_identity('fr') . "\n\n");
+fwrite(STDOUT, 'French source: ' . $stemmer->source_identity('fr') . "\n");
+fwrite(STDOUT, 'Portuguese source: ' . $stemmer->source_identity('pt') . "\n\n");
 
 foreach ($datasets as $dataset => $metadata) {
     $label = wp_fts_language_label($dataset, $metadata);
