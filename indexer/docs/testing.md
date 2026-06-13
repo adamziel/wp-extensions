@@ -40,9 +40,11 @@ php tests/quality/analyzer-language-corpus.php
 ```
 
 Chinese/CJK fallback expectations cover one-character runs plus deterministic
-overlapping n-grams up to 4 characters. These tests assert retrieval-oriented
-n-gram tokenization only, not dictionary segmentation or third-party tokenizer
-data.
+overlapping n-grams up to 4 characters. The same focused lane covers the current
+Bengali and Urdu light suffix baselines, their analyzer signatures, and
+language-partition isolation. These tests assert retrieval-oriented fallback
+tokenization/stemming only, not dictionary segmentation, lemmatization, or
+third-party tokenizer data.
 
 ## Native BM25 Reference Gate
 

@@ -484,7 +484,7 @@ final class WP_FTS_LanguagePipeline
         }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 13,
+            'version' => 14,
             'cjk_max_ngram_length' => self::CJK_MAX_NGRAM_LENGTH,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
@@ -511,7 +511,7 @@ final class WP_FTS_LanguagePipeline
             $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
         }
 
-        return 'wp-fts-language-pipeline-v13:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v14:' . sha1($this->stableJson($payload));
     }
 
     /**

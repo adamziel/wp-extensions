@@ -71,20 +71,23 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
      */
     public function index_signature(): string
     {
-        return 'wp-fts-baseline-language-stemmer:v9:' . sha1(implode('|', [
-            'bn=suffix:classifier-plural-case:v1',
-            'ur=suffix:plural-oblique:v1',
+        return 'wp-fts-baseline-language-stemmer:v10:' . sha1(implode('|', [
+            'bn=suffix:classifier-plural-case:v2',
+            'ur=suffix:plural-oblique:v2',
         ]));
     }
 
     /**
-     * Urdu: keep letters intact and only strip common plural-oblique suffixes.
+     * Urdu: keep letters intact and only strip common plural/oblique suffixes.
      */
     private function stem_urdu(string $term): string
     {
         return $this->strip_suffix_rules($term, [
+            ['یاں', 'ی', 3],
             ['وں', '', 3],
             ['یں', '', 3],
+            ['ات', '', 3],
+            ['ے', '', 3],
         ]);
     }
 
@@ -94,12 +97,27 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
     private function stem_bengali(string $term): string
     {
         return $this->strip_suffix_rules($term, [
+            ['গুলোকে', '', 2],
             ['গুলোতে', '', 2],
+            ['গুলিকে', '', 2],
             ['গুলিতে', '', 2],
             ['গুলোর', '', 2],
+            ['গুলির', '', 2],
             ['গুলো', '', 2],
             ['গুলি', '', 2],
+            ['দেরকে', '', 3],
             ['দের', '', 3],
+            ['টিকে', '', 2],
+            ['টিতে', '', 2],
+            ['টির', '', 2],
+            ['টাকে', '', 2],
+            ['টাতে', '', 2],
+            ['টার', '', 2],
+            ['টি', '', 2],
+            ['টা', '', 2],
+            ['ের', '', 3],
+            ['কে', '', 3],
+            ['রা', '', 3],
             ['তে', '', 3],
         ]);
     }

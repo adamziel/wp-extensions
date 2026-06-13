@@ -53,10 +53,12 @@ Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`), with existing Polish
 This support is selectable/detectable language partitioning plus selected
 analyzer improvements. Arabic, Hindi, Spanish, French, Portuguese, and
 Indonesian use bundled generated Snowball stemming, while Bengali has
-deterministic suffix baseline rules. Arabic and Urdu strip Arabic-script marks
-and tatweel in their own partitions, and Urdu strips common plural-oblique
-suffixes. These are not full morphology, dictionary segmentation, dictionary
-lemmatization, or hard-coded word-family expansion.
+deterministic suffix baseline rules for common classifier, plural, genitive,
+dative, and case endings. Arabic and Urdu strip Arabic-script marks and tatweel
+in their own partitions, and Urdu strips common feminine, masculine,
+Arabic-loan, and plural-oblique suffixes. These are not full morphology,
+dictionary segmentation, dictionary lemmatization, or hard-coded word-family
+expansion.
 
 Search can route different query terms to different language partitions. Each
 term still scores inside one resolved partition, and the searcher does not merge
@@ -82,14 +84,14 @@ Stemming is enabled by default and can be disabled with
   Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
 - Hindi (`hi`) uses the bundled generated Snowball stemmer verified against the
   official 65,118-line Hindi fixture data. Bengali (`bn`) uses deterministic
-  local suffix stemming for common classifier, plural, and case endings. Bengali
-  and Urdu are recall baselines, not Snowball-compliant, lemmatizer-backed, or
-  dictionary-backed analyzers.
+  local suffix stemming for common classifier, plural, genitive, dative, and
+  case endings. Bengali and Urdu are recall baselines, not Snowball-compliant,
+  lemmatizer-backed, or dictionary-backed analyzers.
 - Arabic (`ar`) and Urdu (`ur`) normalize away Arabic-script combining
   marks/harakat and tatweel. Arabic then uses the bundled generated Snowball
   stemmer verified against the official compressed Arabic fixture data; Urdu
-  strips only common plural-oblique suffixes. Persian-like text is not merged
-  into Urdu routing.
+  strips only common feminine, masculine, Arabic-loan, and plural-oblique
+  suffixes. Persian-like text is not merged into Urdu routing.
 - A full CLARIN-PL PoliMorf external pack builder exists for local/offline
   generation. It verifies the approved source artifact, writes the generated
   runtime pack outside the plugin package, and validates the resulting manifest.

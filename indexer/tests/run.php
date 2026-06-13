@@ -3386,16 +3386,28 @@ test_case('baseline top-language stemmer applies deterministic local rules', fun
     assert_same('किताबें', $stemmer->stem('किताबें', 'hi'), 'Baseline stemmer should leave Hindi to the bundled Snowball adapter');
     assert_same('শব্দ', $stemmer->stem('শব্দগুলো', 'bn'), 'Bengali classifier plural -gulo should strip with length guard');
     assert_same('শব্দ', $stemmer->stem('শব্দগুলিতে', 'bn-BD'), 'Bengali classifier locative -gulite should strip with length guard');
+    assert_same('পাতা', $stemmer->stem('পাতাগুলোকে', 'bn'), 'Bengali classifier dative -guloke should strip with length guard');
+    assert_same('লেখা', $stemmer->stem('লেখাগুলির', 'bn'), 'Bengali classifier genitive -gulir should strip with length guard');
     assert_same('লেখা', $stemmer->stem('লেখাগুলোর', 'bn'), 'Bengali classifier genitive -gular should strip with length guard');
     assert_same('শিক্ষক', $stemmer->stem('শিক্ষকদের', 'bn'), 'Bengali plural/genitive -der should strip with length guard');
+    assert_same('শিক্ষক', $stemmer->stem('শিক্ষকদেরকে', 'bn'), 'Bengali plural dative -derke should strip with length guard');
+    assert_same('বই', $stemmer->stem('বইটিকে', 'bn'), 'Bengali singular classifier case -tike should strip with length guard');
+    assert_same('বিদ্যালয়', $stemmer->stem('বিদ্যালয়ের', 'bn'), 'Bengali genitive -er should strip with length guard');
+    assert_same('শিক্ষক', $stemmer->stem('শিক্ষকরা', 'bn'), 'Bengali human plural -ra should strip with length guard');
     assert_same('সূচি', $stemmer->stem('সূচিতে', 'bn'), 'Bengali locative -te should strip when the stem stays non-trivial');
     assert_same('হতে', $stemmer->stem('হতে', 'bn'), 'Bengali short-stem guard should preserve tiny -te words');
+    assert_same('তাকে', $stemmer->stem('তাকে', 'bn'), 'Bengali short-stem guard should preserve tiny -ke words');
     assert_same('البحث', $stemmer->stem('البحث', 'ar'), 'Baseline stemmer should leave Arabic to the bundled Snowball adapter');
     assert_same('کتاب', $stemmer->stem('کتابیں', 'ur'), 'Urdu plural -en should strip without letter rewrites');
     assert_same('فہرست', $stemmer->stem('فہرستوں', 'ur'), 'Urdu plural-oblique -on should strip without letter rewrites');
+    assert_same('لڑکی', $stemmer->stem('لڑکیاں', 'ur'), 'Urdu feminine plural -yan should normalize to the singular yeh ending');
+    assert_same('لڑکی', $stemmer->stem('لڑکیوں', 'ur'), 'Urdu feminine oblique -on should preserve the singular yeh ending');
+    assert_same('لڑک', $stemmer->stem('لڑکے', 'ur'), 'Urdu masculine plural -e should strip when the stem stays non-trivial');
+    assert_same('حال', $stemmer->stem('حالات', 'ur'), 'Urdu Arabic-loan plural -at should strip when the stem stays non-trivial');
+    assert_same('ہے', $stemmer->stem('ہے', 'ur'), 'Urdu short-stem guard should preserve tiny -e words');
     assert_same('فارسی', $stemmer->stem('فارسی', 'ur'), 'Urdu baseline should preserve Persian-like letters and words');
     assert_same('kotami', $stemmer->stem('kotami', 'pl'), 'baseline stemmer should no-op unsupported languages');
-    assert_contains('wp-fts-baseline-language-stemmer:v9:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
+    assert_contains('wp-fts-baseline-language-stemmer:v10:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
 });
 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
@@ -4319,6 +4331,8 @@ test_case('T8 per-language analyzer fixtures are enforced when language pipeline
         ['Polish folding', 'pl', 'Wrocław Łódź zażółć', ['wroclaw', 'lodz', 'zazolc']],
         ['German folding', 'de', 'Straße Ärger Öl', ['strasse', 'aerger', 'oel']],
         ['Turkish dotted I folding', 'tr', 'Isparta İstanbul ışık', ['ısparta', 'istanbul', 'ısık']],
+        ['Bengali baseline stemming', 'bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', 'বিদ্যালয়', 'সূচি']],
+        ['Urdu baseline stemming', 'ur', 'لڑکیوں لڑکیاں لڑکے حالات معلومات', ['لڑکی', 'لڑکی', 'لڑک', 'حال', 'معلوم']],
         ['CJK fallback n-grams', 'zh-Hans', '搜索引擎', ['搜', '索', '引', '擎', '搜索', '索引', '引擎', '搜索引', '索引擎', '搜索引擎']],
     ];
 

@@ -99,10 +99,11 @@ against the official 65,118-line Snowball data, not local light suffix baselines
 or hard-coded word-family maps. Catalan and Dutch can use the optional
 Wamania-backed Snowball stemmers when Composer dependencies are present and the
 compliance harness accepts them. Bengali strips only common classifier, plural,
-and case suffixes.
+genitive, dative, and case suffixes.
 Arabic and Urdu strip Arabic-script combining marks/harakat and tatweel inside
 their own language partitions; Urdu also strips only common plural-oblique
-endings. Persian-like text is not merged into Urdu routing. Polish morphology
+endings, including common feminine, masculine, and Arabic-loan plural forms.
+Persian-like text is not merged into Urdu routing. Polish morphology
 uses configured lemmatizer/analyzer packs where available; it is not driven by
 hard-coded word families. Missing packs, unsupported languages, baseline
 languages without verified morphology, and ambiguous forms keep conservative

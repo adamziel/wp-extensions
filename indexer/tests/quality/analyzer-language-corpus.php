@@ -446,6 +446,8 @@ test_case('quality corpus exposes query occurrence output while preserving plain
         ['pl-PL', 'Łódź Wrocław', ['lodz', 'wroclaw']],
         ['de-DE', 'Straße Öl', ['strasse', 'oel']],
         ['tr-TR', 'İstanbul Iğdır', ['istanbul', 'ıgdır']],
+        ['bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', 'বিদ্যালয়', 'সূচি']],
+        ['ur', 'لڑکیوں لڑکیاں لڑکے حالات معلومات', ['لڑکی', 'لڑکی', 'لڑک', 'حال', 'معلوم']],
         ['zh-Hans', '中文搜索', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '中文搜', '文搜索', '中文搜索']],
         ['zh-Hant', '繁體搜索', ['繁', '體', '搜', '索', '繁體', '體搜', '搜索', '繁體搜', '體搜索', '繁體搜索']],
     ];
@@ -465,10 +467,29 @@ test_case('quality corpus exposes query occurrence output while preserving plain
     }
 });
 
+test_case('quality corpus exposes Bengali Urdu baseline signature changes', function (): void {
+    $stemmer = new WP_FTS_BaselineLanguageStemmer();
+    $pipeline = new WP_FTS_LanguagePipeline();
+    $analyzer = new WP_FTS_Analyzer();
+
+    assert_true(
+        str_contains($stemmer->index_signature(), 'wp-fts-baseline-language-stemmer:v10:'),
+        'baseline Bengali Urdu stemmer signature should identify v2 suffix rules'
+    );
+    assert_true(
+        str_contains($pipeline->index_signature(), 'wp-fts-language-pipeline-v14:'),
+        'language pipeline signature should bump for Bengali Urdu baseline behavior'
+    );
+    assert_true(
+        str_contains($analyzer->index_signature(), 'wp-fts-analyzer-v5:'),
+        'analyzer signature should bump for default language pipeline behavior'
+    );
+});
+
 test_case('quality corpus keeps plain content and query analysis equivalent over generated dimensions', function (): void {
     $analyzer = new WP_FTS_Analyzer(['min_term_len' => 2]);
     $normalizer = new WP_FTS_Normalizer();
-    $languages = ['en-US', 'en-GB', 'pl-PL', 'de-DE', 'tr-TR', 'zh-Hans', 'zh-Hant', 'ja', 'ko', 'fr'];
+    $languages = ['en-US', 'en-GB', 'pl-PL', 'de-DE', 'tr-TR', 'bn', 'ur', 'zh-Hans', 'zh-Hant', 'ja', 'ko', 'fr'];
     $texts = [
         'Alpha beta',
         'Wrocław café',

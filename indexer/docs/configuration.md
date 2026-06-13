@@ -60,11 +60,13 @@ and Urdu (`ur`). Polish (`pl`), German (`de`), and Russian (`ru`) remain
 available where the existing analyzer and detector routes already support them.
 This now includes bundled generated Snowball stemming for Arabic (`ar`), Hindi
 (`hi`), Spanish (`es`), French (`fr`), Portuguese (`pt`), and Indonesian (`id`).
-Bengali (`bn`) strips only common classifier, plural, and case suffixes. Arabic
+Bengali (`bn`) strips only common classifier, plural, genitive, dative, and case
+suffixes. Arabic
 (`ar`) and Urdu (`ur`) strip Arabic-script combining marks/harakat and tatweel
 inside their own partitions. Arabic and Hindi then use generated Snowball
 algorithms verified against official fixture data, while Urdu strips only common
-plural-oblique endings. This is still not full lemmatization, dictionary
+plural-oblique endings, including common feminine, masculine, and Arabic-loan
+plural forms. This is still not full lemmatization, dictionary
 segmentation, or query expansion. Chinese (`zh`) remains deterministic fallback
 CJK n-gram retrieval up to 4 characters.
 
@@ -85,9 +87,10 @@ The default analyzer:
   and Urdu (`ur`) only;
 - applies bundled generated Snowball stemming for Arabic (`ar`) and Hindi
   (`hi`);
-- applies conservative Bengali (`bn`) classifier/plural/case suffix stemming;
-- applies Urdu (`ur`) plural-oblique suffix stemming without Arabic/Persian/Urdu
-  letter rewrites;
+- applies conservative Bengali (`bn`) classifier/plural/genitive/dative/case
+  suffix stemming;
+- applies conservative Urdu (`ur`) feminine/masculine/Arabic-loan/plural-oblique
+  suffix stemming without Arabic/Persian/Urdu letter rewrites;
 - drops non-CJK terms shorter than 2 characters;
 - rejects stored term keys over 255 bytes;
 - tokenizes one-character CJK script runs as-is and longer CJK runs into
@@ -143,9 +146,10 @@ Stemming is enabled by default. The pipeline uses:
 - bundled generated Snowball Indonesian for Indonesian (`id` and Indonesian
   locale tags), verified against the official `indonesian` fixture data;
 - deterministic Bengali (`bn`) light stemming for common classifier, plural,
-  and case suffixes;
-- deterministic Urdu (`ur`) light stemming for common plural-oblique endings,
-  with Arabic/Persian/Urdu letters preserved;
+  genitive, dative, and case suffixes;
+- deterministic Urdu (`ur`) light stemming for common feminine, masculine,
+  Arabic-loan, and plural-oblique endings, with Arabic/Persian/Urdu letters
+  preserved;
 - Snowball through `wamania/php-stemmer` for optional allowlisted languages that
   pass the bundled compliance harness when Composer dependencies are installed:
   Catalan (`ca`) and Dutch Porter (`nl`);
