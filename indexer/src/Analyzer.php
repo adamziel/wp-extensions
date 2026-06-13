@@ -1816,7 +1816,7 @@ final class WP_FTS_Analyzer
 
         $payload = [
             'contract' => 'wp-fts-analyzer',
-            'version' => 3,
+            'version' => 4,
             'skip_ancestors' => $skipAncestors,
             'boosts' => $boosts,
             'stopwords' => $stopwords,
@@ -1834,7 +1834,7 @@ final class WP_FTS_Analyzer
             'html_processor_available' => class_exists('WP_HTML_Processor'),
         ];
 
-        return 'wp-fts-analyzer-v3:' . sha1($this->stableJson($payload));
+        return 'wp-fts-analyzer-v4:' . sha1($this->stableJson($payload));
     }
 
     /**

@@ -3382,6 +3382,7 @@ test_case('baseline top-language stemmer applies deterministic local rules', fun
     assert_same('buscando', $stemmer->stem('buscando', 'es-MX'), 'Baseline stemmer should leave Spanish to the bundled Snowball adapter');
     assert_same('manger', $stemmer->stem('manger', 'fr'), 'Baseline stemmer should leave French to the bundled Snowball adapter');
     assert_same('pesquisando', $stemmer->stem('pesquisando', 'pt-BR'), 'Baseline stemmer should leave Portuguese to the bundled Snowball adapter');
+    assert_same('mencari', $stemmer->stem('mencari', 'id'), 'Baseline stemmer should leave Indonesian to the bundled Snowball adapter');
     assert_same('किताब', $stemmer->stem('किताबें', 'hi'), 'Hindi plural -en should strip with length guard');
     assert_same('किताब', $stemmer->stem('किताबों', 'hi-IN'), 'Hindi oblique plural -on should strip with length guard');
     assert_same('लड़की', $stemmer->stem('लड़कियाँ', 'hi'), 'Hindi -iyan plural should share the singular baseline');
@@ -3393,9 +3394,6 @@ test_case('baseline top-language stemmer applies deterministic local rules', fun
     assert_same('শিক্ষক', $stemmer->stem('শিক্ষকদের', 'bn'), 'Bengali plural/genitive -der should strip with length guard');
     assert_same('সূচি', $stemmer->stem('সূচিতে', 'bn'), 'Bengali locative -te should strip when the stem stays non-trivial');
     assert_same('হতে', $stemmer->stem('হতে', 'bn'), 'Bengali short-stem guard should preserve tiny -te words');
-    assert_same('cari', $stemmer->stem('mencari', 'id'), 'Indonesian meN- prefix should strip with length guard');
-    assert_same('cari', $stemmer->stem('pencarian', 'id-ID'), 'Indonesian peN- prefix and -an suffix should strip with length guard');
-    assert_same('dengan', $stemmer->stem('dengan', 'id'), 'Indonesian suffix stripping should keep short unprefixed stems intact');
     assert_same('بحث', $stemmer->stem('البحث', 'ar'), 'Arabic definite article should strip with length guard');
     assert_same('بحث', $stemmer->stem('للبحث', 'ar'), 'Arabic lam article prefix should strip with length guard');
     assert_same('فهرس', $stemmer->stem('والفهرسة', 'ar'), 'Arabic clitic article and taa marbuta should strip conservatively');
@@ -3406,7 +3404,7 @@ test_case('baseline top-language stemmer applies deterministic local rules', fun
     assert_same('فہرست', $stemmer->stem('فہرستوں', 'ur'), 'Urdu plural-oblique -on should strip without letter rewrites');
     assert_same('فارسی', $stemmer->stem('فارسی', 'ur'), 'Urdu baseline should preserve Persian-like letters and words');
     assert_same('kotami', $stemmer->stem('kotami', 'pl'), 'baseline stemmer should no-op unsupported languages');
-    assert_contains('wp-fts-baseline-language-stemmer:v6:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
+    assert_contains('wp-fts-baseline-language-stemmer:v7:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
 });
 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
@@ -3420,10 +3418,13 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_true($snowball->is_language_available('fr'), 'French Snowball stemmer should be bundled without Wamania');
     assert_true($snowball->supports_language('pt-BR'), 'Snowball adapter should advertise verified Portuguese support');
     assert_true($snowball->is_language_available('pt'), 'Portuguese Snowball stemmer should be bundled without Wamania');
+    assert_true($snowball->supports_language('id-ID'), 'Snowball adapter should advertise verified Indonesian support');
+    assert_true($snowball->is_language_available('id'), 'Indonesian Snowball stemmer should be bundled without Wamania');
     assert_contains('Snowball English (Porter2)', $snowball->source_identity('en'), 'English stemmer should expose its variant identity');
     assert_contains('Snowball Spanish', $snowball->source_identity('es'), 'Spanish stemmer should expose its variant identity');
     assert_contains('Snowball French', $snowball->source_identity('fr'), 'French stemmer should expose its variant identity');
     assert_contains('Snowball Portuguese', $snowball->source_identity('pt'), 'Portuguese stemmer should expose its variant identity');
+    assert_contains('Snowball Indonesian', $snowball->source_identity('id'), 'Indonesian stemmer should expose its variant identity');
     assert_same('run', $snowball->stem('running', 'en'), 'Snowball adapter should use the verified English implementation');
     assert_same('aaron', $snowball->stem('aarón', 'es'), 'Snowball adapter should match the Spanish fixture accent postlude');
     assert_same('abandon', $snowball->stem('abandonarlo', 'es'), 'Snowball adapter should match the Spanish fixture attached-pronoun row');
@@ -3433,6 +3434,10 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_same('pesquis', $snowball->stem('pesquisando', 'pt'), 'Snowball adapter should match the Portuguese fixture gerund row');
     assert_same('dad', $snowball->stem('dados', 'pt'), 'Snowball adapter should match the Portuguese fixture plural row');
     assert_same('rapid', $snowball->stem('rapidamente', 'pt'), 'Snowball adapter should match the Portuguese fixture adverb row');
+    assert_same('cari', $snowball->stem('mencari', 'id'), 'Snowball adapter should match the Indonesian fixture meN row');
+    assert_same('cari', $snowball->stem('pencarian', 'id'), 'Snowball adapter should match the Indonesian fixture peN plus suffix row');
+    assert_same('jalan', $snowball->stem('perjalanan', 'id'), 'Snowball adapter should match the Indonesian fixture per- form row');
+    assert_same('makan', $snowball->stem('makanan', 'id'), 'Snowball adapter should match the Indonesian fixture suffix row');
 
     if ($snowball->is_available()) {
         assert_true($snowball->supports_language('ca'), 'Snowball adapter should advertise compliant Catalan support');
@@ -3450,9 +3455,9 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_same(['busc', 'busc', 'dat', 'clar'], $pipeline->analyze('buscar buscando datos claros', 'es'), 'Spanish Snowball stemming should be available by default');
     assert_same(['mang', 'mang'], $pipeline->analyze('manger mangeaient', 'fr'), 'French Snowball stemming should be available by default');
     assert_same(['pesquis', 'pesquis', 'dad', 'clar'], $pipeline->analyze('pesquisar pesquisando dados claros', 'pt'), 'Portuguese Snowball stemming should be available by default');
+    assert_same(['cari', 'cari', 'jalan', 'jalan', 'makan'], $pipeline->analyze('mencari pencarian berjalan perjalanan makanan', 'id'), 'Indonesian Snowball stemming should be available by default');
     assert_same(['किताब', 'किताब', 'लड़की', 'लड़की', 'भाषा'], $pipeline->analyze('किताबें किताबों लड़कियाँ लड़कियों भाषाएँ', 'hi'), 'Hindi baseline stemming should be available by default');
     assert_same(['শব্দ', 'শব্দ', 'শিক্ষক', 'সূচি'], $pipeline->analyze('শব্দগুলো শব্দগুলিতে শিক্ষকদের সূচিতে', 'bn'), 'Bengali baseline stemming should be available by default');
-    assert_same(['cari', 'cari'], $pipeline->analyze('mencari pencarian', 'id'), 'Indonesian baseline stemming should be available by default');
     assert_same(['بحث', 'بحث', 'فهرس'], $pipeline->analyze('البحث للبحث والفهرسة', 'ar'), 'Arabic baseline stemming should be available by default');
     assert_same(['کتاب', 'فہرست'], $pipeline->analyze('کتابیں فہرستوں', 'ur'), 'Urdu baseline stemming should be available by default');
 

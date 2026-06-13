@@ -59,9 +59,9 @@ English (`en`), Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic
 and Urdu (`ur`). Polish (`pl`), German (`de`), and Russian (`ru`) remain
 available where the existing analyzer and detector routes already support them.
 This now includes bundled generated Snowball stemming for Spanish (`es`),
-French (`fr`), and Portuguese (`pt`). Indonesian (`id`) gets small local
-affix baseline rules. Hindi (`hi`) strips only common plural/oblique suffixes,
-and Bengali (`bn`) strips only common classifier, plural, and case
+French (`fr`), Portuguese (`pt`), and Indonesian (`id`). Hindi (`hi`) strips
+only common plural/oblique suffixes, and Bengali (`bn`) strips only common
+classifier, plural, and case
 suffixes. Arabic (`ar`) and Urdu (`ur`) strip Arabic-script combining
 marks/harakat and tatweel inside their own partitions. Arabic also strips a
 narrow set of common article/clitic prefixes and suffixes, and Urdu strips only
@@ -137,8 +137,8 @@ Stemming is enabled by default. The pipeline uses:
   verified against the official `french` fixture data;
 - bundled generated Snowball Portuguese for Portuguese (`pt` and Portuguese
   locale tags), verified against the official `portuguese` fixture data;
-- deterministic local baseline stemming for common Indonesian (`id`) affix
-  forms;
+- bundled generated Snowball Indonesian for Indonesian (`id` and Indonesian
+  locale tags), verified against the official `indonesian` fixture data;
 - deterministic Hindi (`hi`) light stemming for common plural/oblique suffixes;
 - deterministic Bengali (`bn`) light stemming for common classifier, plural,
   and case suffixes;

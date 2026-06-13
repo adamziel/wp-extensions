@@ -62,7 +62,6 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
         return match ($this->base_language($language)) {
             'hi' => $this->stem_hindi($term),
             'bn' => $this->stem_bengali($term),
-            'id' => $this->stem_indonesian($term),
             'ar' => $this->stem_arabic($term),
             'ur' => $this->stem_urdu($term),
             default => $term,
@@ -74,39 +73,12 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
      */
     public function index_signature(): string
     {
-        return 'wp-fts-baseline-language-stemmer:v6:' . sha1(implode('|', [
+        return 'wp-fts-baseline-language-stemmer:v7:' . sha1(implode('|', [
             'hi=suffix:plural-oblique:v1',
             'bn=suffix:classifier-plural-case:v1',
-            'id=affix:meN,peN,ber,ter,di,ke,se,kan,an,i,nya:v1',
             'ar=affix:article-clitic-plural-pronoun:v1',
             'ur=suffix:plural-oblique:v1',
         ]));
-    }
-
-    /**
-     * Indonesian: strip one common derivational prefix, then one or two suffixes.
-     */
-    private function stem_indonesian(string $term): string
-    {
-        $stem = $this->strip_indonesian_prefix($term);
-        $removedPrefix = $stem !== $term;
-        $anMinLength = $removedPrefix ? 4 : 5;
-
-        for ($i = 0; $i < 2; $i++) {
-            $next = $this->strip_suffix_rules($stem, [
-                ['kan', '', 4],
-                ['nya', '', 4],
-                ['an', '', $anMinLength],
-                ['i', '', 4],
-            ]);
-
-            if ($next === $stem) {
-                break;
-            }
-            $stem = $next;
-        }
-
-        return $stem;
     }
 
     /**
@@ -219,38 +191,6 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
             }
 
             $candidate = substr($term, 0, -strlen($suffix)) . $replacement;
-            if ($this->char_length($candidate) >= $minStemLength) {
-                return $candidate;
-            }
-        }
-
-        return $term;
-    }
-
-    private function strip_indonesian_prefix(string $term): string
-    {
-        foreach ([
-            ['meny', 's', 4],
-            ['peny', 's', 4],
-            ['meng', '', 4],
-            ['peng', '', 4],
-            ['men', '', 4],
-            ['mem', '', 4],
-            ['pen', '', 4],
-            ['pem', '', 4],
-            ['ber', '', 4],
-            ['ter', '', 4],
-            ['me', '', 4],
-            ['pe', '', 4],
-            ['di', '', 4],
-            ['ke', '', 4],
-            ['se', '', 4],
-        ] as [$prefix, $replacement, $minStemLength]) {
-            if (!str_starts_with($term, $prefix)) {
-                continue;
-            }
-
-            $candidate = $replacement . substr($term, strlen($prefix));
             if ($this->char_length($candidate) >= $minStemLength) {
                 return $candidate;
             }
@@ -376,6 +316,7 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     private WP_FTS_SpanishSnowballStemmer $spanishStemmer;
     private WP_FTS_FrenchSnowballStemmer $frenchStemmer;
     private WP_FTS_PortugueseSnowballStemmer $portugueseStemmer;
+    private WP_FTS_IndonesianSnowballStemmer $indonesianStemmer;
 
     /**
      * Initialize the set of Snowball languages accepted by this adapter.
@@ -384,13 +325,15 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
         ?WP_FTS_EnglishSnowballStemmer $englishStemmer = null,
         ?WP_FTS_SpanishSnowballStemmer $spanishStemmer = null,
         ?WP_FTS_FrenchSnowballStemmer $frenchStemmer = null,
-        ?WP_FTS_PortugueseSnowballStemmer $portugueseStemmer = null
+        ?WP_FTS_PortugueseSnowballStemmer $portugueseStemmer = null,
+        ?WP_FTS_IndonesianSnowballStemmer $indonesianStemmer = null
     )
     {
         // Expose only implementations that match the official Snowball
-        // fixtures exactly. English, Spanish, French, and Portuguese are local
-        // generated Snowball ports; Catalan and Dutch Porter remain Wamania-backed
-        // optional paths. Other Wamania classes currently diverge from the
+        // fixtures exactly. English, Spanish, French, Portuguese, and
+        // Indonesian are local generated Snowball ports; Catalan and Dutch
+        // Porter remain Wamania-backed optional paths. Other Wamania classes
+        // currently diverge from the
         // current snowball-data outputs and are treated as no-ops until their
         // algorithms are replaced or patched.
         $this->supportedLanguages = array_fill_keys([
@@ -398,6 +341,7 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
             'en',
             'es',
             'fr',
+            'id',
             'nl',
             'pt',
         ], true);
@@ -405,6 +349,7 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
         $this->spanishStemmer = $spanishStemmer ?? new WP_FTS_SpanishSnowballStemmer();
         $this->frenchStemmer = $frenchStemmer ?? new WP_FTS_FrenchSnowballStemmer();
         $this->portugueseStemmer = $portugueseStemmer ?? new WP_FTS_PortugueseSnowballStemmer();
+        $this->indonesianStemmer = $indonesianStemmer ?? new WP_FTS_IndonesianSnowballStemmer();
     }
 
     /**
@@ -431,9 +376,9 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     /**
      * Report whether a supported language has an available runtime path.
      *
-     * English, Spanish, French, and Portuguese are bundled as generated PHP;
-     * Wamania-backed languages remain optional and no-op safely when Composer
-     * packages are absent.
+     * English, Spanish, French, Portuguese, and Indonesian are bundled as
+     * generated PHP; Wamania-backed languages remain optional and no-op safely
+     * when Composer packages are absent.
      *
      * @param string $language Canonical or locale-style language tag.
      * @return bool True when `stem()` can apply a verified implementation.
@@ -441,7 +386,7 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     public function is_language_available(string $language): bool
     {
         $language = $this->base_language($language);
-        if ($language === 'en' || $language === 'es' || $language === 'fr' || $language === 'pt') {
+        if (in_array($language, ['en', 'es', 'fr', 'id', 'pt'], true)) {
             return true;
         }
 
@@ -470,6 +415,10 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
             return $this->portugueseStemmer->source_identity();
         }
 
+        if ($language === 'id') {
+            return $this->indonesianStemmer->source_identity();
+        }
+
         if ($language === 'nl') {
             return 'wamania/php-stemmer Dutch Porter mapped to nl; verified against snowball-data dutch_porter fixtures when Wamania is installed';
         }
@@ -486,11 +435,12 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
      */
     public function index_signature(): string
     {
-        return 'wp-fts-snowball-stemmer:v5:' . sha1(implode('|', [
+        return 'wp-fts-snowball-stemmer:v6:' . sha1(implode('|', [
             'ca=wamania-catalan',
             'en=' . WP_FTS_EnglishSnowballStemmer::VARIANT . '@snowball-data-13803281',
             'es=' . WP_FTS_SpanishSnowballStemmer::VARIANT . '@snowball-data-spanish-28378',
             'fr=' . WP_FTS_FrenchSnowballStemmer::VARIANT . '@snowball-data-french-21653',
+            'id=' . WP_FTS_IndonesianSnowballStemmer::VARIANT . '@snowball-data-indonesian-64586',
             'nl=wamania-dutch-porter',
             'pt=' . WP_FTS_PortugueseSnowballStemmer::VARIANT . '@snowball-data-portuguese-32016',
         ]));
@@ -527,6 +477,10 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
 
         if ($language === 'pt') {
             return $this->portugueseStemmer->stem_word($term);
+        }
+
+        if ($language === 'id') {
+            return $this->indonesianStemmer->stem_word($term);
         }
 
         if (!$this->is_available()) {

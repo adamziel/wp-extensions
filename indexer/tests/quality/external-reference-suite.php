@@ -298,6 +298,20 @@ function wp_fts_external_reference_supported_snowball_rows(): array
                 ['line' => 32016, 'input' => 'zumbido', 'output' => 'zumb'],
             ],
         ],
+        'indonesian' => [
+            'code' => 'id',
+            'rows' => [
+                ['line' => 3578, 'input' => 'bahasa', 'output' => 'bahasa'],
+                ['line' => 5463, 'input' => 'berjalan', 'output' => 'jalan'],
+                ['line' => 10862, 'input' => 'datanya', 'output' => 'data'],
+                ['line' => 11302, 'input' => 'dengan', 'output' => 'dengan'],
+                ['line' => 23289, 'input' => 'indonesia', 'output' => 'indonesia'],
+                ['line' => 32592, 'input' => 'makanan', 'output' => 'makan'],
+                ['line' => 35411, 'input' => 'mencari', 'output' => 'cari'],
+                ['line' => 44777, 'input' => 'pencarian', 'output' => 'cari'],
+                ['line' => 46931, 'input' => 'perjalanan', 'output' => 'jalan'],
+            ],
+        ],
     ];
 }
 
@@ -532,6 +546,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
         'en' => true,
         'es' => true,
         'fr' => true,
+        'id' => true,
         'nl' => true,
         'pt' => true,
     ];
@@ -548,6 +563,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     wp_fts_external_reference_assert_true($stemmer->supports_language('en-US'), 'English locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('es-MX'), 'Spanish locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('fr-FR'), 'French locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true($stemmer->supports_language('id-ID'), 'Indonesian locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('nl_BE'), 'Dutch locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('pt-BR'), 'Portuguese locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true(!$stemmer->supports_language('it-IT'), 'Unsupported locale tags should remain no-ops');

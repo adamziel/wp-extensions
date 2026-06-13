@@ -285,7 +285,7 @@ function wp_fts_tslr_cases(): array
             'bait' => 'dado claro dados claros',
         ],
         [
-            'id' => 'id-affix-baseline',
+            'id' => 'id-affix-snowball',
             'lang' => 'id',
             'target_id' => 1018,
             'bait_id' => 2018,
@@ -295,7 +295,7 @@ function wp_fts_tslr_cases(): array
             'bait' => 'mencari pencarian cari',
         ],
         [
-            'id' => 'id-suffix-baseline',
+            'id' => 'id-possessive-prefix-snowball',
             'lang' => 'id',
             'target_id' => 1019,
             'bait_id' => 2019,

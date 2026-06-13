@@ -156,7 +156,8 @@ fwrite(
 fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n");
 fwrite(STDOUT, 'Spanish source: ' . $stemmer->source_identity('es') . "\n");
 fwrite(STDOUT, 'French source: ' . $stemmer->source_identity('fr') . "\n");
-fwrite(STDOUT, 'Portuguese source: ' . $stemmer->source_identity('pt') . "\n\n");
+fwrite(STDOUT, 'Portuguese source: ' . $stemmer->source_identity('pt') . "\n");
+fwrite(STDOUT, 'Indonesian source: ' . $stemmer->source_identity('id') . "\n\n");
 
 foreach ($datasets as $dataset => $metadata) {
     $label = wp_fts_language_label($dataset, $metadata);

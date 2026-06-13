@@ -51,9 +51,9 @@ The baseline routed set covers English (`en`), Mandarin/Chinese (`zh`), Hindi
 Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`), with existing Polish
 (`pl`), German (`de`), and Russian (`ru`) routing kept available where present.
 This support is selectable/detectable language partitioning plus selected
-analyzer improvements. Spanish, French, and Portuguese use bundled generated
-Snowball stemming. Indonesian has deterministic affix baseline rules, while
-Hindi and Bengali have deterministic suffix baseline rules. Arabic and Urdu
+analyzer improvements. Spanish, French, Portuguese, and Indonesian use bundled
+generated Snowball stemming, while Hindi and Bengali have deterministic suffix
+baseline rules. Arabic and Urdu
 strip Arabic-script marks and tatweel in their own partitions. Arabic
 additionally has a narrow article/clitic/suffix light stemmer, and Urdu strips
 common plural-oblique suffixes. These are not full morphology, dictionary
@@ -70,9 +70,9 @@ Stemming is enabled by default and can be disabled with
 
 - Advertised Snowball support is exactly Catalan (`ca`), bundled generated
   English Porter2 (`en`), bundled generated Spanish (`es`), bundled generated
-  French (`fr`), bundled generated Portuguese (`pt`), and Dutch Porter (`nl`),
-  because those are the implementations currently verified by the Snowball
-  fixture harness.
+  French (`fr`), bundled generated Portuguese (`pt`), bundled generated
+  Indonesian (`id`), and Dutch Porter (`nl`), because those are the
+  implementations currently verified by the Snowball fixture harness.
 - Wamania exposes other language classes, but this branch treats unsupported or
   divergent algorithms as no-ops instead of claiming compliance.
 - Polish (`pl`) uses a conservative local suffix stemmer by default. A valid
@@ -80,9 +80,6 @@ Stemming is enabled by default and can be disabled with
   `polish_stemming`; otherwise `polish_stemming => 'verified'` can enable a
   compact fixture-backed stemmer slice. Neither path is a full Snowball,
   Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
-- Indonesian (`id`) uses a deterministic local baseline stemmer for common
-  affix forms. This is a recall baseline, not a Snowball-compliant or
-  dictionary-backed analyzer.
 - Hindi (`hi`) uses deterministic local suffix stemming for common
   plural/oblique endings, and Bengali (`bn`) uses deterministic local suffix
   stemming for common classifier, plural, and case endings. These are recall
