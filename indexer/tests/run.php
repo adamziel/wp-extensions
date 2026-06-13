@@ -3916,6 +3916,11 @@ test_case('language detector uses deterministic script and lexical evidence', fu
     assert_same('pl', $detector->detect_text('Wrocław oraz Łódź'), 'Polish diacritics and stopwords should route to pl');
     assert_same('de', $detector->detect_text('Führung und Straße'), 'German diacritics and stopwords should route to de');
     assert_same('zh', $detector->detect_text('搜索引擎'), 'Han script should route to zh');
+    assert_same('ar', $detector->detect_text('هذا نص عربي للبحث'), 'Arabic lexical evidence should route to ar');
+    assert_same('ur', $detector->detect_text('یہ اردو تلاش اور فہرست ہے'), 'Urdu-specific evidence should route to ur');
+    assert_same('ur', $detector->detect_text('اردو تلاش'), 'Urdu lexical evidence should beat shared Arabic script');
+    assert_same(null, $detector->detect_text('سلام دنیا'), 'unsupported Persian-like text should not route to Urdu or Arabic');
+    assert_same(null, $detector->detect_text('فارسی جستجو'), 'unsupported Persian lexical text should not route to Urdu');
     assert_same(null, $detector->detect_text('und'), 'one weak lexical marker should not be enough to guess');
     assert_same(null, $detector->detect_text('shared alpha beta'), 'weak generic Latin evidence should not guess');
 });

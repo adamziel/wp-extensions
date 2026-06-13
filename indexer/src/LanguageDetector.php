@@ -87,9 +87,9 @@ final class WP_FTS_LanguageDetector
      */
     public function index_signature(): string
     {
-        return 'wp-fts-language-detector-v3:' . sha1($this->stableJson([
+        return 'wp-fts-language-detector-v4:' . sha1($this->stableJson([
             'contract' => 'wp-fts-language-detector',
-            'version' => 3,
+            'version' => 4,
             'minimum_score' => $this->minimumScore,
             'minimum_lead' => $this->minimumLead,
             'evidence_terms' => $this->sortedStringSetMap($this->evidenceTerms),
@@ -185,8 +185,9 @@ final class WP_FTS_LanguageDetector
             'ru' => ['pattern' => '/\p{Cyrillic}/u', 'score' => 4],
             'hi' => ['pattern' => '/[\x{0900}-\x{097F}]/u', 'score' => 4],
             'bn' => ['pattern' => '/[\x{0980}-\x{09FF}]/u', 'score' => 4],
-            'ur' => ['pattern' => '/[\x{0679}\x{067E}\x{0686}\x{0688}\x{0691}\x{0698}\x{06AF}\x{06BA}\x{06BE}\x{06C1}\x{06CC}\x{06D2}\x{06D3}]/u', 'score' => 6],
-            'ar' => ['pattern' => '/[\x{0600}-\x{06FF}\x{0750}-\x{077F}\x{08A0}-\x{08FF}]/u', 'score' => 4],
+            'ur' => ['pattern' => '/[\x{0679}\x{0688}\x{0691}\x{06BA}\x{06BE}\x{06C1}\x{06D2}\x{06D3}]/u', 'score' => 6],
+            // Arabic script is shared by unsupported Perso-Arabic languages; require lexical evidence too.
+            'ar' => ['pattern' => '/[\x{0600}-\x{06FF}\x{0750}-\x{077F}\x{08A0}-\x{08FF}]/u', 'score' => 2],
         ];
 
         foreach ($scriptEvidence as $lang => $evidence) {

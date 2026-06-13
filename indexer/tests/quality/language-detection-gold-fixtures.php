@@ -342,12 +342,15 @@ test_case('quality language detection gold fixtures document unsupported and con
         'the and der die' => 'tied English and German lexical evidence should not pick a winner',
         'oraz jest und ist' => 'tied Polish and German lexical evidence should not pick a winner',
         'pesquisa pencarian' => 'tied Portuguese and Indonesian lexical evidence should not pick a winner',
+        'سلام دنیا' => 'unsupported Persian-like Arabic script should not be guessed',
+        'فارسی جستجو' => 'unsupported Persian lexical text should not route to Urdu',
     ] as $text => $message) {
         assert_same(null, $detector->detect_text($text), $message);
     }
 
     assert_same('ar', $detector->detect_text('هذا نص عربي للبحث'), 'clear Arabic script text should route to Arabic');
     assert_same('ur', $detector->detect_text('یہ اردو تلاش اور فہرست ہے'), 'Urdu letters should route Arabic-script text to Urdu');
+    assert_same('ur', $detector->detect_text('اردو تلاش'), 'Urdu lexical evidence should route shared Arabic-script text to Urdu');
 
     assert_same(
         'zh',
@@ -365,6 +368,16 @@ test_case('quality language detection gold fixtures document unsupported and con
         [
             'label' => 'unsupported Thai plus Latin query',
             'text' => 'ราคา search',
+            'minimum_terms' => 2,
+        ],
+        [
+            'label' => 'unsupported Persian-like query',
+            'text' => 'سلام دنیا',
+            'minimum_terms' => 2,
+        ],
+        [
+            'label' => 'unsupported Persian lexical query',
+            'text' => 'فارسی جستجو',
             'minimum_terms' => 2,
         ],
         [
