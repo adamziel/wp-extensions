@@ -155,7 +155,7 @@ function wp_fts_tslr_cases(): array
             'bait' => 'भाषा लड़की भाषाएँ लड़कियाँ',
         ],
         [
-            'id' => 'es-buscar-buscando',
+            'id' => 'es-snowball-buscar-buscando',
             'lang' => 'es',
             'target_id' => 1007,
             'bait_id' => 2007,
@@ -165,7 +165,7 @@ function wp_fts_tslr_cases(): array
             'bait' => 'buscar buscando',
         ],
         [
-            'id' => 'es-plural-adjective-baseline',
+            'id' => 'es-snowball-plural-adjective',
             'lang' => 'es',
             'target_id' => 1008,
             'bait_id' => 2008,
@@ -347,7 +347,7 @@ function wp_fts_tslr_cases(): array
     ];
 }
 
-test_case('quality top spoken language relevance covers baseline retrieval and bait isolation', function (): void {
+test_case('quality top spoken language relevance covers retrieval and bait isolation', function (): void {
     $seen = [];
     $counts = [];
     foreach (wp_fts_tslr_cases() as $case) {

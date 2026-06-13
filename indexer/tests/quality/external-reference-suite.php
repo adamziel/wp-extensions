@@ -235,6 +235,31 @@ function wp_fts_external_reference_supported_snowball_rows(): array
                 ['line' => 40277, 'input' => 'us', 'output' => 'us'],
             ],
         ],
+        'spanish' => [
+            'code' => 'es',
+            'rows' => [
+                ['line' => 1, 'input' => 'a', 'output' => 'a'],
+                ['line' => 2, 'input' => 'aarón', 'output' => 'aaron'],
+                ['line' => 13, 'input' => 'abandonar', 'output' => 'abandon'],
+                ['line' => 14, 'input' => 'abandonarlo', 'output' => 'abandon'],
+                ['line' => 15, 'input' => 'abandonaron', 'output' => 'abandon'],
+                ['line' => 17, 'input' => 'abandonó', 'output' => 'abandon'],
+                ['line' => 100, 'input' => 'abortos', 'output' => 'abort'],
+                ['line' => 250, 'input' => 'accionarias', 'output' => 'accionari'],
+                ['line' => 456, 'input' => 'activamente', 'output' => 'activ'],
+                ['line' => 500, 'input' => 'acuden', 'output' => 'acud'],
+                ['line' => 1000, 'input' => 'agudizado', 'output' => 'agudiz'],
+                ['line' => 2500, 'input' => 'asistiera', 'output' => 'asist'],
+                ['line' => 3878, 'input' => 'buscando', 'output' => 'busc'],
+                ['line' => 3879, 'input' => 'buscar', 'output' => 'busc'],
+                ['line' => 5248, 'input' => 'claros', 'output' => 'clar'],
+                ['line' => 7632, 'input' => 'datos', 'output' => 'dat'],
+                ['line' => 10000, 'input' => 'emergencias', 'output' => 'emergent'],
+                ['line' => 16089, 'input' => 'leyendo', 'output' => 'leyend'],
+                ['line' => 24021, 'input' => 'rápidamente', 'output' => 'rapid'],
+                ['line' => 28378, 'input' => 'útil', 'output' => 'util'],
+            ],
+        ],
     ];
 }
 
@@ -290,7 +315,6 @@ function wp_fts_external_reference_unsupported_boundaries(): array
 
     return [
         'german' => ['code' => 'de', 'line' => 3, 'input' => 'aalglatten', 'output' => 'aalglatt', 'reason' => $reason],
-        'spanish' => ['code' => 'es', 'line' => 2, 'input' => 'aarón', 'output' => 'aaron', 'reason' => $reason],
         'french' => ['code' => 'fr', 'line' => 3, 'input' => 'abaissait', 'output' => 'abaiss', 'reason' => $reason],
         'italian' => ['code' => 'it', 'line' => 5, 'input' => 'abakoumova', 'output' => 'abakoumov', 'reason' => $reason],
         'danish' => ['code' => 'da', 'line' => 3, 'input' => 'aabenbaringen', 'output' => 'aabenbaring', 'reason' => $reason],
@@ -470,6 +494,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     $advertised = [
         'ca' => true,
         'en' => true,
+        'es' => true,
         'nl' => true,
     ];
 
@@ -483,6 +508,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
 
     wp_fts_external_reference_assert_true($stemmer->supports_language('ca-ES'), 'Catalan locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('en-US'), 'English locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true($stemmer->supports_language('es-MX'), 'Spanish locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('nl_BE'), 'Dutch locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true(!$stemmer->supports_language('fr-FR'), 'Unsupported locale tags should remain no-ops');
 });

@@ -58,16 +58,16 @@ English (`en`), Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic
 (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`),
 and Urdu (`ur`). Polish (`pl`), German (`de`), and Russian (`ru`) remain
 available where the existing analyzer and detector routes already support them.
-This now includes deterministic baseline analyzer behavior for a subset:
-Spanish (`es`), French (`fr`), Portuguese (`pt`), and Indonesian (`id`) get
-small local suffix/affix stemming rules. Hindi (`hi`) strips only common
-plural/oblique suffixes, and Bengali (`bn`) strips only common classifier,
-plural, and case suffixes. Arabic (`ar`) and Urdu (`ur`) strip Arabic-script
-combining marks/harakat and tatweel inside their own partitions. Arabic also
-strips a narrow set of common article/clitic prefixes and suffixes, and Urdu
-strips only common plural-oblique endings. This is still not full
-lemmatization, dictionary segmentation, or query expansion. Chinese (`zh`)
-remains fallback CJK n-gram retrieval.
+This now includes bundled generated Snowball stemming for Spanish (`es`).
+French (`fr`), Portuguese (`pt`), and Indonesian (`id`) get small local
+suffix/affix baseline rules. Hindi (`hi`) strips only common plural/oblique
+suffixes, and Bengali (`bn`) strips only common classifier, plural, and case
+suffixes. Arabic (`ar`) and Urdu (`ur`) strip Arabic-script combining
+marks/harakat and tatweel inside their own partitions. Arabic also strips a
+narrow set of common article/clitic prefixes and suffixes, and Urdu strips only
+common plural-oblique endings. This is still not full lemmatization, dictionary
+segmentation, or query expansion. Chinese (`zh`) remains fallback CJK n-gram
+retrieval.
 
 The current searcher scores each query term inside one resolved language
 partition. It can route different terms to different partitions, but it does not
@@ -131,8 +131,10 @@ Stemming is enabled by default. The pipeline uses:
 
 - bundled generated Snowball English/Porter2 for English (`en` and English
   locale tags), verified against the official `english` fixture data;
-- deterministic local baseline stemming for common Spanish (`es`), French
-  (`fr`), Portuguese (`pt`), and Indonesian (`id`) suffix/affix forms;
+- bundled generated Snowball Spanish for Spanish (`es` and Spanish locale
+  tags), verified against the official `spanish` fixture data;
+- deterministic local baseline stemming for common French (`fr`), Portuguese
+  (`pt`), and Indonesian (`id`) suffix/affix forms;
 - deterministic Hindi (`hi`) light stemming for common plural/oblique suffixes;
 - deterministic Bengali (`bn`) light stemming for common classifier, plural,
   and case suffixes;

@@ -60,7 +60,6 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
     public function stem(string $term, string $language): string
     {
         return match ($this->base_language($language)) {
-            'es' => $this->stem_spanish($term),
             'fr' => $this->stem_french($term),
             'hi' => $this->stem_hindi($term),
             'pt' => $this->stem_portuguese($term),
@@ -77,8 +76,7 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
      */
     public function index_signature(): string
     {
-        return 'wp-fts-baseline-language-stemmer:v3:' . sha1(implode('|', [
-            'es=suffix:plural,verb,adverb:v1',
+        return 'wp-fts-baseline-language-stemmer:v4:' . sha1(implode('|', [
             'fr=suffix:plural,verb,adjective,adverb:v1',
             'hi=suffix:plural-oblique:v1',
             'pt=suffix:plural,verb,adverb:v1',
@@ -87,38 +85,6 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
             'ar=affix:article-clitic-plural-pronoun:v1',
             'ur=suffix:plural-oblique:v1',
         ]));
-    }
-
-    /**
-     * Spanish: light plural, common verb, and adverb suffix handling.
-     */
-    private function stem_spanish(string $term): string
-    {
-        return $this->strip_suffix_rules($term, [
-            ['amientos', '', 5],
-            ['imientos', '', 5],
-            ['amiento', '', 5],
-            ['imiento', '', 5],
-            ['aciones', 'acion', 6],
-            ['mente', '', 5],
-            ['ando', '', 4],
-            ['iendo', '', 4],
-            ['yendo', '', 4],
-            ['aron', '', 4],
-            ['ieron', '', 4],
-            ['amos', '', 4],
-            ['emos', '', 4],
-            ['imos', '', 4],
-            ['ado', '', 4],
-            ['ido', '', 4],
-            ['an', '', 4],
-            ['en', '', 4],
-            ['ar', '', 3],
-            ['er', '', 3],
-            ['ir', '', 3],
-            ['es', '', 4],
-            ['s', '', 4, ['is']],
-        ]);
     }
 
     /**
@@ -466,24 +432,30 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     /** @var array<string,bool> */
     private array $supportedLanguages;
     private WP_FTS_EnglishSnowballStemmer $englishStemmer;
+    private WP_FTS_SpanishSnowballStemmer $spanishStemmer;
 
     /**
      * Initialize the set of Snowball languages accepted by this adapter.
      */
-    public function __construct(?WP_FTS_EnglishSnowballStemmer $englishStemmer = null)
+    public function __construct(
+        ?WP_FTS_EnglishSnowballStemmer $englishStemmer = null,
+        ?WP_FTS_SpanishSnowballStemmer $spanishStemmer = null
+    )
     {
         // Expose only implementations that match the official Snowball
-        // fixtures exactly. English is a local generated Snowball/Porter2 port;
-        // Catalan and Dutch Porter remain Wamania-backed optional paths.
+        // fixtures exactly. English and Spanish are local generated Snowball
+        // ports; Catalan and Dutch Porter remain Wamania-backed optional paths.
         // Other Wamania classes currently diverge from the current
         // snowball-data outputs and are treated as no-ops until their
         // algorithms are replaced or patched.
         $this->supportedLanguages = array_fill_keys([
             'ca',
             'en',
+            'es',
             'nl',
         ], true);
         $this->englishStemmer = $englishStemmer ?? new WP_FTS_EnglishSnowballStemmer();
+        $this->spanishStemmer = $spanishStemmer ?? new WP_FTS_SpanishSnowballStemmer();
     }
 
     /**
@@ -510,8 +482,9 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     /**
      * Report whether a supported language has an available runtime path.
      *
-     * English is bundled as generated PHP; Wamania-backed languages remain
-     * optional and no-op safely when Composer packages are absent.
+     * English and Spanish are bundled as generated PHP; Wamania-backed
+     * languages remain optional and no-op safely when Composer packages are
+     * absent.
      *
      * @param string $language Canonical or locale-style language tag.
      * @return bool True when `stem()` can apply a verified implementation.
@@ -519,7 +492,7 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
     public function is_language_available(string $language): bool
     {
         $language = $this->base_language($language);
-        if ($language === 'en') {
+        if ($language === 'en' || $language === 'es') {
             return true;
         }
 
@@ -534,6 +507,10 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
         $language = $this->base_language($language);
         if ($language === 'en') {
             return $this->englishStemmer->source_identity();
+        }
+
+        if ($language === 'es') {
+            return $this->spanishStemmer->source_identity();
         }
 
         if ($language === 'nl') {
@@ -552,9 +529,10 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
      */
     public function index_signature(): string
     {
-        return 'wp-fts-snowball-stemmer:v2:' . sha1(implode('|', [
+        return 'wp-fts-snowball-stemmer:v3:' . sha1(implode('|', [
             'ca=wamania-catalan',
             'en=' . WP_FTS_EnglishSnowballStemmer::VARIANT . '@snowball-data-13803281',
+            'es=' . WP_FTS_SpanishSnowballStemmer::VARIANT . '@snowball-data-spanish-28378',
             'nl=wamania-dutch-porter',
         ]));
     }
@@ -578,6 +556,10 @@ final class WP_FTS_SnowballStemmer implements WP_FTS_Stemmer
 
         if ($language === 'en') {
             return $this->englishStemmer->stem_word($term);
+        }
+
+        if ($language === 'es') {
+            return $this->spanishStemmer->stem_word($term);
         }
 
         if (!$this->is_available()) {

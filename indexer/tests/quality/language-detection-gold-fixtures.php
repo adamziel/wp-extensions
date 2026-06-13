@@ -158,7 +158,7 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'Spanish lexical search span',
             'text' => 'la busqueda en espanol usa datos claros',
             'lang' => 'es',
-            'terms' => ['busqueda', 'espanol', 'dato', 'claro'],
+            'terms' => ['busqued', 'espanol', 'dat', 'clar'],
         ],
         [
             'label' => 'Arabic script search span',

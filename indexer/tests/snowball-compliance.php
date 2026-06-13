@@ -48,7 +48,7 @@ function wp_fts_snowball_datasets(): array
         'russian' => ['code' => 'ru', 'name' => 'Russian', 'skip_reason' => $wamaniaDiverges],
         'serbian' => ['code' => 'sr', 'name' => 'Serbian'],
         'sesotho' => ['code' => 'st', 'name' => 'Sesotho'],
-        'spanish' => ['code' => 'es', 'name' => 'Spanish', 'skip_reason' => $wamaniaDiverges],
+        'spanish' => ['code' => 'es', 'name' => 'Spanish'],
         'swedish' => ['code' => 'sv', 'name' => 'Swedish', 'skip_reason' => $wamaniaDiverges],
         'tamil' => ['code' => 'ta', 'name' => 'Tamil'],
         'turkish' => ['code' => 'tr', 'name' => 'Turkish'],
@@ -153,7 +153,8 @@ fwrite(
             : 'wamania/php-stemmer missing; Wamania-backed supported-language comparisons will be reported as SKIP'
     ) . "\n"
 );
-fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n\n");
+fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n");
+fwrite(STDOUT, 'Spanish source: ' . $stemmer->source_identity('es') . "\n\n");
 
 foreach ($datasets as $dataset => $metadata) {
     $label = wp_fts_language_label($dataset, $metadata);

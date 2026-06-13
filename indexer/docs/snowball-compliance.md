@@ -8,13 +8,18 @@ Snowball languages and alternate algorithm variants are reported as skipped. The
 adapter advertises:
 
 - English (`en`) through a bundled generated PHP Snowball English/Porter2 path;
+- Spanish (`es`) through a bundled generated PHP Snowball Spanish path;
 - Catalan (`ca`) and Dutch Porter (`nl`) through `wamania/php-stemmer` only when
   that optional Composer package is installed.
 
-The English implementation is generated from `algorithms/english.sbl` by
-Snowball 3.1.1 and is verified against `snowballstem/snowball-data` commit
-`13803281da204fbd56be5b6f62d3efb98f4d74c2`. The source identity exposed by
-`WP_FTS_SnowballStemmer::source_identity('en')` records the Snowball source
+The bundled English and Spanish implementations are generated from
+`algorithms/english.sbl` and `algorithms/spanish.sbl` by Snowball 3.1.1. English
+is verified against `snowballstem/snowball-data` commit
+`13803281da204fbd56be5b6f62d3efb98f4d74c2`; Spanish is verified against the
+local official `spanish/voc.txt` and `spanish/output.txt` fixtures with 28,378
+line pairs. The source identities exposed by
+`WP_FTS_SnowballStemmer::source_identity('en')` and
+`WP_FTS_SnowballStemmer::source_identity('es')` record the Snowball source
 commit used for the generated PHP reference. Wamania exposes additional language
 classes, but those implementations currently diverge from the current official
 Snowball outputs, so the adapter treats them as unsupported instead of claiming
@@ -41,13 +46,13 @@ SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 
 Expected counts with the current official dataset inventory are:
 
-- without `vendor/`: `1 pass, 36 skip, 0 fail`;
-- with `vendor/` installed from the committed `composer.lock`: `3 pass, 34 skip, 0 fail`.
+- without `vendor/`: `2 pass, 35 skip, 0 fail`;
+- with `vendor/` installed from the committed `composer.lock`: `4 pass, 33 skip, 0 fail`.
 
-The passing runtime datasets are English, Catalan, and Dutch Porter. Any `fail`
-result means a fixture, algorithm, or advertised-language contract regressed;
-missing Wamania classes are reported as dependency skips, not algorithm
-failures.
+The passing runtime datasets are bundled English and Spanish, plus Catalan and
+Dutch Porter when Wamania is installed. Any `fail` result means a fixture,
+algorithm, or advertised-language contract regressed; missing Wamania classes
+are reported as dependency skips, not algorithm failures.
 
 This is a Snowball stemmer compliance suite for the multilingual full-text
 pipeline. Lucene `analysis/common` remains the broader analyzer reference for
@@ -55,7 +60,8 @@ tokenization, filtering, and language analysis behavior, but this harness does
 not claim compatibility with Lucene's unit test suite unless that suite is run
 separately.
 
-The bundled generated English path preserves the Snowball BSD-3-Clause notice
-in `src/EnglishSnowballStemmer.php`. Missing Composer dependencies do not affect
-English compliance; they only skip Wamania-backed Catalan and Dutch Porter
-runtime comparisons.
+The bundled generated English and Spanish paths preserve the Snowball
+BSD-3-Clause notice in `src/EnglishSnowballStemmer.php` and
+`src/SpanishSnowballStemmer.php`. Missing Composer dependencies do not affect
+bundled English or Spanish compliance; they only skip Wamania-backed Catalan and
+Dutch Porter runtime comparisons.
