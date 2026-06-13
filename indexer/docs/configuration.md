@@ -52,6 +52,16 @@ distinctive Latin letters, and compact lexical evidence to fill gaps. Explicit
 caller options, HTML language attributes, Polylang/WPML metadata, and custom
 language resolvers remain authoritative.
 
+The built-in baseline detector and admin selectors cover these top-10 spoken
+language partitions for explicit routing and conservative gap detection:
+English (`en`), Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic
+(`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`),
+and Urdu (`ur`). Polish (`pl`), German (`de`), and Russian (`ru`) remain
+available where the existing analyzer and detector routes already support them.
+This is language partition routing only; it does not imply stemming,
+lemmatization, dictionary segmentation, or query expansion for languages
+without verified analyzer fixtures.
+
 The current searcher scores each query term inside one resolved language
 partition. It can route different terms to different partitions, but it does not
 merge one term's scores across multiple languages.

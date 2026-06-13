@@ -137,6 +137,66 @@ test_case('quality language detection gold fixtures keep untagged document and q
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
     $cases = [
         [
+            'label' => 'English search span',
+            'text' => 'the search index uses clear language',
+            'lang' => 'en',
+            'terms' => ['the', 'search', 'index', 'use', 'clear', 'languag'],
+        ],
+        [
+            'label' => 'Chinese Han-only non-space text',
+            'text' => '搜索引擎',
+            'lang' => 'zh',
+            'terms' => ['搜索', '索引', '引擎'],
+        ],
+        [
+            'label' => 'Hindi Devanagari search span',
+            'text' => 'यह हिंदी खोज के लिए स्पष्ट पाठ है',
+            'lang' => 'hi',
+            'terms' => ['यह', 'हिंदी', 'खोज', 'स्पष्ट', 'पाठ'],
+        ],
+        [
+            'label' => 'Spanish lexical search span',
+            'text' => 'la busqueda en espanol usa datos claros',
+            'lang' => 'es',
+            'terms' => ['busqueda', 'espanol', 'datos', 'claros'],
+        ],
+        [
+            'label' => 'Arabic script search span',
+            'text' => 'هذا نص عربي للبحث والفهرسة',
+            'lang' => 'ar',
+            'terms' => ['هذا', 'عربي', 'للبحث', 'والفهرسة'],
+        ],
+        [
+            'label' => 'French lexical search span',
+            'text' => 'la recherche en francais utilise des donnees claires',
+            'lang' => 'fr',
+            'terms' => ['recherche', 'francais', 'donnees', 'claires'],
+        ],
+        [
+            'label' => 'Bengali script search span',
+            'text' => 'এই বাংলা অনুসন্ধান এবং সূচি পাঠ',
+            'lang' => 'bn',
+            'terms' => ['এই', 'বাংলা', 'অনুসন্ধান', 'সূচি', 'পাঠ'],
+        ],
+        [
+            'label' => 'Portuguese lexical search span',
+            'text' => 'a pesquisa em portugues usa dados claros',
+            'lang' => 'pt',
+            'terms' => ['pesquisa', 'portugues', 'dados', 'claros'],
+        ],
+        [
+            'label' => 'Indonesian lexical search span',
+            'text' => 'pencarian bahasa indonesia dengan data jelas',
+            'lang' => 'id',
+            'terms' => ['pencarian', 'bahasa', 'indonesia', 'data', 'jelas'],
+        ],
+        [
+            'label' => 'Urdu script search span',
+            'text' => 'یہ اردو تلاش اور فہرست کا متن ہے',
+            'lang' => 'ur',
+            'terms' => ['یہ', 'اردو', 'تلاش', 'فہرست', 'متن'],
+        ],
+        [
             'label' => 'Polish connector span',
             'text' => 'oraz jest',
             'lang' => 'pl',
@@ -166,12 +226,6 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'lang' => 'ja',
             'terms' => ['検索', 'でき', 'ます'],
         ],
-        [
-            'label' => 'Chinese Han-only non-space text',
-            'text' => '搜索引擎',
-            'lang' => 'zh',
-            'terms' => ['搜索', '索引', '引擎'],
-        ],
     ];
 
     foreach ($cases as $case) {
@@ -183,6 +237,37 @@ test_case('quality language detection gold fixtures keep untagged document and q
             assert_same($case['lang'], $contentLangs[$term] ?? null, "{$case['label']} content term {$term}");
             assert_same($case['lang'], $queryLangs[$term] ?? null, "{$case['label']} query term {$term}");
         }
+    }
+});
+
+test_case('quality language detection gold fixtures keep top spoken language partitions searchable', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $cases = [
+        ['id' => 501, 'lang' => 'en', 'text' => 'the search index uses clear language', 'query' => 'search index clear'],
+        ['id' => 502, 'lang' => 'zh', 'text' => '搜索索引语言', 'query' => '搜索索引'],
+        ['id' => 503, 'lang' => 'hi', 'text' => 'यह हिंदी खोज के लिए स्पष्ट पाठ है', 'query' => 'हिंदी खोज स्पष्ट'],
+        ['id' => 504, 'lang' => 'es', 'text' => 'la busqueda en espanol usa datos claros', 'query' => 'busqueda espanol datos'],
+        ['id' => 505, 'lang' => 'ar', 'text' => 'هذا نص عربي للبحث والفهرسة', 'query' => 'هذا عربي للبحث'],
+        ['id' => 506, 'lang' => 'fr', 'text' => 'la recherche en francais utilise des donnees claires', 'query' => 'recherche francais donnees'],
+        ['id' => 507, 'lang' => 'bn', 'text' => 'এই বাংলা অনুসন্ধান এবং সূচি পাঠ', 'query' => 'বাংলা অনুসন্ধান সূচি'],
+        ['id' => 508, 'lang' => 'pt', 'text' => 'a pesquisa em portugues usa dados claros', 'query' => 'pesquisa portugues dados'],
+        ['id' => 509, 'lang' => 'id', 'text' => 'pencarian bahasa indonesia dengan data jelas', 'query' => 'pencarian indonesia data'],
+        ['id' => 510, 'lang' => 'ur', 'text' => 'یہ اردو تلاش اور فہرست کا متن ہے', 'query' => 'اردو تلاش فہرست'],
+    ];
+
+    foreach ($cases as $case) {
+        $indexer->index_document($case['id'], '<p>' . $case['text'] . '</p>');
+    }
+
+    foreach ($cases as $case) {
+        assert_same(
+            [$case['id']],
+            wp_fts_ldgf_result_ids($searcher->search($case['query'], ['mode' => 'AND', 'limit' => 10])),
+            "{$case['lang']} auto-routed AND query should match the detected document partition"
+        );
     }
 });
 
@@ -253,13 +338,16 @@ test_case('quality language detection gold fixtures document unsupported and con
     foreach ([
         'Αθήνα και Θεσσαλονίκη' => 'unsupported Greek script should not be guessed',
         'שלום עולם' => 'unsupported Hebrew script should not be guessed',
-        'مرحبا عالم' => 'unsupported Arabic script should not be guessed',
         'ราคา search' => 'unsupported Thai plus Latin should not be guessed',
         'the and der die' => 'tied English and German lexical evidence should not pick a winner',
         'oraz jest und ist' => 'tied Polish and German lexical evidence should not pick a winner',
+        'pesquisa pencarian' => 'tied Portuguese and Indonesian lexical evidence should not pick a winner',
     ] as $text => $message) {
         assert_same(null, $detector->detect_text($text), $message);
     }
+
+    assert_same('ar', $detector->detect_text('هذا نص عربي للبحث'), 'clear Arabic script text should route to Arabic');
+    assert_same('ur', $detector->detect_text('یہ اردو تلاش اور فہرست ہے'), 'Urdu letters should route Arabic-script text to Urdu');
 
     assert_same(
         'zh',
@@ -393,6 +481,14 @@ test_case('quality language detection gold fixtures honor explicit and multiling
         assert_same('pl', $dataLang['wroclaw'] ?? null, 'data-lang should not override detector evidence');
         assert_same('pl', $dataLang['lodz'] ?? null, 'data-lang should not be treated as explicit language metadata');
 
+        $arabicHtmlOverride = test_lang_by_term($analyzer->analyze_content('<p lang="en">هذا نص عربي للبحث</p>'));
+        assert_same('en', $arabicHtmlOverride['هذا'] ?? null, 'explicit HTML lang should beat Arabic detector evidence');
+        assert_same('en', $arabicHtmlOverride['عربي'] ?? null, 'explicit HTML lang should route Arabic-script content to the requested partition');
+
+        $urduHtmlOverride = test_lang_by_term($analyzer->analyze_content('<p lang="ar">یہ اردو تلاش ہے</p>'));
+        assert_same('ar', $urduHtmlOverride['اردو'] ?? null, 'explicit HTML lang should beat Urdu-specific detector evidence');
+        assert_same('ar', $urduHtmlOverride['تلاش'] ?? null, 'explicit HTML lang should keep Urdu-script content in the requested partition');
+
         $strongEvidenceExplicitContent = test_lang_by_term($analyzer->analyze_content('<p lang="pl_PL">Führung und Straße</p>'));
         assert_same('pl-PL', $strongEvidenceExplicitContent['fuhrung'] ?? null, 'explicit HTML lang should beat strong German document evidence');
         assert_same('pl-PL', $strongEvidenceExplicitContent['und'] ?? null, 'explicit HTML lang should keep connector in override partition');
@@ -409,6 +505,10 @@ test_case('quality language detection gold fixtures honor explicit and multiling
 
         $queryOverride = test_lang_by_term($analyzer->analyze_query_occurrences('oraz jest', ['query_lang' => 'en']));
         assert_same('en', $queryOverride['oraz'] ?? null, 'explicit query_lang should override Polylang current language');
+
+        $arabicQueryOverride = test_lang_by_term($analyzer->analyze_query_occurrences('هذا نص عربي للبحث', ['query_lang' => 'en']));
+        assert_same('en', $arabicQueryOverride['هذا'] ?? null, 'explicit query_lang should beat Arabic query detector evidence');
+        assert_same('en', $arabicQueryOverride['عربي'] ?? null, 'explicit query_lang should route Arabic query terms to the requested partition');
 
         $strongEvidenceQueryOverride = test_lang_by_term($analyzer->analyze_query_occurrences('Führung und Straße', ['query_lang' => 'pl_PL']));
         assert_same('pl-PL', $strongEvidenceQueryOverride['fuhrung'] ?? null, 'explicit query_lang should beat strong German query evidence');

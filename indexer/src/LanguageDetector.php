@@ -87,9 +87,9 @@ final class WP_FTS_LanguageDetector
      */
     public function index_signature(): string
     {
-        return 'wp-fts-language-detector-v2:' . sha1($this->stableJson([
+        return 'wp-fts-language-detector-v3:' . sha1($this->stableJson([
             'contract' => 'wp-fts-language-detector',
-            'version' => 2,
+            'version' => 3,
             'minimum_score' => $this->minimumScore,
             'minimum_lead' => $this->minimumLead,
             'evidence_terms' => $this->sortedStringSetMap($this->evidenceTerms),
@@ -135,13 +135,19 @@ final class WP_FTS_LanguageDetector
     private function default_evidence_terms(): array
     {
         return [
+            'ar' => ['هذا', 'هذه', 'التي', 'الذي', 'على', 'مع', 'بحث', 'للبحث', 'عربي'],
+            'bn' => ['এই', 'এবং', 'জন্য', 'বাংলা', 'অনুসন্ধান', 'সূচি'],
             'ca' => ['el', 'la', 'els', 'les', 'amb', 'per', 'cerca'],
             'de' => ['der', 'die', 'das', 'und', 'ist', 'mit', 'fuer', 'suche'],
-            'en' => ['the', 'and', 'with', 'from', 'this', 'that', 'search'],
-            'es' => ['el', 'los', 'las', 'para', 'con', 'buscar', 'busqueda'],
-            'fr' => ['le', 'les', 'des', 'est', 'avec', 'pour', 'recherche'],
+            'en' => ['the', 'and', 'with', 'from', 'this', 'that', 'search', 'index'],
+            'es' => ['el', 'los', 'las', 'para', 'con', 'buscar', 'busqueda', 'datos', 'espanol'],
+            'fr' => ['le', 'les', 'des', 'est', 'avec', 'pour', 'recherche', 'francais', 'donnees'],
+            'hi' => ['यह', 'और', 'के', 'लिए', 'हिंदी', 'खोज'],
+            'id' => ['yang', 'dan', 'dengan', 'untuk', 'pencarian', 'bahasa', 'indonesia'],
             'nl' => ['de', 'het', 'een', 'van', 'voor', 'zoeken'],
             'pl' => ['oraz', 'jest', 'dla', 'nie', 'sie', 'szukaj', 'wyszukaj'],
+            'pt' => ['a', 'que', 'com', 'para', 'pesquisa', 'portugues', 'dados'],
+            'ur' => ['یہ', 'اور', 'ہے', 'میں', 'اردو', 'تلاش', 'فہرست'],
         ];
     }
 
@@ -177,6 +183,10 @@ final class WP_FTS_LanguageDetector
             'ja' => ['pattern' => '/[\p{Hiragana}\p{Katakana}]/u', 'score' => 6],
             'ko' => ['pattern' => '/\p{Hangul}/u', 'score' => 4],
             'ru' => ['pattern' => '/\p{Cyrillic}/u', 'score' => 4],
+            'hi' => ['pattern' => '/[\x{0900}-\x{097F}]/u', 'score' => 4],
+            'bn' => ['pattern' => '/[\x{0980}-\x{09FF}]/u', 'score' => 4],
+            'ur' => ['pattern' => '/[\x{0679}\x{067E}\x{0686}\x{0688}\x{0691}\x{0698}\x{06AF}\x{06BA}\x{06BE}\x{06C1}\x{06CC}\x{06D2}\x{06D3}]/u', 'score' => 6],
+            'ar' => ['pattern' => '/[\x{0600}-\x{06FF}\x{0750}-\x{077F}\x{08A0}-\x{08FF}]/u', 'score' => 4],
         ];
 
         foreach ($scriptEvidence as $lang => $evidence) {
@@ -202,6 +212,7 @@ final class WP_FTS_LanguageDetector
             'es_accent' => ['lang' => 'es', 'pattern' => '/[Ññ]/u', 'score' => 2],
             'fr' => ['pattern' => '/[ÀÂÆÇÈÉÊËÎÏÔŒÙÛŸàâæçèéêëîïôœùûÿ]/u', 'score' => 2],
             'pl' => ['pattern' => '/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/u', 'score' => 3],
+            'pt' => ['pattern' => '/[ÃÕãõ]/u', 'score' => 2],
         ];
 
         foreach ($patterns as $key => $evidence) {

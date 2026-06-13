@@ -46,6 +46,14 @@ The detector uses script ranges, distinctive Latin letters, and compact lexical
 evidence. Weak generic Latin text stays on the fallback language, so unsupported
 or ambiguous content can still land in the wrong language partition.
 
+The baseline routed set covers English (`en`), Mandarin/Chinese (`zh`), Hindi
+(`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`),
+Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`), with existing Polish
+(`pl`), German (`de`), and Russian (`ru`) routing kept available where present.
+This support is selectable/detectable language partitioning. It is not a claim
+of morphology, dictionary segmentation, or hard-coded word-family expansion for
+languages without verified analyzer resources.
+
 Search can route different query terms to different language partitions. Each
 term still scores inside one resolved partition, and the searcher does not merge
 one term's scores across multiple languages.

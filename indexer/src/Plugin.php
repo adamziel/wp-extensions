@@ -875,8 +875,18 @@ final class WP_FTS_Plugin
         return [
             'auto' => 'Automatic',
             'en' => 'English',
+            'zh' => 'Chinese (Mandarin)',
+            'hi' => 'Hindi',
+            'es' => 'Spanish',
+            'ar' => 'Arabic',
+            'fr' => 'French',
+            'bn' => 'Bengali',
+            'pt' => 'Portuguese',
+            'id' => 'Indonesian',
+            'ur' => 'Urdu',
             'pl' => 'Polish',
             'de' => 'German',
+            'ru' => 'Russian',
         ];
     }
 

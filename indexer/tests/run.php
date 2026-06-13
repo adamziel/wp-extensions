@@ -2442,6 +2442,9 @@ test_case('post language meta box defaults to automatic detection and stores ove
         assert_contains('Post language', $html, 'language meta box should render a labeled selector');
         assert_contains('value="auto" selected="selected"', $html, 'language meta box should default to automatic detection');
         assert_contains('value="pl"', $html, 'language meta box should offer Polish override support');
+        foreach (['en', 'zh', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ur', 'de', 'ru'] as $language) {
+            assert_contains('value="' . $language . '"', $html, "language meta box should offer {$language} override support");
+        }
 
         $_POST = [
             'wp_fts_post_language_nonce' => wp_create_nonce('wp_fts_post_language'),
@@ -2497,6 +2500,9 @@ test_case('authorized admin sandbox render includes search form and indexed post
     assert_contains('value="en"', $html, 'sandbox language selector should include English');
     assert_contains('value="pl"', $html, 'sandbox language selector should include Polish');
     assert_contains('value="de"', $html, 'sandbox language selector should include German');
+    foreach (['zh', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ur', 'ru'] as $language) {
+        assert_contains('value="' . $language . '"', $html, "sandbox language selector should include {$language}");
+    }
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_action"'), 'sandbox page should not render mutating demo action controls');
     assert_true(!str_contains($html, 'Create or refresh demo posts'), 'sandbox page should not render the manual demo refresh button');
     assert_true(!str_contains($html, 'Build demo index'), 'sandbox page should not render the manual demo index button');

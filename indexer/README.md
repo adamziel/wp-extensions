@@ -59,13 +59,14 @@ queries.
   fields plus bounded result metadata.
 - `WP_FTS_Analyzer` strips non-visible HTML, normalizes and tokenizes text,
   routes language gaps, and stems or lemmatizes through the language pipeline.
-- Terms are stored under language namespaces, so English, Polish, German, and
-  other partitions do not share collection statistics by accident.
+- Terms are stored under language namespaces, so the baseline top-10 routed
+  languages plus Polish, German, Russian, and other explicit partitions do not
+  share collection statistics by accident.
 - `WP_FTS_Searcher` scores matches with BM25 and can filter by stored WordPress
   metadata such as post type, status, and date.
-- MySQL is the normal WordPress backend. File storage supports small local,
-  test, Playground, and SQLite-oriented contexts where a full MySQL-backed site
-  is not available.
+- MySQL storage is the normal WordPress backend, including WordPress Playground
+  when the SQLite integration presents a `$wpdb`-compatible database. File
+  storage remains a small local and test backend for non-WordPress contexts.
 
 The index is derived state. Rebuild it after content imports, analyzer changes,
 language-routing changes, or environment moves where the FTS tables were not
@@ -84,12 +85,20 @@ detection. It uses script ranges, distinctive Latin letters, and compact lexical
 evidence only when stronger language signals are absent. Unsupported or
 ambiguous languages fall back conservatively instead of guessing aggressively.
 
+The baseline selectable and detectable routing set covers the top-10 spoken
+language partitions requested for this branch: English (`en`), Mandarin/Chinese
+(`zh`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali
+(`bn`), Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`). Polish (`pl`),
+German (`de`), and Russian (`ru`) remain available for explicit routing and
+existing detector support where present.
+
 The default pipeline includes bundled Snowball/Porter2 stemming for English.
 Catalan and Dutch can use the optional Wamania-backed Snowball stemmers when
 Composer dependencies are present and the compliance harness accepts them.
 Polish morphology uses configured lemmatizer/analyzer packs where available;
 it is not driven by hard-coded word families. Missing packs, unsupported
-languages, and ambiguous forms keep conservative behavior.
+languages, newly routed baseline languages without verified morphology, and
+ambiguous forms keep conservative behavior.
 
 The analyzer also provides CJK fallback tokenization with single characters and
 overlapping bigrams. The plugin does not currently ship Thai or CJK dictionary
