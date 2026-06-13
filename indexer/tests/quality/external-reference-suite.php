@@ -12,6 +12,7 @@ declare(strict_types=1);
 $wp_fts_external_reference_direct = !function_exists('test_case');
 if ($wp_fts_external_reference_direct) {
     require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+    require_once dirname(__DIR__) . '/snowball-fixture-stream.php';
 
     final class WP_FTS_TestFailure extends RuntimeException
     {
@@ -81,6 +82,8 @@ if ($wp_fts_external_reference_direct) {
         return $indexer;
     }
 }
+
+require_once dirname(__DIR__) . '/snowball-fixture-stream.php';
 
 $GLOBALS['wp_fts_external_reference_checks'] = $GLOBALS['wp_fts_external_reference_checks'] ?? 0;
 $GLOBALS['wp_fts_external_reference_optional_skips'] = $GLOBALS['wp_fts_external_reference_optional_skips'] ?? [];
@@ -156,6 +159,18 @@ function wp_fts_external_reference_read_lines(string $path): array
 function wp_fts_external_reference_supported_snowball_rows(): array
 {
     return [
+        'arabic' => [
+            'code' => 'ar',
+            'rows' => [
+                ['line' => 1, 'input' => 'ءامن', 'output' => 'ءام'],
+                ['line' => 10, 'input' => 'أآبا', 'output' => 'ااب'],
+                ['line' => 100, 'input' => 'أأباحتاهم', 'output' => 'اباح'],
+                ['line' => 1000, 'input' => 'أابتزوا', 'output' => 'اتز'],
+                ['line' => 10000, 'input' => 'أأجالاها', 'output' => 'اجال'],
+                ['line' => 100000, 'input' => 'أأوقفتموهما', 'output' => 'اقف'],
+                ['line' => 1000000, 'input' => 'بصنوكم', 'output' => 'بصن'],
+            ],
+        ],
         'catalan' => [
             'code' => 'ca',
             'rows' => [
@@ -506,21 +521,21 @@ test_case('quality external Snowball fixtures cover advertised supported dataset
 
     foreach (wp_fts_external_reference_supported_snowball_rows() as $dataset => $metadata) {
         $code = $metadata['code'];
-        $vocPath = $dataDir . DIRECTORY_SEPARATOR . $dataset . DIRECTORY_SEPARATOR . 'voc.txt';
-        $outputPath = $dataDir . DIRECTORY_SEPARATOR . $dataset . DIRECTORY_SEPARATOR . 'output.txt';
+        $datasetDir = $dataDir . DIRECTORY_SEPARATOR . $dataset;
+        $vocPath = wp_fts_snowball_fixture_file($datasetDir, 'voc.txt');
+        $outputPath = wp_fts_snowball_fixture_file($datasetDir, 'output.txt');
 
-        wp_fts_external_reference_assert_true(is_file($vocPath), "{$dataset} voc.txt should exist");
-        wp_fts_external_reference_assert_true(is_file($outputPath), "{$dataset} output.txt should exist");
+        wp_fts_external_reference_assert_true($vocPath !== null, "{$dataset} voc.txt or voc.txt.gz should exist");
+        wp_fts_external_reference_assert_true($outputPath !== null, "{$dataset} output.txt or output.txt.gz should exist");
         wp_fts_external_reference_assert_true($stemmer->supports_language($code), "{$dataset} language {$code} should be advertised as supported");
 
-        $inputs = wp_fts_external_reference_read_lines($vocPath);
-        $expected = wp_fts_external_reference_read_lines($outputPath);
-        wp_fts_external_reference_assert_same(count($inputs), count($expected), "{$dataset} fixture input/output line counts should match");
+        $lineNumbers = array_map(static fn(array $row): int => (int) $row['line'], $metadata['rows']);
+        $fixtureRows = wp_fts_snowball_fixture_read_rows($vocPath, $outputPath, $lineNumbers);
 
         foreach ($metadata['rows'] as $row) {
-            $index = $row['line'] - 1;
-            wp_fts_external_reference_assert_same($row['input'], $inputs[$index] ?? null, "{$dataset} official input row {$row['line']}");
-            wp_fts_external_reference_assert_same($row['output'], $expected[$index] ?? null, "{$dataset} official output row {$row['line']}");
+            $fixtureRow = $fixtureRows[(int) $row['line']] ?? null;
+            wp_fts_external_reference_assert_same($row['input'], $fixtureRow['input'] ?? null, "{$dataset} official input row {$row['line']}");
+            wp_fts_external_reference_assert_same($row['output'], $fixtureRow['output'] ?? null, "{$dataset} official output row {$row['line']}");
             wp_fts_external_reference_assert_true($row['input'] !== '', "{$dataset} row {$row['line']} input should be non-empty");
             wp_fts_external_reference_assert_true($row['output'] !== '', "{$dataset} row {$row['line']} output should be non-empty");
 
@@ -543,6 +558,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     $stemmer = new WP_FTS_SnowballStemmer();
     $advertised = [
         'ca' => true,
+        'ar' => true,
         'en' => true,
         'es' => true,
         'fr' => true,
@@ -560,6 +576,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     }
 
     wp_fts_external_reference_assert_true($stemmer->supports_language('ca-ES'), 'Catalan locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true($stemmer->supports_language('ar-EG'), 'Arabic locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('en-US'), 'English locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('es-MX'), 'Spanish locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('fr-FR'), 'French locale tags should inherit supported base language');

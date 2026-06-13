@@ -20,6 +20,7 @@ $wp_fts_files = [
     __DIR__ . '/StorageCompat.php',
     __DIR__ . '/Normalizer.php',
     __DIR__ . '/EnglishSnowballStemmer.php',
+    __DIR__ . '/ArabicSnowballStemmer.php',
     __DIR__ . '/SpanishSnowballStemmer.php',
     __DIR__ . '/FrenchSnowballStemmer.php',
     __DIR__ . '/PortugueseSnowballStemmer.php',

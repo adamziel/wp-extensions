@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../src/bootstrap.php';
+require_once __DIR__ . '/snowball-fixture-stream.php';
 
 /**
  * @return array<string,array{code:string|null,name:string,variant?:bool}>
@@ -82,19 +83,6 @@ function wp_fts_discover_snowball_dirs(string $dataDir): array
     return $dirs;
 }
 
-/**
- * @return string[]
- */
-function wp_fts_read_lines(string $path): array
-{
-    $lines = @file($path, FILE_IGNORE_NEW_LINES);
-    if ($lines === false) {
-        throw new RuntimeException("Unable to read {$path}");
-    }
-
-    return array_map(static fn(string $line): string => rtrim($line, "\r"), $lines);
-}
-
 function wp_fts_display_value(string $value): string
 {
     return (string) json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -130,7 +118,10 @@ foreach ($discoveredDirs as $dataset) {
     }
 
     $dir = $dataDir . DIRECTORY_SEPARATOR . $dataset;
-    if (is_file($dir . DIRECTORY_SEPARATOR . 'voc.txt') || is_file($dir . DIRECTORY_SEPARATOR . 'output.txt')) {
+    if (
+        wp_fts_snowball_fixture_file($dir, 'voc.txt') !== null
+        || wp_fts_snowball_fixture_file($dir, 'output.txt') !== null
+    ) {
         $datasets[$dataset] = ['code' => null, 'name' => $dataset];
     }
 }
@@ -154,6 +145,7 @@ fwrite(
     ) . "\n"
 );
 fwrite(STDOUT, 'English source: ' . $stemmer->source_identity('en') . "\n");
+fwrite(STDOUT, 'Arabic source: ' . $stemmer->source_identity('ar') . "\n");
 fwrite(STDOUT, 'Spanish source: ' . $stemmer->source_identity('es') . "\n");
 fwrite(STDOUT, 'French source: ' . $stemmer->source_identity('fr') . "\n");
 fwrite(STDOUT, 'Portuguese source: ' . $stemmer->source_identity('pt') . "\n");
@@ -163,8 +155,8 @@ foreach ($datasets as $dataset => $metadata) {
     $label = wp_fts_language_label($dataset, $metadata);
     $code = $metadata['code'];
     $dir = $dataDir . DIRECTORY_SEPARATOR . $dataset;
-    $vocPath = $dir . DIRECTORY_SEPARATOR . 'voc.txt';
-    $outputPath = $dir . DIRECTORY_SEPARATOR . 'output.txt';
+    $vocPath = wp_fts_snowball_fixture_file($dir, 'voc.txt');
+    $outputPath = wp_fts_snowball_fixture_file($dir, 'output.txt');
 
     if (($metadata['variant'] ?? false) === true) {
         $reason = $metadata['skip_reason'] ?? 'algorithm variant is not part of WP_FTS_SnowballStemmer language support';
@@ -187,44 +179,40 @@ foreach ($datasets as $dataset => $metadata) {
         continue;
     }
 
-    if (!is_file($vocPath) || !is_file($outputPath)) {
-        $reason = 'supported language is missing voc.txt or output.txt';
+    if ($vocPath === null || $outputPath === null) {
+        $reason = 'supported language is missing voc.txt/voc.txt.gz or output.txt/output.txt.gz';
         $results['fail'][] = $label;
         fwrite(STDOUT, "[FAIL] {$label}: {$reason}\n");
         continue;
     }
 
-    $inputs = wp_fts_read_lines($vocPath);
-    $expected = wp_fts_read_lines($outputPath);
-    $lineCount = count($inputs);
-    $expectedCount = count($expected);
-
-    if ($lineCount !== $expectedCount) {
-        $results['fail'][] = $label;
-        fwrite(
-            STDOUT,
-            "[FAIL] {$label}: voc.txt has {$lineCount} lines; output.txt has {$expectedCount} lines\n"
-        );
-        continue;
-    }
-
     $mismatches = 0;
     $firstMismatch = null;
-    foreach ($inputs as $index => $input) {
-        $actual = $stemmer->stem($input, $code);
-        if ($actual === $expected[$index]) {
-            continue;
-        }
+    try {
+        $lineCount = wp_fts_snowball_fixture_for_each_pair(
+            $vocPath,
+            $outputPath,
+            static function (int $line, string $input, string $expected) use ($stemmer, $code, &$mismatches, &$firstMismatch): void {
+                $actual = $stemmer->stem($input, $code);
+                if ($actual === $expected) {
+                    return;
+                }
 
-        $mismatches++;
-        if ($firstMismatch === null) {
-            $firstMismatch = [
-                'line' => $index + 1,
-                'input' => $input,
-                'expected' => $expected[$index],
-                'actual' => $actual,
-            ];
-        }
+                ++$mismatches;
+                if ($firstMismatch === null) {
+                    $firstMismatch = [
+                        'line' => $line,
+                        'input' => $input,
+                        'expected' => $expected,
+                        'actual' => $actual,
+                    ];
+                }
+            }
+        );
+    } catch (Throwable $e) {
+        $results['fail'][] = $label;
+        fwrite(STDOUT, "[FAIL] {$label}: {$e->getMessage()}\n");
+        continue;
     }
 
     if ($mismatches === 0) {

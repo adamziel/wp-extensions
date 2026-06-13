@@ -93,21 +93,21 @@ German (`de`), and Russian (`ru`) remain available for explicit routing and
 existing detector support where present.
 
 The default pipeline includes bundled generated Snowball stemming for English
-Porter2, Spanish, French, Portuguese, and Indonesian. Catalan and Dutch can use
-the optional Wamania-backed Snowball stemmers when Composer dependencies are
-present and the compliance harness accepts them. Hindi strips only common
-plural/oblique suffixes, and Bengali
-strips only common classifier, plural, and case suffixes.
+Porter2, Arabic, Spanish, French, Portuguese, and Indonesian. Arabic is verified
+against the official compressed Snowball data, not a local article/clitic
+baseline or hard-coded word-family map. Catalan and Dutch can use the optional
+Wamania-backed Snowball stemmers when Composer dependencies are present and the
+compliance harness accepts them. Hindi strips only common plural/oblique
+suffixes, and Bengali strips only common classifier, plural, and case suffixes.
 Arabic and Urdu strip Arabic-script combining marks/harakat and tatweel inside
-their own language partitions. Arabic also uses a narrow light stemmer for
-common article/clitic prefixes and suffixes; Urdu strips only common
-plural-oblique endings. These rules do not rewrite letters across Arabic,
-Persian, or Urdu, and Persian-like text is not merged into Urdu routing. Polish
-morphology uses configured lemmatizer/analyzer packs where available; it is not
-driven by hard-coded word families. Missing packs, unsupported languages,
-baseline languages without verified morphology, and ambiguous forms keep
-conservative behavior. Chinese uses fallback CJK n-grams; none of these paths
-claim dictionary segmentation or morphology.
+their own language partitions; Urdu also strips only common plural-oblique
+endings. Persian-like text is not merged into Urdu routing. Polish morphology
+uses configured lemmatizer/analyzer packs where available; it is not driven by
+hard-coded word families. Missing packs, unsupported languages, baseline
+languages without verified morphology, and ambiguous forms keep conservative
+behavior. Chinese uses fallback CJK n-grams; none of these paths claim
+dictionary segmentation, dictionary lemmatization, or hard-coded word-family
+matching.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus overlapping

@@ -51,13 +51,12 @@ The baseline routed set covers English (`en`), Mandarin/Chinese (`zh`), Hindi
 Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`), with existing Polish
 (`pl`), German (`de`), and Russian (`ru`) routing kept available where present.
 This support is selectable/detectable language partitioning plus selected
-analyzer improvements. Spanish, French, Portuguese, and Indonesian use bundled
-generated Snowball stemming, while Hindi and Bengali have deterministic suffix
-baseline rules. Arabic and Urdu
-strip Arabic-script marks and tatweel in their own partitions. Arabic
-additionally has a narrow article/clitic/suffix light stemmer, and Urdu strips
-common plural-oblique suffixes. These are not full morphology, dictionary
-segmentation, or hard-coded word-family expansion.
+analyzer improvements. Arabic, Spanish, French, Portuguese, and Indonesian use
+bundled generated Snowball stemming, while Hindi and Bengali have deterministic
+suffix baseline rules. Arabic and Urdu strip Arabic-script marks and tatweel in
+their own partitions, and Urdu strips common plural-oblique suffixes. These are
+not full morphology, dictionary segmentation, dictionary lemmatization, or
+hard-coded word-family expansion.
 
 Search can route different query terms to different language partitions. Each
 term still scores inside one resolved partition, and the searcher does not merge
@@ -68,10 +67,11 @@ one term's scores across multiple languages.
 Stemming is enabled by default and can be disabled with
 `enable_stemming => false`. The built-in stemming path is intentionally narrow:
 
-- Advertised Snowball support is exactly Catalan (`ca`), bundled generated
-  English Porter2 (`en`), bundled generated Spanish (`es`), bundled generated
-  French (`fr`), bundled generated Portuguese (`pt`), bundled generated
-  Indonesian (`id`), and Dutch Porter (`nl`), because those are the
+- Advertised Snowball support is exactly bundled generated Arabic (`ar`),
+  Catalan (`ca`), bundled generated English Porter2 (`en`), bundled generated
+  Spanish (`es`), bundled generated French (`fr`), bundled generated
+  Portuguese (`pt`), bundled generated Indonesian (`id`), and Dutch Porter
+  (`nl`), because those are the
   implementations currently verified by the Snowball fixture harness.
 - Wamania exposes other language classes, but this branch treats unsupported or
   divergent algorithms as no-ops instead of claiming compliance.
@@ -86,10 +86,10 @@ Stemming is enabled by default and can be disabled with
   baselines, not Snowball-compliant, lemmatizer-backed, or dictionary-backed
   analyzers.
 - Arabic (`ar`) and Urdu (`ur`) normalize away Arabic-script combining
-  marks/harakat and tatweel. Arabic strips only a narrow set of common
-  article/clitic prefixes and suffixes; Urdu strips only common plural-oblique
-  suffixes. Letters are preserved across Arabic/Persian/Urdu families, and
-  Persian-like text is not merged into Urdu routing.
+  marks/harakat and tatweel. Arabic then uses the bundled generated Snowball
+  stemmer verified against the official compressed Arabic fixture data; Urdu
+  strips only common plural-oblique suffixes. Persian-like text is not merged
+  into Urdu routing.
 - A full CLARIN-PL PoliMorf external pack builder exists for local/offline
   generation. It verifies the approved source artifact, writes the generated
   runtime pack outside the plugin package, and validates the resulting manifest.

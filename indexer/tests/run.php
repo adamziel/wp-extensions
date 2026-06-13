@@ -3394,22 +3394,19 @@ test_case('baseline top-language stemmer applies deterministic local rules', fun
     assert_same('শিক্ষক', $stemmer->stem('শিক্ষকদের', 'bn'), 'Bengali plural/genitive -der should strip with length guard');
     assert_same('সূচি', $stemmer->stem('সূচিতে', 'bn'), 'Bengali locative -te should strip when the stem stays non-trivial');
     assert_same('হতে', $stemmer->stem('হতে', 'bn'), 'Bengali short-stem guard should preserve tiny -te words');
-    assert_same('بحث', $stemmer->stem('البحث', 'ar'), 'Arabic definite article should strip with length guard');
-    assert_same('بحث', $stemmer->stem('للبحث', 'ar'), 'Arabic lam article prefix should strip with length guard');
-    assert_same('فهرس', $stemmer->stem('والفهرسة', 'ar'), 'Arabic clitic article and taa marbuta should strip conservatively');
-    assert_same('كلم', $stemmer->stem('كلمات', 'ar'), 'Arabic plural -at should share the same baseline as singular taa marbuta');
-    assert_same('كلم', $stemmer->stem('كلمة', 'ar'), 'Arabic taa marbuta should strip with length guard');
-    assert_same('باحث', $stemmer->stem('باحثون', 'ar'), 'Arabic masculine plural suffix should strip with length guard');
+    assert_same('البحث', $stemmer->stem('البحث', 'ar'), 'Baseline stemmer should leave Arabic to the bundled Snowball adapter');
     assert_same('کتاب', $stemmer->stem('کتابیں', 'ur'), 'Urdu plural -en should strip without letter rewrites');
     assert_same('فہرست', $stemmer->stem('فہرستوں', 'ur'), 'Urdu plural-oblique -on should strip without letter rewrites');
     assert_same('فارسی', $stemmer->stem('فارسی', 'ur'), 'Urdu baseline should preserve Persian-like letters and words');
     assert_same('kotami', $stemmer->stem('kotami', 'pl'), 'baseline stemmer should no-op unsupported languages');
-    assert_contains('wp-fts-baseline-language-stemmer:v7:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
+    assert_contains('wp-fts-baseline-language-stemmer:v8:', $stemmer->index_signature(), 'baseline stemmer should expose an index signature');
 });
 
 test_case('snowball and polish stemmer adapters are guarded and pluggable', function (): void {
     $snowball = new WP_FTS_SnowballStemmer();
     assert_same('kotami', $snowball->stem('kotami', 'pl'), 'Snowball adapter should no-op unsupported languages');
+    assert_true($snowball->supports_language('ar-EG'), 'Snowball adapter should advertise verified Arabic support');
+    assert_true($snowball->is_language_available('ar'), 'Arabic Snowball stemmer should be bundled without Wamania');
     assert_true($snowball->supports_language('en-US'), 'Snowball adapter should advertise verified English support');
     assert_true($snowball->is_language_available('en'), 'English Snowball stemmer should be bundled without Wamania');
     assert_true($snowball->supports_language('es-MX'), 'Snowball adapter should advertise verified Spanish support');
@@ -3420,11 +3417,16 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_true($snowball->is_language_available('pt'), 'Portuguese Snowball stemmer should be bundled without Wamania');
     assert_true($snowball->supports_language('id-ID'), 'Snowball adapter should advertise verified Indonesian support');
     assert_true($snowball->is_language_available('id'), 'Indonesian Snowball stemmer should be bundled without Wamania');
+    assert_contains('Snowball Arabic', $snowball->source_identity('ar'), 'Arabic stemmer should expose its variant identity');
     assert_contains('Snowball English (Porter2)', $snowball->source_identity('en'), 'English stemmer should expose its variant identity');
     assert_contains('Snowball Spanish', $snowball->source_identity('es'), 'Spanish stemmer should expose its variant identity');
     assert_contains('Snowball French', $snowball->source_identity('fr'), 'French stemmer should expose its variant identity');
     assert_contains('Snowball Portuguese', $snowball->source_identity('pt'), 'Portuguese stemmer should expose its variant identity');
     assert_contains('Snowball Indonesian', $snowball->source_identity('id'), 'Indonesian stemmer should expose its variant identity');
+    assert_same('ءام', $snowball->stem('ءامن', 'ar'), 'Snowball adapter should match the Arabic fixture hamza row');
+    assert_same('ااب', $snowball->stem('أآبا', 'ar'), 'Snowball adapter should match the Arabic fixture alef row');
+    assert_same('اباح', $snowball->stem('أأباحتاهم', 'ar'), 'Snowball adapter should match the Arabic fixture verb/pronoun row');
+    assert_same('اقف', $snowball->stem('أأوقفتموهما', 'ar'), 'Snowball adapter should match the Arabic fixture compound suffix row');
     assert_same('run', $snowball->stem('running', 'en'), 'Snowball adapter should use the verified English implementation');
     assert_same('aaron', $snowball->stem('aarón', 'es'), 'Snowball adapter should match the Spanish fixture accent postlude');
     assert_same('abandon', $snowball->stem('abandonarlo', 'es'), 'Snowball adapter should match the Spanish fixture attached-pronoun row');
@@ -3458,7 +3460,7 @@ test_case('snowball and polish stemmer adapters are guarded and pluggable', func
     assert_same(['cari', 'cari', 'jalan', 'jalan', 'makan'], $pipeline->analyze('mencari pencarian berjalan perjalanan makanan', 'id'), 'Indonesian Snowball stemming should be available by default');
     assert_same(['किताब', 'किताब', 'लड़की', 'लड़की', 'भाषा'], $pipeline->analyze('किताबें किताबों लड़कियाँ लड़कियों भाषाएँ', 'hi'), 'Hindi baseline stemming should be available by default');
     assert_same(['শব্দ', 'শব্দ', 'শিক্ষক', 'সূচি'], $pipeline->analyze('শব্দগুলো শব্দগুলিতে শিক্ষকদের সূচিতে', 'bn'), 'Bengali baseline stemming should be available by default');
-    assert_same(['بحث', 'بحث', 'فهرس'], $pipeline->analyze('البحث للبحث والفهرسة', 'ar'), 'Arabic baseline stemming should be available by default');
+    assert_same(['اباح', 'مفيد', 'بحث', 'اقف'], $pipeline->analyze('أأباحتاهم مفيدة للبحث أأوقفتموهما', 'ar'), 'Arabic Snowball stemming should be available by default');
     assert_same(['کتاب', 'فہرست'], $pipeline->analyze('کتابیں فہرستوں', 'ur'), 'Urdu baseline stemming should be available by default');
 
     $verifiedPipeline = new WP_FTS_LanguagePipeline([
