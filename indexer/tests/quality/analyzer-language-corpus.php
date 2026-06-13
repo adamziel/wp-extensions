@@ -351,7 +351,7 @@ test_case('quality corpus tokenizes mixed scripts punctuation numbers emoji and 
         ['zh-Hans', 3, '中文搜索 日 x', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '日'], 'CJK n-grams bypass minimum length'],
         ['en', 2, "don't-stop re-enter", ['don', 'stop', 're', 'enter'], 'apostrophe and hyphen boundaries'],
         ['en', 2, 'v2_0 release42 🚀 emoji', ['v2_0', 'release42', 'emoji'], 'numbers underscores and emoji'],
-        ['fr', 2, "Cafe\u{0301} deja\u{0300}", ['cafe', 'deja'], 'Latin combining marks'],
+        ['fr', 2, "Cafe\u{0301} deja\u{0300}", ['caf', 'dej'], 'Latin combining marks'],
         ['pl', 2, "\u{0141}o\u{0301}d\u{017a} Za\u{017c}o\u{0301}\u{0142}c\u{0301}", ['lodz', 'zazolc'], 'Polish combining marks'],
         ['de', 2, "fu\u{0308}r stra\u{00df}e", ['fuer', 'strasse'], 'German decomposed diaeresis'],
         ['tr', 2, 'İstanbul Iğdır', ['istanbul', 'ıgdır'], 'Turkish dotted and dotless I'],
@@ -414,7 +414,7 @@ test_case('quality corpus applies language-specific folding including no-mbstrin
 
     $pipelineCases = [
         ['de', 'Ärger Öl für', ['aerger', 'oel', 'fuer'], 'German tokenizer plus folding'],
-        ['fr', 'Crème brûlée São', ['creme', 'brulee', 'sao'], 'Latin fallback tokenizer plus folding'],
+        ['fr', 'Crème brûlée São', ['crem', 'brule', 'sao'], 'Latin fallback tokenizer plus folding'],
         ['tr', 'IĞDIR İZMİR', ['ıgdır', 'izmir'], 'Turkish tokenizer plus folding'],
     ];
     foreach ($pipelineCases as [$lang, $input, $expected, $label]) {

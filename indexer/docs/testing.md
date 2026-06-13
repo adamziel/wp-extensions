@@ -205,13 +205,13 @@ SNOWBALL_DATA_DIR=/home/claude/.cache/snowball-data composer test:snowball
 
 The harness reports unsupported Snowball languages as skipped. Skips are
 expected for languages that are not advertised by `WP_FTS_SnowballStemmer`.
-English (`en`) and Spanish (`es`) should pass from the bundled generated
-Snowball implementations even in a bare checkout; Wamania-backed Catalan (`ca`)
-and Dutch Porter (`nl`) skip when optional Composer dependencies are absent.
+English (`en`), Spanish (`es`), and French (`fr`) should pass from the bundled
+generated Snowball implementations even in a bare checkout; Wamania-backed
+Catalan (`ca`) and Dutch Porter (`nl`) skip when optional Composer dependencies are absent.
 With the current official Snowball data checkout, a source tree without
-`vendor/` should report `2 pass, 35 skip, 0 fail`; after installing production
-dependencies from `composer.lock`, English, Spanish, Catalan, and Dutch Porter
-should pass, for `4 pass, 33 skip, 0 fail`.
+`vendor/` should report `3 pass, 34 skip, 0 fail`; after installing production
+dependencies from `composer.lock`, English, Spanish, French, Catalan, and Dutch
+Porter should pass, for `5 pass, 32 skip, 0 fail`.
 
 ## Polish Lemmatizer Source-Lock Pilot
 

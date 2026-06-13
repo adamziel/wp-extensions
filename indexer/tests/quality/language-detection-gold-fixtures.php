@@ -170,7 +170,7 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'French lexical search span',
             'text' => 'la recherche en francais utilise des donnees claires',
             'lang' => 'fr',
-            'terms' => ['recherche', 'francais', 'donne', 'clair'],
+            'terms' => ['recherch', 'franc', 'utilis', 'donne', 'clair'],
         ],
         [
             'label' => 'Bengali script search span',
@@ -509,7 +509,7 @@ test_case('quality language detection gold fixtures honor explicit and multiling
 
         $wpml = test_lang_by_term($analyzer->analyze_content('<p>Führung und Straße</p>', ['post_id' => 20]));
         assert_same('fr-FR', $wpml['fuhrung'] ?? null, 'WPML post locale should resolve untagged document language');
-        assert_same('fr-FR', $wpml['strasse'] ?? null, 'WPML post locale should beat detector evidence from the text');
+        assert_same('fr-FR', $wpml['strass'] ?? null, 'WPML post locale should beat detector evidence from the text');
         assert_same(null, $wpml['fuehrung'] ?? null, 'WPML metadata should prevent German-specific normalization for this fixture');
 
         $GLOBALS['wp_fts_ldgf_polylang_current_language'] = 'pl_PL';
@@ -545,7 +545,7 @@ test_case('quality language detection gold fixtures keep custom resolvers author
     ]);
     $documentLangs = test_lang_by_term($documentAnalyzer->analyze_content('<p>Führung und Straße</p>', ['post_id' => 30]));
     assert_same('fr-FR', $documentLangs['fuhrung'] ?? null, 'custom document resolver should beat strong detector evidence');
-    assert_same('fr-FR', $documentLangs['strasse'] ?? null, 'custom document resolver should apply to the full untagged segment');
+    assert_same('fr-FR', $documentLangs['strass'] ?? null, 'custom document resolver should apply to the full untagged segment');
 
     $queryAnalyzer = new WP_FTS_Analyzer([
         'default_lang' => 'en',

@@ -51,8 +51,8 @@ The baseline routed set covers English (`en`), Mandarin/Chinese (`zh`), Hindi
 Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`), with existing Polish
 (`pl`), German (`de`), and Russian (`ru`) routing kept available where present.
 This support is selectable/detectable language partitioning plus selected
-analyzer improvements. Spanish uses bundled generated Snowball stemming. French,
-Portuguese, and Indonesian have deterministic suffix/affix baseline rules,
+analyzer improvements. Spanish and French use bundled generated Snowball
+stemming. Portuguese and Indonesian have deterministic suffix/affix baseline rules,
 while Hindi and Bengali have deterministic suffix baseline rules. Arabic and
 Urdu strip Arabic-script marks and tatweel in their own partitions. Arabic
 additionally has a narrow article/clitic/suffix light stemmer, and Urdu strips
@@ -69,8 +69,8 @@ Stemming is enabled by default and can be disabled with
 `enable_stemming => false`. The built-in stemming path is intentionally narrow:
 
 - Advertised Snowball support is exactly Catalan (`ca`), bundled generated
-  English Porter2 (`en`), bundled generated Spanish (`es`), and Dutch Porter
-  (`nl`), because those are the implementations currently verified by the
+  English Porter2 (`en`), bundled generated Spanish (`es`), bundled generated
+  French (`fr`), and Dutch Porter (`nl`), because those are the implementations currently verified by the
   Snowball fixture harness.
 - Wamania exposes other language classes, but this branch treats unsupported or
   divergent algorithms as no-ops instead of claiming compliance.
@@ -79,7 +79,7 @@ Stemming is enabled by default and can be disabled with
   `polish_stemming`; otherwise `polish_stemming => 'verified'` can enable a
   compact fixture-backed stemmer slice. Neither path is a full Snowball,
   Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
-- French (`fr`), Portuguese (`pt`), and Indonesian (`id`) use a deterministic
+- Portuguese (`pt`) and Indonesian (`id`) use a deterministic
   local baseline stemmer for common suffix/affix forms. This is a recall
   baseline, not a Snowball-compliant or dictionary-backed analyzer.
 - Hindi (`hi`) uses deterministic local suffix stemming for common

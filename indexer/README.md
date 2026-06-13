@@ -93,9 +93,9 @@ German (`de`), and Russian (`ru`) remain available for explicit routing and
 existing detector support where present.
 
 The default pipeline includes bundled generated Snowball stemming for English
-Porter2 and Spanish. Catalan and Dutch can use the optional Wamania-backed
+Porter2, Spanish, and French. Catalan and Dutch can use the optional Wamania-backed
 Snowball stemmers when Composer dependencies are present and the compliance
-harness accepts them. French, Portuguese, and Indonesian use deterministic local
+harness accepts them. Portuguese and Indonesian use deterministic local
 baseline stemming for common suffix or affix forms so simple inflection searches
 can match without a dictionary pack. Hindi strips only common plural/oblique
 suffixes, and Bengali strips only common classifier, plural, and case suffixes.

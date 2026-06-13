@@ -387,9 +387,10 @@ final class WP_FTS_LanguagePipeline
     /**
      * Route stemming to the language-specific adapter.
      *
-     * Polish keeps its analyzer-pack/conservative precedence. French, Hindi,
+     * Polish keeps its analyzer-pack/conservative precedence. Hindi,
      * Portuguese, Bengali, Indonesian, Arabic, and Urdu use the local baseline
-     * stemmer. Spanish routes through the bundled Snowball adapter.
+     * stemmer. English, Spanish, and French route through bundled Snowball
+     * adapters.
      * Other enabled languages go through the Snowball adapter, which returns
      * the original term when the language is unsupported.
      */
@@ -400,7 +401,7 @@ final class WP_FTS_LanguagePipeline
             return $this->polishStemmer->stem($term, $language);
         }
 
-        if (in_array($base, ['fr', 'hi', 'pt', 'bn', 'id', 'ar', 'ur'], true)) {
+        if (in_array($base, ['hi', 'pt', 'bn', 'id', 'ar', 'ur'], true)) {
             return $this->baselineStemmer->stem($term, $language);
         }
 

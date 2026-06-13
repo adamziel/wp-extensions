@@ -260,6 +260,27 @@ function wp_fts_external_reference_supported_snowball_rows(): array
                 ['line' => 28378, 'input' => 'útil', 'output' => 'util'],
             ],
         ],
+        'french' => [
+            'code' => 'fr',
+            'rows' => [
+                ['line' => 3, 'input' => 'abaissait', 'output' => 'abaiss'],
+                ['line' => 6, 'input' => 'abaissement', 'output' => 'abaissement'],
+                ['line' => 8, 'input' => 'abaisser', 'output' => 'abaiss'],
+                ['line' => 16, 'input' => 'abandonner', 'output' => 'abandon'],
+                ['line' => 45, 'input' => 'abominablement', 'output' => 'abomin'],
+                ['line' => 3414, 'input' => 'cherchait', 'output' => 'cherch'],
+                ['line' => 3418, 'input' => 'chercher', 'output' => 'cherch'],
+                ['line' => 3635, 'input' => 'claires', 'output' => 'clair'],
+                ['line' => 7174, 'input' => 'enfants', 'output' => 'enfant'],
+                ['line' => 12046, 'input' => 'mangeaient', 'output' => 'mang'],
+                ['line' => 12052, 'input' => 'manger', 'output' => 'mang'],
+                ['line' => 16114, 'input' => 'rapidement', 'output' => 'rapid'],
+                ['line' => 16251, 'input' => 'recherche', 'output' => 'recherch'],
+                ['line' => 20180, 'input' => 'utile', 'output' => 'util'],
+                ['line' => 21040, 'input' => 'école', 'output' => 'écol'],
+                ['line' => 21653, 'input' => 'ôtées', 'output' => 'ôté'],
+            ],
+        ],
     ];
 }
 
@@ -315,7 +336,6 @@ function wp_fts_external_reference_unsupported_boundaries(): array
 
     return [
         'german' => ['code' => 'de', 'line' => 3, 'input' => 'aalglatten', 'output' => 'aalglatt', 'reason' => $reason],
-        'french' => ['code' => 'fr', 'line' => 3, 'input' => 'abaissait', 'output' => 'abaiss', 'reason' => $reason],
         'italian' => ['code' => 'it', 'line' => 5, 'input' => 'abakoumova', 'output' => 'abakoumov', 'reason' => $reason],
         'danish' => ['code' => 'da', 'line' => 3, 'input' => 'aabenbaringen', 'output' => 'aabenbaring', 'reason' => $reason],
         'swedish' => ['code' => 'sv', 'line' => 2, 'input' => 'aaele', 'output' => 'aael', 'reason' => $reason],
@@ -495,6 +515,7 @@ test_case('quality external Snowball advertised language allowlist stays exact',
         'ca' => true,
         'en' => true,
         'es' => true,
+        'fr' => true,
         'nl' => true,
     ];
 
@@ -509,8 +530,9 @@ test_case('quality external Snowball advertised language allowlist stays exact',
     wp_fts_external_reference_assert_true($stemmer->supports_language('ca-ES'), 'Catalan locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('en-US'), 'English locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('es-MX'), 'Spanish locale tags should inherit supported base language');
+    wp_fts_external_reference_assert_true($stemmer->supports_language('fr-FR'), 'French locale tags should inherit supported base language');
     wp_fts_external_reference_assert_true($stemmer->supports_language('nl_BE'), 'Dutch locale tags should inherit supported base language');
-    wp_fts_external_reference_assert_true(!$stemmer->supports_language('fr-FR'), 'Unsupported locale tags should remain no-ops');
+    wp_fts_external_reference_assert_true(!$stemmer->supports_language('it-IT'), 'Unsupported locale tags should remain no-ops');
 });
 
 test_case('quality external unsupported Snowball boundaries stay documented no-ops', function (): void {
