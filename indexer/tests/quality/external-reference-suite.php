@@ -618,15 +618,15 @@ test_case('quality external multilingual tokenization reference corpus stays sta
             'text' => 'colour colours coloured colouring flavour flavours behaviour behaviours organise organises organised organising normalise normalises normalised normalising realise realised recognise recognising',
             'terms' => ['color', 'color', 'color', 'color', 'flavor', 'flavor', 'behavior', 'behavior', 'organiz', 'organiz', 'organiz', 'organiz', 'normal', 'normal', 'normal', 'normal', 'realiz', 'realiz', 'recogn', 'recogn'],
         ],
-        'CJK bigrams' => [
+        'CJK fallback n-grams' => [
             'lang' => 'zh',
             'text' => '東京大学検索品質',
-            'terms' => ['東京', '京大', '大学', '学検', '検索', '索品', '品質'],
+            'terms' => ['東', '京', '大', '学', '検', '索', '品', '質', '東京', '京大', '大学', '学検', '検索', '索品', '品質'],
         ],
         'Mixed script runs' => [
             'lang' => 'en',
             'text' => 'alpha東京beta 混合Script zamek城',
-            'terms' => ['alpha', '東京', 'beta', '混合', 'script', 'zamek', '城'],
+            'terms' => ['alpha', '東', '京', '東京', 'beta', '混', '合', '混合', 'script', 'zamek', '城'],
         ],
     ];
 
@@ -662,6 +662,10 @@ test_case('quality external multilingual HTML lang corpus routes snippets by seg
         ['term' => 'muenchen', 'lang' => 'de'],
         ['term' => 'istanbul', 'lang' => 'tr'],
         ['term' => 'ısparta', 'lang' => 'tr'],
+        ['term' => '東', 'lang' => 'zh-Hans'],
+        ['term' => '京', 'lang' => 'zh-Hans'],
+        ['term' => '大', 'lang' => 'zh-Hans'],
+        ['term' => '学', 'lang' => 'zh-Hans'],
         ['term' => '東京', 'lang' => 'zh-Hans'],
         ['term' => '京大', 'lang' => 'zh-Hans'],
         ['term' => '大学', 'lang' => 'zh-Hans'],

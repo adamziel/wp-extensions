@@ -125,14 +125,15 @@ resource-backed analyzers with fixture gates before they are enabled by default:
 - keep per-language analyzer resources opt-in until compliance fixtures and
   regression corpora pass in CI;
 - add a CJK dictionary tokenizer through the existing `cjk_tokenizer` seam
-  instead of expanding fallback bigrams into claimed word segmentation.
+  instead of presenting fallback n-grams as word segmentation.
 
 ## CJK Tokenization
 
 CJK script runs use a fallback tokenizer, not dictionary segmentation. A
-one-character run is kept as one token. Longer CJK runs become overlapping
-bigrams. This improves basic recall without external dictionaries, but it does
-not understand words, compounds, or language-specific segmentation rules.
+one-character run is kept as one token. Longer CJK runs emit character unigrams
+plus overlapping bigrams. This improves basic recall without external
+dictionaries, but it does not understand words, compounds, or language-specific
+segmentation rules.
 
 ## Thai Tokenization
 

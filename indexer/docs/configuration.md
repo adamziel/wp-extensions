@@ -91,8 +91,8 @@ The default analyzer:
   rewrites;
 - drops non-CJK terms shorter than 2 characters;
 - rejects stored term keys over 255 bytes;
-- tokenizes CJK script runs into single characters for one-character runs and
-  overlapping bigrams for longer runs.
+- tokenizes one-character CJK script runs as-is and longer CJK runs into
+  character unigrams plus overlapping bigrams.
 
 The CJK path is fallback n-gram retrieval, not dictionary word segmentation.
 The plugin does not ship a Thai tokenizer, Thai dictionary, TCC/TCC+ rules, or a

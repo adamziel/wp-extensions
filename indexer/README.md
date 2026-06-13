@@ -110,8 +110,9 @@ baseline languages without verified morphology, and ambiguous forms keep
 conservative behavior. Chinese uses fallback CJK n-grams; none of these paths
 claim dictionary segmentation or morphology.
 
-The analyzer also provides CJK fallback tokenization with single characters and
-overlapping bigrams. The plugin does not currently ship Thai or CJK dictionary
+The analyzer also provides CJK fallback tokenization with one-character runs
+kept as-is and longer runs emitted as character unigrams plus overlapping
+bigrams. The plugin does not currently ship Thai or CJK dictionary
 segmentation.
 
 ## Snippets And Highlighting

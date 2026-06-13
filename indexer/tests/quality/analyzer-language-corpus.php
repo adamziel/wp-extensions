@@ -1,6 +1,135 @@
 <?php
 declare(strict_types=1);
 
+$wp_fts_alc_direct = !function_exists('test_case');
+if ($wp_fts_alc_direct) {
+    require_once dirname(__DIR__, 2) . '/src/bootstrap.php';
+
+    final class WP_FTS_TestFailure extends RuntimeException
+    {
+    }
+
+    if (!class_exists('WP_FTS_Fake_HTML_Processor')) {
+        final class WP_FTS_Fake_HTML_Processor
+        {
+            private int $offset = -1;
+
+            /**
+             * @param array<int,array{type:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}> $tokens
+             */
+            public function __construct(private array $tokens)
+            {
+            }
+
+            public function next_token(): bool
+            {
+                $this->offset++;
+
+                return isset($this->tokens[$this->offset]);
+            }
+
+            public function get_token_type(): ?string
+            {
+                return $this->current()['type'] ?? null;
+            }
+
+            /**
+             * @return string[]|null
+             */
+            public function get_breadcrumbs(): ?array
+            {
+                return $this->current()['breadcrumbs'] ?? [];
+            }
+
+            public function get_modifiable_text(): string
+            {
+                return (string) ($this->current()['text'] ?? '');
+            }
+
+            public function is_tag_closer(): bool
+            {
+                return (bool) ($this->current()['closing'] ?? false);
+            }
+
+            public function get_attribute(string $name): mixed
+            {
+                return ($this->current()['attrs'] ?? [])[$name] ?? null;
+            }
+
+            /**
+             * @return array{type?:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}
+             */
+            private function current(): array
+            {
+                return $this->tokens[$this->offset] ?? [];
+            }
+        }
+    }
+
+    /** @var array<int,array{name:string,fn:callable}> */
+    $GLOBALS['wp_fts_alc_tests'] = [];
+    $GLOBALS['wp_fts_alc_check_count'] = 0;
+
+    function test_case(string $name, callable $fn): void
+    {
+        $GLOBALS['wp_fts_alc_tests'][] = ['name' => $name, 'fn' => $fn];
+    }
+
+    function record_check(?string $label = null, int $count = 1): void
+    {
+        if ($count < 1) {
+            throw new WP_FTS_TestFailure('record_check() count must be at least 1.');
+        }
+
+        $GLOBALS['wp_fts_alc_check_count'] += $count;
+    }
+
+    function executed_check_count(): int
+    {
+        return (int) $GLOBALS['wp_fts_alc_check_count'];
+    }
+
+    function assert_true(bool $condition, string $message): void
+    {
+        record_check($message);
+        if (!$condition) {
+            throw new WP_FTS_TestFailure($message);
+        }
+    }
+
+    function assert_same(mixed $expected, mixed $actual, string $message): void
+    {
+        record_check($message);
+        if ($expected !== $actual) {
+            throw new WP_FTS_TestFailure($message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true));
+        }
+    }
+
+    /**
+     * @return string[]
+     */
+    function test_terms(array $occurrences): array
+    {
+        return array_map(static fn(array|string $token): string => is_array($token) ? (string) $token['term'] : $token, $occurrences);
+    }
+
+    function test_normalize_without_mbstring(WP_FTS_Normalizer $normalizer, string $token, string $language): string
+    {
+        $language = $normalizer->canonicalize_language($language);
+
+        $lowercase = new ReflectionMethod($normalizer, 'lowercase_without_mbstring');
+        $lowercase->setAccessible(true);
+        $fold = new ReflectionMethod($normalizer, 'fold_for_language');
+        $fold->setAccessible(true);
+
+        return (string) $fold->invoke(
+            $normalizer,
+            (string) $lowercase->invoke($normalizer, $token, $language),
+            $language
+        );
+    }
+}
+
 /**
  * @param array<int,array{term:string,weight?:float,lang?:string}> $occurrences
  * @return array<string,string[]>
@@ -116,6 +245,10 @@ test_case('quality corpus routes inherited element languages across HTML shapes'
             'label' => 'mixed CJK and Latin blocks',
             'html' => '<article lang=zh-Hans><p>中文搜索</p><section lang=en-GB>colour</section><p>搜索</p></article>',
             'expected' => [
+                '中' => ['zh-Hans'],
+                '文' => ['zh-Hans'],
+                '搜' => ['zh-Hans'],
+                '索' => ['zh-Hans'],
                 '中文' => ['zh-Hans'],
                 '文搜' => ['zh-Hans'],
                 '搜索' => ['zh-Hans'],
@@ -214,8 +347,8 @@ test_case('quality corpus keeps processor extraction in parity with fallback ext
 
 test_case('quality corpus tokenizes mixed scripts punctuation numbers emoji and invalid bytes', function (): void {
     $cases = [
-        ['ja', 3, 'abc東京def', ['abc', '東京', 'def'], 'mixed Latin and Japanese'],
-        ['zh-Hans', 3, '中文搜索 日 x', ['中文', '文搜', '搜索', '日'], 'CJK bigrams bypass minimum length'],
+        ['ja', 3, 'abc東京def', ['abc', '東', '京', '東京', 'def'], 'mixed Latin and Japanese'],
+        ['zh-Hans', 3, '中文搜索 日 x', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '日'], 'CJK n-grams bypass minimum length'],
         ['en', 2, "don't-stop re-enter", ['don', 'stop', 're', 'enter'], 'apostrophe and hyphen boundaries'],
         ['en', 2, 'v2_0 release42 🚀 emoji', ['v2_0', 'release42', 'emoji'], 'numbers underscores and emoji'],
         ['fr', 2, "Cafe\u{0301} deja\u{0300}", ['cafe', 'deja'], 'Latin combining marks'],
@@ -309,8 +442,8 @@ test_case('quality corpus exposes query occurrence output while preserving plain
         ['pl-PL', 'Łódź Wrocław', ['lodz', 'wroclaw']],
         ['de-DE', 'Straße Öl', ['strasse', 'oel']],
         ['tr-TR', 'İstanbul Iğdır', ['istanbul', 'ıgdır']],
-        ['zh-Hans', '中文搜索', ['中文', '文搜', '搜索']],
-        ['zh-Hant', '繁體搜索', ['繁體', '體搜', '搜索']],
+        ['zh-Hans', '中文搜索', ['中', '文', '搜', '索', '中文', '文搜', '搜索']],
+        ['zh-Hant', '繁體搜索', ['繁', '體', '搜', '索', '繁體', '體搜', '搜索']],
     ];
 
     foreach ($cases as [$lang, $query, $expectedTerms]) {
@@ -417,3 +550,29 @@ test_case('quality analyzer language corpus contributes at least five hundred ch
         "analyzer language corpus should contribute at least 500 checks/scenarios; saw {$contribution}"
     );
 });
+
+if ($wp_fts_alc_direct) {
+    $failures = 0;
+    $start = microtime(true);
+    foreach ($GLOBALS['wp_fts_alc_tests'] as $test) {
+        try {
+            ($test['fn'])();
+            fwrite(STDOUT, "[PASS] {$test['name']}\n");
+        } catch (Throwable $e) {
+            $failures++;
+            fwrite(STDERR, "[FAIL] {$test['name']}\n{$e->getMessage()}\n{$e->getTraceAsString()}\n");
+        }
+    }
+
+    $duration = number_format(microtime(true) - $start, 3);
+    $count = count($GLOBALS['wp_fts_alc_tests']);
+    $passed = $count - $failures;
+    $checks = (int) $GLOBALS['wp_fts_alc_check_count'];
+    $summary = "{$passed}/{$count} analyzer language corpus tests passed; failures={$failures}; checks/scenarios={$checks}; duration={$duration}s\n";
+    if ($failures > 0) {
+        fwrite(STDERR, $summary);
+        exit(1);
+    }
+
+    fwrite(STDOUT, $summary);
+}

@@ -32,7 +32,7 @@ final class WP_FTS_LanguagePipeline
      * doubles. Use `stemmer` for a custom stemmer; callables may accept either
      * `($term)` or `($term, $language)`. Use `stemmers_by_lang` for verified
      * language-specific custom stemmers. `cjk_tokenizer` may return dictionary
-     * segments for one CJK run; the built-in bigram path remains the fallback.
+     * segments for one CJK run; the built-in n-gram path remains the fallback.
      * `namespace_terms` is normally false for the high-level indexer, which
      * namespaces after weighting.
      *
@@ -282,9 +282,9 @@ final class WP_FTS_LanguagePipeline
     /**
      * Build CJK tokens from a single CJK script run.
      *
-     * Single-character runs are kept as-is. Longer runs become overlapping
-     * bigrams, which gives query-time matching more context without requiring a
-     * dictionary segmenter.
+     * Single-character runs are kept as-is. Longer runs emit character
+     * unigrams plus overlapping bigrams, which gives query-time matching more
+     * fallback recall without requiring a dictionary segmenter.
      *
      * @param string $run CJK-only text run.
      * @return string[]
@@ -300,7 +300,7 @@ final class WP_FTS_LanguagePipeline
                 }
             } catch (Throwable) {
                 // Segmenters are optional extension points; fall through to the
-                // deterministic built-in bigram tokenizer on failures.
+                // deterministic built-in n-gram tokenizer on failures.
             }
         }
 
@@ -338,7 +338,7 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
-     * Built-in CJK fallback tokenizer using overlapping bigrams.
+     * Built-in CJK fallback tokenizer using unigrams and overlapping bigrams.
      *
      * @param string $run CJK-only text run.
      * @return string[]
@@ -351,7 +351,7 @@ final class WP_FTS_LanguagePipeline
             return $chars;
         }
 
-        $tokens = [];
+        $tokens = $chars;
         for ($i = 0; $i < $count - 1; $i++) {
             $tokens[] = $chars[$i] . $chars[$i + 1];
         }
@@ -476,7 +476,7 @@ final class WP_FTS_LanguagePipeline
         }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 6,
+            'version' => 7,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
             'fold_diacritics' => (bool) ($options['fold_diacritics'] ?? true),
@@ -502,7 +502,7 @@ final class WP_FTS_LanguagePipeline
             $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
         }
 
-        return 'wp-fts-language-pipeline-v6:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v7:' . sha1($this->stableJson($payload));
     }
 
     /**

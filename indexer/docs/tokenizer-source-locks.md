@@ -3,8 +3,8 @@
 The `indexer/` plugin does not currently ship real Thai, CJK, or general
 non-space word segmentation. CJK script runs use the built-in fallback described
 in [Limitations](limitations.md): one-character runs stay as one token and
-longer runs become overlapping bigrams. That is retrieval-oriented n-gram
-tokenization, not dictionary word segmentation.
+longer runs emit character unigrams plus overlapping bigrams. That is
+retrieval-oriented n-gram tokenization, not dictionary word segmentation.
 
 Future support for `thai_dictionary_tcc_v1` must start with a reviewed source
 lock before any adapter, importer, bundled Thai dictionary, generated TCC rules,

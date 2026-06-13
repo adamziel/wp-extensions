@@ -146,7 +146,7 @@ test_case('quality language detection gold fixtures keep untagged document and q
             'label' => 'Chinese Han-only non-space text',
             'text' => '搜索引擎',
             'lang' => 'zh',
-            'terms' => ['搜索', '索引', '引擎'],
+            'terms' => ['搜', '索', '引', '擎', '搜索', '索引', '引擎'],
         ],
         [
             'label' => 'Hindi Devanagari search span',

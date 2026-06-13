@@ -60,7 +60,7 @@ final class WP_FTS_Analyzer
      *   and compact lexical evidence. Explicit language options, HTML language
      *   attributes, and multilingual-plugin metadata still win.
      * - `cjk_tokenizer`: optional segmenter for one CJK script run; the
-     *   built-in bigram tokenizer remains the fallback.
+     *   built-in n-gram tokenizer remains the fallback.
      * - `html_processor_factory`: test hook that returns a `WP_HTML_Processor`
      *   compatible object for the given HTML.
      *

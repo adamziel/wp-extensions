@@ -95,6 +95,16 @@ function wp_fts_tslr_cases(): array
             'bait' => '搜索',
         ],
         [
+            'id' => 'zh-cjk-single-character-query',
+            'lang' => 'zh',
+            'target_id' => 1028,
+            'bait_id' => 2028,
+            'target' => '搜索引擎质量',
+            'query' => '搜',
+            'bait_lang' => 'en',
+            'bait' => '搜',
+        ],
+        [
             'id' => 'zh-cjk-multi-character-substring',
             'lang' => 'zh',
             'target_id' => 1004,
