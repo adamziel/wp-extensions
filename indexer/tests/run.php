@@ -7787,6 +7787,105 @@ test_case('metadata-less replacement clears stale product metadata', function ()
     }
 });
 
+test_case('search bounded top-k matches full-sort ordering for deterministic corpus', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    for ($docId = 1; $docId <= 48; $docId++) {
+        $tokens = array_fill(0, 4 + ($docId % 5), 'needle');
+        $tokens = array_merge($tokens, array_fill(0, 20 + ($docId % 11), 'filler' . ($docId % 7)));
+        if ($docId % 3 === 0) {
+            $tokens[] = 'secondary';
+        }
+        $indexer->index_document_fields($docId, [['name' => 'content', 'text' => implode(' ', $tokens)]], [
+            'lang' => 'en',
+        ]);
+    }
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $bounded = $searcher->search('needle secondary', [
+        'lang' => 'en',
+        'limit' => 7,
+    ]);
+    $full = $searcher->search('needle secondary', [
+        'lang' => 'en',
+        'limit' => 7,
+        'include_total' => true,
+    ]);
+
+    assert_same(48, $full['total'], 'full-sort oracle should see every OR candidate');
+    assert_search_results_equal($full['results'], $bounded, 'bounded top-k should match full-sort top window');
+});
+
+test_case('search bounded top-k bypasses totals offsets and metadata filters', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    for ($docId = 1; $docId <= 24; $docId++) {
+        $tokens = array_merge(
+            array_fill(0, 2 + ($docId % 4), 'shared'),
+            array_fill(0, 8 + ($docId % 6), 'body' . ($docId % 5))
+        );
+        $indexer->index_document_fields($docId, [['name' => 'content', 'text' => implode(' ', $tokens)]], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => $docId,
+                'post_type' => $docId % 2 === 0 ? 'page' : 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-06-01 00:00:00',
+                'title' => 'TopK bypass ' . $docId,
+                'search_text' => implode(' ', $tokens),
+            ],
+        ]);
+    }
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $gate = new ReflectionMethod(WP_FTS_Searcher::class, 'can_use_bounded_top_k');
+    $gate->setAccessible(true);
+
+    assert_true((bool) $gate->invoke($searcher, ['limit' => 5], 0), 'plain first-page search should use bounded top-k');
+    assert_true(!(bool) $gate->invoke($searcher, ['limit' => 5, 'include_total' => true], 0), 'include_total should bypass bounded top-k');
+    assert_true(!(bool) $gate->invoke($searcher, ['limit' => 5], 5), 'offset should bypass bounded top-k');
+    assert_true(!(bool) $gate->invoke($searcher, ['limit' => 5, 'post_type' => 'page'], 0), 'metadata filters should bypass bounded top-k');
+
+    $full = $searcher->search('shared', [
+        'lang' => 'en',
+        'limit' => 24,
+        'include_total' => true,
+    ]);
+    $paged = $searcher->search('shared', [
+        'lang' => 'en',
+        'limit' => 5,
+        'offset' => 5,
+        'include_total' => true,
+    ]);
+    $filtered = $searcher->search('shared', [
+        'lang' => 'en',
+        'limit' => 5,
+        'include_total' => true,
+        'post_type' => 'page',
+    ]);
+
+    assert_same(24, $full['total'], 'full total should include every matching document');
+    assert_same(
+        array_column(array_slice($full['results'], 5, 5), 'doc_id'),
+        array_column($paged['results'], 'doc_id'),
+        'offset path should return the full-sort result window'
+    );
+    assert_same(12, $filtered['total'], 'metadata filter path should compute exact filtered total');
+    foreach ($filtered['results'] as $row) {
+        assert_true((int) $row['doc_id'] % 2 === 0, 'metadata filter path should keep only page documents');
+    }
+});
+
 test_case('search product options filter metadata and return pagination snippets', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $analyzer = new WP_FTS_Analyzer();

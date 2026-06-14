@@ -75,16 +75,11 @@ final class WP_FTS_Searcher
             return $this->format_response([], 0, $opts, $responseLang);
         }
 
-        $results = $this->score_query_groups($groups, $mode);
-        usort($results, static function (array $a, array $b): int {
-            $rankOrder = ($a['_rank'] ?? 0) <=> ($b['_rank'] ?? 0);
-            if ($rankOrder !== 0) {
-                return $rankOrder;
-            }
-
-            $scoreOrder = $b['score'] <=> $a['score'];
-            return $scoreOrder !== 0 ? $scoreOrder : ($a['doc_id'] <=> $b['doc_id']);
-        });
+        $useBoundedTopK = $this->can_use_bounded_top_k($opts, $offset);
+        $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null);
+        if (!$useBoundedTopK) {
+            usort($results, [self::class, 'compare_ranked_results']);
+        }
 
         $metadata = [];
         if ($this->has_metadata_filters($opts)) {
@@ -96,7 +91,7 @@ final class WP_FTS_Searcher
         }
 
         $total = count($results);
-        $page = array_slice($results, $offset, $limit);
+        $page = $useBoundedTopK ? $results : array_slice($results, $offset, $limit);
         if ($this->should_enrich_results($opts) && $page !== []) {
             $pageIds = array_column($page, 'doc_id');
             $pageMetadata = $metadata;
@@ -119,9 +114,11 @@ final class WP_FTS_Searcher
      * same untagged query term expanded across explicit `langs`.
      *
      * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     * @param int|null $topLimit Keep only the best K ranked rows when callers do
+     *        not need totals, offsets, or metadata-filtered result sets.
      * @return array<int,array{doc_id:int,score:float,_rank:int}>
      */
-    private function score_query_groups(array $groups, string $mode): array
+    private function score_query_groups(array $groups, string $mode, ?int $topLimit = null): array
     {
         $termsByKey = [];
         foreach ($groups as $groupId => $alternatives) {
@@ -248,15 +245,73 @@ final class WP_FTS_Searcher
                 continue;
             }
             if ($score > 0.0) {
-                $results[] = [
+                $row = [
                     'doc_id' => (int) $docId,
                     'score' => $score,
                     '_rank' => $mode === 'AND' ? max($matchedGroups) : min($matchedGroups),
                 ];
+                if ($topLimit === null) {
+                    $results[] = $row;
+                } else {
+                    $this->insert_bounded_top_k_result($results, $row, $topLimit);
+                }
             }
         }
 
         return $results;
+    }
+
+    /**
+     * Use bounded top-K only when callers need the first page by ranking.
+     */
+    private function can_use_bounded_top_k(array $opts, int $offset): bool
+    {
+        return $offset === 0
+            && empty($opts['include_total'])
+            && !$this->has_metadata_filters($opts);
+    }
+
+    /**
+     * Compare rows by public search ordering: exact/fallback rank, score, doc id.
+     *
+     * @param array{doc_id:int,score:float,_rank?:int} $a
+     * @param array{doc_id:int,score:float,_rank?:int} $b
+     */
+    private static function compare_ranked_results(array $a, array $b): int
+    {
+        $rankOrder = ($a['_rank'] ?? 0) <=> ($b['_rank'] ?? 0);
+        if ($rankOrder !== 0) {
+            return $rankOrder;
+        }
+
+        $scoreOrder = $b['score'] <=> $a['score'];
+
+        return $scoreOrder !== 0 ? $scoreOrder : ($a['doc_id'] <=> $b['doc_id']);
+    }
+
+    /**
+     * Maintain a sorted bounded result page without materializing all scored rows.
+     *
+     * @param array<int,array{doc_id:int,score:float,_rank:int}> $topResults
+     * @param array{doc_id:int,score:float,_rank:int} $row
+     */
+    private function insert_bounded_top_k_result(array &$topResults, array $row, int $limit): void
+    {
+        $limit = max(1, $limit);
+        $count = count($topResults);
+        if ($count >= $limit && self::compare_ranked_results($row, $topResults[$count - 1]) >= 0) {
+            return;
+        }
+
+        $insertAt = $count;
+        while ($insertAt > 0 && self::compare_ranked_results($row, $topResults[$insertAt - 1]) < 0) {
+            $insertAt--;
+        }
+
+        array_splice($topResults, $insertAt, 0, [$row]);
+        if (count($topResults) > $limit) {
+            array_pop($topResults);
+        }
     }
 
     /**
