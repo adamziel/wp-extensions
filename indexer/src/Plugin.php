@@ -630,11 +630,11 @@ final class WP_FTS_Plugin
     {
         return [
             [
-                'post_title' => 'FTS Sandbox: Running Notes',
+                'post_title' => 'FTS Sandbox: English Running',
                 'post_name' => 'wp-fts-sandbox-running-notes',
                 'lang' => 'en',
-                'post_content' => '<p>The athlete is running every morning before a short recovery run while the orchard team tracks route notes and search progress.</p>',
-                'post_excerpt' => 'English stemming demo for runners and running.',
+                'post_content' => '<p>Running steadily builds the search index while the team studies indexed pages.</p>',
+                'post_excerpt' => 'English stemming demo for running and run.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
@@ -642,17 +642,89 @@ final class WP_FTS_Plugin
                 'post_title' => 'FTS Sandbox: Polish Lemmatizer Demo',
                 'post_name' => 'wp-fts-sandbox-polish-lemmatizer-demo',
                 'lang' => 'pl',
-                'post_content' => '<p>W książkach i zamkach wyszukujemy wpisy oraz kierujemy katalog. W domach przy psach prowadziliśmy notatki i zabralibyśmy katalog samochodami.</p>',
+                'post_content' => '<p>W książkach i zamkach wyszukujemy wpisy oraz kierujemy katalog.</p>',
                 'post_excerpt' => 'Polish lemmatizer demo for pack-backed book, castle, entry, and routing forms.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
             [
-                'post_title' => 'FTS Sandbox: German Fuehrung',
-                'post_name' => 'wp-fts-sandbox-german-fuehrung',
-                'lang' => 'de',
-                'post_content' => '<p>Führung und Straße zeigen die Suche mit deutschen Begriffen, Fuehrung-Faltung und Indexsignalen.</p>',
-                'post_excerpt' => 'German language demo for Fuehrung, Suche, and stemming.',
+                'post_title' => 'FTS Sandbox: Chinese Search N-grams',
+                'post_name' => 'wp-fts-sandbox-chinese-search-ngrams',
+                'lang' => 'zh',
+                'post_content' => '<p>搜索系统质量指标支持语言搜索。</p>',
+                'post_excerpt' => 'Chinese CJK n-gram demo for search-system text.',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ],
+            [
+                'post_title' => 'FTS Sandbox: Hindi Plurals',
+                'post_name' => 'wp-fts-sandbox-hindi-plurals',
+                'lang' => 'hi',
+                'post_content' => '<p>किताबें सूचियों में रखी हैं और स्पष्ट पाठ सूचक के लिए उदाहरण है।</p>',
+                'post_excerpt' => 'Hindi stemming demo for plural and oblique forms.',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ],
+            [
+                'post_title' => 'FTS Sandbox: Spanish Buscar',
+                'post_name' => 'wp-fts-sandbox-spanish-buscar',
+                'lang' => 'es',
+                'post_content' => '<p>Estamos buscando datos claros para el indice.</p>',
+                'post_excerpt' => 'Spanish stemming demo for buscar and buscando.',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ],
+            [
+                'post_title' => 'FTS Sandbox: Arabic Search',
+                'post_name' => 'wp-fts-sandbox-arabic-search',
+                'lang' => 'ar',
+                'post_content' => '<p>أأباحتاهم مفيدة للبحث في الفهرس.</p>',
+                'post_excerpt' => 'Arabic stemming demo for verified search forms.',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ],
+            [
+                'post_title' => 'FTS Sandbox: French Manger',
+                'post_name' => 'wp-fts-sandbox-french-manger',
+                'lang' => 'fr',
+                'post_content' => '<p>Les enfants mangeaient rapidement dans le guide.</p>',
+                'post_excerpt' => 'French stemming demo for manger and mangeaient.',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ],
+            [
+                'post_title' => 'FTS Sandbox: Bengali Suffix Baseline',
+                'post_name' => 'wp-fts-sandbox-bengali-suffix-baseline',
+                'lang' => 'bn',
+                'post_content' => '<p>শব্দগুলো সূচিতে রাখা আছে।</p>',
+                'post_excerpt' => 'Bengali deterministic suffix-baseline demo.',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ],
+            [
+                'post_title' => 'FTS Sandbox: Portuguese Pesquisar',
+                'post_name' => 'wp-fts-sandbox-portuguese-pesquisar',
+                'lang' => 'pt',
+                'post_content' => '<p>Estamos pesquisando dados claros para a pesquisa.</p>',
+                'post_excerpt' => 'Portuguese stemming demo for pesquisar and pesquisando.',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ],
+            [
+                'post_title' => 'FTS Sandbox: Indonesian Cari',
+                'post_name' => 'wp-fts-sandbox-indonesian-cari',
+                'lang' => 'id',
+                'post_content' => '<p>Kami sedang mencari data pencarian dengan catatan jelas.</p>',
+                'post_excerpt' => 'Indonesian stemming demo for cari, mencari, and pencarian.',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+            ],
+            [
+                'post_title' => 'FTS Sandbox: Urdu Suffix Baseline',
+                'post_name' => 'wp-fts-sandbox-urdu-suffix-baseline',
+                'lang' => 'ur',
+                'post_content' => '<p>کتابیں فہرستوں میں موجود ہیں۔</p>',
+                'post_excerpt' => 'Urdu deterministic suffix-baseline demo.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
@@ -902,6 +974,26 @@ final class WP_FTS_Plugin
             array_keys(self::sandbox_language_labels()),
             static fn(string $language): bool => $language !== 'auto'
         ));
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private static function sandbox_demo_query_suggestions(): array
+    {
+        return [
+            'en' => 'run',
+            'pl' => 'kierować zamek',
+            'zh' => '搜索系统',
+            'hi' => 'किताब सूची',
+            'es' => 'buscar',
+            'ar' => 'اباح بحث',
+            'fr' => 'manger',
+            'bn' => 'শব্দ সূচি',
+            'pt' => 'pesquisar',
+            'id' => 'cari',
+            'ur' => 'کتاب فہرست',
+        ];
     }
 
     /**
@@ -1369,8 +1461,7 @@ final class WP_FTS_Plugin
         self::render_sandbox_indexed_posts_table($indexed_posts, $query, $selected_language, $search_submitted);
 
         echo '<h2>Search</h2>';
-        echo '<p>Suggested English stemming query: <code>run</code></p>';
-        echo '<p>Suggested Polish lemmatizer queries: <code>wyszukiwanie</code>, <code>wpis</code>, <code>kierować</code>, <code>zamek</code></p>';
+        self::render_sandbox_query_suggestions();
         echo '<form method="get" action="' . self::esc_url(self::admin_tools_url()) . '">';
         echo '<input type="hidden" name="page" value="' . self::esc_attr(self::ADMIN_PAGE_SLUG) . '">';
         echo '<label for="wp-fts-sandbox-query">Query</label> ';
@@ -1390,6 +1481,21 @@ final class WP_FTS_Plugin
         }
 
         echo '</div>';
+    }
+
+    private static function render_sandbox_query_suggestions(): void
+    {
+        echo '<h3>Suggested queries</h3>';
+        echo '<table class="widefat striped">';
+        echo '<thead><tr><th scope="col">Language</th><th scope="col">Query</th></tr></thead>';
+        echo '<tbody>';
+        foreach (self::sandbox_demo_query_suggestions() as $language => $suggestion) {
+            echo '<tr>';
+            echo '<td>' . self::esc_html(self::sandbox_language_display($language)) . '</td>';
+            echo '<td><code>' . self::esc_html($suggestion) . '</code></td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
     }
 
     private static function render_sandbox_analyzer_pack_statuses(): void
