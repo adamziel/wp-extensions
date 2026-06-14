@@ -35,6 +35,7 @@ final class WP_FTS_LemmaTsvPackImporter
         $rowsPerFile = max(1, (int) ($options['max_rows_per_file'] ?? 100000));
         $chunkRows = max(1, (int) ($options['chunk_rows'] ?? 200000));
         $importerCommit = (string) ($options['importer_commit'] ?? 'recorded-in-task-result');
+        $runtimeCompression = $this->runtime_compression_option($options['runtime_compression'] ?? $options['compression'] ?? null);
 
         $this->prepare_output_directory($outDir);
         $runtimeDir = $outDir . DIRECTORY_SEPARATOR . 'runtime';
@@ -121,7 +122,7 @@ final class WP_FTS_LemmaTsvPackImporter
                 throw new RuntimeException('Source TSV did not yield any normalized runtime rows.');
             }
 
-            $merge = $this->merge_chunks($chunkFiles, $runtimeDir, $rowsPerFile);
+            $merge = $this->merge_chunks($chunkFiles, $runtimeDir, $rowsPerFile, $runtimeCompression);
             $runtimeFiles = $merge['files'];
             $runtimeRows = (int) $merge['rows'];
             $runtimeDigest = (string) $merge['sha256'];
@@ -168,6 +169,7 @@ final class WP_FTS_LemmaTsvPackImporter
                 'importer_commit' => $importerCommit,
                 'rows_per_file' => $rowsPerFile,
                 'chunk_rows' => $chunkRows,
+                'runtime_compression' => $runtimeCompression,
             ]);
             $manifestPath = $outDir . DIRECTORY_SEPARATOR . 'manifest.json';
             $this->write_json($manifestPath, $manifest);
@@ -296,6 +298,29 @@ final class WP_FTS_LemmaTsvPackImporter
         }
 
         return false;
+    }
+
+    private function runtime_compression_option(mixed $value): ?string
+    {
+        if ($value === null || $value === false) {
+            return null;
+        }
+        if (!is_scalar($value)) {
+            throw new RuntimeException('Runtime compression must be none or gzip.');
+        }
+
+        $compression = strtolower(trim((string) $value));
+        if ($compression === '' || in_array($compression, ['0', 'false', 'no', 'none', 'off'], true)) {
+            return null;
+        }
+        if ($compression !== WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            throw new RuntimeException('Runtime compression must be none or gzip.');
+        }
+        if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+            throw new RuntimeException('Gzip runtime compression requires the PHP zlib extension.');
+        }
+
+        return WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP;
     }
 
     private function prepare_output_directory(string $outDir): void
@@ -432,7 +457,7 @@ final class WP_FTS_LemmaTsvPackImporter
      * @param string[] $chunkFiles
      * @return array{files:array<int,array<string,mixed>>,rows:int,sha256:string,ambiguous_surfaces:int,unambiguous_surfaces:int}
      */
-    private function merge_chunks(array $chunkFiles, string $runtimeDir, int $rowsPerFile): array
+    private function merge_chunks(array $chunkFiles, string $runtimeDir, int $rowsPerFile, ?string $runtimeCompression): array
     {
         $chunks = [];
         foreach ($chunkFiles as $path) {
@@ -498,7 +523,7 @@ final class WP_FTS_LemmaTsvPackImporter
                 $currentSurfaceLemmaCount++;
 
                 if ($shard === null) {
-                    $shard = $this->open_shard($runtimeDir, count($files) + 1);
+                    $shard = $this->open_shard($runtimeDir, count($files) + 1, $runtimeCompression);
                 }
                 $this->write_pair_to_shard($shard, $pair, $surface);
                 hash_update($runtimeDigest, $pair . "\n");
@@ -522,13 +547,20 @@ final class WP_FTS_LemmaTsvPackImporter
 
         return [
             'files' => array_map(
-                static fn(array $file): array => [
-                    'path' => 'runtime/' . basename((string) $file['path']),
-                    'sha256' => $file['sha256'],
-                    'rows' => $file['rows'],
-                    'first_surface' => $file['first_surface'],
-                    'last_surface' => $file['last_surface'],
-                ],
+                static function (array $file): array {
+                    $entry = [
+                        'path' => 'runtime/' . basename((string) $file['path']),
+                        'sha256' => $file['sha256'],
+                        'rows' => $file['rows'],
+                        'first_surface' => $file['first_surface'],
+                        'last_surface' => $file['last_surface'],
+                    ];
+                    if (isset($file['compression'])) {
+                        $entry['compression'] = $file['compression'];
+                    }
+
+                    return $entry;
+                },
                 $files
             ),
             'rows' => $totalRows,
@@ -572,12 +604,15 @@ final class WP_FTS_LemmaTsvPackImporter
     }
 
     /**
-     * @return array{path:string,handle:resource,hash:HashContext,rows:int,first_surface:?string,last_surface:?string}
+     * @return array{path:string,handle:resource,compression:?string,rows:int,first_surface:?string,last_surface:?string}
      */
-    private function open_shard(string $runtimeDir, int $number): array
+    private function open_shard(string $runtimeDir, int $number, ?string $runtimeCompression): array
     {
-        $path = $runtimeDir . DIRECTORY_SEPARATOR . sprintf('%04d.tsv', $number);
-        $handle = fopen($path, 'wb');
+        $extension = $runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP ? '.tsv.gz' : '.tsv';
+        $path = $runtimeDir . DIRECTORY_SEPARATOR . sprintf('%04d%s', $number, $extension);
+        $handle = $runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP
+            ? gzopen($path, 'wb9')
+            : fopen($path, 'wb');
         if (!is_resource($handle)) {
             throw new RuntimeException("Could not write runtime shard: {$path}");
         }
@@ -585,7 +620,7 @@ final class WP_FTS_LemmaTsvPackImporter
         return [
             'path' => $path,
             'handle' => $handle,
-            'hash' => hash_init('sha256'),
+            'compression' => $runtimeCompression,
             'rows' => 0,
             'first_surface' => null,
             'last_surface' => null,
@@ -593,36 +628,53 @@ final class WP_FTS_LemmaTsvPackImporter
     }
 
     /**
-     * @param array{path:string,handle:resource,hash:HashContext,rows:int,first_surface:?string,last_surface:?string} $shard
+     * @param array{path:string,handle:resource,compression:?string,rows:int,first_surface:?string,last_surface:?string} $shard
      */
     private function write_pair_to_shard(array &$shard, string $pair, string $surface): void
     {
         $line = $pair . "\n";
-        fwrite($shard['handle'], $line);
-        hash_update($shard['hash'], $line);
+        if ($shard['compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            gzwrite($shard['handle'], $line);
+        } else {
+            fwrite($shard['handle'], $line);
+        }
         $shard['rows']++;
         $shard['first_surface'] ??= $surface;
         $shard['last_surface'] = $surface;
     }
 
     /**
-     * @param array{path:string,handle:resource,hash:HashContext,rows:int,first_surface:?string,last_surface:?string} $shard
-     * @return array{path:string,sha256:string,rows:int,first_surface:string,last_surface:string}
+     * @param array{path:string,handle:resource,compression:?string,rows:int,first_surface:?string,last_surface:?string} $shard
+     * @return array{path:string,sha256:string,rows:int,first_surface:string,last_surface:string,compression?:string}
      */
     private function close_shard(array $shard): array
     {
-        fclose($shard['handle']);
+        if ($shard['compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            gzclose($shard['handle']);
+        } else {
+            fclose($shard['handle']);
+        }
         if (!is_string($shard['first_surface']) || !is_string($shard['last_surface'])) {
             throw new RuntimeException('Cannot close an empty runtime shard.');
         }
 
-        return [
+        $sha = hash_file('sha256', $shard['path']);
+        if (!is_string($sha)) {
+            throw new RuntimeException("Could not hash runtime shard: {$shard['path']}");
+        }
+
+        $file = [
             'path' => $shard['path'],
-            'sha256' => hash_final($shard['hash']),
+            'sha256' => $sha,
             'rows' => $shard['rows'],
             'first_surface' => $shard['first_surface'],
             'last_surface' => $shard['last_surface'],
         ];
+        if ($shard['compression'] !== null) {
+            $file['compression'] = $shard['compression'];
+        }
+
+        return $file;
     }
 
     /**
@@ -640,6 +692,9 @@ final class WP_FTS_LemmaTsvPackImporter
         ];
         if ((bool) $data['fixture_only']) {
             $capabilities[] = 'synthetic-test-data';
+        }
+        if ($data['runtime_compression'] === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            $capabilities[] = 'compressed-runtime-files';
         }
         $license = [
             'spdx_id' => $data['license'],
@@ -696,7 +751,8 @@ final class WP_FTS_LemmaTsvPackImporter
                     (string) $data['version'],
                     (string) $data['source_url'],
                     (string) $data['license'],
-                    (bool) $data['fixture_only']
+                    (bool) $data['fixture_only'],
+                    $data['runtime_compression'] ?? null
                 ),
                 'no_runtime_network_access' => true,
                 'no_full_third_party_dictionary_dump' => (bool) $data['fixture_only'],
@@ -704,6 +760,7 @@ final class WP_FTS_LemmaTsvPackImporter
                 'generated_pack_default_enabled' => false,
                 'rows_per_file' => $data['rows_per_file'],
                 'chunk_rows' => $data['chunk_rows'],
+                'runtime_compression' => $data['runtime_compression'] ?? null,
             ],
         ];
     }
@@ -714,7 +771,8 @@ final class WP_FTS_LemmaTsvPackImporter
         string $version,
         string $sourceUrl,
         string $license,
-        bool $fixtureOnly
+        bool $fixtureOnly,
+        ?string $runtimeCompression
     ): string {
         $parts = [
             'php indexer/tools/import-lemma-tsv-pack.php',
@@ -730,6 +788,9 @@ final class WP_FTS_LemmaTsvPackImporter
         ];
         if ($fixtureOnly) {
             $parts[] = '--fixture-only=true';
+        }
+        if ($runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            $parts[] = '--runtime-compression=gzip';
         }
 
         return implode(' ', $parts);

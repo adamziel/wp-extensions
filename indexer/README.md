@@ -104,12 +104,11 @@ be routed when callers provide language hints.
 
 | Language or partition | Current analyzer tier | Boundary |
 | --- | --- | --- |
-| Polish (`pl`) | Strongest path when an opt-in analyzer/lemma pack is valid. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases; the default fallback is conservative unless a valid pack or verified mode is enabled. | The committed fixture proves the pack contract. Full third-party dictionary data is not bundled. |
-| English (`en`), Arabic (`ar`), Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese (`pt`), Indonesian (`id`) | Bundled generated Snowball stemmers verified by the Snowball fixture harness. | Stemming can match inflected forms, but this is not dictionary lemmatization or query expansion. |
+| Polish (`pl`) | Strongest path when an opt-in analyzer/lemma pack is valid. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases; the default fallback is conservative unless a valid pack or verified mode is enabled. | The committed Polish full pack and fixtures remain opt-in/default-disabled outside the sandbox path. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Packs are CC BY-SA 3.0 data, default-disabled, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), Dutch Porter (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Other Wamania languages are treated as no-ops unless they become verified. |
 | Chinese (`zh`) | Deterministic CJK fallback: one-character runs plus overlapping n-grams up to 4 characters. | No bundled dictionary segmentation or CJK word morphology. |
-| Bengali (`bn`) | Deterministic suffix baseline for common classifier, plural, genitive, dative, and case endings. Generic lemma-pack infrastructure can support future source-approved packs. | The committed `bn` pack is synthetic contract coverage only, not product Bengali dictionary data. |
-| Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common plural-oblique forms. | Not dictionary-backed, not Snowball-backed, and Persian-like text is not merged into Urdu routing. |
+| Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common plural-oblique forms. | UniMorph Urdu imports technically, but the upstream `unimorph/urd` repository has no license evidence, so no generated Urdu pack is committed. |
 | German (`de`), Russian (`ru`), and other explicit partitions | Language namespace/routing support with conservative analysis unless a documented analyzer is available. | Unsupported morphology returns the normalized token unchanged. |
 | Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` accept local manifest-backed packs with matching `language` values. | Missing, invalid, disabled, or language-mismatched packs fall back safely. |
 
@@ -120,8 +119,9 @@ families for product behavior.
 Importer availability is not the same as pack-backed language support. To audit
 top-language readiness, run
 `php tools/audit-top-language-lemma-packs.php --pack-root=/path --json --require-pack-backed`.
-Languages reported as missing or fixture-only are not ready to claim
-Polish-like quality.
+Languages reported as missing, fixture-only, or license-blocked are not ready to
+claim pack-backed quality. Chinese is reported as a tokenizer lane rather than a
+missing lemma pack.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus deterministic

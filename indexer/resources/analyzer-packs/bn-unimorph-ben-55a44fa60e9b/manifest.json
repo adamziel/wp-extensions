@@ -1,0 +1,95 @@
+{
+    "schema_version": 1,
+    "pack_id": "bn-unimorph-ben-55a44fa60e9b",
+    "language": "bn",
+    "version": "55a44fa60e9b-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer bn with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 2855,
+        "total_sha256": "9de282dd5dbe2a1bc3319ab5fde5f94a4d87cca302be74fa2869fa2ecce29fea",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "6c75fd14b7d32a172e78ddc6508a94593e02fde3999f766ea294a9a170cd93e4",
+                "rows": 2855,
+                "first_surface": "অঙ্গ",
+                "last_surface": "হেগেছো",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph ben bn inflection table",
+        "version": "55a44fa60e9b7a3a5ff7acbed66b07571ceefa79",
+        "file": "ben",
+        "url": "https://github.com/unimorph/ben/blob/55a44fa60e9b7a3a5ff7acbed66b07571ceefa79/ben",
+        "repository_url": "https://github.com/unimorph/ben",
+        "commit": "55a44fa60e9b7a3a5ff7acbed66b07571ceefa79",
+        "artifact_sha256": "b0f1e2d005bce183dfcc2a570de1ce3d4d9a17feafa6c222b3f72b3e6ff894b2",
+        "byte_count": 251991,
+        "files": [
+            {
+                "path": "ben",
+                "sha256": "b0f1e2d005bce183dfcc2a570de1ce3d4d9a17feafa6c222b3f72b3e6ff894b2",
+                "byte_count": 251991
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "ben",
+            "source_files": 1,
+            "files": [
+                "ben"
+            ],
+            "source_lines": 4581,
+            "blank_lines": 138,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 1150,
+            "rows_with_features": 3293,
+            "accepted_rows": 3293
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph ben contributors; source repository https://github.com/unimorph/ben"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=bn --pack-id=bn-unimorph-ben-55a44fa60e9b --version=55a44fa60e9b-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ben/blob/55a44fa60e9b7a3a5ff7acbed66b07571ceefa79/ben --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

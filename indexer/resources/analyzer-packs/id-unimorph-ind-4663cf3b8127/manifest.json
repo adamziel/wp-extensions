@@ -1,0 +1,95 @@
+{
+    "schema_version": 1,
+    "pack_id": "id-unimorph-ind-4663cf3b8127",
+    "language": "id",
+    "version": "4663cf3b8127-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer id with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 17421,
+        "total_sha256": "cd59b41b8b1f0cb2f4bebe98ba589a24963bc7f57471b0171eee361bea8c7eaa",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "29a0b3f78bc474b823100671df10952a24c0b94adfd960438bf7a518d2d5cf2e",
+                "rows": 17421,
+                "first_surface": "abadan",
+                "last_surface": "zatnya",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph ind id inflection table",
+        "version": "4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34",
+        "file": "ind",
+        "url": "https://github.com/unimorph/ind/blob/4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34/ind",
+        "repository_url": "https://github.com/unimorph/ind",
+        "commit": "4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34",
+        "artifact_sha256": "77c709f98b581a80051d0e18aa899e0d84d70436223054efa09831d71cdc2ac6",
+        "byte_count": 832127,
+        "files": [
+            {
+                "path": "ind",
+                "sha256": "77c709f98b581a80051d0e18aa899e0d84d70436223054efa09831d71cdc2ac6",
+                "byte_count": 832127
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "ind",
+            "source_files": 1,
+            "files": [
+                "ind"
+            ],
+            "source_lines": 27714,
+            "blank_lines": 0,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 0,
+            "rows_with_features": 27714,
+            "accepted_rows": 27714
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph ind contributors; source repository https://github.com/unimorph/ind"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=id --pack-id=id-unimorph-ind-4663cf3b8127 --version=4663cf3b8127-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ind/blob/4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34/ind --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

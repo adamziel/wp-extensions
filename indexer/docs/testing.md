@@ -133,6 +133,24 @@ This fixture is project-owned artificial data for runtime-contract testing
 only. It does not claim Bengali dictionary quality, Bengali lemmatization, or
 source-backed lexical coverage.
 
+Validate the bundled UniMorph-derived top-language packs with normal PHP gzip
+support:
+
+```sh
+for manifest in resources/analyzer-packs/*-unimorph-*/manifest.json; do
+  php tools/validate-analyzer-pack.php "$manifest"
+done
+php tools/audit-top-language-lemma-packs.php \
+  --pack-root=resources/analyzer-packs \
+  --json \
+  --require-pack-backed
+```
+
+Those packs are source-backed, opt-in, default-disabled, and CC BY-SA 3.0.
+Chinese is audited as a tokenizer lane rather than a missing UniMorph lemma
+pack. Urdu is audited as license-blocked until `unimorph/urd` has clear
+redistribution evidence, so no generated Urdu pack is bundled.
+
 Run the package-safe external pack workflow tests directly when changing the
 builder, importer options, validation boundary, or docs:
 

@@ -255,6 +255,7 @@ function wp_fts_top_language_pack_audit_rows(array $registry, string $packRoot, 
         }
 
         $language = (string) $languageConfig['language'];
+        $supportKind = (string) ($languageConfig['support_kind'] ?? 'lemma_pack');
         $candidate = $explicitByLanguage[$language] ?? null;
         if ($candidate === null && isset($discoveredByLanguage[$language])) {
             $candidate = wp_fts_top_language_pack_audit_best_candidate($discoveredByLanguage[$language]);
@@ -264,6 +265,7 @@ function wp_fts_top_language_pack_audit_rows(array $registry, string $packRoot, 
             'language' => $language,
             'label' => (string) $languageConfig['label'],
             'role' => (string) $languageConfig['role'],
+            'support_kind' => $supportKind,
             'pack_required' => (bool) $languageConfig['pack_required'],
             'status' => 'missing_pack',
             'pack_id' => null,
@@ -271,7 +273,14 @@ function wp_fts_top_language_pack_audit_rows(array $registry, string $packRoot, 
             'manifest' => null,
         ];
 
-        if ($candidate !== null) {
+        if ($supportKind === 'tokenizer') {
+            $row['status'] = 'tokenizer_supported';
+            $row['notes'] = (string) ($languageConfig['notes'] ?? '');
+        } elseif ($supportKind === 'license_blocked') {
+            $row['status'] = 'license_blocked';
+            $row['blocker'] = (string) ($languageConfig['blocker'] ?? 'Redistribution review is incomplete.');
+            $row['notes'] = (string) ($languageConfig['notes'] ?? '');
+        } elseif ($candidate !== null) {
             $row['status'] = $candidate['status'];
             $row['pack_id'] = $candidate['pack_id'];
             $row['version'] = $candidate['version'];
@@ -296,7 +305,11 @@ function wp_fts_top_language_pack_audit_rows(array $registry, string $packRoot, 
 function wp_fts_top_language_pack_audit_has_required_gap(array $rows): bool
 {
     foreach ($rows as $row) {
-        if (($row['pack_required'] ?? false) === true && ($row['status'] ?? null) !== 'pack_backed') {
+        if (
+            ($row['support_kind'] ?? 'lemma_pack') === 'lemma_pack'
+            && ($row['pack_required'] ?? false) === true
+            && ($row['status'] ?? null) !== 'pack_backed'
+        ) {
             return true;
         }
     }
@@ -311,10 +324,11 @@ function wp_fts_top_language_pack_audit_print_human(array $rows, bool $failed): 
 {
     foreach ($rows as $row) {
         printf(
-            "%s\t%s\t%s\t%s\t%s\n",
+            "%s\t%s\t%s\t%s\t%s\t%s\n",
             (string) $row['language'],
             (string) $row['label'],
             (string) $row['role'],
+            (string) ($row['support_kind'] ?? 'lemma_pack'),
             (string) $row['status'],
             (string) ($row['pack_id'] ?? '')
         );

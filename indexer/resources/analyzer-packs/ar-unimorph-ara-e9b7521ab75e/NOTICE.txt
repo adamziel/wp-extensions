@@ -1,0 +1,15 @@
+UniMorph ara ar inflection table e9b7521ab75e3a7da6f996a428031164993e6f19
+Source URL: https://github.com/unimorph/ara/blob/e9b7521ab75e3a7da6f996a428031164993e6f19/ara
+Source repository: https://github.com/unimorph/ara
+Source commit: e9b7521ab75e3a7da6f996a428031164993e6f19
+Source file path: ara
+Source artifact SHA-256: 01663d08dbc6bb2a4207749cb4c000926c72c7cf9ec3faa8521e4cb5e9d690f1
+Source artifact byte count: 7155824
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 498e3d8e2ec409617e1f35b560eb6119981120d47bf1d66c1ed3d79f0fdd8ab5
+Attribution: UniMorph ara contributors; source repository https://github.com/unimorph/ara
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

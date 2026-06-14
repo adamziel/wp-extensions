@@ -1033,6 +1033,145 @@ function top_language_audit_rows_by_language(array $payload): array
 }
 
 /**
+ * @return array<string,string>
+ */
+function bundled_unimorph_top_language_pack_manifests(): array
+{
+    $root = dirname(__DIR__) . '/resources/analyzer-packs';
+
+    return [
+        'en' => $root . '/en-unimorph-eng-66e0e9e8e2dc/manifest.json',
+        'hi' => $root . '/hi-unimorph-hin-ae6231f736fa/manifest.json',
+        'es' => $root . '/es-unimorph-spa-b9655efb0e5c/manifest.json',
+        'ar' => $root . '/ar-unimorph-ara-e9b7521ab75e/manifest.json',
+        'fr' => $root . '/fr-unimorph-fra-f672f8cceb2d/manifest.json',
+        'bn' => $root . '/bn-unimorph-ben-55a44fa60e9b/manifest.json',
+        'pt' => $root . '/pt-unimorph-por-fc2778e08e2d/manifest.json',
+        'id' => $root . '/id-unimorph-ind-4663cf3b8127/manifest.json',
+    ];
+}
+
+/**
+ * @param array<string,mixed> $validation
+ * @return array{surface:string,lemma:string}
+ */
+function bundled_unimorph_runtime_probe_case(array $validation): array
+{
+    $currentSurface = null;
+    $currentLemmas = [];
+    $candidate = null;
+
+    $finishSurface = static function () use (&$currentSurface, &$currentLemmas, &$candidate): void {
+        if ($candidate !== null || $currentSurface === null || count($currentLemmas) !== 1) {
+            return;
+        }
+        $lemma = (string) array_key_first($currentLemmas);
+        if ($lemma === $currentSurface) {
+            return;
+        }
+        if (test_utf8_codepoint_count($currentSurface) < 2 || test_utf8_codepoint_count($lemma) < 2) {
+            return;
+        }
+
+        $candidate = [
+            'surface' => $currentSurface,
+            'lemma' => $lemma,
+        ];
+    };
+
+    foreach ($validation['runtime_files'] as $file) {
+        $compression = isset($file['compression']) ? (string) $file['compression'] : null;
+        $handle = bundled_unimorph_open_runtime_file((string) $file['path'], $compression);
+        try {
+            while (($line = bundled_unimorph_read_runtime_line($handle, $compression)) !== false) {
+                $line = rtrim(rtrim((string) $line, "\n"), "\r");
+                if ($line === '' || $line[0] === '#') {
+                    continue;
+                }
+                [$surface, $lemma] = explode("\t", $line, 2);
+                if ($currentSurface !== $surface) {
+                    $finishSurface();
+                    if ($candidate !== null) {
+                        return $candidate;
+                    }
+                    $currentSurface = $surface;
+                    $currentLemmas = [];
+                }
+                $currentLemmas[$lemma] = true;
+            }
+        } finally {
+            bundled_unimorph_close_runtime_file($handle, $compression);
+        }
+    }
+
+    $finishSurface();
+    if ($candidate === null) {
+        throw new WP_FTS_TestFailure('Could not find an unambiguous surface-to-lemma probe row in bundled UniMorph pack.');
+    }
+
+    return $candidate;
+}
+
+/**
+ * @return resource
+ */
+function bundled_unimorph_open_runtime_file(string $path, ?string $compression): mixed
+{
+    if ($compression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+        $handle = gzopen($path, 'rb');
+        if (!is_resource($handle)) {
+            throw new WP_FTS_TestFailure("Could not open gzip runtime fixture: {$path}");
+        }
+
+        return $handle;
+    }
+
+    $handle = fopen($path, 'rb');
+    if (!is_resource($handle)) {
+        throw new WP_FTS_TestFailure("Could not open runtime fixture: {$path}");
+    }
+
+    return $handle;
+}
+
+/**
+ * @param resource $handle
+ */
+function bundled_unimorph_read_runtime_line(mixed $handle, ?string $compression): string|false
+{
+    if ($compression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+        return gzgets($handle);
+    }
+
+    return fgets($handle);
+}
+
+/**
+ * @param resource $handle
+ */
+function bundled_unimorph_close_runtime_file(mixed $handle, ?string $compression): void
+{
+    if ($compression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+        gzclose($handle);
+        return;
+    }
+
+    fclose($handle);
+}
+
+function test_utf8_codepoint_count(string $value): int
+{
+    if (function_exists('mb_strlen')) {
+        return mb_strlen($value, 'UTF-8');
+    }
+    if (preg_match_all('/./us', $value, $matches) === false) {
+        return strlen($value);
+    }
+
+    return count($matches[0]);
+}
+
+/**
  * @return string[]
  */
 function synthetic_qaa_conllu_import_args(string $source, string $out): array
@@ -4182,10 +4321,47 @@ test_case('top-language pack audit fails required gate when manifests are missin
         assert_same('fail', $cli['json']['status'] ?? null, 'top-language audit JSON should expose the failed gate');
 
         $rows = top_language_audit_rows_by_language($cli['json']);
-        foreach (['en', 'zh', 'es', 'bn', 'ur'] as $language) {
+        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id'] as $language) {
             assert_same('missing_pack', $rows[$language]['status'] ?? null, "{$language} should report a missing pack");
             assert_same(true, $rows[$language]['pack_required'] ?? null, "{$language} should remain required in the audit registry");
+            assert_same('lemma_pack', $rows[$language]['support_kind'] ?? null, "{$language} should remain a lemma-pack lane");
         }
+        assert_same('tokenizer_supported', $rows['zh']['status'] ?? null, 'Chinese should be reported as tokenizer-supported instead of missing a lemma pack');
+        assert_same('tokenizer', $rows['zh']['support_kind'] ?? null, 'Chinese should expose the tokenizer support kind');
+        assert_same(false, $rows['zh']['pack_required'] ?? null, 'Chinese should not be required by the lemma-pack gate');
+        assert_same('license_blocked', $rows['ur']['status'] ?? null, 'Urdu should report the UniMorph redistribution blocker');
+        assert_same('license_blocked', $rows['ur']['support_kind'] ?? null, 'Urdu should expose the license-blocked support kind');
+        assert_same(false, $rows['ur']['pack_required'] ?? null, 'Urdu should not fail the pack-backed gate while redistribution is blocked');
+        assert_contains('contains no README, license, notice, or copying file', (string) ($rows['ur']['blocker'] ?? ''), 'Urdu blocker should explain missing license evidence');
+    } finally {
+        remove_directory_tree($root);
+    }
+});
+
+test_case('top-language pack audit strict gate passes with required lemma packs and explicit non-lemma lanes', function (): void {
+    $root = temp_directory_path('top_language_audit_required_root');
+    try {
+        if (!mkdir($root, 0777, true) && !is_dir($root)) {
+            throw new WP_FTS_TestFailure("Could not create required audit root: {$root}");
+        }
+        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id'] as $language) {
+            write_synthetic_audit_lemma_pack($language, $root . '/' . $language . '-pack', false);
+        }
+
+        $cli = run_top_language_pack_audit([
+            '--pack-root=' . $root,
+            '--json',
+            '--require-pack-backed',
+        ]);
+        assert_same(0, $cli['exit'], 'strict audit gate should pass when every required lemma-pack lane is pack-backed');
+        assert_same('ok', $cli['json']['status'] ?? null, 'strict audit JSON should expose ok status');
+
+        $rows = top_language_audit_rows_by_language($cli['json']);
+        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id'] as $language) {
+            assert_same('pack_backed', $rows[$language]['status'] ?? null, "{$language} should be pack-backed");
+        }
+        assert_same('tokenizer_supported', $rows['zh']['status'] ?? null, 'Chinese tokenizer lane should not require a lemma pack');
+        assert_same('license_blocked', $rows['ur']['status'] ?? null, 'Urdu license blocker should not fail the strict gate');
     } finally {
         remove_directory_tree($root);
     }
@@ -5118,6 +5294,68 @@ test_case('imported unimorph lemma pack drives indexing search and snippets', fu
     } finally {
         remove_directory_tree($out);
         remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('bundled UniMorph top-language packs validate and drive lemma-backed search', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for bundled UniMorph pack validation',
+        'PHP zlib gzip support is unavailable, so bundled UniMorph gzip pack validation is skipped.'
+    );
+
+    foreach (bundled_unimorph_top_language_pack_manifests() as $language => $manifest) {
+        assert_true(is_file($manifest), "{$language} bundled UniMorph manifest should exist");
+        assert_true(is_file(dirname($manifest) . '/SOURCE.lock.json'), "{$language} bundled UniMorph source lock should exist");
+        assert_true(is_file(dirname($manifest) . '/PROVENANCE.md'), "{$language} bundled UniMorph provenance should exist");
+        assert_true(is_file(dirname($manifest) . '/NOTICE.txt'), "{$language} bundled UniMorph notice should exist");
+
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifest, false);
+        assert_same($language, $validation['manifest']['language'], "{$language} bundled UniMorph manifest language should validate");
+        assert_same(false, $validation['manifest']['fixture_only'], "{$language} bundled UniMorph pack should not be fixture-only");
+        assert_same(false, $validation['manifest']['default_enabled'], "{$language} bundled UniMorph pack should remain default-disabled");
+        assert_true(in_array('unimorph-source-import', $validation['manifest']['capabilities'], true), "{$language} bundled UniMorph pack should declare UniMorph provenance");
+        assert_same('CC-BY-SA-3.0', $validation['manifest']['license']['spdx_id'] ?? null, "{$language} bundled UniMorph pack should preserve source license");
+        $publishedSourcePath = (string) ($validation['manifest']['source']['parse_stats']['source_path'] ?? '');
+        assert_true($publishedSourcePath !== '' && !str_contains($publishedSourcePath, '/tmp/'), "{$language} bundled UniMorph parse stats should use upstream source path only");
+
+        $sourceLock = json_decode((string) file_get_contents(dirname($manifest) . '/SOURCE.lock.json'), true, 512, JSON_THROW_ON_ERROR);
+        assert_same('wp-fts-unimorph-lemma-pack-source-lock/v1', $sourceLock['schema_version'] ?? null, "{$language} source lock should use the UniMorph schema");
+        assert_same($validation['manifest']['runtime']['total_rows'], $sourceLock['runtime']['row_count'] ?? null, "{$language} source lock should mirror runtime row count");
+        assert_same($validation['manifest']['runtime']['total_sha256'], $sourceLock['runtime']['digest_sha256'] ?? null, "{$language} source lock should mirror runtime digest");
+
+        $case = bundled_unimorph_runtime_probe_case($validation);
+        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest, null, $language);
+        assert_same($case['lemma'], $pack->stem($case['surface'], $language), "{$language} bundled UniMorph pack should map the selected source-backed surface to its lemma");
+
+        $analyzer = new WP_FTS_Analyzer([
+            'default_lang' => $language,
+            'lemma_packs_by_lang' => [
+                $language => $manifest,
+            ],
+        ]);
+        $storage = new WP_FTS_Storage_InMemory();
+        $text = 'wpftsunimorphprobe ' . $case['surface'];
+        (new WP_FTS_Indexer($storage, $analyzer))->index_document_fields(7000 + strlen($language), [['name' => 'content', 'text' => $text]], [
+            'lang' => $language,
+            'metadata' => [
+                'post_id' => 7000 + strlen($language),
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Bundled UniMorph ' . $language,
+                'search_text' => $text,
+                'language' => $language,
+            ],
+        ]);
+
+        $terms = $storage->all_terms();
+        assert_true(in_array(WP_FTS_TermNamespace::namespace_term($language, $case['lemma']), $terms, true), "{$language} indexing should store the UniMorph lemma");
+        $payload = (new WP_FTS_Searcher($storage, $analyzer))->search($case['lemma'], [
+            'lang' => $language,
+            'mode' => 'AND',
+            'include_total' => true,
+        ]);
+        assert_same(1, $payload['total'], "{$language} lemma query should find the indexed inflected UniMorph surface");
     }
 });
 

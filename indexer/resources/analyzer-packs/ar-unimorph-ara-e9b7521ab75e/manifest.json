@@ -1,0 +1,95 @@
+{
+    "schema_version": 1,
+    "pack_id": "ar-unimorph-ara-e9b7521ab75e",
+    "language": "ar",
+    "version": "e9b7521ab75e-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer ar with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 45516,
+        "total_sha256": "8cff1bbcfeffd47cf52d3c4bdb13818a6f76d3a0ff0f982f3222160ea4944815",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "dd6549a3c819be07757aa3555ac4b6283965885ffdc7bc0fa5ea8f57713ce04d",
+                "rows": 45516,
+                "first_surface": "آئض",
+                "last_surface": "يوميين",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph ara ar inflection table",
+        "version": "e9b7521ab75e3a7da6f996a428031164993e6f19",
+        "file": "ara",
+        "url": "https://github.com/unimorph/ara/blob/e9b7521ab75e3a7da6f996a428031164993e6f19/ara",
+        "repository_url": "https://github.com/unimorph/ara",
+        "commit": "e9b7521ab75e3a7da6f996a428031164993e6f19",
+        "artifact_sha256": "01663d08dbc6bb2a4207749cb4c000926c72c7cf9ec3faa8521e4cb5e9d690f1",
+        "byte_count": 7155824,
+        "files": [
+            {
+                "path": "ara",
+                "sha256": "01663d08dbc6bb2a4207749cb4c000926c72c7cf9ec3faa8521e4cb5e9d690f1",
+                "byte_count": 7155824
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "ara",
+            "source_files": 1,
+            "files": [
+                "ara"
+            ],
+            "source_lines": 140004,
+            "blank_lines": 1,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 1708,
+            "rows_with_features": 138295,
+            "accepted_rows": 138295
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph ara contributors; source repository https://github.com/unimorph/ara"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=ar --pack-id=ar-unimorph-ara-e9b7521ab75e --version=e9b7521ab75e-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ara/blob/e9b7521ab75e3a7da6f996a428031164993e6f19/ara --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

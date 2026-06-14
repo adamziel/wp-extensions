@@ -1,0 +1,69 @@
+{
+    "schema_version": "wp-fts-unimorph-lemma-pack-source-lock/v1",
+    "pack": {
+        "id": "bn-unimorph-ben-55a44fa60e9b",
+        "language": "bn",
+        "kind": "lemmatizer",
+        "status": "production_candidate",
+        "runtime_pack_committed": true,
+        "default_enabled": false
+    },
+    "source": {
+        "name": "UniMorph ben bn inflection table",
+        "version": "55a44fa60e9b7a3a5ff7acbed66b07571ceefa79",
+        "url": "https://github.com/unimorph/ben/blob/55a44fa60e9b7a3a5ff7acbed66b07571ceefa79/ben",
+        "repository_url": "https://github.com/unimorph/ben",
+        "commit": "55a44fa60e9b7a3a5ff7acbed66b07571ceefa79",
+        "file": "ben",
+        "files": [
+            {
+                "path": "ben",
+                "sha256": "b0f1e2d005bce183dfcc2a570de1ce3d4d9a17feafa6c222b3f72b3e6ff894b2",
+                "byte_count": 251991
+            }
+        ],
+        "artifact_sha256": "b0f1e2d005bce183dfcc2a570de1ce3d4d9a17feafa6c222b3f72b3e6ff894b2",
+        "byte_count": 251991,
+        "license": {
+            "spdx_id": "CC-BY-SA-3.0",
+            "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+            "notice_path": "NOTICE.txt",
+            "evidence_path": "README.md",
+            "evidence_sha256": "19cdb1d4f8f529d836be13362904151638361e1ce4285fd699b12083a6cc93ab"
+        }
+    },
+    "columns": {
+        "format": "unimorph-three-column-tsv-v1",
+        "lemma_column": 0,
+        "surface_column": 1,
+        "features_column": 2
+    },
+    "importer": {
+        "path": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
+        "commit": "recorded-in-task-result",
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=bn --pack-id=bn-unimorph-ben-55a44fa60e9b --version=55a44fa60e9b-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ben/blob/55a44fa60e9b7a3a5ff7acbed66b07571ceefa79/ben --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+    },
+    "runtime": {
+        "manifest_sha256": "4abace219055817d7fb321fdbb05e9877f7016d342c72e02b1ccf074a8f1c607",
+        "row_count": 2855,
+        "file_count": 1,
+        "byte_count": 8512,
+        "digest_sha256": "9de282dd5dbe2a1bc3319ab5fde5f94a4d87cca302be74fa2869fa2ecce29fea",
+        "contains_third_party_data": true,
+        "committed": true,
+        "compression": "gzip"
+    },
+    "behavior": {
+        "oov_policy": "return_original_normalized_term",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "unsupported_language_policy": "return_original_normalized_term"
+    },
+    "release": {
+        "default_enabled": false,
+        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+    },
+    "attribution": {
+        "upstream": "UniMorph ben contributors; source repository https://github.com/unimorph/ben"
+    }
+}

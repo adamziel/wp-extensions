@@ -30,6 +30,13 @@ final class WP_FTS_UnimorphLemmaPackImporter
             $tsvOptions['source'] = $normalizedTsv;
             $tsvOptions['language'] = $language;
             $summary = (new WP_FTS_LemmaTsvPackImporter())->import($tsvOptions);
+            $summary = $this->rewrite_pack_metadata_for_unimorph_source(
+                $summary,
+                $options,
+                $sourcePath,
+                $language,
+                $stats
+            );
             $summary['unimorph'] = $stats;
 
             return $summary;
@@ -271,6 +278,457 @@ final class WP_FTS_UnimorphLemmaPackImporter
     private function clean_tsv_note(string $value): string
     {
         return str_replace(["\t", "\r", "\n"], ' ', $value);
+    }
+
+    /**
+     * Replace the delegated normalized-TSV provenance with the real UniMorph
+     * source file provenance that generated the runtime rows.
+     *
+     * @param array<string,mixed> $summary
+     * @param array<string,mixed> $options
+     * @param array<string,mixed> $stats
+     * @return array<string,mixed>
+     */
+    private function rewrite_pack_metadata_for_unimorph_source(
+        array $summary,
+        array $options,
+        string $sourcePath,
+        string $language,
+        array $stats
+    ): array {
+        $manifestPath = (string) ($summary['manifest'] ?? '');
+        if ($manifestPath === '' || !is_file($manifestPath)) {
+            throw new RuntimeException('Generated UniMorph pack summary did not include a manifest path.');
+        }
+
+        $manifest = $this->read_json_file($manifestPath);
+        $sourceEvidence = $this->source_evidence($sourcePath);
+        $sourceUrl = $this->required_string($options, 'source_url');
+        $sourceName = $this->required_string($options, 'source_name');
+        $sourceVersion = (string) ($options['source_version'] ?? $manifest['version'] ?? 'unknown');
+        $license = $this->required_string($options, 'license');
+        $licenseUrl = (string) ($options['license_url'] ?? '');
+        $attribution = $this->required_string($options, 'attribution');
+        $repoUrl = is_scalar($options['source_repo_url'] ?? null) ? trim((string) $options['source_repo_url']) : '';
+        $sourceCommit = is_scalar($options['source_commit'] ?? null) ? trim((string) $options['source_commit']) : '';
+        $declaredSourceFile = is_scalar($options['source_file_path'] ?? null) ? trim((string) $options['source_file_path']) : '';
+        $licenseEvidencePath = is_scalar($options['license_evidence_path'] ?? null) ? trim((string) $options['license_evidence_path']) : '';
+        $licenseEvidenceSha = is_scalar($options['license_evidence_sha256'] ?? null) ? trim((string) $options['license_evidence_sha256']) : '';
+        $publishedStats = $stats;
+        $publishedStats['source_path'] = $declaredSourceFile !== '' ? $declaredSourceFile : implode(',', array_column($sourceEvidence['files'], 'path'));
+
+        $capabilities = $manifest['capabilities'] ?? [];
+        if (is_array($capabilities)) {
+            $capabilities[] = 'unimorph-source-import';
+            $manifest['capabilities'] = array_values(array_unique(array_map('strval', $capabilities)));
+        }
+
+        $sourceFiles = $sourceEvidence['files'];
+        $manifest['source'] = [
+            'name' => $sourceName,
+            'version' => $sourceVersion,
+            'file' => $declaredSourceFile !== '' ? $declaredSourceFile : (string) ($sourceFiles[0]['path'] ?? basename($sourcePath)),
+            'url' => $sourceUrl,
+            'repository_url' => $repoUrl !== '' ? $repoUrl : null,
+            'commit' => $sourceCommit !== '' ? $sourceCommit : null,
+            'artifact_sha256' => $sourceEvidence['sha256'],
+            'byte_count' => $sourceEvidence['bytes'],
+            'files' => $sourceFiles,
+            'column_model' => [
+                'format' => 'unimorph-three-column-tsv-v1',
+                'lemma_column' => 0,
+                'surface_column' => 1,
+                'features_column' => 2,
+            ],
+            'parse_stats' => $publishedStats,
+        ];
+        $manifest['source'] = array_filter(
+            $manifest['source'],
+            static fn(mixed $value): bool => $value !== null
+        );
+
+        $runtimeCompression = $this->runtime_compression_from_manifest($manifest);
+        $manifest['provenance']['importer'] = 'indexer/tools/import-unimorph-lemma-pack.php';
+        $manifest['provenance']['importer_command'] = $this->canonical_unimorph_importer_command(
+            $language,
+            (string) $manifest['pack_id'],
+            (string) $manifest['version'],
+            $sourceUrl,
+            $license,
+            (bool) $manifest['fixture_only'],
+            $runtimeCompression
+        );
+        $manifest['provenance']['source_importer'] = 'indexer/tools/import-unimorph-lemma-pack.php';
+        $manifest['provenance']['delegated_runtime_importer'] = 'indexer/tools/import-lemma-tsv-pack.php';
+
+        $this->write_json_file($manifestPath, $manifest);
+        $manifestSha = hash_file('sha256', $manifestPath);
+        if (!is_string($manifestSha)) {
+            throw new RuntimeException('Could not hash rewritten UniMorph manifest.');
+        }
+
+        $packDir = dirname($manifestPath);
+        $noticePath = $packDir . DIRECTORY_SEPARATOR . 'NOTICE.txt';
+        $this->write_text($noticePath, $this->build_unimorph_notice(
+            $sourceName,
+            $sourceVersion,
+            $sourceUrl,
+            $repoUrl,
+            $sourceCommit,
+            (string) $manifest['source']['file'],
+            $sourceEvidence['sha256'],
+            $sourceEvidence['bytes'],
+            $license,
+            $licenseUrl,
+            $attribution,
+            $licenseEvidencePath,
+            $licenseEvidenceSha
+        ));
+
+        $runtimeBytes = $this->runtime_bytes($packDir, $manifest);
+        $sourceLock = $this->build_source_lock(
+            $manifest,
+            $manifestSha,
+            $runtimeBytes,
+            $license,
+            $licenseUrl,
+            $attribution,
+            $licenseEvidencePath,
+            $licenseEvidenceSha,
+            $runtimeCompression
+        );
+        $sourceLockPath = $packDir . DIRECTORY_SEPARATOR . 'SOURCE.lock.json';
+        $this->write_json_file($sourceLockPath, $sourceLock);
+
+        $provenancePath = $packDir . DIRECTORY_SEPARATOR . 'PROVENANCE.md';
+        $this->write_text($provenancePath, $this->build_provenance_markdown($manifest, $sourceLock));
+
+        $summary['manifest_sha256'] = $manifestSha;
+        $summary['source_lock'] = $sourceLockPath;
+        $summary['provenance'] = $provenancePath;
+        $summary['source'] = [
+            'path' => $sourcePath,
+            'url' => $sourceUrl,
+            'repo_url' => $repoUrl,
+            'commit' => $sourceCommit,
+            'sha256' => $sourceEvidence['sha256'],
+            'bytes' => $sourceEvidence['bytes'],
+            'files' => $sourceFiles,
+        ];
+        $summary['pack_bytes'] = $this->directory_bytes($packDir);
+
+        return $summary;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function read_json_file(string $path): array
+    {
+        $json = file_get_contents($path);
+        if (!is_string($json)) {
+            throw new RuntimeException("Could not read JSON file: {$path}");
+        }
+        $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        if (!is_array($decoded)) {
+            throw new RuntimeException("JSON file must decode to an object: {$path}");
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    private function write_json_file(string $path, array $data): void
+    {
+        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if (!is_string($json) || file_put_contents($path, $json . "\n") === false) {
+            throw new RuntimeException("Could not write JSON file: {$path}");
+        }
+    }
+
+    private function write_text(string $path, string $contents): void
+    {
+        if (file_put_contents($path, $contents) === false) {
+            throw new RuntimeException("Could not write file: {$path}");
+        }
+    }
+
+    /**
+     * @return array{sha256:string,bytes:int,files:array<int,array{path:string,sha256:string,byte_count:int}>}
+     */
+    private function source_evidence(string $sourcePath): array
+    {
+        $files = [];
+        $totalBytes = 0;
+        $digest = hash_init('sha256');
+        foreach ($this->discover_source_files($sourcePath) as $file) {
+            $sha = hash_file('sha256', $file);
+            $bytes = filesize($file);
+            if (!is_string($sha) || !is_int($bytes)) {
+                throw new RuntimeException("Could not collect source evidence for {$file}.");
+            }
+            $label = $this->source_label($file, $sourcePath);
+            $files[] = [
+                'path' => $label,
+                'sha256' => $sha,
+                'byte_count' => $bytes,
+            ];
+            $totalBytes += $bytes;
+            hash_update($digest, $label . "\0" . $sha . "\0" . (string) $bytes . "\n");
+        }
+
+        if (count($files) === 1) {
+            return [
+                'sha256' => $files[0]['sha256'],
+                'bytes' => $files[0]['byte_count'],
+                'files' => $files,
+            ];
+        }
+
+        return [
+            'sha256' => hash_final($digest),
+            'bytes' => $totalBytes,
+            'files' => $files,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     */
+    private function runtime_compression_from_manifest(array $manifest): ?string
+    {
+        foreach (($manifest['runtime']['files'] ?? []) as $file) {
+            if (is_array($file) && ($file['compression'] ?? null) === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+                return WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP;
+            }
+        }
+
+        return null;
+    }
+
+    private function canonical_unimorph_importer_command(
+        string $language,
+        string $packId,
+        string $version,
+        string $sourceUrl,
+        string $license,
+        bool $fixtureOnly,
+        ?string $runtimeCompression
+    ): string {
+        $parts = [
+            'php indexer/tools/import-unimorph-lemma-pack.php',
+            '--source=<unimorph-source>',
+            '--out=<pack-dir>',
+            '--language=' . $language,
+            '--pack-id=' . $packId,
+            '--version=' . $version,
+            '--source-name=<approved-unimorph-source-name>',
+            '--source-url=' . $sourceUrl,
+            '--license=' . $license,
+            '--attribution=<required-attribution>',
+        ];
+        if ($fixtureOnly) {
+            $parts[] = '--fixture-only=true';
+        }
+        if ($runtimeCompression === WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP) {
+            $parts[] = '--runtime-compression=gzip';
+        }
+
+        return implode(' ', $parts);
+    }
+
+    private function build_unimorph_notice(
+        string $sourceName,
+        string $sourceVersion,
+        string $sourceUrl,
+        string $repoUrl,
+        string $sourceCommit,
+        string $sourceFile,
+        string $sourceSha,
+        int $sourceBytes,
+        string $license,
+        string $licenseUrl,
+        string $attribution,
+        string $licenseEvidencePath,
+        string $licenseEvidenceSha
+    ): string {
+        $lines = [
+            "{$sourceName} {$sourceVersion}",
+            "Source URL: {$sourceUrl}",
+        ];
+        if ($repoUrl !== '') {
+            $lines[] = "Source repository: {$repoUrl}";
+        }
+        if ($sourceCommit !== '') {
+            $lines[] = "Source commit: {$sourceCommit}";
+        }
+        $lines[] = "Source file path: {$sourceFile}";
+        $lines[] = "Source artifact SHA-256: {$sourceSha}";
+        $lines[] = "Source artifact byte count: {$sourceBytes}";
+        $lines[] = "License: {$license}";
+        if ($licenseUrl !== '') {
+            $lines[] = "License URL: {$licenseUrl}";
+        }
+        if ($licenseEvidencePath !== '') {
+            $lines[] = "License evidence path: {$licenseEvidencePath}";
+        }
+        if ($licenseEvidenceSha !== '') {
+            $lines[] = "License evidence SHA-256: {$licenseEvidenceSha}";
+        }
+        $lines[] = "Attribution: {$attribution}";
+        $lines[] = '';
+        $lines[] = 'Generated from source-approved UniMorph lemma/form/features rows.';
+        $lines[] = 'The runtime analyzer performs no network access.';
+        $lines[] = '';
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     */
+    private function runtime_bytes(string $packDir, array $manifest): int
+    {
+        $bytes = 0;
+        foreach (($manifest['runtime']['files'] ?? []) as $file) {
+            if (!is_array($file) || !is_string($file['path'] ?? null)) {
+                continue;
+            }
+            $path = $packDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, (string) $file['path']);
+            $fileBytes = filesize($path);
+            if (!is_int($fileBytes)) {
+                throw new RuntimeException("Could not measure runtime file: {$path}");
+            }
+            $bytes += $fileBytes;
+        }
+
+        return $bytes;
+    }
+
+    private function directory_bytes(string $directory): int
+    {
+        $bytes = 0;
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS));
+        foreach ($iterator as $file) {
+            if (!$file->isFile()) {
+                continue;
+            }
+            $size = $file->getSize();
+            if ($size > 0) {
+                $bytes += $size;
+            }
+        }
+
+        return $bytes;
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     * @return array<string,mixed>
+     */
+    private function build_source_lock(
+        array $manifest,
+        string $manifestSha,
+        int $runtimeBytes,
+        string $license,
+        string $licenseUrl,
+        string $attribution,
+        string $licenseEvidencePath,
+        string $licenseEvidenceSha,
+        ?string $runtimeCompression
+    ): array {
+        return [
+            'schema_version' => 'wp-fts-unimorph-lemma-pack-source-lock/v1',
+            'pack' => [
+                'id' => $manifest['pack_id'],
+                'language' => $manifest['language'],
+                'kind' => 'lemmatizer',
+                'status' => ((bool) $manifest['fixture_only']) ? 'fixture' : 'production_candidate',
+                'runtime_pack_committed' => true,
+                'default_enabled' => false,
+            ],
+            'source' => [
+                'name' => $manifest['source']['name'],
+                'version' => $manifest['source']['version'],
+                'url' => $manifest['source']['url'],
+                'repository_url' => $manifest['source']['repository_url'] ?? '',
+                'commit' => $manifest['source']['commit'] ?? '',
+                'file' => $manifest['source']['file'],
+                'files' => $manifest['source']['files'],
+                'artifact_sha256' => $manifest['source']['artifact_sha256'],
+                'byte_count' => $manifest['source']['byte_count'],
+                'license' => [
+                    'spdx_id' => $license,
+                    'license_url' => $licenseUrl,
+                    'notice_path' => 'NOTICE.txt',
+                    'evidence_path' => $licenseEvidencePath,
+                    'evidence_sha256' => $licenseEvidenceSha,
+                ],
+            ],
+            'columns' => $manifest['source']['column_model'],
+            'importer' => [
+                'path' => $manifest['provenance']['importer'],
+                'delegated_runtime_importer' => $manifest['provenance']['delegated_runtime_importer'],
+                'commit' => $manifest['provenance']['importer_commit'],
+                'command' => $manifest['provenance']['importer_command'],
+            ],
+            'runtime' => [
+                'manifest_sha256' => $manifestSha,
+                'row_count' => $manifest['runtime']['total_rows'],
+                'file_count' => count($manifest['runtime']['files']),
+                'byte_count' => $runtimeBytes,
+                'digest_sha256' => $manifest['runtime']['total_sha256'],
+                'contains_third_party_data' => true,
+                'committed' => true,
+                'compression' => $runtimeCompression ?? 'none',
+            ],
+            'behavior' => [
+                'oov_policy' => 'return_original_normalized_term',
+                'ambiguity_policy' => $manifest['runtime']['ambiguity_policy'],
+                'unsupported_language_policy' => 'return_original_normalized_term',
+            ],
+            'release' => [
+                'default_enabled' => false,
+                'claim_boundary' => 'Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled.',
+            ],
+            'attribution' => [
+                'upstream' => $attribution,
+            ],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $manifest
+     * @param array<string,mixed> $sourceLock
+     */
+    private function build_provenance_markdown(array $manifest, array $sourceLock): string
+    {
+        $runtime = $sourceLock['runtime'];
+        $source = $sourceLock['source'];
+        $lines = [
+            '# UniMorph Analyzer Pack Provenance',
+            '',
+            'This pack is generated from source-approved UniMorph data through the repository importer. It contains normalized surface-to-lemma runtime rows and no runtime network access.',
+            '',
+            '- Pack ID: `' . $manifest['pack_id'] . '`',
+            '- Language: `' . $manifest['language'] . '`',
+            '- Source repository: ' . ($source['repository_url'] !== '' ? $source['repository_url'] : $source['url']),
+            '- Source commit: `' . $source['commit'] . '`',
+            '- Source file: `' . $source['file'] . '`',
+            '- Source SHA-256: `' . $source['artifact_sha256'] . '`',
+            '- License: `' . $source['license']['spdx_id'] . '` ' . $source['license']['license_url'],
+            '- Importer command: `' . $sourceLock['importer']['command'] . '`',
+            '- Runtime rows: `' . $runtime['row_count'] . '`',
+            '- Runtime files: `' . $runtime['file_count'] . '`',
+            '- Runtime digest SHA-256: `' . $runtime['digest_sha256'] . '`',
+            '',
+            'The generated pack is default-disabled. Callers must opt in through `lemma_packs_by_lang` or `lemmatizer_packs_by_lang`.',
+            '',
+        ];
+
+        return implode("\n", $lines);
     }
 
     /**

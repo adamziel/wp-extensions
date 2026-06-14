@@ -62,12 +62,11 @@ be routed when callers provide language hints.
 
 | Language or partition | Routing support | Analyzer tier | Fallback and boundary |
 | --- | --- | --- | --- |
-| Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | Strongest path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice. | Default behavior remains conservative unless a valid pack or verified mode is enabled. Bundled fixtures prove contracts; they are not a full third-party dictionary. |
-| English (`en`), Arabic (`ar`), Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese (`pt`), Indonesian (`id`) | Selectable/detectable language partitions. | Bundled generated Snowball stemmers verified by the Snowball fixture harness. | Stemming improves inflection recall but is not dictionary lemmatization, synonym expansion, or phrase handling. |
+| Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | Strongest path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice. | Default behavior remains conservative unless a valid pack or verified mode is enabled. Bundled packs stay opt-in/default-disabled outside the sandbox path. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Configure them through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`; built-in Snowball or baseline behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), Dutch Porter (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
 | Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization: one-character runs plus overlapping n-grams up to 4 characters. | No bundled dictionary segmentation, word morphology, or CJK lexical pack. |
-| Bengali (`bn`) | Selectable/detectable partition. | Deterministic light suffix baseline for common classifier, plural, genitive, dative, and case endings. | Not Snowball-backed or dictionary-backed. The committed `bn` pack is synthetic contract coverage only and stays default-disabled. |
-| Urdu (`ur`) | Selectable/detectable partition. | Arabic-script combining mark/harakat and tatweel normalization plus deterministic light suffix baseline for common plural-oblique forms. | Not Snowball-backed or dictionary-backed. Persian-like text is not merged into Urdu routing. |
+| Urdu (`ur`) | Selectable/detectable partition. | Arabic-script combining mark/harakat and tatweel normalization plus deterministic light suffix baseline for common plural-oblique forms. | UniMorph Urdu is license-blocked, so no generated Urdu pack is bundled. Persian-like text is not merged into Urdu routing. |
 | German (`de`), Russian (`ru`), other explicit partitions | Language namespace/routing support when the caller or detector supplies the language. | Conservative analysis unless a documented analyzer exists. | Unsupported morphology returns the normalized token unchanged. |
 | Generic packs | Available through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Local manifest-backed packs whose manifest `language` matches the configured key. | Invalid, missing, disabled, or language-mismatched packs are ignored and the built-in fallback path remains available. |
 
@@ -90,9 +89,11 @@ The default analyzer:
 - folds diacritics by default;
 - strips Arabic-script combining marks/harakat and tatweel for Arabic (`ar`)
   and Urdu (`ur`) only;
+- applies configured source-backed lemma packs before built-in language
+  fallbacks;
 - applies bundled generated Snowball stemming for English (`en`), Arabic (`ar`),
   Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese (`pt`), and
-  Indonesian (`id`);
+  Indonesian (`id`) when no lemma pack is configured;
 - applies conservative Bengali (`bn`) classifier/plural/genitive/dative/case
   suffix stemming;
 - applies conservative Urdu (`ur`) feminine/masculine/Arabic-loan/plural-oblique

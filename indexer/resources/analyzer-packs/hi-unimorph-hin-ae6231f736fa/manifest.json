@@ -1,0 +1,95 @@
+{
+    "schema_version": 1,
+    "pack_id": "hi-unimorph-hin-ae6231f736fa",
+    "language": "hi",
+    "version": "ae6231f736fa-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer hi with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 1903,
+        "total_sha256": "e43894375f7a3bbb588ceddb9f72a9b56f2c08998fceaafa7edd6c660c4433c7",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "cfaa44497f4e5164cee58c6b16e7e0a85d90e11182f9803b6afe87f6bc2dfdae",
+                "rows": 1903,
+                "first_surface": "अपना",
+                "last_surface": "हिलो",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph hin hi inflection table",
+        "version": "ae6231f736fa5a08205c768ca23ff6c19e80d25e",
+        "file": "hin",
+        "url": "https://github.com/unimorph/hin/blob/ae6231f736fa5a08205c768ca23ff6c19e80d25e/hin",
+        "repository_url": "https://github.com/unimorph/hin",
+        "commit": "ae6231f736fa5a08205c768ca23ff6c19e80d25e",
+        "artifact_sha256": "3c9228053925a69fa5c20c5bafc880268c294afd8d267504258ee405597fb18a",
+        "byte_count": 3994359,
+        "files": [
+            {
+                "path": "hin",
+                "sha256": "3c9228053925a69fa5c20c5bafc880268c294afd8d267504258ee405597fb18a",
+                "byte_count": 3994359
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "hin",
+            "source_files": 1,
+            "files": [
+                "hin"
+            ],
+            "source_lines": 54439,
+            "blank_lines": 1,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 52189,
+            "rows_with_features": 2249,
+            "accepted_rows": 2249
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph hin contributors; source repository https://github.com/unimorph/hin"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=hi --pack-id=hi-unimorph-hin-ae6231f736fa --version=ae6231f736fa-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/hin/blob/ae6231f736fa5a08205c768ca23ff6c19e80d25e/hin --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

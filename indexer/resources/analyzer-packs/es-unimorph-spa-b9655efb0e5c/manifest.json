@@ -1,0 +1,151 @@
+{
+    "schema_version": 1,
+    "pack_id": "es-unimorph-spa-b9655efb0e5c",
+    "language": "es",
+    "version": "b9655efb0e5c-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer es with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 794521,
+        "total_sha256": "c68efa7dfa78f0b1442473c2770ee486965b0a308a63446d653f7929f2dcd54f",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "82495a916db84cf827a1b8721ecfd579eac189d5a6a2f755b393f21c24cd61e9",
+                "rows": 100000,
+                "first_surface": "aaleniana",
+                "last_surface": "autoricenme",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0002.tsv.gz",
+                "sha256": "4f4608890933fed61c3c06f646dd295b553d4fa138dfa8d2cdc6f8db49c5d906",
+                "rows": 100000,
+                "first_surface": "autoricennos",
+                "last_surface": "corporizandote",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0003.tsv.gz",
+                "sha256": "e3765c884972b62a7d9da4dc633e33d0ff65cc8f910f7b0d75c1023ece2ce00c",
+                "rows": 100000,
+                "first_surface": "corporizanos",
+                "last_surface": "dobleteadas",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0004.tsv.gz",
+                "sha256": "39a1e9b2a7c3f56fef352320e004cbed27a9027509803e8b4401b5f596714068",
+                "rows": 100000,
+                "first_surface": "dobleteado",
+                "last_surface": "favelizalas",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0005.tsv.gz",
+                "sha256": "e0054f97bf869eb63e8866de8c46ad41309183689f24c598a0ea0d3a0be7482c",
+                "rows": 100000,
+                "first_surface": "favelizale",
+                "last_surface": "malgastenme",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0006.tsv.gz",
+                "sha256": "4126a27dcaae058b61d53a5c5e0eb91da344df16d4526228a01f7ce54f8bed24",
+                "rows": 100000,
+                "first_surface": "malgastennos",
+                "last_surface": "principaliceis",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0007.tsv.gz",
+                "sha256": "742423d6f6f68c9d0447762a743c0487fda8a4bbe8649368df0b1f930c2e1d32",
+                "rows": 100000,
+                "first_surface": "principalicela",
+                "last_surface": "segmentaba",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0008.tsv.gz",
+                "sha256": "198e2f8c6884abe4b01b4193a4ce04f9f2ac8b889f8139c0451371fea6e79598",
+                "rows": 94521,
+                "first_surface": "segmentabais",
+                "last_surface": "zwitterionicos",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph spa es inflection table",
+        "version": "b9655efb0e5ce0f99809badaa7f4e93017ab8430",
+        "file": "spa",
+        "url": "https://github.com/unimorph/spa/blob/b9655efb0e5ce0f99809badaa7f4e93017ab8430/spa",
+        "repository_url": "https://github.com/unimorph/spa",
+        "commit": "b9655efb0e5ce0f99809badaa7f4e93017ab8430",
+        "artifact_sha256": "7a165d4b44eb078d23964f3eee3813f5140c5df0ffab0143c806c562e67f8771",
+        "byte_count": 50335761,
+        "files": [
+            {
+                "path": "spa",
+                "sha256": "7a165d4b44eb078d23964f3eee3813f5140c5df0ffab0143c806c562e67f8771",
+                "byte_count": 50335761
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "spa",
+            "source_files": 1,
+            "files": [
+                "spa"
+            ],
+            "source_lines": 1196245,
+            "blank_lines": 0,
+            "comment_lines": 0,
+            "placeholder_rows": 21,
+            "invalid_runtime_token_rows": 33719,
+            "rows_with_features": 1162505,
+            "accepted_rows": 1162505
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph spa contributors; source repository https://github.com/unimorph/spa"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=es --pack-id=es-unimorph-spa-b9655efb0e5c --version=b9655efb0e5c-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/spa/blob/b9655efb0e5ce0f99809badaa7f4e93017ab8430/spa --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

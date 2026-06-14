@@ -1,0 +1,15 @@
+UniMorph ind id inflection table 4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34
+Source URL: https://github.com/unimorph/ind/blob/4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34/ind
+Source repository: https://github.com/unimorph/ind
+Source commit: 4663cf3b8127fb85cb7e8a0c1a4f07e96103fe34
+Source file path: ind
+Source artifact SHA-256: 77c709f98b581a80051d0e18aa899e0d84d70436223054efa09831d71cdc2ac6
+Source artifact byte count: 832127
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 0b4358af8279493d5708736e14537280f0d869a5d765888e3ebb927c2ee94bb0
+Attribution: UniMorph ind contributors; source repository https://github.com/unimorph/ind
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

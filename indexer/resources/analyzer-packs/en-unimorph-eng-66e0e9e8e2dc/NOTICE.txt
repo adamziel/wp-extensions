@@ -1,0 +1,15 @@
+UniMorph eng en inflection table 66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b
+Source URL: https://github.com/unimorph/eng/blob/66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b/eng
+Source repository: https://github.com/unimorph/eng
+Source commit: 66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b
+Source file path: eng
+Source artifact SHA-256: 20a191cefdc7cad6fa74b00f49d6f658684f17b14541aae372e5a3d5a8c15c67
+Source artifact byte count: 18022905
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: e0fc60fc99bda429e3d366af1f993d649dfc5fea2ed0510740f607e67c26354d
+Attribution: UniMorph eng contributors; source repository https://github.com/unimorph/eng
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

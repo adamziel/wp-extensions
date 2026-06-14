@@ -1,0 +1,135 @@
+{
+    "schema_version": 1,
+    "pack_id": "en-unimorph-eng-66e0e9e8e2dc",
+    "language": "en",
+    "version": "66e0e9e8e2dc-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer en with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 566761,
+        "total_sha256": "5db7690f96aac3e07cefb1465cbc4cd02ba1b440be118ddf87108adb0c1b217f",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "c9969799b34ad72587c9977d3a6e4ecd21a72eb2f8f4003b10426cb1efbfde0d",
+                "rows": 100001,
+                "first_surface": "0",
+                "last_surface": "confuzzled",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0002.tsv.gz",
+                "sha256": "06988d845c87665ac0b038d95b7753564fe989f810fa48cc9cdf936b82f13684",
+                "rows": 100000,
+                "first_surface": "confuzzlement",
+                "last_surface": "glomangiomyoma",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0003.tsv.gz",
+                "sha256": "9f6db3841bd39d609bdbd3a21c0da6b291d6b470b796d8f10083adc8c1bae6f3",
+                "rows": 100000,
+                "first_surface": "glomangiomyomas",
+                "last_surface": "minireview",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0004.tsv.gz",
+                "sha256": "f78a3ea8196cfdaa8d0ede68a26d030befa942dea6d392b72b2e7288593cd965",
+                "rows": 100000,
+                "first_surface": "minireviews",
+                "last_surface": "prohypertrophic",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0005.tsv.gz",
+                "sha256": "2c94fad9d560a25449b95c9750a2b060451ebf9ef4f99f494cbc146d0304cac7",
+                "rows": 100000,
+                "first_surface": "proictogenic",
+                "last_surface": "terguride",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0006.tsv.gz",
+                "sha256": "595b90dd5e6376767edb52ce6e5b71066748800cbc6c7d2741930b52eb8c7bac",
+                "rows": 66760,
+                "first_surface": "teriflunomide",
+                "last_surface": "ṛgvedic",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph eng en inflection table",
+        "version": "66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b",
+        "file": "eng",
+        "url": "https://github.com/unimorph/eng/blob/66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b/eng",
+        "repository_url": "https://github.com/unimorph/eng",
+        "commit": "66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b",
+        "artifact_sha256": "20a191cefdc7cad6fa74b00f49d6f658684f17b14541aae372e5a3d5a8c15c67",
+        "byte_count": 18022905,
+        "files": [
+            {
+                "path": "eng",
+                "sha256": "20a191cefdc7cad6fa74b00f49d6f658684f17b14541aae372e5a3d5a8c15c67",
+                "byte_count": 18022905
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "eng",
+            "source_files": 1,
+            "files": [
+                "eng"
+            ],
+            "source_lines": 652477,
+            "blank_lines": 0,
+            "comment_lines": 5,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 24276,
+            "rows_with_features": 628196,
+            "accepted_rows": 628196
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph eng contributors; source repository https://github.com/unimorph/eng"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=en --pack-id=en-unimorph-eng-66e0e9e8e2dc --version=66e0e9e8e2dc-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/eng/blob/66e0e9e8e2dcd196da081a25a48e5c1fe3d8b49b/eng --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

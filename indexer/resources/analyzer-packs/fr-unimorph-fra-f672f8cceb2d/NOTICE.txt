@@ -1,0 +1,15 @@
+UniMorph fra fr inflection table f672f8cceb2d5f5a1e2241b5622c8845f8274635
+Source URL: https://github.com/unimorph/fra/blob/f672f8cceb2d5f5a1e2241b5622c8845f8274635/fra
+Source repository: https://github.com/unimorph/fra
+Source commit: f672f8cceb2d5f5a1e2241b5622c8845f8274635
+Source file path: fra
+Source artifact SHA-256: 4760fc36435a9ffba9b4de6f0787d8eca5b15022e6b141e3b242b129f0d88dcb
+Source artifact byte count: 13405679
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 94a3807882c7b5b119909d7137e7fa7f279ac5e9c8de6ac02004ca3c2b575edf
+Attribution: UniMorph fra contributors; source repository https://github.com/unimorph/fra
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

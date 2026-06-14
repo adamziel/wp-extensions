@@ -1,0 +1,15 @@
+UniMorph hin hi inflection table ae6231f736fa5a08205c768ca23ff6c19e80d25e
+Source URL: https://github.com/unimorph/hin/blob/ae6231f736fa5a08205c768ca23ff6c19e80d25e/hin
+Source repository: https://github.com/unimorph/hin
+Source commit: ae6231f736fa5a08205c768ca23ff6c19e80d25e
+Source file path: hin
+Source artifact SHA-256: 3c9228053925a69fa5c20c5bafc880268c294afd8d267504258ee405597fb18a
+Source artifact byte count: 3994359
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: f2a801b09db30075caa91036a4ee49913e01dd2ae1683561def92662f4eccc27
+Attribution: UniMorph hin contributors; source repository https://github.com/unimorph/hin
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

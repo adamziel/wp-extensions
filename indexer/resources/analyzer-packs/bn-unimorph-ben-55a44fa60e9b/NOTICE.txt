@@ -1,0 +1,15 @@
+UniMorph ben bn inflection table 55a44fa60e9b7a3a5ff7acbed66b07571ceefa79
+Source URL: https://github.com/unimorph/ben/blob/55a44fa60e9b7a3a5ff7acbed66b07571ceefa79/ben
+Source repository: https://github.com/unimorph/ben
+Source commit: 55a44fa60e9b7a3a5ff7acbed66b07571ceefa79
+Source file path: ben
+Source artifact SHA-256: b0f1e2d005bce183dfcc2a570de1ce3d4d9a17feafa6c222b3f72b3e6ff894b2
+Source artifact byte count: 251991
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 19cdb1d4f8f529d836be13362904151638361e1ce4285fd699b12083a6cc93ab
+Attribution: UniMorph ben contributors; source repository https://github.com/unimorph/ben
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

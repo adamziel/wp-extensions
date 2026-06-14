@@ -1,0 +1,15 @@
+UniMorph por pt inflection table fc2778e08e2da476d9d2f27f15f218b1cbb25ad5
+Source URL: https://github.com/unimorph/por/blob/fc2778e08e2da476d9d2f27f15f218b1cbb25ad5/por
+Source repository: https://github.com/unimorph/por
+Source commit: fc2778e08e2da476d9d2f27f15f218b1cbb25ad5
+Source file path: por
+Source artifact SHA-256: af71c94afbb857b3875817d8edb8ea4a1211d902326b74de4d86de85ea348944
+Source artifact byte count: 10982524
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 17e48dc74cbae40720123b66a1c5a99fdfc62a1cb44ac622a1e5303d7962aa62
+Attribution: UniMorph por contributors; source repository https://github.com/unimorph/por
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

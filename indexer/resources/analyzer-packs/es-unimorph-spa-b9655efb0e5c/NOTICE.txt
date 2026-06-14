@@ -1,0 +1,15 @@
+UniMorph spa es inflection table b9655efb0e5ce0f99809badaa7f4e93017ab8430
+Source URL: https://github.com/unimorph/spa/blob/b9655efb0e5ce0f99809badaa7f4e93017ab8430/spa
+Source repository: https://github.com/unimorph/spa
+Source commit: b9655efb0e5ce0f99809badaa7f4e93017ab8430
+Source file path: spa
+Source artifact SHA-256: 7a165d4b44eb078d23964f3eee3813f5140c5df0ffab0143c806c562e67f8771
+Source artifact byte count: 50335761
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 261c426050d5320d2a3ce1e03f6fc091cbf42857d772cb0f6532811200dd9824
+Attribution: UniMorph spa contributors; source repository https://github.com/unimorph/spa
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

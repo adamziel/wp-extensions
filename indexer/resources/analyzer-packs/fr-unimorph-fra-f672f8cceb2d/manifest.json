@@ -1,0 +1,111 @@
+{
+    "schema_version": 1,
+    "pack_id": "fr-unimorph-fra-f672f8cceb2d",
+    "language": "fr",
+    "version": "f672f8cceb2d-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer fr with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 259061,
+        "total_sha256": "6f211e28d69623b5763728296208e3160a75ce7306baade5d3b6036df060f34b",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "dfd77a9c8185c3a2b01b7f817be3c756da681f86bfed4d30d2c480289d6b1c0f",
+                "rows": 100000,
+                "first_surface": "a",
+                "last_surface": "elliras",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0002.tsv.gz",
+                "sha256": "743fae4d0347ce7d936d5f9ab1d021582a5c80b04caca1a0efc6d4b54e64b4d9",
+                "rows": 100000,
+                "first_surface": "ellire",
+                "last_surface": "rancirions",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0003.tsv.gz",
+                "sha256": "0c279308849bbd9ccdb9d048e3f099b315c3b7feff86279522029010761338de",
+                "rows": 59061,
+                "first_surface": "rancirons",
+                "last_surface": "zyeutons",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph fra fr inflection table",
+        "version": "f672f8cceb2d5f5a1e2241b5622c8845f8274635",
+        "file": "fra",
+        "url": "https://github.com/unimorph/fra/blob/f672f8cceb2d5f5a1e2241b5622c8845f8274635/fra",
+        "repository_url": "https://github.com/unimorph/fra",
+        "commit": "f672f8cceb2d5f5a1e2241b5622c8845f8274635",
+        "artifact_sha256": "4760fc36435a9ffba9b4de6f0787d8eca5b15022e6b141e3b242b129f0d88dcb",
+        "byte_count": 13405679,
+        "files": [
+            {
+                "path": "fra",
+                "sha256": "4760fc36435a9ffba9b4de6f0787d8eca5b15022e6b141e3b242b129f0d88dcb",
+                "byte_count": 13405679
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "fra",
+            "source_files": 1,
+            "files": [
+                "fra"
+            ],
+            "source_lines": 367733,
+            "blank_lines": 1,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 11116,
+            "rows_with_features": 356616,
+            "accepted_rows": 356616
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph fra contributors; source repository https://github.com/unimorph/fra"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=fr --pack-id=fr-unimorph-fra-f672f8cceb2d --version=f672f8cceb2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/fra/blob/f672f8cceb2d5f5a1e2241b5622c8845f8274635/fra --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

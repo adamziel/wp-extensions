@@ -1,0 +1,69 @@
+{
+    "schema_version": "wp-fts-unimorph-lemma-pack-source-lock/v1",
+    "pack": {
+        "id": "pt-unimorph-por-fc2778e08e2d",
+        "language": "pt",
+        "kind": "lemmatizer",
+        "status": "production_candidate",
+        "runtime_pack_committed": true,
+        "default_enabled": false
+    },
+    "source": {
+        "name": "UniMorph por pt inflection table",
+        "version": "fc2778e08e2da476d9d2f27f15f218b1cbb25ad5",
+        "url": "https://github.com/unimorph/por/blob/fc2778e08e2da476d9d2f27f15f218b1cbb25ad5/por",
+        "repository_url": "https://github.com/unimorph/por",
+        "commit": "fc2778e08e2da476d9d2f27f15f218b1cbb25ad5",
+        "file": "por",
+        "files": [
+            {
+                "path": "por",
+                "sha256": "af71c94afbb857b3875817d8edb8ea4a1211d902326b74de4d86de85ea348944",
+                "byte_count": 10982524
+            }
+        ],
+        "artifact_sha256": "af71c94afbb857b3875817d8edb8ea4a1211d902326b74de4d86de85ea348944",
+        "byte_count": 10982524,
+        "license": {
+            "spdx_id": "CC-BY-SA-3.0",
+            "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+            "notice_path": "NOTICE.txt",
+            "evidence_path": "README.md",
+            "evidence_sha256": "17e48dc74cbae40720123b66a1c5a99fdfc62a1cb44ac622a1e5303d7962aa62"
+        }
+    },
+    "columns": {
+        "format": "unimorph-three-column-tsv-v1",
+        "lemma_column": 0,
+        "surface_column": 1,
+        "features_column": 2
+    },
+    "importer": {
+        "path": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
+        "commit": "recorded-in-task-result",
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=pt --pack-id=pt-unimorph-por-fc2778e08e2d --version=fc2778e08e2d-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/por/blob/fc2778e08e2da476d9d2f27f15f218b1cbb25ad5/por --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+    },
+    "runtime": {
+        "manifest_sha256": "b309cb091742d92b32b1e1aa85016bb01c8f855f9f6f757c4506780714abc0e5",
+        "row_count": 195342,
+        "file_count": 2,
+        "byte_count": 426447,
+        "digest_sha256": "2493486031bb2daf012920c6de51c36383b3d2f495e313ecbf15741bfd4391a5",
+        "contains_third_party_data": true,
+        "committed": true,
+        "compression": "gzip"
+    },
+    "behavior": {
+        "oov_policy": "return_original_normalized_term",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "unsupported_language_policy": "return_original_normalized_term"
+    },
+    "release": {
+        "default_enabled": false,
+        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+    },
+    "attribution": {
+        "upstream": "UniMorph por contributors; source repository https://github.com/unimorph/por"
+    }
+}
