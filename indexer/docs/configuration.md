@@ -278,6 +278,41 @@ its compressed shards can be read; otherwise it falls back to the bundled tiny
 Polish fixture pack. The synthetic Bengali pack remains a default-disabled test
 fixture and is not product data.
 
+### Importing Normalized Lemma TSV Packs
+
+`tools/import-lemma-tsv-pack.php` adapts a source-approved normalized lemma TSV
+into the generic analyzer-pack runtime. The source TSV must be UTF-8 and already
+normalized for the target language. Each non-comment row uses
+`surface<TAB>lemma`; optional third and fourth columns may carry source tags or
+notes. The importer sorts and deduplicates rows, writes runtime shards, and
+emits `manifest.json` plus `NOTICE.txt` with source, license, attribution, and
+provenance metadata.
+
+```sh
+php tools/import-lemma-tsv-pack.php \
+  --source=/path/to/approved-normalized-lemmas.tsv \
+  --out=/srv/wp-fts-packs/example-lemma-pack \
+  --language=bn \
+  --pack-id=bn-approved-lemma-pack \
+  --version=2026.06-source-v1 \
+  --source-name="Approved source dictionary name" \
+  --source-url="https://example.test/source-artifact" \
+  --license=CC-BY-4.0 \
+  --license-url="https://creativecommons.org/licenses/by/4.0/" \
+  --attribution="Required upstream attribution text"
+```
+
+Validate the generated pack before configuring it:
+
+```sh
+php tools/validate-analyzer-pack.php /srv/wp-fts-packs/example-lemma-pack/manifest.json
+```
+
+Real dictionary imports require source approval, license compatibility review,
+an exact source artifact URL/digest, and required attribution before running the
+importer. The repository does not vendor external dictionary data, and generated
+packs stay opt-in and default-disabled.
+
 The repository includes a tiny `bn` synthetic fixture only to test this generic
 runtime contract. It is project-owned artificial data, default-disabled, and not
 Bengali dictionary or morphology coverage. Real Bengali, Urdu, and CJK lexical
