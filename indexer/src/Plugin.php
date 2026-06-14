@@ -1135,6 +1135,51 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Enable a local lemma-pack manifest in the stored runtime analyzer option.
+     *
+     * Existing analyzer option keys and other language entries are preserved.
+     * If the same language is already present in the higher-precedence
+     * `lemma_packs_by_lang` alias, that entry is updated too so the new manifest
+     * is the effective runtime pack.
+     *
+     * @return array<string,mixed> Stored analyzer option value after the merge.
+     */
+    public static function set_runtime_lemma_pack_option(string $language, string $manifestPath): array
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language);
+        $manifestPath = trim($manifestPath);
+        if ($language === '' || $manifestPath === '') {
+            throw new InvalidArgumentException('Runtime lemma pack option requires a language and manifest path.');
+        }
+
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        $options = is_array($stored) ? $stored : [];
+
+        if (!isset($options['lemmatizer_packs_by_lang']) || !is_array($options['lemmatizer_packs_by_lang'])) {
+            $options['lemmatizer_packs_by_lang'] = [];
+        }
+        $options['lemmatizer_packs_by_lang'] = self::set_language_pack_map_entry(
+            $options['lemmatizer_packs_by_lang'],
+            $language,
+            $manifestPath,
+            true
+        );
+
+        if (isset($options['lemma_packs_by_lang']) && is_array($options['lemma_packs_by_lang'])) {
+            $options['lemma_packs_by_lang'] = self::set_language_pack_map_entry(
+                $options['lemma_packs_by_lang'],
+                $language,
+                $manifestPath,
+                false
+            );
+        }
+
+        self::set_option(self::ANALYZER_OPTIONS_OPTION, $options);
+
+        return $options;
+    }
+
+    /**
      * Report configured runtime lemma packs for admin diagnostics.
      *
      * @return array<int,array{language:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
@@ -1336,6 +1381,32 @@ final class WP_FTS_Plugin
         }
 
         return $normalized;
+    }
+
+    /**
+     * @param array<string,mixed> $packs
+     * @return array<string,mixed>
+     */
+    private static function set_language_pack_map_entry(array $packs, string $language, string $manifestPath, bool $addCanonical): array
+    {
+        $updated = false;
+        foreach ($packs as $entryLanguage => $option) {
+            if (!is_scalar($entryLanguage) || trim((string) $entryLanguage) === '') {
+                continue;
+            }
+            if (WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) !== $language) {
+                continue;
+            }
+
+            $packs[$entryLanguage] = $manifestPath;
+            $updated = true;
+        }
+
+        if ($addCanonical && !$updated) {
+            $packs[$language] = $manifestPath;
+        }
+
+        return $packs;
     }
 
     /**

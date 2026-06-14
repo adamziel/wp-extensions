@@ -196,6 +196,90 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
+     * Import a normalized source-backed lemma TSV into a local analyzer pack.
+     *
+     * ## OPTIONS
+     *
+     * --source=<path>
+     * : Normalized lemma TSV source file. Each row is surface<TAB>lemma with optional tag/source-note columns.
+     *
+     * --language=<language>
+     * : Language tag for the generated pack. Alias: --lang.
+     *
+     * --pack-id=<id>
+     * : Stable analyzer pack id.
+     *
+     * --version=<version>
+     * : Generated pack version.
+     *
+     * --source-name=<name>
+     * : Human-readable source name.
+     *
+     * --source-url=<url>
+     * : Reviewed upstream or artifact source URL.
+     *
+     * --license=<spdx>
+     * : Source license identifier.
+     *
+     * [--license-url=<url>]
+     * : Optional license URL.
+     *
+     * [--source-version=<version>]
+     * : Optional upstream source version. Defaults to --version.
+     *
+     * [--attribution=<text>]
+     * : Optional attribution text. Defaults to --source-name.
+     *
+     * [--tmp-dir=<path>]
+     * : Optional temporary parent directory for importer-owned chunks.
+     *
+     * [--max-rows-per-file=<n>]
+     * : Maximum runtime rows per generated shard.
+     *
+     * [--chunk-rows=<n>]
+     * : Number of deduplicated source pairs to sort per temporary chunk.
+     *
+     * [--fixture-only]
+     * : Mark the generated pack as a test fixture only.
+     *
+     * [--out=<path>]
+     * : Output pack directory. Alias: --output-dir. Defaults under uploads/wp-fts-lemma-packs/<pack-id>.
+     *
+     * [--enable]
+     * : Enable the generated manifest for runtime indexing/search. Reindex existing content afterwards.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function import_lemma_pack(array $args, array $assoc_args): void
+    {
+        require_once dirname(__DIR__) . '/tools/import-lemma-tsv-pack.php';
+
+        $enable = $this->bool_flag_arg($assoc_args, ['enable'], false);
+        $options = $this->lemma_pack_import_options($assoc_args);
+        $summary = (new WP_FTS_LemmaTsvPackImporter())->import($options);
+        $manifestPath = isset($summary['manifest']) && is_scalar($summary['manifest'])
+            ? (string) $summary['manifest']
+            : '';
+        if ($manifestPath === '') {
+            throw new RuntimeException('Lemma pack importer did not return a manifest path.');
+        }
+
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+        $manifest = $validation['manifest'];
+        $language = (string) ($manifest['language'] ?? $summary['language'] ?? $options['language']);
+        $packId = (string) ($manifest['pack_id'] ?? $summary['pack_id'] ?? $options['pack_id']);
+
+        if ($enable) {
+            WP_FTS_Plugin::set_runtime_lemma_pack_option($language, $manifestPath);
+            WP_CLI::success("Imported and enabled lemma pack {$packId} for {$language}: {$manifestPath}. Reindex existing content for the pack to affect stored terms.");
+            return;
+        }
+
+        WP_CLI::success("Imported lemma pack {$packId} for {$language}: {$manifestPath}. Runtime analyzer options were not changed.");
+    }
+
+    /**
      * Build an indexer wired to MySQL storage and the plugin runtime analyzer.
      */
     private function indexer(): WP_FTS_Indexer
@@ -255,6 +339,134 @@ final class WP_FTS_WPCLI_Command
         }
 
         return $default;
+    }
+
+    /**
+     * Build importer options from WP-CLI aliases without letting absent --out
+     * leak into the lower-level importer as a missing required argument.
+     *
+     * @param array<string,mixed> $assoc_args
+     * @return array<string,mixed>
+     */
+    private function lemma_pack_import_options(array $assoc_args): array
+    {
+        $packId = $this->required_assoc_string($assoc_args, ['pack-id', 'pack_id'], 'pack-id');
+        $sourceName = $this->required_assoc_string($assoc_args, ['source-name', 'source_name'], 'source-name');
+
+        $options = [
+            'source' => $this->required_assoc_string($assoc_args, ['source'], 'source'),
+            'language' => $this->required_assoc_string($assoc_args, ['language', 'lang'], 'language'),
+            'pack_id' => $packId,
+            'version' => $this->required_assoc_string($assoc_args, ['version'], 'version'),
+            'source_name' => $sourceName,
+            'source_url' => $this->required_assoc_string($assoc_args, ['source-url', 'source_url'], 'source-url'),
+            'license' => $this->required_assoc_string($assoc_args, ['license'], 'license'),
+            'attribution' => $this->optional_assoc_string($assoc_args, ['attribution'], $sourceName),
+        ];
+
+        $out = $this->assoc_arg($assoc_args, ['out', 'output-dir', 'output_dir'], null);
+        $options['out'] = $out !== null && is_scalar($out) && trim((string) $out) !== ''
+            ? (string) $out
+            : $this->default_lemma_pack_output_dir($packId);
+
+        foreach ([
+            'license_url' => ['license-url', 'license_url'],
+            'source_version' => ['source-version', 'source_version'],
+            'tmp_dir' => ['tmp-dir', 'tmp_dir'],
+            'max_rows_per_file' => ['max-rows-per-file', 'max_rows_per_file'],
+            'chunk_rows' => ['chunk-rows', 'chunk_rows'],
+            'fixture_only' => ['fixture-only', 'fixture_only'],
+        ] as $importerKey => $cliNames) {
+            $value = $this->assoc_arg($assoc_args, $cliNames, null);
+            if ($value !== null) {
+                $options[$importerKey] = $value;
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * @param array<string,mixed> $assoc_args
+     * @param string[] $names
+     */
+    private function required_assoc_string(array $assoc_args, array $names, string $displayName): string
+    {
+        $value = $this->assoc_arg($assoc_args, $names, null);
+        if (!is_scalar($value) || trim((string) $value) === '') {
+            throw new RuntimeException("Missing required option --{$displayName}.");
+        }
+
+        return (string) $value;
+    }
+
+    /**
+     * @param array<string,mixed> $assoc_args
+     * @param string[] $names
+     */
+    private function optional_assoc_string(array $assoc_args, array $names, string $default): string
+    {
+        $value = $this->assoc_arg($assoc_args, $names, null);
+        if (!is_scalar($value) || trim((string) $value) === '') {
+            return $default;
+        }
+
+        return (string) $value;
+    }
+
+    /**
+     * Resolve a boolean WP-CLI flag, accepting explicit false-like values for tests.
+     *
+     * @param array<string,mixed> $assoc_args
+     * @param string[] $names
+     */
+    private function bool_flag_arg(array $assoc_args, array $names, bool $default): bool
+    {
+        $value = $this->assoc_arg($assoc_args, $names, null);
+        if ($value === null) {
+            return $default;
+        }
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_scalar($value)) {
+            return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
+        }
+
+        return $default;
+    }
+
+    private function default_lemma_pack_output_dir(string $packId): string
+    {
+        $baseDir = '';
+        if (function_exists('wp_upload_dir')) {
+            $uploads = wp_upload_dir(null, true, false);
+            if (is_array($uploads)) {
+                $error = $uploads['error'] ?? false;
+                if (is_string($error) && trim($error) !== '') {
+                    throw new RuntimeException('Could not resolve WordPress uploads directory: ' . $error);
+                }
+                if (isset($uploads['basedir']) && is_scalar($uploads['basedir']) && trim((string) $uploads['basedir']) !== '') {
+                    $baseDir = (string) $uploads['basedir'];
+                }
+            }
+        }
+        if ($baseDir === '') {
+            $baseDir = sys_get_temp_dir();
+        }
+
+        return rtrim($baseDir, '/\\') . DIRECTORY_SEPARATOR . 'wp-fts-lemma-packs' . DIRECTORY_SEPARATOR . $this->lemma_pack_directory_name($packId);
+    }
+
+    private function lemma_pack_directory_name(string $packId): string
+    {
+        $directory = preg_replace('/[^A-Za-z0-9._-]+/', '-', $packId);
+        $directory = is_string($directory) ? trim($directory, '.-_') : '';
+        if ($directory === '') {
+            throw new RuntimeException('Pack id must contain at least one filesystem-safe character for the default output directory.');
+        }
+
+        return $directory;
     }
 
     /**

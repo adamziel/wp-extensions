@@ -874,6 +874,27 @@ function synthetic_qaa_lemma_tsv_import_args(string $source, string $out): array
 }
 
 /**
+ * @return array<string,mixed>
+ */
+function synthetic_qaa_lemma_tsv_wpcli_assoc_args(string $source): array
+{
+    return [
+        'source' => $source,
+        'lang' => 'qaa',
+        'pack-id' => 'qaa-synthetic-lemma-tsv-importer',
+        'version' => '0.1.0-synthetic-import',
+        'source-name' => 'Project-owned synthetic qaa lemma TSV importer fixture',
+        'source-version' => '0.1.0-synthetic',
+        'source-url' => 'urn:wp-fts:test:synthetic-qaa-lemma-tsv',
+        'license' => 'CC0-1.0',
+        'license-url' => 'urn:wp-fts:test:synthetic-qaa-license',
+        'fixture-only' => true,
+        'max-rows-per-file' => '2',
+        'chunk-rows' => '2',
+    ];
+}
+
+/**
  * @return string[]
  */
 function lemma_tsv_import_tmp_children(string $parent): array
@@ -1952,6 +1973,8 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_get_post_callbacks'] = [];
     $GLOBALS['wp_fts_test_do_blocks'] = [];
     $GLOBALS['wp_fts_test_filters'] = [];
+    $GLOBALS['wp_fts_test_upload_dir'] = null;
+    $GLOBALS['wp_fts_test_upload_error'] = false;
     $GLOBALS['wp_fts_test_post_types'] = [
         'post' => (object) ['public' => true, 'exclude_from_search' => false],
         'page' => (object) ['public' => true, 'exclude_from_search' => false],
@@ -2029,6 +2052,38 @@ if (!function_exists('delete_option')) {
         unset($GLOBALS['wp_fts_test_options'][$name]);
 
         return $existed;
+    }
+}
+
+if (!function_exists('wp_upload_dir')) {
+    /**
+     * @return array<string,mixed>
+     */
+    function wp_upload_dir(mixed $time = null, bool $create_dir = true, bool $refresh_cache = false): array
+    {
+        $error = $GLOBALS['wp_fts_test_upload_error'] ?? false;
+        if (is_string($error) && trim($error) !== '') {
+            return [
+                'basedir' => '',
+                'baseurl' => '',
+                'path' => '',
+                'url' => '',
+                'error' => $error,
+            ];
+        }
+
+        $baseDir = $GLOBALS['wp_fts_test_upload_dir'] ?? null;
+        if (!is_string($baseDir) || trim($baseDir) === '') {
+            $baseDir = sys_get_temp_dir() . '/wp-fts-test-uploads';
+        }
+
+        return [
+            'basedir' => $baseDir,
+            'baseurl' => 'https://example.test/wp-content/uploads',
+            'path' => $baseDir,
+            'url' => 'https://example.test/wp-content/uploads',
+            'error' => false,
+        ];
     }
 }
 
@@ -4061,6 +4116,174 @@ test_case('imported generic lemma pack drives indexing search and snippets', fun
     } finally {
         remove_directory_tree($out);
         remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('wp cli import lemma pack uses default uploads pack directory', function (): void {
+    $sourceDir = temp_directory_path('wpcli_lemma_import_default_source');
+    $uploads = temp_directory_path('wpcli_lemma_import_default_uploads');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_upload_dir'] = $uploads;
+        $command = new WP_FTS_WPCLI_Command();
+        $command->import_lemma_pack([], synthetic_qaa_lemma_tsv_wpcli_assoc_args($source));
+
+        $manifest = $uploads . '/wp-fts-lemma-packs/qaa-synthetic-lemma-tsv-importer/manifest.json';
+        assert_true(is_file($manifest), 'WP-CLI import should default output under uploads/wp-fts-lemma-packs/<pack-id>');
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifest);
+        assert_same('qaa', $validation['manifest']['language'], 'default-directory WP-CLI import should preserve language');
+        assert_same('qaa-synthetic-lemma-tsv-importer', $validation['manifest']['pack_id'], 'default-directory WP-CLI import should preserve pack id');
+        assert_same(5, $validation['runtime_rows'], 'default-directory WP-CLI import should validate generated runtime rows');
+        assert_same('Project-owned synthetic qaa lemma TSV importer fixture', $validation['manifest']['attribution']['upstream'] ?? null, 'WP-CLI import should default optional attribution to source name');
+        assert_true(!array_key_exists(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, $GLOBALS['wp_fts_test_options']), 'WP-CLI import without --enable should not create analyzer options');
+        assert_same(
+            ["Imported lemma pack qaa-synthetic-lemma-tsv-importer for qaa: {$manifest}. Runtime analyzer options were not changed."],
+            WP_CLI::$successMessages,
+            'WP-CLI import success message should include language and manifest path'
+        );
+    } finally {
+        remove_directory_tree($uploads);
+        remove_directory_tree($sourceDir);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('wp cli import lemma pack enable merges analyzer options and drives runtime analyzer', function (): void {
+    $sourceDir = temp_directory_path('wpcli_lemma_import_enable_source');
+    $out = temp_directory_path('wpcli_lemma_import_enable_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'future_supported_option' => 'preserve-me',
+            'lemmatizer_packs_by_lang' => [
+                'ur' => '/tmp/existing-ur-pack/manifest.json',
+            ],
+            'lemma_packs_by_lang' => [
+                'qaa' => false,
+                'pl' => false,
+            ],
+            'polish_lemma_pack' => false,
+        ];
+
+        $args = synthetic_qaa_lemma_tsv_wpcli_assoc_args($source);
+        $args['out'] = $out;
+        $args['enable'] = true;
+        $args['attribution'] = 'Project-owned synthetic qaa rows for WP-CLI enable tests only.';
+
+        $command = new WP_FTS_WPCLI_Command();
+        $command->import_lemma_pack([], $args);
+
+        $manifest = $out . '/manifest.json';
+        $stored = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? [];
+        assert_same($manifest, $stored['lemmatizer_packs_by_lang']['qaa'] ?? null, '--enable should point lemmatizer_packs_by_lang at the generated manifest');
+        assert_same($manifest, $stored['lemma_packs_by_lang']['qaa'] ?? null, '--enable should update same-language higher-precedence generic aliases');
+        assert_same('/tmp/existing-ur-pack/manifest.json', $stored['lemmatizer_packs_by_lang']['ur'] ?? null, '--enable should preserve existing language entries');
+        assert_same(false, $stored['lemma_packs_by_lang']['pl'] ?? null, '--enable should preserve unrelated Polish generic entries');
+        assert_same(false, $stored['polish_lemma_pack'] ?? null, '--enable should preserve unrelated Polish legacy aliases');
+        assert_same('preserve-me', $stored['future_supported_option'] ?? null, '--enable should preserve unrelated analyzer option keys');
+
+        $options = WP_FTS_Plugin::runtime_analyzer_options();
+        assert_same($manifest, $options['lemmatizer_packs_by_lang']['qaa'] ?? null, '--enable should make the generated manifest the runtime qaa pack');
+        assert_same(['qaalemma'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('qaaformb', ['lang' => 'qaa']), 'enabled WP-CLI import should reach the runtime analyzer');
+        assert_contains('Reindex existing content', WP_CLI::$successMessages[0] ?? '', '--enable success message should tell operators to reindex');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('wp cli import lemma pack without enable preserves existing analyzer options', function (): void {
+    $sourceDir = temp_directory_path('wpcli_lemma_import_noenable_source');
+    $out = temp_directory_path('wpcli_lemma_import_noenable_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+
+        wp_fts_test_reset_wordpress_fakes();
+        $existing = [
+            'lemmatizer_packs_by_lang' => [
+                'bn' => WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest(),
+            ],
+        ];
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = $existing;
+
+        $args = synthetic_qaa_lemma_tsv_wpcli_assoc_args($source);
+        $args['output-dir'] = $out;
+        (new WP_FTS_WPCLI_Command())->import_lemma_pack([], $args);
+
+        assert_true(is_file($out . '/manifest.json'), 'WP-CLI import without --enable should still generate a validated pack');
+        assert_same($existing, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? null, 'WP-CLI import without --enable should leave analyzer options unchanged');
+        assert_same(['সিনথ000লেমা'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('সিনথ000গুলো', ['lang' => 'bn']), 'pre-existing analyzer option should continue to drive runtime analyzer');
+        assert_same(['qaaformb'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('qaaformb', ['lang' => 'qaa']), 'non-enabled imported pack should not affect runtime analyzer');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('wp cli import lemma pack rejects missing metadata and invalid source paths', function (): void {
+    $sourceDir = temp_directory_path('wpcli_lemma_import_reject_source');
+    $out = temp_directory_path('wpcli_lemma_import_reject_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'lemmatizer_packs_by_lang' => [
+                'bn' => WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest(),
+            ],
+        ];
+
+        $missingMetadata = synthetic_qaa_lemma_tsv_wpcli_assoc_args($source);
+        $missingMetadata['out'] = $out;
+        unset($missingMetadata['source-name']);
+        $thrown = false;
+        try {
+            (new WP_FTS_WPCLI_Command())->import_lemma_pack([], $missingMetadata);
+        } catch (RuntimeException $e) {
+            $thrown = true;
+            assert_contains('Missing required option --source-name.', $e->getMessage(), 'WP-CLI import should reject missing required metadata');
+        }
+        assert_true($thrown, 'WP-CLI import should throw when required metadata is missing');
+        assert_true(!is_dir($out), 'metadata rejection should not create an output directory');
+
+        $invalidPath = synthetic_qaa_lemma_tsv_wpcli_assoc_args($sourceDir . '/missing.tsv');
+        $invalidPath['out'] = $out;
+        $thrown = false;
+        try {
+            (new WP_FTS_WPCLI_Command())->import_lemma_pack([], $invalidPath);
+        } catch (RuntimeException $e) {
+            $thrown = true;
+            assert_contains('Required file --source does not exist', $e->getMessage(), 'WP-CLI import should reject invalid source paths');
+        }
+        assert_true($thrown, 'WP-CLI import should throw when the source path is invalid');
+        assert_true(!is_dir($out), 'source-path rejection should not create an output directory');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION]['lemmatizer_packs_by_lang']['qaa']), 'failed imports should not enable the requested language');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+        wp_fts_test_reset_wordpress_fakes();
     }
 });
 
