@@ -1,0 +1,93 @@
+{
+  "schema_version": "wp-fts-top-language-lemma-packs/v1",
+  "languages": [
+    {
+      "language": "en",
+      "label": "English",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Pack-backed morphology required for Polish-like quality."
+    },
+    {
+      "language": "zh",
+      "label": "Chinese",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": [],
+      "notes": "Chinese likely needs tokenizer/segmentation evidence rather than lemma packs; audit must keep it visible."
+    },
+    {
+      "language": "hi",
+      "label": "Hindi",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Baseline suffix rules are not enough for Polish-like quality."
+    },
+    {
+      "language": "es",
+      "label": "Spanish",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Pack-backed morphology required for Polish-like quality."
+    },
+    {
+      "language": "ar",
+      "label": "Arabic",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Light stemming is not enough for Polish-like quality."
+    },
+    {
+      "language": "fr",
+      "label": "French",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Pack-backed morphology required for Polish-like quality."
+    },
+    {
+      "language": "bn",
+      "label": "Bengali",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Synthetic committed pack is not product dictionary coverage."
+    },
+    {
+      "language": "pt",
+      "label": "Portuguese",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Pack-backed morphology required for Polish-like quality."
+    },
+    {
+      "language": "id",
+      "label": "Indonesian",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Pack-backed morphology required for Polish-like quality."
+    },
+    {
+      "language": "ur",
+      "label": "Urdu",
+      "role": "target",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Light suffix rules are not enough for Polish-like quality."
+    },
+    {
+      "language": "pl",
+      "label": "Polish",
+      "role": "reference",
+      "pack_required": false,
+      "accepted_importers": ["lemma-tsv"],
+      "notes": "Reference lane for pack-backed behavior."
+    }
+  ]
+}

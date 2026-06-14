@@ -117,6 +117,12 @@ Morphology support must come from verified algorithms, analyzers, or
 manifest-backed lemmatizer packs. The plugin does not use hard-coded word
 families for product behavior.
 
+Importer availability is not the same as pack-backed language support. To audit
+top-language readiness, run
+`php tools/audit-top-language-lemma-packs.php --pack-root=/path --json --require-pack-backed`.
+Languages reported as missing or fixture-only are not ready to claim
+Polish-like quality.
+
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus deterministic
 overlapping n-grams up to 4 characters. The plugin does not currently ship Thai

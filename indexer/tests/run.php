@@ -929,6 +929,109 @@ function synthetic_qaa_lemma_tsv_import_args(string $source, string $out): array
     ];
 }
 
+function write_synthetic_audit_lemma_tsv_source(string $path, string $prefix): void
+{
+    $contents = implode("\n", [
+        "# Project-owned synthetic {$prefix} top-language audit fixture.",
+        "{$prefix}formb\t{$prefix}lemma\tAUDIT\tsecond synthetic audit source note",
+        "{$prefix}solo\t{$prefix}solo",
+        "{$prefix}forma\t{$prefix}lemma\tAUDIT\tfirst synthetic audit source note",
+        '',
+    ]);
+
+    if (file_put_contents($path, $contents) === false) {
+        throw new WP_FTS_TestFailure("Could not write synthetic top-language audit source: {$path}");
+    }
+}
+
+/**
+ * @return string[]
+ */
+function synthetic_audit_lemma_tsv_import_args(string $language, string $source, string $out, bool $fixtureOnly): array
+{
+    $kind = $fixtureOnly ? 'fixture' : 'pack-backed';
+
+    return [
+        '--source=' . $source,
+        '--out=' . $out,
+        '--language=' . $language,
+        '--pack-id=' . $language . '-synthetic-audit-' . $kind,
+        '--version=0.1.0-synthetic-audit',
+        '--source-name=Project-owned synthetic ' . $language . ' top-language audit ' . $kind . ' pack',
+        '--source-version=0.1.0-synthetic',
+        '--source-url=urn:wp-fts:test:synthetic-' . $language . '-top-language-audit',
+        '--license=CC0-1.0',
+        '--license-url=urn:wp-fts:test:synthetic-' . $language . '-audit-license',
+        '--attribution=Project-owned synthetic ' . $language . ' rows for top-language audit tests only.',
+        '--fixture-only=' . ($fixtureOnly ? 'true' : 'false'),
+        '--max-rows-per-file=2',
+        '--chunk-rows=2',
+        '--importer-commit=test-commit',
+    ];
+}
+
+function write_synthetic_audit_lemma_pack(string $language, string $out, bool $fixtureOnly): string
+{
+    require_once __DIR__ . '/../tools/import-lemma-tsv-pack.php';
+
+    $sourceDir = temp_directory_path('top_language_audit_source_' . $language);
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic audit source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/' . $language . '-normalized-lemma.tsv';
+        write_synthetic_audit_lemma_tsv_source($source, $language);
+
+        $options = WP_FTS_LemmaTsvPackImporter::parse_cli_options(
+            synthetic_audit_lemma_tsv_import_args($language, $source, $out, $fixtureOnly)
+        );
+        (new WP_FTS_LemmaTsvPackImporter())->import($options);
+
+        return $out . '/manifest.json';
+    } finally {
+        remove_directory_tree($sourceDir);
+    }
+}
+
+/**
+ * @param string[] $args
+ * @return array{exit:int,stdout:string,stderr:string,json:array<string,mixed>}
+ */
+function run_top_language_pack_audit(array $args): array
+{
+    $cli = test_run_subprocess(
+        array_merge([PHP_BINARY, dirname(__DIR__) . '/tools/audit-top-language-lemma-packs.php'], $args),
+        dirname(__DIR__)
+    );
+    $payload = json_decode($cli['stdout'], true, 512, JSON_THROW_ON_ERROR);
+    if (!is_array($payload)) {
+        throw new WP_FTS_TestFailure('Top-language audit JSON did not decode to an object.');
+    }
+
+    return $cli + ['json' => $payload];
+}
+
+/**
+ * @param array<string,mixed> $payload
+ * @return array<string,array<string,mixed>>
+ */
+function top_language_audit_rows_by_language(array $payload): array
+{
+    if (!isset($payload['rows']) || !is_array($payload['rows'])) {
+        throw new WP_FTS_TestFailure('Top-language audit JSON did not include rows.');
+    }
+
+    $rows = [];
+    foreach ($payload['rows'] as $row) {
+        if (!is_array($row) || !is_string($row['language'] ?? null)) {
+            throw new WP_FTS_TestFailure('Top-language audit row is malformed.');
+        }
+        $rows[$row['language']] = $row;
+    }
+
+    return $rows;
+}
+
 /**
  * @return string[]
  */
@@ -4061,6 +4164,155 @@ test_case('plugin runtime analyzer ignores invalid or language-mismatched generi
     assert_same('ignored', $statuses['pt']['status'] ?? null, 'missing pack should be reported as ignored');
     assert_same('ignored', $statuses['ur']['status'] ?? null, 'wrong-language generic pack should be reported as ignored');
     assert_same('disabled', $statuses['de']['status'] ?? null, 'explicit false pack option should disable that language pack entry');
+});
+
+test_case('top-language pack audit fails required gate when manifests are missing', function (): void {
+    $root = temp_directory_path('top_language_audit_empty_root');
+    try {
+        if (!mkdir($root, 0777, true) && !is_dir($root)) {
+            throw new WP_FTS_TestFailure("Could not create empty audit root: {$root}");
+        }
+
+        $cli = run_top_language_pack_audit([
+            '--pack-root=' . $root,
+            '--json',
+            '--require-pack-backed',
+        ]);
+        assert_same(1, $cli['exit'], 'top-language audit should fail when required target packs are absent');
+        assert_same('fail', $cli['json']['status'] ?? null, 'top-language audit JSON should expose the failed gate');
+
+        $rows = top_language_audit_rows_by_language($cli['json']);
+        foreach (['en', 'zh', 'es', 'bn', 'ur'] as $language) {
+            assert_same('missing_pack', $rows[$language]['status'] ?? null, "{$language} should report a missing pack");
+            assert_same(true, $rows[$language]['pack_required'] ?? null, "{$language} should remain required in the audit registry");
+        }
+    } finally {
+        remove_directory_tree($root);
+    }
+});
+
+test_case('top-language pack audit marks generated non-fixture Spanish pack as pack-backed', function (): void {
+    $root = temp_directory_path('top_language_audit_es_root');
+    try {
+        if (!mkdir($root, 0777, true) && !is_dir($root)) {
+            throw new WP_FTS_TestFailure("Could not create Spanish audit root: {$root}");
+        }
+        $manifest = write_synthetic_audit_lemma_pack('es', $root . '/es-pack', false);
+
+        $cli = run_top_language_pack_audit([
+            '--pack-root=' . $root,
+            '--json',
+        ]);
+        assert_same(0, $cli['exit'], 'top-language audit should pass without the required gate');
+
+        $rows = top_language_audit_rows_by_language($cli['json']);
+        assert_same('pack_backed', $rows['es']['status'] ?? null, 'generated non-fixture Spanish manifest should count as pack-backed');
+        assert_same('es-synthetic-audit-pack-backed', $rows['es']['pack_id'] ?? null, 'Spanish audit row should expose the generated pack id');
+        assert_same(realpath($manifest), $rows['es']['manifest'] ?? null, 'Spanish audit row should expose the discovered manifest path');
+    } finally {
+        remove_directory_tree($root);
+    }
+});
+
+test_case('top-language pack audit treats generated Bengali fixture pack as insufficient', function (): void {
+    $root = temp_directory_path('top_language_audit_bn_fixture_root');
+    try {
+        if (!mkdir($root, 0777, true) && !is_dir($root)) {
+            throw new WP_FTS_TestFailure("Could not create Bengali audit root: {$root}");
+        }
+        write_synthetic_audit_lemma_pack('bn', $root . '/bn-fixture-pack', true);
+
+        $cli = run_top_language_pack_audit([
+            '--pack-root=' . $root,
+            '--json',
+            '--require-pack-backed',
+        ]);
+        assert_same(1, $cli['exit'], 'required audit gate should fail when Bengali coverage is fixture-only');
+
+        $rows = top_language_audit_rows_by_language($cli['json']);
+        assert_same('fixture_only', $rows['bn']['status'] ?? null, 'generated Bengali fixture manifest should be reported as fixture-only');
+        assert_same('bn-synthetic-audit-fixture', $rows['bn']['pack_id'] ?? null, 'Bengali audit row should expose the fixture pack id');
+    } finally {
+        remove_directory_tree($root);
+    }
+});
+
+test_case('top-language pack audit reports explicit manifest language mismatch', function (): void {
+    $root = temp_directory_path('top_language_audit_mismatch_root');
+    $pack = temp_directory_path('top_language_audit_mismatch_pack');
+    try {
+        if (!mkdir($root, 0777, true) && !is_dir($root)) {
+            throw new WP_FTS_TestFailure("Could not create mismatch audit root: {$root}");
+        }
+        $manifest = write_synthetic_audit_lemma_pack('bn', $pack, true);
+
+        $cli = run_top_language_pack_audit([
+            '--pack-root=' . $root,
+            '--manifest=es:' . $manifest,
+            '--json',
+        ]);
+        assert_same(0, $cli['exit'], 'language mismatch should be reported without failing when the required gate is off');
+
+        $rows = top_language_audit_rows_by_language($cli['json']);
+        assert_same('language_mismatch', $rows['es']['status'] ?? null, 'explicit Spanish mapping to a Bengali manifest should report mismatch');
+        assert_same('bn', $rows['es']['manifest_language'] ?? null, 'mismatch row should expose the manifest language');
+        assert_same('bn-synthetic-audit-fixture', $rows['es']['pack_id'] ?? null, 'mismatch row should still expose validated manifest metadata');
+    } finally {
+        remove_directory_tree($root);
+        remove_directory_tree($pack);
+    }
+});
+
+test_case('top-language pack audit reports corrupt explicit manifest as invalid', function (): void {
+    $root = temp_directory_path('top_language_audit_corrupt_root');
+    $pack = temp_directory_path('top_language_audit_corrupt_pack');
+    try {
+        foreach ([$root, $pack] as $directory) {
+            if (!mkdir($directory, 0777, true) && !is_dir($directory)) {
+                throw new WP_FTS_TestFailure("Could not create corrupt audit directory: {$directory}");
+            }
+        }
+        $manifest = $pack . '/manifest.json';
+        if (file_put_contents($manifest, "{\"schema_version\":1,\n") === false) {
+            throw new WP_FTS_TestFailure("Could not write corrupt audit manifest: {$manifest}");
+        }
+
+        $cli = run_top_language_pack_audit([
+            '--pack-root=' . $root,
+            '--manifest=es:' . $manifest,
+            '--json',
+        ]);
+        assert_same(0, $cli['exit'], 'invalid explicit pack should be reported without failing when the required gate is off');
+
+        $rows = top_language_audit_rows_by_language($cli['json']);
+        assert_same('invalid_pack', $rows['es']['status'] ?? null, 'corrupt explicit manifest should report invalid_pack');
+        assert_contains('not valid JSON', (string) ($rows['es']['error'] ?? ''), 'invalid pack row should expose validator metadata errors');
+    } finally {
+        remove_directory_tree($root);
+        remove_directory_tree($pack);
+    }
+});
+
+test_case('top-language pack audit discovers nested pack-root manifests', function (): void {
+    $root = temp_directory_path('top_language_audit_nested_root');
+    try {
+        if (!mkdir($root, 0777, true) && !is_dir($root)) {
+            throw new WP_FTS_TestFailure("Could not create nested audit root: {$root}");
+        }
+        $manifest = write_synthetic_audit_lemma_pack('es', $root . '/one/two/es-pack', false);
+
+        $cli = run_top_language_pack_audit([
+            '--pack-root=' . $root,
+            '--json',
+        ]);
+        assert_same(0, $cli['exit'], 'nested audit discovery should succeed');
+
+        $rows = top_language_audit_rows_by_language($cli['json']);
+        assert_same('pack_backed', $rows['es']['status'] ?? null, 'nested Spanish manifest should be discovered by pack-root scan');
+        assert_same(realpath($manifest), $rows['es']['manifest'] ?? null, 'nested audit row should expose the discovered manifest path');
+    } finally {
+        remove_directory_tree($root);
+    }
 });
 
 test_case('generic lemma TSV importer builds a valid synthetic pack', function (): void {
