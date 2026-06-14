@@ -1,15 +1,14 @@
 # Configuration
 
 This branch has no settings screen for analyzer, search, or extractor
-configuration. WordPress runtime indexing, REST/admin search, and the PHP
-plugin search helper use a runtime analyzer that auto-loads the bundled Polish
-pack path when available, then falls back conservatively. WP-CLI commands use
-the default analyzer and MySQL storage. Operational options such as schema
-version and pending queue state are managed internally, and selected custom
-fields can be supplied through an option or filters. More advanced
-configuration is available to PHP callers that instantiate `WP_FTS_Analyzer`,
-`WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or `WP_FTS_Storage_Mysql`
-directly.
+configuration. WordPress runtime indexing, REST/admin search, the PHP plugin
+search helper, and WP-CLI use `WP_FTS_Plugin::runtime_analyzer()`.
+Per-language lemma packs can be supplied through the `wp_fts_analyzer_options`
+option or filter. Operational options such as schema version and pending queue
+state are managed internally, and selected custom fields can be supplied
+through an option or filters. More advanced configuration is available to PHP
+callers that instantiate `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`,
+`WP_FTS_Searcher`, or `WP_FTS_Storage_Mysql` directly.
 
 ## Languages
 
@@ -126,11 +125,10 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
-WordPress runtime indexing, REST/admin search, and the PHP plugin search helper
-use the plugin runtime analyzer. That runtime path enables the bundled local
-Polish pack when its compressed shards can be read; otherwise it falls back to
-the bundled tiny Polish fixture pack. WP-CLI commands currently create
-`new WP_FTS_Analyzer()` with no custom options.
+WordPress runtime indexing, REST/admin search, the PHP plugin search helper,
+the admin sandbox, and WP-CLI use the same plugin runtime analyzer. Reindex
+after changing analyzer options so stored terms and document signatures are
+rebuilt with the new behavior.
 
 Analyzer behavior participates in stale-document detection. A reindex skips
 unchanged content only when the source content, primary language, and
@@ -250,11 +248,35 @@ are ignored so the existing fallback analyzer remains available. Enabled packs
 participate in the language-pipeline signature, so unchanged documents are
 rewritten when a pack changes.
 
+WordPress runtime configuration uses the same map shape. The plugin starts with
+its bundled runtime defaults, merges the `wp_fts_analyzer_options` option, then
+applies the `wp_fts_analyzer_options` filter:
+
+```php
+update_option(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, [
+    'lemmatizer_packs_by_lang' => [
+        'bn' => '/srv/wp-fts-packs/bn-approved-lemma-pack/manifest.json',
+    ],
+]);
+
+add_filter(WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER, static function (array $options): array {
+    $options['lemma_packs_by_lang']['ur'] = '/srv/wp-fts-packs/ur-approved-lemma-pack/manifest.json';
+
+    return $options;
+});
+```
+
 `lemma_packs_by_lang` wins over `lemmatizer_packs_by_lang` for the same
 language. The legacy `polish_lemma_pack` / `polish_lemmatizer_pack` aliases map
-to `pl` when no explicit Polish entry is present. Current main exposes these as
-analyzer constructor options for PHP callers; it does not provide a settings
-screen, WP-CLI flag, or WordPress option/filter for arbitrary runtime packs.
+to `pl` when no explicit Polish entry is present. Explicit `false`, `null`,
+`"0"`, `"false"`, `"no"`, or `"off"` disables that configured language entry.
+Invalid, missing, and language-mismatched manifests are reported as ignored in
+the admin sandbox and fall back to the built-in analyzer path for that language.
+
+The Playground/admin runtime auto-loads only the bundled local Polish pack when
+its compressed shards can be read; otherwise it falls back to the bundled tiny
+Polish fixture pack. The synthetic Bengali pack remains a default-disabled test
+fixture and is not product data.
 
 The repository includes a tiny `bn` synthetic fixture only to test this generic
 runtime contract. It is project-owned artificial data, default-disabled, and not
