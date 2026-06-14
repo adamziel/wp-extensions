@@ -87,8 +87,10 @@ Stemming is enabled by default and can be disabled with
 - Generic opt-in lemma-pack infrastructure exists through
   `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. Bundled source-backed
   UniMorph packs exist for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`.
-  They are default-disabled. The old synthetic `bn` contract pack remains a
-  fixture-only runtime contract test; it is not product Bengali morphology.
+  They are enabled automatically only for the admin/Playground sandbox and
+  remain default-disabled elsewhere. The old synthetic `bn` contract pack
+  remains a fixture-only runtime contract test; it is not product Bengali
+  morphology.
 - Hindi (`hi`) uses the bundled generated Snowball stemmer verified against the
   official 65,118-line Hindi fixture data. Bengali (`bn`) uses deterministic
   local suffix stemming for common classifier, plural, genitive, dative, and

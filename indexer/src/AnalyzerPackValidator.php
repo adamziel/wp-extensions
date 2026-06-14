@@ -52,6 +52,49 @@ final class WP_FTS_AnalyzerPackValidator
     }
 
     /**
+     * Return bundled source-backed UniMorph top-language manifest paths keyed by
+     * their manifest language.
+     *
+     * @return array<string,string>
+     */
+    public static function bundled_unimorph_top_language_pack_manifests(): array
+    {
+        $root = dirname(__DIR__) . '/resources/analyzer-packs';
+        $paths = glob($root . '/*-unimorph-*/manifest.json');
+        if (!is_array($paths)) {
+            return [];
+        }
+
+        $manifests = [];
+        foreach ($paths as $manifestPath) {
+            if (!is_string($manifestPath) || !is_file($manifestPath)) {
+                continue;
+            }
+
+            $json = file_get_contents($manifestPath);
+            if (!is_string($json)) {
+                continue;
+            }
+
+            $manifest = json_decode($json, true);
+            if (!is_array($manifest) || !is_scalar($manifest['language'] ?? null)) {
+                continue;
+            }
+
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $manifest['language']);
+            if ($language === '') {
+                continue;
+            }
+
+            $manifests[$language] = $manifestPath;
+        }
+
+        ksort($manifests, SORT_STRING);
+
+        return $manifests;
+    }
+
+    /**
      * Report whether this PHP runtime can stream gzip-compressed runtime shards.
      */
     public static function gzip_available(): bool

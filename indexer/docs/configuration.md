@@ -126,10 +126,11 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
-WordPress runtime indexing, REST/admin search, the PHP plugin search helper,
-the admin sandbox, and WP-CLI use the same plugin runtime analyzer. Reindex
-after changing analyzer options so stored terms and document signatures are
-rebuilt with the new behavior.
+WordPress runtime indexing, REST/admin search, the PHP plugin search helper, and
+WP-CLI use the same plugin runtime analyzer. Reindex after changing analyzer
+options so stored terms and document signatures are rebuilt with the new
+behavior. The admin/Playground sandbox adds a demo-only analyzer layer for the
+bundled local packs described below.
 
 Analyzer behavior participates in stale-document detection. A reindex skips
 unchanged content only when the source content, primary language, and
@@ -274,10 +275,11 @@ to `pl` when no explicit Polish entry is present. Explicit `false`, `null`,
 Invalid, missing, and language-mismatched manifests are reported as ignored in
 the admin sandbox and fall back to the built-in analyzer path for that language.
 
-The Playground/admin runtime auto-loads only the bundled local Polish pack when
-its compressed shards can be read; otherwise it falls back to the bundled tiny
-Polish fixture pack. The synthetic Bengali pack remains a default-disabled test
-fixture and is not product data.
+The Playground/admin sandbox auto-loads the bundled local Polish pack and the
+committed UniMorph packs for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`
+when compressed shards can be read. Outside the sandbox, those UniMorph packs
+remain opt-in/default-disabled. The synthetic Bengali pack remains a
+default-disabled test fixture and is not product data.
 
 ### Importing Normalized Lemma TSV Packs
 

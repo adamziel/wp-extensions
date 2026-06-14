@@ -410,7 +410,7 @@ final class WP_FTS_Plugin
         $query = self::sandbox_search_query();
         $selected_language = self::sandbox_selected_language();
         if ($query === '' && !$search_submitted) {
-            $query = 'run';
+            $query = 'mouse';
         }
 
         $results = self::empty_sandbox_search_results($selected_language);
@@ -630,11 +630,11 @@ final class WP_FTS_Plugin
     {
         return [
             [
-                'post_title' => 'FTS Sandbox: English Running',
-                'post_name' => 'wp-fts-sandbox-running-notes',
+                'post_title' => 'FTS Sandbox: English Mice',
+                'post_name' => 'wp-fts-sandbox-english-mice',
                 'lang' => 'en',
-                'post_content' => '<p>Running steadily builds the search index while the team studies indexed pages.</p>',
-                'post_excerpt' => 'English stemming demo for running and run.',
+                'post_content' => '<p>Mice study indexed pages while building the search index.</p>',
+                'post_excerpt' => 'English UniMorph demo for mice and mouse.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
@@ -657,11 +657,11 @@ final class WP_FTS_Plugin
                 'post_type' => 'post',
             ],
             [
-                'post_title' => 'FTS Sandbox: Hindi Plurals',
-                'post_name' => 'wp-fts-sandbox-hindi-plurals',
+                'post_title' => 'FTS Sandbox: Hindi Lemmatizer',
+                'post_name' => 'wp-fts-sandbox-hindi-lemmatizer',
                 'lang' => 'hi',
-                'post_content' => '<p>किताबें सूचियों में रखी हैं और स्पष्ट पाठ सूचक के लिए उदाहरण है।</p>',
-                'post_excerpt' => 'Hindi stemming demo for plural and oblique forms.',
+                'post_content' => '<p>संपादक नया तरीका अपनाता है और स्पष्ट पाठ सूचक के लिए उदाहरण रखता है।</p>',
+                'post_excerpt' => 'Hindi UniMorph demo for अपनाता and अपनाना.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
@@ -678,26 +678,26 @@ final class WP_FTS_Plugin
                 'post_title' => 'FTS Sandbox: Arabic Search',
                 'post_name' => 'wp-fts-sandbox-arabic-search',
                 'lang' => 'ar',
-                'post_content' => '<p>أأباحتاهم مفيدة للبحث في الفهرس.</p>',
-                'post_excerpt' => 'Arabic stemming demo for verified search forms.',
+                'post_content' => '<p>آبارا مفيدة في الفهرس ومثال البحث.</p>',
+                'post_excerpt' => 'Arabic UniMorph demo for آبارا and بئر.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
             [
-                'post_title' => 'FTS Sandbox: French Manger',
-                'post_name' => 'wp-fts-sandbox-french-manger',
+                'post_title' => 'FTS Sandbox: French Chercher',
+                'post_name' => 'wp-fts-sandbox-french-chercher',
                 'lang' => 'fr',
-                'post_content' => '<p>Les enfants mangeaient rapidement dans le guide.</p>',
-                'post_excerpt' => 'French stemming demo for manger and mangeaient.',
+                'post_content' => '<p>Les equipes cherchent rapidement dans le guide.</p>',
+                'post_excerpt' => 'French UniMorph demo for cherchent and chercher.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
             [
-                'post_title' => 'FTS Sandbox: Bengali Suffix Baseline',
-                'post_name' => 'wp-fts-sandbox-bengali-suffix-baseline',
+                'post_title' => 'FTS Sandbox: Bengali Lemmatizer',
+                'post_name' => 'wp-fts-sandbox-bengali-lemmatizer',
                 'lang' => 'bn',
-                'post_content' => '<p>শব্দগুলো সূচিতে রাখা আছে।</p>',
-                'post_excerpt' => 'Bengali deterministic suffix-baseline demo.',
+                'post_content' => '<p>অনুরোধগুলা সূচিতে রাখা আছে।</p>',
+                'post_excerpt' => 'Bengali UniMorph demo for অনুরোধগুলা and অনুরোধ.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
@@ -711,11 +711,11 @@ final class WP_FTS_Plugin
                 'post_type' => 'post',
             ],
             [
-                'post_title' => 'FTS Sandbox: Indonesian Cari',
-                'post_name' => 'wp-fts-sandbox-indonesian-cari',
+                'post_title' => 'FTS Sandbox: Indonesian Abadi',
+                'post_name' => 'wp-fts-sandbox-indonesian-abadi',
                 'lang' => 'id',
-                'post_content' => '<p>Kami sedang mencari data pencarian dengan catatan jelas.</p>',
-                'post_excerpt' => 'Indonesian stemming demo for cari, mencari, and pencarian.',
+                'post_content' => '<p>Kami abadikan catatan pencarian dengan data jelas.</p>',
+                'post_excerpt' => 'Indonesian UniMorph demo for abadikan and abadi.',
                 'post_status' => 'publish',
                 'post_type' => 'post',
             ],
@@ -982,16 +982,16 @@ final class WP_FTS_Plugin
     private static function sandbox_demo_query_suggestions(): array
     {
         return [
-            'en' => 'run',
+            'en' => 'mouse',
             'pl' => 'kierować zamek',
             'zh' => '搜索系统',
-            'hi' => 'किताब सूची',
+            'hi' => 'अपनाना',
             'es' => 'buscar',
-            'ar' => 'اباح بحث',
-            'fr' => 'manger',
-            'bn' => 'শব্দ সূচি',
+            'ar' => 'بئر',
+            'fr' => 'chercher',
+            'bn' => 'অনুরোধ',
             'pt' => 'pesquisar',
-            'id' => 'cari',
+            'id' => 'abadi',
             'ur' => 'کتاب فہرست',
         ];
     }
@@ -1108,12 +1108,27 @@ final class WP_FTS_Plugin
         ];
     }
 
-    /**
-     * Use the runtime analyzer for the admin demo corpus.
-     */
     private static function sandbox_analyzer(): WP_FTS_Analyzer
     {
-        return self::runtime_analyzer();
+        return self::sandbox_demo_analyzer();
+    }
+
+    /**
+     * Build the analyzer used only by the admin/Playground demo corpus.
+     */
+    public static function sandbox_demo_analyzer(): WP_FTS_Analyzer
+    {
+        return new WP_FTS_Analyzer(self::sandbox_demo_analyzer_options());
+    }
+
+    /**
+     * Return demo-only analyzer options with bundled local packs preconfigured.
+     *
+     * @return array<string,mixed>
+     */
+    public static function sandbox_demo_analyzer_options(): array
+    {
+        return self::sanitize_runtime_analyzer_options(self::raw_sandbox_demo_analyzer_options());
     }
 
     /**
@@ -1186,8 +1201,27 @@ final class WP_FTS_Plugin
      */
     public static function runtime_analyzer_pack_statuses(): array
     {
+        return self::analyzer_pack_statuses(self::raw_runtime_analyzer_options());
+    }
+
+    /**
+     * Report configured sandbox/demo lemma packs for admin diagnostics.
+     *
+     * @return array<int,array{language:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     */
+    public static function sandbox_demo_analyzer_pack_statuses(): array
+    {
+        return self::analyzer_pack_statuses(self::raw_sandbox_demo_analyzer_options());
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     * @return array<int,array{language:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     */
+    private static function analyzer_pack_statuses(array $options): array
+    {
         $statuses = [];
-        foreach (self::runtime_lemma_pack_options_by_language(self::raw_runtime_analyzer_options()) as $language => $option) {
+        foreach (self::runtime_lemma_pack_options_by_language($options) as $language => $option) {
             if (self::lemma_pack_option_is_disabled($option)) {
                 $statuses[] = [
                     'language' => $language,
@@ -1234,8 +1268,28 @@ final class WP_FTS_Plugin
      */
     private static function raw_runtime_analyzer_options(): array
     {
+        return self::raw_analyzer_options_with_bundled_lemma_packs(self::bundled_runtime_lemma_packs_by_lang());
+    }
+
+    /**
+     * Read bundled sandbox/demo defaults, the WordPress option, and the analyzer
+     * options filter.
+     *
+     * @return array<string,mixed>
+     */
+    private static function raw_sandbox_demo_analyzer_options(): array
+    {
+        return self::raw_analyzer_options_with_bundled_lemma_packs(self::bundled_sandbox_demo_lemma_packs_by_lang());
+    }
+
+    /**
+     * @param array<string,bool|string> $bundled_packs
+     * @return array<string,mixed>
+     */
+    private static function raw_analyzer_options_with_bundled_lemma_packs(array $bundled_packs): array
+    {
         $options = [
-            'lemmatizer_packs_by_lang' => self::bundled_runtime_lemma_packs_by_lang(),
+            'lemmatizer_packs_by_lang' => $bundled_packs,
         ];
 
         $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
@@ -1473,6 +1527,24 @@ final class WP_FTS_Plugin
         ];
     }
 
+    /**
+     * @return array<string,bool|string>
+     */
+    private static function bundled_sandbox_demo_lemma_packs_by_lang(): array
+    {
+        $packs = self::bundled_runtime_lemma_packs_by_lang();
+        if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
+            $packs = array_replace(
+                $packs,
+                WP_FTS_AnalyzerPackValidator::bundled_unimorph_top_language_pack_manifests()
+            );
+        }
+
+        ksort($packs, SORT_STRING);
+
+        return $packs;
+    }
+
     private static function sandbox_polish_lemmatizer_pack(): bool|string
     {
         $manifestPath = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
@@ -1571,7 +1643,7 @@ final class WP_FTS_Plugin
 
     private static function render_sandbox_analyzer_pack_statuses(): void
     {
-        $statuses = self::runtime_analyzer_pack_statuses();
+        $statuses = self::sandbox_demo_analyzer_pack_statuses();
 
         echo '<h2>Analyzer packs</h2>';
         if ($statuses === []) {

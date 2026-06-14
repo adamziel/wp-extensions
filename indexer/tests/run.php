@@ -1037,17 +1037,55 @@ function top_language_audit_rows_by_language(array $payload): array
  */
 function bundled_unimorph_top_language_pack_manifests(): array
 {
-    $root = dirname(__DIR__) . '/resources/analyzer-packs';
+    return WP_FTS_AnalyzerPackValidator::bundled_unimorph_top_language_pack_manifests();
+}
 
+/**
+ * @return array<string,array{surface:string,lemma:string,title:string}>
+ */
+function bundled_unimorph_sandbox_demo_probe_cases(): array
+{
     return [
-        'en' => $root . '/en-unimorph-eng-66e0e9e8e2dc/manifest.json',
-        'hi' => $root . '/hi-unimorph-hin-ae6231f736fa/manifest.json',
-        'es' => $root . '/es-unimorph-spa-b9655efb0e5c/manifest.json',
-        'ar' => $root . '/ar-unimorph-ara-e9b7521ab75e/manifest.json',
-        'fr' => $root . '/fr-unimorph-fra-f672f8cceb2d/manifest.json',
-        'bn' => $root . '/bn-unimorph-ben-55a44fa60e9b/manifest.json',
-        'pt' => $root . '/pt-unimorph-por-fc2778e08e2d/manifest.json',
-        'id' => $root . '/id-unimorph-ind-4663cf3b8127/manifest.json',
+        'en' => [
+            'surface' => 'mice',
+            'lemma' => 'mouse',
+            'title' => 'FTS Sandbox: English Mice',
+        ],
+        'es' => [
+            'surface' => 'buscando',
+            'lemma' => 'buscar',
+            'title' => 'FTS Sandbox: Spanish Buscar',
+        ],
+        'fr' => [
+            'surface' => 'cherchent',
+            'lemma' => 'chercher',
+            'title' => 'FTS Sandbox: French Chercher',
+        ],
+        'hi' => [
+            'surface' => 'अपनाता',
+            'lemma' => 'अपनाना',
+            'title' => 'FTS Sandbox: Hindi Lemmatizer',
+        ],
+        'ar' => [
+            'surface' => 'آبارا',
+            'lemma' => 'بئر',
+            'title' => 'FTS Sandbox: Arabic Search',
+        ],
+        'bn' => [
+            'surface' => 'অনুরোধগুলা',
+            'lemma' => 'অনুরোধ',
+            'title' => 'FTS Sandbox: Bengali Lemmatizer',
+        ],
+        'pt' => [
+            'surface' => 'pesquisando',
+            'lemma' => 'pesquisar',
+            'title' => 'FTS Sandbox: Portuguese Pesquisar',
+        ],
+        'id' => [
+            'surface' => 'abadikan',
+            'lemma' => 'abadi',
+            'title' => 'FTS Sandbox: Indonesian Abadi',
+        ],
     ];
 }
 
@@ -2849,9 +2887,9 @@ function wp_fts_test_sandbox_demo_expectations(): array
     return [
         [
             'lang' => 'en',
-            'title' => 'FTS Sandbox: English Running',
-            'query' => 'run',
-            'preview' => 'Running steadily builds the search index',
+            'title' => 'FTS Sandbox: English Mice',
+            'query' => 'mouse',
+            'preview' => 'Mice study indexed pages',
         ],
         [
             'lang' => 'pl',
@@ -2867,9 +2905,9 @@ function wp_fts_test_sandbox_demo_expectations(): array
         ],
         [
             'lang' => 'hi',
-            'title' => 'FTS Sandbox: Hindi Plurals',
-            'query' => 'किताब सूची',
-            'preview' => 'किताबें सूचियों में रखी हैं',
+            'title' => 'FTS Sandbox: Hindi Lemmatizer',
+            'query' => 'अपनाना',
+            'preview' => 'संपादक नया तरीका अपनाता है',
         ],
         [
             'lang' => 'es',
@@ -2880,20 +2918,20 @@ function wp_fts_test_sandbox_demo_expectations(): array
         [
             'lang' => 'ar',
             'title' => 'FTS Sandbox: Arabic Search',
-            'query' => 'اباح بحث',
-            'preview' => 'أأباحتاهم مفيدة للبحث',
+            'query' => 'بئر',
+            'preview' => 'آبارا مفيدة في الفهرس',
         ],
         [
             'lang' => 'fr',
-            'title' => 'FTS Sandbox: French Manger',
-            'query' => 'manger',
-            'preview' => 'Les enfants mangeaient rapidement',
+            'title' => 'FTS Sandbox: French Chercher',
+            'query' => 'chercher',
+            'preview' => 'Les equipes cherchent rapidement',
         ],
         [
             'lang' => 'bn',
-            'title' => 'FTS Sandbox: Bengali Suffix Baseline',
-            'query' => 'শব্দ সূচি',
-            'preview' => 'শব্দগুলো সূচিতে রাখা আছে',
+            'title' => 'FTS Sandbox: Bengali Lemmatizer',
+            'query' => 'অনুরোধ',
+            'preview' => 'অনুরোধগুলা সূচিতে রাখা আছে',
         ],
         [
             'lang' => 'pt',
@@ -2903,9 +2941,9 @@ function wp_fts_test_sandbox_demo_expectations(): array
         ],
         [
             'lang' => 'id',
-            'title' => 'FTS Sandbox: Indonesian Cari',
-            'query' => 'cari',
-            'preview' => 'Kami sedang mencari data pencarian',
+            'title' => 'FTS Sandbox: Indonesian Abadi',
+            'query' => 'abadi',
+            'preview' => 'Kami abadikan catatan pencarian',
         ],
         [
             'lang' => 'ur',
@@ -3071,6 +3109,7 @@ test_case('authorized admin sandbox render includes search form and indexed post
     assert_same(count($demo), count($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? []), 'authorized first render should create the top-language demo posts');
     assert_true($fake->terms !== [], 'authorized first render should build FTS terms for the demo corpus');
     assert_contains('name="wp_fts_sandbox_query"', $html, 'sandbox page should include the search query field');
+    assert_contains('value="mouse"', $html, 'sandbox page should default to the English pack-backed query suggestion');
     assert_contains('name="wp_fts_sandbox_lang"', $html, 'sandbox page should include the query language selector');
     assert_contains('value="auto"', $html, 'sandbox language selector should include automatic detection');
     assert_contains('value="en"', $html, 'sandbox language selector should include English');
@@ -3168,8 +3207,79 @@ test_case('authorized admin sandbox POST actions require nonce before demo mutat
     }
 });
 
+test_case('sandbox demo analyzer loads bundled UniMorph packs without changing runtime defaults', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for bundled UniMorph sandbox demo analyzer coverage',
+        'PHP zlib gzip support is unavailable, so bundled UniMorph sandbox demo analyzer coverage is skipped.'
+    );
+
+    wp_fts_test_reset_wordpress_fakes();
+
+    $manifests = bundled_unimorph_top_language_pack_manifests();
+    assert_same(['ar', 'bn', 'en', 'es', 'fr', 'hi', 'id', 'pt'], array_keys($manifests), 'bundled UniMorph discovery should find only committed top-language manifests');
+
+    $runtimeOptions = WP_FTS_Plugin::runtime_analyzer_options();
+    $runtimePacks = $runtimeOptions['lemmatizer_packs_by_lang'] ?? [];
+    assert_true(is_array($runtimePacks), 'runtime analyzer options should expose the existing pack map shape');
+    foreach ($manifests as $language => $manifest) {
+        assert_true(!array_key_exists($language, $runtimePacks), "{$language} UniMorph pack should not become a production runtime default");
+    }
+    assert_true(array_key_exists('pl', $runtimePacks), 'production runtime defaults should keep the existing bundled Polish pack behavior');
+
+    $sandboxOptions = WP_FTS_Plugin::sandbox_demo_analyzer_options();
+    $sandboxPacks = $sandboxOptions['lemmatizer_packs_by_lang'] ?? [];
+    assert_true(is_array($sandboxPacks), 'sandbox analyzer options should expose the pack map shape');
+    foreach ($manifests as $language => $manifest) {
+        assert_same($manifest, $sandboxPacks[$language] ?? null, "{$language} sandbox analyzer should point at the committed UniMorph manifest");
+    }
+    assert_true(array_key_exists('pl', $sandboxPacks), 'sandbox analyzer should preserve the existing bundled Polish pack');
+
+    $statuses = [];
+    foreach (WP_FTS_Plugin::sandbox_demo_analyzer_pack_statuses() as $status) {
+        $statuses[$status['language']] = $status;
+    }
+    foreach ($manifests as $language => $manifest) {
+        assert_same('active', $statuses[$language]['status'] ?? null, "{$language} sandbox status should mark the committed UniMorph pack active");
+        assert_same(false, $statuses[$language]['fixture_only'] ?? null, "{$language} sandbox status should report the committed pack as full local data");
+    }
+
+    $analyzer = WP_FTS_Plugin::sandbox_demo_analyzer();
+    foreach (bundled_unimorph_sandbox_demo_probe_cases() as $language => $case) {
+        assert_same([$case['lemma']], $analyzer->analyze_query($case['surface'], ['lang' => $language]), "{$language} sandbox analyzer should lemmatize the demo surface through the bundled pack");
+        assert_same([$case['lemma']], $analyzer->analyze_query($case['lemma'], ['lang' => $language]), "{$language} sandbox analyzer should keep the demo lemma searchable");
+
+        $storage = new WP_FTS_Storage_InMemory();
+        (new WP_FTS_Indexer($storage, $analyzer))->index_document_fields(8200 + count($storage->all_doc_ids(false)), [['name' => 'content', 'text' => $case['surface']]], [
+            'lang' => $language,
+            'metadata' => [
+                'post_id' => 8200,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => $case['title'],
+                'search_text' => $case['surface'],
+                'language' => $language,
+            ],
+        ]);
+
+        assert_true(in_array(WP_FTS_TermNamespace::namespace_term($language, $case['lemma']), $storage->all_terms(), true), "{$language} sandbox indexing should store the committed UniMorph lemma");
+        $payload = (new WP_FTS_Searcher($storage, $analyzer))->search($case['lemma'], [
+            'lang' => $language,
+            'mode' => 'AND',
+            'include_total' => true,
+        ]);
+        assert_same(1, $payload['total'], "{$language} sandbox search should find the indexed demo surface by lemma");
+    }
+});
+
 test_case('initial authorized sandbox page load auto-seeds and automatic demo searches use supported partitions', function (): void {
     global $wpdb;
+
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for bundled UniMorph sandbox demo searches',
+        'PHP zlib gzip support is unavailable, so bundled UniMorph sandbox demo searches are skipped.'
+    );
 
     $oldWpdb = $wpdb ?? null;
     $oldGet = $_GET;
@@ -3313,6 +3423,12 @@ test_case('sandbox demo post save immediately refreshes index with sandbox analy
 
 test_case('admin sandbox demo indexing supports requested and detected languages', function (): void {
     global $wpdb;
+
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for bundled UniMorph sandbox demo indexing',
+        'PHP zlib gzip support is unavailable, so bundled UniMorph sandbox demo indexing coverage is skipped.'
+    );
 
     $oldWpdb = $wpdb ?? null;
     $oldGet = $_GET;
@@ -3477,13 +3593,13 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
         assert_contains('Custom Indexed 1', $pageTwoHtml, 'second indexed-post page should include the first non-demo storage row');
         assert_contains('Custom Indexed 9', $pageTwoHtml, 'second indexed-post page should include non-demo storage rows up to the page limit');
         assert_true(!str_contains($pageTwoHtml, 'Custom Indexed 10'), 'second indexed-post page should not leak third-page rows');
-        assert_true(!str_contains($pageTwoHtml, 'FTS Sandbox: English Running'), 'second indexed-post page should prove pagination is active');
+        assert_true(!str_contains($pageTwoHtml, 'FTS Sandbox: English Mice'), 'second indexed-post page should prove pagination is active');
         assert_true(!str_contains($pageTwoHtml, 'Create or refresh demo posts'), 'paginated sandbox page should still hide manual demo refresh controls');
         assert_true(!str_contains($pageTwoHtml, 'Build demo index'), 'paginated sandbox page should still hide manual demo index controls');
 
         $pageOneHtml = $renderSandbox(['wp_fts_sandbox_posts_page' => '1']);
-        assert_contains('FTS Sandbox: English Running', $pageOneHtml, 'first indexed-post page should list the auto-seeded demo index row');
-        assert_contains('FTS Sandbox: Indonesian Cari', $pageOneHtml, 'first indexed-post page should include demo rows up to the page limit');
+        assert_contains('FTS Sandbox: English Mice', $pageOneHtml, 'first indexed-post page should list the auto-seeded demo index row');
+        assert_contains('FTS Sandbox: Indonesian Abadi', $pageOneHtml, 'first indexed-post page should include demo rows up to the page limit');
         assert_true(!str_contains($pageOneHtml, 'FTS Sandbox: Urdu Suffix Baseline'), 'first indexed-post page should not leak the second demo page row');
         assert_true(!str_contains($pageOneHtml, 'Custom Indexed 1'), 'first indexed-post page should not leak second-page custom rows');
 
