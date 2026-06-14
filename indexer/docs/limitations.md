@@ -46,19 +46,22 @@ The detector uses script ranges, distinctive Latin letters, and compact lexical
 evidence. Weak generic Latin text stays on the fallback language, so unsupported
 or ambiguous content can still land in the wrong language partition.
 
-The baseline routed set covers English (`en`), Mandarin/Chinese (`zh`), Hindi
-(`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`),
-Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`), with existing Polish
-(`pl`), German (`de`), and Russian (`ru`) routing kept available where present.
-This support is selectable/detectable language partitioning plus selected
-analyzer improvements. Arabic, Hindi, Spanish, French, Portuguese, and
-Indonesian use bundled generated Snowball stemming, while Bengali has
-deterministic suffix baseline rules for common classifier, plural, genitive,
-dative, and case endings. Arabic and Urdu strip Arabic-script marks and tatweel
-in their own partitions, and Urdu strips common feminine, masculine,
-Arabic-loan, and plural-oblique suffixes. These are not full morphology,
-dictionary segmentation, dictionary lemmatization, or hard-coded word-family
-expansion.
+Current language support is best read by tier:
+
+| Language or partition | What works today | What it does not claim |
+| --- | --- | --- |
+| Polish (`pl`) | Explicit routing plus the strongest morphology path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases, and `polish_stemming => 'verified'` enables a compact fixture-backed stemmer slice. | No bundled full third-party dictionary. Default fallback remains conservative when no valid pack or verified mode is enabled. |
+| English (`en`), Arabic (`ar`), Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese (`pt`), Indonesian (`id`) | Bundled generated Snowball stemming inside their language partitions. | Not dictionary lemmatization, phrase search, synonym expansion, or cross-language merging. |
+| Catalan (`ca`), Dutch Porter (`nl`) | Optional Wamania-backed Snowball stemming when Composer dependencies are present and the compliance harness accepts them. | No broad Wamania language claim beyond the allowlist. |
+| Chinese (`zh`) | Deterministic CJK fallback n-grams up to 4 characters. | No dictionary segmentation, word morphology, or bundled CJK lexical pack. |
+| Bengali (`bn`) | Selectable/detectable partition plus deterministic suffix baseline for common classifier, plural, genitive, dative, and case endings. | Not Snowball-compliant, lemmatizer-backed, or dictionary-backed. The committed `bn` pack is synthetic contract coverage only. |
+| Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common feminine, masculine, Arabic-loan, and plural-oblique forms. | Not Snowball-compliant, lemmatizer-backed, or dictionary-backed. Persian-like text is not merged into Urdu routing. |
+| German (`de`), Russian (`ru`), other explicit partitions | Language namespace/routing support with conservative normalized tokens unless a documented analyzer exists. | No unverified morphology claim. |
+| Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` can enable local manifest-backed, language-matched packs. | Invalid, missing, disabled, or mismatched packs do not stop indexing; they fall back to the built-in analyzer path. |
+
+Morphology support must come from verified algorithms, analyzers, or
+manifest-backed lemmatizer packs. Hard-coded word-family expansion is not a
+supported product path.
 
 Search can route different query terms to different language partitions. Each
 term still scores inside one resolved partition, and the searcher does not merge
@@ -70,11 +73,11 @@ Stemming is enabled by default and can be disabled with
 `enable_stemming => false`. The built-in stemming path is intentionally narrow:
 
 - Advertised Snowball support is exactly bundled generated Arabic (`ar`),
-  Catalan (`ca`), bundled generated English Porter2 (`en`), bundled generated
-  Spanish (`es`), bundled generated French (`fr`), bundled generated Hindi
-  (`hi`), bundled generated Portuguese (`pt`), bundled generated Indonesian
-  (`id`), and Dutch Porter (`nl`), because those are the
-  implementations currently verified by the Snowball fixture harness.
+  English Porter2 (`en`), Spanish (`es`), French (`fr`), Hindi (`hi`),
+  Portuguese (`pt`), and Indonesian (`id`), plus optional Wamania-backed
+  Catalan (`ca`) and Dutch Porter (`nl`) when Composer dependencies are
+  installed, because those are the implementations currently verified by the
+  Snowball fixture harness.
 - Wamania exposes other language classes, but this branch treats unsupported or
   divergent algorithms as no-ops instead of claiming compliance.
 - Polish (`pl`) uses a conservative local suffix stemmer by default. A valid
@@ -163,6 +166,10 @@ Current search supports:
 - post type, status, and GMT date filters when document metadata is present;
 - snippets and highlighting from bounded extracted metadata text;
 - BM25 scoring with configurable `k1` and `b` for programmatic callers.
+
+Highlighting is analyzer-aware. A matched snippet can highlight a different
+inflected surface form when the query term and candidate token normalize to the
+same analyzed key.
 
 It does not support:
 

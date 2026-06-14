@@ -72,6 +72,17 @@ The index is derived state. Rebuild it after content imports, analyzer changes,
 language-routing changes, or environment moves where the FTS tables were not
 restored with WordPress content.
 
+## Feature Summary
+
+| Area | Current support |
+| --- | --- |
+| Indexing | Builds derived `fts_*` tables from WordPress posts, including title, content, excerpt, rendered block deltas, taxonomy terms, selected custom fields, boosts, and bounded result metadata. |
+| Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, post save/status/delete hooks index or tombstone posts, and `wp fts reindex` can rebuild a scoped corpus. |
+| Language routing | Terms are stored in language namespaces. Explicit `--lang`, the wp-admin `FTS Language` field, Polylang/WPML metadata, and HTML `lang`/`xml:lang` scopes route content before conservative detector fallback. |
+| Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
+| Snippets | Search can return snippets from bounded extracted metadata, with highlighting based on analyzed query/document keys rather than literal text only. |
+| Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, and admin-only Tools > FTS Sandbox used by the Playground preview. |
+
 ## Language And Morphology
 
 Language routing is explicit-first. Use `wp fts reindex --lang=...` or
@@ -85,33 +96,26 @@ detection. It uses script ranges, distinctive Latin letters, and compact lexical
 evidence only when stronger language signals are absent. Unsupported or
 ambiguous languages fall back conservatively instead of guessing aggressively.
 
-The baseline selectable and detectable routing set covers the top-10 spoken
-language partitions requested for this branch: English (`en`), Mandarin/Chinese
-(`zh`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali
-(`bn`), Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`). Polish (`pl`),
-German (`de`), and Russian (`ru`) remain available for explicit routing and
-existing detector support where present.
+The baseline selectable and detectable routing set covers English (`en`),
+Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French
+(`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`).
+Polish (`pl`), German (`de`), Russian (`ru`), and other explicit partitions can
+be routed when callers provide language hints.
 
-The default pipeline includes bundled generated Snowball stemming for English
-Porter2, Arabic, Hindi, Spanish, French, Portuguese, and Indonesian. Arabic is
-verified against the official compressed Snowball data, and Hindi is verified
-against the official 65,118-line Snowball data, not local light suffix baselines
-or hard-coded word-family maps. Catalan and Dutch can use the optional
-Wamania-backed Snowball stemmers when Composer dependencies are present and the
-compliance harness accepts them. Bengali strips only common classifier, plural,
-genitive, dative, and case suffixes.
-Arabic and Urdu strip Arabic-script combining marks/harakat and tatweel inside
-their own language partitions; Urdu also strips only common plural-oblique
-endings, including common feminine, masculine, and Arabic-loan plural forms.
-Persian-like text is not merged into Urdu routing. Polish morphology
-uses configured lemmatizer/analyzer packs where available; it is not driven by
-hard-coded word families. Generic per-language lemma-pack infrastructure is
-available for future source-approved packs, but the only committed non-Polish
-pack is a synthetic test fixture. Missing packs, unsupported languages,
-baseline languages without verified morphology, and ambiguous forms keep
-conservative behavior. Chinese uses fallback CJK n-grams; none of these paths
-claim dictionary segmentation, dictionary lemmatization, or hard-coded
-word-family matching.
+| Language or partition | Current analyzer tier | Boundary |
+| --- | --- | --- |
+| Polish (`pl`) | Strongest path when an opt-in analyzer/lemma pack is valid. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases; the default fallback is conservative unless a valid pack or verified mode is enabled. | The committed fixture proves the pack contract. Full third-party dictionary data is not bundled. |
+| English (`en`), Arabic (`ar`), Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese (`pt`), Indonesian (`id`) | Bundled generated Snowball stemmers verified by the Snowball fixture harness. | Stemming can match inflected forms, but this is not dictionary lemmatization or query expansion. |
+| Catalan (`ca`), Dutch Porter (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Other Wamania languages are treated as no-ops unless they become verified. |
+| Chinese (`zh`) | Deterministic CJK fallback: one-character runs plus overlapping n-grams up to 4 characters. | No bundled dictionary segmentation or CJK word morphology. |
+| Bengali (`bn`) | Deterministic suffix baseline for common classifier, plural, genitive, dative, and case endings. Generic lemma-pack infrastructure can support future source-approved packs. | The committed `bn` pack is synthetic contract coverage only, not product Bengali dictionary data. |
+| Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common plural-oblique forms. | Not dictionary-backed, not Snowball-backed, and Persian-like text is not merged into Urdu routing. |
+| German (`de`), Russian (`ru`), and other explicit partitions | Language namespace/routing support with conservative analysis unless a documented analyzer is available. | Unsupported morphology returns the normalized token unchanged. |
+| Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` accept local manifest-backed packs with matching `language` values. | Missing, invalid, disabled, or language-mismatched packs fall back safely. |
+
+Morphology support must come from verified algorithms, analyzers, or
+manifest-backed lemmatizer packs. The plugin does not use hard-coded word
+families for product behavior.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus deterministic

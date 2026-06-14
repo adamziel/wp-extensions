@@ -1,12 +1,15 @@
 # Configuration
 
 This branch has no settings screen for analyzer, search, or extractor
-configuration. WP-CLI commands use the default analyzer and MySQL storage.
-Operational options such as schema version and pending queue state are managed
-internally, and selected custom fields can be supplied through an option or
-filters. More advanced configuration is available to PHP callers that
-instantiate `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
-`WP_FTS_Storage_Mysql` directly.
+configuration. WordPress runtime indexing, REST/admin search, and the PHP
+plugin search helper use a runtime analyzer that auto-loads the bundled Polish
+pack path when available, then falls back conservatively. WP-CLI commands use
+the default analyzer and MySQL storage. Operational options such as schema
+version and pending queue state are managed internally, and selected custom
+fields can be supplied through an option or filters. More advanced
+configuration is available to PHP callers that instantiate `WP_FTS_Analyzer`,
+`WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or `WP_FTS_Storage_Mysql`
+directly.
 
 ## Languages
 
@@ -52,23 +55,26 @@ distinctive Latin letters, and compact lexical evidence to fill gaps. Explicit
 caller options, HTML language attributes, Polylang/WPML metadata, and custom
 language resolvers remain authoritative.
 
-The built-in baseline detector and admin selectors cover these top-10 spoken
-language partitions for explicit routing and conservative gap detection:
-English (`en`), Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic
-(`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`),
-and Urdu (`ur`). Polish (`pl`), German (`de`), and Russian (`ru`) remain
-available where the existing analyzer and detector routes already support them.
-This now includes bundled generated Snowball stemming for Arabic (`ar`), Hindi
-(`hi`), Spanish (`es`), French (`fr`), Portuguese (`pt`), and Indonesian (`id`).
-Bengali (`bn`) strips only common classifier, plural, genitive, dative, and case
-suffixes. Arabic
-(`ar`) and Urdu (`ur`) strip Arabic-script combining marks/harakat and tatweel
-inside their own partitions. Arabic and Hindi then use generated Snowball
-algorithms verified against official fixture data, while Urdu strips only common
-plural-oblique endings, including common feminine, masculine, and Arabic-loan
-plural forms. This is still not full lemmatization, dictionary
-segmentation, or query expansion. Chinese (`zh`) remains deterministic fallback
-CJK n-gram retrieval up to 4 characters.
+The built-in baseline detector and admin selectors cover English (`en`),
+Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French
+(`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`).
+Polish (`pl`), German (`de`), Russian (`ru`), and other explicit partitions can
+be routed when callers provide language hints.
+
+| Language or partition | Routing support | Analyzer tier | Fallback and boundary |
+| --- | --- | --- | --- |
+| Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | Strongest path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice. | Default behavior remains conservative unless a valid pack or verified mode is enabled. Bundled fixtures prove contracts; they are not a full third-party dictionary. |
+| English (`en`), Arabic (`ar`), Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese (`pt`), Indonesian (`id`) | Selectable/detectable language partitions. | Bundled generated Snowball stemmers verified by the Snowball fixture harness. | Stemming improves inflection recall but is not dictionary lemmatization, synonym expansion, or phrase handling. |
+| Catalan (`ca`), Dutch Porter (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
+| Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization: one-character runs plus overlapping n-grams up to 4 characters. | No bundled dictionary segmentation, word morphology, or CJK lexical pack. |
+| Bengali (`bn`) | Selectable/detectable partition. | Deterministic light suffix baseline for common classifier, plural, genitive, dative, and case endings. | Not Snowball-backed or dictionary-backed. The committed `bn` pack is synthetic contract coverage only and stays default-disabled. |
+| Urdu (`ur`) | Selectable/detectable partition. | Arabic-script combining mark/harakat and tatweel normalization plus deterministic light suffix baseline for common plural-oblique forms. | Not Snowball-backed or dictionary-backed. Persian-like text is not merged into Urdu routing. |
+| German (`de`), Russian (`ru`), other explicit partitions | Language namespace/routing support when the caller or detector supplies the language. | Conservative analysis unless a documented analyzer exists. | Unsupported morphology returns the normalized token unchanged. |
+| Generic packs | Available through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Local manifest-backed packs whose manifest `language` matches the configured key. | Invalid, missing, disabled, or language-mismatched packs are ignored and the built-in fallback path remains available. |
+
+Morphology support must come from verified algorithms, analyzers, or
+manifest-backed lemmatizer packs. Do not model product behavior with hard-coded
+word families.
 
 The current searcher scores each query term inside one resolved language
 partition. It can route different terms to different partitions, but it does not
@@ -85,8 +91,9 @@ The default analyzer:
 - folds diacritics by default;
 - strips Arabic-script combining marks/harakat and tatweel for Arabic (`ar`)
   and Urdu (`ur`) only;
-- applies bundled generated Snowball stemming for Arabic (`ar`) and Hindi
-  (`hi`);
+- applies bundled generated Snowball stemming for English (`en`), Arabic (`ar`),
+  Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese (`pt`), and
+  Indonesian (`id`);
 - applies conservative Bengali (`bn`) classifier/plural/genitive/dative/case
   suffix stemming;
 - applies conservative Urdu (`ur`) feminine/masculine/Arabic-loan/plural-oblique
@@ -119,8 +126,11 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
-The WP-CLI commands currently create `new WP_FTS_Analyzer()` with no custom
-options.
+WordPress runtime indexing, REST/admin search, and the PHP plugin search helper
+use the plugin runtime analyzer. That runtime path enables the bundled local
+Polish pack when its compressed shards can be read; otherwise it falls back to
+the bundled tiny Polish fixture pack. WP-CLI commands currently create
+`new WP_FTS_Analyzer()` with no custom options.
 
 Analyzer behavior participates in stale-document detection. A reindex skips
 unchanged content only when the source content, primary language, and
@@ -240,6 +250,12 @@ are ignored so the existing fallback analyzer remains available. Enabled packs
 participate in the language-pipeline signature, so unchanged documents are
 rewritten when a pack changes.
 
+`lemma_packs_by_lang` wins over `lemmatizer_packs_by_lang` for the same
+language. The legacy `polish_lemma_pack` / `polish_lemmatizer_pack` aliases map
+to `pl` when no explicit Polish entry is present. Current main exposes these as
+analyzer constructor options for PHP callers; it does not provide a settings
+screen, WP-CLI flag, or WordPress option/filter for arbitrary runtime packs.
+
 The repository includes a tiny `bn` synthetic fixture only to test this generic
 runtime contract. It is project-owned artificial data, default-disabled, and not
 Bengali dictionary or morphology coverage. Real Bengali, Urdu, and CJK lexical
@@ -306,7 +322,7 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
-The WP-CLI default analyzer does not configure stopwords.
+The WordPress runtime analyzer does not configure stopwords by default.
 
 ## Custom Fields And Content Extraction
 
@@ -385,8 +401,14 @@ $searcher = new WP_FTS_Searcher(
 );
 ```
 
+Snippet generation uses bounded extracted metadata text stored at index time.
+When highlighting is enabled, snippet tokens are analyzed before comparison, so
+a snippet can highlight a different inflected surface form when the query and
+candidate token normalize to the same analyzed key.
+
 Current search does not support phrases, positions, field-specific result
-explanations, facets, snippets, or cross-language score merging.
+explanations, facets, typo tolerance, query-time synonyms, or cross-language
+score merging.
 
 ## Storage Prefix
 
