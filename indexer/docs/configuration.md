@@ -366,6 +366,55 @@ read stable-sorted `.conllu` files. `--enable` stores the generated manifest in
 the runtime analyzer options; reindex existing content after enabling a new pack
 so stored index terms use the new lemmatizer.
 
+### Importing UniMorph-Style Lemma Packs
+
+`tools/import-unimorph-lemma-pack.php` converts source-approved inflection
+tables shaped like UniMorph rows into the normalized lemma TSV contract, then
+uses the same analyzer-pack generation path described above. Each non-comment
+input row must be `lemma<TAB>surface<TAB>features`. Comments, blank rows,
+placeholder lemma/surface values, and values that do not normalize to one
+runtime token are skipped; rows with any other field count are rejected.
+
+Use this for reviewed dictionary-shaped build artifacts where the exact source,
+license, source version, URL, and attribution are known. It is a
+pack-generation path, not bundled broad dictionary coverage, and it does not
+download data or hard-code word families.
+
+```sh
+php tools/import-unimorph-lemma-pack.php \
+  --source=/path/to/source-approved-unimorph-table \
+  --out=/srv/wp-fts-packs/es-unimorph-lemma-pack \
+  --language=es \
+  --pack-id=es-unimorph-lemma-pack \
+  --version=2026.06 \
+  --source-name="Reviewed UniMorph source" \
+  --source-url="https://example.test/source-artifact" \
+  --license=CC-BY-SA-4.0 \
+  --license-url="https://creativecommons.org/licenses/by-sa/4.0/" \
+  --source-version=2026.06 \
+  --attribution="Required upstream attribution text"
+```
+
+The same path is available in WordPress through WP-CLI:
+
+```sh
+wp fts import-unimorph-lemma-pack \
+  --source=/path/to/source-approved-unimorph-table \
+  --language=es \
+  --pack-id=es-unimorph-lemma-pack \
+  --version=2026.06 \
+  --source-name="Reviewed UniMorph source" \
+  --source-url="https://example.test/source-artifact" \
+  --license=CC-BY-SA-4.0 \
+  --attribution="Required upstream attribution text" \
+  --enable
+```
+
+`--source` may point to one file or a directory. Directory imports recursively
+read stable-sorted `.txt`, `.tsv`, and `.unimorph` files. `--enable` stores the
+generated manifest in the runtime analyzer options; reindex existing content
+after enabling a new pack so stored index terms use the new lemmatizer.
+
 Full generated packs stay opt-in and default-disabled. The full CLARIN-PL
 source archive, extracted TSV, and generated runtime shards are not bundled in
 this repository or plugin package. Users or build systems must generate and

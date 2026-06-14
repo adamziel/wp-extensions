@@ -878,6 +878,33 @@ function write_synthetic_qaa_conllu_source(string $path): void
     }
 }
 
+function synthetic_qaa_unimorph_row(string $lemma, string $surface, string $features = 'N;SG'): string
+{
+    return implode("\t", [$lemma, $surface, $features]);
+}
+
+function write_synthetic_qaa_unimorph_source(string $path): void
+{
+    $contents = implode("\n", [
+        '# Project-owned synthetic qaa UniMorph importer fixture.',
+        synthetic_qaa_unimorph_row('QAALemma', 'QAAFormB', 'V;PST'),
+        synthetic_qaa_unimorph_row('QAAOne', 'QAAAmb'),
+        '',
+        synthetic_qaa_unimorph_row('_', 'QAAPlaceholderLemma'),
+        synthetic_qaa_unimorph_row('QAALemma', '_'),
+        synthetic_qaa_unimorph_row('QAALemma', 'QAA Multi'),
+        synthetic_qaa_unimorph_row('QAA-Lemma', 'QAAHyphenLemma'),
+        synthetic_qaa_unimorph_row('QAALemma', 'QAAFormA', 'V;PRS'),
+        synthetic_qaa_unimorph_row('QAASolo', 'QAASolo'),
+        synthetic_qaa_unimorph_row('QAATwo', 'QAAAmb', 'N;PL'),
+        '',
+    ]);
+
+    if (file_put_contents($path, $contents) === false) {
+        throw new WP_FTS_TestFailure("Could not write synthetic qaa UniMorph source: {$path}");
+    }
+}
+
 /**
  * @return string[]
  */
@@ -927,6 +954,30 @@ function synthetic_qaa_conllu_import_args(string $source, string $out): array
 }
 
 /**
+ * @return string[]
+ */
+function synthetic_qaa_unimorph_import_args(string $source, string $out): array
+{
+    return [
+        '--source=' . $source,
+        '--out=' . $out,
+        '--language=qaa',
+        '--pack-id=qaa-synthetic-unimorph-lemma-importer',
+        '--version=0.1.0-synthetic-unimorph-import',
+        '--source-name=Project-owned synthetic qaa UniMorph importer fixture',
+        '--source-version=0.1.0-synthetic',
+        '--source-url=urn:wp-fts:test:synthetic-qaa-unimorph',
+        '--license=CC0-1.0',
+        '--license-url=urn:wp-fts:test:synthetic-qaa-license',
+        '--attribution=Project-owned synthetic qaa UniMorph rows for importer tests only.',
+        '--fixture-only=true',
+        '--max-rows-per-file=2',
+        '--chunk-rows=2',
+        '--importer-commit=test-commit',
+    ];
+}
+
+/**
  * @return array<string,mixed>
  */
 function synthetic_qaa_lemma_tsv_wpcli_assoc_args(string $source): array
@@ -960,6 +1011,27 @@ function synthetic_qaa_conllu_wpcli_assoc_args(string $source): array
         'source-name' => 'Project-owned synthetic qaa CoNLL-U importer fixture',
         'source-version' => '0.1.0-synthetic',
         'source-url' => 'urn:wp-fts:test:synthetic-qaa-conllu',
+        'license' => 'CC0-1.0',
+        'license-url' => 'urn:wp-fts:test:synthetic-qaa-license',
+        'fixture-only' => true,
+        'max-rows-per-file' => '2',
+        'chunk-rows' => '2',
+    ];
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function synthetic_qaa_unimorph_wpcli_assoc_args(string $source): array
+{
+    return [
+        'source' => $source,
+        'lang' => 'qaa',
+        'pack-id' => 'qaa-synthetic-unimorph-lemma-importer',
+        'version' => '0.1.0-synthetic-unimorph-import',
+        'source-name' => 'Project-owned synthetic qaa UniMorph importer fixture',
+        'source-version' => '0.1.0-synthetic',
+        'source-url' => 'urn:wp-fts:test:synthetic-qaa-unimorph',
         'license' => 'CC0-1.0',
         'license-url' => 'urn:wp-fts:test:synthetic-qaa-license',
         'fixture-only' => true,
@@ -4555,6 +4627,326 @@ test_case('wp cli import conllu lemma pack without enable preserves existing ana
         assert_same(['সিনথ000লেমা'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('সিনথ000গুলো', ['lang' => 'bn']), 'pre-existing analyzer option should continue to drive runtime analyzer after CoNLL-U import');
         assert_same(['qaaformb'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('qaaformb', ['lang' => 'qaa']), 'non-enabled CoNLL-U imported pack should not affect runtime analyzer');
         assert_contains('Runtime analyzer options were not changed', WP_CLI::$successMessages[0] ?? '', 'CoNLL-U no-enable success message should report unchanged analyzer options');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('unimorph lemma importer builds a valid synthetic pack and skips non-runtime rows', function (): void {
+    $sourceDir = temp_directory_path('unimorph_import_source');
+    $out = temp_directory_path('unimorph_import_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic UniMorph source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-synthetic.unimorph';
+        write_synthetic_qaa_unimorph_source($source);
+
+        $cli = test_run_subprocess(
+            array_merge(
+                [PHP_BINARY, dirname(__DIR__) . '/tools/import-unimorph-lemma-pack.php'],
+                synthetic_qaa_unimorph_import_args($source, $out)
+            ),
+            dirname(__DIR__)
+        );
+        assert_same(0, $cli['exit'], 'UniMorph importer CLI should succeed for synthetic source-shaped input: ' . $cli['stderr']);
+
+        $summary = json_decode($cli['stdout'], true, 512, JSON_THROW_ON_ERROR);
+        assert_same('ok', $summary['status'] ?? null, 'UniMorph importer CLI should return ok status');
+        assert_same('qaa-synthetic-unimorph-lemma-importer', $summary['pack_id'] ?? null, 'UniMorph importer summary should expose pack id');
+        assert_same('qaa', $summary['language'] ?? null, 'UniMorph importer summary should expose language');
+        assert_same(5, $summary['runtime']['rows'] ?? null, 'UniMorph importer should emit only normalized runtime rows');
+        assert_same(3, $summary['runtime']['files'] ?? null, 'UniMorph importer should delegate runtime sharding to the TSV importer');
+        assert_same(1, $summary['unimorph']['comment_lines'] ?? null, 'UniMorph importer should skip comment rows');
+        assert_same(1, $summary['unimorph']['blank_lines'] ?? null, 'UniMorph importer should skip blank rows');
+        assert_same(2, $summary['unimorph']['placeholder_rows'] ?? null, 'UniMorph importer should skip empty or underscore lemma/form rows');
+        assert_same(2, $summary['unimorph']['invalid_runtime_token_rows'] ?? null, 'UniMorph importer should drop rows that normalize outside one runtime token');
+        assert_same(5, $summary['unimorph']['rows_with_features'] ?? null, 'UniMorph importer should preserve feature bundles as TSV tags for accepted rows');
+        assert_same(5, $summary['unimorph']['accepted_rows'] ?? null, 'UniMorph importer should count accepted source rows before TSV deduplication');
+
+        $manifest = $out . '/manifest.json';
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifest);
+        assert_same('qaa-synthetic-unimorph-lemma-importer', $validation['manifest']['pack_id'], 'generated UniMorph pack manifest should validate');
+        assert_same('qaa', $validation['manifest']['language'], 'generated UniMorph pack language should validate');
+        assert_same(WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV, $validation['manifest']['runtime']['format'], 'generated UniMorph pack should use lemma TSV runtime format');
+        assert_same('Project-owned synthetic qaa UniMorph importer fixture', $validation['manifest']['source']['name'] ?? null, 'generated UniMorph manifest should preserve source name');
+        assert_same('Project-owned synthetic qaa UniMorph rows for importer tests only.', $validation['manifest']['attribution']['upstream'] ?? null, 'generated UniMorph manifest should preserve attribution');
+
+        $rowsByPair = [];
+        foreach ($validation['rows'] as $row) {
+            assert_true(
+                str_starts_with($row['surface'], 'qaa') && str_starts_with($row['lemma'], 'qaa'),
+                'imported UniMorph synthetic rows should not use real-language word-family fixtures'
+            );
+            $rowsByPair[$row['surface'] . "\t" . $row['lemma']] = true;
+        }
+        assert_true(isset($rowsByPair["qaaforma\tqaalemma"]), 'generated UniMorph runtime should include the first synthetic form');
+        assert_true(isset($rowsByPair["qaaformb\tqaalemma"]), 'generated UniMorph runtime should include the second synthetic form sharing a lemma');
+        assert_true(isset($rowsByPair["qaaamb\tqaaone"]), 'generated UniMorph runtime should retain first ambiguous synthetic lemma');
+        assert_true(isset($rowsByPair["qaaamb\tqaatwo"]), 'generated UniMorph runtime should retain second ambiguous synthetic lemma');
+        assert_true(!isset($rowsByPair["qaa\tqaalemma"]), 'generated UniMorph runtime should not include multi-token source values');
+        assert_true(!isset($rowsByPair["qaahyphenlemma\tqaa-lemma"]), 'generated UniMorph runtime should not include punctuation-only invalid runtime lemmas');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('unimorph lemma importer combines directory sources in stable order', function (): void {
+    $sourceDir = temp_directory_path('unimorph_import_tree_source');
+    $nestedDir = $sourceDir . '/nested';
+    $out = temp_directory_path('unimorph_import_tree_pack');
+    try {
+        if (!mkdir($nestedDir, 0777, true) && !is_dir($nestedDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic UniMorph tree directory: {$nestedDir}");
+        }
+        if (file_put_contents($sourceDir . '/ignore.conllu', "not unimorph\n") === false) {
+            throw new WP_FTS_TestFailure('Could not write ignored synthetic source file.');
+        }
+        if (file_put_contents($sourceDir . '/a.txt', synthetic_qaa_unimorph_row('QAADirLemma', 'QAADirA') . "\n") === false) {
+            throw new WP_FTS_TestFailure('Could not write first synthetic UniMorph source file.');
+        }
+        if (file_put_contents($sourceDir . '/b.tsv', synthetic_qaa_unimorph_row('QAADirLemma', 'QAADirB') . "\n") === false) {
+            throw new WP_FTS_TestFailure('Could not write second synthetic UniMorph source file.');
+        }
+        if (file_put_contents($nestedDir . '/c.unimorph', synthetic_qaa_unimorph_row('QAADirLemma', 'QAADirC') . "\n") === false) {
+            throw new WP_FTS_TestFailure('Could not write nested synthetic UniMorph source file.');
+        }
+
+        $cli = test_run_subprocess(
+            array_merge(
+                [PHP_BINARY, dirname(__DIR__) . '/tools/import-unimorph-lemma-pack.php'],
+                synthetic_qaa_unimorph_import_args($sourceDir, $out)
+            ),
+            dirname(__DIR__)
+        );
+        assert_same(0, $cli['exit'], 'UniMorph directory importer should succeed: ' . $cli['stderr']);
+
+        $summary = json_decode($cli['stdout'], true, 512, JSON_THROW_ON_ERROR);
+        assert_same(3, $summary['unimorph']['source_files'] ?? null, 'UniMorph directory importer should discover .txt, .tsv, and .unimorph files');
+        assert_same(['a.txt', 'b.tsv', 'nested/c.unimorph'], $summary['unimorph']['files'] ?? null, 'UniMorph directory importer should report stable-sorted source order');
+        assert_same(3, $summary['runtime']['rows'] ?? null, 'UniMorph directory importer should combine rows from every discovered source file');
+
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($out . '/manifest.json');
+        $rowsByPair = [];
+        foreach ($validation['rows'] as $row) {
+            $rowsByPair[$row['surface'] . "\t" . $row['lemma']] = true;
+        }
+        assert_true(isset($rowsByPair["qaadira\tqaadirlemma"]), 'directory import should include the root .txt file');
+        assert_true(isset($rowsByPair["qaadirb\tqaadirlemma"]), 'directory import should include the root .tsv file');
+        assert_true(isset($rowsByPair["qaadirc\tqaadirlemma"]), 'directory import should include the nested .unimorph file');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('unimorph lemma importer rejects invalid rows with wrong field counts', function (): void {
+    $cases = [
+        'too_few' => [
+            "QAALemma\tQAAForm",
+            'too few columns',
+        ],
+        'too_many' => [
+            synthetic_qaa_unimorph_row('QAALemma', 'QAAForm') . "\tEXTRA",
+            'too many columns',
+        ],
+    ];
+
+    foreach ($cases as $name => [$row, $expectedMessage]) {
+        $sourceDir = temp_directory_path('unimorph_import_invalid_' . $name . '_source');
+        $out = temp_directory_path('unimorph_import_invalid_' . $name . '_pack');
+        try {
+            if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+                throw new WP_FTS_TestFailure("Could not create invalid UniMorph source directory: {$sourceDir}");
+            }
+            $source = $sourceDir . '/invalid.unimorph';
+            if (file_put_contents($source, $row . "\n") === false) {
+                throw new WP_FTS_TestFailure("Could not write invalid synthetic UniMorph source: {$source}");
+            }
+
+            $cli = test_run_subprocess(
+                array_merge(
+                    [PHP_BINARY, dirname(__DIR__) . '/tools/import-unimorph-lemma-pack.php'],
+                    synthetic_qaa_unimorph_import_args($source, $out)
+                ),
+                dirname(__DIR__)
+            );
+            assert_same(1, $cli['exit'], "UniMorph importer should fail for {$name} rows");
+            assert_contains($expectedMessage, $cli['stderr'], "UniMorph importer should report a clear {$expectedMessage} error for {$name}");
+            assert_contains('expected exactly 3 tab-separated columns', $cli['stderr'], "UniMorph importer should report the exact UniMorph field count for {$name}");
+            assert_true(!is_file($out . '/manifest.json'), "failed UniMorph import should not leave a valid pack manifest for {$name}");
+        } finally {
+            remove_directory_tree($out);
+            remove_directory_tree($sourceDir);
+        }
+    }
+});
+
+test_case('imported unimorph lemma pack drives indexing search and snippets', function (): void {
+    require_once __DIR__ . '/../tools/import-unimorph-lemma-pack.php';
+
+    $sourceDir = temp_directory_path('unimorph_runtime_source');
+    $out = temp_directory_path('unimorph_runtime_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic UniMorph runtime source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-synthetic.unimorph';
+        write_synthetic_qaa_unimorph_source($source);
+
+        $options = WP_FTS_UnimorphLemmaPackImporter::parse_cli_options(synthetic_qaa_unimorph_import_args($source, $out));
+        (new WP_FTS_UnimorphLemmaPackImporter())->import($options);
+
+        $manifest = $out . '/manifest.json';
+        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest);
+        assert_same('qaalemma', $pack->stem('qaaforma', 'qaa'), 'generated UniMorph runtime pack should map first synthetic surface to lemma');
+        assert_same('qaalemma', $pack->stem('qaaformb', 'qaa'), 'generated UniMorph runtime pack should map second synthetic surface to shared lemma');
+        assert_same('qaaamb', $pack->stem('qaaamb', 'qaa'), 'generated UniMorph runtime pack should no-op ambiguous synthetic surfaces');
+
+        $analyzer = new WP_FTS_Analyzer([
+            'default_lang' => 'qaa',
+            'lemma_packs_by_lang' => [
+                'qaa' => $manifest,
+            ],
+        ]);
+        $storage = new WP_FTS_Storage_InMemory();
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $text = 'Synthetic UniMorph source row qaaforma appears in this document with qaasolo.';
+        $indexer->index_document_fields(1011, [['name' => 'content', 'text' => $text]], [
+            'lang' => 'qaa',
+            'metadata' => [
+                'post_id' => 1011,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Synthetic qaa UniMorph importer',
+                'search_text' => $text,
+                'language' => 'qaa',
+            ],
+        ]);
+
+        $terms = $storage->all_terms();
+        assert_true(in_array(WP_FTS_TermNamespace::namespace_term('qaa', 'qaalemma'), $terms, true), 'UniMorph pack should store the shared synthetic lemma during indexing');
+        assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('qaa', 'qaaforma'), $terms, true), 'UniMorph pack should not store the mapped document surface as the index key');
+
+        $payload = (new WP_FTS_Searcher($storage, $analyzer))->search('qaaformb', [
+            'lang' => 'qaa',
+            'mode' => 'AND',
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+            'highlight' => true,
+            'snippet_length' => 160,
+        ]);
+        assert_same(1, $payload['total'], 'query surface should meet indexed document surface through imported UniMorph lemma pack');
+        assert_same(1011, $payload['results'][0]['doc_id'] ?? null, 'UniMorph pack search should return the indexed synthetic document');
+        assert_contains('<mark>qaaforma</mark>', (string) ($payload['results'][0]['snippet'] ?? ''), 'UniMorph pack snippet highlighter should mark the indexed surface when querying another imported form');
+
+        $fallbackAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'qaa']);
+        $fallbackStorage = new WP_FTS_Storage_InMemory();
+        (new WP_FTS_Indexer($fallbackStorage, $fallbackAnalyzer))->index_document_fields(1012, [['name' => 'content', 'text' => $text]], [
+            'lang' => 'qaa',
+            'metadata' => [
+                'post_id' => 1012,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Synthetic qaa UniMorph fallback',
+                'search_text' => $text,
+                'language' => 'qaa',
+            ],
+        ]);
+        $fallbackPayload = (new WP_FTS_Searcher($fallbackStorage, $fallbackAnalyzer))->search('qaaformb', [
+            'lang' => 'qaa',
+            'mode' => 'AND',
+            'include_total' => true,
+        ]);
+        assert_same(0, $fallbackPayload['total'], 'missing UniMorph-generated pack should preserve the built-in fallback behavior');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('wp cli import unimorph lemma pack enable merges analyzer options and drives runtime analyzer', function (): void {
+    $sourceDir = temp_directory_path('wpcli_unimorph_import_enable_source');
+    $out = temp_directory_path('wpcli_unimorph_import_enable_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create WP-CLI UniMorph source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-synthetic.unimorph';
+        write_synthetic_qaa_unimorph_source($source);
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'future_supported_option' => 'preserve-me',
+            'lemmatizer_packs_by_lang' => [
+                'ur' => '/tmp/existing-ur-pack/manifest.json',
+            ],
+            'lemma_packs_by_lang' => [
+                'qaa' => false,
+                'pl' => false,
+            ],
+            'polish_lemma_pack' => false,
+        ];
+
+        $args = synthetic_qaa_unimorph_wpcli_assoc_args($source);
+        $args['out'] = $out;
+        $args['enable'] = true;
+        $args['attribution'] = 'Project-owned synthetic qaa rows for WP-CLI UniMorph enable tests only.';
+
+        (new WP_FTS_WPCLI_Command())->import_unimorph_lemma_pack([], $args);
+
+        $manifest = $out . '/manifest.json';
+        $stored = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? [];
+        assert_same($manifest, $stored['lemmatizer_packs_by_lang']['qaa'] ?? null, 'UniMorph --enable should point lemmatizer_packs_by_lang at the generated manifest');
+        assert_same($manifest, $stored['lemma_packs_by_lang']['qaa'] ?? null, 'UniMorph --enable should update same-language higher-precedence generic aliases');
+        assert_same('/tmp/existing-ur-pack/manifest.json', $stored['lemmatizer_packs_by_lang']['ur'] ?? null, 'UniMorph --enable should preserve existing language entries');
+        assert_same(false, $stored['lemma_packs_by_lang']['pl'] ?? null, 'UniMorph --enable should preserve unrelated Polish generic entries');
+        assert_same(false, $stored['polish_lemma_pack'] ?? null, 'UniMorph --enable should preserve unrelated Polish legacy aliases');
+        assert_same('preserve-me', $stored['future_supported_option'] ?? null, 'UniMorph --enable should preserve unrelated analyzer option keys');
+
+        $options = WP_FTS_Plugin::runtime_analyzer_options();
+        assert_same($manifest, $options['lemmatizer_packs_by_lang']['qaa'] ?? null, 'UniMorph --enable should make the generated manifest the runtime qaa pack');
+        assert_same(['qaalemma'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('qaaformb', ['lang' => 'qaa']), 'enabled WP-CLI UniMorph import should reach the runtime analyzer');
+        assert_contains('Imported and enabled UniMorph lemma pack', WP_CLI::$successMessages[0] ?? '', 'UniMorph --enable success message should identify the command path');
+        assert_contains('Reindex existing content', WP_CLI::$successMessages[0] ?? '', 'UniMorph --enable success message should tell operators to reindex');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('wp cli import unimorph lemma pack without enable preserves existing analyzer options', function (): void {
+    $sourceDir = temp_directory_path('wpcli_unimorph_import_noenable_source');
+    $out = temp_directory_path('wpcli_unimorph_import_noenable_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create WP-CLI UniMorph no-enable source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-synthetic.unimorph';
+        write_synthetic_qaa_unimorph_source($source);
+
+        wp_fts_test_reset_wordpress_fakes();
+        $existing = [
+            'lemmatizer_packs_by_lang' => [
+                'bn' => WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest(),
+            ],
+        ];
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = $existing;
+
+        $args = synthetic_qaa_unimorph_wpcli_assoc_args($source);
+        $args['output-dir'] = $out;
+        (new WP_FTS_WPCLI_Command())->import_unimorph_lemma_pack([], $args);
+
+        assert_true(is_file($out . '/manifest.json'), 'WP-CLI UniMorph import without --enable should still generate a validated pack');
+        assert_same($existing, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? null, 'WP-CLI UniMorph import without --enable should leave analyzer options unchanged');
+        assert_same(['সিনথ000লেমা'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('সিনথ000গুলো', ['lang' => 'bn']), 'pre-existing analyzer option should continue to drive runtime analyzer after UniMorph import');
+        assert_same(['qaaformb'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('qaaformb', ['lang' => 'qaa']), 'non-enabled UniMorph imported pack should not affect runtime analyzer');
+        assert_contains('Runtime analyzer options were not changed', WP_CLI::$successMessages[0] ?? '', 'UniMorph no-enable success message should report unchanged analyzer options');
     } finally {
         remove_directory_tree($out);
         remove_directory_tree($sourceDir);
