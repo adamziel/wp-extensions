@@ -4072,6 +4072,30 @@ test_case('analyzer folds diacritics and null processor falls back safely', func
     assert_same(['plain', 'text'], $terms, 'null WP_HTML_Processor should fall back to stripped plain text');
 });
 
+test_case('analyzer treats visible words split by inline HTML as single Unicode tokens', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['auto_detect_language' => false]);
+
+    foreach ([
+        ['<p><strong>Word</strong>Press</p>', 'WordPress', 'en'],
+        ['<p>Szk<em>l<i><b>ar</b></i></em>nia</p>', 'Szklarnia', 'pl'],
+        ['<p>W<em>ęgorz</em></p>', 'Węgorz', 'pl'],
+        ['<p>W&#281;<em>gorz</em></p>', 'Węgorz', 'pl'],
+    ] as [$html, $query, $lang]) {
+        $indexedTerms = test_terms($analyzer->analyze_content($html, ['lang' => $lang]));
+        $queryTerms = $analyzer->analyze_query($query, ['lang' => $lang]);
+
+        foreach ($queryTerms as $term) {
+            assert_true(
+                in_array($term, $indexedTerms, true),
+                "inline HTML split word {$query} should index analyzed query term {$term}"
+            );
+        }
+    }
+
+    $blockTerms = test_terms($analyzer->analyze_content('<p>Word</p><p>Press</p>', ['lang' => 'en']));
+    assert_true(!in_array('wordpress', $blockTerms, true), 'block boundaries should not join Word and Press into WordPress');
+});
+
 test_case('analyzer does not require optional extensions at runtime', function (): void {
     $bootstrap = (string) realpath(__DIR__ . '/../src/bootstrap.php');
     $code = str_replace('__BOOTSTRAP__', var_export($bootstrap, true), <<<'PHP'
@@ -7815,6 +7839,55 @@ test_case('search product options filter metadata and return pagination snippets
     ]);
     assert_same(2, $paged['total'], 'unfiltered total should include both matching posts');
     assert_same(2, $paged['results'][0]['doc_id'], 'offset should page through ordered results');
+});
+
+test_case('search snippets highlight analyzed Unicode words across inline HTML without marking hidden text', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['auto_detect_language' => false]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $html = '<p><strong>Word</strong>Press Szk<em>l<i><b>ar</b></i></em>nia ' .
+        'W<em>ęgorz</em> W&#281;<em>gorz</em></p>' .
+        '<script>WordPress Szklarnia Węgorz</script>' .
+        '<style>.hidden{content:"WordPress Szklarnia Węgorz"}</style>' .
+        '<!-- WordPress Szklarnia Węgorz -->';
+
+    (new WP_FTS_Indexer($storage, $analyzer))->index_document_fields(31, [[
+        'name' => 'content',
+        'text' => 'WordPress Szklarnia Węgorz Węgorz',
+        'html' => $html,
+    ]], [
+        'lang' => 'pl',
+        'metadata' => [
+            'post_id' => 31,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'title' => 'Inline HTML',
+            'search_text' => 'WordPress Szklarnia Węgorz Węgorz',
+        ],
+    ]);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    foreach ([
+        'WordPress' => '<mark><strong>Word</strong>Press</mark>',
+        'Szklarnia' => '<mark>Szk<em>l<i><b>ar</b></i></em>nia</mark>',
+        'Węgorz' => '<mark>W<em>ęgorz</em></mark>',
+        'Wegorz' => '<mark>W&#281;<em>gorz</em></mark>',
+    ] as $query => $expectedMark) {
+        $payload = $searcher->search($query, [
+            'lang' => 'pl',
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+            'highlight' => true,
+            'snippet_length' => 260,
+        ]);
+
+        assert_same(1, $payload['total'], "HTML-aware snippet query should match {$query}");
+        $snippet = (string) ($payload['results'][0]['snippet'] ?? '');
+        assert_contains($expectedMark, $snippet, "HTML-aware snippet should preserve inline markup for {$query}");
+        assert_true(!str_contains($snippet, '<script><mark>'), "HTML-aware snippet should not mark script text for {$query}");
+        assert_true(!str_contains($snippet, '<style><mark>'), "HTML-aware snippet should not mark style text for {$query}");
+        assert_true(!str_contains($snippet, '<!-- <mark>'), "HTML-aware snippet should not mark comment text for {$query}");
+    }
 });
 
 test_case('field boosts are tunable for extracted fields', function (): void {

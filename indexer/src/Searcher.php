@@ -692,8 +692,12 @@ final class WP_FTS_Searcher
                 }
             }
             if ($includeSnippets) {
+                $snippetSource = (string) ($meta['search_html'] ?? '');
+                if ($snippetSource === '') {
+                    $snippetSource = (string) ($meta['search_text'] ?? $meta['excerpt'] ?? $meta['title'] ?? '');
+                }
                 $row['snippet'] = $this->snippet(
-                    (string) ($meta['search_text'] ?? $meta['excerpt'] ?? $meta['title'] ?? ''),
+                    $snippetSource,
                     $query,
                     max(40, (int) ($opts['snippet_length'] ?? 180)),
                     !empty($opts['highlight']),
@@ -803,7 +807,14 @@ final class WP_FTS_Searcher
      */
     private function snippet(string $text, string $query, int $length, bool $highlight, array $opts = [], array $queryGroups = [], string $queryLang = '', string $resultLang = ''): string
     {
-        $text = trim(preg_replace('/\s+/u', ' ', strip_tags($text)) ?? $text);
+        if ($highlight && str_contains($text, '<')) {
+            $htmlSnippet = $this->html_snippet($text, $query, $opts, $queryGroups, $queryLang, $resultLang);
+            if ($htmlSnippet !== null) {
+                return $htmlSnippet;
+            }
+        }
+
+        $text = WP_FTS_Html_Text_Stream::visible_text($text);
         if ($text === '') {
             return '';
         }
@@ -858,6 +869,80 @@ final class WP_FTS_Searcher
             $resultLang,
             $analysisCache
         );
+    }
+
+    /**
+     * Highlight analyzed visible words in an HTML snippet source.
+     *
+     * The source is scanned as HTML tokens. Matching is done on decoded visible
+     * words, while the returned snippet is the original HTML with <mark> tags
+     * inserted at source offsets expanded over inline wrappers.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     */
+    private function html_snippet(string $html, string $query, array $opts, array $queryGroups, string $queryLang, string $resultLang): ?string
+    {
+        $words = WP_FTS_Html_Text_Stream::visible_words($html);
+        if ($words === []) {
+            return null;
+        }
+
+        $literalTerms = array_fill_keys($this->snippet_terms($query), true);
+        $queryKeys = $this->snippet_query_keys($queryGroups);
+        if ($literalTerms === [] && $queryKeys === []) {
+            return null;
+        }
+
+        $analysisCache = [];
+        $ranges = [];
+        foreach ($words as $word) {
+            $surface = (string) $word['text'];
+            $matchesLiteral = isset($literalTerms[strtolower($surface)]);
+            $matchesAnalyzer = $queryKeys !== []
+                && $this->snippet_token_matches_query($surface, $queryKeys, $opts, $queryGroups, $queryLang, $resultLang, $analysisCache);
+            if (!$matchesLiteral && !$matchesAnalyzer) {
+                continue;
+            }
+
+            $range = WP_FTS_Html_Text_Stream::expand_inline_range(
+                $html,
+                (int) $word['source_start'],
+                (int) $word['source_end']
+            );
+            $ranges[] = ['start' => $range['start'], 'end' => $range['end']];
+        }
+
+        if ($ranges === []) {
+            return null;
+        }
+
+        return WP_FTS_Html_Text_Stream::mark_ranges($html, $this->merge_snippet_mark_ranges($ranges));
+    }
+
+    /**
+     * @param array<int,array{start:int,end:int}> $ranges
+     * @return array<int,array{start:int,end:int}>
+     */
+    private function merge_snippet_mark_ranges(array $ranges): array
+    {
+        usort($ranges, static fn(array $a, array $b): int => $a['start'] <=> $b['start']);
+
+        $merged = [];
+        foreach ($ranges as $range) {
+            if ($range['end'] <= $range['start']) {
+                continue;
+            }
+
+            $lastIndex = count($merged) - 1;
+            if ($lastIndex >= 0 && $range['start'] <= $merged[$lastIndex]['end']) {
+                $merged[$lastIndex]['end'] = max($merged[$lastIndex]['end'], $range['end']);
+                continue;
+            }
+
+            $merged[] = $range;
+        }
+
+        return $merged;
     }
 
     /**

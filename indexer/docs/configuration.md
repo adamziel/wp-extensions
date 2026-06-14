@@ -613,10 +613,14 @@ $searcher = new WP_FTS_Searcher(
 );
 ```
 
-Snippet generation uses bounded extracted metadata text stored at index time.
-When highlighting is enabled, snippet tokens are analyzed before comparison, so
-a snippet can highlight a different inflected surface form when the query and
-candidate token normalize to the same analyzed key.
+Snippet generation uses bounded extracted metadata stored at index time. Plain
+text is always stored, and field HTML is retained as bounded snippet source when
+available. When highlighting is enabled, snippet tokens are analyzed before
+comparison, so a snippet can highlight a different inflected surface form when
+the query and candidate token normalize to the same analyzed key. HTML snippets
+scan visible text nodes and source offsets rather than applying regex
+replacements, preserving inline markup without marking script, style, or comment
+text.
 
 Current search does not support phrases, positions, field-specific result
 explanations, facets, typo tolerance, query-time synonyms, or cross-language

@@ -80,7 +80,7 @@ restored with WordPress content.
 | Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, post save/status/delete hooks index or tombstone posts, and `wp fts reindex` can rebuild a scoped corpus. |
 | Language routing | Terms are stored in language namespaces. Explicit `--lang`, the wp-admin `FTS Language` field, Polylang/WPML metadata, and HTML `lang`/`xml:lang` scopes route content before conservative detector fallback. |
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
-| Snippets | Search can return snippets from bounded extracted metadata, with highlighting based on analyzed query/document keys rather than literal text only. |
+| Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, and admin-only Tools > FTS Sandbox used by the Playground preview. |
 
 ## Language And Morphology
@@ -139,14 +139,17 @@ n-grams. The plugin does not currently ship Thai dictionary segmentation.
 
 ## Snippets And Highlighting
 
-Snippets come from bounded plain-text metadata extracted during indexing, not
-from live post rendering at search time. This keeps result hydration predictable
-and avoids storing unbounded source text.
+Snippets come from bounded metadata extracted during indexing, not from live
+post rendering at search time. When indexed fields provide HTML, a bounded HTML
+source is stored alongside plain text so inline markup can be preserved in
+highlighted snippets.
 
 When highlighting is enabled, the highlighter compares snippet tokens through
-the same analyzer path used for the query. That means a result can highlight the
-matched document surface form even when the query form and document form differ
-through stemming or lemmatizer equivalence.
+the same analyzer path used for the query. The HTML path scans text nodes and
+source offsets rather than applying regex replacements, so a result can
+highlight the matched document surface form while preserving nested inline tags,
+including when the query form and document form differ through stemming or
+lemmatizer equivalence.
 
 ## Common Commands
 

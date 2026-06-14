@@ -17,6 +17,7 @@ $wp_fts_files = [
     __DIR__ . '/DocumentMetadataStorage.php',
     __DIR__ . '/TermNamespace.php',
     __DIR__ . '/Utf8.php',
+    __DIR__ . '/HtmlTextStream.php',
     __DIR__ . '/StorageCompat.php',
     __DIR__ . '/Normalizer.php',
     __DIR__ . '/EnglishSnowballStemmer.php',

@@ -100,6 +100,12 @@ final class WP_FTS_Indexer
         $metadata = isset($opts['metadata']) && is_array($opts['metadata'])
             ? $opts['metadata']
             : null;
+        if ($metadata !== null && !array_key_exists('search_html', $metadata)) {
+            $searchHtml = $this->fields_search_html($fields, (int) ($opts['metadata_html_limit'] ?? $opts['metadata_text_limit'] ?? 20000));
+            if ($searchHtml !== '') {
+                $metadata['search_html'] = $searchHtml;
+            }
+        }
         $hash = $this->content_hash($this->fields_hash_source($fields, $metadata), $primaryLang);
 
         $occurrences = [];
@@ -519,6 +525,35 @@ LIMIT %d",
     private function normalize_field_boost(float $boost): float
     {
         return $boost > 0.0 ? min(100.0, $boost) : 1.0;
+    }
+
+    /**
+     * Build a bounded HTML source for snippets from weighted fields.
+     *
+     * @param array<int,array{name:string,text:string,html?:string,boost:float}> $fields
+     */
+    private function fields_search_html(array $fields, int $limit): string
+    {
+        $html = [];
+        $hasMarkup = false;
+        foreach ($fields as $field) {
+            if (isset($field['html']) && trim((string) $field['html']) !== '') {
+                $html[] = (string) $field['html'];
+                $hasMarkup = true;
+                continue;
+            }
+
+            $text = trim((string) ($field['text'] ?? ''));
+            if ($text !== '') {
+                $html[] = htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+            }
+        }
+
+        if (!$hasMarkup || $html === []) {
+            return '';
+        }
+
+        return rtrim(WP_FTS_Utf8::truncate_bytes(implode(' ', $html), max(1, $limit)));
     }
 
     /**

@@ -481,7 +481,7 @@ test_case('quality corpus exposes Bengali Urdu baseline signature changes', func
         'language pipeline signature should bump for Bengali Urdu baseline behavior'
     );
     assert_true(
-        str_contains($analyzer->index_signature(), 'wp-fts-analyzer-v5:'),
+        str_contains($analyzer->index_signature(), 'wp-fts-analyzer-v6:'),
         'analyzer signature should bump for default language pipeline behavior'
     );
 });

@@ -338,14 +338,7 @@ final class WP_FTS_StorageCompat
             return '';
         }
 
-        $text = (string) $value;
-        $text = WP_FTS_Utf8::repair($text);
-        $text = strip_tags($text);
-        $text = html_entity_decode($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
-        $text = WP_FTS_Utf8::repair($text);
-        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
-
-        return trim($text);
+        return WP_FTS_Html_Text_Stream::visible_text((string) $value);
     }
 
     /**

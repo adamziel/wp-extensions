@@ -585,20 +585,19 @@ final class WP_FTS_Analyzer
         if ($this->htmlProcessorFactory !== null || class_exists('WP_HTML_Processor')) {
             $processor = $this->createProcessor($html);
             if ($processor === null) {
-                $plain = $this->stripAllTags($html);
-                return trim($plain) === '' ? [] : [[
-                    'text' => $plain,
-                    'weight' => 1.0,
-                    'lang' => $autoDetect ? $this->detectSegmentLanguage($plain, $documentLang) : $documentLang,
-                    'explicit_lang' => false,
-                    'detect_group' => 0,
-                ]];
+                return $this->coalesceInlineLexicalSegments(
+                    $this->maybeDetectSegmentLanguages($this->extractWithFallbackParser($html, $documentLang), $documentLang, $autoDetect)
+                );
             }
 
-            return $this->maybeDetectSegmentLanguages($this->extractWithProcessor($processor, $documentLang), $documentLang, $autoDetect);
+            return $this->coalesceInlineLexicalSegments(
+                $this->maybeDetectSegmentLanguages($this->extractWithProcessor($processor, $documentLang), $documentLang, $autoDetect)
+            );
         }
 
-        return $this->maybeDetectSegmentLanguages($this->extractWithFallbackParser($html, $documentLang), $documentLang, $autoDetect);
+        return $this->coalesceInlineLexicalSegments(
+            $this->maybeDetectSegmentLanguages($this->extractWithFallbackParser($html, $documentLang), $documentLang, $autoDetect)
+        );
     }
 
     /**
@@ -769,6 +768,7 @@ final class WP_FTS_Analyzer
                     $rootTextGroup,
                     $textGroupCounter
                 ),
+                'inline_path' => $this->inlineAncestors($breadcrumbs),
             ];
         }
 
@@ -891,10 +891,159 @@ final class WP_FTS_Analyzer
                 'lang' => $scope['lang'],
                 'explicit_lang' => $scope['explicit'],
                 'detect_group' => $this->fallbackCurrentTextGroup($stack, $rootTextGroup, $textGroupCounter),
+                'inline_path' => $this->inlineAncestors($ancestors),
             ];
         }
 
         return $segments;
+    }
+
+    /**
+     * Merge lexical words split across inline tags after language detection.
+     *
+     * Text nodes remain separate until this point so HTML language scopes,
+     * skipped ancestors, boosts, and block boundaries are still computed from
+     * syntax tokens. The merge is lexical: only adjacent word chunks in the same
+     * visible-text group are joined, while whitespace, punctuation, and block
+     * groups keep their boundary behavior.
+     *
+     * @param array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}> $segments
+     * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
+     */
+    private function coalesceInlineLexicalSegments(array $segments): array
+    {
+        $coalesced = [];
+        $openIndex = null;
+
+        foreach ($segments as $segment) {
+            foreach ($this->lexicalChunks((string) $segment['text']) as $chunk) {
+                if (!$chunk['word']) {
+                    $openIndex = null;
+                    continue;
+                }
+
+                $candidate = $segment;
+                $candidate['text'] = $chunk['text'];
+                if (
+                    $openIndex !== null
+                    && isset($coalesced[$openIndex])
+                    && $this->canMergeLexicalSegments($coalesced[$openIndex], $candidate)
+                ) {
+                    $coalesced[$openIndex]['text'] .= $chunk['text'];
+                    $coalesced[$openIndex]['weight'] = max(
+                        (float) ($coalesced[$openIndex]['weight'] ?? 1.0),
+                        (float) ($candidate['weight'] ?? 1.0)
+                    );
+                    continue;
+                }
+
+                $coalesced[] = $candidate;
+                $openIndex = count($coalesced) - 1;
+            }
+        }
+
+        return $coalesced;
+    }
+
+    /**
+     * @param array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int} $left
+     * @param array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int} $right
+     */
+    private function canMergeLexicalSegments(array $left, array $right): bool
+    {
+        return ($left['lang'] ?? '') === ($right['lang'] ?? '')
+            && (bool) ($left['explicit_lang'] ?? false) === (bool) ($right['explicit_lang'] ?? false)
+            && ($left['detect_group'] ?? null) === ($right['detect_group'] ?? null)
+            && $this->inlinePathsCompatible($left['inline_path'] ?? [], $right['inline_path'] ?? []);
+    }
+
+    /**
+     * @param string[] $left
+     * @param string[] $right
+     */
+    private function inlinePathsCompatible(array $left, array $right): bool
+    {
+        return $this->isInlinePathPrefix($left, $right) || $this->isInlinePathPrefix($right, $left);
+    }
+
+    /**
+     * @param string[] $prefix
+     * @param string[] $path
+     */
+    private function isInlinePathPrefix(array $prefix, array $path): bool
+    {
+        if (count($prefix) > count($path)) {
+            return false;
+        }
+
+        foreach ($prefix as $index => $tag) {
+            if (($path[$index] ?? null) !== $tag) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @return array<int,array{text:string,word:bool}>
+     */
+    private function lexicalChunks(string $text): array
+    {
+        if ($text === '') {
+            return [];
+        }
+
+        $chars = [];
+        if (preg_match_all('/./us', $text, $matches)) {
+            $chars = $matches[0];
+        } else {
+            $chars = str_split($text);
+        }
+
+        $chunks = [];
+        $current = '';
+        $currentIsWord = null;
+        foreach ($chars as $char) {
+            $isWord = $this->isLexicalWordCharacter($char);
+            if ($current !== '' && $currentIsWord !== $isWord) {
+                $chunks[] = ['text' => $current, 'word' => (bool) $currentIsWord];
+                $current = '';
+            }
+
+            $current .= $char;
+            $currentIsWord = $isWord;
+        }
+
+        if ($current !== '') {
+            $chunks[] = ['text' => $current, 'word' => (bool) $currentIsWord];
+        }
+
+        return $chunks;
+    }
+
+    private function isLexicalWordCharacter(string $char): bool
+    {
+        return $char !== '' && preg_match('/^[\p{L}\p{M}\p{N}_]$/u', $char) === 1;
+    }
+
+    /**
+     * Return non-boundary ancestors that affect inline word continuity.
+     *
+     * @param string[] $ancestors
+     * @return string[]
+     */
+    private function inlineAncestors(array $ancestors): array
+    {
+        $inline = [];
+        foreach ($ancestors as $tag) {
+            $tag = strtoupper($tag);
+            if (!$this->isTextGroupBoundaryTag($tag)) {
+                $inline[] = $tag;
+            }
+        }
+
+        return $inline;
     }
 
     /**
@@ -1831,7 +1980,7 @@ final class WP_FTS_Analyzer
 
         $payload = [
             'contract' => 'wp-fts-analyzer',
-            'version' => 5,
+            'version' => 6,
             'skip_ancestors' => $skipAncestors,
             'boosts' => $boosts,
             'stopwords' => $stopwords,
@@ -1849,7 +1998,7 @@ final class WP_FTS_Analyzer
             'html_processor_available' => class_exists('WP_HTML_Processor'),
         ];
 
-        return 'wp-fts-analyzer-v5:' . sha1($this->stableJson($payload));
+        return 'wp-fts-analyzer-v6:' . sha1($this->stableJson($payload));
     }
 
     /**

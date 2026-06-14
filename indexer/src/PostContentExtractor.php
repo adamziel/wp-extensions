@@ -559,24 +559,7 @@ final class WP_FTS_PostContentExtractor
             return '';
         }
 
-        $text = WP_FTS_Utf8::repair($text);
-        $text = preg_replace(
-            '/<\s*\/?\s*(?:address|article|aside|blockquote|br|caption|dd|div|dl|dt|figcaption|figure|footer|h[1-6]|header|hr|li|main|nav|ol|p|pre|section|table|tbody|td|tfoot|th|thead|tr|ul)\b[^>]*>/i',
-            ' ',
-            $text
-        ) ?? $text;
-        if (function_exists('wp_strip_all_tags')) {
-            $text = (string) wp_strip_all_tags($text, true);
-        } else {
-            $text = preg_replace('/<script\b[^>]*>.*?<\/script>/is', ' ', $text) ?? $text;
-            $text = preg_replace('/<style\b[^>]*>.*?<\/style>/is', ' ', $text) ?? $text;
-            $text = strip_tags($text);
-        }
-        $text = html_entity_decode($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
-        $text = WP_FTS_Utf8::repair($text);
-        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
-
-        return trim($text);
+        return WP_FTS_Html_Text_Stream::visible_text($text);
     }
 
     /**
