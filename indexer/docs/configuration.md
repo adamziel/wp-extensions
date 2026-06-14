@@ -311,13 +311,15 @@ php tools/validate-analyzer-pack.php /srv/wp-fts-packs/example-lemma-pack/manife
 
 Real dictionary imports require source approval, license compatibility review,
 an exact source artifact URL/digest, and required attribution before running the
-importer. The repository does not vendor external dictionary data, and generated
-packs stay opt-in and default-disabled.
+importer. The repository does not vendor raw upstream source artifacts, and
+generated packs stay opt-in and default-disabled.
 
-The repository includes a tiny `bn` synthetic fixture only to test this generic
-runtime contract. It is project-owned artificial data, default-disabled, and not
-Bengali dictionary or morphology coverage. Real Bengali, Urdu, and CJK lexical
-packs remain source-lock gated and are not bundled.
+The repository also includes bundled source-backed UniMorph packs for `en`,
+`es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`; they remain opt-in and
+default-disabled. The tiny synthetic `bn` fixture remains only a
+project-owned runtime contract test, not product Bengali morphology. `zh`
+remains tokenizer/segmentation-only, and `ur` remains license-blocked with no
+committed generated pack.
 
 ### Importing CoNLL-U Lemma Packs
 

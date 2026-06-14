@@ -85,15 +85,16 @@ Stemming is enabled by default and can be disabled with
   compact fixture-backed stemmer slice. Neither path is a full Snowball,
   Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
 - Generic opt-in lemma-pack infrastructure exists through
-  `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` for future
-  source-approved packs. The only committed non-Polish pack is a tiny synthetic
-  `bn` contract fixture for tests; it is not Bengali dictionary or morphology
-  coverage and is not enabled by default.
+  `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. Bundled source-backed
+  UniMorph packs exist for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`.
+  They are default-disabled. The old synthetic `bn` contract pack remains a
+  fixture-only runtime contract test; it is not product Bengali morphology.
 - Hindi (`hi`) uses the bundled generated Snowball stemmer verified against the
   official 65,118-line Hindi fixture data. Bengali (`bn`) uses deterministic
   local suffix stemming for common classifier, plural, genitive, dative, and
-  case endings. Bengali and Urdu are recall baselines, not Snowball-compliant,
-  lemmatizer-backed, or dictionary-backed analyzers.
+  case endings when no opt-in pack is configured; the bundled `bn` UniMorph pack
+  can provide source-backed lemmatization when enabled. Urdu remains a recall
+  baseline, not Snowball-compliant, lemmatizer-backed, or dictionary-backed.
 - Arabic (`ar`) and Urdu (`ur`) normalize away Arabic-script combining
   marks/harakat and tatweel. Arabic then uses the bundled generated Snowball
   stemmer verified against the official compressed Arabic fixture data; Urdu
