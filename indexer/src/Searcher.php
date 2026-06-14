@@ -692,19 +692,40 @@ final class WP_FTS_Searcher
                 }
             }
             if ($includeSnippets) {
-                $snippetSource = (string) ($meta['search_html'] ?? '');
-                if ($snippetSource === '') {
-                    $snippetSource = (string) ($meta['search_text'] ?? $meta['excerpt'] ?? $meta['title'] ?? '');
+                $resultLang = $this->snippet_result_language($row, $meta, $doc, $opts, $queryLang);
+                $snippetLength = max(40, (int) ($opts['snippet_length'] ?? 180));
+                $highlight = !empty($opts['highlight']);
+                $searchHtml = (string) ($meta['search_html'] ?? '');
+                if ($highlight && $searchHtml !== '' && (str_contains($searchHtml, '<') || str_contains($searchHtml, '&'))) {
+                    $htmlSnippet = $this->html_snippet(
+                        $searchHtml,
+                        $query,
+                        $snippetLength,
+                        $opts,
+                        $queryGroups,
+                        $queryLang,
+                        $resultLang
+                    );
+                    if ($htmlSnippet !== null) {
+                        $row['snippet'] = $htmlSnippet;
+                        continue;
+                    }
                 }
+
+                $snippetSource = (string) ($meta['search_text'] ?? $meta['excerpt'] ?? $meta['title'] ?? '');
+                if ($snippetSource === '') {
+                    $snippetSource = $searchHtml;
+                }
+
                 $row['snippet'] = $this->snippet(
                     $snippetSource,
                     $query,
-                    max(40, (int) ($opts['snippet_length'] ?? 180)),
-                    !empty($opts['highlight']),
+                    $snippetLength,
+                    $highlight,
                     $opts,
                     $queryGroups,
                     $queryLang,
-                    $this->snippet_result_language($row, $meta, $doc, $opts, $queryLang)
+                    $resultLang
                 );
             }
         }

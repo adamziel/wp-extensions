@@ -7929,6 +7929,60 @@ test_case('highlighted HTML snippets are compacted around split inline matches',
     assert_true(strlen($snippet) <= 180, 'compact HTML snippet should stay within a small practical HTML fragment size');
 });
 
+test_case('snippet metadata stores compact HTML sidecar without losing text fallback', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['auto_detect_language' => false]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $plainPrefix = str_repeat('<p>plain filler commonterm context block</p>', 180);
+    $plainSuffix = str_repeat('<p>tail filler block PlainTailNeedle context</p>', 20);
+    $html = $plainPrefix . '<p><strong>Word</strong>Press split marker</p>' . $plainSuffix;
+    $searchText = WP_FTS_Html_Text_Stream::visible_text($html);
+
+    (new WP_FTS_Indexer($storage, $analyzer))->index_document_fields(33, [[
+        'name' => 'content',
+        'text' => $searchText,
+        'html' => $html,
+    ]], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 33,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'title' => 'Compact sidecar',
+            'search_text' => $searchText,
+        ],
+    ]);
+
+    $metadata = $storage->get_doc_metadata([33])[33] ?? [];
+    $searchHtml = (string) ($metadata['search_html'] ?? '');
+    assert_true(strlen($html) > 8000, 'fixture should contain long HTML content');
+    assert_true(strlen($searchHtml) < 120, 'stored HTML sidecar should avoid copying long plain HTML content');
+    assert_contains('<strong>Word</strong>Press', $searchHtml, 'stored HTML sidecar should retain split inline markup needed for highlighting');
+    assert_true(!str_contains($searchHtml, 'PlainTailNeedle'), 'stored HTML sidecar should leave plain terms to search_text fallback');
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $splitPayload = $searcher->search('WordPress', [
+        'lang' => 'en',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 80,
+    ]);
+    $textPayload = $searcher->search('PlainTailNeedle', [
+        'lang' => 'en',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 80,
+    ]);
+
+    assert_same(1, $splitPayload['total'], 'split inline query should still match after metadata compaction');
+    assert_contains('<mark><strong>Word</strong>Press</mark>', (string) ($splitPayload['results'][0]['snippet'] ?? ''), 'split inline query should still preserve original HTML markup');
+    assert_same(1, $textPayload['total'], 'plain tail query should still match after metadata compaction');
+    assert_contains('<mark>PlainTailNeedle</mark>', (string) ($textPayload['results'][0]['snippet'] ?? ''), 'plain tail query should fall back to stored search_text snippets');
+});
+
 test_case('field boosts are tunable for extracted fields', function (): void {
     $analyzer = new WP_FTS_Analyzer();
 
