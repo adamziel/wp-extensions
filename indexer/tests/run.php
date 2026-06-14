@@ -849,6 +849,35 @@ function write_synthetic_qaa_lemma_tsv_source(string $path): void
     }
 }
 
+function synthetic_qaa_conllu_row(string $id, string $form, string $lemma, string $upos = 'NOUN'): string
+{
+    return implode("\t", [$id, $form, $lemma, $upos, '_', '_', '0', 'root', '_', '_']);
+}
+
+function write_synthetic_qaa_conllu_source(string $path): void
+{
+    $contents = implode("\n", [
+        '# Project-owned synthetic qaa CoNLL-U importer fixture.',
+        synthetic_qaa_conllu_row('1-2', 'QAACompound', '_'),
+        synthetic_qaa_conllu_row('1', 'QAAFormB', 'QAALemma', 'VERB'),
+        synthetic_qaa_conllu_row('2', 'QAAAmb', 'QAAOne'),
+        synthetic_qaa_conllu_row('2.1', 'QAAEmptyNode', 'QAALemma'),
+        '',
+        synthetic_qaa_conllu_row('3', '_', 'QAALemma'),
+        synthetic_qaa_conllu_row('4', 'QAAPlaceholderLemma', '_'),
+        synthetic_qaa_conllu_row('5', 'QAA Multi', 'QAALemma'),
+        synthetic_qaa_conllu_row('6', 'QAAHyphenLemma', 'QAA-Lemma'),
+        synthetic_qaa_conllu_row('7', 'QAAFormA', 'QAALemma', 'VERB'),
+        synthetic_qaa_conllu_row('8', 'QAASolo', 'QAASolo'),
+        synthetic_qaa_conllu_row('9', 'QAAAmb', 'QAATwo'),
+        '',
+    ]);
+
+    if (file_put_contents($path, $contents) === false) {
+        throw new WP_FTS_TestFailure("Could not write synthetic qaa CoNLL-U source: {$path}");
+    }
+}
+
 /**
  * @return string[]
  */
@@ -874,6 +903,30 @@ function synthetic_qaa_lemma_tsv_import_args(string $source, string $out): array
 }
 
 /**
+ * @return string[]
+ */
+function synthetic_qaa_conllu_import_args(string $source, string $out): array
+{
+    return [
+        '--source=' . $source,
+        '--out=' . $out,
+        '--language=qaa',
+        '--pack-id=qaa-synthetic-conllu-lemma-importer',
+        '--version=0.1.0-synthetic-conllu-import',
+        '--source-name=Project-owned synthetic qaa CoNLL-U importer fixture',
+        '--source-version=0.1.0-synthetic',
+        '--source-url=urn:wp-fts:test:synthetic-qaa-conllu',
+        '--license=CC0-1.0',
+        '--license-url=urn:wp-fts:test:synthetic-qaa-license',
+        '--attribution=Project-owned synthetic qaa CoNLL-U rows for importer tests only.',
+        '--fixture-only=true',
+        '--max-rows-per-file=2',
+        '--chunk-rows=2',
+        '--importer-commit=test-commit',
+    ];
+}
+
+/**
  * @return array<string,mixed>
  */
 function synthetic_qaa_lemma_tsv_wpcli_assoc_args(string $source): array
@@ -886,6 +939,27 @@ function synthetic_qaa_lemma_tsv_wpcli_assoc_args(string $source): array
         'source-name' => 'Project-owned synthetic qaa lemma TSV importer fixture',
         'source-version' => '0.1.0-synthetic',
         'source-url' => 'urn:wp-fts:test:synthetic-qaa-lemma-tsv',
+        'license' => 'CC0-1.0',
+        'license-url' => 'urn:wp-fts:test:synthetic-qaa-license',
+        'fixture-only' => true,
+        'max-rows-per-file' => '2',
+        'chunk-rows' => '2',
+    ];
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function synthetic_qaa_conllu_wpcli_assoc_args(string $source): array
+{
+    return [
+        'source' => $source,
+        'lang' => 'qaa',
+        'pack-id' => 'qaa-synthetic-conllu-lemma-importer',
+        'version' => '0.1.0-synthetic-conllu-import',
+        'source-name' => 'Project-owned synthetic qaa CoNLL-U importer fixture',
+        'source-version' => '0.1.0-synthetic',
+        'source-url' => 'urn:wp-fts:test:synthetic-qaa-conllu',
         'license' => 'CC0-1.0',
         'license-url' => 'urn:wp-fts:test:synthetic-qaa-license',
         'fixture-only' => true,
@@ -4116,6 +4190,307 @@ test_case('imported generic lemma pack drives indexing search and snippets', fun
     } finally {
         remove_directory_tree($out);
         remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('conllu lemma importer builds a valid synthetic pack and skips non-runtime rows', function (): void {
+    $sourceDir = temp_directory_path('conllu_import_source');
+    $out = temp_directory_path('conllu_import_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic CoNLL-U source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-synthetic.conllu';
+        write_synthetic_qaa_conllu_source($source);
+
+        $cli = test_run_subprocess(
+            array_merge(
+                [PHP_BINARY, dirname(__DIR__) . '/tools/import-conllu-lemma-pack.php'],
+                synthetic_qaa_conllu_import_args($source, $out)
+            ),
+            dirname(__DIR__)
+        );
+        assert_same(0, $cli['exit'], 'CoNLL-U importer CLI should succeed for synthetic source-shaped input: ' . $cli['stderr']);
+
+        $summary = json_decode($cli['stdout'], true, 512, JSON_THROW_ON_ERROR);
+        assert_same('ok', $summary['status'] ?? null, 'CoNLL-U importer CLI should return ok status');
+        assert_same('qaa-synthetic-conllu-lemma-importer', $summary['pack_id'] ?? null, 'CoNLL-U importer summary should expose pack id');
+        assert_same('qaa', $summary['language'] ?? null, 'CoNLL-U importer summary should expose language');
+        assert_same(5, $summary['runtime']['rows'] ?? null, 'CoNLL-U importer should emit only normalized runtime rows');
+        assert_same(3, $summary['runtime']['files'] ?? null, 'CoNLL-U importer should delegate runtime sharding to the TSV importer');
+        assert_same(1, $summary['conllu']['multiword_token_rows'] ?? null, 'CoNLL-U importer should skip multiword token rows');
+        assert_same(1, $summary['conllu']['empty_node_rows'] ?? null, 'CoNLL-U importer should skip empty-node rows');
+        assert_same(2, $summary['conllu']['placeholder_rows'] ?? null, 'CoNLL-U importer should skip empty or underscore form/lemma rows');
+        assert_same(2, $summary['conllu']['invalid_runtime_token_rows'] ?? null, 'CoNLL-U importer should drop rows that normalize outside one runtime token');
+        assert_same(5, $summary['conllu']['accepted_rows'] ?? null, 'CoNLL-U importer should count accepted source rows before TSV deduplication');
+
+        $manifest = $out . '/manifest.json';
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifest);
+        assert_same('qaa-synthetic-conllu-lemma-importer', $validation['manifest']['pack_id'], 'generated CoNLL-U pack manifest should validate');
+        assert_same('qaa', $validation['manifest']['language'], 'generated CoNLL-U pack language should validate');
+        assert_same(WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV, $validation['manifest']['runtime']['format'], 'generated CoNLL-U pack should use lemma TSV runtime format');
+        assert_same('Project-owned synthetic qaa CoNLL-U importer fixture', $validation['manifest']['source']['name'] ?? null, 'generated CoNLL-U manifest should preserve source name');
+        assert_same('Project-owned synthetic qaa CoNLL-U rows for importer tests only.', $validation['manifest']['attribution']['upstream'] ?? null, 'generated CoNLL-U manifest should preserve attribution');
+
+        $rowsByPair = [];
+        foreach ($validation['rows'] as $row) {
+            assert_true(
+                str_starts_with($row['surface'], 'qaa') && str_starts_with($row['lemma'], 'qaa'),
+                'imported CoNLL-U synthetic rows should not use real-language word-family fixtures'
+            );
+            $rowsByPair[$row['surface'] . "\t" . $row['lemma']] = true;
+        }
+        assert_true(isset($rowsByPair["qaaforma\tqaalemma"]), 'generated CoNLL-U runtime should include the first synthetic form');
+        assert_true(isset($rowsByPair["qaaformb\tqaalemma"]), 'generated CoNLL-U runtime should include the second synthetic form sharing a lemma');
+        assert_true(isset($rowsByPair["qaaamb\tqaaone"]), 'generated CoNLL-U runtime should retain first ambiguous synthetic lemma');
+        assert_true(isset($rowsByPair["qaaamb\tqaatwo"]), 'generated CoNLL-U runtime should retain second ambiguous synthetic lemma');
+        assert_true(!isset($rowsByPair["qaa\tqaalemma"]), 'generated CoNLL-U runtime should not include multi-token source values');
+        assert_true(!isset($rowsByPair["qaahyphenlemma\tqaa-lemma"]), 'generated CoNLL-U runtime should not include punctuation-only invalid runtime lemmas');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('conllu lemma importer combines directory sources in stable order', function (): void {
+    $sourceDir = temp_directory_path('conllu_import_tree_source');
+    $nestedDir = $sourceDir . '/nested';
+    $out = temp_directory_path('conllu_import_tree_pack');
+    try {
+        if (!mkdir($nestedDir, 0777, true) && !is_dir($nestedDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic CoNLL-U tree directory: {$nestedDir}");
+        }
+        if (file_put_contents($sourceDir . '/ignore.txt', "not conllu\n") === false) {
+            throw new WP_FTS_TestFailure('Could not write ignored synthetic source file.');
+        }
+        if (file_put_contents($sourceDir . '/a.conllu', synthetic_qaa_conllu_row('1', 'QAADirA', 'QAADirLemma') . "\n") === false) {
+            throw new WP_FTS_TestFailure('Could not write first synthetic CoNLL-U source file.');
+        }
+        if (file_put_contents($nestedDir . '/b.conllu', synthetic_qaa_conllu_row('1', 'QAADirB', 'QAADirLemma') . "\n") === false) {
+            throw new WP_FTS_TestFailure('Could not write nested synthetic CoNLL-U source file.');
+        }
+
+        $cli = test_run_subprocess(
+            array_merge(
+                [PHP_BINARY, dirname(__DIR__) . '/tools/import-conllu-lemma-pack.php'],
+                synthetic_qaa_conllu_import_args($sourceDir, $out)
+            ),
+            dirname(__DIR__)
+        );
+        assert_same(0, $cli['exit'], 'CoNLL-U directory importer should succeed: ' . $cli['stderr']);
+
+        $summary = json_decode($cli['stdout'], true, 512, JSON_THROW_ON_ERROR);
+        assert_same(2, $summary['conllu']['source_files'] ?? null, 'CoNLL-U directory importer should discover only .conllu files');
+        assert_same(['a.conllu', 'nested/b.conllu'], $summary['conllu']['files'] ?? null, 'CoNLL-U directory importer should report stable-sorted source order');
+        assert_same(2, $summary['runtime']['rows'] ?? null, 'CoNLL-U directory importer should combine rows from every discovered source file');
+
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($out . '/manifest.json');
+        $rowsByPair = [];
+        foreach ($validation['rows'] as $row) {
+            $rowsByPair[$row['surface'] . "\t" . $row['lemma']] = true;
+        }
+        assert_true(isset($rowsByPair["qaadira\tqaadirlemma"]), 'directory import should include the root .conllu file');
+        assert_true(isset($rowsByPair["qaadirb\tqaadirlemma"]), 'directory import should include the nested .conllu file');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('conllu lemma importer rejects invalid rows with too few columns', function (): void {
+    $sourceDir = temp_directory_path('conllu_import_invalid_source');
+    $out = temp_directory_path('conllu_import_invalid_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create invalid CoNLL-U source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/invalid.conllu';
+        if (file_put_contents($source, "1\tQAAForm\tQAALemma\n") === false) {
+            throw new WP_FTS_TestFailure("Could not write invalid synthetic CoNLL-U source: {$source}");
+        }
+
+        $cli = test_run_subprocess(
+            array_merge(
+                [PHP_BINARY, dirname(__DIR__) . '/tools/import-conllu-lemma-pack.php'],
+                synthetic_qaa_conllu_import_args($source, $out)
+            ),
+            dirname(__DIR__)
+        );
+        assert_same(1, $cli['exit'], 'CoNLL-U importer should fail for rows with too few columns');
+        assert_contains('too few columns', $cli['stderr'], 'CoNLL-U importer should report a clear too-few-columns error');
+        assert_true(!is_file($out . '/manifest.json'), 'failed CoNLL-U import should not leave a valid pack manifest');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('imported conllu lemma pack drives indexing search and snippets', function (): void {
+    require_once __DIR__ . '/../tools/import-conllu-lemma-pack.php';
+
+    $sourceDir = temp_directory_path('conllu_runtime_source');
+    $out = temp_directory_path('conllu_runtime_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic CoNLL-U runtime source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-synthetic.conllu';
+        write_synthetic_qaa_conllu_source($source);
+
+        $options = WP_FTS_ConlluLemmaPackImporter::parse_cli_options(synthetic_qaa_conllu_import_args($source, $out));
+        (new WP_FTS_ConlluLemmaPackImporter())->import($options);
+
+        $manifest = $out . '/manifest.json';
+        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest);
+        assert_same('qaalemma', $pack->stem('qaaforma', 'qaa'), 'generated CoNLL-U runtime pack should map first synthetic surface to lemma');
+        assert_same('qaalemma', $pack->stem('qaaformb', 'qaa'), 'generated CoNLL-U runtime pack should map second synthetic surface to shared lemma');
+        assert_same('qaaamb', $pack->stem('qaaamb', 'qaa'), 'generated CoNLL-U runtime pack should no-op ambiguous synthetic surfaces');
+
+        $analyzer = new WP_FTS_Analyzer([
+            'default_lang' => 'qaa',
+            'lemma_packs_by_lang' => [
+                'qaa' => $manifest,
+            ],
+        ]);
+        $storage = new WP_FTS_Storage_InMemory();
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $text = 'Synthetic CoNLL-U source row qaaforma appears in this document with qaasolo.';
+        $indexer->index_document_fields(916, [['name' => 'content', 'text' => $text]], [
+            'lang' => 'qaa',
+            'metadata' => [
+                'post_id' => 916,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Synthetic qaa CoNLL-U importer',
+                'search_text' => $text,
+                'language' => 'qaa',
+            ],
+        ]);
+
+        $terms = $storage->all_terms();
+        assert_true(in_array(WP_FTS_TermNamespace::namespace_term('qaa', 'qaalemma'), $terms, true), 'CoNLL-U pack should store the shared synthetic lemma during indexing');
+        assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('qaa', 'qaaforma'), $terms, true), 'CoNLL-U pack should not store the mapped document surface as the index key');
+
+        $payload = (new WP_FTS_Searcher($storage, $analyzer))->search('qaaformb', [
+            'lang' => 'qaa',
+            'mode' => 'AND',
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+            'highlight' => true,
+            'snippet_length' => 160,
+        ]);
+        assert_same(1, $payload['total'], 'query surface should meet indexed document surface through imported CoNLL-U lemma pack');
+        assert_same(916, $payload['results'][0]['doc_id'] ?? null, 'CoNLL-U pack search should return the indexed synthetic document');
+        assert_contains('<mark>qaaforma</mark>', (string) ($payload['results'][0]['snippet'] ?? ''), 'CoNLL-U pack snippet highlighter should mark the indexed surface when querying another imported form');
+
+        $fallbackAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'qaa']);
+        $fallbackStorage = new WP_FTS_Storage_InMemory();
+        (new WP_FTS_Indexer($fallbackStorage, $fallbackAnalyzer))->index_document_fields(917, [['name' => 'content', 'text' => $text]], [
+            'lang' => 'qaa',
+            'metadata' => [
+                'post_id' => 917,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Synthetic qaa CoNLL-U fallback',
+                'search_text' => $text,
+                'language' => 'qaa',
+            ],
+        ]);
+        $fallbackPayload = (new WP_FTS_Searcher($fallbackStorage, $fallbackAnalyzer))->search('qaaformb', [
+            'lang' => 'qaa',
+            'mode' => 'AND',
+            'include_total' => true,
+        ]);
+        assert_same(0, $fallbackPayload['total'], 'missing CoNLL-U-generated pack should preserve the built-in fallback behavior');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('wp cli import conllu lemma pack enable merges analyzer options and drives runtime analyzer', function (): void {
+    $sourceDir = temp_directory_path('wpcli_conllu_import_enable_source');
+    $out = temp_directory_path('wpcli_conllu_import_enable_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create WP-CLI CoNLL-U source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-synthetic.conllu';
+        write_synthetic_qaa_conllu_source($source);
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'future_supported_option' => 'preserve-me',
+            'lemmatizer_packs_by_lang' => [
+                'ur' => '/tmp/existing-ur-pack/manifest.json',
+            ],
+            'lemma_packs_by_lang' => [
+                'qaa' => false,
+                'pl' => false,
+            ],
+            'polish_lemma_pack' => false,
+        ];
+
+        $args = synthetic_qaa_conllu_wpcli_assoc_args($source);
+        $args['out'] = $out;
+        $args['enable'] = true;
+        $args['attribution'] = 'Project-owned synthetic qaa rows for WP-CLI CoNLL-U enable tests only.';
+
+        (new WP_FTS_WPCLI_Command())->import_conllu_lemma_pack([], $args);
+
+        $manifest = $out . '/manifest.json';
+        $stored = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? [];
+        assert_same($manifest, $stored['lemmatizer_packs_by_lang']['qaa'] ?? null, 'CoNLL-U --enable should point lemmatizer_packs_by_lang at the generated manifest');
+        assert_same($manifest, $stored['lemma_packs_by_lang']['qaa'] ?? null, 'CoNLL-U --enable should update same-language higher-precedence generic aliases');
+        assert_same('/tmp/existing-ur-pack/manifest.json', $stored['lemmatizer_packs_by_lang']['ur'] ?? null, 'CoNLL-U --enable should preserve existing language entries');
+        assert_same(false, $stored['lemma_packs_by_lang']['pl'] ?? null, 'CoNLL-U --enable should preserve unrelated Polish generic entries');
+        assert_same(false, $stored['polish_lemma_pack'] ?? null, 'CoNLL-U --enable should preserve unrelated Polish legacy aliases');
+        assert_same('preserve-me', $stored['future_supported_option'] ?? null, 'CoNLL-U --enable should preserve unrelated analyzer option keys');
+
+        $options = WP_FTS_Plugin::runtime_analyzer_options();
+        assert_same($manifest, $options['lemmatizer_packs_by_lang']['qaa'] ?? null, 'CoNLL-U --enable should make the generated manifest the runtime qaa pack');
+        assert_same(['qaalemma'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('qaaformb', ['lang' => 'qaa']), 'enabled WP-CLI CoNLL-U import should reach the runtime analyzer');
+        assert_contains('Imported and enabled CoNLL-U lemma pack', WP_CLI::$successMessages[0] ?? '', 'CoNLL-U --enable success message should identify the command path');
+        assert_contains('Reindex existing content', WP_CLI::$successMessages[0] ?? '', 'CoNLL-U --enable success message should tell operators to reindex');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('wp cli import conllu lemma pack without enable preserves existing analyzer options', function (): void {
+    $sourceDir = temp_directory_path('wpcli_conllu_import_noenable_source');
+    $out = temp_directory_path('wpcli_conllu_import_noenable_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create WP-CLI CoNLL-U no-enable source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-synthetic.conllu';
+        write_synthetic_qaa_conllu_source($source);
+
+        wp_fts_test_reset_wordpress_fakes();
+        $existing = [
+            'lemmatizer_packs_by_lang' => [
+                'bn' => WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest(),
+            ],
+        ];
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = $existing;
+
+        $args = synthetic_qaa_conllu_wpcli_assoc_args($source);
+        $args['output-dir'] = $out;
+        (new WP_FTS_WPCLI_Command())->import_conllu_lemma_pack([], $args);
+
+        assert_true(is_file($out . '/manifest.json'), 'WP-CLI CoNLL-U import without --enable should still generate a validated pack');
+        assert_same($existing, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? null, 'WP-CLI CoNLL-U import without --enable should leave analyzer options unchanged');
+        assert_same(['সিনথ000লেমা'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('সিনথ000গুলো', ['lang' => 'bn']), 'pre-existing analyzer option should continue to drive runtime analyzer after CoNLL-U import');
+        assert_same(['qaaformb'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('qaaformb', ['lang' => 'qaa']), 'non-enabled CoNLL-U imported pack should not affect runtime analyzer');
+        assert_contains('Runtime analyzer options were not changed', WP_CLI::$successMessages[0] ?? '', 'CoNLL-U no-enable success message should report unchanged analyzer options');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+        wp_fts_test_reset_wordpress_fakes();
     }
 });
 

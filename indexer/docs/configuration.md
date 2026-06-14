@@ -318,6 +318,54 @@ runtime contract. It is project-owned artificial data, default-disabled, and not
 Bengali dictionary or morphology coverage. Real Bengali, Urdu, and CJK lexical
 packs remain source-lock gated and are not bundled.
 
+### Importing CoNLL-U Lemma Packs
+
+`tools/import-conllu-lemma-pack.php` converts source-approved CoNLL-U or
+Universal Dependencies style corpora into the normalized lemma TSV contract, then
+uses the same analyzer-pack generation path described above. It reads `FORM` and
+`LEMMA`, skips CoNLL-U comments, blank lines, multiword token rows, empty-node
+rows, placeholder values, and values that do not normalize to one runtime token.
+
+Use this for reviewed treebanks or build artifacts where the exact source,
+license, source version, URL, and attribution are known. It is a pack-generation
+path, not bundled broad dictionary coverage, and it does not download data or
+hard-code word families.
+
+```sh
+php tools/import-conllu-lemma-pack.php \
+  --source=/path/to/source-approved-treebank \
+  --out=/srv/wp-fts-packs/es-ud-lemma-pack \
+  --language=es \
+  --pack-id=es-ud-lemma-pack \
+  --version=2026.06 \
+  --source-name="Reviewed Universal Dependencies source" \
+  --source-url="https://example.test/source-artifact" \
+  --license=CC-BY-SA-4.0 \
+  --license-url="https://creativecommons.org/licenses/by-sa/4.0/" \
+  --source-version=2026.06 \
+  --attribution="Required upstream attribution text"
+```
+
+The same path is available in WordPress through WP-CLI:
+
+```sh
+wp fts import-conllu-lemma-pack \
+  --source=/path/to/source-approved-treebank \
+  --language=es \
+  --pack-id=es-ud-lemma-pack \
+  --version=2026.06 \
+  --source-name="Reviewed Universal Dependencies source" \
+  --source-url="https://example.test/source-artifact" \
+  --license=CC-BY-SA-4.0 \
+  --attribution="Required upstream attribution text" \
+  --enable
+```
+
+`--source` may point to one file or a directory. Directory imports recursively
+read stable-sorted `.conllu` files. `--enable` stores the generated manifest in
+the runtime analyzer options; reindex existing content after enabling a new pack
+so stored index terms use the new lemmatizer.
+
 Full generated packs stay opt-in and default-disabled. The full CLARIN-PL
 source archive, extracted TSV, and generated runtime shards are not bundled in
 this repository or plugin package. Users or build systems must generate and

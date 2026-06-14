@@ -172,8 +172,9 @@ wp fts optimize
   Snowball fixture harness.
 - [Analyzer source locks](docs/analyzer-source-locks.md) define the manifest
   schema required before analyzer or lemmatizer data imports. The generic
-  normalized lemma TSV importer is covered in
-  [Configuration](docs/configuration.md#importing-normalized-lemma-tsv-packs).
+  normalized lemma TSV and CoNLL-U lemma importers are covered in
+  [Configuration](docs/configuration.md#importing-normalized-lemma-tsv-packs)
+  and [Configuration](docs/configuration.md#importing-conllu-lemma-packs).
 - [Tokenizer source locks](docs/tokenizer-source-locks.md) documents the
   pre-coding gate for any future Thai TCC/dictionary tokenizer. The current
   plugin does not ship real Thai or CJK word segmentation.

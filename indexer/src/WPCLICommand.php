@@ -280,6 +280,90 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
+     * Import CoNLL-U FORM/LEMMA rows into a local analyzer pack.
+     *
+     * ## OPTIONS
+     *
+     * --source=<path>
+     * : CoNLL-U source file or directory. Directories are scanned recursively for .conllu files.
+     *
+     * --language=<language>
+     * : Language tag for the generated pack. Alias: --lang.
+     *
+     * --pack-id=<id>
+     * : Stable analyzer pack id.
+     *
+     * --version=<version>
+     * : Generated pack version.
+     *
+     * --source-name=<name>
+     * : Human-readable source name.
+     *
+     * --source-url=<url>
+     * : Reviewed upstream or artifact source URL.
+     *
+     * --license=<spdx>
+     * : Source license identifier.
+     *
+     * [--license-url=<url>]
+     * : Optional license URL.
+     *
+     * [--source-version=<version>]
+     * : Optional upstream source version. Defaults to --version.
+     *
+     * [--attribution=<text>]
+     * : Optional attribution text. Defaults to --source-name.
+     *
+     * [--tmp-dir=<path>]
+     * : Optional temporary parent directory for importer-owned conversion and chunk files.
+     *
+     * [--max-rows-per-file=<n>]
+     * : Maximum runtime rows per generated shard.
+     *
+     * [--chunk-rows=<n>]
+     * : Number of deduplicated source pairs to sort per temporary chunk.
+     *
+     * [--fixture-only]
+     * : Mark the generated pack as a test fixture only.
+     *
+     * [--out=<path>]
+     * : Output pack directory. Alias: --output-dir. Defaults under uploads/wp-fts-lemma-packs/<pack-id>.
+     *
+     * [--enable]
+     * : Enable the generated manifest for runtime indexing/search. Reindex existing content afterwards.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function import_conllu_lemma_pack(array $args, array $assoc_args): void
+    {
+        require_once dirname(__DIR__) . '/tools/import-conllu-lemma-pack.php';
+
+        $enable = $this->bool_flag_arg($assoc_args, ['enable'], false);
+        $options = $this->lemma_pack_import_options($assoc_args);
+        $summary = (new WP_FTS_ConlluLemmaPackImporter())->import($options);
+        $manifestPath = isset($summary['manifest']) && is_scalar($summary['manifest'])
+            ? (string) $summary['manifest']
+            : '';
+        if ($manifestPath === '') {
+            throw new RuntimeException('CoNLL-U lemma pack importer did not return a manifest path.');
+        }
+
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifestPath, false);
+        $manifest = $validation['manifest'];
+        $language = (string) ($manifest['language'] ?? $summary['language'] ?? $options['language']);
+        $packId = (string) ($manifest['pack_id'] ?? $summary['pack_id'] ?? $options['pack_id']);
+
+        if ($enable) {
+            WP_FTS_Plugin::set_runtime_lemma_pack_option($language, $manifestPath);
+            WP_CLI::success("Imported and enabled CoNLL-U lemma pack {$packId} for {$language}: {$manifestPath}. Reindex existing content for the pack to affect stored terms.");
+            return;
+        }
+
+        WP_CLI::success("Imported CoNLL-U lemma pack {$packId} for {$language}: {$manifestPath}. Runtime analyzer options were not changed.");
+    }
+
+    /**
      * Build an indexer wired to MySQL storage and the plugin runtime analyzer.
      */
     private function indexer(): WP_FTS_Indexer
