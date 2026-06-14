@@ -4297,16 +4297,72 @@ test_case('conllu lemma importer combines directory sources in stable order', fu
     }
 });
 
-test_case('conllu lemma importer rejects invalid rows with too few columns', function (): void {
-    $sourceDir = temp_directory_path('conllu_import_invalid_source');
-    $out = temp_directory_path('conllu_import_invalid_pack');
+test_case('conllu lemma importer rejects invalid rows with wrong field counts', function (): void {
+    $cases = [
+        'regular_too_few' => [
+            "1\tQAAForm\tQAALemma",
+            'too few columns',
+        ],
+        'regular_too_many' => [
+            synthetic_qaa_conllu_row('1', 'QAAForm', 'QAALemma') . "\tEXTRA",
+            'too many columns',
+        ],
+        'multiword_too_few' => [
+            "1-2\tQAACompound\t_",
+            'too few columns',
+        ],
+        'empty_node_too_few' => [
+            "2.1\tQAAEmptyNode\tQAALemma",
+            'too few columns',
+        ],
+    ];
+
+    foreach ($cases as $name => [$row, $expectedMessage]) {
+        $sourceDir = temp_directory_path('conllu_import_invalid_' . $name . '_source');
+        $out = temp_directory_path('conllu_import_invalid_' . $name . '_pack');
+        try {
+            if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+                throw new WP_FTS_TestFailure("Could not create invalid CoNLL-U source directory: {$sourceDir}");
+            }
+            $source = $sourceDir . '/invalid.conllu';
+            if (file_put_contents($source, $row . "\n") === false) {
+                throw new WP_FTS_TestFailure("Could not write invalid synthetic CoNLL-U source: {$source}");
+            }
+
+            $cli = test_run_subprocess(
+                array_merge(
+                    [PHP_BINARY, dirname(__DIR__) . '/tools/import-conllu-lemma-pack.php'],
+                    synthetic_qaa_conllu_import_args($source, $out)
+                ),
+                dirname(__DIR__)
+            );
+            assert_same(1, $cli['exit'], "CoNLL-U importer should fail for {$name} rows");
+            assert_contains($expectedMessage, $cli['stderr'], "CoNLL-U importer should report a clear {$expectedMessage} error for {$name}");
+            assert_contains('expected exactly 10 tab-separated columns', $cli['stderr'], "CoNLL-U importer should report the exact CoNLL-U field count for {$name}");
+            assert_true(!is_file($out . '/manifest.json'), "failed CoNLL-U import should not leave a valid pack manifest for {$name}");
+        } finally {
+            remove_directory_tree($out);
+            remove_directory_tree($sourceDir);
+        }
+    }
+});
+
+test_case('conllu lemma importer still skips valid multiword and empty-node rows', function (): void {
+    $sourceDir = temp_directory_path('conllu_import_valid_skips_source');
+    $out = temp_directory_path('conllu_import_valid_skips_pack');
     try {
         if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
-            throw new WP_FTS_TestFailure("Could not create invalid CoNLL-U source directory: {$sourceDir}");
+            throw new WP_FTS_TestFailure("Could not create valid-skip CoNLL-U source directory: {$sourceDir}");
         }
-        $source = $sourceDir . '/invalid.conllu';
-        if (file_put_contents($source, "1\tQAAForm\tQAALemma\n") === false) {
-            throw new WP_FTS_TestFailure("Could not write invalid synthetic CoNLL-U source: {$source}");
+        $source = $sourceDir . '/valid-skips.conllu';
+        $contents = implode("\n", [
+            synthetic_qaa_conllu_row('1-2', 'QAACompound', '_'),
+            synthetic_qaa_conllu_row('1', 'QAASolo', 'QAALemma'),
+            synthetic_qaa_conllu_row('1.1', 'QAAEmptyNode', 'QAALemma'),
+            '',
+        ]);
+        if (file_put_contents($source, $contents) === false) {
+            throw new WP_FTS_TestFailure("Could not write valid-skip synthetic CoNLL-U source: {$source}");
         }
 
         $cli = test_run_subprocess(
@@ -4316,9 +4372,21 @@ test_case('conllu lemma importer rejects invalid rows with too few columns', fun
             ),
             dirname(__DIR__)
         );
-        assert_same(1, $cli['exit'], 'CoNLL-U importer should fail for rows with too few columns');
-        assert_contains('too few columns', $cli['stderr'], 'CoNLL-U importer should report a clear too-few-columns error');
-        assert_true(!is_file($out . '/manifest.json'), 'failed CoNLL-U import should not leave a valid pack manifest');
+        assert_same(0, $cli['exit'], 'CoNLL-U importer should accept valid 10-column skipped rows: ' . $cli['stderr']);
+
+        $summary = json_decode($cli['stdout'], true, 512, JSON_THROW_ON_ERROR);
+        assert_same(1, $summary['conllu']['multiword_token_rows'] ?? null, 'CoNLL-U importer should still skip valid multiword-token rows');
+        assert_same(1, $summary['conllu']['empty_node_rows'] ?? null, 'CoNLL-U importer should still skip valid empty-node rows');
+        assert_same(1, $summary['conllu']['accepted_rows'] ?? null, 'CoNLL-U importer should accept only the real token row');
+        assert_same(1, $summary['runtime']['rows'] ?? null, 'CoNLL-U importer should emit only the real token row');
+
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($out . '/manifest.json');
+        $rowsByPair = [];
+        foreach ($validation['rows'] as $row) {
+            $rowsByPair[$row['surface'] . "\t" . $row['lemma']] = true;
+        }
+        assert_true(isset($rowsByPair["qaasolo\tqaalemma"]), 'valid-skip import should include the real token row');
+        assert_true(!isset($rowsByPair["qaaemptynode\tqaalemma"]), 'valid empty-node rows should not be emitted into runtime TSV');
     } finally {
         remove_directory_tree($out);
         remove_directory_tree($sourceDir);

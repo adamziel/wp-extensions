@@ -191,7 +191,13 @@ final class WP_FTS_ConlluLemmaPackImporter
                 }
 
                 $columns = explode("\t", $line);
-                $id = trim((string) ($columns[0] ?? ''));
+                $columnCount = count($columns);
+                if ($columnCount !== 10) {
+                    $direction = $columnCount < 10 ? 'too few' : 'too many';
+                    throw new RuntimeException("CoNLL-U row {$label}:{$lineNumber} has {$direction} columns; expected exactly 10 tab-separated columns, found {$columnCount}.");
+                }
+
+                $id = trim($columns[0]);
                 if (str_contains($id, '-')) {
                     $stats['multiword_token_rows']++;
                     continue;
@@ -199,9 +205,6 @@ final class WP_FTS_ConlluLemmaPackImporter
                 if (str_contains($id, '.')) {
                     $stats['empty_node_rows']++;
                     continue;
-                }
-                if (count($columns) < 10) {
-                    throw new RuntimeException("CoNLL-U row {$label}:{$lineNumber} has too few columns; expected 10 tab-separated columns, found " . count($columns) . '.');
                 }
 
                 $form = trim($columns[1]);
