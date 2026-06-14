@@ -7890,6 +7890,45 @@ test_case('search snippets highlight analyzed Unicode words across inline HTML w
     }
 });
 
+test_case('highlighted HTML snippets are compacted around split inline matches', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['auto_detect_language' => false]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $farPrefix = str_repeat('far-prefix-filler ', 30);
+    $farSuffix = str_repeat(' far-suffix-filler', 30);
+    $html = '<p>' . $farPrefix . '<strong>Word</strong>Press' . $farSuffix . '</p>';
+
+    (new WP_FTS_Indexer($storage, $analyzer))->index_document_fields(32, [[
+        'name' => 'content',
+        'text' => $farPrefix . 'WordPress' . $farSuffix,
+        'html' => $html,
+    ]], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 32,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'title' => 'Long Inline HTML',
+            'search_text' => $farPrefix . 'WordPress' . $farSuffix,
+        ],
+    ]);
+
+    $payload = (new WP_FTS_Searcher($storage, $analyzer))->search('WordPress', [
+        'lang' => 'en',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 40,
+    ]);
+
+    assert_same(1, $payload['total'], 'compact HTML snippet query should match the indexed split inline word');
+    $snippet = (string) ($payload['results'][0]['snippet'] ?? '');
+    assert_contains('<mark><strong>Word</strong>Press</mark>', $snippet, 'compact HTML snippet should preserve the marked split inline word');
+    assert_true(!str_contains($snippet, 'far-prefix-filler far-prefix-filler'), 'compact HTML snippet should omit far prefix filler');
+    assert_true(!str_contains($snippet, 'far-suffix-filler far-suffix-filler'), 'compact HTML snippet should omit far suffix filler');
+    assert_true(strlen($snippet) <= 180, 'compact HTML snippet should stay within a small practical HTML fragment size');
+});
+
 test_case('field boosts are tunable for extracted fields', function (): void {
     $analyzer = new WP_FTS_Analyzer();
 

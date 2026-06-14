@@ -112,14 +112,17 @@ final class WP_FTS_Html_Text_Stream
     /**
      * Return visible lexical words with their original source byte ranges.
      *
-     * @return array<int,array{text:string,source_start:int,source_end:int,group:int}>
+     * @return array<int,array{text:string,source_start:int,source_end:int,group:int,visible_start:int,visible_end:int}>
      */
     public static function visible_words(string $html): array
     {
         $words = [];
         $current = null;
+        $visibleOffset = 0;
 
         foreach (self::visible_characters($html) as $char) {
+            $charVisibleStart = $visibleOffset;
+            $visibleOffset++;
             if (!self::is_word_character($char['text'])) {
                 if ($current !== null) {
                     $words[] = $current;
@@ -131,6 +134,7 @@ final class WP_FTS_Html_Text_Stream
             if ($current !== null && $current['group'] === $char['group']) {
                 $current['text'] .= $char['text'];
                 $current['source_end'] = $char['source_end'];
+                $current['visible_end'] = $charVisibleStart + 1;
                 continue;
             }
 
@@ -142,6 +146,8 @@ final class WP_FTS_Html_Text_Stream
                 'source_start' => $char['source_start'],
                 'source_end' => $char['source_end'],
                 'group' => $char['group'],
+                'visible_start' => $charVisibleStart,
+                'visible_end' => $charVisibleStart + 1,
             ];
         }
 
@@ -150,6 +156,55 @@ final class WP_FTS_Html_Text_Stream
         }
 
         return $words;
+    }
+
+    /**
+     * Return source byte offsets covering a window of decoded visible text.
+     *
+     * @return array{source_start:int,source_end:int,visible_start:int,visible_end:int,total_visible:int}|null
+     */
+    public static function visible_source_window(string $html, int $visibleStart, int $visibleEnd): ?array
+    {
+        $characters = self::visible_characters($html);
+        $total = count($characters);
+        if ($total === 0) {
+            return null;
+        }
+
+        $visibleStart = max(0, min($total - 1, $visibleStart));
+        $visibleEnd = max($visibleStart + 1, min($total, $visibleEnd));
+        $sourceStart = null;
+        $sourceEnd = null;
+        $actualVisibleStart = null;
+        $actualVisibleEnd = null;
+
+        foreach ($characters as $index => $char) {
+            if ($index < $visibleStart) {
+                continue;
+            }
+            if ($index >= $visibleEnd) {
+                break;
+            }
+
+            if ($sourceStart === null) {
+                $sourceStart = (int) $char['source_start'];
+                $actualVisibleStart = $index;
+            }
+            $sourceEnd = (int) $char['source_end'];
+            $actualVisibleEnd = $index + 1;
+        }
+
+        if ($sourceStart === null || $sourceEnd === null || $actualVisibleStart === null || $actualVisibleEnd === null) {
+            return null;
+        }
+
+        return [
+            'source_start' => $sourceStart,
+            'source_end' => $sourceEnd,
+            'visible_start' => $actualVisibleStart,
+            'visible_end' => $actualVisibleEnd,
+            'total_visible' => $total,
+        ];
     }
 
     /**

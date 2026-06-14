@@ -808,7 +808,7 @@ final class WP_FTS_Searcher
     private function snippet(string $text, string $query, int $length, bool $highlight, array $opts = [], array $queryGroups = [], string $queryLang = '', string $resultLang = ''): string
     {
         if ($highlight && str_contains($text, '<')) {
-            $htmlSnippet = $this->html_snippet($text, $query, $opts, $queryGroups, $queryLang, $resultLang);
+            $htmlSnippet = $this->html_snippet($text, $query, $length, $opts, $queryGroups, $queryLang, $resultLang);
             if ($htmlSnippet !== null) {
                 return $htmlSnippet;
             }
@@ -880,7 +880,7 @@ final class WP_FTS_Searcher
      *
      * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
      */
-    private function html_snippet(string $html, string $query, array $opts, array $queryGroups, string $queryLang, string $resultLang): ?string
+    private function html_snippet(string $html, string $query, int $length, array $opts, array $queryGroups, string $queryLang, string $resultLang): ?string
     {
         $words = WP_FTS_Html_Text_Stream::visible_words($html);
         if ($words === []) {
@@ -894,7 +894,7 @@ final class WP_FTS_Searcher
         }
 
         $analysisCache = [];
-        $ranges = [];
+        $matches = [];
         foreach ($words as $word) {
             $surface = (string) $word['text'];
             $matchesLiteral = isset($literalTerms[strtolower($surface)]);
@@ -909,14 +909,83 @@ final class WP_FTS_Searcher
                 (int) $word['source_start'],
                 (int) $word['source_end']
             );
-            $ranges[] = ['start' => $range['start'], 'end' => $range['end']];
+            $matches[] = [
+                'range' => ['start' => $range['start'], 'end' => $range['end']],
+                'visible_start' => (int) $word['visible_start'],
+                'visible_end' => (int) $word['visible_end'],
+            ];
         }
 
-        if ($ranges === []) {
+        if ($matches === []) {
             return null;
         }
 
-        return WP_FTS_Html_Text_Stream::mark_ranges($html, $this->merge_snippet_mark_ranges($ranges));
+        $selected = $matches[0];
+        $length = max(1, $length);
+        $windowStart = max(0, $selected['visible_start'] - intdiv($length, 3));
+        $windowEnd = max($selected['visible_end'], $windowStart + $length);
+        $window = WP_FTS_Html_Text_Stream::visible_source_window($html, $windowStart, $windowEnd);
+        if ($window === null) {
+            return null;
+        }
+
+        $sourceStart = min((int) $window['source_start'], (int) $selected['range']['start']);
+        $sourceEnd = max((int) $window['source_end'], (int) $selected['range']['end']);
+        foreach ($matches as $match) {
+            if ($match['visible_end'] <= $window['visible_start'] || $match['visible_start'] >= $window['visible_end']) {
+                continue;
+            }
+
+            $sourceStart = min($sourceStart, (int) $match['range']['start']);
+            $sourceEnd = max($sourceEnd, (int) $match['range']['end']);
+        }
+        $sourceStart = max(0, min(strlen($html), $sourceStart));
+        $sourceEnd = max($sourceStart, min(strlen($html), $sourceEnd));
+        if ($sourceEnd <= $sourceStart) {
+            return null;
+        }
+        $sourceRange = WP_FTS_Html_Text_Stream::expand_inline_range($html, $sourceStart, $sourceEnd);
+        $sourceStart = $sourceRange['start'];
+        $sourceEnd = $sourceRange['end'];
+
+        $fragment = substr($html, $sourceStart, $sourceEnd - $sourceStart);
+        if (strlen($fragment) > $this->max_html_snippet_source_bytes($length)) {
+            return null;
+        }
+
+        $markRanges = [];
+        foreach ($matches as $match) {
+            $range = $match['range'];
+            if ($range['start'] < $sourceStart || $range['end'] > $sourceEnd) {
+                continue;
+            }
+
+            $markRanges[] = [
+                'start' => $range['start'] - $sourceStart,
+                'end' => $range['end'] - $sourceStart,
+            ];
+        }
+
+        if ($markRanges === []) {
+            return null;
+        }
+
+        $fragment = WP_FTS_Html_Text_Stream::mark_ranges($fragment, $this->merge_snippet_mark_ranges($markRanges));
+        if ($window['visible_start'] > 0) {
+            $fragment = '...' . ltrim($fragment);
+        }
+        if ($window['visible_end'] < $window['total_visible']) {
+            $fragment = rtrim($fragment) . '...';
+        }
+
+        return $fragment;
+    }
+
+    private function max_html_snippet_source_bytes(int $length): int
+    {
+        $length = max(1, $length);
+
+        return max($length + 96, $length * 3);
     }
 
     /**
