@@ -53,7 +53,7 @@ Current language support is best read by tier:
 | Polish (`pl`) | Explicit routing plus the strongest morphology path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases, and `polish_stemming => 'verified'` enables a compact fixture-backed stemmer slice. | Default fallback remains conservative when no valid pack or verified mode is enabled; bundled packs remain opt-in/default-disabled outside the sandbox path. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`) | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Not synonym expansion, phrase search, cross-language merging, or a default-enabled analyzer path. Built-in stemmers/baselines remain fallback behavior when packs are not configured. |
 | Catalan (`ca`), Dutch Porter (`nl`) | Optional Wamania-backed Snowball stemming when Composer dependencies are present and the compliance harness accepts them. | No broad Wamania language claim beyond the allowlist. |
-| Chinese (`zh`) | Deterministic CJK fallback n-grams up to 4 characters. | No dictionary segmentation, word morphology, or bundled CJK lexical pack. |
+| Chinese (`zh`) | Deterministic CJK fallback n-grams up to 4 characters, plus optional Jieba dictionary segmentation from the pinned source submodule when configured. | Jieba is segmentation only, default-disabled outside the sandbox, and not morphology, synonym expansion, phrase search, or broad Simplified/Traditional conversion. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common feminine, masculine, Arabic-loan, and plural-oblique forms. | UniMorph Urdu is license-blocked because `unimorph/urd` has no redistribution license evidence; no generated Urdu pack is bundled. Persian-like text is not merged into Urdu routing. |
 | German (`de`), Russian (`ru`), other explicit partitions | Language namespace/routing support with conservative normalized tokens unless a documented analyzer exists. | No unverified morphology claim. |
 | Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` can enable local manifest-backed, language-matched packs. | Invalid, missing, disabled, or mismatched packs do not stop indexing; they fall back to the built-in analyzer path. |
@@ -111,7 +111,8 @@ Stemming is enabled by default and can be disabled with
   `polish_lemma_pack` or `polish_lemmatizer_pack`.
 - Unsupported languages return the original normalized term.
 - Chinese (`zh`) continues to use deterministic CJK fallback n-grams up to 4
-  characters without dictionary segmentation.
+  characters. Optional Jieba segmentation reads the pinned submodule source only
+  when configured and hash-valid.
 
 See [Snowball compliance](snowball-compliance.md) for the harness and rationale.
 See [Polish lemmatizer source-lock pilot](polish-lemmatizer-source-lock.md) for
@@ -135,16 +136,32 @@ resource-backed analyzers with fixture gates before they are enabled by default:
   full PoliMorf pack remains an unbundled external generated artifact;
 - keep per-language analyzer resources opt-in until compliance fixtures and
   regression corpora pass in CI;
-- add a CJK dictionary tokenizer through the existing `cjk_tokenizer` seam
-  instead of presenting fallback n-grams as word segmentation.
+- keep optional Chinese dictionary tokenization on the source-backed
+  `segmenter_packs_by_lang` path instead of presenting fallback n-grams as word
+  segmentation.
 
 ## CJK Tokenization
 
-CJK script runs use a fallback tokenizer, not dictionary segmentation. A
-one-character run is kept as one token. Longer CJK runs emit character unigrams
-plus deterministic overlapping n-grams up to 4 characters. This improves basic
-retrieval evidence without external dictionaries, but it does not understand
-words, compounds, or language-specific segmentation rules.
+CJK script runs use a fallback tokenizer by default. A one-character run is kept
+as one token. Longer CJK runs emit character unigrams plus deterministic
+overlapping n-grams up to 4 characters. This improves basic retrieval evidence
+without external dictionaries, but it does not understand words, compounds, or
+language-specific segmentation rules.
+
+Chinese (`zh`) can optionally add Jieba dictionary segmentation from the pinned
+`indexer/resources/sources/jieba` git submodule. Initialize it with:
+
+```sh
+git submodule update --init --recursive indexer/resources/sources/jieba
+```
+
+The adapter verifies `jieba/dict.txt` against commit
+`67fa2e36e72f69d9134b8a1037b83fbb070b9775`, SHA-256
+`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and byte
+size `5071852` before using it. Missing, uninitialized, invalid, or
+hash-mismatched data falls back to the default CJK n-grams. The repository
+commits only the submodule pointer, not copied Jieba dictionary rows, HMM/POS,
+IDF, or model files.
 
 ## Thai Tokenization
 

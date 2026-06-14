@@ -1090,6 +1090,93 @@ function bundled_unimorph_sandbox_demo_probe_cases(): array
 }
 
 /**
+ * @param array<int,array{0:string,1:int,2:string}> $rows
+ */
+function write_synthetic_jieba_segmenter_source(string $path, array $rows): void
+{
+    $lines = [];
+    foreach ($rows as $row) {
+        $lines[] = $row[0] . ' ' . (string) $row[1] . ' ' . $row[2];
+    }
+
+    if (file_put_contents($path, implode("\n", $lines) . "\n") === false) {
+        throw new WP_FTS_TestFailure("Could not write synthetic Jieba segmenter source: {$path}");
+    }
+}
+
+/**
+ * @return array<int,array{0:string,1:int,2:string}>
+ */
+function synthetic_jieba_segmenter_rows(): array
+{
+    return [
+        ['中国科学院', 2000, 'nt'],
+        ['中国', 1200, 'ns'],
+        ['科学院', 900, 'n'],
+        ['科学', 800, 'n'],
+        ['学院', 700, 'n'],
+        ['计算所', 600, 'n'],
+        ['搜索引擎', 1100, 'n'],
+        ['搜索', 1000, 'v'],
+        ['引擎', 900, 'n'],
+        ['系统', 800, 'n'],
+    ];
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function synthetic_jieba_segmenter_option(string $source): array
+{
+    $hash = hash_file('sha256', $source);
+    $bytes = filesize($source);
+    if (!is_string($hash) || !is_int($bytes)) {
+        throw new WP_FTS_TestFailure("Could not hash synthetic Jieba source: {$source}");
+    }
+
+    return [
+        'source_file' => $source,
+        'language' => 'zh',
+        'pack_id' => 'zh-jieba-synthetic-fixture',
+        'version' => substr($hash, 0, 12) . '-synthetic-v1',
+        'source_repository' => 'urn:wp-fts:test:synthetic-jieba',
+        'source_commit' => 'project-owned-synthetic-fixture',
+        'source_path' => 'jieba/dict.txt',
+        'expected_sha256' => $hash,
+        'expected_byte_size' => $bytes,
+        'fixture_only' => true,
+        'max_cached_prefixes' => 4,
+        'max_candidates_per_prefix' => 100,
+    ];
+}
+
+/**
+ * @return array{analyzer:WP_FTS_Analyzer,option:array<string,mixed>,source:string,dir:string}
+ */
+function synthetic_jieba_segmenter_analyzer(): array
+{
+    $dir = temp_directory_path('jieba_segmenter_fixture');
+    if (!mkdir($dir, 0777, true) && !is_dir($dir)) {
+        throw new WP_FTS_TestFailure("Could not create synthetic Jieba directory: {$dir}");
+    }
+
+    $source = $dir . '/dict.txt';
+    write_synthetic_jieba_segmenter_source($source, synthetic_jieba_segmenter_rows());
+    $option = synthetic_jieba_segmenter_option($source);
+
+    return [
+        'analyzer' => new WP_FTS_Analyzer([
+            'segmenter_packs_by_lang' => [
+                'zh' => $option,
+            ],
+        ]),
+        'option' => $option,
+        'source' => $source,
+        'dir' => $dir,
+    ];
+}
+
+/**
  * @param array<string,mixed> $validation
  * @return array{surface:string,lemma:string}
  */
@@ -4267,6 +4354,185 @@ test_case('generic lemma packs by language beat baseline and fall back safely', 
     ]);
     assert_same(['ককক'], $packAnalyzer->analyze_query('ককগুলো', ['lang' => 'bn']), 'analyzer should pass generic pack options into the language pipeline');
     assert_true($defaultAnalyzer->index_signature() !== $packAnalyzer->index_signature(), 'analyzer signature should change when a generic pack is enabled');
+});
+
+test_case('configured Chinese Jieba segmenter changes matching while preserving fallback ngrams', function (): void {
+    $fixture = synthetic_jieba_segmenter_analyzer();
+    try {
+        $segmenterAnalyzer = $fixture['analyzer'];
+        $fallbackAnalyzer = new WP_FTS_Analyzer();
+
+        $fallbackQueryTerms = $fallbackAnalyzer->analyze_query('中国科学院', ['lang' => 'zh']);
+        $segmenterQueryTerms = $segmenterAnalyzer->analyze_query('中国科学院', ['lang' => 'zh']);
+        assert_true(!in_array('中国科学院', $fallbackQueryTerms, true), 'fallback Chinese n-grams should not emit dictionary words longer than four characters');
+        assert_true(in_array('中国科学院', $segmenterQueryTerms, true), 'configured Jieba segmenter should emit the source-backed long dictionary word');
+        assert_true(in_array('国科学院', $segmenterQueryTerms, true), 'configured Jieba segmenter should preserve fallback four-character subword recall');
+
+        $targetHtml = '<p>小明硕士毕业于中国科学院计算所。</p>';
+        $baitHtml = '<p>中国 国科 科学 学院 中国科 国科学 科学院 中国科学 国科学院 中 国 科 学 院。</p>';
+
+        $fallbackStorage = new WP_FTS_Storage_InMemory();
+        $fallbackIndexer = new WP_FTS_Indexer($fallbackStorage, $fallbackAnalyzer);
+        $fallbackIndexer->index_document(9101, $targetHtml, ['lang' => 'zh']);
+        $fallbackIndexer->index_document(9102, $baitHtml, ['lang' => 'zh']);
+        $fallbackPayload = (new WP_FTS_Searcher($fallbackStorage, $fallbackAnalyzer))->search('中国科学院', [
+            'lang' => 'zh',
+            'mode' => 'AND',
+            'include_total' => true,
+        ]);
+        assert_same(2, $fallbackPayload['total'], 'fallback n-gram matching should allow both the true phrase and full n-gram bait');
+
+        $segmenterStorage = new WP_FTS_Storage_InMemory();
+        $segmenterIndexer = new WP_FTS_Indexer($segmenterStorage, $segmenterAnalyzer);
+        $segmenterIndexer->index_document(9101, $targetHtml, ['lang' => 'zh']);
+        $segmenterIndexer->index_document(9102, $baitHtml, ['lang' => 'zh']);
+        assert_true(in_array(WP_FTS_TermNamespace::namespace_term('zh', '中国科学院'), $segmenterStorage->all_terms(), true), 'Jieba indexing should store the source-backed long segment');
+        assert_true(in_array(WP_FTS_TermNamespace::namespace_term('zh', '国科学院'), $segmenterStorage->all_terms(), true), 'Jieba indexing should still store fallback subword n-grams');
+
+        $segmenterPayload = (new WP_FTS_Searcher($segmenterStorage, $segmenterAnalyzer))->search('中国科学院', [
+            'lang' => 'zh',
+            'mode' => 'AND',
+            'include_total' => true,
+        ]);
+        assert_same(1, $segmenterPayload['total'], 'configured Jieba long-word evidence should filter the n-gram-only bait in AND mode');
+        assert_same(9101, (int) ($segmenterPayload['results'][0]['doc_id'] ?? 0), 'configured Jieba result should be the document containing the full dictionary word');
+
+        $subwordPayload = (new WP_FTS_Searcher($segmenterStorage, $segmenterAnalyzer))->search('院计算', [
+            'lang' => 'zh',
+            'mode' => 'AND',
+            'include_total' => true,
+        ]);
+        assert_same(1, $subwordPayload['total'], 'unknown subword queries should still match through fallback CJK n-grams');
+    } finally {
+        remove_directory_tree($fixture['dir']);
+    }
+});
+
+test_case('Chinese Jieba segmenter source failures fall back safely', function (): void {
+    $fixture = synthetic_jieba_segmenter_analyzer();
+    try {
+        $fallback = new WP_FTS_Analyzer();
+        $fallbackTerms = $fallback->analyze_query('中国科学院', ['lang' => 'zh']);
+
+        $missingOption = $fixture['option'];
+        $missingOption['source_file'] = $fixture['dir'] . '/missing-dict.txt';
+        $missingAnalyzer = new WP_FTS_Analyzer([
+            'segmenter_packs_by_lang' => [
+                'zh' => $missingOption,
+            ],
+        ]);
+        assert_same($fallbackTerms, $missingAnalyzer->analyze_query('中国科学院', ['lang' => 'zh']), 'missing Jieba source should fall back to built-in CJK n-grams');
+
+        $hashMismatchOption = $fixture['option'];
+        $hashMismatchOption['expected_sha256'] = str_repeat('0', 64);
+        $hashMismatchAnalyzer = new WP_FTS_Analyzer([
+            'segmenter_packs_by_lang' => [
+                'zh' => $hashMismatchOption,
+            ],
+        ]);
+        assert_same($fallbackTerms, $hashMismatchAnalyzer->analyze_query('中国科学院', ['lang' => 'zh']), 'hash-mismatched Jieba source should fall back to built-in CJK n-grams');
+
+        $sizeMismatchOption = $fixture['option'];
+        $sizeMismatchOption['expected_byte_size'] = ((int) $sizeMismatchOption['expected_byte_size']) + 1;
+        $sizeMismatchAnalyzer = new WP_FTS_Analyzer([
+            'segmenter_packs_by_lang' => [
+                'zh' => $sizeMismatchOption,
+            ],
+        ]);
+        assert_same($fallbackTerms, $sizeMismatchAnalyzer->analyze_query('中国科学院', ['lang' => 'zh']), 'byte-size-mismatched Jieba source should fall back to built-in CJK n-grams');
+    } finally {
+        remove_directory_tree($fixture['dir']);
+    }
+});
+
+test_case('Chinese segmenter pack options affect runtime and sandbox defaults intentionally', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+
+    $runtimeOptions = WP_FTS_Plugin::runtime_analyzer_options();
+    $runtimeSegmenters = $runtimeOptions['segmenter_packs_by_lang'] ?? [];
+    assert_true(is_array($runtimeSegmenters), 'runtime analyzer options should expose the segmenter pack map shape only when configured');
+    assert_true(!array_key_exists('zh', $runtimeSegmenters), 'production runtime defaults should not enable the Jieba Chinese segmenter');
+
+    $sandboxOptions = WP_FTS_Plugin::sandbox_demo_analyzer_options();
+    $sandboxSegmenters = $sandboxOptions['segmenter_packs_by_lang'] ?? [];
+    assert_true(is_array($sandboxSegmenters), 'sandbox analyzer options should expose the segmenter pack map shape');
+    assert_same(true, $sandboxSegmenters['zh'] ?? null, 'sandbox analyzer should try the pinned Jieba submodule source for Chinese');
+
+    $statuses = [];
+    foreach (WP_FTS_Plugin::sandbox_demo_analyzer_pack_statuses() as $status) {
+        $statuses[$status['language'] . ':' . $status['kind']] = $status;
+    }
+    $zhStatus = $statuses['zh:tokenizer'] ?? null;
+    assert_true(is_array($zhStatus), 'sandbox status should include a Chinese tokenizer row');
+    assert_same('tokenizer', $zhStatus['kind'] ?? null, 'Chinese sandbox status should identify tokenizer support');
+
+    if (WP_FTS_ChineseJiebaSegmenter::default_source_evidence()['available']) {
+        assert_same('active', $zhStatus['status'] ?? null, 'initialized valid submodule should make the sandbox Jieba segmenter active');
+        assert_same('zh-jieba-dict-67fa2e36e72f', $zhStatus['pack_id'] ?? null, 'active Jieba sandbox status should expose the source pack id');
+        assert_true(in_array('中国科学院', WP_FTS_Plugin::sandbox_demo_analyzer()->analyze_query('小明硕士毕业于中国科学院计算所', ['lang' => 'zh']), true), 'sandbox analyzer should use the valid submodule-backed Jieba segmenter');
+    } else {
+        assert_same('fallback', $zhStatus['status'] ?? null, 'missing submodule should make sandbox status report fallback');
+        assert_contains('fallback CJK n-grams', $zhStatus['reason'] ?? '', 'missing submodule status should explain fallback n-grams');
+    }
+});
+
+test_case('plugin runtime analyzer accepts Chinese segmenter packs from WordPress option and filter', function (): void {
+    $fixture = synthetic_jieba_segmenter_analyzer();
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'segmenter_packs_by_lang' => [
+                'zh' => $fixture['option'],
+            ],
+        ];
+
+        $optionRuntime = WP_FTS_Plugin::runtime_analyzer_options();
+        assert_same($fixture['option'], $optionRuntime['segmenter_packs_by_lang']['zh'] ?? null, 'WordPress analyzer option should pass the Chinese segmenter source config');
+        assert_true(in_array('中国科学院', WP_FTS_Plugin::runtime_analyzer()->analyze_query('中国科学院', ['lang' => 'zh']), true), 'WordPress option segmenter should reach the runtime analyzer');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (array $options) use ($fixture): array {
+            $options['cjk_segmenter_packs_by_lang']['zh'] = $fixture['option'];
+
+            return $options;
+        };
+
+        $filterRuntime = WP_FTS_Plugin::runtime_analyzer_options();
+        assert_same($fixture['option'], $filterRuntime['segmenter_packs_by_lang']['zh'] ?? null, 'WordPress analyzer filter should canonicalize Chinese segmenter aliases');
+        assert_true(in_array('中国科学院', WP_FTS_Plugin::runtime_analyzer()->analyze_query('中国科学院', ['lang' => 'zh']), true), 'WordPress filter segmenter should reach the runtime analyzer');
+    } finally {
+        remove_directory_tree($fixture['dir']);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
+test_case('Chinese Jieba segmenter source participates in analyzer signatures', function (): void {
+    $first = synthetic_jieba_segmenter_analyzer();
+    $secondDir = temp_directory_path('jieba_segmenter_fixture_changed');
+    try {
+        if (!mkdir($secondDir, 0777, true) && !is_dir($secondDir)) {
+            throw new WP_FTS_TestFailure("Could not create changed synthetic Jieba directory: {$secondDir}");
+        }
+        $secondSource = $secondDir . '/dict.txt';
+        $rows = synthetic_jieba_segmenter_rows();
+        $rows[] = ['自然语言处理系统', 1500, 'n'];
+        write_synthetic_jieba_segmenter_source($secondSource, $rows);
+        $secondOption = synthetic_jieba_segmenter_option($secondSource);
+
+        $firstAnalyzer = $first['analyzer'];
+        $secondAnalyzer = new WP_FTS_Analyzer([
+            'segmenter_packs_by_lang' => [
+                'zh' => $secondOption,
+            ],
+        ]);
+        $fallbackAnalyzer = new WP_FTS_Analyzer();
+
+        assert_true($fallbackAnalyzer->index_signature() !== $firstAnalyzer->index_signature(), 'enabling a Jieba segmenter source should change the analyzer signature');
+        assert_true($firstAnalyzer->index_signature() !== $secondAnalyzer->index_signature(), 'changing the Jieba source hash should change the analyzer signature');
+    } finally {
+        remove_directory_tree($first['dir']);
+        remove_directory_tree($secondDir);
+    }
 });
 
 test_case('plugin runtime analyzer accepts generic lemma packs from WordPress option and filter', function (): void {

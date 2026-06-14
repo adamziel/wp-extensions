@@ -65,7 +65,7 @@ be routed when callers provide language hints.
 | Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | Strongest path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice. | Default behavior remains conservative unless a valid pack or verified mode is enabled. Bundled packs stay opt-in/default-disabled outside the sandbox path. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Configure them through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`; built-in Snowball or baseline behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), Dutch Porter (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
-| Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization: one-character runs plus overlapping n-grams up to 4 characters. | No bundled dictionary segmentation, word morphology, or CJK lexical pack. |
+| Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization plus optional Jieba dictionary segmentation from the pinned source submodule through `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Fallback n-grams remain enabled for unknown/subword recall. |
 | Urdu (`ur`) | Selectable/detectable partition. | Arabic-script combining mark/harakat and tatweel normalization plus deterministic light suffix baseline for common plural-oblique forms. | UniMorph Urdu is license-blocked, so no generated Urdu pack is bundled. Persian-like text is not merged into Urdu routing. |
 | German (`de`), Russian (`ru`), other explicit partitions | Language namespace/routing support when the caller or detector supplies the language. | Conservative analysis unless a documented analyzer exists. | Unsupported morphology returns the normalized token unchanged. |
 | Generic packs | Available through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Local manifest-backed packs whose manifest `language` matches the configured key. | Invalid, missing, disabled, or language-mismatched packs are ignored and the built-in fallback path remains available. |
@@ -101,9 +101,17 @@ The default analyzer:
 - drops non-CJK terms shorter than 2 characters;
 - rejects stored term keys over 255 bytes;
 - tokenizes one-character CJK script runs as-is and longer CJK runs into
-  character unigrams plus deterministic overlapping n-grams up to 4 characters.
+  character unigrams plus deterministic overlapping n-grams up to 4 characters;
+- can add optional source-backed Chinese Jieba segments when a configured
+  segmenter pack validates locally.
 
-The CJK path is fallback n-gram retrieval, not dictionary word segmentation.
+The default CJK path is fallback n-gram retrieval, not dictionary word
+segmentation. The optional Chinese Jieba adapter reads `jieba/dict.txt` from the
+pinned `indexer/resources/sources/jieba` git submodule, verifies the expected
+byte count and SHA-256, emits deterministic longest-match segments, and keeps
+fallback n-grams in the same token stream. If the submodule is missing,
+uninitialized, invalid, or hash-mismatched, the adapter is ignored and fallback
+n-grams are used.
 The plugin does not ship a Thai tokenizer, Thai dictionary, TCC/TCC+ rules, or a
 production non-space tokenizer adapter. Any future Thai adapter must pass the
 [tokenizer source-lock](tokenizer-source-locks.md) gate first.
@@ -277,9 +285,53 @@ the admin sandbox and fall back to the built-in analyzer path for that language.
 
 The Playground/admin sandbox auto-loads the bundled local Polish pack and the
 committed UniMorph packs for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`
-when compressed shards can be read. Outside the sandbox, those UniMorph packs
-remain opt-in/default-disabled. The synthetic Bengali pack remains a
-default-disabled test fixture and is not product data.
+when compressed shards can be read. It also tries the pinned Jieba Chinese
+segmenter source when the submodule is initialized and hash-valid. Outside the
+sandbox, those UniMorph packs and the Jieba segmenter remain
+opt-in/default-disabled. The synthetic Bengali pack remains a default-disabled
+test fixture and is not product data.
+
+### Optional Chinese Jieba Segmenter
+
+Chinese fallback n-grams work without external data. To enable dictionary
+segmentation, initialize the pinned Jieba source submodule:
+
+```sh
+git submodule update --init --recursive indexer/resources/sources/jieba
+```
+
+The expected source is `https://github.com/fxsjy/jieba` at commit
+`67fa2e36e72f69d9134b8a1037b83fbb070b9775`, file `jieba/dict.txt`, SHA-256
+`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, byte size
+`5071852`, under the upstream MIT license. README evidence for that commit
+documents the `word frequency tag` dictionary format, default `dict.txt`
+distribution, and `cut_for_search` search-engine segmentation mode.
+
+Production runtime does not enable this segmenter by default. Configure it with
+the analyzer option or WordPress option/filter:
+
+```php
+$analyzer = new WP_FTS_Analyzer([
+    'segmenter_packs_by_lang' => [
+        'zh' => true,
+    ],
+]);
+
+update_option(WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION, [
+    'segmenter_packs_by_lang' => [
+        'zh' => true,
+    ],
+]);
+```
+
+`true` means the default pinned submodule source. A custom option array may
+provide `source_file`, `expected_sha256`, and `expected_byte_size` for a
+reviewed local source, but invalid or mismatched sources fail closed to CJK
+n-grams. The aliases `cjk_segmenter_packs_by_lang`,
+`cjk_tokenizer_packs_by_lang`, and `tokenizer_packs_by_lang` are accepted;
+`segmenter_packs_by_lang` wins for the same language. Reindex after enabling or
+changing a segmenter source because its verified source hash participates in the
+analyzer/index signature.
 
 ### Importing Normalized Lemma TSV Packs
 
@@ -320,7 +372,8 @@ The repository also includes bundled source-backed UniMorph packs for `en`,
 `es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`; they remain opt-in and
 default-disabled. The tiny synthetic `bn` fixture remains only a
 project-owned runtime contract test, not product Bengali morphology. `zh`
-remains tokenizer/segmentation-only, and `ur` remains license-blocked with no
+remains tokenizer/segmentation-only, backed by optional pinned Jieba source
+instead of copied dictionary rows, and `ur` remains license-blocked with no
 committed generated pack.
 
 ### Importing CoNLL-U Lemma Packs

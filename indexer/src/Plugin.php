@@ -1197,7 +1197,7 @@ final class WP_FTS_Plugin
     /**
      * Report configured runtime lemma packs for admin diagnostics.
      *
-     * @return array<int,array{language:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
      */
     public static function runtime_analyzer_pack_statuses(): array
     {
@@ -1207,7 +1207,7 @@ final class WP_FTS_Plugin
     /**
      * Report configured sandbox/demo lemma packs for admin diagnostics.
      *
-     * @return array<int,array{language:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
      */
     public static function sandbox_demo_analyzer_pack_statuses(): array
     {
@@ -1216,7 +1216,7 @@ final class WP_FTS_Plugin
 
     /**
      * @param array<string,mixed> $options
-     * @return array<int,array{language:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
      */
     private static function analyzer_pack_statuses(array $options): array
     {
@@ -1225,6 +1225,7 @@ final class WP_FTS_Plugin
             if (self::lemma_pack_option_is_disabled($option)) {
                 $statuses[] = [
                     'language' => $language,
+                    'kind' => 'lemmatizer',
                     'status' => 'disabled',
                     'pack_id' => '',
                     'fixture_only' => false,
@@ -1241,6 +1242,7 @@ final class WP_FTS_Plugin
             if ($pack === null) {
                 $statuses[] = [
                     'language' => $language,
+                    'kind' => 'lemmatizer',
                     'status' => 'ignored',
                     'pack_id' => '',
                     'fixture_only' => false,
@@ -1251,12 +1253,52 @@ final class WP_FTS_Plugin
 
             $statuses[] = [
                 'language' => $language,
+                'kind' => 'lemmatizer',
                 'status' => 'active',
                 'pack_id' => $pack->pack_id(),
                 'fixture_only' => $pack->is_fixture_only(),
                 'reason' => '',
             ];
         }
+        foreach (self::runtime_segmenter_pack_options_by_language($options) as $language => $option) {
+            if (self::lemma_pack_option_is_disabled($option)) {
+                $statuses[] = [
+                    'language' => $language,
+                    'kind' => 'tokenizer',
+                    'status' => 'disabled',
+                    'pack_id' => '',
+                    'fixture_only' => false,
+                    'reason' => 'Disabled by configuration.',
+                ];
+                continue;
+            }
+
+            $pack = WP_FTS_ChineseJiebaSegmenter::from_pack_option($option, $language);
+            if ($pack === null) {
+                $statuses[] = [
+                    'language' => $language,
+                    'kind' => 'tokenizer',
+                    'status' => 'fallback',
+                    'pack_id' => '',
+                    'fixture_only' => false,
+                    'reason' => 'Jieba dictionary source is missing, invalid, or hash-mismatched; using fallback CJK n-grams.',
+                ];
+                continue;
+            }
+
+            $statuses[] = [
+                'language' => $language,
+                'kind' => 'tokenizer',
+                'status' => 'active',
+                'pack_id' => $pack->pack_id(),
+                'fixture_only' => $pack->is_fixture_only(),
+                'reason' => '',
+            ];
+        }
+        usort(
+            $statuses,
+            static fn(array $a, array $b): int => strcmp((string) $a['language'] . (string) $a['kind'], (string) $b['language'] . (string) $b['kind'])
+        );
 
         return $statuses;
     }
@@ -1268,7 +1310,10 @@ final class WP_FTS_Plugin
      */
     private static function raw_runtime_analyzer_options(): array
     {
-        return self::raw_analyzer_options_with_bundled_lemma_packs(self::bundled_runtime_lemma_packs_by_lang());
+        return self::raw_analyzer_options_with_bundled_packs(
+            self::bundled_runtime_lemma_packs_by_lang(),
+            self::bundled_runtime_segmenter_packs_by_lang()
+        );
     }
 
     /**
@@ -1279,17 +1324,22 @@ final class WP_FTS_Plugin
      */
     private static function raw_sandbox_demo_analyzer_options(): array
     {
-        return self::raw_analyzer_options_with_bundled_lemma_packs(self::bundled_sandbox_demo_lemma_packs_by_lang());
+        return self::raw_analyzer_options_with_bundled_packs(
+            self::bundled_sandbox_demo_lemma_packs_by_lang(),
+            self::bundled_sandbox_demo_segmenter_packs_by_lang()
+        );
     }
 
     /**
-     * @param array<string,bool|string> $bundled_packs
+     * @param array<string,bool|string> $bundled_lemma_packs
+     * @param array<string,bool|string> $bundled_segmenter_packs
      * @return array<string,mixed>
      */
-    private static function raw_analyzer_options_with_bundled_lemma_packs(array $bundled_packs): array
+    private static function raw_analyzer_options_with_bundled_packs(array $bundled_lemma_packs, array $bundled_segmenter_packs): array
     {
         $options = [
-            'lemmatizer_packs_by_lang' => $bundled_packs,
+            'lemmatizer_packs_by_lang' => $bundled_lemma_packs,
+            'segmenter_packs_by_lang' => $bundled_segmenter_packs,
         ];
 
         $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
@@ -1319,14 +1369,21 @@ final class WP_FTS_Plugin
      */
     private static function sanitize_runtime_analyzer_options(array $options): array
     {
-        $packs = self::runtime_lemma_pack_options_by_language($options);
-        if ($packs === []) {
+        $lemmaPacks = self::runtime_lemma_pack_options_by_language($options);
+        $segmenterPacks = self::runtime_segmenter_pack_options_by_language($options);
+        if ($lemmaPacks === [] && $segmenterPacks === []) {
             return [];
         }
 
-        return [
-            'lemmatizer_packs_by_lang' => $packs,
-        ];
+        $sanitized = [];
+        if ($lemmaPacks !== []) {
+            $sanitized['lemmatizer_packs_by_lang'] = $lemmaPacks;
+        }
+        if ($segmenterPacks !== []) {
+            $sanitized['segmenter_packs_by_lang'] = $segmenterPacks;
+        }
+
+        return $sanitized;
     }
 
     /**
@@ -1342,7 +1399,7 @@ final class WP_FTS_Plugin
 
         foreach ($override as $key => $value) {
             if (
-                in_array($key, ['lemma_packs_by_lang', 'lemmatizer_packs_by_lang'], true)
+                in_array($key, ['lemma_packs_by_lang', 'lemmatizer_packs_by_lang', 'segmenter_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'tokenizer_packs_by_lang'], true)
                 && is_array($value)
             ) {
                 $current = isset($base[$key]) && is_array($base[$key]) ? $base[$key] : [];
@@ -1369,7 +1426,7 @@ final class WP_FTS_Plugin
     {
         $override = [];
 
-        foreach (['lemma_packs_by_lang', 'lemmatizer_packs_by_lang'] as $key) {
+        foreach (['lemma_packs_by_lang', 'lemmatizer_packs_by_lang', 'segmenter_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'tokenizer_packs_by_lang'] as $key) {
             if (!isset($filtered[$key]) || !is_array($filtered[$key])) {
                 continue;
             }
@@ -1401,7 +1458,7 @@ final class WP_FTS_Plugin
     {
         $normalized = [];
 
-        foreach (['lemmatizer_packs_by_lang', 'lemma_packs_by_lang'] as $key) {
+        foreach (['lemmatizer_packs_by_lang', 'lemma_packs_by_lang', 'tokenizer_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
             if (isset($options[$key]) && is_array($options[$key])) {
                 $normalized[$key] = self::normalize_runtime_analyzer_language_map($options[$key]);
             }
@@ -1518,6 +1575,39 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Normalize segmenter pack option aliases to a canonical language map.
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private static function runtime_segmenter_pack_options_by_language(array $options): array
+    {
+        $packs = [];
+        foreach (['tokenizer_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
+            if (isset($options[$key]) && is_array($options[$key])) {
+                $packs = array_replace($packs, $options[$key]);
+            }
+        }
+
+        $normalized = [];
+        foreach ($packs as $language => $option) {
+            if (!is_scalar($language) || trim((string) $language) === '') {
+                continue;
+            }
+
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+            if (!self::is_supported_lemma_pack_option($option)) {
+                continue;
+            }
+
+            $normalized[$language] = $option;
+        }
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
+    }
+
+    /**
      * @return array<string,bool|string>
      */
     private static function bundled_runtime_lemma_packs_by_lang(): array
@@ -1525,6 +1615,14 @@ final class WP_FTS_Plugin
         return [
             'pl' => self::sandbox_polish_lemmatizer_pack(),
         ];
+    }
+
+    /**
+     * @return array<string,bool|string>
+     */
+    private static function bundled_runtime_segmenter_packs_by_lang(): array
+    {
+        return [];
     }
 
     /**
@@ -1543,6 +1641,16 @@ final class WP_FTS_Plugin
         ksort($packs, SORT_STRING);
 
         return $packs;
+    }
+
+    /**
+     * @return array<string,bool|string>
+     */
+    private static function bundled_sandbox_demo_segmenter_packs_by_lang(): array
+    {
+        return [
+            'zh' => true,
+        ];
     }
 
     private static function sandbox_polish_lemmatizer_pack(): bool|string
@@ -1652,7 +1760,7 @@ final class WP_FTS_Plugin
         }
 
         echo '<table class="widefat striped">';
-        echo '<thead><tr><th scope="col">Language</th><th scope="col">Status</th><th scope="col">Pack</th><th scope="col">Scope</th></tr></thead>';
+        echo '<thead><tr><th scope="col">Language</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Pack</th><th scope="col">Scope</th></tr></thead>';
         echo '<tbody>';
         foreach ($statuses as $status) {
             $scope = $status['status'] === 'active'
@@ -1661,6 +1769,7 @@ final class WP_FTS_Plugin
             $pack = $status['pack_id'] !== '' ? $status['pack_id'] : '-';
             echo '<tr>';
             echo '<td>' . self::esc_html(self::sandbox_language_display($status['language'])) . '</td>';
+            echo '<td>' . self::esc_html(ucfirst($status['kind'])) . '</td>';
             echo '<td>' . self::esc_html(ucfirst($status['status'])) . '</td>';
             echo '<td><code>' . self::esc_html($pack) . '</code></td>';
             echo '<td>' . self::esc_html($scope) . '</td>';

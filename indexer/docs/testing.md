@@ -40,11 +40,13 @@ php tests/quality/analyzer-language-corpus.php
 ```
 
 Chinese/CJK fallback expectations cover one-character runs plus deterministic
-overlapping n-grams up to 4 characters. The same focused lane covers the current
-Bengali and Urdu light suffix baselines, their analyzer signatures, and
-language-partition isolation. These tests assert retrieval-oriented fallback
-tokenization/stemming only, not dictionary segmentation, lemmatization, or
-third-party tokenizer data.
+overlapping n-grams up to 4 characters. The main harness also covers the
+optional source-backed Jieba Chinese segmenter with project-owned synthetic
+fixture rows: configured long-word matching, retained unknown/subword n-gram
+recall, missing/hash-mismatched source fallback, sandbox defaults, and analyzer
+signature changes when the verified source hash changes. The same focused lane
+covers the current Bengali and Urdu light suffix baselines, their analyzer
+signatures, and language-partition isolation.
 
 ## Native BM25 Reference Gate
 
@@ -147,9 +149,20 @@ php tools/audit-top-language-lemma-packs.php \
 ```
 
 Those packs are source-backed, opt-in, default-disabled, and CC BY-SA 3.0.
-Chinese is audited as a tokenizer lane rather than a missing UniMorph lemma
-pack. Urdu is audited as license-blocked until `unimorph/urd` has clear
-redistribution evidence, so no generated Urdu pack is bundled.
+Chinese is a tokenizer lane rather than a missing UniMorph lemma pack. Its
+optional Jieba source is pinned as a git submodule, not copied dictionary rows:
+
+```sh
+git submodule update --init --recursive indexer/resources/sources/jieba
+git -C indexer/resources/sources/jieba rev-parse HEAD
+sha256sum indexer/resources/sources/jieba/jieba/dict.txt
+wc -c indexer/resources/sources/jieba/jieba/dict.txt
+```
+
+The expected commit is `67fa2e36e72f69d9134b8a1037b83fbb070b9775`, SHA-256 is
+`7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and byte
+size is `5071852`. Urdu is audited as license-blocked until `unimorph/urd` has
+clear redistribution evidence, so no generated Urdu pack is bundled.
 
 Run the package-safe external pack workflow tests directly when changing the
 builder, importer options, validation boundary, or docs:

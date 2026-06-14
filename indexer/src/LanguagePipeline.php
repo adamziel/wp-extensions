@@ -54,6 +54,10 @@ final class WP_FTS_LanguagePipeline
      *   stemmers?:array<string,WP_FTS_Stemmer|callable|null>,
      *   cjk_tokenizer?:callable|null,
      *   cjk_segmenter?:callable|null,
+     *   segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   cjk_segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   cjk_tokenizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   tokenizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
      *   token_normalizer?:callable|null,
      *   chinese_script_map?:array<string,string>|array<string,array<string,string>>,
      *   enable_stemming?:bool,
@@ -85,6 +89,9 @@ final class WP_FTS_LanguagePipeline
             $this->lemma_pack_options_by_language($options)
         );
         $tokenizer = $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null;
+        if (!is_callable($tokenizer)) {
+            $tokenizer = $this->segmenter_pack_tokenizer_for_options($options);
+        }
         $this->cjkTokenizer = is_callable($tokenizer) ? $tokenizer : null;
         $this->enableStemming = (bool) ($options['enable_stemming'] ?? true);
         $this->namespaceTerms = (bool) ($options['namespace_terms'] ?? false);
@@ -554,6 +561,67 @@ final class WP_FTS_LanguagePipeline
     }
 
     /**
+     * Build a CJK tokenizer from local source-backed segmenter pack options.
+     *
+     * @param array<string,mixed> $options
+     */
+    private function segmenter_pack_tokenizer_for_options(array $options): ?callable
+    {
+        $packs = $this->segmenter_pack_options_by_language($options);
+        if ($packs === []) {
+            return null;
+        }
+
+        $segmenters = [];
+        foreach ($packs as $language => $option) {
+            $canonicalLanguage = $this->canonicalize_language((string) $language);
+            if ($canonicalLanguage === 'und') {
+                continue;
+            }
+
+            $segmenter = WP_FTS_ChineseJiebaSegmenter::from_pack_option($option, $canonicalLanguage);
+            if ($segmenter !== null) {
+                $segmenters[$this->base_language($canonicalLanguage)] = $segmenter;
+            }
+        }
+
+        if ($segmenters === []) {
+            return null;
+        }
+        if (count($segmenters) === 1) {
+            return reset($segmenters) ?: null;
+        }
+
+        ksort($segmenters, SORT_STRING);
+
+        return function (string $run, string $language) use ($segmenters): array {
+            $base = $this->base_language($language);
+            $segmenter = $segmenters[$base] ?? null;
+
+            return $segmenter instanceof WP_FTS_ChineseJiebaSegmenter ? $segmenter($run, $language) : [];
+        };
+    }
+
+    /**
+     * Merge segmenter-pack option aliases. `segmenter_packs_by_lang` wins when
+     * aliases provide the same language key.
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private function segmenter_pack_options_by_language(array $options): array
+    {
+        $packs = [];
+        foreach (['tokenizer_packs_by_lang', 'cjk_tokenizer_packs_by_lang', 'cjk_segmenter_packs_by_lang', 'segmenter_packs_by_lang'] as $key) {
+            if (isset($options[$key]) && is_array($options[$key])) {
+                $packs = array_replace($packs, $options[$key]);
+            }
+        }
+
+        return $packs;
+    }
+
+    /**
      * Build a stable signature for tokenization, normalization, and stemming.
      *
      * @param array<string,mixed> $options Constructor options.
@@ -655,10 +723,6 @@ final class WP_FTS_LanguagePipeline
             return null;
         }
 
-        if (is_callable($component)) {
-            return $this->callableSignature($component);
-        }
-
         if (is_object($component)) {
             if (is_callable([$component, 'index_signature'])) {
                 try {
@@ -672,6 +736,10 @@ final class WP_FTS_LanguagePipeline
             }
 
             return 'object:' . get_debug_type($component);
+        }
+
+        if (is_callable($component)) {
+            return $this->callableSignature($component);
         }
 
         return $this->signatureValue($component);

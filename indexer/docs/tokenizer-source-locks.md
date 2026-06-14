@@ -1,11 +1,20 @@
 # Tokenizer Source Locks
 
-The `indexer/` plugin does not currently ship real Thai, CJK, or general
-non-space word segmentation. CJK script runs use the built-in fallback described
-in [Limitations](limitations.md): one-character runs stay as one token and
-longer runs emit character unigrams plus deterministic overlapping n-grams up
-to 4 characters. That is retrieval-oriented n-gram tokenization, not dictionary
-word segmentation.
+The `indexer/` plugin does not currently ship real Thai or general non-space
+word segmentation. CJK script runs use the built-in fallback described in
+[Limitations](limitations.md): one-character runs stay as one token and longer
+runs emit character unigrams plus deterministic overlapping n-grams up to 4
+characters. That default path is retrieval-oriented n-gram tokenization, not
+dictionary word segmentation.
+
+Chinese (`zh`) has a narrow optional exception: a source-backed Jieba adapter can
+read `jieba/dict.txt` from the pinned `indexer/resources/sources/jieba`
+submodule when configured through `segmenter_packs_by_lang`. The main repository
+commits only `.gitmodules` and the gitlink. It does not copy Jieba dictionary
+rows, HMM/POS/IDF/model files, or generated tokenizer archives. Runtime use
+requires the file to match commit `67fa2e36e72f69d9134b8a1037b83fbb070b9775`,
+SHA-256 `7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and
+byte size `5071852`; otherwise Chinese falls back to CJK n-grams.
 
 Future support for `thai_dictionary_tcc_v1` must start with a reviewed source
 lock before any adapter, importer, bundled Thai dictionary, generated TCC rules,

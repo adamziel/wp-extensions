@@ -107,7 +107,7 @@ be routed when callers provide language hints.
 | Polish (`pl`) | Strongest path when an opt-in analyzer/lemma pack is valid. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases; the default fallback is conservative unless a valid pack or verified mode is enabled. | The committed Polish full pack and fixtures remain opt-in/default-disabled outside the sandbox path. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Packs are CC BY-SA 3.0 data, default-disabled, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), Dutch Porter (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Other Wamania languages are treated as no-ops unless they become verified. |
-| Chinese (`zh`) | Deterministic CJK fallback: one-character runs plus overlapping n-grams up to 4 characters. | No bundled dictionary segmentation or CJK word morphology. |
+| Chinese (`zh`) | Deterministic CJK fallback plus optional Jieba dictionary segmentation from the pinned `indexer/resources/sources/jieba` submodule via `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Fallback n-grams remain enabled for unknown/subword recall. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common plural-oblique forms. | UniMorph Urdu imports technically, but the upstream `unimorph/urd` repository has no license evidence, so no generated Urdu pack is committed. |
 | German (`de`), Russian (`ru`), and other explicit partitions | Language namespace/routing support with conservative analysis unless a documented analyzer is available. | Unsupported morphology returns the normalized token unchanged. |
 | Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` accept local manifest-backed packs with matching `language` values. | Missing, invalid, disabled, or language-mismatched packs fall back safely. |
@@ -120,13 +120,22 @@ Importer availability is not the same as pack-backed language support. To audit
 top-language readiness, run
 `php tools/audit-top-language-lemma-packs.php --pack-root=/path --json --require-pack-backed`.
 Languages reported as missing, fixture-only, or license-blocked are not ready to
-claim pack-backed quality. Chinese is reported as a tokenizer lane rather than a
-missing lemma pack.
+claim pack-backed quality. Chinese is a tokenizer lane rather than a missing
+lemma pack; its optional Jieba source is a git submodule, not copied dictionary
+rows in this repository.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus deterministic
-overlapping n-grams up to 4 characters. The plugin does not currently ship Thai
-or CJK dictionary segmentation.
+overlapping n-grams up to 4 characters. Initialize optional Jieba source data
+with:
+
+```sh
+git submodule update --init --recursive indexer/resources/sources/jieba
+```
+
+The runtime verifies `jieba/dict.txt` against the pinned SHA-256 before using
+it. Missing, uninitialized, or hash-mismatched source data falls back to CJK
+n-grams. The plugin does not currently ship Thai dictionary segmentation.
 
 ## Snippets And Highlighting
 
@@ -183,8 +192,9 @@ wp fts optimize
   [Configuration](docs/configuration.md#importing-conllu-lemma-packs), and
   [Configuration](docs/configuration.md#importing-unimorph-style-lemma-packs).
 - [Tokenizer source locks](docs/tokenizer-source-locks.md) documents the
-  pre-coding gate for any future Thai TCC/dictionary tokenizer. The current
-  plugin does not ship real Thai or CJK word segmentation.
+  pre-coding gate for any future Thai TCC/dictionary tokenizer and the narrow
+  pinned-source boundary for optional Chinese Jieba segmentation. The current
+  plugin does not ship real Thai word segmentation.
 - [Polish fixture pack](docs/polish-morfologik-fixture-pack.md) explains the
   opt-in Morfologik/PoliMorf-compatible lemmatizer contract slice.
 - [Polish verified stemmer](docs/polish-verified-stemmer.md) explains the
@@ -204,5 +214,7 @@ Current caveats:
 - no settings screen;
 - custom field indexing must be configured;
 - shortcode rendering is opt-in;
-- no Thai or CJK dictionary segmentation;
+- no Thai dictionary segmentation;
+- Chinese Jieba dictionary segmentation is optional and requires the pinned
+  submodule source to be initialized and hash-valid;
 - no honest prefix or phrase search unless an extension supplies that backend.

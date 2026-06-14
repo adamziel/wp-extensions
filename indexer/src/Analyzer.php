@@ -61,6 +61,9 @@ final class WP_FTS_Analyzer
      *   attributes, and multilingual-plugin metadata still win.
      * - `cjk_tokenizer`: optional segmenter for one CJK script run; the
      *   built-in n-gram tokenizer remains the fallback.
+     * - `segmenter_packs_by_lang`: optional source-backed tokenizer packs such
+     *   as the Jieba-backed Chinese adapter. Missing or invalid packs fall back
+     *   to the built-in n-gram tokenizer.
      * - `html_processor_factory`: test hook that returns a `WP_HTML_Processor`
      *   compatible object for the given HTML.
      *
@@ -88,6 +91,10 @@ final class WP_FTS_Analyzer
      *   stemmers?:array<string,WP_FTS_Stemmer|callable|null>,
      *   cjk_tokenizer?:callable|null,
      *   cjk_segmenter?:callable|null,
+     *   segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   cjk_segmenter_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   cjk_tokenizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
+     *   tokenizer_packs_by_lang?:array<string,bool|string|array<string,mixed>|null>,
      *   token_normalizer?:callable|null,
      *   chinese_script_map?:array<string,string>|array<string,array<string,string>>,
      *   stopwords_by_lang?:array<string,string[]>,
@@ -156,6 +163,10 @@ final class WP_FTS_Analyzer
             'stemmer' => $options['stemmer'] ?? null,
             'stemmers_by_lang' => $options['stemmers_by_lang'] ?? $options['stemmers'] ?? [],
             'cjk_tokenizer' => $options['cjk_tokenizer'] ?? $options['cjk_segmenter'] ?? null,
+            'segmenter_packs_by_lang' => $options['segmenter_packs_by_lang'] ?? [],
+            'cjk_segmenter_packs_by_lang' => $options['cjk_segmenter_packs_by_lang'] ?? [],
+            'cjk_tokenizer_packs_by_lang' => $options['cjk_tokenizer_packs_by_lang'] ?? [],
+            'tokenizer_packs_by_lang' => $options['tokenizer_packs_by_lang'] ?? [],
             'token_normalizer' => $options['token_normalizer'] ?? null,
             'chinese_script_map' => $options['chinese_script_map'] ?? [],
         ]);

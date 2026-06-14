@@ -31,6 +31,7 @@ $wp_fts_files = [
     __DIR__ . '/AnalyzerPackValidator.php',
     __DIR__ . '/LanguageLemmaPack.php',
     __DIR__ . '/PolishMorfologikLemmatizer.php',
+    __DIR__ . '/ChineseJiebaSegmenter.php',
     __DIR__ . '/LanguageDetector.php',
     __DIR__ . '/TokenizerSourceLockVerifier.php',
     __DIR__ . '/TokenizerSourceCandidateLockVerifier.php',
