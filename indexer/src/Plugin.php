@@ -19,6 +19,8 @@ final class WP_FTS_Plugin
     public const ADMIN_PAGE_SLUG = 'wp-fts-sandbox';
     public const ADMIN_CAPABILITY = 'manage_options';
     public const SANDBOX_DEMO_POSTS_OPTION = 'wp_fts_sandbox_demo_post_ids';
+    public const ANALYZER_OPTIONS_OPTION = 'wp_fts_analyzer_options';
+    public const ANALYZER_OPTIONS_FILTER = 'wp_fts_analyzer_options';
     public const LANGUAGE_META_KEY = '_wp_fts_index_language';
     public const DEFAULT_BATCH_SIZE = 25;
     public const MAX_SEARCH_LIMIT = 50;
@@ -89,6 +91,7 @@ final class WP_FTS_Plugin
         self::delete_option(self::SCHEMA_VERSION_OPTION);
         self::delete_option(self::QUEUE_OPTION);
         self::delete_option(self::SANDBOX_DEMO_POSTS_OPTION);
+        self::delete_option(self::ANALYZER_OPTIONS_OPTION);
     }
 
     /**
@@ -1014,7 +1017,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Use the full compressed Polish lemmatizer pack for the admin demo corpus when available.
+     * Use the runtime analyzer for the admin demo corpus.
      */
     private static function sandbox_analyzer(): WP_FTS_Analyzer
     {
@@ -1024,11 +1027,188 @@ final class WP_FTS_Plugin
     /**
      * Use the same analyzer for runtime indexing and product searches.
      */
-    private static function runtime_analyzer(): WP_FTS_Analyzer
+    public static function runtime_analyzer(): WP_FTS_Analyzer
     {
-        return new WP_FTS_Analyzer([
-            'polish_lemmatizer_pack' => self::sandbox_polish_lemmatizer_pack(),
-        ]);
+        return new WP_FTS_Analyzer(self::runtime_analyzer_options());
+    }
+
+    /**
+     * Build analyzer options for WordPress runtime indexing, REST, admin, and WP-CLI.
+     *
+     * @return array<string,mixed>
+     */
+    public static function runtime_analyzer_options(): array
+    {
+        return self::sanitize_runtime_analyzer_options(self::raw_runtime_analyzer_options());
+    }
+
+    /**
+     * Report configured runtime lemma packs for admin diagnostics.
+     *
+     * @return array<int,array{language:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     */
+    public static function runtime_analyzer_pack_statuses(): array
+    {
+        $statuses = [];
+        foreach (self::runtime_lemma_pack_options_by_language(self::raw_runtime_analyzer_options()) as $language => $option) {
+            if (self::lemma_pack_option_is_disabled($option)) {
+                $statuses[] = [
+                    'language' => $language,
+                    'status' => 'disabled',
+                    'pack_id' => '',
+                    'fixture_only' => false,
+                    'reason' => 'Disabled by configuration.',
+                ];
+                continue;
+            }
+
+            $pack = WP_FTS_LanguageLemmaPack::from_pack_option(
+                $option,
+                $language,
+                self::default_lemma_pack_manifest_for_language($language)
+            );
+            if ($pack === null) {
+                $statuses[] = [
+                    'language' => $language,
+                    'status' => 'ignored',
+                    'pack_id' => '',
+                    'fixture_only' => false,
+                    'reason' => 'Missing, invalid, or language-mismatched manifest.',
+                ];
+                continue;
+            }
+
+            $statuses[] = [
+                'language' => $language,
+                'status' => 'active',
+                'pack_id' => $pack->pack_id(),
+                'fixture_only' => $pack->is_fixture_only(),
+                'reason' => '',
+            ];
+        }
+
+        return $statuses;
+    }
+
+    /**
+     * Read bundled defaults, the WordPress option, and the analyzer options filter.
+     *
+     * @return array<string,mixed>
+     */
+    private static function raw_runtime_analyzer_options(): array
+    {
+        $options = [
+            'lemmatizer_packs_by_lang' => self::bundled_runtime_lemma_packs_by_lang(),
+        ];
+
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        if (is_array($stored)) {
+            $options = self::merge_runtime_analyzer_options($options, $stored);
+        }
+
+        if (function_exists('apply_filters')) {
+            $filtered = apply_filters(self::ANALYZER_OPTIONS_FILTER, $options);
+            if (is_array($filtered)) {
+                $options = $filtered;
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * Keep only the analyzer options supported by the WordPress configuration path.
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private static function sanitize_runtime_analyzer_options(array $options): array
+    {
+        $packs = self::runtime_lemma_pack_options_by_language($options);
+        if ($packs === []) {
+            return [];
+        }
+
+        return [
+            'lemmatizer_packs_by_lang' => $packs,
+        ];
+    }
+
+    /**
+     * Merge nested analyzer option maps without inventing support for arbitrary options.
+     *
+     * @param array<string,mixed> $base
+     * @param array<string,mixed> $override
+     * @return array<string,mixed>
+     */
+    private static function merge_runtime_analyzer_options(array $base, array $override): array
+    {
+        foreach ($override as $key => $value) {
+            if (
+                in_array($key, ['lemma_packs_by_lang', 'lemmatizer_packs_by_lang'], true)
+                && is_array($value)
+            ) {
+                $current = isset($base[$key]) && is_array($base[$key]) ? $base[$key] : [];
+                $base[$key] = array_replace($current, $value);
+                continue;
+            }
+
+            if (in_array($key, ['polish_lemma_pack', 'polish_lemmatizer_pack'], true)) {
+                $base[$key] = $value;
+            }
+        }
+
+        return $base;
+    }
+
+    /**
+     * Normalize generic and legacy pack option aliases to a canonical language map.
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private static function runtime_lemma_pack_options_by_language(array $options): array
+    {
+        $packs = [];
+        if (isset($options['lemmatizer_packs_by_lang']) && is_array($options['lemmatizer_packs_by_lang'])) {
+            $packs = $options['lemmatizer_packs_by_lang'];
+        }
+        if (isset($options['lemma_packs_by_lang']) && is_array($options['lemma_packs_by_lang'])) {
+            $packs = array_replace($packs, $options['lemma_packs_by_lang']);
+        }
+        if (
+            !array_key_exists('pl', $packs)
+            && (array_key_exists('polish_lemma_pack', $options) || array_key_exists('polish_lemmatizer_pack', $options))
+        ) {
+            $packs['pl'] = $options['polish_lemma_pack'] ?? $options['polish_lemmatizer_pack'] ?? false;
+        }
+
+        $normalized = [];
+        foreach ($packs as $language => $option) {
+            if (!is_scalar($language) || trim((string) $language) === '') {
+                continue;
+            }
+
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+            if (!self::is_supported_lemma_pack_option($option)) {
+                continue;
+            }
+
+            $normalized[$language] = $option;
+        }
+        ksort($normalized, SORT_STRING);
+
+        return $normalized;
+    }
+
+    /**
+     * @return array<string,bool|string>
+     */
+    private static function bundled_runtime_lemma_packs_by_lang(): array
+    {
+        return [
+            'pl' => self::sandbox_polish_lemmatizer_pack(),
+        ];
     }
 
     private static function sandbox_polish_lemmatizer_pack(): bool|string
@@ -1039,6 +1219,32 @@ final class WP_FTS_Plugin
         }
 
         return true;
+    }
+
+    private static function default_lemma_pack_manifest_for_language(string $language): ?string
+    {
+        $parts = explode('-', str_replace('_', '-', $language));
+        $base = strtolower((string) ($parts[0] ?? $language));
+
+        return $base === 'pl' ? WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest() : null;
+    }
+
+    private static function is_supported_lemma_pack_option(mixed $option): bool
+    {
+        return $option === null || is_bool($option) || is_string($option) || is_array($option);
+    }
+
+    private static function lemma_pack_option_is_disabled(mixed $option): bool
+    {
+        if ($option === false || $option === null) {
+            return true;
+        }
+
+        if (is_string($option)) {
+            return in_array(strtolower(trim($option)), ['', '0', 'false', 'no', 'off'], true);
+        }
+
+        return false;
     }
 
     /**
@@ -1056,6 +1262,8 @@ final class WP_FTS_Plugin
         foreach ($messages as $message) {
             self::render_sandbox_notice($message[0], $message[1]);
         }
+
+        self::render_sandbox_analyzer_pack_statuses();
 
         echo '<h2>Indexed posts</h2>';
         echo '<p>The sandbox prepares demo posts and indexes them automatically. Automatic detection is the default; choose a language on the post edit screen to pin indexing for that post.</p>';
@@ -1083,6 +1291,34 @@ final class WP_FTS_Plugin
         }
 
         echo '</div>';
+    }
+
+    private static function render_sandbox_analyzer_pack_statuses(): void
+    {
+        $statuses = self::runtime_analyzer_pack_statuses();
+
+        echo '<h2>Analyzer packs</h2>';
+        if ($statuses === []) {
+            echo '<p>No lemma packs are configured. Languages without an active pack use their built-in stemmer or tokenizer behavior.</p>';
+            return;
+        }
+
+        echo '<table class="widefat striped">';
+        echo '<thead><tr><th scope="col">Language</th><th scope="col">Status</th><th scope="col">Pack</th><th scope="col">Scope</th></tr></thead>';
+        echo '<tbody>';
+        foreach ($statuses as $status) {
+            $scope = $status['status'] === 'active'
+                ? ($status['fixture_only'] ? 'Fixture' : 'Full local pack')
+                : $status['reason'];
+            $pack = $status['pack_id'] !== '' ? $status['pack_id'] : '-';
+            echo '<tr>';
+            echo '<td>' . self::esc_html(self::sandbox_language_display($status['language'])) . '</td>';
+            echo '<td>' . self::esc_html(ucfirst($status['status'])) . '</td>';
+            echo '<td><code>' . self::esc_html($pack) . '</code></td>';
+            echo '<td>' . self::esc_html($scope) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
     }
 
     /**

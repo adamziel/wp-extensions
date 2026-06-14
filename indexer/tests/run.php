@@ -2503,6 +2503,9 @@ test_case('authorized admin sandbox render includes search form and indexed post
     foreach (['zh', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ur', 'ru'] as $language) {
         assert_contains('value="' . $language . '"', $html, "sandbox language selector should include {$language}");
     }
+    assert_contains('Analyzer packs', $html, 'sandbox page should show configured analyzer pack status');
+    assert_contains('Polish (pl)', $html, 'sandbox analyzer pack status should include the bundled Polish pack');
+    assert_contains('<td>Active</td>', $html, 'sandbox analyzer pack status should identify active packs');
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_action"'), 'sandbox page should not render mutating demo action controls');
     assert_true(!str_contains($html, 'Create or refresh demo posts'), 'sandbox page should not render the manual demo refresh button');
     assert_true(!str_contains($html, 'Build demo index'), 'sandbox page should not render the manual demo index button');
@@ -3572,6 +3575,69 @@ test_case('generic lemma packs by language beat baseline and fall back safely', 
     ]);
     assert_same(['ককক'], $packAnalyzer->analyze_query('ককগুলো', ['lang' => 'bn']), 'analyzer should pass generic pack options into the language pipeline');
     assert_true($defaultAnalyzer->index_signature() !== $packAnalyzer->index_signature(), 'analyzer signature should change when a generic pack is enabled');
+});
+
+test_case('plugin runtime analyzer accepts generic lemma packs from WordPress option and filter', function (): void {
+    $manifest = WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest();
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'lemmatizer_packs_by_lang' => [
+            'bn' => $manifest,
+        ],
+    ];
+
+    $options = WP_FTS_Plugin::runtime_analyzer_options();
+    assert_same($manifest, $options['lemmatizer_packs_by_lang']['bn'] ?? null, 'WordPress analyzer option should pass a generic Bengali pack manifest');
+    assert_true(isset($options['lemmatizer_packs_by_lang']['pl']), 'runtime analyzer options should preserve the bundled Polish pack default');
+
+    $analyzer = WP_FTS_Plugin::runtime_analyzer();
+    assert_same(['সিনথ000লেমা'], $analyzer->analyze_query('সিনথ000গুলো', ['lang' => 'bn']), 'WordPress option pack should reach the runtime analyzer');
+
+    $statuses = [];
+    foreach (WP_FTS_Plugin::runtime_analyzer_pack_statuses() as $status) {
+        $statuses[$status['language']] = $status;
+    }
+    assert_same('active', $statuses['bn']['status'] ?? null, 'runtime pack status should mark the configured generic pack active');
+    assert_same('bn-synthetic-lemma-fixture', $statuses['bn']['pack_id'] ?? null, 'runtime pack status should expose the active generic pack id');
+    assert_same(true, $statuses['bn']['fixture_only'] ?? null, 'runtime pack status should preserve fixture-only diagnostics for configured test packs');
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (array $options) use ($manifest): array {
+        $options['lemma_packs_by_lang']['bn'] = ['manifest_path' => $manifest];
+
+        return $options;
+    };
+
+    $filterAnalyzer = WP_FTS_Plugin::runtime_analyzer();
+    assert_same(['ককক'], $filterAnalyzer->analyze_query('ককগুলো', ['lang' => 'bn']), 'WordPress analyzer filter should pass generic pack aliases into the runtime analyzer');
+});
+
+test_case('plugin runtime analyzer ignores invalid or language-mismatched generic packs safely', function (): void {
+    $syntheticBnManifest = WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest();
+    $polishManifest = WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest();
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'lemma_packs_by_lang' => [
+            'bn' => $polishManifest,
+            'pt' => __DIR__ . '/missing-pt-pack/manifest.json',
+            'ur' => $syntheticBnManifest,
+            'de' => false,
+        ],
+    ];
+
+    $analyzer = WP_FTS_Plugin::runtime_analyzer();
+    assert_same(['সিনথ000'], $analyzer->analyze_query('সিনথ000গুলো', ['lang' => 'bn']), 'language-mismatched generic pack should fall back to the Bengali baseline');
+
+    $statuses = [];
+    foreach (WP_FTS_Plugin::runtime_analyzer_pack_statuses() as $status) {
+        $statuses[$status['language']] = $status;
+    }
+    assert_same('ignored', $statuses['bn']['status'] ?? null, 'language-mismatched pack should be reported as ignored');
+    assert_same('ignored', $statuses['pt']['status'] ?? null, 'missing pack should be reported as ignored');
+    assert_same('ignored', $statuses['ur']['status'] ?? null, 'wrong-language generic pack should be reported as ignored');
+    assert_same('disabled', $statuses['de']['status'] ?? null, 'explicit false pack option should disable that language pack entry');
 });
 
 test_case('polish Morfologik fixture pack validates manifest digests and rows', function (): void {
@@ -5543,6 +5609,46 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     }
     assert_true($postSelect !== null, 'CLI reindex should prepare a batched posts query');
     assert_same(['publish', 'draft', 'post', 'page', 0, 1], $postSelect['args'], 'CLI source filters and remaining limit should be prepared');
+});
+
+test_case('wp cli reindex uses plugin runtime analyzer pack configuration', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $fake->postRows = [
+        (object) [
+            'ID' => 12,
+            'post_title' => 'Synthetic Bengali Pack Probe',
+            'post_content' => '<p>সিনথ000গুলো</p>',
+            'post_excerpt' => '',
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-03-06 05:06:07',
+        ],
+    ];
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'lemmatizer_packs_by_lang' => [
+            'bn' => WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest(),
+        ],
+    ];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $command->reindex([], [
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'lang' => 'bn',
+        ]);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(['Indexed 1 posts in bn.'], WP_CLI::$successMessages, 'CLI reindex should keep reporting the explicit language partition');
+    assert_true(isset($fake->terms[WP_FTS_TermNamespace::namespace_term('bn', 'সিনথ000লেমা')]), 'CLI reindex should use the configured generic lemma pack');
+    assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('bn', 'সিনথ000')]), 'CLI reindex should not fall back to the Bengali baseline when a valid pack is configured');
 });
 
 discover_quality_tests();

@@ -107,7 +107,7 @@ final class WP_FTS_WPCLI_Command
     public function search(array $args, array $assoc_args): void
     {
         $query = (string) ($args[0] ?? '');
-        $searcher = new WP_FTS_Searcher($this->storage(), new WP_FTS_Analyzer());
+        $searcher = new WP_FTS_Searcher($this->storage(), WP_FTS_Plugin::runtime_analyzer());
         $searchOptions = [
             'mode' => (string) ($assoc_args['mode'] ?? 'OR'),
             'limit' => $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10),
@@ -196,11 +196,11 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
-     * Build an indexer wired to MySQL storage and the default analyzer.
+     * Build an indexer wired to MySQL storage and the plugin runtime analyzer.
      */
     private function indexer(): WP_FTS_Indexer
     {
-        return new WP_FTS_Indexer($this->storage(), new WP_FTS_Analyzer());
+        return new WP_FTS_Indexer($this->storage(), WP_FTS_Plugin::runtime_analyzer());
     }
 
     /**
