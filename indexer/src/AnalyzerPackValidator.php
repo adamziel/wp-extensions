@@ -485,11 +485,24 @@ final class WP_FTS_AnalyzerPackValidator
         if (!isset($manifest['source']['byte_count']) || !is_int($manifest['source']['byte_count']) || $manifest['source']['byte_count'] < 1) {
             throw new RuntimeException('Full analyzer pack source byte_count must be a positive integer.');
         }
-        if (($manifest['license']['spdx_id'] ?? null) !== 'BSD-2-Clause') {
-            throw new RuntimeException('Full analyzer pack license spdx_id must be BSD-2-Clause.');
+        if (!isset($manifest['license']['spdx_id']) || !is_string($manifest['license']['spdx_id']) || trim($manifest['license']['spdx_id']) === '') {
+            throw new RuntimeException('Full analyzer pack license spdx_id is required.');
+        }
+        if (isset($manifest['license']['license_url']) && (!is_string($manifest['license']['license_url']) || trim($manifest['license']['license_url']) === '')) {
+            throw new RuntimeException('Full analyzer pack license license_url must be a non-empty string when present.');
         }
         if (!isset($manifest['license']['notice_path']) || !is_string($manifest['license']['notice_path']) || trim($manifest['license']['notice_path']) === '') {
             throw new RuntimeException('Full analyzer pack must include a license notice_path.');
+        }
+        $hasAttribution = false;
+        foreach (['upstream', 'note', 'notice_path'] as $field) {
+            if (isset($manifest['attribution'][$field]) && is_string($manifest['attribution'][$field]) && trim($manifest['attribution'][$field]) !== '') {
+                $hasAttribution = true;
+                break;
+            }
+        }
+        if (!$hasAttribution) {
+            throw new RuntimeException('Full analyzer pack attribution metadata is required.');
         }
         if (($manifest['runtime']['ambiguity_policy'] ?? null) !== 'ambiguous_surface_noop') {
             throw new RuntimeException('Full analyzer pack must declare ambiguous_surface_noop ambiguity policy.');

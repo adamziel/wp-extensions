@@ -831,6 +831,48 @@ function write_synthetic_full_analyzer_pack(string $directory, int $rows, int $s
     return $directory . '/manifest.json';
 }
 
+function write_synthetic_qaa_lemma_tsv_source(string $path): void
+{
+    $contents = implode("\n", [
+        '# Project-owned synthetic qaa lemma-pack importer fixture.',
+        'qaaformb	qaalemma	QAA-TAG	second synthetic source note',
+        'qaaamb	qaaone',
+        'qaasolo	qaasolo',
+        'qaaforma	qaalemma	QAA-TAG	first synthetic source note',
+        'qaaamb	qaatwo',
+        'qaaformb	qaalemma	QAA-TAG	duplicate synthetic note',
+        '',
+    ]);
+
+    if (file_put_contents($path, $contents) === false) {
+        throw new WP_FTS_TestFailure("Could not write synthetic qaa lemma source: {$path}");
+    }
+}
+
+/**
+ * @return string[]
+ */
+function synthetic_qaa_lemma_tsv_import_args(string $source, string $out): array
+{
+    return [
+        '--source=' . $source,
+        '--out=' . $out,
+        '--language=qaa',
+        '--pack-id=qaa-synthetic-lemma-tsv-importer',
+        '--version=0.1.0-synthetic-import',
+        '--source-name=Project-owned synthetic qaa lemma TSV importer fixture',
+        '--source-version=0.1.0-synthetic',
+        '--source-url=urn:wp-fts:test:synthetic-qaa-lemma-tsv',
+        '--license=CC0-1.0',
+        '--license-url=urn:wp-fts:test:synthetic-qaa-license',
+        '--attribution=Project-owned synthetic qaa rows for importer tests only.',
+        '--fixture-only=true',
+        '--max-rows-per-file=2',
+        '--chunk-rows=2',
+        '--importer-commit=test-commit',
+    ];
+}
+
 /**
  * @return array<string,callable():WP_FTS_Storage>
  */
@@ -3572,6 +3614,153 @@ test_case('generic lemma packs by language beat baseline and fall back safely', 
     ]);
     assert_same(['ককক'], $packAnalyzer->analyze_query('ককগুলো', ['lang' => 'bn']), 'analyzer should pass generic pack options into the language pipeline');
     assert_true($defaultAnalyzer->index_signature() !== $packAnalyzer->index_signature(), 'analyzer signature should change when a generic pack is enabled');
+});
+
+test_case('generic lemma TSV importer builds a valid synthetic pack', function (): void {
+    $sourceDir = temp_directory_path('lemma_tsv_import_source');
+    $out = temp_directory_path('lemma_tsv_import_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+
+        $cli = test_run_subprocess(
+            array_merge(
+                [PHP_BINARY, dirname(__DIR__) . '/tools/import-lemma-tsv-pack.php'],
+                synthetic_qaa_lemma_tsv_import_args($source, $out)
+            ),
+            dirname(__DIR__)
+        );
+        assert_same(0, $cli['exit'], 'generic lemma TSV importer CLI should succeed for synthetic normalized input: ' . $cli['stderr']);
+
+        $summary = json_decode($cli['stdout'], true, 512, JSON_THROW_ON_ERROR);
+        assert_same('ok', $summary['status'] ?? null, 'generic importer CLI should return ok status');
+        assert_same('qaa-synthetic-lemma-tsv-importer', $summary['pack_id'] ?? null, 'generic importer summary should expose pack id');
+        assert_same('qaa', $summary['language'] ?? null, 'generic importer summary should expose language');
+        assert_same(5, $summary['runtime']['rows'] ?? null, 'generic importer should sort and deduplicate synthetic rows');
+        assert_same(3, $summary['runtime']['files'] ?? null, 'generic importer should shard without splitting ambiguous surfaces');
+        assert_same(1, $summary['stats']['deduplicated_rows'] ?? null, 'generic importer should report duplicate source pairs');
+        assert_same(3, $summary['stats']['rows_with_tags'] ?? null, 'generic importer should accept optional tag columns');
+        assert_same(3, $summary['stats']['rows_with_source_notes'] ?? null, 'generic importer should accept optional source-note columns');
+
+        $manifest = $out . '/manifest.json';
+        $validation = (new WP_FTS_AnalyzerPackValidator())->validate($manifest);
+        assert_same('qaa-synthetic-lemma-tsv-importer', $validation['manifest']['pack_id'], 'generated generic pack manifest should validate');
+        assert_same('qaa', $validation['manifest']['language'], 'generated generic pack language should validate');
+        assert_same(WP_FTS_AnalyzerPackValidator::RUNTIME_FORMAT_LEMMA_TSV, $validation['manifest']['runtime']['format'], 'generated generic pack should use lemma TSV runtime format');
+        assert_true($validation['manifest']['fixture_only'] === true, 'synthetic generated pack should be fixture-only');
+        assert_same(false, $validation['manifest']['default_enabled'], 'generated pack should remain default-disabled');
+        assert_same('Project-owned synthetic qaa lemma TSV importer fixture', $validation['manifest']['source']['name'] ?? null, 'generated manifest should preserve source name');
+        assert_same('urn:wp-fts:test:synthetic-qaa-lemma-tsv', $validation['manifest']['source']['url'] ?? null, 'generated manifest should preserve source URL');
+        assert_same('CC0-1.0', $validation['manifest']['license']['spdx_id'] ?? null, 'generated manifest should preserve license identifier');
+        assert_same('Project-owned synthetic qaa rows for importer tests only.', $validation['manifest']['attribution']['upstream'] ?? null, 'generated manifest should preserve attribution');
+        assert_same(5, $validation['runtime_rows'], 'validator should count generated runtime rows');
+        assert_same(5, count($validation['rows']), 'validator should collect tiny synthetic generated rows');
+
+        $rowsByPair = [];
+        foreach ($validation['rows'] as $row) {
+            assert_true(
+                str_starts_with($row['surface'], 'qaa') && str_starts_with($row['lemma'], 'qaa'),
+                'imported synthetic rows should not use real-language word-family fixtures'
+            );
+            $rowsByPair[$row['surface'] . "\t" . $row['lemma']] = true;
+        }
+        assert_true(isset($rowsByPair["qaaforma\tqaalemma"]), 'generated runtime should include the first synthetic form');
+        assert_true(isset($rowsByPair["qaaformb\tqaalemma"]), 'generated runtime should include the second synthetic form sharing a lemma');
+        assert_true(isset($rowsByPair["qaaamb\tqaaone"]), 'generated runtime should retain first ambiguous synthetic lemma');
+        assert_true(isset($rowsByPair["qaaamb\tqaatwo"]), 'generated runtime should retain second ambiguous synthetic lemma');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
+});
+
+test_case('imported generic lemma pack drives indexing search and snippets', function (): void {
+    require_once __DIR__ . '/../tools/import-lemma-tsv-pack.php';
+
+    $sourceDir = temp_directory_path('lemma_tsv_runtime_source');
+    $out = temp_directory_path('lemma_tsv_runtime_pack');
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+
+        $options = WP_FTS_LemmaTsvPackImporter::parse_cli_options(synthetic_qaa_lemma_tsv_import_args($source, $out));
+        (new WP_FTS_LemmaTsvPackImporter())->import($options);
+
+        $manifest = $out . '/manifest.json';
+        $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest);
+        assert_same('qaalemma', $pack->stem('qaaforma', 'qaa'), 'generated runtime pack should map first synthetic surface to lemma');
+        assert_same('qaalemma', $pack->stem('qaaformb', 'qaa'), 'generated runtime pack should map second synthetic surface to shared lemma');
+        assert_same('qaaamb', $pack->stem('qaaamb', 'qaa'), 'generated runtime pack should no-op ambiguous synthetic surfaces');
+        assert_same('qaaforma', $pack->stem('qaaforma', 'en'), 'generated runtime pack should no-op other language partitions');
+
+        $analyzer = new WP_FTS_Analyzer([
+            'default_lang' => 'qaa',
+            'lemma_packs_by_lang' => [
+                'qaa' => $manifest,
+            ],
+        ]);
+        $storage = new WP_FTS_Storage_InMemory();
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $text = 'Synthetic source row qaaforma appears in this document with qaasolo.';
+        $indexer->index_document_fields(815, [['name' => 'content', 'text' => $text]], [
+            'lang' => 'qaa',
+            'metadata' => [
+                'post_id' => 815,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Synthetic qaa lemma TSV importer',
+                'search_text' => $text,
+                'language' => 'qaa',
+            ],
+        ]);
+
+        $terms = $storage->all_terms();
+        assert_true(in_array(WP_FTS_TermNamespace::namespace_term('qaa', 'qaalemma'), $terms, true), 'imported pack should store the shared synthetic lemma during indexing');
+        assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('qaa', 'qaaforma'), $terms, true), 'imported pack should not store the mapped document surface as the index key');
+
+        $searcher = new WP_FTS_Searcher($storage, $analyzer);
+        $payload = $searcher->search('qaaformb', [
+            'lang' => 'qaa',
+            'mode' => 'AND',
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+            'highlight' => true,
+            'snippet_length' => 160,
+        ]);
+        assert_same(1, $payload['total'], 'query surface should meet indexed document surface through imported lemma pack');
+        assert_same(815, $payload['results'][0]['doc_id'] ?? null, 'imported pack search should return the indexed synthetic document');
+        assert_contains('<mark>qaaforma</mark>', (string) ($payload['results'][0]['snippet'] ?? ''), 'snippet highlighter should mark the indexed surface when querying another imported form');
+
+        $fallbackAnalyzer = new WP_FTS_Analyzer(['default_lang' => 'qaa']);
+        $fallbackStorage = new WP_FTS_Storage_InMemory();
+        (new WP_FTS_Indexer($fallbackStorage, $fallbackAnalyzer))->index_document_fields(816, [['name' => 'content', 'text' => $text]], [
+            'lang' => 'qaa',
+            'metadata' => [
+                'post_id' => 816,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Synthetic qaa fallback',
+                'search_text' => $text,
+                'language' => 'qaa',
+            ],
+        ]);
+        $fallbackPayload = (new WP_FTS_Searcher($fallbackStorage, $fallbackAnalyzer))->search('qaaformb', [
+            'lang' => 'qaa',
+            'mode' => 'AND',
+            'include_total' => true,
+        ]);
+        assert_same(0, $fallbackPayload['total'], 'missing generic pack should preserve the built-in fallback behavior');
+    } finally {
+        remove_directory_tree($out);
+        remove_directory_tree($sourceDir);
+    }
 });
 
 test_case('polish Morfologik fixture pack validates manifest digests and rows', function (): void {
