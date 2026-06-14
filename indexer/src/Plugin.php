@@ -1107,9 +1107,13 @@ final class WP_FTS_Plugin
         }
 
         if (function_exists('apply_filters')) {
+            $base = $options;
             $filtered = apply_filters(self::ANALYZER_OPTIONS_FILTER, $options);
             if (is_array($filtered)) {
-                $options = $filtered;
+                $options = self::merge_runtime_analyzer_options(
+                    $base,
+                    self::runtime_analyzer_filter_override_layer($base, $filtered)
+                );
             }
         }
 
@@ -1143,6 +1147,8 @@ final class WP_FTS_Plugin
      */
     private static function merge_runtime_analyzer_options(array $base, array $override): array
     {
+        $override = self::normalize_runtime_analyzer_option_layer($override);
+
         foreach ($override as $key => $value) {
             if (
                 in_array($key, ['lemma_packs_by_lang', 'lemmatizer_packs_by_lang'], true)
@@ -1159,6 +1165,99 @@ final class WP_FTS_Plugin
         }
 
         return $base;
+    }
+
+    /**
+     * Return only analyzer option values changed by a filter callback.
+     *
+     * @param array<string,mixed> $base
+     * @param array<string,mixed> $filtered
+     * @return array<string,mixed>
+     */
+    private static function runtime_analyzer_filter_override_layer(array $base, array $filtered): array
+    {
+        $override = [];
+
+        foreach (['lemma_packs_by_lang', 'lemmatizer_packs_by_lang'] as $key) {
+            if (!isset($filtered[$key]) || !is_array($filtered[$key])) {
+                continue;
+            }
+
+            $baseMap = isset($base[$key]) && is_array($base[$key]) ? $base[$key] : [];
+            foreach ($filtered[$key] as $language => $option) {
+                if (!array_key_exists($language, $baseMap) || $baseMap[$language] !== $option) {
+                    $override[$key][$language] = $option;
+                }
+            }
+        }
+
+        foreach (['polish_lemma_pack', 'polish_lemmatizer_pack'] as $key) {
+            if (array_key_exists($key, $filtered) && (!array_key_exists($key, $base) || $base[$key] !== $filtered[$key])) {
+                $override[$key] = $filtered[$key];
+            }
+        }
+
+        return $override;
+    }
+
+    /**
+     * Normalize one precedence layer before it is merged into earlier layers.
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private static function normalize_runtime_analyzer_option_layer(array $options): array
+    {
+        $normalized = [];
+
+        foreach (['lemmatizer_packs_by_lang', 'lemma_packs_by_lang'] as $key) {
+            if (isset($options[$key]) && is_array($options[$key])) {
+                $normalized[$key] = self::normalize_runtime_analyzer_language_map($options[$key]);
+            }
+        }
+
+        if (!self::runtime_analyzer_layer_has_generic_polish_pack($normalized)) {
+            if (array_key_exists('polish_lemmatizer_pack', $options)) {
+                $normalized['lemmatizer_packs_by_lang']['pl'] = $options['polish_lemmatizer_pack'];
+            }
+            if (array_key_exists('polish_lemma_pack', $options)) {
+                $normalized['lemma_packs_by_lang']['pl'] = $options['polish_lemma_pack'];
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<string,mixed> $packs
+     * @return array<string,mixed>
+     */
+    private static function normalize_runtime_analyzer_language_map(array $packs): array
+    {
+        $normalized = [];
+        foreach ($packs as $language => $option) {
+            if (!is_scalar($language) || trim((string) $language) === '') {
+                continue;
+            }
+
+            $normalized[WP_FTS_TermNamespace::canonicalize_lang((string) $language)] = $option;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     */
+    private static function runtime_analyzer_layer_has_generic_polish_pack(array $options): bool
+    {
+        foreach (['lemma_packs_by_lang', 'lemmatizer_packs_by_lang'] as $key) {
+            if (isset($options[$key]) && is_array($options[$key]) && array_key_exists('pl', $options[$key])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

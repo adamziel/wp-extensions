@@ -3613,6 +3613,95 @@ test_case('plugin runtime analyzer accepts generic lemma packs from WordPress op
     assert_same(['ককক'], $filterAnalyzer->analyze_query('ককগুলো', ['lang' => 'bn']), 'WordPress analyzer filter should pass generic pack aliases into the runtime analyzer');
 });
 
+test_case('plugin runtime analyzer lets legacy Polish aliases override earlier defaults', function (): void {
+    $fixtureManifest = WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest();
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'polish_lemma_pack' => false,
+    ];
+
+    $disabledOptions = WP_FTS_Plugin::runtime_analyzer_options();
+    assert_same(false, $disabledOptions['lemmatizer_packs_by_lang']['pl'] ?? null, 'legacy Polish option alias should disable the bundled runtime pack');
+    $statuses = [];
+    foreach (WP_FTS_Plugin::runtime_analyzer_pack_statuses() as $status) {
+        $statuses[$status['language']] = $status;
+    }
+    assert_same('disabled', $statuses['pl']['status'] ?? null, 'legacy Polish option alias should report the runtime pack as disabled');
+    assert_same(['zamk'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('zamkach', ['lang' => 'pl']), 'disabled runtime Polish pack should fall back to suffix stemming');
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'polish_lemmatizer_pack' => $fixtureManifest,
+    ];
+
+    $optionReplacement = WP_FTS_Plugin::runtime_analyzer_options();
+    assert_same($fixtureManifest, $optionReplacement['lemmatizer_packs_by_lang']['pl'] ?? null, 'legacy Polish lemmatizer option alias should replace the bundled runtime pack');
+    assert_same(['zamek'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('zamkach', ['lang' => 'pl']), 'replacement runtime Polish pack should reach the analyzer');
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (array $options) use ($fixtureManifest): array {
+        $options['polish_lemmatizer_pack'] = $fixtureManifest;
+
+        return $options;
+    };
+
+    $filterReplacement = WP_FTS_Plugin::runtime_analyzer_options();
+    assert_same($fixtureManifest, $filterReplacement['lemmatizer_packs_by_lang']['pl'] ?? null, 'legacy Polish filter alias should replace the bundled runtime pack');
+    assert_same(['zamek'], WP_FTS_Plugin::runtime_analyzer()->analyze_query('zamkach', ['lang' => 'pl']), 'replacement runtime Polish pack from filter should reach the analyzer');
+});
+
+test_case('plugin runtime analyzer keeps generic Polish maps canonical within each layer', function (): void {
+    $fixtureManifest = WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest();
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'polish_lemma_pack' => false,
+        'lemmatizer_packs_by_lang' => [
+            'pl' => $fixtureManifest,
+        ],
+    ];
+
+    $optionGeneric = WP_FTS_Plugin::runtime_analyzer_options();
+    assert_same($fixtureManifest, $optionGeneric['lemmatizer_packs_by_lang']['pl'] ?? null, 'explicit generic Polish option should beat same-layer legacy alias');
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'polish_lemmatizer_pack' => $fixtureManifest,
+        'lemmatizer_packs_by_lang' => [
+            'pl' => $fixtureManifest,
+        ],
+        'lemma_packs_by_lang' => [
+            'pl' => false,
+        ],
+    ];
+
+    $optionLemmaGeneric = WP_FTS_Plugin::runtime_analyzer_options();
+    assert_same(false, $optionLemmaGeneric['lemmatizer_packs_by_lang']['pl'] ?? null, 'lemma_packs_by_lang Polish option should remain canonical over lemmatizer_packs_by_lang and legacy aliases');
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (array $options) use ($fixtureManifest): array {
+        $options['polish_lemma_pack'] = false;
+        $options['lemmatizer_packs_by_lang']['pl'] = $fixtureManifest;
+
+        return $options;
+    };
+
+    $filterGeneric = WP_FTS_Plugin::runtime_analyzer_options();
+    assert_same($fixtureManifest, $filterGeneric['lemmatizer_packs_by_lang']['pl'] ?? null, 'explicit generic Polish filter entry should beat same-layer legacy alias');
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (array $options) use ($fixtureManifest): array {
+        $options['polish_lemmatizer_pack'] = $fixtureManifest;
+        $options['lemma_packs_by_lang']['pl'] = false;
+
+        return $options;
+    };
+
+    $filterLemmaGeneric = WP_FTS_Plugin::runtime_analyzer_options();
+    assert_same(false, $filterLemmaGeneric['lemmatizer_packs_by_lang']['pl'] ?? null, 'lemma_packs_by_lang Polish filter entry should remain canonical over lemmatizer_packs_by_lang and legacy aliases');
+});
+
 test_case('plugin runtime analyzer ignores invalid or language-mismatched generic packs safely', function (): void {
     $syntheticBnManifest = WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest();
     $polishManifest = WP_FTS_AnalyzerPackValidator::default_polish_fixture_manifest();
