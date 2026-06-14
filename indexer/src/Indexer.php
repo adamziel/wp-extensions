@@ -534,26 +534,83 @@ LIMIT %d",
      */
     private function fields_search_html(array $fields, int $limit): string
     {
-        $html = [];
-        $hasMarkup = false;
+        $fragments = [];
         foreach ($fields as $field) {
             if (isset($field['html']) && trim((string) $field['html']) !== '') {
-                $html[] = (string) $field['html'];
-                $hasMarkup = true;
-                continue;
-            }
-
-            $text = trim((string) ($field['text'] ?? ''));
-            if ($text !== '') {
-                $html[] = htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+                foreach ($this->compact_html_metadata_fragments((string) $field['html']) as $fragment) {
+                    $fragments[$fragment] = true;
+                }
             }
         }
 
-        if (!$hasMarkup || $html === []) {
+        if ($fragments === []) {
             return '';
         }
 
-        return rtrim(WP_FTS_Utf8::truncate_bytes(implode(' ', $html), max(1, $limit)));
+        return rtrim(WP_FTS_Utf8::truncate_bytes(implode(' ', array_keys($fragments)), max(1, $limit)));
+    }
+
+    /**
+     * Keep only HTML fragments needed to preserve rich snippet highlights.
+     *
+     * Plain snippet text already lives in `search_text`; this sidecar exists for
+     * inline markup/entity cases where plain text cannot reconstruct a safe mark
+     * range around the original edited HTML.
+     *
+     * @return string[]
+     */
+    private function compact_html_metadata_fragments(string $html): array
+    {
+        $ranges = [];
+        foreach (WP_FTS_Html_Text_Stream::visible_words($html) as $word) {
+            $sourceStart = (int) $word['source_start'];
+            $sourceEnd = (int) $word['source_end'];
+            $source = substr($html, $sourceStart, max(0, $sourceEnd - $sourceStart));
+            if (!str_contains($source, '<') && !str_contains($source, '&')) {
+                continue;
+            }
+
+            $range = WP_FTS_Html_Text_Stream::expand_inline_range($html, $sourceStart, $sourceEnd);
+            $ranges[] = $range;
+        }
+
+        $fragments = [];
+        foreach ($this->merge_html_source_ranges($ranges) as $range) {
+            $fragment = trim(substr($html, $range['start'], max(0, $range['end'] - $range['start'])));
+            if ($fragment !== '') {
+                $fragments[] = $fragment;
+            }
+        }
+
+        return $fragments;
+    }
+
+    /**
+     * @param array<int,array{start:int,end:int}> $ranges
+     * @return array<int,array{start:int,end:int}>
+     */
+    private function merge_html_source_ranges(array $ranges): array
+    {
+        usort($ranges, static fn(array $a, array $b): int => $a['start'] <=> $b['start']);
+
+        $merged = [];
+        foreach ($ranges as $range) {
+            $start = max(0, (int) $range['start']);
+            $end = max($start, (int) $range['end']);
+            if ($end <= $start) {
+                continue;
+            }
+
+            $last = count($merged) - 1;
+            if ($last >= 0 && $start <= $merged[$last]['end']) {
+                $merged[$last]['end'] = max($merged[$last]['end'], $end);
+                continue;
+            }
+
+            $merged[] = ['start' => $start, 'end' => $end];
+        }
+
+        return $merged;
     }
 
     /**
