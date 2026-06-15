@@ -7,9 +7,10 @@ caveats operators need to account for.
 
 - The plugin exposes WP-CLI commands when `WP_CLI` is active.
 - It registers activation, deactivation, uninstall, post-save, status
-  transition, trash/delete, WP-Cron queue, and REST search hooks when WordPress
-  hook APIs are available.
-- It does not currently replace WordPress front-end search.
+  transition, trash/delete, WP-Cron queue, REST search, and front-end search
+  replacement hooks when WordPress hook APIs are available.
+- Front-end main-query search replacement is enabled by default and can be
+  disabled with the `wp_fts_replace_frontend_search` filter.
 - There is no settings screen for analyzer, search, or extractor configuration;
   operational options such as schema version and pending queue state are managed
   internally.

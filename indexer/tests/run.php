@@ -2468,9 +2468,49 @@ if (!class_exists('WP_Error')) {
     }
 }
 
+final class WP_FTS_Test_Query
+{
+    /** @var array<string,mixed> */
+    public array $query_vars;
+    public int $found_posts = 0;
+    public int $max_num_pages = 0;
+
+    /**
+     * @param array<string,mixed> $query_vars
+     */
+    public function __construct(
+        array $query_vars,
+        private bool $search = true,
+        private bool $main = true,
+    ) {
+        $this->query_vars = $query_vars;
+    }
+
+    public function is_search(): bool
+    {
+        return $this->search;
+    }
+
+    public function is_main_query(): bool
+    {
+        return $this->main;
+    }
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return array_key_exists($key, $this->query_vars) ? $this->query_vars[$key] : $default;
+    }
+
+    public function set(string $key, mixed $value): void
+    {
+        $this->query_vars[$key] = $value;
+    }
+}
+
 function wp_fts_test_reset_wordpress_fakes(): void
 {
     $GLOBALS['wp_fts_test_actions'] = [];
+    $GLOBALS['wp_fts_test_filter_registrations'] = [];
     $GLOBALS['wp_fts_test_activation_hooks'] = [];
     $GLOBALS['wp_fts_test_deactivation_hooks'] = [];
     $GLOBALS['wp_fts_test_uninstall_hooks'] = [];
@@ -2488,6 +2528,10 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_filters'] = [];
     $GLOBALS['wp_fts_test_upload_dir'] = null;
     $GLOBALS['wp_fts_test_upload_error'] = false;
+    $GLOBALS['wp_fts_test_is_admin'] = false;
+    $GLOBALS['wp_fts_test_is_cron'] = false;
+    $GLOBALS['wp_fts_test_is_rest'] = false;
+    $GLOBALS['wp_query'] = null;
     $GLOBALS['wp_fts_test_post_types'] = [
         'post' => (object) ['public' => true, 'exclude_from_search' => false],
         'page' => (object) ['public' => true, 'exclude_from_search' => false],
@@ -2513,6 +2557,31 @@ if (!function_exists('add_action')) {
         if (array_key_exists('wp_fts_quality_add_action_calls', $GLOBALS)) {
             $GLOBALS['wp_fts_quality_add_action_calls'][] = $entry;
         }
+
+        return true;
+    }
+}
+
+if (!function_exists('add_filter')) {
+    function add_filter(string $hook_name, mixed $callback, int $priority = 10, int $accepted_args = 1): bool
+    {
+        $entry = [
+            'hook' => $hook_name,
+            'callback' => $callback,
+            'priority' => $priority,
+            'accepted_args' => $accepted_args,
+        ];
+        $GLOBALS['wp_fts_test_filter_registrations'][] = $entry;
+
+        $existing = $GLOBALS['wp_fts_test_filters'][$hook_name] ?? [];
+        if (is_callable($existing)) {
+            $existing = [$existing];
+        }
+        if (!is_array($existing)) {
+            $existing = [];
+        }
+        $existing[] = $callback;
+        $GLOBALS['wp_fts_test_filters'][$hook_name] = $existing;
 
         return true;
     }
@@ -2836,6 +2905,9 @@ if (!function_exists('get_post_types')) {
             if (array_key_exists('public', $args) && (bool) ($object->public ?? false) !== (bool) $args['public']) {
                 continue;
             }
+            if (array_key_exists('exclude_from_search', $args) && (bool) ($object->exclude_from_search ?? false) !== (bool) $args['exclude_from_search']) {
+                continue;
+            }
             $types[$name] = $output === 'objects' ? $object : $name;
         }
 
@@ -2886,6 +2958,27 @@ if (!function_exists('current_user_can')) {
         $post_id = isset($args[0]) ? (int) $args[0] : 0;
 
         return (bool) ($GLOBALS['wp_fts_test_caps'][$capability][$post_id] ?? false);
+    }
+}
+
+if (!function_exists('is_admin')) {
+    function is_admin(): bool
+    {
+        return !empty($GLOBALS['wp_fts_test_is_admin']);
+    }
+}
+
+if (!function_exists('wp_doing_cron')) {
+    function wp_doing_cron(): bool
+    {
+        return !empty($GLOBALS['wp_fts_test_is_cron']);
+    }
+}
+
+if (!function_exists('wp_is_serving_rest_request')) {
+    function wp_is_serving_rest_request(): bool
+    {
+        return !empty($GLOBALS['wp_fts_test_is_rest']);
     }
 }
 
@@ -3085,6 +3178,7 @@ PHP;
         'add_meta_boxes',
         'admin_menu',
         'before_delete_post',
+        'pre_get_posts',
         'rest_api_init',
         'save_post',
         'save_post',
@@ -3094,6 +3188,10 @@ PHP;
     ];
     sort($expectedHooks, SORT_STRING);
     assert_same($expectedHooks, $hooks, 'bootstrap should register bounded runtime hooks in WordPress context');
+
+    $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
+    sort($filterHooks, SORT_STRING);
+    assert_same(['found_posts', 'get_the_excerpt', 'posts_pre_query'], $filterHooks, 'bootstrap should register front-end search replacement filters');
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
 });
 
@@ -4037,6 +4135,260 @@ test_case('search refills requested limit after filtering hidden stale rows', fu
         $indexer->index_post($visible, ['lang' => 'en']);
 
         assert_same([214], array_column(WP_FTS_Plugin::search('shared', ['limit' => 1]), 'doc_id'), 'hidden stale rows should not consume the requested visible result limit');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end main query search is replaced with FTS-ranked WP_Post results', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $low = (object) [
+        'ID' => 501,
+        'post_title' => 'Lower front-end rank',
+        'post_content' => '<p>frontneedle appears once.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-12 00:00:00',
+    ];
+    $high = (object) [
+        'ID' => 502,
+        'post_title' => 'Higher front-end rank',
+        'post_content' => '<p>frontneedle frontneedle frontneedle frontneedle.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][501] = $low;
+    $GLOBALS['wp_fts_test_posts'][502] = $high;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(501, $low, true);
+        WP_FTS_Plugin::handle_post_save(502, $high, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'frontneedle',
+            'posts_per_page' => 10,
+            'paged' => 1,
+            'post_type' => 'post',
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($query);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+        assert_same(true, $query->get('wp_fts_search_candidate'), 'pre_get_posts should mark eligible front-end search queries');
+        assert_same([502, 501], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end search should return FTS-ranked post objects');
+        assert_same(2, $query->found_posts, 'front-end search should expose the FTS visible total on the query');
+        assert_same(1, $query->max_num_pages, 'front-end search should expose max pages from the FTS visible total');
+        assert_same(2, WP_FTS_Plugin::filter_frontend_search_found_posts(999, $query), 'found_posts filter should preserve the replacement total');
+
+        $excerpt = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0]);
+        assert_contains('<mark>frontneedle</mark>', $excerpt, 'front-end excerpts should use highlighted FTS snippets');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search replacement respects pagination and explicit offset', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        for ($postId = 601; $postId <= 604; $postId++) {
+            $post = (object) [
+                'ID' => $postId,
+                'post_title' => 'Paged result ' . $postId,
+                'post_content' => '<p>pageneedle shared body.</p>',
+                'post_excerpt' => '',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+                'post_date_gmt' => '2026-06-13 00:00:00',
+            ];
+            $GLOBALS['wp_fts_test_posts'][$postId] = $post;
+            WP_FTS_Plugin::handle_post_save($postId, $post, true);
+        }
+
+        $pageTwo = new WP_FTS_Test_Query([
+            's' => 'pageneedle',
+            'posts_per_page' => 2,
+            'paged' => 2,
+        ]);
+        $pageTwoPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $pageTwo);
+        assert_same([603, 604], array_map(static fn(object $post): int => (int) $post->ID, $pageTwoPosts), 'paged front-end search should return the second visible FTS window');
+        assert_same(4, $pageTwo->found_posts, 'paged front-end search should keep the full visible total');
+        assert_same(2, $pageTwo->max_num_pages, 'paged front-end search should compute max pages from posts_per_page');
+
+        $offsetQuery = new WP_FTS_Test_Query([
+            's' => 'pageneedle',
+            'posts_per_page' => 2,
+            'paged' => 99,
+            'offset' => 1,
+        ]);
+        $offsetPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $offsetQuery);
+        assert_same([602, 603], array_map(static fn(object $post): int => (int) $post->ID, $offsetPosts), 'explicit offset should override paged window math');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search replacement avoids admin REST cron secondary and disabled queries', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $query = new WP_FTS_Test_Query(['s' => 'guardneedle', 'posts_per_page' => 10]);
+
+    $GLOBALS['wp_fts_test_is_admin'] = true;
+    assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), 'admin searches should not be hijacked');
+
+    $GLOBALS['wp_fts_test_is_admin'] = false;
+    $GLOBALS['wp_fts_test_is_rest'] = true;
+    assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), 'REST requests should not be hijacked');
+
+    $GLOBALS['wp_fts_test_is_rest'] = false;
+    $GLOBALS['wp_fts_test_is_cron'] = true;
+    assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), 'cron requests should not be hijacked');
+
+    $GLOBALS['wp_fts_test_is_cron'] = false;
+    $secondary = new WP_FTS_Test_Query(['s' => 'guardneedle', 'posts_per_page' => 10], true, false);
+    assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $secondary), 'secondary front-end search queries should not be hijacked');
+
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
+    assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), 'site owners should be able to disable front-end replacement by filter');
+});
+
+test_case('front-end search replacement only returns public searchable published posts', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $fixtures = [
+        701 => ['Public visible', 'publish', 'post', ''],
+        702 => ['Private hidden', 'private', 'post', ''],
+        703 => ['Draft hidden', 'draft', 'post', ''],
+        704 => ['Trash hidden', 'trash', 'post', ''],
+        705 => ['Excluded type hidden', 'publish', 'secret', ''],
+        706 => ['Password hidden', 'publish', 'post', 'secret'],
+    ];
+
+    try {
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer());
+        foreach ($fixtures as $postId => [$title, $status, $type, $password]) {
+            $post = (object) [
+                'ID' => $postId,
+                'post_title' => $title,
+                'post_content' => '<p>visibilityneedle shared content.</p>',
+                'post_excerpt' => '',
+                'post_status' => $status,
+                'post_type' => $type,
+                'post_password' => $password,
+                'post_date_gmt' => '2026-06-13 00:00:00',
+            ];
+            $GLOBALS['wp_fts_test_posts'][$postId] = $post;
+            $indexer->index_post($post, ['lang' => 'en']);
+        }
+
+        $GLOBALS['wp_fts_test_caps']['read_post'][702] = true;
+        $query = new WP_FTS_Test_Query([
+            's' => 'visibilityneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'any',
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+        assert_same([701], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end search should not expose private passworded unpublished trashed or excluded post types');
+        assert_same(1, $query->found_posts, 'front-end total should count only visible replacement results');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search auto-detects Polish and highlights morphology-backed document forms', function (): void {
+    global $wpdb;
+
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for Polish front-end morphology search',
+        'PHP zlib gzip support is unavailable, so Polish front-end morphology search is skipped.'
+    );
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 801,
+        'post_title' => 'Polish front-end result',
+        'post_content' => '<p>W książkach i zamkach kierujemy wpisy do katalogu.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][801] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(801, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'kierować',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+        assert_same([801], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'automatic front-end Polish query should find the Polish document partition');
+        assert_same('pl', $query->get('wp_fts_query_lang'), 'front-end search should expose the analyzer-detected Polish query language');
+        $snippet = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0]);
+        assert_contains('<mark>kierujemy</mark>', $snippet, 'front-end snippet should mark the morphology-backed Polish document form');
+        assert_true(!str_contains($snippet, '<mark>kierować</mark>'), 'front-end snippet should not mark only the literal query form when the document surface differs');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search snippets preserve split inline HTML safely', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 811,
+        'post_title' => 'Inline front-end result',
+        'post_content' => '<p><strong>Word</strong>Press Szk<em>l<i><b>ar</b></i></em>nia W<em>ęgorz</em></p><script>Węgorz</script>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][811] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(811, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'Węgorz',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        $snippet = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0] ?? null);
+
+        assert_same([811], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end split-inline search should return the matching post');
+        assert_contains('<mark>W<em>ęgorz</em></mark>', $snippet, 'front-end snippets should preserve valid inline markup inside highlighted split tokens');
+        assert_true(!str_contains($snippet, '<script>'), 'front-end snippets should not expose unsafe script markup');
     } finally {
         $wpdb = $oldWpdb;
     }

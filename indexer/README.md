@@ -14,9 +14,9 @@ updated published posts when they are saved. Playground is useful for trying the
 workflow quickly; production validation still needs a real WordPress/MySQL
 environment.
 
-The plugin does not use MySQL `FULLTEXT`, does not replace WordPress front-end
-search automatically, and treats the index as rebuildable data derived from
-WordPress content.
+The plugin does not use MySQL `FULLTEXT`, replaces normal front-end main-query
+search with ranked FTS results by default, and treats the index as rebuildable
+data derived from WordPress content.
 
 ## Quickstart
 
@@ -213,7 +213,8 @@ environment before using it for production search.
 
 Current caveats:
 
-- no automatic front-end search replacement;
+- front-end search replacement is enabled by default and can be disabled with
+  the `wp_fts_replace_frontend_search` filter;
 - no settings screen;
 - custom field indexing must be configured;
 - shortcode rendering is opt-in;

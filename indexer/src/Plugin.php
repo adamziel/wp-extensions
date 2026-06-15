@@ -21,6 +21,7 @@ final class WP_FTS_Plugin
     public const SANDBOX_DEMO_POSTS_OPTION = 'wp_fts_sandbox_demo_post_ids';
     public const ANALYZER_OPTIONS_OPTION = 'wp_fts_analyzer_options';
     public const ANALYZER_OPTIONS_FILTER = 'wp_fts_analyzer_options';
+    public const FRONTEND_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_frontend_search';
     public const LANGUAGE_META_KEY = '_wp_fts_index_language';
     public const DEFAULT_BATCH_SIZE = 25;
     public const MAX_SEARCH_LIMIT = 50;
@@ -38,6 +39,17 @@ final class WP_FTS_Plugin
     private const VISIBILITY_REFILL_MIN_BATCH = 10;
     private const VISIBILITY_REFILL_MULTIPLIER = 4;
     private const VISIBILITY_REFILL_MAX_SCAN = 250;
+    private const FRONTEND_SNIPPET_LENGTH = 180;
+
+    /**
+     * @var array<int,array{total:int,max_pages:int,query_lang:string}>
+     */
+    private static array $front_end_search_query_state = [];
+
+    /**
+     * @var array<int,string>
+     */
+    private static array $front_end_search_snippets = [];
 
     /**
      * Register runtime hooks when WordPress hook APIs are available.
@@ -58,6 +70,13 @@ final class WP_FTS_Plugin
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
         add_action('add_meta_boxes', [self::class, 'register_language_meta_box'], 10, 0);
         add_action('save_post', [self::class, 'save_post_language_override'], 5, 3);
+        add_action('pre_get_posts', [self::class, 'prepare_frontend_search_query'], 10, 1);
+
+        if (function_exists('add_filter')) {
+            add_filter('posts_pre_query', [self::class, 'replace_frontend_search_posts'], 10, 2);
+            add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], 10, 2);
+            add_filter('get_the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 2);
+        }
     }
 
     /**
@@ -2213,6 +2232,536 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Mark eligible front-end search queries before posts are requested.
+     *
+     * @param mixed $query WordPress WP_Query-like object.
+     */
+    public static function prepare_frontend_search_query(mixed $query): void
+    {
+        if (!self::is_frontend_search_query($query)) {
+            return;
+        }
+
+        self::set_query_var($query, 'wp_fts_search_candidate', true);
+    }
+
+    /**
+     * Short-circuit the main front-end search query with FTS-ranked posts.
+     *
+     * @param mixed $posts Null when WordPress has not already short-circuited the query.
+     * @param mixed $query WordPress WP_Query-like object.
+     * @return mixed Null to leave WordPress alone, or an array of post objects.
+     */
+    public static function replace_frontend_search_posts(mixed $posts, mixed $query): mixed
+    {
+        if ($posts !== null || !self::should_replace_frontend_search($query)) {
+            return $posts;
+        }
+
+        $search_query = self::frontend_search_query_text($query);
+        if ($search_query === '') {
+            return $posts;
+        }
+
+        $result = self::frontend_search_result_page($query, $search_query);
+        self::store_frontend_search_query_state(
+            $query,
+            $result['total'],
+            $result['limit'],
+            $result['query_lang'],
+            $result['snippets']
+        );
+
+        return $result['posts'];
+    }
+
+    /**
+     * Preserve FTS total counts for themes and pagination helpers.
+     *
+     * @param mixed $found_posts WordPress' computed total.
+     * @param mixed $query WP_Query-like object.
+     */
+    public static function filter_frontend_search_found_posts(mixed $found_posts, mixed $query): mixed
+    {
+        $query_key = self::query_object_key($query);
+        if ($query_key > 0 && isset(self::$front_end_search_query_state[$query_key])) {
+            return self::$front_end_search_query_state[$query_key]['total'];
+        }
+
+        return $found_posts;
+    }
+
+    /**
+     * Serve highlighted FTS snippets through normal search template excerpts.
+     *
+     * @param mixed $excerpt Existing excerpt.
+     * @param mixed $post Current post, when supplied by WordPress.
+     */
+    public static function frontend_search_excerpt(mixed $excerpt, mixed $post = null): string
+    {
+        $post_id = self::post_id_from_value($post);
+        if ($post_id <= 0 && isset($GLOBALS['post'])) {
+            $post_id = self::post_id_from_value($GLOBALS['post']);
+        }
+
+        if ($post_id > 0 && isset(self::$front_end_search_snippets[$post_id])) {
+            return self::$front_end_search_snippets[$post_id];
+        }
+
+        return is_scalar($excerpt) ? (string) $excerpt : '';
+    }
+
+    private static function should_replace_frontend_search(mixed $query): bool
+    {
+        if (!self::is_frontend_search_query($query)) {
+            return false;
+        }
+
+        $replace = true;
+        if (function_exists('apply_filters')) {
+            $replace = apply_filters(self::FRONTEND_SEARCH_REPLACEMENT_FILTER, true, $query);
+        }
+
+        if (is_bool($replace)) {
+            return $replace;
+        }
+
+        if (is_scalar($replace)) {
+            return !in_array(strtolower(trim((string) $replace)), ['', '0', 'false', 'no', 'off'], true);
+        }
+
+        return (bool) $replace;
+    }
+
+    private static function is_frontend_search_query(mixed $query): bool
+    {
+        if (!is_object($query)) {
+            return false;
+        }
+
+        if (self::is_admin_request() || self::is_rest_request() || self::is_cron_request()) {
+            return false;
+        }
+
+        if (!self::query_is_search($query) || !self::query_is_main($query)) {
+            return false;
+        }
+
+        if (self::query_var_truthy($query, 'suppress_filters')) {
+            return false;
+        }
+
+        return self::frontend_search_query_text($query) !== '';
+    }
+
+    private static function frontend_search_query_text(mixed $query): string
+    {
+        $value = self::query_var($query, 's', '');
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        return trim((string) $value);
+    }
+
+    /**
+     * @return array{posts:array<int,object>,snippets:array<int,string>,total:int,limit:int,query_lang:string}
+     */
+    private static function frontend_search_result_page(mixed $query, string $search_query): array
+    {
+        $limit = self::frontend_query_limit($query);
+        $offset = self::frontend_query_offset($query, $limit);
+        $post_types = self::frontend_query_post_types($query);
+        if ($post_types === []) {
+            return [
+                'posts' => [],
+                'snippets' => [],
+                'total' => 0,
+                'limit' => $limit,
+                'query_lang' => '',
+            ];
+        }
+
+        $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
+        $search_options = [
+            'mode' => 'OR',
+            'limit' => self::visibility_refill_batch_limit(max(1, $limit)),
+            'offset' => 0,
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => true,
+            'highlight' => true,
+            'snippet_length' => self::FRONTEND_SNIPPET_LENGTH,
+            'post_type' => $post_types,
+            'post_status' => 'publish',
+        ];
+        $explicit_language = self::query_var($query, 'wp_fts_lang', null);
+        if (is_scalar($explicit_language) && trim((string) $explicit_language) !== '') {
+            $search_options['lang'] = (string) $explicit_language;
+            $search_options['query_lang'] = (string) $explicit_language;
+        }
+
+        $posts = [];
+        $snippets = [];
+        $visible_total = 0;
+        $search_offset = 0;
+        $query_lang = '';
+        $metadata_total = 0;
+        $seen = [];
+
+        while ($search_offset < self::VISIBILITY_REFILL_MAX_SCAN) {
+            $search_options['offset'] = $search_offset;
+            $search_options['limit'] = min(
+                self::visibility_refill_batch_limit(max(1, $limit)),
+                self::VISIBILITY_REFILL_MAX_SCAN - $search_offset
+            );
+            if ($search_options['limit'] <= 0) {
+                break;
+            }
+
+            $payload = $searcher->search($search_query, $search_options);
+            $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
+            $metadata_total = is_numeric($payload['total'] ?? null) ? (int) $payload['total'] : $metadata_total;
+            if (is_scalar($payload['query_lang'] ?? null) && trim((string) $payload['query_lang']) !== '') {
+                $query_lang = WP_FTS_TermNamespace::canonicalize_lang((string) $payload['query_lang']);
+            }
+
+            if ($rows === []) {
+                break;
+            }
+
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+
+                $post_id = (int) ($row['post_id'] ?? $row['doc_id'] ?? 0);
+                if ($post_id <= 0 || isset($seen[$post_id])) {
+                    continue;
+                }
+                $seen[$post_id] = true;
+
+                if (!self::frontend_post_result_visible($post_id, $post_types)) {
+                    continue;
+                }
+
+                $visible_total++;
+                if ($visible_total <= $offset || count($posts) >= $limit) {
+                    continue;
+                }
+
+                $post = self::post_object($post_id);
+                if ($post === null) {
+                    continue;
+                }
+
+                $posts[] = $post;
+                $snippet = isset($row['snippet']) && is_scalar($row['snippet'])
+                    ? self::sanitize_frontend_snippet_html((string) $row['snippet'])
+                    : '';
+                if ($snippet !== '') {
+                    $snippets[$post_id] = $snippet;
+                }
+            }
+
+            $search_offset += (int) $search_options['limit'];
+            if (count($rows) < (int) $search_options['limit'] || ($metadata_total > 0 && $search_offset >= $metadata_total)) {
+                break;
+            }
+        }
+
+        return [
+            'posts' => $posts,
+            'snippets' => $snippets,
+            'total' => $visible_total,
+            'limit' => $limit,
+            'query_lang' => $query_lang,
+        ];
+    }
+
+    /**
+     * @param array<int,string> $snippets
+     */
+    private static function store_frontend_search_query_state(mixed $query, int $total, int $limit, string $query_lang, array $snippets): void
+    {
+        self::$front_end_search_snippets = $snippets;
+
+        $max_pages = $total > 0 ? (int) ceil($total / max(1, $limit)) : 0;
+        $query_key = self::query_object_key($query);
+        if ($query_key > 0) {
+            self::$front_end_search_query_state[$query_key] = [
+                'total' => $total,
+                'max_pages' => $max_pages,
+                'query_lang' => $query_lang,
+            ];
+        }
+
+        self::set_query_property($query, 'found_posts', $total);
+        self::set_query_property($query, 'max_num_pages', $max_pages);
+        self::set_query_var($query, 'wp_fts_query_lang', $query_lang);
+        self::set_query_var($query, 'wp_fts_found_posts', $total);
+    }
+
+    private static function frontend_query_limit(mixed $query): int
+    {
+        $value = self::query_var($query, 'posts_per_page', self::get_option('posts_per_page', 10));
+        $limit = is_numeric($value) ? (int) $value : 10;
+        if ($limit === -1) {
+            return self::MAX_SEARCH_LIMIT;
+        }
+
+        return max(1, $limit);
+    }
+
+    private static function frontend_query_offset(mixed $query, int $limit): int
+    {
+        $offset = self::query_var($query, 'offset', null);
+        if (is_numeric($offset)) {
+            return max(0, (int) $offset);
+        }
+
+        $paged = self::query_var($query, 'paged', self::query_var($query, 'page', 1));
+        $page = is_numeric($paged) ? max(1, (int) $paged) : 1;
+
+        return ($page - 1) * max(1, $limit);
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function frontend_query_post_types(mixed $query): array
+    {
+        $requested = self::query_var($query, 'post_type', null);
+        if ($requested === null || $requested === '' || $requested === 'any') {
+            return self::public_searchable_post_types();
+        }
+
+        $types = [];
+        foreach (self::normalize_string_list($requested) as $type) {
+            if (self::is_public_searchable_post_type($type)) {
+                $types[$type] = true;
+            }
+        }
+
+        return array_keys($types);
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function public_searchable_post_types(): array
+    {
+        $types = [];
+        if (function_exists('get_post_types')) {
+            $raw = get_post_types(['public' => true, 'exclude_from_search' => false], 'names');
+            if (is_array($raw)) {
+                foreach ($raw as $key => $value) {
+                    $type = is_scalar($value) ? (string) $value : (is_scalar($key) ? (string) $key : '');
+                    if ($type !== '' && self::is_public_searchable_post_type($type)) {
+                        $types[$type] = true;
+                    }
+                }
+            }
+        }
+
+        if ($types === []) {
+            foreach (['post', 'page'] as $type) {
+                if (self::is_public_searchable_post_type($type)) {
+                    $types[$type] = true;
+                }
+            }
+        }
+
+        return array_keys($types);
+    }
+
+    private static function is_public_searchable_post_type(string $type): bool
+    {
+        $type = trim($type);
+        if ($type === '') {
+            return false;
+        }
+
+        if (!function_exists('get_post_type_object')) {
+            return in_array($type, ['post', 'page'], true);
+        }
+
+        $post_type = get_post_type_object($type);
+        if (!is_object($post_type)) {
+            return false;
+        }
+
+        if (isset($post_type->public) && !$post_type->public) {
+            return false;
+        }
+
+        if (isset($post_type->exclude_from_search) && $post_type->exclude_from_search) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param string[] $allowed_post_types
+     */
+    private static function frontend_post_result_visible(int $post_id, array $allowed_post_types): bool
+    {
+        $post = self::post_object($post_id);
+        if ($post === null || !self::is_indexable_post($post)) {
+            return false;
+        }
+
+        $type = isset($post->post_type) && is_scalar($post->post_type) ? (string) $post->post_type : 'post';
+
+        return in_array($type, $allowed_post_types, true);
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function normalize_string_list(mixed $value): array
+    {
+        $items = is_array($value) ? $value : [$value];
+        $result = [];
+        foreach ($items as $item) {
+            if (!is_scalar($item)) {
+                continue;
+            }
+            foreach (explode(',', (string) $item) as $part) {
+                $part = trim($part);
+                if ($part !== '') {
+                    $result[$part] = true;
+                }
+            }
+        }
+
+        return array_keys($result);
+    }
+
+    private static function query_is_search(mixed $query): bool
+    {
+        if (is_object($query) && is_callable([$query, 'is_search'])) {
+            return (bool) $query->is_search();
+        }
+
+        if (is_object($query) && property_exists($query, 'is_search')) {
+            return (bool) $query->is_search;
+        }
+
+        return self::frontend_search_query_text($query) !== '';
+    }
+
+    private static function query_is_main(mixed $query): bool
+    {
+        if (is_object($query) && is_callable([$query, 'is_main_query'])) {
+            return (bool) $query->is_main_query();
+        }
+
+        if (is_object($query) && property_exists($query, 'is_main_query')) {
+            return (bool) $query->is_main_query;
+        }
+
+        return isset($GLOBALS['wp_query']) && $query === $GLOBALS['wp_query'];
+    }
+
+    private static function query_var(mixed $query, string $key, mixed $default = null): mixed
+    {
+        if (is_object($query) && is_callable([$query, 'get'])) {
+            $value = $query->get($key, $default);
+            return $value === null || $value === '' ? $default : $value;
+        }
+
+        if (is_object($query) && isset($query->query_vars) && is_array($query->query_vars) && array_key_exists($key, $query->query_vars)) {
+            return $query->query_vars[$key];
+        }
+
+        if (is_array($query) && array_key_exists($key, $query)) {
+            return $query[$key];
+        }
+
+        return $default;
+    }
+
+    private static function set_query_var(mixed $query, string $key, mixed $value): void
+    {
+        if (is_object($query) && is_callable([$query, 'set'])) {
+            $query->set($key, $value);
+            return;
+        }
+
+        if (is_object($query) && property_exists($query, 'query_vars') && is_array($query->query_vars)) {
+            $query->query_vars[$key] = $value;
+        }
+    }
+
+    private static function set_query_property(mixed $query, string $property, mixed $value): void
+    {
+        if (!is_object($query)) {
+            return;
+        }
+
+        if (property_exists($query, $property) || $query instanceof stdClass) {
+            $query->{$property} = $value;
+        }
+    }
+
+    private static function query_var_truthy(mixed $query, string $key): bool
+    {
+        $value = self::query_var($query, $key, false);
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_scalar($value)) {
+            return !in_array(strtolower(trim((string) $value)), ['', '0', 'false', 'no', 'off'], true);
+        }
+
+        return (bool) $value;
+    }
+
+    private static function query_object_key(mixed $query): int
+    {
+        return is_object($query) ? spl_object_id($query) : 0;
+    }
+
+    private static function post_id_from_value(mixed $post): int
+    {
+        if (is_object($post) && isset($post->ID)) {
+            return (int) $post->ID;
+        }
+
+        if (is_numeric($post)) {
+            return (int) $post;
+        }
+
+        return 0;
+    }
+
+    private static function is_admin_request(): bool
+    {
+        return function_exists('is_admin') && is_admin();
+    }
+
+    private static function is_rest_request(): bool
+    {
+        if (defined('REST_REQUEST') && REST_REQUEST) {
+            return true;
+        }
+
+        return function_exists('wp_is_serving_rest_request') && wp_is_serving_rest_request();
+    }
+
+    private static function is_cron_request(): bool
+    {
+        if (defined('DOING_CRON') && DOING_CRON) {
+            return true;
+        }
+
+        return function_exists('wp_doing_cron') && wp_doing_cron();
+    }
+
+    /**
      * Add a post id to the pending queue without duplicates.
      */
     private static function queue_post(int $post_id): void
@@ -2628,6 +3177,103 @@ final class WP_FTS_Plugin
         $value = str_replace(['<mark>', '</mark>'], [$open, $close], $value);
 
         return str_replace([$open, $close], ['<mark>', '</mark>'], self::esc_html($value));
+    }
+
+    private static function sanitize_frontend_snippet_html(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+
+        $allowed = self::frontend_snippet_allowed_html();
+        if (function_exists('wp_kses')) {
+            return (string) wp_kses($value, $allowed);
+        }
+
+        return self::sanitize_inline_snippet_fallback($value, array_keys($allowed));
+    }
+
+    /**
+     * @return array<string,array<string,string[]>>
+     */
+    private static function frontend_snippet_allowed_html(): array
+    {
+        return [
+            'a' => [
+                'href' => [],
+                'rel' => [],
+                'title' => [],
+            ],
+            'abbr' => [
+                'title' => [],
+            ],
+            'b' => [],
+            'br' => [],
+            'cite' => [],
+            'code' => [],
+            'del' => [],
+            'em' => [],
+            'i' => [],
+            'ins' => [],
+            'kbd' => [],
+            'mark' => [],
+            's' => [],
+            'small' => [],
+            'span' => [
+                'class' => [],
+            ],
+            'strong' => [],
+            'sub' => [],
+            'sup' => [],
+            'time' => [
+                'datetime' => [],
+            ],
+        ];
+    }
+
+    /**
+     * Conservative fallback for the test harness and non-WordPress contexts.
+     *
+     * WordPress installations use wp_kses() above. Without it, keep only a
+     * small inline tag set and drop every attribute instead of trying to parse
+     * URL-bearing markup.
+     *
+     * @param string[] $allowed_tags
+     */
+    private static function sanitize_inline_snippet_fallback(string $html, array $allowed_tags): string
+    {
+        $allowed = array_fill_keys(array_map('strtolower', $allowed_tags), true);
+        $void = ['br' => true];
+        $placeholders = [];
+        $index = 0;
+
+        $html = preg_replace_callback(
+            '/<\s*(\/?)\s*([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/',
+            static function (array $match) use (&$placeholders, &$index, $allowed, $void): string {
+                $tag = strtolower((string) $match[2]);
+                if (!isset($allowed[$tag])) {
+                    return '';
+                }
+
+                $closing = (string) $match[1] === '/';
+                if ($closing && isset($void[$tag])) {
+                    return '';
+                }
+
+                $safe = $closing ? '</' . $tag . '>' : '<' . $tag . '>';
+                $placeholder = '@@WPFTS_SNIPPET_TAG_' . $index++ . '@@';
+                $placeholders[$placeholder] = $safe;
+
+                return $placeholder;
+            },
+            $html
+        );
+
+        $html = is_string($html) ? $html : '';
+        $escaped = htmlspecialchars($html, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8', false);
+
+        return strtr($escaped, $placeholders);
     }
 
     /**
