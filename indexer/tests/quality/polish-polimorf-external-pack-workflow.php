@@ -161,6 +161,29 @@ function wp_fts_ppew_case_rejects_output_inside_repository_root(): array
 /**
  * @return string[]
  */
+function wp_fts_ppew_case_rejects_output_inside_repository_docs_directory(): array
+{
+    $errors = [];
+    $repoRoot = wp_fts_ppew_repository_root();
+    $out = $repoRoot . '/docs/ppew-docs-output-' . getmypid() . '-' . bin2hex(random_bytes(4));
+    try {
+        (new WP_FTS_PolishPolimorfExternalPackBuilder())->build(
+            wp_fts_ppew_fixture_options($out, ['expect_source_bytes' => 1])
+        );
+        $errors[] = 'output inside repository docs directory should fail before source verification';
+    } catch (RuntimeException $e) {
+        wp_fts_ppew_check(str_contains($e->getMessage(), 'Git repository worktree'), 'docs output failure should name Git worktree boundary', $errors);
+        wp_fts_ppew_check(!str_contains($e->getMessage(), 'Source byte count mismatch'), 'docs output failure should happen before source verification', $errors);
+    } finally {
+        wp_fts_ppew_remove_tree($out);
+    }
+
+    return $errors;
+}
+
+/**
+ * @return string[]
+ */
 function wp_fts_ppew_case_rejects_cache_inside_repository_root(): array
 {
     $errors = [];
@@ -187,6 +210,34 @@ function wp_fts_ppew_case_rejects_cache_inside_repository_root(): array
         if (is_string($cwd)) {
             chdir($cwd);
         }
+        wp_fts_ppew_remove_tree($cache);
+        wp_fts_ppew_remove_tree($out);
+    }
+
+    return $errors;
+}
+
+/**
+ * @return string[]
+ */
+function wp_fts_ppew_case_rejects_cache_inside_repository_docs_directory(): array
+{
+    $errors = [];
+    $repoRoot = wp_fts_ppew_repository_root();
+    $cache = $repoRoot . '/docs/ppew-docs-cache-' . getmypid() . '-' . bin2hex(random_bytes(4));
+    $out = wp_fts_ppew_temp_dir('docs_cache_boundary_out');
+    try {
+        (new WP_FTS_PolishPolimorfExternalPackBuilder())->build([
+            'download' => true,
+            'acknowledge_license' => 'BSD-2-Clause',
+            'cache_dir' => $cache,
+            'out' => $out,
+        ]);
+        $errors[] = 'cache inside repository docs directory should fail before download setup';
+    } catch (RuntimeException $e) {
+        wp_fts_ppew_check(str_contains($e->getMessage(), 'Git repository worktree'), 'docs cache failure should name Git worktree boundary', $errors);
+        wp_fts_ppew_check(!str_contains($e->getMessage(), 'allow_url_fopen'), 'docs cache failure should happen before download setup', $errors);
+    } finally {
         wp_fts_ppew_remove_tree($cache);
         wp_fts_ppew_remove_tree($out);
     }
@@ -371,7 +422,9 @@ function wp_fts_ppew_run_verifier(): array
     return array_merge(
         wp_fts_ppew_case_rejects_output_inside_plugin_root(),
         wp_fts_ppew_case_rejects_output_inside_repository_root(),
+        wp_fts_ppew_case_rejects_output_inside_repository_docs_directory(),
         wp_fts_ppew_case_rejects_cache_inside_repository_root(),
+        wp_fts_ppew_case_rejects_cache_inside_repository_docs_directory(),
         wp_fts_ppew_case_allows_safe_external_cache_path_to_reach_source_verification(),
         wp_fts_ppew_case_builds_local_fixture_and_stays_offline(),
         wp_fts_ppew_case_rejects_source_identity_mismatch(),
@@ -389,8 +442,16 @@ if (function_exists('test_case')) {
         assert_same([], wp_fts_ppew_case_rejects_output_inside_repository_root(), 'external pack workflow should reject repo-root output paths');
     });
 
+    test_case('quality Polish PoliMorf external pack workflow rejects output inside repository docs directory', function (): void {
+        assert_same([], wp_fts_ppew_case_rejects_output_inside_repository_docs_directory(), 'external pack workflow should reject docs output paths before source verification');
+    });
+
     test_case('quality Polish PoliMorf external pack workflow rejects cache inside repository root', function (): void {
         assert_same([], wp_fts_ppew_case_rejects_cache_inside_repository_root(), 'external pack workflow should reject repo-root cache paths');
+    });
+
+    test_case('quality Polish PoliMorf external pack workflow rejects cache inside repository docs directory', function (): void {
+        assert_same([], wp_fts_ppew_case_rejects_cache_inside_repository_docs_directory(), 'external pack workflow should reject docs cache paths before download setup');
     });
 
     test_case('quality Polish PoliMorf external pack workflow allows safe external cache boundary', function (): void {
