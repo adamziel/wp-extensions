@@ -211,7 +211,7 @@ final class WP_FTS_Analyzer
      * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int}|string|null $options
      *        Either an options array or a legacy language string. `post_id`
      *        allows Polylang/WPML integrations to resolve the document language.
-     * @return array<int,array{term:string,weight:float,lang:string}>
+     * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
      *         Occurrences in document order. `weight` is the strongest boost
      *         inherited from ancestor tags, and `lang` is the term language.
      */
@@ -219,18 +219,29 @@ final class WP_FTS_Analyzer
     {
         $options = $this->normalizeLanguageOptions($options, 'document');
         $tokens = [];
+        $nextPosition = 0;
 
         foreach ($this->extractHtmlSegments($html, $options) as $segment) {
-            foreach ($this->analyzeText($segment['text'], $segment['lang']) as $term) {
+            $terms = $this->renumberAnalyzedPositions(
+                $this->analyzeText($segment['text'], $segment['lang']),
+                $nextPosition
+            );
+            foreach ($terms as $term) {
                 if ($this->isStopword($term['term'], $term['lang'])) {
                     continue;
                 }
 
-                $tokens[] = [
+                $row = [
                     'term' => $term['term'],
                     'weight' => $segment['weight'],
                     'lang' => $term['lang'],
                 ];
+                foreach (['position', 'rank', 'source'] as $key) {
+                    if (array_key_exists($key, $term)) {
+                        $row[$key] = $term[$key];
+                    }
+                }
+                $tokens[] = $row;
             }
         }
 
@@ -245,7 +256,7 @@ final class WP_FTS_Analyzer
      * language.
      *
      * @param array<string,mixed>|string|null $language
-     * @return array<int,array{term:string,weight:float,lang:string}>
+     * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
      */
     public function analyze_content_terms(string $html, array|string|null $language = null): array
     {
@@ -262,7 +273,7 @@ final class WP_FTS_Analyzer
      * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,return?:string,format?:string,_force_query_lang?:bool}|string|null $options
      *        Query language hints and optional output format. A legacy string is
      *        treated as `query_lang`.
-     * @return string[]|array<int,array{term:string,lang:string}>
+     * @return string[]|array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
      *         Term strings or occurrence rows, depending on requested format.
      */
     public function analyze_query(string $query, array|string|null $options = []): array
@@ -286,7 +297,7 @@ final class WP_FTS_Analyzer
      * defaults to strings.
      *
      * @param array<string,mixed>|string|null $language
-     * @return array<int,array{term:string,lang:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
      */
     public function analyze_query_terms(string $query, array|string|null $language = null): array
     {
@@ -300,16 +311,21 @@ final class WP_FTS_Analyzer
      * query terms.
      *
      * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,_force_query_lang?:bool}|string|null $options
-     * @return array<int,array{term:string,lang:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
      */
     public function analyze_query_occurrences(string $query, array|string|null $options = []): array
     {
         $options = $this->normalizeLanguageOptions($options, 'query');
         $lang = $this->resolveQueryLanguage($options);
         $terms = [];
+        $nextPosition = 0;
 
         foreach ($this->queryTextSegments($query, $lang, $options) as $segment) {
-            foreach ($this->analyzeText($segment['text'], $segment['lang']) as $term) {
+            $segmentTerms = $this->renumberAnalyzedPositions(
+                $this->analyzeText($segment['text'], $segment['lang']),
+                $nextPosition
+            );
+            foreach ($segmentTerms as $term) {
                 if ($this->isStopword($term['term'], $term['lang'])) {
                     continue;
                 }
@@ -385,13 +401,56 @@ final class WP_FTS_Analyzer
      * @param string $text Visible text from a document segment or query.
      * @param string $lang Segment language, canonicalized with analyzer
      *        fallbacks.
-     * @return array<int,array{term:string,lang:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
      */
     private function analyzeText(string $text, string $lang): array
     {
         $lang = $this->canonicalLanguage($lang) ?? $this->defaultLanguage;
 
         return $this->languagePipeline->analyze_detailed($text, $lang);
+    }
+
+    /**
+     * Convert pipeline-local token positions into analyzer-global positions.
+     *
+     * The public occurrence shape stays unchanged for normal single-analysis
+     * tokens. A `position` key is retained only when a token produced multiple
+     * analyses and search needs those rows grouped as alternatives.
+     *
+     * @param array<int,array<string,mixed>> $terms
+     * @return array<int,array<string,mixed>>
+     */
+    private function renumberAnalyzedPositions(array $terms, int &$nextPosition): array
+    {
+        $positionCounts = [];
+        foreach ($terms as $term) {
+            if (isset($term['position']) && is_scalar($term['position'])) {
+                $position = (string) $term['position'];
+                $positionCounts[$position] = ($positionCounts[$position] ?? 0) + 1;
+            }
+        }
+
+        $positionMap = [];
+        foreach ($terms as &$term) {
+            if (!isset($term['position']) || !is_scalar($term['position'])) {
+                $nextPosition++;
+                continue;
+            }
+
+            $localPosition = (string) $term['position'];
+            if (!array_key_exists($localPosition, $positionMap)) {
+                $positionMap[$localPosition] = $nextPosition++;
+            }
+
+            if (($positionCounts[$localPosition] ?? 0) > 1) {
+                $term['position'] = $positionMap[$localPosition];
+            } else {
+                unset($term['position']);
+            }
+        }
+        unset($term);
+
+        return $terms;
     }
 
     /**

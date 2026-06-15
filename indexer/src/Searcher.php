@@ -235,7 +235,8 @@ final class WP_FTS_Searcher
                 }
 
                 $avgDocLen = $meta['len_sum'] > 0 ? $meta['len_sum'] / $docCount : 1.0;
-                $score += $this->bm25($tf, $docLengthsByLang[$lang][$docId], $docCount, $df, $avgDocLen);
+                $score += $this->bm25($tf, $docLengthsByLang[$lang][$docId], $docCount, $df, $avgDocLen)
+                    * $this->query_rank_score_multiplier($termsByKey[$term]['groups']);
                 foreach ($termsByKey[$term]['groups'] as $groupId => $rank) {
                     $matchedGroups[$groupId] = min($matchedGroups[$groupId] ?? $rank, $rank);
                 }
@@ -287,6 +288,23 @@ final class WP_FTS_Searcher
         $scoreOrder = $b['score'] <=> $a['score'];
 
         return $scoreOrder !== 0 ? $scoreOrder : ($a['doc_id'] <=> $b['doc_id']);
+    }
+
+    /**
+     * Keep exact query candidates strongest while allowing secondary pack
+     * candidates to contribute recall.
+     *
+     * @param array<int,int> $groupRanks
+     */
+    private function query_rank_score_multiplier(array $groupRanks): float
+    {
+        if ($groupRanks === []) {
+            return 1.0;
+        }
+
+        $rank = min(array_map('intval', $groupRanks));
+
+        return 1.0 / (1.0 + max(0, $rank));
     }
 
     /**
@@ -436,14 +454,41 @@ final class WP_FTS_Searcher
     private function groups_from_occurrences(array $occurrences, string $defaultLang, int $rank, ?string $authoritativeLang = null): array
     {
         $groups = [];
+        $currentPosition = null;
+        $currentGroupIndex = null;
         foreach ($occurrences as $occurrence) {
             $candidate = $this->candidate_from_occurrence($occurrence, $defaultLang, $rank, $authoritativeLang);
             if ($candidate !== null) {
+                $position = $this->occurrence_position($occurrence);
+                if ($position !== null && $currentGroupIndex !== null && $currentPosition === $position) {
+                    $groups[$currentGroupIndex][] = $candidate;
+                    continue;
+                }
+
                 $groups[] = [$candidate];
+                if ($position === null) {
+                    $currentPosition = null;
+                    $currentGroupIndex = null;
+                } else {
+                    $currentPosition = $position;
+                    $currentGroupIndex = count($groups) - 1;
+                }
             }
         }
 
         return $groups;
+    }
+
+    /**
+     * Return the analyzer token-position marker when present.
+     */
+    private function occurrence_position(array|string $occurrence): ?string
+    {
+        if (!is_array($occurrence) || !isset($occurrence['position']) || !is_scalar($occurrence['position'])) {
+            return null;
+        }
+
+        return (string) $occurrence['position'];
     }
 
     /**
@@ -481,11 +526,15 @@ final class WP_FTS_Searcher
             return null;
         }
 
+        $occurrenceRank = is_array($occurrence) && isset($occurrence['rank']) && is_numeric($occurrence['rank'])
+            ? max(0, (int) $occurrence['rank'])
+            : 0;
+
         return [
             'key' => WP_FTS_TermNamespace::namespace_term($lang, $term),
             'lang' => $lang,
             'term' => $term,
-            'rank' => $rank,
+            'rank' => $rank + $occurrenceRank,
         ];
     }
 

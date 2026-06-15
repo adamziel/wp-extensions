@@ -128,7 +128,7 @@ final class WP_FTS_LanguagePipeline
      *
      * @param string $text Plain visible text to tokenize.
      * @param string $language Document or query language hint.
-     * @return array<int,array{term:string,lang:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
      */
     public function analyze_detailed(string $text, string $language): array
     {
@@ -136,15 +136,26 @@ final class WP_FTS_LanguagePipeline
         $terms = [];
 
         foreach ($this->tokenize($text, $language) as $rawToken) {
-            $term = $this->normalize_raw_token($rawToken['text'], $language, $rawToken['is_cjk']);
-            if ($term === null) {
+            $analyses = $this->analyze_raw_token($rawToken['text'], $language, $rawToken['is_cjk']);
+            if ($analyses === []) {
                 continue;
             }
 
-            $terms[] = [
-                'term' => $this->namespaceTerms ? $this->namespace_term($language, $term) : $term,
-                'lang' => $language,
-            ];
+            $position = count($terms);
+            $isMultiAnalysis = count($analyses) > 1;
+            foreach ($analyses as $analysis) {
+                $term = (string) $analysis['term'];
+                $row = [
+                    'term' => $this->namespaceTerms ? $this->namespace_term($language, $term) : $term,
+                    'lang' => $language,
+                ];
+                if ($isMultiAnalysis) {
+                    $row['position'] = $position;
+                    $row['rank'] = (int) ($analysis['rank'] ?? 0);
+                    $row['source'] = (string) ($analysis['source'] ?? 'analyzer');
+                }
+                $terms[] = $row;
+            }
         }
 
         return $terms;
@@ -218,12 +229,87 @@ final class WP_FTS_LanguagePipeline
             }
         }
 
-        $length = function_exists('mb_strlen') ? mb_strlen($term, 'UTF-8') : strlen($term);
-        if ((!$isCjk && $length < $this->minTermLen) || strlen($term) > $this->maxTermBytes) {
+        if (!$this->term_passes_length_filters($term, $isCjk)) {
             return null;
         }
 
         return $term;
+    }
+
+    /**
+     * Normalize one raw token and return all valid analysis candidates.
+     *
+     * This mirrors `normalize_raw_token()` for legacy callers, but lets
+     * dictionary lemma packs return multiple pack-backed candidates for one
+     * source token. Custom stemmers and non-pack language paths remain
+     * single-analysis.
+     *
+     * @return array<int,array{term:string,rank:int,source:string}>
+     */
+    private function analyze_raw_token(string $rawToken, string $language, bool $isCjk = false): array
+    {
+        $language = $this->canonicalize_language($language);
+        $term = $this->normalizer->normalize_token($rawToken, $language);
+        $analyses = null;
+
+        if ($isCjk) {
+            $analyses = [['term' => $term, 'rank' => 0, 'source' => 'normalized']];
+        } else {
+            $customStemmer = $this->custom_stemmer_for_language($language);
+            if ($customStemmer !== null) {
+                $analyses = [['term' => $customStemmer->stem($term, $language), 'rank' => 0, 'source' => 'stemmer']];
+            } elseif ($this->customStemmer !== null) {
+                $analyses = [['term' => $this->customStemmer->stem($term, $language), 'rank' => 0, 'source' => 'stemmer']];
+            } elseif ($this->enableStemming) {
+                $lemmaPack = $this->lemma_pack_for_language($language);
+                if ($lemmaPack !== null) {
+                    $analyses = $lemmaPack->analyze($term, $language);
+                    if (count($analyses) > 1 && !$this->term_meets_min_length($term, $isCjk)) {
+                        return [];
+                    }
+                } else {
+                    $analyses = [['term' => $this->stem_for_language($term, $language), 'rank' => 0, 'source' => 'stemmer']];
+                }
+            }
+        }
+
+        $analyses ??= [['term' => $term, 'rank' => 0, 'source' => 'normalized']];
+
+        $valid = [];
+        $seen = [];
+        foreach ($analyses as $analysis) {
+            $candidate = trim((string) ($analysis['term'] ?? ''));
+            if ($candidate === '' || isset($seen[$candidate]) || !$this->term_passes_length_filters($candidate, $isCjk)) {
+                continue;
+            }
+
+            $seen[$candidate] = true;
+            $valid[] = [
+                'term' => $candidate,
+                'rank' => max(0, (int) ($analysis['rank'] ?? 0)),
+                'source' => (string) ($analysis['source'] ?? 'analyzer'),
+            ];
+        }
+
+        return $valid;
+    }
+
+    /**
+     * Apply the shared post-analysis length and byte filters.
+     */
+    private function term_passes_length_filters(string $term, bool $isCjk): bool
+    {
+        return $this->term_meets_min_length($term, $isCjk) && strlen($term) <= $this->maxTermBytes;
+    }
+
+    /**
+     * Check the character-length side of the shared post-analysis filters.
+     */
+    private function term_meets_min_length(string $term, bool $isCjk): bool
+    {
+        $length = function_exists('mb_strlen') ? mb_strlen($term, 'UTF-8') : strlen($term);
+
+        return $isCjk || $length >= $this->minTermLen;
     }
 
     /**
@@ -634,7 +720,7 @@ final class WP_FTS_LanguagePipeline
         }
         $payload = [
             'contract' => 'wp-fts-language-pipeline',
-            'version' => 15,
+            'version' => 16,
             'cjk_max_ngram_length' => self::CJK_MAX_NGRAM_LENGTH,
             'min_term_len' => $this->minTermLen,
             'max_term_bytes' => $this->maxTermBytes,
@@ -660,7 +746,7 @@ final class WP_FTS_LanguagePipeline
             $payload['polish_verified_stemmer'] = WP_FTS_PolishVerifiedStemmerData::VERSION;
         }
 
-        return 'wp-fts-language-pipeline-v15:' . sha1($this->stableJson($payload));
+        return 'wp-fts-language-pipeline-v16:' . sha1($this->stableJson($payload));
     }
 
     /**

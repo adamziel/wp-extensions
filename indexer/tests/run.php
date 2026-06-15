@@ -251,6 +251,17 @@ function test_lang_by_term(array $occurrences): array
 }
 
 /**
+ * @return string[]
+ */
+function test_analysis_terms(array $analyses): array
+{
+    return array_map(
+        static fn(array|string $analysis): string => is_array($analysis) ? (string) $analysis['term'] : (string) $analysis,
+        $analyses
+    );
+}
+
+/**
  * @return array{term:string,lang:?string}
  */
 function test_split_namespaced_term(string $term): array
@@ -5086,7 +5097,7 @@ test_case('generic lemma packs by language beat baseline and fall back safely', 
     $defaultSignature = $baseline->index_signature();
     $packSignature = $packPipeline->index_signature();
     assert_true($defaultSignature !== $packSignature, 'language pipeline signature should change when a generic pack is enabled');
-    assert_contains('wp-fts-language-pipeline-v15:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
+    assert_contains('wp-fts-language-pipeline-v16:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
 
     $defaultAnalyzer = new WP_FTS_Analyzer();
     $packAnalyzer = new WP_FTS_Analyzer([
@@ -5096,6 +5107,15 @@ test_case('generic lemma packs by language beat baseline and fall back safely', 
     ]);
     assert_same(['ককক'], $packAnalyzer->analyze_query('ককগুলো', ['lang' => 'bn']), 'analyzer should pass generic pack options into the language pipeline');
     assert_true($defaultAnalyzer->index_signature() !== $packAnalyzer->index_signature(), 'analyzer signature should change when a generic pack is enabled');
+
+    $boundedPackPipeline = new WP_FTS_LanguagePipeline([
+        'enable_stemming' => true,
+        'max_term_bytes' => 6,
+        'lemma_packs_by_lang' => [
+            'bn' => $manifest,
+        ],
+    ]);
+    assert_same(['ঘঘ'], $boundedPackPipeline->analyze('ঘঘক', 'bn'), 'generic pack multi-analysis should filter each emitted candidate independently');
 });
 
 test_case('configured Chinese Jieba segmenter changes matching while preserving fallback ngrams', function (): void {
@@ -6851,6 +6871,28 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
     }
 });
 
+test_case('polish compressed full pack exposes ambiguous lemma analyses without changing stem compatibility', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for compressed full pack multi-analysis coverage',
+        'PHP zlib gzip support is unavailable, so compressed full pack multi-analysis is skipped.'
+    );
+
+    $manifest = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+    $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest);
+    assert_same('pl-polimorf-20180722-full', $pack->pack_id(), 'multi-analysis coverage should use the bundled full Polish pack');
+
+    assert_same(['chrzastek', 'chrzastka'], test_analysis_terms($pack->analyze('chrzastek', 'pl')), 'chrząstek normalized surface should expose both pack-backed lemmas');
+    assert_same(['chrzastka', 'chrzastek'], test_analysis_terms($pack->analyze('chrzastka', 'pl')), 'chrząstka normalized surface should expose both pack-backed lemmas with the exact normalized lemma first');
+    assert_same(['chrzastek', 'chrzastka'], test_analysis_terms($pack->analyze('chrzastki', 'pl')), 'chrząstki normalized surface should expose both pack-backed lemmas');
+    assert_same(['drogi', 'droga'], test_analysis_terms($pack->analyze('drogi', 'pl')), 'unrelated ambiguous pack rows should also expose all pack-backed analyses');
+
+    assert_same('chrzastek', $pack->stem('chrzastek', 'pl'), 'stem compatibility should keep ambiguous chrząstek normalized surface unchanged');
+    assert_same('chrzastka', $pack->stem('chrzastka', 'pl'), 'stem compatibility should keep ambiguous chrząstka normalized surface unchanged');
+    assert_same('chrzastki', $pack->stem('chrzastki', 'pl'), 'stem compatibility should keep ambiguous chrząstki normalized surface unchanged');
+    assert_same('drogi', $pack->stem('drogi', 'pl'), 'stem compatibility should keep ambiguous unrelated pack surfaces unchanged');
+});
+
 test_case('polish compressed full pack snippets stay within playground memory limit', function (): void {
     assert_or_pending(
         WP_FTS_AnalyzerPackValidator::gzip_available(),
@@ -6926,6 +6968,111 @@ PHP;
 
     assert_same(0, $cli['exit'], 'compressed full pack snippets should not exhaust the Playground-sized PHP memory limit: ' . $cli['stderr']);
     assert_contains('ok', $cli['stdout'], 'compressed full pack low-memory snippet smoke should complete');
+});
+
+test_case('polish full pack ambiguous candidates index search and highlight as alternatives', function (): void {
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for full Polish ambiguous candidate search',
+        'PHP zlib gzip support is unavailable, so full Polish ambiguous candidate search is skipped.'
+    );
+
+    $analyzer = new WP_FTS_Analyzer([
+        'default_lang' => 'pl',
+        'polish_lemma_pack' => WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest(),
+    ]);
+    assert_same(['chrzastek', 'chrzastka'], $analyzer->analyze_query('chrząstek', ['lang' => 'pl']), 'query chrząstek should analyze to both full-pack candidates');
+    assert_same(['chrzastka', 'chrzastek'], $analyzer->analyze_query('chrząstka', ['lang' => 'pl']), 'query chrząstka should analyze to both full-pack candidates');
+    assert_same(['chrzastek', 'chrzastka'], $analyzer->analyze_query('chrząstki', ['lang' => 'pl']), 'query chrząstki should analyze to both full-pack candidates');
+    assert_same([], $analyzer->analyze_query('w', ['lang' => 'pl']), 'short ambiguous Polish function words should remain filtered instead of expanding through long pack lemmas');
+
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $formattedHtml = '<p>W chrzą<strong>st</strong>ek atlas notuje wynik.</p>';
+    $indexer->index_document_fields(951, [['name' => 'content', 'html' => $formattedHtml]], [
+        'lang' => 'pl',
+        'metadata' => [
+            'post_id' => 951,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'title' => 'Ambiguous chrząstek',
+            'search_text' => 'W chrząstek atlas notuje wynik.',
+            'language' => 'pl',
+        ],
+    ]);
+    $indexer->index_document_fields(952, [['name' => 'content', 'text' => 'Opis chrząstka w atlasie.' ]], [
+        'lang' => 'pl',
+        'metadata' => [
+            'post_id' => 952,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'title' => 'Ambiguous chrząstka',
+            'search_text' => 'Opis chrząstka w atlasie.',
+            'language' => 'pl',
+        ],
+    ]);
+
+    $terms = $storage->all_terms();
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'chrzastek'), $terms, true), 'document chrząstek should index the pack-backed chrzastek lemma');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'chrzastka'), $terms, true), 'document chrząstek should index the pack-backed chrzastka lemma');
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    foreach ([
+        'chrząstka' => 951,
+        'chrząstki' => 951,
+        'chrząstek' => 952,
+    ] as $query => $expectedDocId) {
+        $ids = array_column($searcher->search($query, ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10]), 'doc_id');
+        assert_true(in_array($expectedDocId, $ids, true), "{$query} should find document {$expectedDocId} through pack-backed ambiguous candidates");
+    }
+    assert_same(
+        952,
+        $searcher->search('chrząstka atlas', ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])[0]['doc_id'] ?? null,
+        'exact chrząstka document surface should outrank a secondary chrząstek lemma match'
+    );
+    assert_same(
+        951,
+        $searcher->search('chrząstek atlas', ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])[0]['doc_id'] ?? null,
+        'exact chrząstek document surface should outrank a secondary chrząstka lemma match'
+    );
+
+    $payload = $searcher->search('chrząstka', [
+        'lang' => 'pl',
+        'mode' => 'AND',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 180,
+    ]);
+    assert_true(($payload['total'] ?? 0) >= 1, 'chrząstka should return the formatted chrząstek document');
+    $formattedResult = null;
+    foreach ($payload['results'] as $result) {
+        if ((int) ($result['doc_id'] ?? 0) === 951) {
+            $formattedResult = $result;
+            break;
+        }
+    }
+    assert_true(is_array($formattedResult), 'chrząstka result set should include the formatted chrząstek document');
+    assert_contains('<mark>chrzą<strong>st</strong>ek</mark>', (string) ($formattedResult['snippet'] ?? ''), 'snippet highlighting should mark the full formatted chrząstek surface');
+
+    $singleCandidateStorage = new WP_FTS_Storage_InMemory();
+    $singleCandidateStorage->put_doc(970, 'pl', ['pl' => 2], 'manual-pack-alternative');
+    $singleCandidateStorage->put_term(
+        WP_FTS_TermNamespace::namespace_term('pl', 'atlas'),
+        1,
+        WP_FTS_PostingsCodec::encode([970 => 1])
+    );
+    $singleCandidateStorage->put_term(
+        WP_FTS_TermNamespace::namespace_term('pl', 'chrzastek'),
+        1,
+        WP_FTS_PostingsCodec::encode([970 => 1])
+    );
+    $andIds = array_column(
+        (new WP_FTS_Searcher($singleCandidateStorage, $analyzer))->search('chrząstki atlas', ['lang' => 'pl', 'mode' => 'AND']),
+        'doc_id'
+    );
+    assert_same([970], $andIds, 'AND search should treat chrząstki lemma candidates as alternatives for one logical token');
 });
 
 test_case('polish PoliMorf importer deterministically generates sharded full-pack shape', function (): void {
@@ -7042,7 +7189,7 @@ test_case('polish lemma pack is opt-in and invalid packs fall back to suffix ste
     ]);
     assert_same(['zamek'], $packPipeline->analyze('zamkach', 'pl'), 'enabled fixture pack should use dictionary lemma rows');
     assert_same(['zielonymi'], $packPipeline->analyze('zielonymi', 'pl'), 'enabled fixture pack should not suffix-stem missing rows');
-    assert_same(['drogi'], $packPipeline->analyze('drogi', 'pl'), 'enabled fixture pack should no-op ambiguous rows');
+    assert_same(['drogi', 'droga'], $packPipeline->analyze('drogi', 'pl'), 'enabled fixture pack should expose ambiguous rows as alternatives');
     assert_same(['wyszukiwac', 'wyszukiwac'], $packPipeline->analyze('wyszukiwanie wyszukujemy', 'pl'), 'enabled fixture pack should use source-derived search lemma rows');
     assert_same(['wpis', 'wpis', 'wpis'], $packPipeline->analyze('wpisy wpisach wpisami', 'pl'), 'enabled fixture pack should use source-derived entry lemma rows');
     assert_same(['kierowac', 'kierowac'], $packPipeline->analyze('kierowania kierujemy', 'pl'), 'enabled fixture pack should use source-derived routing lemma rows');
@@ -8932,7 +9079,8 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_same(['Indexed 1 posts in pl-PL.'], WP_CLI::$successMessages, 'CLI should report canonical language and limited count');
     assert_same([10], array_keys($fake->docs), 'CLI limit should restrict indexed posts');
     assert_same('pl-PL', $fake->docs[10]['lang'], 'CLI language option should reach MySQL docs');
-    assert_same(['pl-PL' => 7], $fake->docLengths[10], 'CLI reindex should write boosted per-language doc length');
+    $expectedDocLength = WP_FTS_AnalyzerPackValidator::gzip_available() ? 9 : 7;
+    assert_same(['pl-PL' => $expectedDocLength], $fake->docLengths[10], 'CLI reindex should write boosted per-language doc length for the active Polish pack');
     assert_same('post', $fake->docMeta[10]['post_type'], 'CLI reindex should store post type metadata');
     assert_same('publish', $fake->docMeta[10]['post_status'], 'CLI reindex should store status metadata');
     assert_same('2026-03-04 05:06:07', $fake->docMeta[10]['post_date_gmt'], 'CLI reindex should store date metadata');

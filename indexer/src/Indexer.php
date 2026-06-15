@@ -662,6 +662,15 @@ LIMIT %d",
             }
 
             $weight = is_array($occurrence) ? (float) ($occurrence['weight'] ?? 1.0) : 1.0;
+            if (
+                is_array($occurrence)
+                && ($occurrence['source'] ?? '') === 'lemma-pack'
+                && isset($occurrence['rank'])
+                && is_numeric($occurrence['rank'])
+                && (int) $occurrence['rank'] === 0
+            ) {
+                $weight *= 2.0;
+            }
             if ($weight <= 0.0) {
                 continue;
             }

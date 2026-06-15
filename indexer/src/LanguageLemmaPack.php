@@ -4,20 +4,19 @@ declare(strict_types=1);
 /**
  * Opt-in dictionary lemmatizer backed by a validated local analyzer pack.
  *
- * The adapter consumes normalized surface-to-lemma runtime rows. It
- * deliberately no-ops unsupported language partitions, ambiguous surfaces, and
- * missing forms so partial fixture packs cannot over-stem terms.
+ * The adapter consumes normalized surface-to-lemma runtime rows. The legacy
+ * `stem()` API still no-ops unsupported language partitions, ambiguous
+ * surfaces, and missing forms, while `analyze()` exposes all pack-backed lemma
+ * candidates for callers that can treat them as alternatives.
  */
 final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
 {
     private const EAGER_ROW_LIMIT = 50000;
     private const MAX_CACHED_LOOKUPS = 512;
 
-    /** @var array<string,string> */
-    private array $lemmaBySurface = [];
-    /** @var array<string,bool> */
-    private array $ambiguousSurfaces = [];
-    /** @var array<string,string> */
+    /** @var array<string,string[]> */
+    private array $lemmasBySurface = [];
+    /** @var array<string,string[]> */
     private array $lookupCache = [];
     /** @var string[] */
     private array $lookupCacheOrder = [];
@@ -94,15 +93,46 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
             return $term;
         }
 
-        if ($this->lazy) {
-            return $this->lookup_lazy($term);
-        }
-
-        if (isset($this->ambiguousSurfaces[$term])) {
+        $lemmas = $this->lemmas_for_term($term);
+        if (count($lemmas) !== 1) {
             return $term;
         }
 
-        return $this->lemmaBySurface[$term] ?? $term;
+        return $lemmas[0];
+    }
+
+    /**
+     * Return every pack-backed lemma candidate for one normalized token.
+     *
+     * Missing forms and unsupported language partitions return the original term
+     * so callers can use this as a drop-in expansion API. Ambiguous pack rows are
+     * returned as alternatives, with an exact normalized lemma ordered first when
+     * the pack contains one.
+     *
+     * @return array<int,array{term:string,rank:int,source:string}>
+     */
+    public function analyze(string $term, string $language): array
+    {
+        if (self::base_language($language) !== $this->packLanguage) {
+            return [$this->analysis_row($term, 0, 'original')];
+        }
+
+        $lemmas = $this->lemmas_for_term($term);
+        if ($lemmas === []) {
+            return [$this->analysis_row($term, 0, 'original')];
+        }
+
+        $hasExact = in_array($term, $lemmas, true);
+        $analyses = [];
+        foreach ($lemmas as $lemma) {
+            $analyses[] = $this->analysis_row(
+                $lemma,
+                !$hasExact || $lemma === $term ? 0 : 1,
+                'lemma-pack'
+            );
+        }
+
+        return $analyses;
     }
 
     /**
@@ -221,18 +251,27 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         }
 
         foreach ($lemmasBySurface as $surface => $lemmas) {
-            $lemmaList = array_keys($lemmas);
-            sort($lemmaList, SORT_STRING);
-            if (count($lemmaList) === 1) {
-                $this->lemmaBySurface[$surface] = $lemmaList[0];
-                continue;
-            }
-
-            $this->ambiguousSurfaces[$surface] = true;
+            $lemmaList = $this->ordered_lemmas_for_surface($surface, array_keys($lemmas));
+            $this->lemmasBySurface[$surface] = $lemmaList;
         }
     }
 
-    private function lookup_lazy(string $term): string
+    /**
+     * @return string[]
+     */
+    private function lemmas_for_term(string $term): array
+    {
+        if ($this->lazy) {
+            return $this->lookup_lazy_lemmas($term);
+        }
+
+        return $this->lemmasBySurface[$term] ?? [];
+    }
+
+    /**
+     * @return string[]
+     */
+    private function lookup_lazy_lemmas(string $term): array
     {
         if (isset($this->lookupCache[$term])) {
             return $this->lookupCache[$term];
@@ -242,17 +281,40 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         foreach ($this->candidate_runtime_files($term) as $file) {
             foreach ($this->lookup_term_in_runtime_file($term, $file) as $lemma => $_) {
                 $lemmas[$lemma] = true;
-                if (count($lemmas) > 1) {
-                    return $this->cache_lookup($term, $term);
-                }
             }
         }
 
-        if (count($lemmas) !== 1) {
-            return $this->cache_lookup($term, $term);
+        return $this->cache_lookup($term, $this->ordered_lemmas_for_surface($term, array_keys($lemmas)));
+    }
+
+    /**
+     * @param string[] $lemmas
+     * @return string[]
+     */
+    private function ordered_lemmas_for_surface(string $surface, array $lemmas): array
+    {
+        $lemmas = array_values(array_unique(array_map('strval', $lemmas)));
+        sort($lemmas, SORT_STRING);
+        if (!in_array($surface, $lemmas, true)) {
+            return $lemmas;
         }
 
-        return $this->cache_lookup($term, (string) array_key_first($lemmas));
+        return array_values(array_merge(
+            [$surface],
+            array_filter($lemmas, static fn(string $lemma): bool => $lemma !== $surface)
+        ));
+    }
+
+    /**
+     * @return array{term:string,rank:int,source:string}
+     */
+    private function analysis_row(string $term, int $rank, string $source): array
+    {
+        return [
+            'term' => $term,
+            'rank' => max(0, $rank),
+            'source' => $source,
+        ];
     }
 
     /**
@@ -317,7 +379,11 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         return $lemmas;
     }
 
-    private function cache_lookup(string $term, string $result): string
+    /**
+     * @param string[] $result
+     * @return string[]
+     */
+    private function cache_lookup(string $term, array $result): array
     {
         if (!isset($this->lookupCache[$term])) {
             $this->lookupCacheOrder[] = $term;
