@@ -79,7 +79,7 @@ final class WP_FTS_Plugin
             add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], 10, 2);
             add_filter('get_the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 2);
             add_filter('the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 1);
-            add_filter('the_content', [self::class, 'frontend_search_excerpt'], 20, 1);
+            add_filter('the_content', [self::class, 'frontend_search_content'], 20, 1);
             add_filter('the_title', [self::class, 'frontend_search_title'], 10, 2);
         }
 
@@ -2352,6 +2352,31 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Serve highlighted FTS content previews without changing theme layout.
+     *
+     * Search-result templates that render `the_content` expect block-level
+     * markup. Returning a bare text node can bypass block-theme width
+     * constraints, so content previews are wrapped like normal paragraph
+     * content while preserving the same highlighted snippet.
+     *
+     * @param mixed $content Existing content.
+     */
+    public static function frontend_search_content(mixed $content): string
+    {
+        $post_id = isset($GLOBALS['post']) ? self::post_id_from_value($GLOBALS['post']) : 0;
+        $query_key = self::$front_end_search_active_query_key;
+        if (
+            $post_id > 0
+            && $query_key > 0
+            && isset(self::$front_end_search_query_state[$query_key]['snippets'][$post_id])
+        ) {
+            return self::frontend_content_preview_markup(self::$front_end_search_query_state[$query_key]['snippets'][$post_id]);
+        }
+
+        return is_scalar($content) ? (string) $content : '';
+    }
+
+    /**
      * Serve highlighted FTS titles through normal search result title rendering.
      *
      * @param mixed $title Existing title.
@@ -2374,6 +2399,20 @@ final class WP_FTS_Plugin
         }
 
         return is_scalar($title) ? (string) $title : '';
+    }
+
+    private static function frontend_content_preview_markup(string $snippet): string
+    {
+        $snippet = trim($snippet);
+        if ($snippet === '') {
+            return '';
+        }
+
+        if (preg_match('/^\s*<(?:p|div|section|article|blockquote|pre|ul|ol|li|figure|table|h[1-6])\b/i', $snippet) === 1) {
+            return $snippet;
+        }
+
+        return '<p>' . $snippet . '</p>';
     }
 
     private static function should_replace_frontend_search(mixed $query): bool
@@ -2577,9 +2616,15 @@ final class WP_FTS_Plugin
             'post_status' => 'publish',
         ];
         $explicit_language = self::query_var($query, 'wp_fts_lang', null);
+        $snippet_languages = [];
         if (is_scalar($explicit_language) && trim((string) $explicit_language) !== '') {
             $search_options['lang'] = (string) $explicit_language;
             $search_options['query_lang'] = (string) $explicit_language;
+        } else {
+            $snippet_languages = self::frontend_auto_search_languages($search_query);
+            if ($snippet_languages !== []) {
+                $search_options['languages'] = $snippet_languages;
+            }
         }
 
         $posts = [];
@@ -2637,14 +2682,14 @@ final class WP_FTS_Plugin
                 $posts[] = $post;
                 $document_lang = self::frontend_result_language($post_id);
                 $result_lang = $document_lang !== '' ? $document_lang : $query_lang;
-                $snippet = self::frontend_content_preview_snippet($searcher, $post, $search_query, $query_lang, $result_lang);
+                $snippet = self::frontend_content_preview_snippet($searcher, $post, $search_query, $query_lang, $result_lang, $snippet_languages);
                 if ($snippet === '' && isset($row['snippet']) && is_scalar($row['snippet'])) {
                     $snippet = self::sanitize_frontend_snippet_html((string) $row['snippet']);
                 }
                 if ($snippet !== '') {
                     $snippets[$post_id] = $snippet;
                 }
-                $title = self::frontend_title_snippet($searcher, $post, $search_query, $query_lang, $result_lang);
+                $title = self::frontend_title_snippet($searcher, $post, $search_query, $query_lang, $result_lang, $snippet_languages);
                 if ($title !== '') {
                     $titles[$post_id] = $title;
                 }
@@ -2666,7 +2711,10 @@ final class WP_FTS_Plugin
         ];
     }
 
-    private static function frontend_content_preview_snippet(WP_FTS_Searcher $searcher, object $post, string $query, string $query_lang, string $result_lang): string
+    /**
+     * @param string[] $languages
+     */
+    private static function frontend_content_preview_snippet(WP_FTS_Searcher $searcher, object $post, string $query, string $query_lang, string $result_lang, array $languages): string
     {
         $content = isset($post->post_content) && is_scalar($post->post_content)
             ? (string) $post->post_content
@@ -2678,11 +2726,14 @@ final class WP_FTS_Plugin
         return self::sanitize_frontend_snippet_html($searcher->snippet_for_text(
             $content,
             $query,
-            self::frontend_snippet_options($query_lang, $result_lang, self::FRONTEND_SNIPPET_LENGTH)
+            self::frontend_snippet_options($query_lang, $result_lang, self::FRONTEND_SNIPPET_LENGTH, $languages)
         ));
     }
 
-    private static function frontend_title_snippet(WP_FTS_Searcher $searcher, object $post, string $query, string $query_lang, string $result_lang): string
+    /**
+     * @param string[] $languages
+     */
+    private static function frontend_title_snippet(WP_FTS_Searcher $searcher, object $post, string $query, string $query_lang, string $result_lang, array $languages): string
     {
         $title = isset($post->post_title) && is_scalar($post->post_title)
             ? (string) $post->post_title
@@ -2694,19 +2745,27 @@ final class WP_FTS_Plugin
         return self::sanitize_frontend_snippet_html($searcher->snippet_for_text(
             $title,
             $query,
-            self::frontend_snippet_options($query_lang, $result_lang, max(self::FRONTEND_SNIPPET_LENGTH, strlen($title) + 1))
+            self::frontend_snippet_options($query_lang, $result_lang, max(self::FRONTEND_SNIPPET_LENGTH, strlen($title) + 1), $languages)
         ));
     }
 
     /**
+     * @param string[] $languages
      * @return array<string,mixed>
      */
-    private static function frontend_snippet_options(string $query_lang, string $result_lang, int $length): array
+    private static function frontend_snippet_options(string $query_lang, string $result_lang, int $length, array $languages = []): array
     {
         $options = [
             'highlight' => true,
             'snippet_length' => $length,
         ];
+        $languages = array_values(array_unique(array_filter(
+            array_map(static fn(string $language): string => WP_FTS_TermNamespace::canonicalize_lang($language), $languages),
+            static fn(string $language): bool => $language !== ''
+        )));
+        if ($languages !== []) {
+            $options['languages'] = $languages;
+        }
         if ($query_lang !== '') {
             $options['query_lang'] = $query_lang;
         }
@@ -2715,6 +2774,40 @@ final class WP_FTS_Plugin
         }
 
         return $options;
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function frontend_auto_search_languages(string $query): array
+    {
+        $languages = [];
+        try {
+            foreach (self::runtime_analyzer()->analyze_query_occurrences($query, ['return' => 'occurrences']) as $occurrence) {
+                if (isset($occurrence['lang']) && is_scalar($occurrence['lang']) && trim((string) $occurrence['lang']) !== '') {
+                    $language = WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang']);
+                    if ($language !== '') {
+                        $languages[$language] = true;
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable) {
+            // Fall through to deterministic defaults.
+        }
+
+        $languages[WP_FTS_TermNamespace::DEFAULT_LANG] = true;
+        foreach (self::runtime_analyzer_pack_statuses() as $status) {
+            if (($status['status'] ?? '') !== 'active') {
+                continue;
+            }
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) ($status['language'] ?? ''));
+            if ($language !== '') {
+                $languages[$language] = true;
+            }
+        }
+
+        return array_keys($languages);
     }
 
     private static function frontend_result_language(int $post_id): string

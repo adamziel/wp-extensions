@@ -4442,7 +4442,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 20, 1);
+    add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_content'], 20, 1);
     add_filter('the_excerpt', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 10, 1);
     add_filter('the_title', [WP_FTS_Plugin::class, 'frontend_search_title'], 10, 2);
 
@@ -4490,6 +4490,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
         assert_contains('<mark>kier<em>ujemy</em></mark>', $snippet, 'front-end snippet should mark the morphology-backed Polish document form split by safe inline HTML');
         assert_contains('<mark>kier<em>ujemy</em></mark>', $renderedSnippet, 'rendered front-end excerpts should expose the morphology-backed highlighted snippet');
         assert_contains('<mark>kier<em>ujemy</em></mark>', $renderedContent, 'rendered front-end content previews should expose the morphology-backed highlighted snippet');
+        assert_contains('<p>', $renderedContent, 'rendered front-end content previews should keep block-level paragraph markup for theme layout constraints');
         assert_true(!str_contains($renderedSnippet, '<mark>kierować</mark>'), 'rendered front-end excerpts should not mark only the literal query form when the document surface differs');
         assert_true(!str_contains($renderedContent, '<mark>kierować</mark>'), 'rendered front-end content previews should not mark only the literal query form when the document surface differs');
         assert_true(!str_contains($renderedContent, 'Polish Lemmatizer Demo'), 'rendered front-end content previews should not include indexed title metadata');
@@ -4497,6 +4498,28 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
         assert_true(!str_contains($renderedContent, 'Uncategorized'), 'rendered front-end content previews should not include indexed taxonomy metadata');
         assert_same('Polish Lemmatizer Demo', $renderedTitle, 'titles without a matched surface should remain unchanged');
         assert_true(!str_contains($snippet, '<mark>kierować</mark>'), 'front-end snippet should not mark only the literal query form when the document surface differs');
+
+        $unaccentedQuery = new WP_FTS_Test_Query([
+            's' => 'kieruje',
+            'posts_per_page' => 10,
+        ]);
+        $unaccentedPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $unaccentedQuery);
+        assert_same([801], array_map(static fn(object $post): int => (int) $post->ID, $unaccentedPosts), 'automatic front-end Polish search should find the same document when the query omits diacritics');
+
+        $oldGlobalPost = $GLOBALS['post'] ?? null;
+        wp_fts_test_begin_frontend_search_loop($unaccentedQuery);
+        try {
+            $GLOBALS['post'] = $unaccentedPosts[0];
+            $unaccentedContent = apply_filters('the_content', '<p>Theme fallback content.</p>');
+        } finally {
+            wp_fts_test_end_frontend_search_loop($unaccentedQuery);
+            if ($oldGlobalPost === null) {
+                unset($GLOBALS['post']);
+            } else {
+                $GLOBALS['post'] = $oldGlobalPost;
+            }
+        }
+        assert_contains('<mark>kier<em>ujemy</em></mark>', $unaccentedContent, 'unaccented front-end Polish queries should still highlight the matched document surface form');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -4509,7 +4532,7 @@ test_case('front-end search highlights title-only matches while keeping previews
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
-    add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 20, 1);
+    add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_content'], 20, 1);
     add_filter('the_title', [WP_FTS_Plugin::class, 'frontend_search_title'], 10, 2);
 
     $post = (object) [
