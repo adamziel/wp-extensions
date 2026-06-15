@@ -3207,7 +3207,7 @@ PHP;
 
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
-    assert_same(['found_posts', 'get_the_excerpt', 'posts_pre_query', 'the_excerpt'], $filterHooks, 'bootstrap should register front-end search replacement filters');
+    assert_same(['found_posts', 'get_the_excerpt', 'posts_pre_query', 'the_content', 'the_excerpt'], $filterHooks, 'bootstrap should register front-end search replacement filters');
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
 });
 
@@ -4442,6 +4442,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 20, 1);
     add_filter('the_excerpt', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 10, 1);
 
     $post = (object) [
@@ -4472,6 +4473,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
             $snippet = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0]);
             $GLOBALS['post'] = $posts[0];
             $renderedSnippet = apply_filters('the_excerpt', 'Theme fallback excerpt');
+            $renderedContent = apply_filters('the_content', '<p>Theme full content without the highlighted surface form.</p>');
         } finally {
             wp_fts_test_end_frontend_search_loop($query);
             if ($oldGlobalPost === null) {
@@ -4482,7 +4484,9 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
         }
         assert_contains('<mark>kier<em>ujemy</em></mark>', $snippet, 'front-end snippet should mark the morphology-backed Polish document form split by safe inline HTML');
         assert_contains('<mark>kier<em>ujemy</em></mark>', $renderedSnippet, 'rendered front-end excerpts should expose the morphology-backed highlighted snippet');
+        assert_contains('<mark>kier<em>ujemy</em></mark>', $renderedContent, 'rendered front-end content previews should expose the morphology-backed highlighted snippet');
         assert_true(!str_contains($renderedSnippet, '<mark>kierować</mark>'), 'rendered front-end excerpts should not mark only the literal query form when the document surface differs');
+        assert_true(!str_contains($renderedContent, '<mark>kierować</mark>'), 'rendered front-end content previews should not mark only the literal query form when the document surface differs');
         assert_true(!str_contains($snippet, '<mark>kierować</mark>'), 'front-end snippet should not mark only the literal query form when the document surface differs');
     } finally {
         $wpdb = $oldWpdb;

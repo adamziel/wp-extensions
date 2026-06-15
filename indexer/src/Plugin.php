@@ -79,6 +79,7 @@ final class WP_FTS_Plugin
             add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], 10, 2);
             add_filter('get_the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 2);
             add_filter('the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 1);
+            add_filter('the_content', [self::class, 'frontend_search_excerpt'], 20, 1);
         }
 
         add_action('loop_start', [self::class, 'begin_frontend_search_loop'], 10, 1);
@@ -2324,7 +2325,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Serve highlighted FTS snippets through normal search template excerpts.
+     * Serve highlighted FTS snippets through normal search result previews.
      *
      * @param mixed $excerpt Existing excerpt.
      * @param mixed $post Current post, when supplied by WordPress.
