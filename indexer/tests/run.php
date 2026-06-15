@@ -4520,6 +4520,43 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
             }
         }
         assert_contains('<mark>kier<em>ujemy</em></mark>', $unaccentedContent, 'unaccented front-end Polish queries should still highlight the matched document surface form');
+
+        $post->post_content = '<!-- wp:paragraph -->' . "\n"
+            . '<p>W książkach i zamkach i w sta<strong>jn<em>ia</em></strong>ch wyszukujemy wpisy oraz kierujemy katalog.</p>' . "\n"
+            . '<!-- /wp:paragraph -->';
+        $GLOBALS['wp_fts_test_posts'][801] = $post;
+        WP_FTS_Plugin::handle_post_save(801, $post, true);
+
+        assert_true(
+            isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'stajnia')]),
+            'updated formatted Polish post content should index the pack-backed stable lemma across nested inline markup'
+        );
+
+        $formattedQuery = new WP_FTS_Test_Query([
+            's' => 'Stajnia',
+            'posts_per_page' => 10,
+        ]);
+        $formattedPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $formattedQuery);
+        assert_same([801], array_map(static fn(object $post): int => (int) $post->ID, $formattedPosts), 'automatic front-end Polish search should find an updated post whose inflected match is split by nested inline markup');
+
+        $oldGlobalPost = $GLOBALS['post'] ?? null;
+        wp_fts_test_begin_frontend_search_loop($formattedQuery);
+        try {
+            $formattedSnippet = WP_FTS_Plugin::frontend_search_excerpt('', $formattedPosts[0]);
+            $GLOBALS['post'] = $formattedPosts[0];
+            $formattedContent = apply_filters('the_content', '<p>Theme fallback content.</p>');
+        } finally {
+            wp_fts_test_end_frontend_search_loop($formattedQuery);
+            if ($oldGlobalPost === null) {
+                unset($GLOBALS['post']);
+            } else {
+                $GLOBALS['post'] = $oldGlobalPost;
+            }
+        }
+
+        assert_contains('<mark>sta<strong>jn<em>ia</em></strong>ch</mark>', $formattedSnippet, 'front-end snippets should mark the full Polish document form across nested inline formatting');
+        assert_contains('<mark>sta<strong>jn<em>ia</em></strong>ch</mark>', $formattedContent, 'front-end content previews should mark the full Polish document form across nested inline formatting');
+        assert_true(!str_contains($formattedContent, '<mark>Stajnia</mark>'), 'front-end content previews should not fall back to highlighting only the literal query form');
     } finally {
         $wpdb = $oldWpdb;
     }
