@@ -2507,6 +2507,20 @@ final class WP_FTS_Test_Query
     }
 }
 
+function wp_fts_test_begin_frontend_search_loop(mixed $query): void
+{
+    if (is_callable([WP_FTS_Plugin::class, 'begin_frontend_search_loop'])) {
+        WP_FTS_Plugin::begin_frontend_search_loop($query);
+    }
+}
+
+function wp_fts_test_end_frontend_search_loop(mixed $query): void
+{
+    if (is_callable([WP_FTS_Plugin::class, 'end_frontend_search_loop'])) {
+        WP_FTS_Plugin::end_frontend_search_loop($query);
+    }
+}
+
 function wp_fts_test_reset_wordpress_fakes(): void
 {
     $GLOBALS['wp_fts_test_actions'] = [];
@@ -3178,6 +3192,8 @@ PHP;
         'add_meta_boxes',
         'admin_menu',
         'before_delete_post',
+        'loop_end',
+        'loop_start',
         'pre_get_posts',
         'rest_api_init',
         'save_post',
@@ -4188,8 +4204,53 @@ test_case('front-end main query search is replaced with FTS-ranked WP_Post resul
         assert_same(1, $query->max_num_pages, 'front-end search should expose max pages from the FTS visible total');
         assert_same(2, WP_FTS_Plugin::filter_frontend_search_found_posts(999, $query), 'found_posts filter should preserve the replacement total');
 
-        $excerpt = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0]);
-        assert_contains('<mark>frontneedle</mark>', $excerpt, 'front-end excerpts should use highlighted FTS snippets');
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            $excerpt = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0]);
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+        }
+        assert_contains('<mark>frontneedle</mark>', $excerpt, 'front-end excerpts should use highlighted FTS snippets in the replaced main loop');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search totals are not capped by visibility refill scan size', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $totalMatches = 260;
+        for ($index = 0; $index < $totalMatches; $index++) {
+            $postId = 9000 + $index;
+            $post = (object) [
+                'ID' => $postId,
+                'post_title' => 'Bulk front-end total ' . $postId,
+                'post_content' => '<p>bulkfrontneedle shared body.</p>',
+                'post_excerpt' => '',
+                'post_status' => 'publish',
+                'post_type' => 'post',
+                'post_date_gmt' => '2026-06-13 00:00:00',
+            ];
+            $GLOBALS['wp_fts_test_posts'][$postId] = $post;
+            WP_FTS_Plugin::handle_post_save($postId, $post, true);
+        }
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'bulkfrontneedle',
+            'posts_per_page' => 25,
+            'paged' => 1,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+        assert_same(25, count($posts), 'front-end replacement should still return only the requested page of many matches');
+        assert_same($totalMatches, $query->found_posts, 'front-end found_posts should count every visible match beyond the refill scan size');
+        assert_same(11, $query->max_num_pages, 'front-end max pages should be computed from the uncapped visible total');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -4264,6 +4325,61 @@ test_case('front-end search replacement avoids admin REST cron secondary and dis
     assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), 'site owners should be able to disable front-end replacement by filter');
 });
 
+test_case('front-end search replacement declines constrained WP_Query searches', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 751,
+        'post_title' => 'Constrained front-end result',
+        'post_content' => '<p>constraintneedle should stay on normal WordPress search when constrained.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][751] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(751, $post, true);
+
+        $constrainedVars = [
+            'category id' => ['cat' => 5],
+            'category slug' => ['category_name' => 'news'],
+            'tag slug' => ['tag' => 'feature'],
+            'custom tax query' => ['tax_query' => [['taxonomy' => 'category', 'terms' => [5]]]],
+            'author id' => ['author' => 7],
+            'author slug' => ['author_name' => 'editor'],
+            'date query' => ['date_query' => [['after' => '2026-01-01']]],
+            'year archive' => ['year' => 2026],
+            'meta key' => ['meta_key' => 'featured'],
+            'custom meta query' => ['meta_query' => [['key' => 'featured', 'value' => '1']]],
+            'include list' => ['post__in' => [751]],
+            'exclude list' => ['post__not_in' => [752]],
+            'exact post id' => ['p' => 751],
+            'exact page id' => ['page_id' => 751],
+            'exact post name' => ['name' => 'constrained-front-end-result'],
+        ];
+
+        foreach ($constrainedVars as $label => $vars) {
+            $query = new WP_FTS_Test_Query(array_merge([
+                's' => 'constraintneedle',
+                'posts_per_page' => 10,
+            ], $vars));
+
+            WP_FTS_Plugin::prepare_frontend_search_query($query);
+            assert_same(null, $query->get('wp_fts_search_candidate', null), "constrained {$label} search should not be marked for FTS replacement");
+            assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), "constrained {$label} search should continue through normal WordPress search");
+        }
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('front-end search replacement only returns public searchable published posts', function (): void {
     global $wpdb;
 
@@ -4330,7 +4446,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
     $post = (object) [
         'ID' => 801,
         'post_title' => 'Polish front-end result',
-        'post_content' => '<p>W książkach i zamkach kierujemy wpisy do katalogu.</p>',
+        'post_content' => '<p>W książkach i zamkach kier<em>ujemy</em> wpisy do katalogu.</p>',
         'post_excerpt' => '',
         'post_status' => 'publish',
         'post_type' => 'post',
@@ -4349,8 +4465,13 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
 
         assert_same([801], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'automatic front-end Polish query should find the Polish document partition');
         assert_same('pl', $query->get('wp_fts_query_lang'), 'front-end search should expose the analyzer-detected Polish query language');
-        $snippet = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0]);
-        assert_contains('<mark>kierujemy</mark>', $snippet, 'front-end snippet should mark the morphology-backed Polish document form');
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            $snippet = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0]);
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+        }
+        assert_contains('<mark>kier<em>ujemy</em></mark>', $snippet, 'front-end snippet should mark the morphology-backed Polish document form split by safe inline HTML');
         assert_true(!str_contains($snippet, '<mark>kierować</mark>'), 'front-end snippet should not mark only the literal query form when the document surface differs');
     } finally {
         $wpdb = $oldWpdb;
@@ -4384,11 +4505,117 @@ test_case('front-end search snippets preserve split inline HTML safely', functio
             'posts_per_page' => 10,
         ]);
         $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
-        $snippet = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0] ?? null);
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            $snippet = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0] ?? null);
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+        }
 
         assert_same([811], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end split-inline search should return the matching post');
         assert_contains('<mark>W<em>ęgorz</em></mark>', $snippet, 'front-end snippets should preserve valid inline markup inside highlighted split tokens');
         assert_true(!str_contains($snippet, '<script>'), 'front-end snippets should not expose unsafe script markup');
+
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search snippets remove hidden bodies from split highlighted words', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 812,
+        'post_title' => 'Hidden split front-end result',
+        'post_content' => '<p>nee<script>SECRET_TOKEN</script>dle stays visible.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][812] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(812, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'needle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            $snippet = WP_FTS_Plugin::frontend_search_excerpt('', $posts[0] ?? null);
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+        }
+
+        assert_same([812], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end split-hidden search should return the visible matching post');
+        assert_true(!str_contains($snippet, 'SECRET_TOKEN'), 'front-end snippets must not expose hidden script bodies inside split highlighted words');
+        assert_contains('<mark>needle</mark>', $snippet, 'front-end snippets should preserve the visible split word after removing hidden bodies');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search excerpts are scoped to the active replaced main loop', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 813,
+        'post_title' => 'Scoped front-end result',
+        'post_content' => '<p>scopeneedle scoped front-end snippet source.</p>',
+        'post_excerpt' => 'Normal scoped excerpt',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][813] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(813, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'scopeneedle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        assert_same([813], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'scoped front-end search should return the matching post');
+
+        assert_same('Secondary normal excerpt', WP_FTS_Plugin::frontend_search_excerpt('Secondary normal excerpt', (object) ['ID' => 813]), 'stored FTS snippets should not affect excerpts outside the replaced main loop');
+
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            $mainExcerpt = WP_FTS_Plugin::frontend_search_excerpt('Main normal excerpt', $posts[0] ?? null);
+            assert_contains('<mark>scopeneedle</mark>', $mainExcerpt, 'active replaced main loop should receive the highlighted FTS snippet');
+
+            $secondary = new WP_FTS_Test_Query([
+                's' => 'scopeneedle',
+                'posts_per_page' => 1,
+            ], true, false);
+            wp_fts_test_begin_frontend_search_loop($secondary);
+            try {
+                assert_same('Nested secondary excerpt', WP_FTS_Plugin::frontend_search_excerpt('Nested secondary excerpt', (object) ['ID' => 813]), 'secondary loops with the same post ID should not receive the main-loop FTS snippet');
+            } finally {
+                wp_fts_test_end_frontend_search_loop($secondary);
+            }
+
+            assert_contains('<mark>scopeneedle</mark>', WP_FTS_Plugin::frontend_search_excerpt('Main normal excerpt', $posts[0] ?? null), 'main-loop FTS snippet should resume after a nested secondary loop ends');
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+        }
+
+        assert_same('After loop excerpt', WP_FTS_Plugin::frontend_search_excerpt('After loop excerpt', (object) ['ID' => 813]), 'stored FTS snippets should not leak after the replaced main loop ends');
     } finally {
         $wpdb = $oldWpdb;
     }

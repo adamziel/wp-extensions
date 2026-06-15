@@ -42,14 +42,16 @@ final class WP_FTS_Plugin
     private const FRONTEND_SNIPPET_LENGTH = 180;
 
     /**
-     * @var array<int,array{total:int,max_pages:int,query_lang:string}>
+     * @var array<int,array{total:int,max_pages:int,query_lang:string,snippets:array<int,string>}>
      */
     private static array $front_end_search_query_state = [];
 
     /**
-     * @var array<int,string>
+     * @var int[]
      */
-    private static array $front_end_search_snippets = [];
+    private static array $front_end_search_loop_stack = [];
+
+    private static int $front_end_search_active_query_key = 0;
 
     /**
      * Register runtime hooks when WordPress hook APIs are available.
@@ -77,6 +79,9 @@ final class WP_FTS_Plugin
             add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], 10, 2);
             add_filter('get_the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 2);
         }
+
+        add_action('loop_start', [self::class, 'begin_frontend_search_loop'], 10, 1);
+        add_action('loop_end', [self::class, 'end_frontend_search_loop'], 10, 1);
     }
 
     /**
@@ -2292,6 +2297,32 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Track when the replaced main query loop is rendering.
+     *
+     * @param mixed $query WP_Query-like object passed by loop_start.
+     */
+    public static function begin_frontend_search_loop(mixed $query): void
+    {
+        self::$front_end_search_loop_stack[] = self::$front_end_search_active_query_key;
+
+        $query_key = self::query_object_key($query);
+        self::$front_end_search_active_query_key = $query_key > 0 && isset(self::$front_end_search_query_state[$query_key])
+            ? $query_key
+            : 0;
+    }
+
+    /**
+     * Restore the previous loop scope after a loop finishes.
+     *
+     * @param mixed $query WP_Query-like object passed by loop_end.
+     */
+    public static function end_frontend_search_loop(mixed $query): void
+    {
+        $previous = array_pop(self::$front_end_search_loop_stack);
+        self::$front_end_search_active_query_key = is_int($previous) ? $previous : 0;
+    }
+
+    /**
      * Serve highlighted FTS snippets through normal search template excerpts.
      *
      * @param mixed $excerpt Existing excerpt.
@@ -2304,8 +2335,13 @@ final class WP_FTS_Plugin
             $post_id = self::post_id_from_value($GLOBALS['post']);
         }
 
-        if ($post_id > 0 && isset(self::$front_end_search_snippets[$post_id])) {
-            return self::$front_end_search_snippets[$post_id];
+        $query_key = self::$front_end_search_active_query_key;
+        if (
+            $post_id > 0
+            && $query_key > 0
+            && isset(self::$front_end_search_query_state[$query_key]['snippets'][$post_id])
+        ) {
+            return self::$front_end_search_query_state[$query_key]['snippets'][$post_id];
         }
 
         return is_scalar($excerpt) ? (string) $excerpt : '';
@@ -2351,6 +2387,10 @@ final class WP_FTS_Plugin
             return false;
         }
 
+        if (self::frontend_search_query_has_unsupported_constraints($query)) {
+            return false;
+        }
+
         return self::frontend_search_query_text($query) !== '';
     }
 
@@ -2362,6 +2402,117 @@ final class WP_FTS_Plugin
         }
 
         return trim((string) $value);
+    }
+
+    private static function frontend_search_query_has_unsupported_constraints(mixed $query): bool
+    {
+        foreach (self::frontend_search_unsupported_constraint_vars() as $key) {
+            if (self::query_var_has_constraint($query, $key)) {
+                return true;
+            }
+        }
+
+        $post_status = self::query_var($query, 'post_status', null);
+        if (self::constraint_value_present($post_status)) {
+            $statuses = self::normalize_string_list($post_status);
+            if ($statuses !== ['publish']) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function frontend_search_unsupported_constraint_vars(): array
+    {
+        return [
+            'attachment',
+            'attachment_id',
+            'author',
+            'author__in',
+            'author__not_in',
+            'author_name',
+            'cat',
+            'category__and',
+            'category__in',
+            'category__not_in',
+            'category_name',
+            'date_query',
+            'day',
+            'exact',
+            'hour',
+            'm',
+            'meta_compare',
+            'meta_key',
+            'meta_query',
+            'meta_value',
+            'meta_value_num',
+            'minute',
+            'monthnum',
+            'name',
+            'p',
+            'page_id',
+            'pagename',
+            'post__in',
+            'post__not_in',
+            'post_mime_type',
+            'post_name__in',
+            'post_parent',
+            'post_parent__in',
+            'post_parent__not_in',
+            'post_password',
+            'sentence',
+            'second',
+            'search_columns',
+            'tag',
+            'tag__and',
+            'tag__in',
+            'tag__not_in',
+            'tag_id',
+            'tag_slug__and',
+            'tag_slug__in',
+            'tax_query',
+            'taxonomy',
+            'term',
+            'w',
+            'year',
+        ];
+    }
+
+    private static function query_var_has_constraint(mixed $query, string $key): bool
+    {
+        return self::constraint_value_present(self::query_var($query, $key, null));
+    }
+
+    private static function constraint_value_present(mixed $value): bool
+    {
+        if ($value === null || $value === false) {
+            return false;
+        }
+
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                if (self::constraint_value_present($item)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (is_string($value)) {
+            $value = trim($value);
+            return $value !== '' && $value !== '0';
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (float) $value !== 0.0;
+        }
+
+        return true;
     }
 
     /**
@@ -2409,12 +2560,9 @@ final class WP_FTS_Plugin
         $metadata_total = 0;
         $seen = [];
 
-        while ($search_offset < self::VISIBILITY_REFILL_MAX_SCAN) {
+        while (true) {
             $search_options['offset'] = $search_offset;
-            $search_options['limit'] = min(
-                self::visibility_refill_batch_limit(max(1, $limit)),
-                self::VISIBILITY_REFILL_MAX_SCAN - $search_offset
-            );
+            $search_options['limit'] = self::visibility_refill_batch_limit(max(1, $limit));
             if ($search_options['limit'] <= 0) {
                 break;
             }
@@ -2484,15 +2632,16 @@ final class WP_FTS_Plugin
      */
     private static function store_frontend_search_query_state(mixed $query, int $total, int $limit, string $query_lang, array $snippets): void
     {
-        self::$front_end_search_snippets = $snippets;
-
         $max_pages = $total > 0 ? (int) ceil($total / max(1, $limit)) : 0;
         $query_key = self::query_object_key($query);
         if ($query_key > 0) {
-            self::$front_end_search_query_state[$query_key] = [
-                'total' => $total,
-                'max_pages' => $max_pages,
-                'query_lang' => $query_lang,
+            self::$front_end_search_query_state = [
+                $query_key => [
+                    'total' => $total,
+                    'max_pages' => $max_pages,
+                    'query_lang' => $query_lang,
+                    'snippets' => $snippets,
+                ],
             ];
         }
 
@@ -3186,12 +3335,33 @@ final class WP_FTS_Plugin
             return '';
         }
 
+        $value = self::remove_hidden_frontend_snippet_bodies($value);
+        if ($value === '') {
+            return '';
+        }
+
         $allowed = self::frontend_snippet_allowed_html();
         if (function_exists('wp_kses')) {
             return (string) wp_kses($value, $allowed);
         }
 
         return self::sanitize_inline_snippet_fallback($value, array_keys($allowed));
+    }
+
+    private static function remove_hidden_frontend_snippet_bodies(string $html): string
+    {
+        $html = preg_replace('/<!--.*?-->/s', '', $html) ?? $html;
+        $hidden_tags = 'script|style|noscript|template|iframe|object|embed|svg|math|canvas';
+
+        do {
+            $previous = $html;
+            $html = preg_replace('/<\s*(' . $hidden_tags . ')\b[^>]*>.*?<\s*\/\s*\1\s*>/is', '', $html) ?? $html;
+        } while ($html !== $previous);
+
+        $html = preg_replace('/<\s*(' . $hidden_tags . ')\b[^>]*>.*$/is', '', $html) ?? $html;
+        $html = preg_replace('/<\s*\/?\s*(' . $hidden_tags . ')\b[^>]*>/is', '', $html) ?? $html;
+
+        return trim($html);
     }
 
     /**

@@ -693,6 +693,8 @@ namespace {
             'add_meta_boxes',
             'admin_menu',
             'before_delete_post',
+            'loop_end',
+            'loop_start',
             'pre_get_posts',
             'rest_api_init',
             'save_post',
