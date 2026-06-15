@@ -63,6 +63,40 @@ final class WP_FTS_StorageCompat
     }
 
     /**
+     * Return stored term keys that have postings for one document.
+     *
+     * Backends with row-posting support can answer this directly. Blob-backed
+     * compatibility stores fall back to decoded postings so fake and file
+     * storage stay useful for admin diagnostics.
+     *
+     * @return string[] Sorted stored term keys, limited when `$limit > 0`.
+     */
+    public static function terms_for_doc(WP_FTS_Storage $storage, int $docId, int $limit = 0): array
+    {
+        if ($docId <= 0) {
+            return [];
+        }
+
+        if ($storage instanceof WP_FTS_Document_Terms_Storage) {
+            return self::normalize_doc_terms($storage->terms_for_doc($docId), $limit);
+        }
+
+        $terms = [];
+        foreach (array_chunk($storage->all_terms(), 200) as $chunk) {
+            foreach (self::get_postings($storage, $chunk) as $term => $postings) {
+                if (array_key_exists($docId, $postings)) {
+                    $terms[] = $term;
+                    if ($limit > 0 && count($terms) >= $limit) {
+                        return self::normalize_doc_terms($terms, $limit);
+                    }
+                }
+            }
+        }
+
+        return self::normalize_doc_terms($terms, $limit);
+    }
+
+    /**
      * Detect whether a backend accepts language-aware document payloads.
      *
      * @return bool True when `put_doc()` has the new four-argument shape and
@@ -398,6 +432,18 @@ final class WP_FTS_StorageCompat
         }
 
         return $normalized;
+    }
+
+    /**
+     * @param string[] $terms
+     * @return string[]
+     */
+    private static function normalize_doc_terms(array $terms, int $limit): array
+    {
+        $normalized = array_values(array_unique(array_map('strval', $terms)));
+        sort($normalized, SORT_STRING);
+
+        return $limit > 0 ? array_slice($normalized, 0, $limit) : $normalized;
     }
 
     /**

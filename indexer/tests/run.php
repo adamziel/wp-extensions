@@ -3346,6 +3346,7 @@ test_case('authorized admin sandbox render includes search form and indexed post
     }
     assert_contains('<th scope="col">Language</th>', $html, 'sandbox indexed-post table should include a language column');
     assert_contains('<th scope="col">Indexed length</th>', $html, 'sandbox indexed-post table should include indexed token length');
+    assert_contains('<th scope="col">Indexed terms</th>', $html, 'sandbox indexed-post table should include stored FTS terms');
     assert_contains('<th scope="col">Content preview</th>', $html, 'sandbox indexed-post table should include a content preview column');
     assert_contains('Showing 1-10 of 11 indexed post(s).', $html, 'sandbox indexed-post table should paginate the top-language demo corpus');
     foreach (array_slice($demo, 0, 10) as $case) {
@@ -3353,6 +3354,62 @@ test_case('authorized admin sandbox render includes search form and indexed post
         assert_contains($case['preview'], $html, "sandbox indexed-post table should preview the {$case['lang']} indexed content");
     }
     assert_true(!str_contains($html, 'FTS Sandbox: Urdu Suffix Baseline'), 'first indexed-post page should keep the eleventh demo row on page two');
+});
+
+test_case('admin sandbox indexed terms expose stored Polish lemmas for split inline HTML', function (): void {
+    global $wpdb;
+
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for Polish sandbox indexed-term diagnostics',
+        'PHP zlib gzip support is unavailable, so Polish sandbox indexed-term diagnostics are skipped.'
+    );
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $post = (object) [
+        'ID' => 901,
+        'post_title' => 'Custom Polish Split Surface',
+        'post_content' => '<p>chr<strong><em>ząs</em>tki</strong> są wspaniałe</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+
+    try {
+        $GLOBALS['wp_fts_test_posts'][901] = $post;
+        update_post_meta(901, WP_FTS_Plugin::LANGUAGE_META_KEY, 'pl');
+        WP_FTS_Plugin::handle_post_save(901, $post, true);
+
+        $_POST = [];
+        $_GET = [
+            'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
+            'wp_fts_sandbox_query' => 'chrząstka',
+            'wp_fts_sandbox_lang' => 'pl',
+            'wp_fts_sandbox_search' => '1',
+        ];
+
+        $html = wp_fts_test_capture_admin_sandbox();
+
+        assert_contains('<th scope="col">Indexed terms</th>', $html, 'indexed-post diagnostics should include the indexed terms column');
+        assert_contains('Custom Polish Split Surface', $html, 'sandbox search should find the post with split inline Polish text');
+        assert_contains('<code>pl:chrzastka</code>', $html, 'indexed terms should show the stored Polish lemma for chrząstki');
+        assert_contains('<code>pl:chrzastek</code>', $html, 'indexed terms should show the alternate stored Polish lemma for chrząstki');
+        assert_contains('<mark>chr', $html, 'sandbox search should highlight the matched split surface');
+        assert_contains('ząs', $html, 'sandbox search highlight should include the formatted middle of the split surface');
+        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'chrząstki')]), 'sandbox diagnostics should reflect stored lemmas rather than hard-coded Polish surface forms');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('unauthorized admin sandbox render is blocked safely', function (): void {

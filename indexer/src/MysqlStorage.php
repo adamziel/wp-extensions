@@ -10,7 +10,7 @@ declare(strict_types=1);
  * flag, and per-language lengths live in a separate table so BM25 can score
  * inside one language partition without mixing collection statistics.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_DocumentMetadataStorage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_Document_Terms_Storage
 {
     private object $wpdb;
     private string $termsTable;
@@ -723,11 +723,11 @@ GROUP BY dl.lang",
      *
      * @return string[]
      */
-    private function terms_for_doc(int $docId): array
+    public function terms_for_doc(int $doc_id): array
     {
         $rows = $this->get_results($this->wpdb->prepare(
             "SELECT term FROM {$this->postingsTable} WHERE doc_id = %d",
-            $docId
+            $doc_id
         ), 'read FTS document posting terms');
 
         $terms = [];

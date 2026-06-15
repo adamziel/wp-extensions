@@ -35,6 +35,7 @@ final class WP_FTS_Plugin
     private const POST_LANGUAGE_FIELD = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_ACTION = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_FIELD = 'wp_fts_post_language_nonce';
+    private const SANDBOX_INDEXED_TERMS_LIMIT = 24;
     private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
     private const VISIBILITY_REFILL_MIN_BATCH = 10;
     private const VISIBILITY_REFILL_MULTIPLIER = 4;
@@ -1806,7 +1807,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}>} $page
+     * @param array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,indexed_terms:string[],indexed_terms_more:bool,preview:string}>} $page
      */
     private static function render_sandbox_indexed_posts_table(array $page, string $query, string $selected_language, bool $search_submitted): void
     {
@@ -1820,7 +1821,7 @@ final class WP_FTS_Plugin
         echo '<p>Showing ' . self::esc_html((string) $start) . '-' . self::esc_html((string) $end) . ' of ' . self::esc_html((string) $page['total']) . ' indexed post(s).</p>';
 
         echo '<table class="widefat striped">';
-        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Language</th><th scope="col">Indexed length</th><th scope="col">Content preview</th></tr></thead>';
+        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Language</th><th scope="col">Indexed length</th><th scope="col">Indexed terms</th><th scope="col">Content preview</th></tr></thead>';
         echo '<tbody>';
         foreach ($page['rows'] as $row) {
             echo '<tr>';
@@ -1830,6 +1831,9 @@ final class WP_FTS_Plugin
             echo '<td><code>' . self::esc_html($row['post_status']) . '</code></td>';
             echo '<td>' . self::esc_html($row['language']) . '</td>';
             echo '<td>' . self::esc_html((string) $row['length']) . '</td>';
+            echo '<td>';
+            self::render_sandbox_indexed_terms($row['indexed_terms'], $row['indexed_terms_more']);
+            echo '</td>';
             echo '<td>' . self::esc_html($row['preview']) . '</td>';
             echo '</tr>';
         }
@@ -1901,7 +1905,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @return array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}>}
+     * @return array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,indexed_terms:string[],indexed_terms_more:bool,preview:string}>}
      */
     private static function empty_sandbox_indexed_posts_page(int $page = 1): array
     {
@@ -1917,7 +1921,7 @@ final class WP_FTS_Plugin
     /**
      * Read the current indexed-post list from storage state, not the demo option.
      *
-     * @return array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}>}
+     * @return array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,indexed_terms:string[],indexed_terms_more:bool,preview:string}>}
      */
     private static function sandbox_indexed_posts_page(int $page): array
     {
@@ -1941,7 +1945,8 @@ final class WP_FTS_Plugin
             if ($doc === null || (bool) ($doc['deleted'] ?? false)) {
                 continue;
             }
-            $rows[] = self::sandbox_indexed_post_row($post_id, $metadata[$post_id] ?? [], $doc);
+            $indexed_terms = WP_FTS_StorageCompat::terms_for_doc($storage, $post_id, self::SANDBOX_INDEXED_TERMS_LIMIT + 1);
+            $rows[] = self::sandbox_indexed_post_row($post_id, $metadata[$post_id] ?? [], $doc, $indexed_terms);
         }
 
         return [
@@ -1956,9 +1961,10 @@ final class WP_FTS_Plugin
     /**
      * @param array<string,mixed> $metadata
      * @param array<string,mixed> $doc
-     * @return array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}
+     * @param string[] $indexed_terms
+     * @return array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,indexed_terms:string[],indexed_terms_more:bool,preview:string}
      */
-    private static function sandbox_indexed_post_row(int $post_id, array $metadata, array $doc): array
+    private static function sandbox_indexed_post_row(int $post_id, array $metadata, array $doc, array $indexed_terms): array
     {
         $post = self::post_object($post_id);
         $post_type = self::metadata_or_post_value($metadata, $post, 'post_type');
@@ -1976,8 +1982,49 @@ final class WP_FTS_Plugin
             'post_status' => $post_status !== '' ? $post_status : 'unknown',
             'language' => self::sandbox_indexed_post_language_display($metadata, $doc, $lengths),
             'length' => array_sum($lengths),
+            'indexed_terms' => self::sandbox_indexed_terms_for_display(array_slice($indexed_terms, 0, self::SANDBOX_INDEXED_TERMS_LIMIT)),
+            'indexed_terms_more' => count($indexed_terms) > self::SANDBOX_INDEXED_TERMS_LIMIT,
             'preview' => self::sanitize_text($preview),
         ];
+    }
+
+    /**
+     * @param string[] $terms
+     * @return string[]
+     */
+    private static function sandbox_indexed_terms_for_display(array $terms): array
+    {
+        $display = [];
+        foreach ($terms as $term) {
+            $split = WP_FTS_TermNamespace::split_term($term);
+            $label = $split !== null
+                ? $split['lang'] . ':' . $split['term']
+                : $term;
+            $label = trim(str_replace(["\r", "\n", "\t"], ' ', WP_FTS_Utf8::repair($label)));
+            if ($label !== '') {
+                $display[$label] = true;
+            }
+        }
+
+        return array_keys($display);
+    }
+
+    /**
+     * @param string[] $terms
+     */
+    private static function render_sandbox_indexed_terms(array $terms, bool $has_more): void
+    {
+        if ($terms === []) {
+            echo '<span aria-hidden="true">-</span>';
+            return;
+        }
+
+        foreach ($terms as $term) {
+            echo '<code>' . self::esc_html($term) . '</code> ';
+        }
+        if ($has_more) {
+            echo '<span class="description">...</span>';
+        }
     }
 
     /**

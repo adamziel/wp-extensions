@@ -176,3 +176,20 @@ interface WP_FTS_Row_Postings_Storage extends WP_FTS_Storage
      */
     public function get_postings(array $terms): array;
 }
+
+/**
+ * Optional storage extension for backends that can read document terms directly.
+ *
+ * Blob-backed stores can derive this through `all_terms()` plus decoded
+ * postings, but row-postings stores should expose a direct lookup so admin
+ * diagnostics do not scan the full term table.
+ */
+interface WP_FTS_Document_Terms_Storage extends WP_FTS_Storage
+{
+    /**
+     * Return stored term keys currently posted by one document id.
+     *
+     * @return string[] Sorted stored term keys.
+     */
+    public function terms_for_doc(int $doc_id): array;
+}
