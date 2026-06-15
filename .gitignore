@@ -1,3 +1,4 @@
 .tmp/
+.cao/generated/
 dist/
 static-site-output/

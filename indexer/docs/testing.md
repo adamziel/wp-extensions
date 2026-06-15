@@ -97,6 +97,34 @@ body, excerpt, and content fields. The benchmark is pure-PHP generated evidence
 only: it does not use live MySQL, does not replay production traffic, and does
 not commit generated corpora, caches, logs, or archives.
 
+## Large Search Corpus Generator
+
+Use the large corpus generator when you need deterministic multilingual JSONL
+shards for demos or external benchmark indexing:
+
+```sh
+php tools/generate-large-search-corpus.php \
+  --output=/home/claude/indexer/.cao/generated/search-corpus-v1 \
+  --seed=wp-fts-large-search-corpus-v1 \
+  --english-docs=100000 \
+  --per-language-docs=30000
+```
+
+The focused tests are discovered by the main harness in
+`tests/quality/search-corpus-generator.php` and can also be run directly:
+
+```sh
+php tests/search-corpus-generator.php
+php -n tests/search-corpus-generator.php
+```
+
+The default language scope and output contract are documented in
+[`docs/search-corpus-generator.md`](search-corpus-generator.md). Generated
+corpora are rebuildable artifacts and should stay under `.cao/generated/` or
+another untracked output directory. Length-focused tests cover the 200-token
+floor, the roughly 750-word modal bucket, and the deterministic 5,000+ token
+long tail.
+
 ## Analyzer Source-Lock Manifests
 
 Analyzer, stemmer, tokenizer, and lemmatizer packs must have a source-lock
