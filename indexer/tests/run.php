@@ -3207,7 +3207,7 @@ PHP;
 
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
-    assert_same(['found_posts', 'get_the_excerpt', 'posts_pre_query', 'the_content', 'the_excerpt'], $filterHooks, 'bootstrap should register front-end search replacement filters');
+    assert_same(['found_posts', 'get_the_excerpt', 'posts_pre_query', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end search replacement filters');
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
 });
 
@@ -4444,15 +4444,19 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
     wp_fts_test_reset_wordpress_fakes();
     add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 20, 1);
     add_filter('the_excerpt', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 10, 1);
+    add_filter('the_title', [WP_FTS_Plugin::class, 'frontend_search_title'], 10, 2);
 
     $post = (object) [
         'ID' => 801,
-        'post_title' => 'Polish front-end result',
+        'post_title' => 'Polish Lemmatizer Demo',
         'post_content' => '<p>W książkach i zamkach kier<em>ujemy</em> wpisy do katalogu.</p>',
-        'post_excerpt' => '',
+        'post_excerpt' => 'Polish lemmatizer demo for pack-backed book, castle, entry, and routing forms.',
         'post_status' => 'publish',
         'post_type' => 'post',
         'post_date_gmt' => '2026-06-13 00:00:00',
+        'terms' => [
+            'category' => ['Uncategorized'],
+        ],
     ];
     $GLOBALS['wp_fts_test_posts'][801] = $post;
 
@@ -4474,6 +4478,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
             $GLOBALS['post'] = $posts[0];
             $renderedSnippet = apply_filters('the_excerpt', 'Theme fallback excerpt');
             $renderedContent = apply_filters('the_content', '<p>Theme full content without the highlighted surface form.</p>');
+            $renderedTitle = apply_filters('the_title', $post->post_title, 801);
         } finally {
             wp_fts_test_end_frontend_search_loop($query);
             if ($oldGlobalPost === null) {
@@ -4487,7 +4492,66 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
         assert_contains('<mark>kier<em>ujemy</em></mark>', $renderedContent, 'rendered front-end content previews should expose the morphology-backed highlighted snippet');
         assert_true(!str_contains($renderedSnippet, '<mark>kierować</mark>'), 'rendered front-end excerpts should not mark only the literal query form when the document surface differs');
         assert_true(!str_contains($renderedContent, '<mark>kierować</mark>'), 'rendered front-end content previews should not mark only the literal query form when the document surface differs');
+        assert_true(!str_contains($renderedContent, 'Polish Lemmatizer Demo'), 'rendered front-end content previews should not include indexed title metadata');
+        assert_true(!str_contains($renderedContent, 'pack-backed book'), 'rendered front-end content previews should not include indexed excerpt metadata');
+        assert_true(!str_contains($renderedContent, 'Uncategorized'), 'rendered front-end content previews should not include indexed taxonomy metadata');
+        assert_same('Polish Lemmatizer Demo', $renderedTitle, 'titles without a matched surface should remain unchanged');
         assert_true(!str_contains($snippet, '<mark>kierować</mark>'), 'front-end snippet should not mark only the literal query form when the document surface differs');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search highlights title-only matches while keeping previews content-only', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 20, 1);
+    add_filter('the_title', [WP_FTS_Plugin::class, 'frontend_search_title'], 10, 2);
+
+    $post = (object) [
+        'ID' => 802,
+        'post_title' => 'Running Title Signal',
+        'post_content' => '<p>Body preview stays tied to the actual edited post content.</p>',
+        'post_excerpt' => 'Excerpt metadata should stay out of the rendered search preview.',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][802] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(802, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'run',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+        assert_same([802], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end search should find title-only matches because titles are indexed');
+        $oldGlobalPost = $GLOBALS['post'] ?? null;
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            $GLOBALS['post'] = $posts[0];
+            $renderedTitle = apply_filters('the_title', $post->post_title, 802);
+            $renderedContent = apply_filters('the_content', '<p>Theme fallback content.</p>');
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+            if ($oldGlobalPost === null) {
+                unset($GLOBALS['post']);
+            } else {
+                $GLOBALS['post'] = $oldGlobalPost;
+            }
+        }
+
+        assert_contains('<mark>Running</mark> Title Signal', $renderedTitle, 'front-end titles should highlight matched title surfaces');
+        assert_contains('Body preview stays tied to the actual edited post content.', $renderedContent, 'front-end content previews should come from post_content');
+        assert_true(!str_contains($renderedContent, 'Running Title Signal'), 'front-end content previews should not include indexed title metadata for title-only matches');
+        assert_true(!str_contains($renderedContent, 'Excerpt metadata'), 'front-end content previews should not include indexed excerpt metadata');
     } finally {
         $wpdb = $oldWpdb;
     }

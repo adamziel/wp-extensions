@@ -879,6 +879,40 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Build a highlighted snippet from a caller-supplied source using the same
+     * analyzer/query plan as normal search result enrichment.
+     *
+     * This is intended for WordPress render surfaces that need a field-specific
+     * preview, for example highlighting only the actual post content or only the
+     * title instead of the aggregate indexed metadata.
+     *
+     * @param array<string,mixed> $opts
+     */
+    public function snippet_for_text(string $text, string $query, array $opts = []): string
+    {
+        $query = trim($query);
+        if ($query === '' || trim($text) === '') {
+            return '';
+        }
+
+        $groups = $this->build_query_groups($query, $opts);
+        $queryLang = $this->response_query_language($opts, $groups);
+        $resultLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['result_lang', 'document_lang', 'lang', 'language'])
+            ?? $queryLang;
+
+        return $this->snippet(
+            $text,
+            $query,
+            max(40, (int) ($opts['snippet_length'] ?? 180)),
+            !empty($opts['highlight']),
+            $opts,
+            $groups,
+            $queryLang,
+            $resultLang
+        );
+    }
+
+    /**
      * Build a compact snippet from stored plain text.
      */
     private function snippet(string $text, string $query, int $length, bool $highlight, array $opts = [], array $queryGroups = [], string $queryLang = '', string $resultLang = ''): string
