@@ -78,6 +78,7 @@ final class WP_FTS_Plugin
             add_filter('posts_pre_query', [self::class, 'replace_frontend_search_posts'], 10, 2);
             add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], 10, 2);
             add_filter('get_the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 2);
+            add_filter('the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 1);
         }
 
         add_action('loop_start', [self::class, 'begin_frontend_search_loop'], 10, 1);
