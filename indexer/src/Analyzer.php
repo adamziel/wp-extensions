@@ -1087,7 +1087,11 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Return non-boundary ancestors that affect inline word continuity.
+     * Return non-boundary element ancestors that affect inline word continuity.
+     *
+     * WordPress processor breadcrumbs for text nodes may include pseudo entries
+     * such as `#text`. Those are not element boundaries; keeping them would make
+     * nested inline fragments look like unrelated sibling paths.
      *
      * @param string[] $ancestors
      * @return string[]
@@ -1097,6 +1101,9 @@ final class WP_FTS_Analyzer
         $inline = [];
         foreach ($ancestors as $tag) {
             $tag = strtoupper($tag);
+            if ($tag === '' || str_starts_with($tag, '#')) {
+                continue;
+            }
             if (!$this->isTextGroupBoundaryTag($tag)) {
                 $inline[] = $tag;
             }

@@ -16,7 +16,7 @@ final class WP_FTS_Fake_HTML_Processor
     private int $offset = -1;
 
     /**
-     * @param array<int,array{type:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}> $tokens
+     * @param array<int,array{type:string,tag?:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}> $tokens
      */
     public function __construct(private array $tokens)
     {
@@ -47,6 +47,13 @@ final class WP_FTS_Fake_HTML_Processor
         return (string) ($this->current()['text'] ?? '');
     }
 
+    public function get_tag(): ?string
+    {
+        $tag = $this->current()['tag'] ?? null;
+
+        return is_string($tag) && $tag !== '' ? strtoupper($tag) : null;
+    }
+
     public function is_tag_closer(): bool
     {
         return (bool) ($this->current()['closing'] ?? false);
@@ -58,7 +65,7 @@ final class WP_FTS_Fake_HTML_Processor
     }
 
     /**
-     * @return array{type?:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}
+     * @return array{type?:string,tag?:string,breadcrumbs?:string[],text?:string,attrs?:array<string,string>,closing?:bool}
      */
     private function current(): array
     {
@@ -4880,6 +4887,89 @@ test_case('analyzer treats visible words split by inline HTML as single Unicode 
 
     $blockTerms = test_terms($analyzer->analyze_content('<p>Word</p><p>Press</p>', ['lang' => 'en']));
     assert_true(!in_array('wordpress', $blockTerms, true), 'block boundaries should not join Word and Press into WordPress');
+});
+
+test_case('processor extraction coalesces nested inline Polish fragments before lemmatizing', function (): void {
+    $html = '<p>chr<strong><em>ząs</em>tki</strong> są wspaniałe</p>';
+    $processorFactory = static function (string $source) use ($html): ?WP_FTS_Fake_HTML_Processor {
+        if ($source !== $html) {
+            return null;
+        }
+
+        return new WP_FTS_Fake_HTML_Processor([
+            ['type' => '#tag', 'tag' => 'P', 'breadcrumbs' => ['HTML', 'BODY', 'P']],
+            ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'P', '#text'], 'text' => 'chr'],
+            ['type' => '#tag', 'tag' => 'STRONG', 'breadcrumbs' => ['HTML', 'BODY', 'P', 'STRONG']],
+            ['type' => '#tag', 'tag' => 'EM', 'breadcrumbs' => ['HTML', 'BODY', 'P', 'STRONG', 'EM']],
+            ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'P', 'STRONG', 'EM', '#text'], 'text' => 'ząs'],
+            ['type' => '#tag', 'tag' => 'EM', 'breadcrumbs' => ['HTML', 'BODY', 'P', 'STRONG', 'EM'], 'closing' => true],
+            ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'P', 'STRONG', '#text'], 'text' => 'tki'],
+            ['type' => '#tag', 'tag' => 'STRONG', 'breadcrumbs' => ['HTML', 'BODY', 'P', 'STRONG'], 'closing' => true],
+            ['type' => '#text', 'breadcrumbs' => ['HTML', 'BODY', 'P', '#text'], 'text' => ' są wspaniałe'],
+            ['type' => '#tag', 'tag' => 'P', 'breadcrumbs' => ['HTML', 'BODY', 'P'], 'closing' => true],
+        ]);
+    };
+
+    $surfaceAnalyzer = new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'enable_stemming' => false,
+        'html_processor_factory' => $processorFactory,
+    ]);
+    $surfaceTerms = test_terms($surfaceAnalyzer->analyze_content($html, ['lang' => 'pl']));
+    assert_true(in_array('chrzastki', $surfaceTerms, true), 'processor path should analyze the split inline Polish word as one normalized surface');
+    assert_true(!in_array('chr', $surfaceTerms, true), 'processor path should not index the leading Polish fragment separately');
+    assert_true(!in_array('zas', $surfaceTerms, true), 'processor path should not index the nested Polish fragment separately');
+    assert_true(!in_array('tki', $surfaceTerms, true), 'processor path should not index the trailing Polish fragment separately');
+
+    assert_or_pending(
+        WP_FTS_AnalyzerPackValidator::gzip_available(),
+        'gzip support should be available for processor-path full Polish pack indexing',
+        'PHP zlib gzip support is unavailable, so processor-path full Polish pack indexing is skipped.'
+    );
+
+    $analyzer = new WP_FTS_Analyzer([
+        'default_lang' => 'pl',
+        'polish_lemma_pack' => WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest(),
+        'html_processor_factory' => $processorFactory,
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $post = (object) [
+        'ID' => 1068,
+        'post_title' => 'Processor Polish Split Surface',
+        'post_content' => $html,
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-16 00:00:00',
+    ];
+
+    $indexer->index_post($post, ['lang' => 'pl']);
+
+    $terms = WP_FTS_StorageCompat::terms_for_doc($storage, 1068);
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'chrzastka'), $terms, true), 'index_post should store the full-pack chrzastka lemma for processor-path chrząstki');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'chrzastek'), $terms, true), 'index_post should store the full-pack chrzastek lemma for processor-path chrząstki');
+    assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('pl', 'chr'), $terms, true), 'index_post should not store the leading processor fragment');
+    assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('pl', 'zas'), $terms, true), 'index_post should not store the nested processor fragment');
+    assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('pl', 'tki'), $terms, true), 'index_post should not store the trailing processor fragment');
+
+    $payload = (new WP_FTS_Searcher($storage, $analyzer))->search('chrząstka', [
+        'lang' => 'pl',
+        'mode' => 'AND',
+        'include_total' => true,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 180,
+    ]);
+
+    assert_same(1, $payload['total'] ?? 0, 'chrząstka should find the processor-indexed post through the full Polish pack');
+    assert_same(1068, (int) ($payload['results'][0]['doc_id'] ?? 0), 'chrząstka should return the processor-indexed post');
+    assert_contains(
+        '<mark>chr<strong><em>ząs</em>tki</strong></mark>',
+        (string) ($payload['results'][0]['snippet'] ?? ''),
+        'search highlighting should preserve the formatted chrząstki surface'
+    );
 });
 
 test_case('analyzer does not require optional extensions at runtime', function (): void {

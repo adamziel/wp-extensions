@@ -19,7 +19,7 @@
       "step": "installPlugin",
       "pluginData": {
         "resource": "url",
-        "url": "https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/indexer-preview.zip?v=20260616-indexed-terms-debug-v1"
+        "url": "https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/indexer-preview.zip?v=20260616-processor-inline-polish-v1"
       },
       "options": {
         "activate": true,
