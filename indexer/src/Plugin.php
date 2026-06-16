@@ -22,6 +22,7 @@ final class WP_FTS_Plugin
     public const ANALYZER_OPTIONS_OPTION = 'wp_fts_analyzer_options';
     public const ANALYZER_OPTIONS_FILTER = 'wp_fts_analyzer_options';
     public const FRONTEND_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_frontend_search';
+    public const ADMIN_POST_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_admin_post_search';
     public const LANGUAGE_META_KEY = '_wp_fts_index_language';
     public const DEFAULT_BATCH_SIZE = 25;
     public const MAX_SEARCH_LIMIT = 50;
@@ -41,11 +42,18 @@ final class WP_FTS_Plugin
     private const VISIBILITY_REFILL_MULTIPLIER = 4;
     private const VISIBILITY_REFILL_MAX_SCAN = 250;
     private const FRONTEND_SNIPPET_LENGTH = 180;
+    private const FRONTEND_SEARCH_POST_STATUSES = ['publish'];
+    private const ADMIN_POST_SEARCH_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
 
     /**
      * @var array<int,array{total:int,max_pages:int,query_lang:string,snippets:array<int,string>,titles:array<int,string>}>
      */
     private static array $front_end_search_query_state = [];
+
+    /**
+     * @var array<int,array{total:int,max_pages:int,query_lang:string}>
+     */
+    private static array $admin_post_search_query_state = [];
 
     /**
      * @var int[]
@@ -74,10 +82,13 @@ final class WP_FTS_Plugin
         add_action('add_meta_boxes', [self::class, 'register_language_meta_box'], 10, 0);
         add_action('save_post', [self::class, 'save_post_language_override'], 5, 3);
         add_action('pre_get_posts', [self::class, 'prepare_frontend_search_query'], 10, 1);
+        add_action('pre_get_posts', [self::class, 'prepare_admin_post_search_query'], 10, 1);
 
         if (function_exists('add_filter')) {
             add_filter('posts_pre_query', [self::class, 'replace_frontend_search_posts'], 10, 2);
+            add_filter('posts_pre_query', [self::class, 'replace_admin_post_search_posts'], 10, 2);
             add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], 10, 2);
+            add_filter('found_posts', [self::class, 'filter_admin_post_search_found_posts'], 10, 2);
             add_filter('get_the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 2);
             add_filter('the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 1);
             add_filter('the_content', [self::class, 'frontend_search_content'], 20, 1);
@@ -158,8 +169,8 @@ final class WP_FTS_Plugin
     /**
      * Queue indexable posts after normal WordPress save/insert hooks.
      *
-     * Non-indexable saved posts are tombstoned immediately so unpublished,
-     * private, trashed, or deleted content cannot linger in search results.
+     * Non-indexable saved posts are tombstoned immediately so trash, deleted,
+     * password-protected, or unsupported content cannot linger in search results.
      *
      * @param mixed $post WordPress post object when supplied by the hook.
      */
@@ -187,7 +198,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Keep indexed state aligned when a post becomes public or leaves visibility.
+     * Keep indexed state aligned when a post enters or leaves searchable status.
      *
      * @param mixed $post WordPress post object passed by transition_post_status.
      */
@@ -2348,6 +2359,65 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Mark eligible wp-admin Posts list searches before posts are requested.
+     *
+     * @param mixed $query WordPress WP_Query-like object.
+     */
+    public static function prepare_admin_post_search_query(mixed $query): void
+    {
+        if (!self::is_admin_post_search_query($query)) {
+            return;
+        }
+
+        self::set_query_var($query, 'wp_fts_admin_post_search_candidate', true);
+    }
+
+    /**
+     * Short-circuit the main wp-admin Posts list search with FTS-ranked posts.
+     *
+     * @param mixed $posts Null when WordPress has not already short-circuited the query.
+     * @param mixed $query WordPress WP_Query-like object.
+     * @return mixed Null to leave WordPress alone, or an array of post objects.
+     */
+    public static function replace_admin_post_search_posts(mixed $posts, mixed $query): mixed
+    {
+        if ($posts !== null || !self::should_replace_admin_post_search($query)) {
+            return $posts;
+        }
+
+        $search_query = self::frontend_search_query_text($query);
+        if ($search_query === '') {
+            return $posts;
+        }
+
+        $result = self::admin_post_search_result_page($query, $search_query);
+        self::store_admin_post_search_query_state(
+            $query,
+            $result['total'],
+            $result['limit'],
+            $result['query_lang']
+        );
+
+        return $result['posts'];
+    }
+
+    /**
+     * Preserve FTS total counts for wp-admin list-table pagination.
+     *
+     * @param mixed $found_posts WordPress' computed total.
+     * @param mixed $query WP_Query-like object.
+     */
+    public static function filter_admin_post_search_found_posts(mixed $found_posts, mixed $query): mixed
+    {
+        $query_key = self::query_object_key($query);
+        if ($query_key > 0 && isset(self::$admin_post_search_query_state[$query_key])) {
+            return self::$admin_post_search_query_state[$query_key]['total'];
+        }
+
+        return $found_posts;
+    }
+
+    /**
      * Track when the replaced main query loop is rendering.
      *
      * @param mixed $query WP_Query-like object passed by loop_start.
@@ -2484,6 +2554,28 @@ final class WP_FTS_Plugin
         return (bool) $replace;
     }
 
+    private static function should_replace_admin_post_search(mixed $query): bool
+    {
+        if (!self::is_admin_post_search_query($query)) {
+            return false;
+        }
+
+        $replace = true;
+        if (function_exists('apply_filters')) {
+            $replace = apply_filters(self::ADMIN_POST_SEARCH_REPLACEMENT_FILTER, true, $query);
+        }
+
+        if (is_bool($replace)) {
+            return $replace;
+        }
+
+        if (is_scalar($replace)) {
+            return !in_array(strtolower(trim((string) $replace)), ['', '0', 'false', 'no', 'off'], true);
+        }
+
+        return (bool) $replace;
+    }
+
     private static function is_frontend_search_query(mixed $query): bool
     {
         if (!is_object($query)) {
@@ -2503,6 +2595,35 @@ final class WP_FTS_Plugin
         }
 
         if (self::frontend_search_query_has_unsupported_constraints($query)) {
+            return false;
+        }
+
+        return self::frontend_search_query_text($query) !== '';
+    }
+
+    private static function is_admin_post_search_query(mixed $query): bool
+    {
+        if (!is_object($query)) {
+            return false;
+        }
+
+        if (!self::is_admin_request() || self::is_rest_request() || self::is_cron_request()) {
+            return false;
+        }
+
+        if (!self::is_admin_post_list_screen()) {
+            return false;
+        }
+
+        if (!self::query_is_search($query) || !self::query_is_main($query)) {
+            return false;
+        }
+
+        if (self::query_var_truthy($query, 'suppress_filters')) {
+            return false;
+        }
+
+        if (self::admin_post_search_query_has_unsupported_constraints($query)) {
             return false;
         }
 
@@ -2530,12 +2651,111 @@ final class WP_FTS_Plugin
         $post_status = self::query_var($query, 'post_status', null);
         if (self::constraint_value_present($post_status)) {
             $statuses = self::normalize_string_list($post_status);
-            if ($statuses !== ['publish']) {
+            if ($statuses !== self::FRONTEND_SEARCH_POST_STATUSES) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private static function admin_post_search_query_has_unsupported_constraints(mixed $query): bool
+    {
+        if (self::admin_post_search_post_types($query) === []) {
+            return true;
+        }
+
+        if (self::query_var($query, 'page', '') === self::ADMIN_PAGE_SLUG) {
+            return true;
+        }
+
+        foreach (self::frontend_search_unsupported_constraint_vars() as $key) {
+            if (self::query_var_has_constraint($query, $key)) {
+                return true;
+            }
+        }
+
+        if (self::admin_post_search_has_unsupported_permission_scope($query)) {
+            return true;
+        }
+
+        if (self::admin_post_search_has_unsupported_status_view_ordering($query)) {
+            return true;
+        }
+
+        if (
+            self::constraint_value_present(self::query_var($query, 'post_status', null))
+            && self::admin_post_search_statuses($query) === []
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static function admin_post_search_has_unsupported_permission_scope(mixed $query): bool
+    {
+        $perm = self::query_var($query, 'perm', null);
+        if (!self::constraint_value_present($perm)) {
+            return false;
+        }
+
+        return !is_scalar($perm) || trim((string) $perm) !== 'readable';
+    }
+
+    /**
+     * Allow only the status-tab ordering that wp_edit_posts_query() adds.
+     */
+    private static function admin_post_search_has_unsupported_status_view_ordering(mixed $query): bool
+    {
+        $orderby = self::query_var($query, 'orderby', null);
+        if (!self::constraint_value_present($orderby)) {
+            return false;
+        }
+
+        if (!is_scalar($orderby) || trim((string) $orderby) !== 'modified') {
+            return true;
+        }
+
+        $status = self::admin_post_search_single_requested_status($query);
+        if ($status === 'draft') {
+            return self::admin_post_search_has_unsupported_order($query, ['DESC']);
+        }
+
+        if ($status === 'pending') {
+            return self::admin_post_search_has_unsupported_order($query, ['ASC']);
+        }
+
+        return true;
+    }
+
+    /**
+     * @param string[] $allowed
+     */
+    private static function admin_post_search_has_unsupported_order(mixed $query, array $allowed): bool
+    {
+        $order = self::query_var($query, 'order', null);
+        if (!self::constraint_value_present($order)) {
+            return false;
+        }
+
+        if (!is_scalar($order)) {
+            return true;
+        }
+
+        return !in_array(strtoupper(trim((string) $order)), $allowed, true);
+    }
+
+    private static function admin_post_search_single_requested_status(mixed $query): string
+    {
+        $requested = self::query_var($query, 'post_status', null);
+        if (!self::constraint_value_present($requested)) {
+            return '';
+        }
+
+        $statuses = self::normalize_string_list($requested);
+
+        return count($statuses) === 1 ? $statuses[0] : '';
     }
 
     /**
@@ -2635,10 +2855,45 @@ final class WP_FTS_Plugin
      */
     private static function frontend_search_result_page(mixed $query, string $search_query): array
     {
+        return self::search_result_page(
+            $query,
+            $search_query,
+            self::frontend_query_post_types($query),
+            self::FRONTEND_SEARCH_POST_STATUSES,
+            'frontend'
+        );
+    }
+
+    /**
+     * @return array{posts:array<int,object>,snippets:array<int,string>,titles:array<int,string>,total:int,limit:int,query_lang:string}
+     */
+    private static function admin_post_search_result_page(mixed $query, string $search_query): array
+    {
+        return self::search_result_page(
+            $query,
+            $search_query,
+            self::admin_post_search_post_types($query),
+            self::admin_post_search_statuses($query),
+            'admin'
+        );
+    }
+
+    /**
+     * @param string[] $post_types
+     * @param string[] $post_statuses
+     * @return array{posts:array<int,object>,snippets:array<int,string>,titles:array<int,string>,total:int,limit:int,query_lang:string}
+     */
+    private static function search_result_page(
+        mixed $query,
+        string $search_query,
+        array $post_types,
+        array $post_statuses,
+        string $visibility_context
+    ): array
+    {
         $limit = self::frontend_query_limit($query);
         $offset = self::frontend_query_offset($query, $limit);
-        $post_types = self::frontend_query_post_types($query);
-        if ($post_types === []) {
+        if ($post_types === [] || $post_statuses === []) {
             return [
                 'posts' => [],
                 'snippets' => [],
@@ -2660,7 +2915,7 @@ final class WP_FTS_Plugin
             'highlight' => true,
             'snippet_length' => self::FRONTEND_SNIPPET_LENGTH,
             'post_type' => $post_types,
-            'post_status' => 'publish',
+            'post_status' => $post_statuses,
         ];
         $explicit_language = self::query_var($query, 'wp_fts_lang', null);
         $snippet_languages = [];
@@ -2712,7 +2967,10 @@ final class WP_FTS_Plugin
                 }
                 $seen[$post_id] = true;
 
-                if (!self::frontend_post_result_visible($post_id, $post_types)) {
+                $visible = $visibility_context === 'admin'
+                    ? self::admin_post_result_visible($post_id, $post_types)
+                    : self::frontend_post_result_visible($post_id, $post_types);
+                if (!$visible) {
                     continue;
                 }
 
@@ -2900,6 +3158,26 @@ final class WP_FTS_Plugin
         self::set_query_var($query, 'wp_fts_found_posts', $total);
     }
 
+    private static function store_admin_post_search_query_state(mixed $query, int $total, int $limit, string $query_lang): void
+    {
+        $max_pages = $total > 0 ? (int) ceil($total / max(1, $limit)) : 0;
+        $query_key = self::query_object_key($query);
+        if ($query_key > 0) {
+            self::$admin_post_search_query_state = [
+                $query_key => [
+                    'total' => $total,
+                    'max_pages' => $max_pages,
+                    'query_lang' => $query_lang,
+                ],
+            ];
+        }
+
+        self::set_query_property($query, 'found_posts', $total);
+        self::set_query_property($query, 'max_num_pages', $max_pages);
+        self::set_query_var($query, 'wp_fts_query_lang', $query_lang);
+        self::set_query_var($query, 'wp_fts_found_posts', $total);
+    }
+
     private static function frontend_query_limit(mixed $query): int
     {
         $value = self::query_var($query, 'posts_per_page', self::get_option('posts_per_page', 10));
@@ -2942,6 +3220,49 @@ final class WP_FTS_Plugin
         }
 
         return array_keys($types);
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function admin_post_search_post_types(mixed $query): array
+    {
+        $requested = self::query_var($query, 'post_type', 'post');
+        if ($requested === null || $requested === '') {
+            $requested = 'post';
+        }
+
+        $types = self::normalize_string_list($requested);
+        if ($types === []) {
+            $types = ['post'];
+        }
+
+        if ($types !== ['post'] || !self::is_public_searchable_post_type('post')) {
+            return [];
+        }
+
+        return ['post'];
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function admin_post_search_statuses(mixed $query): array
+    {
+        $requested = self::query_var($query, 'post_status', null);
+        if (!self::constraint_value_present($requested)) {
+            return self::ADMIN_POST_SEARCH_POST_STATUSES;
+        }
+
+        $statuses = [];
+        foreach (self::normalize_string_list($requested) as $status) {
+            if (!in_array($status, self::ADMIN_POST_SEARCH_POST_STATUSES, true)) {
+                return [];
+            }
+            $statuses[$status] = true;
+        }
+
+        return array_keys($statuses);
     }
 
     /**
@@ -3006,13 +3327,40 @@ final class WP_FTS_Plugin
     private static function frontend_post_result_visible(int $post_id, array $allowed_post_types): bool
     {
         $post = self::post_object($post_id);
-        if ($post === null || !self::is_indexable_post($post)) {
+        if ($post === null || !self::is_public_search_result_post($post)) {
             return false;
         }
 
         $type = isset($post->post_type) && is_scalar($post->post_type) ? (string) $post->post_type : 'post';
 
         return in_array($type, $allowed_post_types, true);
+    }
+
+    /**
+     * @param string[] $allowed_post_types
+     */
+    private static function admin_post_result_visible(int $post_id, array $allowed_post_types): bool
+    {
+        $post = self::post_object($post_id);
+        if ($post === null || (isset($post->post_password) && (string) $post->post_password !== '')) {
+            return false;
+        }
+
+        $type = self::post_type_from_object($post);
+        if (!in_array($type, $allowed_post_types, true)) {
+            return false;
+        }
+
+        $status = self::post_status_from_object($post);
+        if (!in_array($status, self::ADMIN_POST_SEARCH_POST_STATUSES, true)) {
+            return false;
+        }
+
+        if ($status === 'publish') {
+            return true;
+        }
+
+        return self::current_user_can_read_or_edit_post($post_id);
     }
 
     /**
@@ -3061,6 +3409,22 @@ final class WP_FTS_Plugin
         }
 
         return isset($GLOBALS['wp_query']) && $query === $GLOBALS['wp_query'];
+    }
+
+    private static function is_admin_post_list_screen(): bool
+    {
+        if (isset($GLOBALS['pagenow']) && is_scalar($GLOBALS['pagenow']) && trim((string) $GLOBALS['pagenow']) !== '') {
+            return (string) $GLOBALS['pagenow'] === 'edit.php';
+        }
+
+        if (function_exists('get_current_screen')) {
+            $screen = get_current_screen();
+            if (is_object($screen) && isset($screen->base) && is_scalar($screen->base)) {
+                return (string) $screen->base === 'edit';
+            }
+        }
+
+        return false;
     }
 
     private static function query_var(mixed $query, string $key, mixed $default = null): mixed
@@ -3334,15 +3698,20 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Safe defaults: index only published, searchable public post types.
+     * Index public search rows plus post statuses needed by the admin Posts list.
      */
     private static function is_indexable_post(object $post): bool
     {
-        $status = isset($post->post_status) ? (string) $post->post_status : '';
-        if ($status === '' && isset($post->ID) && function_exists('get_post_status')) {
-            $status = (string) get_post_status((int) $post->ID);
+        if (isset($post->post_password) && (string) $post->post_password !== '') {
+            return false;
         }
-        if ($status !== 'publish') {
+
+        return self::is_public_search_result_post($post) || self::is_admin_indexable_post($post);
+    }
+
+    private static function is_public_search_result_post(object $post): bool
+    {
+        if (self::post_status_from_object($post) !== 'publish') {
             return false;
         }
 
@@ -3350,29 +3719,73 @@ final class WP_FTS_Plugin
             return false;
         }
 
-        $type = isset($post->post_type) && is_scalar($post->post_type) ? (string) $post->post_type : 'post';
-        if (!function_exists('get_post_type_object')) {
-            return in_array($type, ['post', 'page'], true);
-        }
+        $type = self::post_type_from_object($post);
 
-        $post_type = get_post_type_object($type);
-        if (!is_object($post_type)) {
+        return self::is_public_searchable_post_type($type);
+    }
+
+    private static function is_admin_indexable_post(object $post): bool
+    {
+        if (isset($post->post_password) && (string) $post->post_password !== '') {
             return false;
         }
 
-        if (isset($post_type->public) && !$post_type->public) {
+        if (self::post_type_from_object($post) !== 'post') {
             return false;
         }
 
-        if (isset($post_type->exclude_from_search) && $post_type->exclude_from_search) {
+        $status = self::post_status_from_object($post);
+        if (!in_array($status, self::ADMIN_POST_SEARCH_POST_STATUSES, true)) {
             return false;
         }
 
-        return true;
+        return self::is_public_searchable_post_type('post');
+    }
+
+    private static function post_status_from_object(object $post): string
+    {
+        $status = isset($post->post_status) && is_scalar($post->post_status) ? (string) $post->post_status : '';
+        if ($status === '' && isset($post->ID) && function_exists('get_post_status')) {
+            $status = (string) get_post_status((int) $post->ID);
+        }
+
+        return $status;
+    }
+
+    private static function post_type_from_object(object $post): string
+    {
+        return isset($post->post_type) && is_scalar($post->post_type) ? (string) $post->post_type : 'post';
+    }
+
+    private static function current_user_can_read_or_edit_post(int $post_id): bool
+    {
+        if (!function_exists('current_user_can')) {
+            return false;
+        }
+
+        return current_user_can('read_post', $post_id) || current_user_can('edit_post', $post_id);
+    }
+
+    private static function is_readable_non_public_search_result_post(int $post_id, object $post): bool
+    {
+        if (isset($post->post_password) && (string) $post->post_password !== '') {
+            return false;
+        }
+
+        $status = self::post_status_from_object($post);
+        if (!in_array($status, self::ADMIN_POST_SEARCH_POST_STATUSES, true)) {
+            return false;
+        }
+
+        if (!self::is_public_searchable_post_type(self::post_type_from_object($post))) {
+            return false;
+        }
+
+        return self::current_user_can_read_or_edit_post($post_id);
     }
 
     /**
-     * Search results expose public searchable posts, or private posts readable by the user.
+     * Search results expose public searchable posts, or non-public rows readable by the user.
      */
     private static function can_read_post_result(int $post_id): bool
     {
@@ -3385,11 +3798,11 @@ final class WP_FTS_Plugin
             return false;
         }
 
-        if (self::is_indexable_post($post)) {
+        if (self::is_public_search_result_post($post)) {
             return true;
         }
 
-        return function_exists('current_user_can') && current_user_can('read_post', $post_id);
+        return self::is_readable_non_public_search_result_post($post_id, $post);
     }
 
     /**

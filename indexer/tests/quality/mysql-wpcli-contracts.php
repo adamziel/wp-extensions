@@ -421,6 +421,44 @@ namespace {
     test_case('quality wp cli reindex covers aliases limits batches and post filters', function (): void {
         $scenarios = [
             [
+                'label' => 'missing filters default admin searchable statuses',
+                'args' => [
+                    'language' => 'en',
+                    'limit' => '5',
+                    'batch_size' => '5',
+                ],
+                'rows' => [
+                    (object) ['ID' => 451, 'post_title' => 'Published', 'post_content' => '<p>alpha status</p>', 'post_excerpt' => '', 'post_type' => 'post', 'post_status' => 'publish'],
+                    (object) ['ID' => 452, 'post_title' => 'Draft', 'post_content' => '<p>beta status</p>', 'post_excerpt' => '', 'post_type' => 'post', 'post_status' => 'draft'],
+                    (object) ['ID' => 453, 'post_title' => 'Pending', 'post_content' => '<p>gamma status</p>', 'post_excerpt' => '', 'post_type' => 'post', 'post_status' => 'pending'],
+                    (object) ['ID' => 454, 'post_title' => 'Future', 'post_content' => '<p>delta status</p>', 'post_excerpt' => '', 'post_type' => 'post', 'post_status' => 'future'],
+                    (object) ['ID' => 455, 'post_title' => 'Private', 'post_content' => '<p>epsilon status</p>', 'post_excerpt' => '', 'post_type' => 'post', 'post_status' => 'private'],
+                ],
+                'expected_docs' => [451, 452, 453, 454, 455],
+                'expected_first_args' => ['publish', 'draft', 'pending', 'future', 'private', 'post', 0, 5],
+                'expected_last_args' => ['publish', 'draft', 'pending', 'future', 'private', 'post', 0, 5],
+                'message' => 'Indexed 5 posts in en.',
+                'lang' => 'en',
+            ],
+            [
+                'label' => 'explicit publish remains narrow',
+                'args' => [
+                    'post_status' => 'publish',
+                    'post_type' => 'post',
+                    'language' => 'en',
+                    'limit' => '1',
+                    'batch_size' => '1',
+                ],
+                'rows' => [
+                    (object) ['ID' => 461, 'post_title' => 'Published', 'post_content' => '<p>alpha public</p>', 'post_excerpt' => '', 'post_type' => 'post', 'post_status' => 'publish'],
+                ],
+                'expected_docs' => [461],
+                'expected_first_args' => ['publish', 'post', 0, 1],
+                'expected_last_args' => ['publish', 'post', 0, 1],
+                'message' => 'Indexed 1 posts in en.',
+                'lang' => 'en',
+            ],
+            [
                 'label' => 'dash aliases limited batches',
                 'args' => [
                     'post-status' => 'publish, private ,,',
@@ -472,8 +510,8 @@ namespace {
                     (object) ['ID' => 701, 'post_title' => 'Ein', 'post_content' => '<p>alpha beta</p>'],
                 ],
                 'expected_docs' => [701],
-                'expected_first_args' => ['publish', 'post', 0, 1],
-                'expected_last_args' => ['publish', 'post', 701, 1],
+                'expected_first_args' => ['publish', 'draft', 'pending', 'future', 'private', 'post', 0, 1],
+                'expected_last_args' => ['publish', 'draft', 'pending', 'future', 'private', 'post', 701, 1],
                 'message' => 'Indexed 1 posts in de-DE.',
                 'lang' => 'de-DE',
             ],
@@ -695,6 +733,7 @@ namespace {
             'before_delete_post',
             'loop_end',
             'loop_start',
+            'pre_get_posts',
             'pre_get_posts',
             'rest_api_init',
             'save_post',

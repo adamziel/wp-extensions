@@ -20,7 +20,7 @@ wp eval 'WP_FTS_Plugin::upgrade_schema();'
 To create or repair the schema and index content, run:
 
 ```sh
-wp fts reindex --post_type=post,page --post_status=publish
+wp fts reindex --post_type=post
 ```
 
 The MySQL backend creates six tables under the active WordPress table prefix:
@@ -46,13 +46,13 @@ Run a full reindex after first activation, after large content imports, and
 after changing language or analyzer behavior.
 
 ```sh
-wp fts reindex --post_type=post,page --post_status=publish --batch_size=500
+wp fts reindex --post_type=post --batch_size=500
 ```
 
 Use a smaller batch size on shared databases:
 
 ```sh
-wp fts reindex --post_type=post,page --post_status=publish --batch_size=100
+wp fts reindex --post_type=post --batch_size=100
 ```
 
 Use `--limit` for smoke tests and staged rollouts:
@@ -70,7 +70,7 @@ documents even when their source content is unchanged.
 
 Important current behaviors:
 
-- `--post_status` defaults to `publish`.
+- `--post_status` defaults to `publish,draft,pending,future,private`.
 - `--post_type` defaults to `post`.
 - comma-separated values are accepted, for example `--post_type=post,page`.
 - language can be forced with `--lang=pl-PL`.
@@ -78,8 +78,9 @@ Important current behaviors:
   title, content, excerpt, rendered block deltas, taxonomy terms, selected
   custom fields, field boosts, and stored product metadata.
 - save/insert hooks queue bounded indexing work, and status/delete/trash hooks
-  tombstone posts that leave public searchable visibility.
-- password-protected, private, draft, trashed, deleted, or otherwise
+  tombstone posts that leave the supported front-end or admin-searchable status
+  scopes.
+- password-protected, trashed, deleted, unsupported-status, or otherwise
   non-searchable posts are tombstoned instead of left visible in search results.
 - posts that no longer match a later manual reindex scope should still be
   deleted or tombstoned explicitly if no WordPress status/delete hook fires.
@@ -155,7 +156,7 @@ metadata looks wrong, run:
 
 ```sh
 wp fts optimize
-wp fts reindex --post_type=post,page --post_status=publish
+wp fts reindex --post_type=post
 ```
 
 If posting rows or tables are corrupt, restore the database from backup or

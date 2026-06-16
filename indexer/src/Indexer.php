@@ -11,6 +11,7 @@ declare(strict_types=1);
 final class WP_FTS_Indexer
 {
     private const INDEX_SIGNATURE_VERSION = 'wp-fts-indexer-v2';
+    private const DEFAULT_REINDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
 
     /**
      * @param WP_FTS_Storage $storage Storage backend for terms, documents, and
@@ -238,7 +239,7 @@ final class WP_FTS_Indexer
     }
 
     /**
-     * Reindex published posts directly from WordPress. Defaults match the v1 spec.
+     * Reindex posts directly from WordPress using admin-search-aware defaults.
      *
      * This method pages through `$wpdb->posts` by ascending ID and indexes each
      * row through the post content extractor so full reindexes and incremental
@@ -262,7 +263,7 @@ final class WP_FTS_Indexer
             throw new RuntimeException('reindex_all requires the WordPress $wpdb global.');
         }
 
-        $postStatuses = $this->normalize_list_option($opts['post_status'] ?? 'publish');
+        $postStatuses = $this->normalize_list_option($opts['post_status'] ?? self::DEFAULT_REINDEX_POST_STATUSES);
         $postTypes = $this->normalize_list_option($opts['post_type'] ?? 'post');
         $batchSize = max(1, (int) ($opts['batch_size'] ?? 500));
         $limit = max(0, (int) ($opts['limit'] ?? 0));

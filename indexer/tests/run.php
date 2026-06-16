@@ -2563,6 +2563,8 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_is_admin'] = false;
     $GLOBALS['wp_fts_test_is_cron'] = false;
     $GLOBALS['wp_fts_test_is_rest'] = false;
+    unset($GLOBALS['pagenow']);
+    $GLOBALS['wp_fts_test_current_screen'] = null;
     $GLOBALS['wp_query'] = null;
     $GLOBALS['wp_fts_test_post_types'] = [
         'post' => (object) ['public' => true, 'exclude_from_search' => false],
@@ -3000,6 +3002,15 @@ if (!function_exists('is_admin')) {
     }
 }
 
+if (!function_exists('get_current_screen')) {
+    function get_current_screen(): ?object
+    {
+        $screen = $GLOBALS['wp_fts_test_current_screen'] ?? null;
+
+        return is_object($screen) ? $screen : null;
+    }
+}
+
 if (!function_exists('wp_doing_cron')) {
     function wp_doing_cron(): bool
     {
@@ -3213,6 +3224,7 @@ PHP;
         'loop_end',
         'loop_start',
         'pre_get_posts',
+        'pre_get_posts',
         'rest_api_init',
         'save_post',
         'save_post',
@@ -3225,7 +3237,7 @@ PHP;
 
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
-    assert_same(['found_posts', 'get_the_excerpt', 'posts_pre_query', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end search replacement filters');
+    assert_same(['found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end and admin search replacement filters');
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
 });
 
@@ -4019,9 +4031,9 @@ test_case('runtime post hooks index visible posts immediately and tombstone invi
         assert_contains('RuntimeCustomSignal', $fake->docMeta[101]['search_text'] ?? '', 'immediate metadata should keep custom field text for snippets');
         assert_contains('RuntimeRenderedSignal', $fake->docMeta[101]['search_text'] ?? '', 'immediate metadata should keep rendered text for snippets');
 
-        $post->post_status = 'draft';
-        WP_FTS_Plugin::handle_status_transition('draft', 'publish', $post);
-        assert_true($fake->docs[101]['is_deleted'] === 1, 'leaving publish status should tombstone the indexed document');
+        $post->post_status = 'trash';
+        WP_FTS_Plugin::handle_status_transition('trash', 'publish', $post);
+        assert_true($fake->docs[101]['is_deleted'] === 1, 'leaving searchable status should tombstone the indexed document');
         assert_same([], WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'tombstoned documents should not be returned');
 
         $GLOBALS['wp_fts_test_revisions'][102] = true;
@@ -4398,6 +4410,288 @@ test_case('front-end search replacement avoids admin REST cron secondary and dis
 
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
     assert_same(null, WP_FTS_Plugin::replace_frontend_search_posts(null, $query), 'site owners should be able to disable front-end replacement by filter');
+});
+
+test_case('admin Posts list search is replaced with FTS-ranked WP_Post results', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_is_admin'] = true;
+    $GLOBALS['pagenow'] = 'edit.php';
+
+    $low = (object) [
+        'ID' => 551,
+        'post_title' => 'Lower admin rank',
+        'post_content' => '<p>adminneedle appears once.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $high = (object) [
+        'ID' => 552,
+        'post_title' => 'Higher admin rank',
+        'post_content' => '<p>adminneedle adminneedle adminneedle adminneedle.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][551] = $low;
+    $GLOBALS['wp_fts_test_posts'][552] = $high;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(551, $low, true);
+        WP_FTS_Plugin::handle_post_save(552, $high, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'adminneedle',
+            'posts_per_page' => 10,
+            'paged' => 1,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        WP_FTS_Plugin::prepare_admin_post_search_query($query);
+        $posts = WP_FTS_Plugin::replace_admin_post_search_posts(null, $query);
+
+        assert_same(true, $query->get('wp_fts_admin_post_search_candidate'), 'pre_get_posts should mark eligible admin Posts list searches');
+        assert_same([552, 551], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'admin Posts list search should return FTS-ranked post objects');
+        assert_same(2, $query->found_posts, 'admin Posts list search should expose the FTS visible total on the query');
+        assert_same(1, $query->max_num_pages, 'admin Posts list search should expose max pages from the FTS visible total');
+        assert_same(2, WP_FTS_Plugin::filter_admin_post_search_found_posts(999, $query), 'admin found_posts filter should preserve the replacement total');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin Posts list default search covers supported statuses and filters non-public rows by capability', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_is_admin'] = true;
+    $GLOBALS['pagenow'] = 'edit.php';
+
+    $fixtures = [
+        561 => ['Admin publish visible', 'publish', ''],
+        562 => ['Admin draft visible', 'draft', ''],
+        563 => ['Admin pending visible', 'pending', ''],
+        564 => ['Admin future visible', 'future', ''],
+        565 => ['Admin private visible', 'private', ''],
+        566 => ['Admin trash hidden', 'trash', ''],
+        567 => ['Admin password hidden', 'publish', 'secret'],
+    ];
+
+    try {
+        foreach ($fixtures as $postId => [$title, $status, $password]) {
+            $post = (object) [
+                'ID' => $postId,
+                'post_title' => $title,
+                'post_content' => '<p>allstatusneedle shared body.</p>',
+                'post_excerpt' => '',
+                'post_status' => $status,
+                'post_type' => 'post',
+                'post_password' => $password,
+                'post_date_gmt' => '2026-06-14 00:00:00',
+            ];
+            $GLOBALS['wp_fts_test_posts'][$postId] = $post;
+            WP_FTS_Plugin::handle_post_save($postId, $post, true);
+        }
+
+        foreach ([561, 562, 563, 564, 565] as $postId) {
+            assert_true(($fake->docs[$postId]['is_deleted'] ?? 1) === 0, "supported admin status post {$postId} should stay indexed");
+        }
+        assert_true(!isset($fake->docs[566]) || ($fake->docs[566]['is_deleted'] ?? 0) === 1, 'trash posts should not stay actively indexed for admin search');
+        assert_true(!isset($fake->docs[567]) || ($fake->docs[567]['is_deleted'] ?? 0) === 1, 'password-protected posts should not stay actively indexed for admin search');
+
+        $GLOBALS['wp_fts_test_caps']['edit_post'][562] = true;
+        $GLOBALS['wp_fts_test_caps']['edit_post'][563] = true;
+        $GLOBALS['wp_fts_test_caps']['edit_post'][564] = true;
+        $GLOBALS['wp_fts_test_caps']['read_post'][565] = true;
+
+        $allQuery = new WP_FTS_Test_Query([
+            's' => 'allstatusneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+        ]);
+        WP_FTS_Plugin::prepare_admin_post_search_query($allQuery);
+        $allIds = array_map(static fn(object $post): int => (int) $post->ID, WP_FTS_Plugin::replace_admin_post_search_posts(null, $allQuery));
+        sort($allIds, SORT_NUMERIC);
+
+        assert_same(true, $allQuery->get('wp_fts_admin_post_search_candidate'), 'default admin All search should be marked for FTS replacement');
+        assert_same([561, 562, 563, 564, 565], $allIds, 'default admin All search should include supported statuses when the user can read or edit non-public rows');
+        assert_same(5, $allQuery->found_posts, 'default admin All total should include only visible supported status rows');
+
+        $statusQueries = [
+            'draft' => [
+                562,
+                [
+                    'post_status' => 'draft',
+                    'perm' => 'readable',
+                    'orderby' => 'modified',
+                    'order' => 'DESC',
+                ],
+            ],
+            'pending' => [
+                563,
+                [
+                    'post_status' => 'pending',
+                    'perm' => 'readable',
+                    'orderby' => 'modified',
+                    'order' => 'ASC',
+                ],
+            ],
+            'private' => [
+                565,
+                [
+                    'post_status' => 'private',
+                    'perm' => 'readable',
+                ],
+            ],
+        ];
+        foreach ($statusQueries as $status => [$expectedId, $vars]) {
+            $statusQuery = new WP_FTS_Test_Query(array_merge([
+                's' => 'allstatusneedle',
+                'posts_per_page' => 10,
+                'post_type' => 'post',
+            ], $vars));
+            WP_FTS_Plugin::prepare_admin_post_search_query($statusQuery);
+            $statusIds = array_map(static fn(object $post): int => (int) $post->ID, WP_FTS_Plugin::replace_admin_post_search_posts(null, $statusQuery));
+            assert_same(true, $statusQuery->get('wp_fts_admin_post_search_candidate'), "admin {$status} status tab search should be marked for FTS replacement");
+            assert_same([$expectedId], $statusIds, "admin {$status} status tab search should pass WordPress-native status vars through to FTS");
+        }
+
+        $GLOBALS['wp_fts_test_caps'] = [];
+        $restrictedQuery = new WP_FTS_Test_Query([
+            's' => 'allstatusneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+        ]);
+        $restrictedIds = array_map(static fn(object $post): int => (int) $post->ID, WP_FTS_Plugin::replace_admin_post_search_posts(null, $restrictedQuery));
+        sort($restrictedIds, SORT_NUMERIC);
+
+        assert_same([561], $restrictedIds, 'admin search should hide draft pending future and private rows without row capability');
+        assert_same(1, $restrictedQuery->found_posts, 'admin visible total should exclude non-public rows without row capability');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin Posts list search replacement can be disabled independently', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 553,
+        'post_title' => 'Separate filter result',
+        'post_content' => '<p>separatefilterneedle appears for front-end replacement.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][553] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(553, $post, true);
+
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ADMIN_POST_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
+        $adminQuery = new WP_FTS_Test_Query([
+            's' => 'separatefilterneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+        ]);
+        assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $adminQuery), 'site owners should be able to disable admin Posts list replacement by filter');
+
+        $GLOBALS['wp_fts_test_is_admin'] = false;
+        $frontQuery = new WP_FTS_Test_Query([
+            's' => 'separatefilterneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+        ]);
+        $frontPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $frontQuery);
+        assert_same([553], array_map(static fn(object $frontPost): int => (int) $frontPost->ID, $frontPosts), 'admin replacement filter should not disable front-end replacement');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin Posts list search replacement avoids REST cron secondary sandbox and constrained queries', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_is_admin'] = true;
+    $GLOBALS['pagenow'] = 'edit.php';
+    $query = new WP_FTS_Test_Query(['s' => 'adminguardneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
+
+    $GLOBALS['wp_fts_test_is_rest'] = true;
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'REST admin searches should not be hijacked');
+
+    $GLOBALS['wp_fts_test_is_rest'] = false;
+    $GLOBALS['wp_fts_test_is_cron'] = true;
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'cron admin searches should not be hijacked');
+
+    $GLOBALS['wp_fts_test_is_cron'] = false;
+    $secondary = new WP_FTS_Test_Query(['s' => 'adminguardneedle', 'posts_per_page' => 10, 'post_type' => 'post'], true, false);
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $secondary), 'secondary admin search queries should not be hijacked');
+
+    $sandbox = new WP_FTS_Test_Query(['s' => 'adminguardneedle', 'posts_per_page' => 10, 'post_type' => 'post', 'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG]);
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $sandbox), 'FTS sandbox searches should stay on the sandbox search path');
+
+    $GLOBALS['pagenow'] = 'post.php';
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'non-list admin screens should not be hijacked');
+    $GLOBALS['pagenow'] = 'edit.php';
+
+    unset($GLOBALS['pagenow']);
+    $GLOBALS['wp_fts_test_current_screen'] = null;
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'unknown admin screen context should fail closed');
+
+    $GLOBALS['wp_fts_test_current_screen'] = (object) ['base' => 'post'];
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'non-list current screen base should not be hijacked');
+
+    $GLOBALS['wp_fts_test_current_screen'] = (object) ['base' => 'edit'];
+    $screenQuery = new WP_FTS_Test_Query(['s' => 'adminguardneedle', 'posts_per_page' => 10, 'post_type' => 'post']);
+    WP_FTS_Plugin::prepare_admin_post_search_query($screenQuery);
+    assert_same(true, $screenQuery->get('wp_fts_admin_post_search_candidate'), 'edit current screen base should identify the admin Posts list when pagenow is unavailable');
+
+    $GLOBALS['pagenow'] = 'edit.php';
+    $GLOBALS['wp_fts_test_current_screen'] = null;
+
+    $constrainedVars = [
+        'trash status' => ['post_status' => 'trash'],
+        'inherit status' => ['post_status' => 'inherit'],
+        'mixed safe and unsupported status' => ['post_status' => 'publish,trash'],
+        'page list' => ['post_type' => 'page'],
+        'include list' => ['post__in' => [551]],
+        'author id' => ['author' => 7],
+        'custom meta query' => ['meta_query' => [['key' => 'featured', 'value' => '1']]],
+        'sorted column' => ['orderby' => 'title'],
+        'custom status sorted column' => ['post_status' => 'draft', 'perm' => 'readable', 'orderby' => 'title'],
+        'custom status order direction' => ['post_status' => 'pending', 'perm' => 'readable', 'orderby' => 'modified', 'order' => 'DESC'],
+        'permission scope' => ['perm' => 'editable'],
+        'suppressed filters' => ['suppress_filters' => true],
+    ];
+
+    foreach ($constrainedVars as $label => $vars) {
+        $guarded = new WP_FTS_Test_Query(array_merge([
+            's' => 'adminguardneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+        ], $vars));
+
+        WP_FTS_Plugin::prepare_admin_post_search_query($guarded);
+        assert_same(null, $guarded->get('wp_fts_admin_post_search_candidate', null), "constrained admin {$label} search should not be marked for FTS replacement");
+        assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $guarded), "constrained admin {$label} search should continue through normal WordPress search");
+    }
 });
 
 test_case('front-end search replacement declines constrained WP_Query searches', function (): void {
@@ -9243,6 +9537,89 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_same(['publish', 'draft', 'post', 'page', 0, 1], $postSelect['args'], 'CLI source filters and remaining limit should be prepared');
 });
 
+test_case('wp cli reindex defaults cover admin-searchable post statuses while explicit publish stays narrow', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $supportedStatuses = ['publish', 'draft', 'pending', 'future', 'private'];
+    $fake = new WP_FTS_Test_WPDB();
+    foreach ($supportedStatuses as $index => $status) {
+        $fake->postRows[] = (object) [
+            'ID' => 30 + $index,
+            'post_title' => ucfirst($status) . ' backfill',
+            'post_content' => '<p>backfill coverage ' . $status . '</p>',
+            'post_excerpt' => '',
+            'post_type' => 'post',
+            'post_status' => $status,
+            'post_date_gmt' => '2026-03-07 05:06:07',
+        ];
+    }
+    $wpdb = $fake;
+    WP_CLI::$successMessages = [];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $command->reindex([], [
+            'lang' => 'en',
+            'limit' => '5',
+            'batch_size' => '10',
+        ]);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(['Indexed 5 posts in en.'], WP_CLI::$successMessages, 'default CLI reindex should report supported admin status backfill count');
+    assert_same([30, 31, 32, 33, 34], array_keys($fake->docs), 'default CLI reindex should index supported admin status rows returned by WordPress');
+    assert_same($supportedStatuses, array_column($fake->docMeta, 'post_status'), 'default CLI reindex should preserve supported status metadata');
+
+    $defaultSelect = null;
+    foreach ($fake->prepared as $prepared) {
+        if (str_starts_with($prepared['sql'], 'SELECT ID, post_content, post_title')) {
+            $defaultSelect = $prepared;
+            break;
+        }
+    }
+    assert_true($defaultSelect !== null, 'default CLI reindex should prepare a source query');
+    assert_same(['publish', 'draft', 'pending', 'future', 'private', 'post', 0, 5], $defaultSelect['args'], 'default CLI source filters should cover admin-searchable post statuses only');
+
+    $publishOnly = new WP_FTS_Test_WPDB();
+    $publishOnly->postRows = [
+        (object) [
+            'ID' => 40,
+            'post_title' => 'Public backfill',
+            'post_content' => '<p>public coverage</p>',
+            'post_excerpt' => '',
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-03-08 05:06:07',
+        ],
+    ];
+    $wpdb = $publishOnly;
+    WP_CLI::$successMessages = [];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $command->reindex([], [
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'lang' => 'en',
+            'limit' => '1',
+        ]);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $publishSelect = null;
+    foreach ($publishOnly->prepared as $prepared) {
+        if (str_starts_with($prepared['sql'], 'SELECT ID, post_content, post_title')) {
+            $publishSelect = $prepared;
+            break;
+        }
+    }
+    assert_true($publishSelect !== null, 'explicit publish-only CLI reindex should prepare a source query');
+    assert_same(['publish', 'post', 0, 1], $publishSelect['args'], 'explicit --post_status=publish should keep the source query public-only');
+});
+
 test_case('wp cli reindex uses plugin runtime analyzer pack configuration', function (): void {
     global $wpdb;
 
@@ -9261,6 +9638,7 @@ test_case('wp cli reindex uses plugin runtime analyzer pack configuration', func
     ];
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    WP_CLI::$successMessages = [];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
         'lemmatizer_packs_by_lang' => [
             'bn' => WP_FTS_AnalyzerPackValidator::default_synthetic_bengali_fixture_manifest(),

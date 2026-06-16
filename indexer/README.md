@@ -15,8 +15,9 @@ workflow quickly; production validation still needs a real WordPress/MySQL
 environment.
 
 The plugin does not use MySQL `FULLTEXT`, replaces normal front-end main-query
-search with ranked FTS results by default, and treats the index as rebuildable
-data derived from WordPress content.
+search and eligible wp-admin Posts list searches with ranked FTS results by
+default, and treats the index as rebuildable data derived from WordPress
+content.
 
 ## Quickstart
 
@@ -32,12 +33,17 @@ wp plugin activate indexer
 ```
 
 Activation creates or repairs the `fts_*` tables and schedules the bounded
-runtime queue processor. Run a first reindex to backfill existing published
-content:
+runtime queue processor. Run a first reindex to backfill existing posts that
+the wp-admin Posts list replacement can search:
 
 ```sh
-wp fts reindex --post_type=post,page --post_status=publish --batch_size=200
+wp fts reindex --post_type=post --batch_size=200
 ```
+
+The default post status scope for `wp fts reindex` is
+`publish,draft,pending,future,private`, matching the admin Posts list search
+surface for `post`. Normal front-end search replacement still returns published
+content only; use `--post_status=publish` for a public-only backfill.
 
 Run a search with the language you expect:
 
@@ -81,7 +87,7 @@ restored with WordPress content.
 | Language routing | Terms are stored in language namespaces. Explicit `--lang`, the wp-admin `FTS Language` field, Polylang/WPML metadata, and HTML `lang`/`xml:lang` scopes route content before conservative detector fallback. |
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
-| Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, and admin-only Tools > FTS Sandbox used by the Playground preview. |
+| Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Tools > FTS Sandbox used by the Playground preview. |
 
 ## Language And Morphology
 
@@ -171,10 +177,10 @@ lemmatizer equivalence.
 ## Common Commands
 
 ```sh
-# Index published posts using site, post, or multilingual-plugin language hints.
+# Index admin-searchable post statuses for posts using site, post, or multilingual-plugin language hints.
 wp fts reindex
 
-# Index posts and pages into an explicit language partition.
+# Index public posts and pages into an explicit language partition.
 wp fts reindex --post_type=post,page --post_status=publish --lang=pl-PL
 
 # Limit a smoke or catch-up run.
@@ -232,6 +238,9 @@ Current caveats:
 
 - front-end search replacement is enabled by default and can be disabled with
   the `wp_fts_replace_frontend_search` filter;
+- wp-admin Posts list search replacement is enabled for safe main-list searches
+  over indexed supported admin post statuses and can be disabled with the
+  `wp_fts_replace_admin_post_search` filter;
 - no settings screen;
 - custom field indexing must be configured;
 - shortcode rendering is opt-in;

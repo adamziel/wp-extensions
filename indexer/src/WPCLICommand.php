@@ -9,6 +9,8 @@ declare(strict_types=1);
  */
 final class WP_FTS_WPCLI_Command
 {
+    private const DEFAULT_REINDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
+
     /**
      * Register the `wp fts` command when WP-CLI is loaded.
      */
@@ -25,7 +27,7 @@ final class WP_FTS_WPCLI_Command
      * ## OPTIONS
      *
      * [--post_status=<status>]
-     * : Comma-separated statuses. Default: publish.
+     * : Comma-separated statuses. Default: publish,draft,pending,future,private. Use --post_status=publish for public-only backfills.
      *
      * [--post_type=<type>]
      * : Comma-separated post types. Default: post.
@@ -50,7 +52,10 @@ final class WP_FTS_WPCLI_Command
         $lang = $langArg !== null ? $this->language_arg($langArg) : null;
         $indexer = $this->indexer();
         $options = [
-            'post_status' => $this->csv_arg((string) $this->assoc_arg($assoc_args, ['post_status', 'post-status'], 'publish'), 'publish'),
+            'post_status' => $this->csv_arg(
+                (string) $this->assoc_arg($assoc_args, ['post_status', 'post-status'], implode(',', self::DEFAULT_REINDEX_POST_STATUSES)),
+                self::DEFAULT_REINDEX_POST_STATUSES
+            ),
             'post_type' => $this->csv_arg((string) $this->assoc_arg($assoc_args, ['post_type', 'post-type'], 'post'), 'post'),
             'limit' => $this->non_negative_int_arg($this->assoc_arg($assoc_args, ['limit'], 0), 0),
             'batch_size' => $this->positive_int_arg($this->assoc_arg($assoc_args, ['batch_size', 'batch-size'], 500), 500),
@@ -479,12 +484,12 @@ final class WP_FTS_WPCLI_Command
      *
      * @return string[]
      */
-    private function csv_arg(string $value, string $fallback): array
+    private function csv_arg(string $value, string|array $fallback): array
     {
         $items = array_map('trim', explode(',', $value));
         $items = array_values(array_filter($items, static fn(string $item): bool => $item !== ''));
 
-        return $items === [] ? [$fallback] : $items;
+        return $items === [] ? (is_array($fallback) ? $fallback : [$fallback]) : $items;
     }
 
     /**
