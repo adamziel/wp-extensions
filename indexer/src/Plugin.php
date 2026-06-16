@@ -249,6 +249,10 @@ final class WP_FTS_Plugin
         }
 
         if (self::is_indexable_post($post)) {
+            if (!self::settings()['auto_index']) {
+                return;
+            }
+
             if (self::index_sandbox_demo_post_if_known($post_id, $post)) {
                 return;
             }
@@ -3858,7 +3862,7 @@ final class WP_FTS_Plugin
             $types = ['post'];
         }
 
-        if ($types !== ['post'] || !self::is_public_searchable_post_type('post')) {
+        if ($types !== ['post'] || !self::is_configured_index_post_type('post')) {
             return [];
         }
 

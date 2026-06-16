@@ -4333,6 +4333,45 @@ test_case('runtime post hooks index visible posts immediately and tombstone invi
     }
 });
 
+test_case('disabled auto-index blocks status transition indexing but still tombstones departures', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $settings = array_replace(WP_FTS_Plugin::default_settings(), ['auto_index' => false]);
+    $post = (object) [
+        'ID' => 111,
+        'post_title' => 'Manual indexing only',
+        'post_content' => '<p>manualtransitionneedle remains manual.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-16 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][111] = $post;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $settings;
+
+    try {
+        WP_FTS_Plugin::handle_status_transition('publish', 'draft', $post);
+        assert_true(!isset($fake->docs[111]), 'disabled auto-index should not index when a post transitions into a searchable status');
+        assert_same([], WP_FTS_Plugin::search('manualtransitionneedle', ['limit' => 10]), 'blocked transition indexing should leave FTS results empty');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace($settings, ['auto_index' => true]);
+        WP_FTS_Plugin::handle_post_save(111, $post, true);
+        assert_true(($fake->docs[111]['is_deleted'] ?? 1) === 0, 'test setup should create an active indexed document');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $settings;
+        $post->post_status = 'trash';
+        WP_FTS_Plugin::handle_status_transition('trash', 'publish', $post);
+        assert_true(($fake->docs[111]['is_deleted'] ?? 0) === 1, 'disabled auto-index should still tombstone posts leaving searchable status');
+        assert_same([], WP_FTS_Plugin::search('manualtransitionneedle', ['limit' => 10]), 'tombstoned posts should disappear even when auto-index is disabled');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('queue processing preserves posts queued during an active batch', function (): void {
     global $wpdb;
 
@@ -4914,6 +4953,26 @@ test_case('admin Posts list search replacement can be disabled independently', f
     } finally {
         $wpdb = $oldWpdb;
     }
+});
+
+test_case('admin Posts list search replacement skips post when it is not an indexed post type', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_is_admin'] = true;
+    $GLOBALS['pagenow'] = 'edit.php';
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['index_post_types' => ['page']]
+    );
+
+    $query = new WP_FTS_Test_Query([
+        's' => 'uncheckedpostneedle',
+        'posts_per_page' => 10,
+        'post_type' => 'post',
+    ]);
+
+    WP_FTS_Plugin::prepare_admin_post_search_query($query);
+    assert_same(null, $query->get('wp_fts_admin_post_search_candidate', null), 'admin Posts list search should not be marked for FTS replacement when post indexing is disabled');
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'admin Posts list search should fall back to native WordPress search when post indexing is disabled');
 });
 
 test_case('admin Posts list search replacement avoids REST cron secondary sandbox and constrained queries', function (): void {
