@@ -7,12 +7,12 @@ full-text index for WordPress posts. It indexes post content into derived FTS
 tables, keeps those tables current from WordPress post lifecycle hooks, and can
 be managed or queried with WP-CLI.
 
-The Playground preview opens the admin-only Tools > FTS Sandbox page. The
-sandbox prepares demo posts and indexes them automatically, shows indexed posts
-with pagination, lets you run language-aware searches, and indexes new or
-updated published posts when they are saved. Playground is useful for trying the
-workflow quickly; production validation still needs a real WordPress/MySQL
-environment.
+The Playground preview opens the admin-only Settings > Full-Text Search
+Sandbox tab. The sandbox prepares demo posts and indexes them automatically,
+shows indexed posts with pagination, lets you run language-aware searches, and
+indexes new or updated published posts when they are saved. Playground is useful
+for trying the workflow quickly; production validation still needs a real
+WordPress/MySQL environment.
 
 The plugin does not use MySQL `FULLTEXT`, replaces normal front-end main-query
 search and eligible wp-admin Posts list searches with ranked FTS results by
@@ -87,7 +87,7 @@ restored with WordPress content.
 | Language routing | Terms are stored in language namespaces. Explicit `--lang`, the wp-admin `FTS Language` field, Polylang/WPML metadata, and HTML `lang`/`xml:lang` scopes route content before conservative detector fallback. |
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
-| Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Tools > FTS Sandbox used by the Playground preview. |
+| Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
 
 ## Language And Morphology
 

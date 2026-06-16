@@ -3323,7 +3323,21 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
     assert_same(true, WP_FTS_Plugin::default_settings()['language_fallback'], 'default settings should enable language fallback');
 });
 
-test_case('settings sanitization maps replacement scope radio to existing booleans', function (): void {
+test_case('settings sanitization maps replacement checkboxes and legacy scope to existing booleans', function (): void {
+    $checkboxes = WP_FTS_Plugin::sanitize_settings([
+        'replace_frontend_search' => '1',
+        'replace_admin_post_search' => '0',
+        'auto_index' => '0',
+    ]);
+    assert_same(true, $checkboxes['replace_frontend_search'], 'frontend replacement checkbox should enable the public-site replacement boolean');
+    assert_same(false, $checkboxes['replace_admin_post_search'], 'admin replacement checkbox should disable the wp-admin replacement boolean');
+    assert_same(false, $checkboxes['auto_index'], 'auto-index checkbox should disable automatic indexing when unchecked');
+
+    $autoIndex = WP_FTS_Plugin::sanitize_settings([
+        'auto_index' => '1',
+    ]);
+    assert_same(true, $autoIndex['auto_index'], 'auto-index checkbox should enable automatic indexing when checked');
+
     $adminOnly = WP_FTS_Plugin::sanitize_settings([
         'replace_search_scope' => 'admin',
     ]);
@@ -3437,16 +3451,36 @@ test_case('authorized admin sandbox render includes search form and indexed post
     $demo = wp_fts_test_sandbox_demo_expectations();
     assert_same(count($demo), count($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? []), 'authorized first render should create the top-language demo posts');
     assert_true($fake->terms !== [], 'authorized first render should build FTS terms for the demo corpus');
-    foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Search behavior', 'Language handling'] as $groupLabel) {
+    foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Customer-facing search behavior', 'Language handling'] as $groupLabel) {
         assert_contains($groupLabel, $settingsHtml, "settings tab should group controls by {$groupLabel}");
     }
     assert_contains('Content types in the index', $settingsHtml, 'settings tab should render post-type configuration');
     assert_contains('value="post" checked="checked"', $settingsHtml, 'settings defaults should include posts');
     assert_contains('value="page" checked="checked"', $settingsHtml, 'settings defaults should include pages');
     assert_contains('name="_wp_http_referer" value="/wp-admin/options-general.php?page=wp-fts-settings"', $settingsHtml, 'settings form should preserve a settings-page referrer after save');
-    assert_contains('name="wp_fts_settings[auto_index]" value="1" checked="checked"', $settingsHtml, 'settings auto-index mode should render as an explicit enabled radio');
-    assert_contains('name="wp_fts_settings[replace_search_scope]" value="frontend-admin" checked="checked"', $settingsHtml, 'settings replacement behavior should render as a single explicit mode');
+    assert_contains('Automatically update the search index when content changes', $settingsHtml, 'settings auto-index control should use a plain checkbox label');
+    assert_contains('type="hidden" name="wp_fts_settings[auto_index]" value="0"', $settingsHtml, 'settings auto-index checkbox should post an unchecked value');
+    assert_contains('type="checkbox" name="wp_fts_settings[auto_index]" value="1" checked="checked"', $settingsHtml, 'settings auto-index checkbox should render checked by default');
+    assert_true(!str_contains($settingsHtml, 'type="radio" name="wp_fts_settings[auto_index]"'), 'settings auto-index control should no longer render as radios');
+    assert_contains('Use full-text search on the public site', $settingsHtml, 'settings replacement behavior should expose the public-site checkbox');
+    assert_contains('Use full-text search in wp-admin post search', $settingsHtml, 'settings replacement behavior should expose the wp-admin checkbox');
+    assert_contains('type="hidden" name="wp_fts_settings[replace_frontend_search]" value="0"', $settingsHtml, 'public-site replacement checkbox should post an unchecked value');
+    assert_contains('type="checkbox" name="wp_fts_settings[replace_frontend_search]" value="1" checked="checked"', $settingsHtml, 'public-site replacement checkbox should be checked by default');
+    assert_contains('type="hidden" name="wp_fts_settings[replace_admin_post_search]" value="0"', $settingsHtml, 'wp-admin replacement checkbox should post an unchecked value');
+    assert_contains('type="checkbox" name="wp_fts_settings[replace_admin_post_search]" value="1" checked="checked"', $settingsHtml, 'wp-admin replacement checkbox should be checked by default');
+    assert_true(!str_contains($settingsHtml, 'name="wp_fts_settings[replace_search_scope]"'), 'settings replacement behavior should no longer render the legacy scope radio group');
+    assert_contains('Search result excerpt length', $settingsHtml, 'settings should use clearer excerpt length copy');
+    assert_contains('short piece of post text shown around a matching word', $settingsHtml, 'settings should explain search result excerpts in plain language');
+    assert_contains('Search term matching', $settingsHtml, 'settings should use product-style search matching language');
+    assert_contains('Match any word (broader)', $settingsHtml, 'settings should describe the broad matching option without making OR the primary label');
+    assert_contains('Require every word (stricter)', $settingsHtml, 'settings should describe the strict matching option without making AND the primary label');
+    assert_true(!str_contains($settingsHtml, '>Match mode<'), 'settings UI should not expose the old Match mode label');
+    assert_contains('Results per page', $settingsHtml, 'settings should rename result limit to results per page');
+    assert_contains('shown on one page or search view', $settingsHtml, 'settings results-per-page help should explain the page/search-view behavior');
     assert_contains('name="wp_fts_settings[language_fallback]" value="1" checked="checked"', $settingsHtml, 'settings defaults should enable language fallback');
+    assert_contains('If the query language is unsupported or produces no matches', $settingsHtml, 'settings language fallback copy should explain unsupported languages and no-match fallback');
+    assert_contains('not copied into this plugin setting', $settingsHtml, 'settings language fallback copy should explain that site language is read dynamically');
+    assert_contains('href="/wp-admin/options-general.php"', $settingsHtml, 'current site language description should link to General Settings');
     assert_contains('name="wp_fts_sandbox_query"', $html, 'sandbox page should include the search query field');
     assert_contains('Try a query against the same index and saved settings', $html, 'sandbox tab should explain that it searches the same index');
     assert_contains('name="tab" value="sandbox"', $html, 'sandbox form should preserve the selected tab on search submission');
@@ -3460,12 +3494,18 @@ test_case('authorized admin sandbox render includes search form and indexed post
     foreach (['zh', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ur', 'ru'] as $language) {
         assert_contains('value="' . $language . '"', $html, "sandbox language selector should include {$language}");
     }
-    assert_contains('name="wp_fts_sandbox_mode"', $html, 'sandbox page should expose match mode');
-    assert_contains('name="wp_fts_sandbox_limit"', $html, 'sandbox page should expose result limit');
-    assert_contains('name="wp_fts_sandbox_snippet_length"', $html, 'sandbox page should expose snippet length');
+    assert_contains('name="wp_fts_sandbox_mode"', $html, 'sandbox page should expose search term matching');
+    assert_contains('Match any word (broader)', $html, 'sandbox page should describe broader matching clearly');
+    assert_contains('Require every word (stricter)', $html, 'sandbox page should describe stricter matching clearly');
+    assert_contains('name="wp_fts_sandbox_limit"', $html, 'sandbox page should expose results per page');
+    assert_contains('Results per page', $html, 'sandbox page should rename maximum results to results per page');
+    assert_contains('name="wp_fts_sandbox_snippet_length"', $html, 'sandbox page should expose search result excerpt length');
+    assert_contains('Search result excerpt length', $html, 'sandbox page should use clearer excerpt copy');
+    assert_contains('short piece of post text shown around a matching word', $html, 'sandbox page should explain excerpts inline');
     assert_contains('name="wp_fts_sandbox_highlight"', $html, 'sandbox page should expose highlight toggle');
     assert_contains('name="wp_fts_sandbox_language_fallback"', $html, 'sandbox page should expose language fallback toggle');
-    assert_contains('Try the current site language if the selected language has no match', $html, 'sandbox language fallback should be an explicit behavior choice');
+    assert_contains('Also try the current WordPress site language when needed', $html, 'sandbox language fallback should be an explicit behavior choice');
+    assert_contains('That language is read dynamically from WordPress', $html, 'sandbox language fallback should explain dynamic site language lookup');
     assert_contains('name="wp_fts_sandbox_post_type[]"', $html, 'sandbox page should expose post type filters');
     assert_contains('name="wp_fts_sandbox_post_status[]"', $html, 'sandbox page should expose post status filters');
     assert_contains('name="wp_fts_sandbox_date_after"', $html, 'sandbox page should expose date-after filter');
@@ -3518,6 +3558,9 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
         $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'sandbox'];
         $sandboxHtml = wp_fts_test_capture_admin_settings_tab(null);
 
+        parse_str('page=' . WP_FTS_Plugin::ADMIN_PAGE_SLUG . '&tab=sandbox', $_GET);
+        $directLandingHtml = wp_fts_test_capture_admin_settings_tab(null);
+
         $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'indexed-content'];
         $indexedHtml = wp_fts_test_capture_admin_settings_tab(null);
 
@@ -3538,6 +3581,8 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
     assert_contains('aria-current="page">Sandbox</a>', $sandboxHtml, 'sandbox query tab should render Sandbox as active');
     assert_contains('<h2>Sandbox</h2>', $sandboxHtml, 'sandbox query tab should render the sandbox panel');
     assert_true(!str_contains($sandboxHtml, '<h2>Settings</h2>'), 'sandbox query tab should not fall back to the settings panel');
+    assert_contains('aria-current="page">Sandbox</a>', $directLandingHtml, 'direct admin landing URL should render Sandbox as active');
+    assert_contains('<h2>Sandbox</h2>', $directLandingHtml, 'direct admin landing URL should render the sandbox panel');
 
     assert_contains('aria-current="page">Indexed content</a>', $indexedHtml, 'indexed-content query tab should render Indexed content as active');
     assert_contains('<h2>Indexed content</h2>', $indexedHtml, 'indexed-content query tab should render the indexed-content panel');
@@ -3550,6 +3595,28 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
     assert_true(!str_contains($fallbackHtml, '<script>'), 'invalid tab values should not be reflected into the admin page');
 });
 
+test_case('playground blueprint preserves sandbox landing tab', function (): void {
+    $blueprintPath = __DIR__ . '/../playground/blueprint.json';
+    $json = file_get_contents($blueprintPath);
+    if (!is_string($json)) {
+        throw new WP_FTS_TestFailure('Could not read playground blueprint.');
+    }
+
+    $blueprint = json_decode($json, true);
+    assert_true(is_array($blueprint), 'playground blueprint should decode as JSON');
+
+    $landingPage = is_scalar($blueprint['landingPage'] ?? null) ? (string) $blueprint['landingPage'] : '';
+    assert_same('/wp-admin/options-general.php?page=wp-fts-settings%26tab=sandbox', $landingPage, 'playground landing page should encode the tab separator so the Sandbox tab survives Playground URL handling');
+
+    $decodedLandingPage = str_replace('%26', '&', $landingPage);
+    $parts = parse_url($decodedLandingPage);
+    assert_same('/wp-admin/options-general.php', (string) ($parts['path'] ?? ''), 'decoded playground landing page should target General Settings');
+    $params = [];
+    parse_str((string) ($parts['query'] ?? ''), $params);
+    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($params['page'] ?? ''), 'decoded playground landing page should target the FTS settings page');
+    assert_same('sandbox', (string) ($params['tab'] ?? ''), 'decoded playground landing page should target the Sandbox tab');
+});
+
 test_case('settings page reports unsupported site language without storing fallback language', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
@@ -3559,6 +3626,7 @@ test_case('settings page reports unsupported site language without storing fallb
 
     assert_contains('Current site language QAA (qaa) uses conservative fallback', $html, 'settings page should explicitly flag unsupported site languages');
     assert_contains('full morphology is unavailable', $html, 'settings page should explain that full morphology is unavailable for unsupported site languages');
+    assert_contains('Change it on the <a href="/wp-admin/options-general.php">WordPress General Settings page</a>', $html, 'current site language description should link to General Settings');
     assert_true(!str_contains($html, 'fallback_language'), 'settings page should not store a stale fallback language value');
 });
 
