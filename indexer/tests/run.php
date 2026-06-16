@@ -3164,6 +3164,33 @@ function wp_fts_test_capture_admin_settings_tab(?string $tab = null): string
 }
 
 /**
+ * @return array{path:string,params:array<string,mixed>}
+ */
+function wp_fts_test_parse_admin_route(string $url): array
+{
+    $parts = parse_url($url);
+    if (!is_array($parts)) {
+        throw new WP_FTS_TestFailure("Could not parse admin route: {$url}");
+    }
+
+    $params = [];
+    parse_str((string) ($parts['query'] ?? ''), $params);
+
+    return [
+        'path' => (string) ($parts['path'] ?? ''),
+        'params' => $params,
+    ];
+}
+
+function wp_fts_test_capture_admin_route(string $url): string
+{
+    $route = wp_fts_test_parse_admin_route($url);
+    $_GET = $route['params'];
+
+    return wp_fts_test_capture_admin_settings_tab(null);
+}
+
+/**
  * @return array<int,array{lang:string,title:string,query:string,preview:string}>
  */
 function wp_fts_test_sandbox_demo_expectations(): array
@@ -3554,18 +3581,40 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
 
     try {
         $_POST = [];
-
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'sandbox'];
-        $sandboxHtml = wp_fts_test_capture_admin_settings_tab(null);
-
-        parse_str('page=' . WP_FTS_Plugin::ADMIN_PAGE_SLUG . '&tab=sandbox', $_GET);
-        $directLandingHtml = wp_fts_test_capture_admin_settings_tab(null);
-
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'indexed-content'];
-        $indexedHtml = wp_fts_test_capture_admin_settings_tab(null);
-
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'analyzer-packs'];
-        $analyzerHtml = wp_fts_test_capture_admin_settings_tab(null);
+        $routes = [
+            'settings' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings',
+                'label' => 'Settings',
+                'heading' => '<h2>Settings</h2>',
+            ],
+            'sandbox' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=sandbox',
+                'label' => 'Sandbox',
+                'heading' => '<h2>Sandbox</h2>',
+            ],
+            'indexed-content' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=indexed-content',
+                'label' => 'Indexed content',
+                'heading' => '<h2>Indexed content</h2>',
+            ],
+            'analyzer-packs' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=analyzer-packs',
+                'label' => 'Analyzer packs',
+                'heading' => '<h2>Analyzer packs</h2>',
+            ],
+        ];
+        $htmlByTab = [];
+        foreach ($routes as $tab => $route) {
+            $parsed = wp_fts_test_parse_admin_route($route['url']);
+            assert_same('/wp-admin/options-general.php', $parsed['path'], "{$tab} route should target General Settings");
+            assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($parsed['params']['page'] ?? ''), "{$tab} route should keep the FTS page slug separate");
+            if ($tab === 'settings') {
+                assert_true(!isset($parsed['params']['tab']), 'settings route should use the base plugin settings URL');
+            } else {
+                assert_same($tab, (string) ($parsed['params']['tab'] ?? ''), "{$tab} route should keep the selected tab separate");
+            }
+            $htmlByTab[$tab] = wp_fts_test_capture_admin_route($route['url']);
+        }
 
         $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'nonesuch<script>'];
         $fallbackHtml = wp_fts_test_capture_admin_settings_tab(null);
@@ -3575,14 +3624,20 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
         $wpdb = $oldWpdb;
     }
 
+    $settingsHtml = $htmlByTab['settings'];
+    $sandboxHtml = $htmlByTab['sandbox'];
+    $indexedHtml = $htmlByTab['indexed-content'];
+    $analyzerHtml = $htmlByTab['analyzer-packs'];
+
+    assert_contains('href="/wp-admin/options-general.php?page=wp-fts-settings"', $settingsHtml, 'settings tab link should target the base settings page URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=sandbox', $sandboxHtml, 'tab links should target the sandbox tab URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=indexed-content', $sandboxHtml, 'tab links should target the indexed-content tab URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=analyzer-packs', $sandboxHtml, 'tab links should target the analyzer-packs tab URL');
+    assert_contains('aria-current="page">Settings</a>', $settingsHtml, 'direct settings URL should render Settings as active');
+    assert_contains('<h2>Settings</h2>', $settingsHtml, 'direct settings URL should render the Settings panel');
     assert_contains('aria-current="page">Sandbox</a>', $sandboxHtml, 'sandbox query tab should render Sandbox as active');
     assert_contains('<h2>Sandbox</h2>', $sandboxHtml, 'sandbox query tab should render the sandbox panel');
     assert_true(!str_contains($sandboxHtml, '<h2>Settings</h2>'), 'sandbox query tab should not fall back to the settings panel');
-    assert_contains('aria-current="page">Sandbox</a>', $directLandingHtml, 'direct admin landing URL should render Sandbox as active');
-    assert_contains('<h2>Sandbox</h2>', $directLandingHtml, 'direct admin landing URL should render the sandbox panel');
 
     assert_contains('aria-current="page">Indexed content</a>', $indexedHtml, 'indexed-content query tab should render Indexed content as active');
     assert_contains('<h2>Indexed content</h2>', $indexedHtml, 'indexed-content query tab should render the indexed-content panel');
@@ -3606,15 +3661,17 @@ test_case('playground blueprint preserves sandbox landing tab', function (): voi
     assert_true(is_array($blueprint), 'playground blueprint should decode as JSON');
 
     $landingPage = is_scalar($blueprint['landingPage'] ?? null) ? (string) $blueprint['landingPage'] : '';
-    assert_same('/wp-admin/options-general.php?page=wp-fts-settings%26tab=sandbox', $landingPage, 'playground landing page should encode the tab separator so the Sandbox tab survives Playground URL handling');
+    assert_same('/wp-admin/options-general.php?page=wp-fts-settings&tab=sandbox', $landingPage, 'playground landing page should use a normal admin query string');
+    assert_true(!str_contains($landingPage, '%26'), 'playground landing page should not encode the tab separator into the page slug');
 
-    $decodedLandingPage = str_replace('%26', '&', $landingPage);
-    $parts = parse_url($decodedLandingPage);
-    assert_same('/wp-admin/options-general.php', (string) ($parts['path'] ?? ''), 'decoded playground landing page should target General Settings');
-    $params = [];
-    parse_str((string) ($parts['query'] ?? ''), $params);
-    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($params['page'] ?? ''), 'decoded playground landing page should target the FTS settings page');
-    assert_same('sandbox', (string) ($params['tab'] ?? ''), 'decoded playground landing page should target the Sandbox tab');
+    $route = wp_fts_test_parse_admin_route($landingPage);
+    assert_same('/wp-admin/options-general.php', $route['path'], 'playground landing page should target General Settings');
+    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($route['params']['page'] ?? ''), 'playground landing page should target the FTS settings page');
+    assert_same('sandbox', (string) ($route['params']['tab'] ?? ''), 'playground landing page should target the Sandbox tab');
+
+    $brokenRoute = wp_fts_test_parse_admin_route('/wp-admin/options-general.php?page=wp-fts-settings%26tab=sandbox');
+    assert_same('wp-fts-settings&tab=sandbox', (string) ($brokenRoute['params']['page'] ?? ''), 'real query parsing treats encoded ampersand as part of the page value');
+    assert_true(!isset($brokenRoute['params']['tab']), 'real query parsing does not recover a tab parameter from an encoded ampersand');
 });
 
 test_case('settings page reports unsupported site language without storing fallback language', function (): void {
