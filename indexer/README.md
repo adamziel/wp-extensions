@@ -85,16 +85,33 @@ restored with WordPress content.
 
 ## Language And Morphology
 
-Language routing is explicit-first. Use `wp fts reindex --lang=...` or
-`wp fts search --lang=...` when you know the language. In wp-admin, the `FTS
-Language` post field can pin indexing for a post. Polylang/WPML metadata and
-HTML `lang`/`xml:lang` scopes are also honored, with HTML scopes able to route
-individual content segments.
+Language routing is explicit-first. Use `wp fts reindex --lang=...`,
+`wp fts search --lang=...`, or the sandbox language selector when you know the
+language. In wp-admin, the `FTS Language` post field can pin indexing for a
+post. HTML `lang`/`xml:lang` scopes, Polylang/WPML metadata, and custom analyzer
+resolvers are also honored, with HTML scopes able to route individual visible
+segments.
 
-Automatic detection is conservative gap filling, not statistical language
-detection. It uses script ranges, distinctive Latin letters, and compact lexical
-evidence only when stronger language signals are absent. Unsupported or
-ambiguous languages fall back conservatively instead of guessing aggressively.
+Automatic detection is conservative, deterministic gap filling, not statistical
+or ML language detection. It only runs for untagged visible text groups after
+stronger language signals are absent. The detector looks at script ranges,
+distinctive Latin letters, and compact lexical evidence with thresholds; one
+weak marker is not enough. Inline HTML is reduced to visible words before
+morphology, so text split across nested inline tags is analyzed as the reader
+sees it.
+
+If no language can be detected, analysis falls back instead of failing.
+Documents fall back through the primary document language, post metadata, site
+locale, and the analyzer default. Queries fall back through the selected or
+current query language, site locale, and the analyzer default. In Playground,
+that usually means `en-US`/`en` unless you choose another language.
+
+Terms are stored in language partitions such as `pl:chrzastka` or `en:search`,
+and query terms must resolve to the same partition to match. Automatic detection
+does not search every language because broad cross-language searches would add
+noisy matches and make ranking less useful. In the sandbox, use the `Indexed
+terms` column to inspect the actual stored postings when the visible preview
+text and indexed analyzer output differ.
 
 The baseline selectable and detectable routing set covers English (`en`),
 Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French
