@@ -16,8 +16,9 @@ final class WP_FTS_Plugin
     public const CRON_HOOK = 'wp_fts_process_index_queue';
     public const REST_NAMESPACE = 'wp-fts/v1';
     public const REST_SEARCH_ROUTE = '/search';
-    public const ADMIN_PAGE_SLUG = 'wp-fts-sandbox';
+    public const ADMIN_PAGE_SLUG = 'wp-fts-settings';
     public const ADMIN_CAPABILITY = 'manage_options';
+    public const SETTINGS_OPTION = 'wp_fts_settings';
     public const SANDBOX_DEMO_POSTS_OPTION = 'wp_fts_sandbox_demo_post_ids';
     public const ANALYZER_OPTIONS_OPTION = 'wp_fts_analyzer_options';
     public const ANALYZER_OPTIONS_FILTER = 'wp_fts_analyzer_options';
@@ -33,11 +34,39 @@ final class WP_FTS_Plugin
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
     private const ADMIN_POSTS_PAGE_FIELD = 'wp_fts_sandbox_posts_page';
+    private const ADMIN_TAB_FIELD = 'tab';
+    private const ADMIN_SETTINGS_TAB = 'settings';
+    private const ADMIN_SANDBOX_TAB = 'sandbox';
+    private const ADMIN_INDEXED_TAB = 'indexed-content';
+    private const ADMIN_ANALYZER_TAB = 'analyzer-packs';
+    private const ADMIN_MODE_FIELD = 'wp_fts_sandbox_mode';
+    private const ADMIN_LIMIT_FIELD = 'wp_fts_sandbox_limit';
+    private const ADMIN_SNIPPET_LENGTH_FIELD = 'wp_fts_sandbox_snippet_length';
+    private const ADMIN_HIGHLIGHT_FIELD = 'wp_fts_sandbox_highlight';
+    private const ADMIN_LANGUAGE_FALLBACK_FIELD = 'wp_fts_sandbox_language_fallback';
+    private const ADMIN_POST_TYPE_FIELD = 'wp_fts_sandbox_post_type';
+    private const ADMIN_POST_STATUS_FIELD = 'wp_fts_sandbox_post_status';
+    private const ADMIN_DATE_AFTER_FIELD = 'wp_fts_sandbox_date_after';
+    private const ADMIN_DATE_BEFORE_FIELD = 'wp_fts_sandbox_date_before';
+    private const SETTINGS_GROUP = 'wp_fts_settings';
     private const POST_LANGUAGE_FIELD = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_ACTION = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_FIELD = 'wp_fts_post_language_nonce';
     private const SANDBOX_INDEXED_TERMS_LIMIT = 24;
     private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
+    private const SETTINGS_SNIPPET_MIN = 40;
+    private const SETTINGS_SNIPPET_MAX = 500;
+    private const DEFAULT_SETTINGS = [
+        'index_post_types' => ['post', 'page'],
+        'auto_index' => true,
+        'replace_frontend_search' => true,
+        'replace_admin_post_search' => true,
+        'highlight' => true,
+        'snippet_length' => 180,
+        'match_mode' => 'OR',
+        'result_limit' => 10,
+        'language_fallback' => true,
+    ];
     private const VISIBILITY_REFILL_MIN_BATCH = 10;
     private const VISIBILITY_REFILL_MULTIPLIER = 4;
     private const VISIBILITY_REFILL_MAX_SCAN = 250;
@@ -79,6 +108,7 @@ final class WP_FTS_Plugin
         add_action(self::CRON_HOOK, [self::class, 'process_queue'], 10, 0);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
+        add_action('admin_init', [self::class, 'register_settings'], 10, 0);
         add_action('add_meta_boxes', [self::class, 'register_language_meta_box'], 10, 0);
         add_action('save_post', [self::class, 'save_post_language_override'], 5, 3);
         add_action('pre_get_posts', [self::class, 'prepare_frontend_search_query'], 10, 1);
@@ -131,6 +161,7 @@ final class WP_FTS_Plugin
         self::delete_option(self::QUEUE_OPTION);
         self::delete_option(self::SANDBOX_DEMO_POSTS_OPTION);
         self::delete_option(self::ANALYZER_OPTIONS_OPTION);
+        self::delete_option(self::SETTINGS_OPTION);
     }
 
     /**
@@ -184,6 +215,10 @@ final class WP_FTS_Plugin
         if ($post !== null && !self::is_indexable_post($post)) {
             self::tombstone_post($post_id);
             self::remove_from_queue([$post_id]);
+            return;
+        }
+
+        if ($post !== null && !self::settings()['auto_index']) {
             return;
         }
 
@@ -300,21 +335,37 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Register a small wp-admin sandbox under Tools.
+     * Register the primary wp-admin surface under Settings.
      */
     public static function register_admin_menu(): void
     {
-        if (!function_exists('add_management_page')) {
+        if (!function_exists('add_options_page')) {
             return;
         }
 
-        add_management_page(
-            'FTS Sandbox',
-            'FTS Sandbox',
+        add_options_page(
+            'Full-Text Search',
+            'Full-Text Search',
             self::ADMIN_CAPABILITY,
             self::ADMIN_PAGE_SLUG,
-            [self::class, 'render_admin_sandbox']
+            [self::class, 'render_admin_settings_page']
         );
+    }
+
+    /**
+     * Register the plugin's operator-facing settings option.
+     */
+    public static function register_settings(): void
+    {
+        if (!function_exists('register_setting')) {
+            return;
+        }
+
+        register_setting(self::SETTINGS_GROUP, self::SETTINGS_OPTION, [
+            'type' => 'array',
+            'sanitize_callback' => [self::class, 'sanitize_settings'],
+            'default' => self::default_settings(),
+        ]);
     }
 
     /**
@@ -352,7 +403,7 @@ final class WP_FTS_Plugin
         echo '<input type="hidden" name="' . self::esc_attr(self::POST_LANGUAGE_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
         echo '<p><label for="wp-fts-post-language">Post language</label></p>';
         echo '<select id="wp-fts-post-language" name="' . self::esc_attr(self::POST_LANGUAGE_FIELD) . '" style="width:100%;">';
-        foreach (self::sandbox_language_labels() as $language => $label) {
+        foreach (['auto' => 'Automatic'] + self::sandbox_language_labels() as $language => $label) {
             $selected = $selected_language === $language ? ' selected="selected"' : '';
             echo '<option value="' . self::esc_attr($language) . '"' . $selected . '>' . self::esc_html($label) . '</option>';
         }
@@ -393,18 +444,217 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Render the admin-only FTS sandbox page.
+     * Render the primary Settings > Full-Text Search admin page.
      */
-    public static function render_admin_sandbox(): void
+    public static function render_admin_settings_page(?string $forced_tab = null): void
     {
         if (!self::can_manage_admin_sandbox()) {
             echo '<div class="wrap">';
-            echo '<h1>FTS Sandbox</h1>';
-            self::render_sandbox_notice('error', 'You do not have permission to use the FTS sandbox.');
+            echo '<h1>Full-Text Search</h1>';
+            self::render_sandbox_notice('error', 'You do not have permission to manage Full-Text Search settings.');
             echo '</div>';
             return;
         }
 
+        $tab = $forced_tab !== null ? self::sanitize_admin_tab($forced_tab) : self::selected_admin_tab();
+
+        echo '<div class="wrap">';
+        echo '<h1>Full-Text Search</h1>';
+        self::render_admin_tabs($tab);
+        self::render_site_language_status_notice();
+
+        if ($tab === self::ADMIN_SANDBOX_TAB) {
+            self::render_admin_sandbox_tab();
+        } elseif ($tab === self::ADMIN_INDEXED_TAB) {
+            self::render_indexed_content_tab();
+        } elseif ($tab === self::ADMIN_ANALYZER_TAB) {
+            self::render_analyzer_packs_tab();
+        } else {
+            self::render_settings_tab();
+        }
+
+        echo '</div>';
+    }
+
+    /**
+     * Compatibility entry point for the old sandbox callback.
+     */
+    public static function render_admin_sandbox(): void
+    {
+        self::render_admin_settings_page(self::ADMIN_SANDBOX_TAB);
+    }
+
+    /**
+     * Current admin user gate for all sandbox rendering and actions.
+     */
+    private static function can_manage_admin_sandbox(): bool
+    {
+        return function_exists('current_user_can') && current_user_can(self::ADMIN_CAPABILITY);
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private static function admin_tabs(): array
+    {
+        return [
+            self::ADMIN_SETTINGS_TAB => 'Settings',
+            self::ADMIN_SANDBOX_TAB => 'Sandbox',
+            self::ADMIN_INDEXED_TAB => 'Indexed content',
+            self::ADMIN_ANALYZER_TAB => 'Analyzer packs',
+        ];
+    }
+
+    private static function selected_admin_tab(): string
+    {
+        return self::sanitize_admin_tab(self::request_text_value($_GET, self::ADMIN_TAB_FIELD, 40));
+    }
+
+    private static function sanitize_admin_tab(string $tab): string
+    {
+        $tab = self::sanitize_key($tab);
+
+        return array_key_exists($tab, self::admin_tabs()) ? $tab : self::ADMIN_SETTINGS_TAB;
+    }
+
+    private static function render_admin_tabs(string $current_tab): void
+    {
+        echo '<nav class="nav-tab-wrapper" aria-label="Full-Text Search tabs">';
+        foreach (self::admin_tabs() as $tab => $label) {
+            $classes = 'nav-tab';
+            if ($tab === $current_tab) {
+                $classes .= ' nav-tab-active';
+            }
+            echo '<a class="' . self::esc_attr($classes) . '" href="' . self::esc_url(self::admin_page_url($tab)) . '">';
+            echo self::esc_html($label);
+            echo '</a>';
+        }
+        echo '</nav>';
+    }
+
+    private static function render_settings_tab(): void
+    {
+        $settings = self::settings();
+        $post_types = self::settings_post_type_choices();
+
+        echo '<h2>Settings</h2>';
+        echo '<form method="post" action="' . self::esc_url(self::admin_options_url()) . '">';
+        if (function_exists('settings_fields')) {
+            settings_fields(self::SETTINGS_GROUP);
+        } else {
+            echo '<input type="hidden" name="option_page" value="' . self::esc_attr(self::SETTINGS_GROUP) . '">';
+            echo '<input type="hidden" name="action" value="update">';
+        }
+
+        echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<tr><th scope="row">Indexed post types</th><td>';
+        foreach ($post_types as $post_type) {
+            $checked = in_array($post_type, $settings['index_post_types'], true) ? ' checked="checked"' : '';
+            echo '<label><input type="checkbox" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[index_post_types][]" value="' . self::esc_attr($post_type) . '"' . $checked . '> ';
+            echo '<code>' . self::esc_html($post_type) . '</code></label><br>';
+        }
+        echo '</td></tr>';
+
+        self::render_settings_checkbox_row('auto_index', 'Auto-index on save/update', $settings['auto_index']);
+        self::render_settings_checkbox_row('replace_frontend_search', 'Replace frontend search', $settings['replace_frontend_search']);
+        self::render_settings_checkbox_row('replace_admin_post_search', 'Replace admin post search', $settings['replace_admin_post_search']);
+        self::render_settings_checkbox_row('highlight', 'Highlight search results', $settings['highlight']);
+
+        echo '<tr><th scope="row"><label for="wp-fts-settings-snippet-length">Snippet length</label></th><td>';
+        echo '<input id="wp-fts-settings-snippet-length" type="number" min="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MIN) . '" max="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MAX) . '" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[snippet_length]" value="' . self::esc_attr((string) $settings['snippet_length']) . '">';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-settings-match-mode">Match mode</label></th><td>';
+        echo '<select id="wp-fts-settings-match-mode" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[match_mode]">';
+        self::render_option('OR', 'Any term', $settings['match_mode']);
+        self::render_option('AND', 'All terms', $settings['match_mode']);
+        echo '</select></td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-settings-result-limit">Result limit</label></th><td>';
+        echo '<input id="wp-fts-settings-result-limit" type="number" min="1" max="' . self::esc_attr((string) self::MAX_SEARCH_LIMIT) . '" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[result_limit]" value="' . self::esc_attr((string) $settings['result_limit']) . '">';
+        echo '</td></tr>';
+
+        self::render_settings_checkbox_row('language_fallback', 'Language fallback', $settings['language_fallback']);
+
+        echo '</tbody></table>';
+        if (function_exists('submit_button')) {
+            submit_button('Save Changes');
+        } else {
+            echo '<p><button type="submit" class="button button-primary">Save Changes</button></p>';
+        }
+        echo '</form>';
+    }
+
+    private static function render_settings_checkbox_row(string $key, string $label, bool $enabled): void
+    {
+        echo '<tr><th scope="row">' . self::esc_html($label) . '</th><td>';
+        echo '<input type="hidden" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[' . self::esc_attr($key) . ']" value="0">';
+        echo '<label><input type="checkbox" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[' . self::esc_attr($key) . ']" value="1"' . ($enabled ? ' checked="checked"' : '') . '> Enabled</label>';
+        echo '</td></tr>';
+    }
+
+    private static function render_admin_sandbox_tab(): void
+    {
+        $state = self::admin_sandbox_state(false);
+        foreach ($state['messages'] as $message) {
+            self::render_sandbox_notice($message[0], $message[1]);
+        }
+
+        self::render_sandbox_search_form(
+            $state['query'],
+            $state['selected_language'],
+            $state['controls'],
+            $state['search_submitted']
+        );
+
+        if ($state['search_submitted']) {
+            self::render_sandbox_results($state['results']);
+        }
+    }
+
+    private static function render_indexed_content_tab(): void
+    {
+        $messages = [];
+        try {
+            $indexed_posts = self::sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
+        } catch (Throwable $e) {
+            $messages[] = ['error', 'Could not read indexed posts: ' . $e->getMessage()];
+            $indexed_posts = self::empty_sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
+        }
+
+        echo '<h2>Indexed content</h2>';
+        foreach ($messages as $message) {
+            self::render_sandbox_notice($message[0], $message[1]);
+        }
+        self::render_sandbox_indexed_posts_table(
+            $indexed_posts,
+            self::sandbox_search_query(),
+            self::sandbox_selected_language(),
+            self::sandbox_search_submitted()
+        );
+    }
+
+    private static function render_analyzer_packs_tab(): void
+    {
+        echo '<h2>Analyzer packs</h2>';
+        echo '<h3>Runtime analyzer packs</h3>';
+        self::render_analyzer_pack_statuses(self::runtime_analyzer_pack_statuses());
+        echo '<h3>Sandbox analyzer packs</h3>';
+        self::render_analyzer_pack_statuses(self::sandbox_demo_analyzer_pack_statuses());
+    }
+
+    /**
+     * @return array{
+     *   messages:array<int,array{0:string,1:string}>,
+     *   query:string,
+     *   selected_language:string,
+     *   search_submitted:bool,
+     *   controls:array<string,mixed>,
+     *   results:array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
+     * }
+     */
+    private static function admin_sandbox_state(bool $include_indexed_posts): array
+    {
         $messages = [];
         $demo_post_ids = self::sandbox_demo_post_ids();
         $post_action_submitted = self::sandbox_post_action_submitted();
@@ -448,6 +698,7 @@ final class WP_FTS_Plugin
         $search_submitted = self::sandbox_search_submitted();
         $query = self::sandbox_search_query();
         $selected_language = self::sandbox_selected_language();
+        $controls = self::sandbox_search_controls($search_submitted);
         if ($query === '' && !$search_submitted) {
             $query = 'mouse';
         }
@@ -458,7 +709,7 @@ final class WP_FTS_Plugin
                 $messages[] = ['error', 'Enter a search query before running the sandbox search.'];
             } else {
                 try {
-                    $results = self::sandbox_search_results($query, $selected_language);
+                    $results = self::sandbox_search_results($query, $selected_language, $controls);
                     $messages[] = ['info', sprintf('Search returned %d result(s).', count($results['results']))];
                 } catch (Throwable $e) {
                     $messages[] = ['error', 'Could not run the sandbox search: ' . $e->getMessage()];
@@ -466,22 +717,170 @@ final class WP_FTS_Plugin
             }
         }
 
-        try {
-            $indexed_posts = self::sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
-        } catch (Throwable $e) {
-            $messages[] = ['error', 'Could not read indexed posts: ' . $e->getMessage()];
-            $indexed_posts = self::empty_sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
-        }
-
-        self::render_admin_sandbox_page($messages, $indexed_posts, $query, $selected_language, $search_submitted, $results);
+        return [
+            'messages' => $messages,
+            'query' => $query,
+            'selected_language' => $selected_language,
+            'search_submitted' => $search_submitted,
+            'controls' => $controls,
+            'results' => $results,
+        ];
     }
 
     /**
-     * Current admin user gate for all sandbox rendering and actions.
+     * @return array{
+     *   mode:string,
+     *   limit:int,
+     *   snippet_length:int,
+     *   highlight:bool,
+     *   language_fallback:bool,
+     *   post_types:string[],
+     *   post_statuses:string[],
+     *   date_after:string,
+     *   date_before:string
+     * }
      */
-    private static function can_manage_admin_sandbox(): bool
+    private static function sandbox_search_controls(bool $search_submitted): array
     {
-        return function_exists('current_user_can') && current_user_can(self::ADMIN_CAPABILITY);
+        $settings = self::settings();
+        $mode = strtoupper(self::request_text_value($_GET, self::ADMIN_MODE_FIELD, 10));
+        if (!in_array($mode, ['OR', 'AND'], true)) {
+            $mode = $settings['match_mode'];
+        }
+
+        return [
+            'mode' => $mode,
+            'limit' => self::clamp_int(self::request_text_value($_GET, self::ADMIN_LIMIT_FIELD, 8) ?: $settings['result_limit'], 1, self::MAX_SEARCH_LIMIT),
+            'snippet_length' => self::clamp_int(self::request_text_value($_GET, self::ADMIN_SNIPPET_LENGTH_FIELD, 8) ?: $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
+            'highlight' => self::request_bool_value($_GET, self::ADMIN_HIGHLIGHT_FIELD, $settings['highlight'], $search_submitted),
+            'language_fallback' => self::request_bool_value($_GET, self::ADMIN_LANGUAGE_FALLBACK_FIELD, $settings['language_fallback'], $search_submitted),
+            'post_types' => self::request_list_value($_GET, self::ADMIN_POST_TYPE_FIELD, self::settings_post_type_choices(), $settings['index_post_types']),
+            'post_statuses' => self::request_list_value($_GET, self::ADMIN_POST_STATUS_FIELD, self::sandbox_post_status_choices(), self::sandbox_post_status_choices()),
+            'date_after' => self::sanitize_date_filter(self::request_text_value($_GET, self::ADMIN_DATE_AFTER_FIELD, 20)),
+            'date_before' => self::sanitize_date_filter(self::request_text_value($_GET, self::ADMIN_DATE_BEFORE_FIELD, 20)),
+        ];
+    }
+
+    /**
+     * Sanitize the persisted `wp_fts_settings` option.
+     *
+     * @param mixed $value Raw option value from Settings API.
+     * @return array<string,mixed>
+     */
+    public static function sanitize_settings(mixed $value): array
+    {
+        $value = is_array($value) ? $value : [];
+        $defaults = self::default_settings();
+        $allowed_post_types = self::settings_post_type_choices();
+
+        $post_types = self::sanitize_post_type_list($value['index_post_types'] ?? [], $allowed_post_types);
+        if ($post_types === []) {
+            $post_types = $defaults['index_post_types'];
+        }
+
+        $mode = strtoupper(is_scalar($value['match_mode'] ?? null) ? (string) $value['match_mode'] : '');
+        if (!in_array($mode, ['OR', 'AND'], true)) {
+            $mode = $defaults['match_mode'];
+        }
+
+        return [
+            'index_post_types' => $post_types,
+            'auto_index' => array_key_exists('auto_index', $value) ? self::truthy_admin_value($value['auto_index']) : $defaults['auto_index'],
+            'replace_frontend_search' => array_key_exists('replace_frontend_search', $value) ? self::truthy_admin_value($value['replace_frontend_search']) : $defaults['replace_frontend_search'],
+            'replace_admin_post_search' => array_key_exists('replace_admin_post_search', $value) ? self::truthy_admin_value($value['replace_admin_post_search']) : $defaults['replace_admin_post_search'],
+            'highlight' => array_key_exists('highlight', $value) ? self::truthy_admin_value($value['highlight']) : $defaults['highlight'],
+            'snippet_length' => self::clamp_int($value['snippet_length'] ?? $defaults['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
+            'match_mode' => $mode,
+            'result_limit' => self::clamp_int($value['result_limit'] ?? $defaults['result_limit'], 1, self::MAX_SEARCH_LIMIT),
+            'language_fallback' => array_key_exists('language_fallback', $value) ? self::truthy_admin_value($value['language_fallback']) : $defaults['language_fallback'],
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    public static function default_settings(): array
+    {
+        return self::DEFAULT_SETTINGS;
+    }
+
+    /**
+     * @return array{
+     *   index_post_types:string[],
+     *   auto_index:bool,
+     *   replace_frontend_search:bool,
+     *   replace_admin_post_search:bool,
+     *   highlight:bool,
+     *   snippet_length:int,
+     *   match_mode:string,
+     *   result_limit:int,
+     *   language_fallback:bool
+     * }
+     */
+    private static function settings(): array
+    {
+        $stored = self::get_option(self::SETTINGS_OPTION, []);
+        $settings = self::sanitize_settings($stored);
+        $defaults = self::default_settings();
+
+        return array_replace($defaults, $settings);
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function settings_post_type_choices(): array
+    {
+        $choices = self::public_searchable_post_types();
+        foreach (self::DEFAULT_SETTINGS['index_post_types'] as $post_type) {
+            if (!in_array($post_type, $choices, true) && self::is_public_searchable_post_type($post_type)) {
+                $choices[] = $post_type;
+            }
+        }
+        $choices = array_values(array_unique($choices));
+        sort($choices, SORT_STRING);
+
+        return $choices;
+    }
+
+    /**
+     * @param mixed $value
+     * @param string[] $allowed
+     * @return string[]
+     */
+    private static function sanitize_post_type_list(mixed $value, array $allowed): array
+    {
+        $allowed_map = array_fill_keys($allowed, true);
+        $post_types = [];
+        foreach (is_array($value) ? $value : [$value] as $item) {
+            if (!is_scalar($item)) {
+                continue;
+            }
+            $post_type = self::sanitize_key((string) $item);
+            if ($post_type !== '' && isset($allowed_map[$post_type])) {
+                $post_types[$post_type] = true;
+            }
+        }
+
+        $post_types = array_keys($post_types);
+        sort($post_types, SORT_STRING);
+
+        return $post_types;
+    }
+
+    private static function truthy_admin_value(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (float) $value !== 0.0;
+        }
+        if (is_scalar($value)) {
+            return !in_array(strtolower(trim((string) $value)), ['', '0', 'false', 'no', 'off'], true);
+        }
+
+        return false;
     }
 
     /**
@@ -978,7 +1377,7 @@ final class WP_FTS_Plugin
     {
         $language = self::sanitize_key(self::request_text_value($_GET, self::ADMIN_LANG_FIELD, 20));
 
-        return array_key_exists($language, self::sandbox_language_labels()) ? $language : 'auto';
+        return array_key_exists($language, self::sandbox_query_language_labels()) ? $language : 'auto';
     }
 
     /**
@@ -987,7 +1386,6 @@ final class WP_FTS_Plugin
     private static function sandbox_language_labels(): array
     {
         return [
-            'auto' => 'Automatic',
             'en' => 'English',
             'zh' => 'Chinese (Mandarin)',
             'hi' => 'Hindi',
@@ -1005,13 +1403,21 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * @return array<string,string>
+     */
+    private static function sandbox_query_language_labels(): array
+    {
+        return ['auto' => 'Automatic', 'site' => 'Site language'] + self::sandbox_language_labels();
+    }
+
+    /**
      * @return string[]
      */
     private static function sandbox_auto_search_languages(): array
     {
         return array_values(array_filter(
             array_keys(self::sandbox_language_labels()),
-            static fn(string $language): bool => $language !== 'auto'
+            static fn(string $language): bool => $language !== 'auto' && $language !== 'site'
         ));
     }
 
@@ -1077,23 +1483,51 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * @param array<string,mixed> $controls
      * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
      */
-    private static function sandbox_search_results(string $query, string $selected_language): array
+    private static function sandbox_search_results(string $query, string $selected_language, array $controls = []): array
     {
-        $limit = 10;
+        $settings = self::settings();
+        $limit = self::clamp_int($controls['limit'] ?? $settings['result_limit'], 1, self::MAX_SEARCH_LIMIT);
+        $mode = strtoupper((string) ($controls['mode'] ?? $settings['match_mode']));
+        if (!in_array($mode, ['OR', 'AND'], true)) {
+            $mode = $settings['match_mode'];
+        }
+
         $storage = self::storage(false);
-        $searcher = new WP_FTS_Searcher($storage, self::sandbox_analyzer());
         $search_options = [
-            'mode' => 'OR',
+            'mode' => $mode,
             'limit' => $limit,
             'include_total' => true,
             'include_metadata' => true,
             'include_snippets' => true,
-            'highlight' => true,
-            'snippet_length' => 180,
+            'highlight' => (bool) ($controls['highlight'] ?? $settings['highlight']),
+            'snippet_length' => self::clamp_int($controls['snippet_length'] ?? $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
         ];
-        if ($selected_language !== 'auto') {
+        foreach (['post_types' => 'post_type', 'post_statuses' => 'post_status'] as $control_key => $search_key) {
+            if (isset($controls[$control_key]) && is_array($controls[$control_key]) && $controls[$control_key] !== []) {
+                $search_options[$search_key] = array_values(array_filter(
+                    array_map(static fn(mixed $value): string => is_scalar($value) ? (string) $value : '', $controls[$control_key]),
+                    static fn(string $value): bool => trim($value) !== ''
+                ));
+            }
+        }
+        foreach (['date_after', 'date_before'] as $date_key) {
+            if (isset($controls[$date_key]) && is_scalar($controls[$date_key]) && trim((string) $controls[$date_key]) !== '') {
+                $search_options[$date_key] = (string) $controls[$date_key];
+            }
+        }
+        if (!empty($controls['language_fallback'])) {
+            $search_options['language_fallback'] = true;
+            $search_options['fallback_languages'] = self::site_fallback_languages();
+        }
+
+        if ($selected_language === 'site') {
+            $site_language = self::site_language();
+            $search_options['lang'] = $site_language;
+            $search_options['query_lang'] = $site_language;
+        } elseif ($selected_language !== 'auto') {
             $search_options['lang'] = $selected_language;
             $search_options['query_lang'] = $selected_language;
         } else {
@@ -1101,41 +1535,50 @@ final class WP_FTS_Plugin
         }
 
         $visible = [];
-        $offset = 0;
+        $seen_post_ids = [];
         $total = 0;
         $query_language = '';
         $batch_limit = self::visibility_refill_batch_limit($limit);
-        while (count($visible) < $limit && $offset < self::VISIBILITY_REFILL_MAX_SCAN) {
-            $search_options['limit'] = min($batch_limit, self::VISIBILITY_REFILL_MAX_SCAN - $offset);
-            $search_options['offset'] = $offset;
-            $payload = $searcher->search($query, $search_options);
-            $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
-            $total = is_numeric($payload['total'] ?? null) ? (int) $payload['total'] : $total;
-            if (is_scalar($payload['query_lang'] ?? null) && trim((string) $payload['query_lang']) !== '') {
-                $query_language = (string) $payload['query_lang'];
-            }
-            if ($rows === []) {
+        foreach ([self::sandbox_analyzer(), self::runtime_analyzer()] as $analyzer) {
+            if (count($visible) >= $limit) {
                 break;
             }
 
-            foreach ($rows as $row) {
-                if (!is_array($row)) {
-                    continue;
+            $searcher = new WP_FTS_Searcher($storage, $analyzer);
+            $offset = 0;
+            while (count($visible) < $limit && $offset < self::VISIBILITY_REFILL_MAX_SCAN) {
+                $search_options['limit'] = min($batch_limit, self::VISIBILITY_REFILL_MAX_SCAN - $offset);
+                $search_options['offset'] = $offset;
+                $payload = $searcher->search($query, $search_options);
+                $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
+                $total = is_numeric($payload['total'] ?? null) ? max($total, (int) $payload['total']) : $total;
+                if ($query_language === '' && is_scalar($payload['query_lang'] ?? null) && trim((string) $payload['query_lang']) !== '') {
+                    $query_language = (string) $payload['query_lang'];
                 }
-                $post_id = (int) ($row['doc_id'] ?? $row['post_id'] ?? 0);
-                if ($post_id <= 0 || !self::can_read_post_result($post_id)) {
-                    continue;
-                }
-                $visible[] = self::sandbox_result_row($row, $storage, $post_id);
-                if (count($visible) >= $limit) {
+                if ($rows === []) {
                     break;
                 }
-            }
 
-            if (count($rows) < $search_options['limit']) {
-                break;
+                foreach ($rows as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $post_id = (int) ($row['doc_id'] ?? $row['post_id'] ?? 0);
+                    if ($post_id <= 0 || isset($seen_post_ids[$post_id]) || !self::can_read_post_result($post_id)) {
+                        continue;
+                    }
+                    $seen_post_ids[$post_id] = true;
+                    $visible[] = self::sandbox_result_row($row, $storage, $post_id);
+                    if (count($visible) >= $limit) {
+                        break;
+                    }
+                }
+
+                if (count($rows) < $search_options['limit']) {
+                    break;
+                }
+                $offset += $search_options['limit'];
             }
-            $offset += $search_options['limit'];
         }
         $query_language = self::sandbox_resolved_query_language($selected_language, $query_language, $visible);
 
@@ -1729,48 +2172,89 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Render the wp-admin sandbox surface.
-     *
-     * @param array<int,array{0:string,1:string}> $messages
-     * @param array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,preview:string}>} $indexed_posts
-     * @param array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>} $results
+     * @param array{
+     *   mode:string,
+     *   limit:int,
+     *   snippet_length:int,
+     *   highlight:bool,
+     *   language_fallback:bool,
+     *   post_types:string[],
+     *   post_statuses:string[],
+     *   date_after:string,
+     *   date_before:string
+     * } $controls
      */
-    private static function render_admin_sandbox_page(array $messages, array $indexed_posts, string $query, string $selected_language, bool $search_submitted, array $results): void
+    private static function render_sandbox_search_form(string $query, string $selected_language, array $controls, bool $search_submitted): void
     {
-        echo '<div class="wrap">';
-        echo '<h1>Pure PHP FTS Sandbox</h1>';
-
-        foreach ($messages as $message) {
-            self::render_sandbox_notice($message[0], $message[1]);
-        }
-
-        self::render_sandbox_analyzer_pack_statuses();
-
-        echo '<h2>Indexed posts</h2>';
-        echo '<p>The sandbox prepares demo posts and indexes them automatically. Automatic detection is the default; choose a language on the post edit screen to pin indexing for that post.</p>';
-        self::render_sandbox_indexed_posts_table($indexed_posts, $query, $selected_language, $search_submitted);
-
-        echo '<h2>Search</h2>';
+        echo '<h2>Sandbox</h2>';
         self::render_sandbox_query_suggestions();
-        echo '<form method="get" action="' . self::esc_url(self::admin_tools_url()) . '">';
+        echo '<form method="get" action="' . self::esc_url(self::admin_options_general_url()) . '">';
         echo '<input type="hidden" name="page" value="' . self::esc_attr(self::ADMIN_PAGE_SLUG) . '">';
-        echo '<label for="wp-fts-sandbox-query">Query</label> ';
-        echo '<input id="wp-fts-sandbox-query" type="search" class="regular-text" name="' . self::esc_attr(self::ADMIN_QUERY_FIELD) . '" value="' . self::esc_attr($query) . '"> ';
-        echo '<label for="wp-fts-sandbox-lang">Query language</label> ';
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_TAB_FIELD) . '" value="' . self::esc_attr(self::ADMIN_SANDBOX_TAB) . '">';
+        echo '<table class="form-table" role="presentation"><tbody>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-sandbox-query">Query</label></th><td>';
+        echo '<input id="wp-fts-sandbox-query" type="search" class="regular-text" name="' . self::esc_attr(self::ADMIN_QUERY_FIELD) . '" value="' . self::esc_attr($query) . '">';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-sandbox-lang">Query language</label></th><td>';
         echo '<select id="wp-fts-sandbox-lang" name="' . self::esc_attr(self::ADMIN_LANG_FIELD) . '">';
-        foreach (self::sandbox_language_labels() as $language => $label) {
+        foreach (self::sandbox_query_language_labels() as $language => $label) {
             $selected = $selected_language === $language ? ' selected="selected"' : '';
             echo '<option value="' . self::esc_attr($language) . '"' . $selected . '>' . self::esc_html($label) . '</option>';
         }
-        echo '</select> ';
-        echo '<button type="submit" class="button button-primary" name="' . self::esc_attr(self::ADMIN_SEARCH_FIELD) . '" value="1">Search</button>';
-        echo '</form>';
+        echo '</select></td></tr>';
 
-        if ($search_submitted) {
-            self::render_sandbox_results($results);
+        echo '<tr><th scope="row"><label for="wp-fts-sandbox-mode">Match mode</label></th><td>';
+        echo '<select id="wp-fts-sandbox-mode" name="' . self::esc_attr(self::ADMIN_MODE_FIELD) . '">';
+        self::render_option('OR', 'Any term', $controls['mode']);
+        self::render_option('AND', 'All terms', $controls['mode']);
+        echo '</select></td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-sandbox-limit">Result limit</label></th><td>';
+        echo '<input id="wp-fts-sandbox-limit" type="number" min="1" max="' . self::esc_attr((string) self::MAX_SEARCH_LIMIT) . '" name="' . self::esc_attr(self::ADMIN_LIMIT_FIELD) . '" value="' . self::esc_attr((string) $controls['limit']) . '">';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-sandbox-snippet-length">Snippet length</label></th><td>';
+        echo '<input id="wp-fts-sandbox-snippet-length" type="number" min="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MIN) . '" max="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MAX) . '" name="' . self::esc_attr(self::ADMIN_SNIPPET_LENGTH_FIELD) . '" value="' . self::esc_attr((string) $controls['snippet_length']) . '">';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row">Highlight</th><td>';
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HIGHLIGHT_FIELD) . '" value="0">';
+        echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_HIGHLIGHT_FIELD) . '" value="1"' . ($controls['highlight'] ? ' checked="checked"' : '') . '> On</label>';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row">Language fallback</th><td>';
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_LANGUAGE_FALLBACK_FIELD) . '" value="0">';
+        echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_LANGUAGE_FALLBACK_FIELD) . '" value="1"' . ($controls['language_fallback'] ? ' checked="checked"' : '') . '> On</label>';
+        echo ' <span class="description">Current site language: ' . self::esc_html(self::sandbox_language_display(self::site_language())) . '</span>';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row">Post type</th><td>';
+        foreach (self::settings_post_type_choices() as $post_type) {
+            $checked = in_array($post_type, $controls['post_types'], true) ? ' checked="checked"' : '';
+            echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_POST_TYPE_FIELD) . '[]" value="' . self::esc_attr($post_type) . '"' . $checked . '> <code>' . self::esc_html($post_type) . '</code></label><br>';
         }
+        echo '</td></tr>';
 
-        echo '</div>';
+        echo '<tr><th scope="row">Post status</th><td>';
+        foreach (self::sandbox_post_status_choices() as $status) {
+            $checked = in_array($status, $controls['post_statuses'], true) ? ' checked="checked"' : '';
+            echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_POST_STATUS_FIELD) . '[]" value="' . self::esc_attr($status) . '"' . $checked . '> <code>' . self::esc_html($status) . '</code></label><br>';
+        }
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-sandbox-date-after">Date after</label></th><td>';
+        echo '<input id="wp-fts-sandbox-date-after" type="date" name="' . self::esc_attr(self::ADMIN_DATE_AFTER_FIELD) . '" value="' . self::esc_attr($controls['date_after']) . '">';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-sandbox-date-before">Date before</label></th><td>';
+        echo '<input id="wp-fts-sandbox-date-before" type="date" name="' . self::esc_attr(self::ADMIN_DATE_BEFORE_FIELD) . '" value="' . self::esc_attr($controls['date_before']) . '">';
+        echo '</td></tr>';
+
+        echo '</tbody></table>';
+        echo '<p><button type="submit" class="button button-primary" name="' . self::esc_attr(self::ADMIN_SEARCH_FIELD) . '" value="1">Search</button></p>';
+        echo '</form>';
     }
 
     private static function render_sandbox_query_suggestions(): void
@@ -1788,11 +2272,11 @@ final class WP_FTS_Plugin
         echo '</tbody></table>';
     }
 
-    private static function render_sandbox_analyzer_pack_statuses(): void
+    /**
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $statuses
+     */
+    private static function render_analyzer_pack_statuses(array $statuses): void
     {
-        $statuses = self::sandbox_demo_analyzer_pack_statuses();
-
-        echo '<h2>Analyzer packs</h2>';
         if ($statuses === []) {
             echo '<p>No lemma packs are configured. Languages without an active pack use their built-in stemmer or tokenizer behavior.</p>';
             return;
@@ -2081,7 +2565,8 @@ final class WP_FTS_Plugin
 
         $display = [];
         foreach ($languages as $language) {
-            $display[] = self::sandbox_language_display($language);
+            $support = self::language_support_details($language, true);
+            $display[] = self::sandbox_language_display($language) . ' - ' . $support['label'];
         }
 
         return implode(', ', array_values(array_unique($display)));
@@ -2094,15 +2579,121 @@ final class WP_FTS_Plugin
             return 'unknown';
         }
 
-        $label = self::sandbox_language_labels()[$language] ?? strtoupper($language);
+        $base = self::base_language($language);
+        $label = self::sandbox_language_labels()[$language] ?? self::sandbox_language_labels()[$base] ?? strtoupper($base !== '' ? $base : $language);
 
         return sprintf('%s (%s)', $label, $language);
+    }
+
+    /**
+     * @return array{label:string,full:bool,reason:string}
+     */
+    private static function language_support_details(string $language, bool $include_sandbox): array
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG);
+        $base = self::base_language($language);
+        $statuses = self::runtime_analyzer_pack_statuses();
+        if ($include_sandbox) {
+            $statuses = array_merge($statuses, self::sandbox_demo_analyzer_pack_statuses());
+        }
+
+        $fixture = false;
+        $tokenizer = false;
+        foreach ($statuses as $status) {
+            $status_language = WP_FTS_TermNamespace::canonicalize_lang((string) ($status['language'] ?? ''), WP_FTS_TermNamespace::DEFAULT_LANG);
+            if ($status_language !== $language && self::base_language($status_language) !== $base) {
+                continue;
+            }
+            if (($status['status'] ?? '') !== 'active') {
+                continue;
+            }
+            if (($status['kind'] ?? '') === 'lemmatizer') {
+                if (empty($status['fixture_only'])) {
+                    return [
+                        'label' => 'Full morphology',
+                        'full' => true,
+                        'reason' => 'An active full analyzer pack is available.',
+                    ];
+                }
+                $fixture = true;
+            } elseif (($status['kind'] ?? '') === 'tokenizer') {
+                $tokenizer = true;
+            }
+        }
+
+        if ($fixture) {
+            return [
+                'label' => 'Fixture morphology',
+                'full' => false,
+                'reason' => 'Only a fixture-sized analyzer pack is active.',
+            ];
+        }
+        if ($tokenizer) {
+            return [
+                'label' => 'Tokenizer pack',
+                'full' => false,
+                'reason' => 'A tokenizer pack is active, but full morphology is unavailable.',
+            ];
+        }
+
+        return [
+            'label' => 'Conservative fallback',
+            'full' => false,
+            'reason' => 'Full morphology is unavailable for this language.',
+        ];
+    }
+
+    private static function render_site_language_status_notice(): void
+    {
+        $language = self::site_language();
+        $support = self::language_support_details($language, false);
+        if ($support['full']) {
+            return;
+        }
+
+        self::render_sandbox_notice(
+            'info',
+            sprintf(
+                'Current site language %s uses %s; full morphology is unavailable until an analyzer pack is enabled.',
+                self::sandbox_language_display($language),
+                strtolower($support['label'])
+            )
+        );
+    }
+
+    private static function site_language(): string
+    {
+        return WP_FTS_TermNamespace::default_language();
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function site_fallback_languages(): array
+    {
+        $site_language = WP_FTS_TermNamespace::canonicalize_lang(self::site_language(), WP_FTS_TermNamespace::DEFAULT_LANG);
+        $languages = [$site_language];
+        $base_language = self::base_language($site_language);
+        if ($base_language !== '' && !in_array($base_language, $languages, true)) {
+            $languages[] = $base_language;
+        }
+
+        return $languages;
+    }
+
+    private static function base_language(string $language): string
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG);
+        $parts = explode('-', $language);
+
+        return strtolower((string) ($parts[0] ?? $language));
     }
 
     private static function sandbox_indexed_posts_page_url(int $page, string $query, string $selected_language, bool $search_submitted): string
     {
         $params = [
             'page' => self::ADMIN_PAGE_SLUG,
+            self::ADMIN_TAB_FIELD => self::ADMIN_INDEXED_TAB,
             self::ADMIN_POSTS_PAGE_FIELD => (string) max(1, $page),
         ];
 
@@ -2114,7 +2705,7 @@ final class WP_FTS_Plugin
             $params[self::ADMIN_SEARCH_FIELD] = '1';
         }
 
-        return self::admin_tools_url() . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
+        return self::admin_options_general_url() . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
     }
 
     /**
@@ -2164,14 +2755,31 @@ final class WP_FTS_Plugin
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
     }
 
-    private static function admin_page_url(): string
+    private static function admin_page_url(string $tab = self::ADMIN_SETTINGS_TAB): string
     {
-        return self::admin_tools_url() . '?page=' . rawurlencode(self::ADMIN_PAGE_SLUG);
+        $params = ['page' => self::ADMIN_PAGE_SLUG];
+        $tab = self::sanitize_admin_tab($tab);
+        if ($tab !== self::ADMIN_SETTINGS_TAB) {
+            $params[self::ADMIN_TAB_FIELD] = $tab;
+        }
+
+        return self::admin_options_general_url() . '?' . http_build_query($params, '', '&', PHP_QUERY_RFC3986);
     }
 
-    private static function admin_tools_url(): string
+    private static function admin_options_url(): string
     {
-        return function_exists('admin_url') ? (string) admin_url('tools.php') : 'tools.php';
+        return function_exists('admin_url') ? (string) admin_url('options.php') : 'options.php';
+    }
+
+    private static function admin_options_general_url(): string
+    {
+        return function_exists('admin_url') ? (string) admin_url('options-general.php') : 'options-general.php';
+    }
+
+    private static function render_option(string $value, string $label, string $selected_value): void
+    {
+        $selected = $value === $selected_value ? ' selected="selected"' : '';
+        echo '<option value="' . self::esc_attr($value) . '"' . $selected . '>' . self::esc_html($label) . '</option>';
     }
 
     private static function post_title(int $post_id): string
@@ -2538,9 +3146,9 @@ final class WP_FTS_Plugin
             return false;
         }
 
-        $replace = true;
+        $replace = self::settings()['replace_frontend_search'];
         if (function_exists('apply_filters')) {
-            $replace = apply_filters(self::FRONTEND_SEARCH_REPLACEMENT_FILTER, true, $query);
+            $replace = apply_filters(self::FRONTEND_SEARCH_REPLACEMENT_FILTER, $replace, $query);
         }
 
         if (is_bool($replace)) {
@@ -2560,9 +3168,9 @@ final class WP_FTS_Plugin
             return false;
         }
 
-        $replace = true;
+        $replace = self::settings()['replace_admin_post_search'];
         if (function_exists('apply_filters')) {
-            $replace = apply_filters(self::ADMIN_POST_SEARCH_REPLACEMENT_FILTER, true, $query);
+            $replace = apply_filters(self::ADMIN_POST_SEARCH_REPLACEMENT_FILTER, $replace, $query);
         }
 
         if (is_bool($replace)) {
@@ -2904,19 +3512,24 @@ final class WP_FTS_Plugin
             ];
         }
 
+        $settings = self::settings();
         $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
         $search_options = [
-            'mode' => 'OR',
+            'mode' => $settings['match_mode'],
             'limit' => self::visibility_refill_batch_limit(max(1, $limit)),
             'offset' => 0,
             'include_total' => true,
             'include_metadata' => true,
             'include_snippets' => true,
-            'highlight' => true,
-            'snippet_length' => self::FRONTEND_SNIPPET_LENGTH,
+            'highlight' => $settings['highlight'],
+            'snippet_length' => $settings['snippet_length'],
             'post_type' => $post_types,
             'post_status' => $post_statuses,
         ];
+        if ($settings['language_fallback']) {
+            $search_options['language_fallback'] = true;
+            $search_options['fallback_languages'] = self::site_fallback_languages();
+        }
         $explicit_language = self::query_var($query, 'wp_fts_lang', null);
         $snippet_languages = [];
         if (is_scalar($explicit_language) && trim((string) $explicit_language) !== '') {
@@ -3031,7 +3644,7 @@ final class WP_FTS_Plugin
         return self::sanitize_frontend_snippet_html($searcher->snippet_for_text(
             $content,
             $query,
-            self::frontend_snippet_options($query_lang, $result_lang, self::FRONTEND_SNIPPET_LENGTH, $languages)
+            self::frontend_snippet_options($query_lang, $result_lang, self::settings()['snippet_length'], $languages)
         ));
     }
 
@@ -3050,7 +3663,7 @@ final class WP_FTS_Plugin
         return self::sanitize_frontend_snippet_html($searcher->snippet_for_text(
             $title,
             $query,
-            self::frontend_snippet_options($query_lang, $result_lang, max(self::FRONTEND_SNIPPET_LENGTH, strlen($title) + 1), $languages)
+            self::frontend_snippet_options($query_lang, $result_lang, max(self::settings()['snippet_length'], strlen($title) + 1), $languages)
         ));
     }
 
@@ -3061,9 +3674,13 @@ final class WP_FTS_Plugin
     private static function frontend_snippet_options(string $query_lang, string $result_lang, int $length, array $languages = []): array
     {
         $options = [
-            'highlight' => true,
+            'highlight' => self::settings()['highlight'],
             'snippet_length' => $length,
         ];
+        if (self::settings()['language_fallback']) {
+            $options['language_fallback'] = true;
+            $options['fallback_languages'] = self::site_fallback_languages();
+        }
         $languages = array_values(array_unique(array_filter(
             array_map(static fn(string $language): string => WP_FTS_TermNamespace::canonicalize_lang($language), $languages),
             static fn(string $language): bool => $language !== ''
@@ -3207,14 +3824,18 @@ final class WP_FTS_Plugin
      */
     private static function frontend_query_post_types(mixed $query): array
     {
+        $configured = array_fill_keys(self::settings()['index_post_types'], true);
         $requested = self::query_var($query, 'post_type', null);
         if ($requested === null || $requested === '' || $requested === 'any') {
-            return self::public_searchable_post_types();
+            return array_values(array_filter(
+                self::public_searchable_post_types(),
+                static fn(string $type): bool => isset($configured[$type])
+            ));
         }
 
         $types = [];
         foreach (self::normalize_string_list($requested) as $type) {
-            if (self::is_public_searchable_post_type($type)) {
+            if (isset($configured[$type]) && self::is_public_searchable_post_type($type)) {
                 $types[$type] = true;
             }
         }
@@ -3721,7 +4342,7 @@ final class WP_FTS_Plugin
 
         $type = self::post_type_from_object($post);
 
-        return self::is_public_searchable_post_type($type);
+        return self::is_configured_index_post_type($type);
     }
 
     private static function is_admin_indexable_post(object $post): bool
@@ -3730,7 +4351,7 @@ final class WP_FTS_Plugin
             return false;
         }
 
-        if (self::post_type_from_object($post) !== 'post') {
+        if (self::post_type_from_object($post) !== 'post' || !self::is_configured_index_post_type('post')) {
             return false;
         }
 
@@ -3755,6 +4376,12 @@ final class WP_FTS_Plugin
     private static function post_type_from_object(object $post): string
     {
         return isset($post->post_type) && is_scalar($post->post_type) ? (string) $post->post_type : 'post';
+    }
+
+    private static function is_configured_index_post_type(string $type): bool
+    {
+        return in_array($type, self::settings()['index_post_types'], true)
+            && self::is_public_searchable_post_type($type);
     }
 
     private static function current_user_can_read_or_edit_post(int $post_id): bool
@@ -3890,6 +4517,67 @@ final class WP_FTS_Plugin
         }
 
         return $value;
+    }
+
+    private static function request_bool_value(array $source, string $key, bool $default, bool $submitted): bool
+    {
+        if (!array_key_exists($key, $source)) {
+            return $default;
+        }
+
+        return self::truthy_admin_value(self::unslash_scalar($source[$key]));
+    }
+
+    /**
+     * @param string[] $allowed
+     * @param string[] $default
+     * @return string[]
+     */
+    private static function request_list_value(array $source, string $key, array $allowed, array $default): array
+    {
+        if (!array_key_exists($key, $source)) {
+            return $default;
+        }
+
+        $value = $source[$key];
+        if (function_exists('wp_unslash')) {
+            $value = wp_unslash($value);
+        }
+
+        $allowed_map = array_fill_keys($allowed, true);
+        $selected = [];
+        foreach (is_array($value) ? $value : [$value] as $item) {
+            if (!is_scalar($item)) {
+                continue;
+            }
+            $item = self::sanitize_key((string) $item);
+            if ($item !== '' && isset($allowed_map[$item])) {
+                $selected[$item] = true;
+            }
+        }
+
+        $selected = array_keys($selected);
+        sort($selected, SORT_STRING);
+
+        return $selected;
+    }
+
+    private static function sanitize_date_filter(string $date): string
+    {
+        $date = trim($date);
+        if ($date === '') {
+            return '';
+        }
+
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1 ? $date : '';
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function sandbox_post_status_choices(): array
+    {
+        return self::ADMIN_POST_SEARCH_POST_STATUSES;
     }
 
     private static function unslash_scalar(mixed $value): string
