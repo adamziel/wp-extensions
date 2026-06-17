@@ -1,1 +1,0 @@
-# synthetic readiness fixture: no stopwords

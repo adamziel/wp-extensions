@@ -1,4 +1,0 @@
-# Benchmark fixture stopwords.
-the
-and
-of
