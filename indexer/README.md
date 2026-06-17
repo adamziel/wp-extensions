@@ -99,6 +99,41 @@ restored with WordPress content.
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
 
+## Search Accuracy And Automatic Fast Mode
+
+Exact search is the correctness-first baseline. For small or targeted searches,
+the searcher considers every matching candidate document, which preserves the
+best recall, ranking, and total-count exactness.
+
+Broad searches automatically switch to approximate fast top-K mode when the
+analyzed query's estimated matching candidate document count exceeds the
+configured threshold. That estimate is based on the query terms after analysis
+and supported metadata filters; it is not based on the total number of indexed
+posts or pages. Automatic fast mode is enabled by default, uses a threshold of
+`2000` candidates, and scores up to `1000` candidates unless configured
+otherwise.
+
+Fast mode can improve latency for broad queries, but it is approximate: recall,
+ranking, and total counts may differ from exact scoring. Tune the policy in
+`wp-config.php` or an early plugin/bootstrap file before the plugin loads:
+
+```php
+define('WP_FTS_FAST_MODE_THRESHOLD', 2000);
+define('WP_FTS_FAST_MODE_CANDIDATE_CAP', 1000);
+define('WP_FTS_FAST_MODE_ENABLED', true);
+```
+
+Lower threshold or cap values switch sooner or score fewer candidates, which is
+faster and less complete. Higher values keep more broad-query candidates, which
+is more complete and slower. Set `WP_FTS_FAST_MODE_ENABLED` to `false` when a
+site needs exact broad-query recall and exact totals more than broad-query
+latency.
+
+Explicit search options still win over the automatic policy. Programmatic
+callers can force exact scoring with `exact_top_k`, `exact`, or an explicit
+false `fast_top_k`; explicit `fast_top_k` or `approximate_top_k` opts into
+approximate top-K mode for that search.
+
 ## Language And Morphology
 
 Language routing is explicit-first. Use `wp fts reindex --lang=...`,
