@@ -7976,6 +7976,25 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
     ] as $surface => $lemma) {
         assert_same($lemma, $lemmatizer->stem($surface, 'pl'), "{$surface} should map through a compressed full-pack-only shard");
     }
+
+    $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest);
+    foreach ([
+        'zamki' => 'zamek',
+        'zamkach' => 'zamek',
+        'wyszukujemy' => 'wyszukiwac',
+    ] as $surface => $lemma) {
+        $analyses = test_analysis_terms($pack->analyze($surface, 'pl'));
+        assert_true(in_array($lemma, $analyses, true), "{$surface} should still map through the compressed full Polish pack");
+
+        $stats = $pack->last_lookup_stats();
+        assert_same($surface, $stats['term'], "{$surface} lookup stats should record the normalized term");
+        assert_same(1, $stats['candidate_files'], "{$surface} lookup should narrow to one runtime shard by manifest range");
+        assert_same(1, $stats['files_opened'], "{$surface} lookup should open only the narrowed runtime shard");
+        assert_true(in_array('gzip-binary-search', $stats['modes'], true), "{$surface} lookup should use gzip binary search");
+        assert_true(!in_array('stream-scan', $stats['modes'], true), "{$surface} lookup should not stream-scan the full shard");
+        assert_true($stats['lines_read'] <= 64, "{$surface} lookup should inspect a bounded number of runtime rows");
+        assert_true($stats['bytes_loaded'] > 0 && $stats['bytes_loaded'] <= 3000000, "{$surface} lookup should load one bounded decoded shard");
+    }
 });
 
 test_case('polish compressed full pack exposes ambiguous lemma analyses without changing stem compatibility', function (): void {

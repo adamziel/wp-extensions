@@ -13,6 +13,9 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
 {
     private const EAGER_ROW_LIMIT = 50000;
     private const MAX_CACHED_LOOKUPS = 512;
+    private const MAX_BINARY_LOOKUP_RUNTIME_ROWS = 250000;
+    private const MAX_BINARY_LOOKUP_COMPRESSED_BYTES = 2097152;
+    private const MAX_DECODED_RUNTIME_FILE_CACHE_BYTES = 16777216;
 
     /** @var array<string,string[]> */
     private array $lemmasBySurface = [];
@@ -20,6 +23,20 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     private array $lookupCache = [];
     /** @var string[] */
     private array $lookupCacheOrder = [];
+    /** @var array{term:string,candidate_files:int,files_opened:int,lines_read:int,bytes_loaded:int,modes:string[]} */
+    private array $lastLookupStats = [
+        'term' => '',
+        'candidate_files' => 0,
+        'files_opened' => 0,
+        'lines_read' => 0,
+        'bytes_loaded' => 0,
+        'modes' => [],
+    ];
+    /** @var array<string,string> */
+    private static array $decodedRuntimeFileCache = [];
+    /** @var string[] */
+    private static array $decodedRuntimeFileCacheOrder = [];
+    private static int $decodedRuntimeFileCacheBytes = 0;
     private bool $lazy;
     private string $indexSignature;
     private string $packLanguage;
@@ -175,6 +192,16 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         return (bool) $this->validation['manifest']['fixture_only'];
     }
 
+    /**
+     * Expose the last lazy lookup shape for deterministic performance tests.
+     *
+     * @return array{term:string,candidate_files:int,files_opened:int,lines_read:int,bytes_loaded:int,modes:string[]}
+     */
+    public function last_lookup_stats(): array
+    {
+        return $this->lastLookupStats;
+    }
+
     private static function manifest_path_from_option(mixed $option, ?string $defaultManifestPath): ?string
     {
         if ($option === false || $option === null) {
@@ -274,11 +301,28 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     private function lookup_lazy_lemmas(string $term): array
     {
         if (isset($this->lookupCache[$term])) {
+            $this->lastLookupStats = [
+                'term' => $term,
+                'candidate_files' => 0,
+                'files_opened' => 0,
+                'lines_read' => 0,
+                'bytes_loaded' => 0,
+                'modes' => ['memory-cache'],
+            ];
             return $this->lookupCache[$term];
         }
 
         $lemmas = [];
-        foreach ($this->candidate_runtime_files($term) as $file) {
+        $files = $this->candidate_runtime_files($term);
+        $this->lastLookupStats = [
+            'term' => $term,
+            'candidate_files' => count($files),
+            'files_opened' => 0,
+            'lines_read' => 0,
+            'bytes_loaded' => 0,
+            'modes' => [],
+        ];
+        foreach ($files as $file) {
             foreach ($this->lookup_term_in_runtime_file($term, $file) as $lemma => $_) {
                 $lemmas[$lemma] = true;
             }
@@ -342,14 +386,21 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
     private function lookup_term_in_runtime_file(string $term, array $file): array
     {
         $compression = isset($file['compression']) ? (string) $file['compression'] : null;
+        if ($this->can_use_binary_runtime_lookup($file, $compression)) {
+            return $this->lookup_term_in_decoded_gzip_runtime_file($term, (string) $file['path']);
+        }
+
         $handle = $this->open_runtime_file((string) $file['path'], $compression);
         if (!is_resource($handle)) {
             return [];
         }
 
         $lemmas = [];
+        $this->record_lookup_mode('stream-scan');
+        $this->lastLookupStats['files_opened']++;
         try {
             while (($line = $this->read_runtime_line($handle, $compression)) !== false) {
+                $this->lastLookupStats['lines_read']++;
                 $line = rtrim((string) $line, "\n");
                 $line = rtrim($line, "\r");
                 if ($line === '' || $line[0] === '#') {
@@ -377,6 +428,242 @@ final class WP_FTS_LanguageLemmaPack implements WP_FTS_Stemmer
         }
 
         return $lemmas;
+    }
+
+    /**
+     * Use one decoded shard and a byte-position binary search instead of
+     * looping over up to every row in a gzip shard for one query token.
+     *
+     * @return array<string,bool>
+     */
+    private function lookup_term_in_decoded_gzip_runtime_file(string $term, string $path): array
+    {
+        $data = $this->decoded_runtime_file($path);
+        if (!is_string($data) || $data === '') {
+            return [];
+        }
+
+        $this->record_lookup_mode('gzip-binary-search');
+        $this->lastLookupStats['files_opened']++;
+        $this->lastLookupStats['bytes_loaded'] += strlen($data);
+
+        $offset = $this->first_surface_offset($data, $term);
+        if ($offset === null) {
+            return [];
+        }
+
+        $lemmas = [];
+        $length = strlen($data);
+        while ($offset < $length) {
+            $line = $this->runtime_data_line_at_or_after($data, $offset);
+            if ($line === null) {
+                break;
+            }
+            $this->lastLookupStats['lines_read']++;
+
+            $parsed = $this->parse_runtime_line_pair($line['line']);
+            $offset = $line['end'] + 1;
+            if ($parsed === null) {
+                continue;
+            }
+
+            $comparison = strcmp($parsed['surface'], $term);
+            if ($comparison < 0) {
+                continue;
+            }
+            if ($comparison > 0) {
+                break;
+            }
+
+            $lemmas[$parsed['lemma']] = true;
+        }
+
+        return $lemmas;
+    }
+
+    /**
+     * Find the first runtime line whose surface is greater than or equal to the
+     * requested term. Runtime rows are sorted by surface then lemma.
+     */
+    private function first_surface_offset(string $data, string $term): ?int
+    {
+        $low = 0;
+        $high = strlen($data);
+        while ($low < $high) {
+            $mid = intdiv($low + $high, 2);
+            $line = $this->runtime_data_line_at_or_after($data, $mid);
+            if ($line === null) {
+                $high = $mid;
+                continue;
+            }
+            $this->lastLookupStats['lines_read']++;
+
+            $parsed = $this->parse_runtime_line_pair($line['line']);
+            if ($parsed === null) {
+                $next = $line['end'] + 1;
+                if ($next <= $low) {
+                    break;
+                }
+                $low = $next;
+                continue;
+            }
+
+            if (strcmp($parsed['surface'], $term) < 0) {
+                $next = $line['end'] + 1;
+                if ($next <= $low) {
+                    break;
+                }
+                $low = $next;
+                continue;
+            }
+
+            $high = $mid;
+        }
+
+        $line = $this->runtime_data_line_at_or_after($data, $low);
+        while ($line !== null) {
+            $parsed = $this->parse_runtime_line_pair($line['line']);
+            if ($parsed !== null && strcmp($parsed['surface'], $term) >= 0) {
+                return $line['start'];
+            }
+
+            $next = $line['end'] + 1;
+            if ($next <= $low) {
+                return null;
+            }
+
+            $low = $next;
+            $line = $this->runtime_data_line_at_or_after($data, $low);
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{start:int,end:int,line:string}|null
+     */
+    private function runtime_data_line_at_or_after(string $data, int $offset): ?array
+    {
+        $length = strlen($data);
+        $offset = max(0, min($offset, $length));
+        if ($offset >= $length) {
+            return null;
+        }
+
+        if ($offset === 0 || $data[$offset - 1] === "\n") {
+            $start = $offset;
+        } else {
+            $newline = strpos($data, "\n", $offset);
+            if ($newline === false) {
+                return null;
+            }
+            $start = $newline + 1;
+        }
+
+        while ($start < $length) {
+            $end = strpos($data, "\n", $start);
+            if ($end === false) {
+                $end = $length;
+            }
+            $line = rtrim(substr($data, $start, $end - $start), "\r");
+            if ($line !== '' && $line[0] !== '#') {
+                return [
+                    'start' => $start,
+                    'end' => $end,
+                    'line' => $line,
+                ];
+            }
+            $start = $end + 1;
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{surface:string,lemma:string}|null
+     */
+    private function parse_runtime_line_pair(string $line): ?array
+    {
+        $separator = strpos($line, "\t");
+        if ($separator === false || strpos($line, "\t", $separator + 1) !== false) {
+            return null;
+        }
+
+        return [
+            'surface' => substr($line, 0, $separator),
+            'lemma' => substr($line, $separator + 1),
+        ];
+    }
+
+    /**
+     * @param array{path:string,rows:int,sha256:string,compression?:string,first_surface?:string,last_surface?:string} $file
+     */
+    private function can_use_binary_runtime_lookup(array $file, ?string $compression): bool
+    {
+        if ($compression !== WP_FTS_AnalyzerPackValidator::RUNTIME_COMPRESSION_GZIP || !function_exists('gzdecode')) {
+            return false;
+        }
+
+        if ((int) ($file['rows'] ?? 0) > self::MAX_BINARY_LOOKUP_RUNTIME_ROWS) {
+            return false;
+        }
+
+        $size = filesize((string) $file['path']);
+        return is_int($size) && $size > 0 && $size <= self::MAX_BINARY_LOOKUP_COMPRESSED_BYTES;
+    }
+
+    private function decoded_runtime_file(string $path): ?string
+    {
+        if (isset(self::$decodedRuntimeFileCache[$path])) {
+            $this->record_lookup_mode('decoded-file-cache');
+            return self::$decodedRuntimeFileCache[$path];
+        }
+
+        $compressed = file_get_contents($path);
+        if (!is_string($compressed)) {
+            return null;
+        }
+
+        $decoded = gzdecode($compressed);
+        if (!is_string($decoded)) {
+            return null;
+        }
+
+        $this->cache_decoded_runtime_file($path, $decoded);
+
+        return $decoded;
+    }
+
+    private function cache_decoded_runtime_file(string $path, string $data): void
+    {
+        $bytes = strlen($data);
+        if ($bytes > self::MAX_DECODED_RUNTIME_FILE_CACHE_BYTES) {
+            return;
+        }
+
+        if (isset(self::$decodedRuntimeFileCache[$path])) {
+            return;
+        }
+
+        self::$decodedRuntimeFileCache[$path] = $data;
+        self::$decodedRuntimeFileCacheOrder[] = $path;
+        self::$decodedRuntimeFileCacheBytes += $bytes;
+
+        while (self::$decodedRuntimeFileCacheBytes > self::MAX_DECODED_RUNTIME_FILE_CACHE_BYTES) {
+            $oldest = array_shift(self::$decodedRuntimeFileCacheOrder);
+            if (!is_string($oldest) || !isset(self::$decodedRuntimeFileCache[$oldest])) {
+                continue;
+            }
+            self::$decodedRuntimeFileCacheBytes -= strlen(self::$decodedRuntimeFileCache[$oldest]);
+            unset(self::$decodedRuntimeFileCache[$oldest]);
+        }
+    }
+
+    private function record_lookup_mode(string $mode): void
+    {
+        if (!in_array($mode, $this->lastLookupStats['modes'], true)) {
+            $this->lastLookupStats['modes'][] = $mode;
+        }
     }
 
     /**
