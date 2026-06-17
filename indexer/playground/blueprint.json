@@ -19,7 +19,7 @@
       "step": "installPlugin",
       "pluginData": {
         "resource": "url",
-        "url": "https://raw.githubusercontent.com/adamziel/wp-extensions/indexer/fts-settings-page-sandbox-tabs/indexer/playground/indexer-preview.zip?v=20260617-real-tab-route-v1"
+        "url": "https://raw.githubusercontent.com/adamziel/wp-extensions/indexer/fts-settings-page-sandbox-tabs/indexer/playground/indexer-preview.zip?v=20260617-render-selected-tab-v1"
       },
       "options": {
         "activate": true,

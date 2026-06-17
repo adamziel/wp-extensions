@@ -460,7 +460,9 @@ final class WP_FTS_Plugin
             return;
         }
 
-        $tab = $forced_tab !== null ? self::sanitize_admin_tab($forced_tab) : self::selected_admin_tab();
+        $tab = $forced_tab !== null && $forced_tab !== ''
+            ? self::sanitize_admin_tab($forced_tab)
+            : self::selected_admin_tab();
 
         echo '<div class="wrap">';
         echo '<h1>Full-Text Search</h1>';

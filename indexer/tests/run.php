@@ -3190,6 +3190,38 @@ function wp_fts_test_capture_admin_route(string $url): string
     return wp_fts_test_capture_admin_settings_tab(null);
 }
 
+function wp_fts_test_registered_admin_settings_callback(): callable
+{
+    WP_FTS_Plugin::register_admin_menu();
+    $page = $GLOBALS['wp_fts_test_admin_pages'][0] ?? null;
+    $callback = is_array($page) ? ($page['callback'] ?? null) : null;
+    if (!is_callable($callback)) {
+        throw new WP_FTS_TestFailure('Settings page did not register a callable admin callback.');
+    }
+
+    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, $page['menu_slug'] ?? null, 'registered admin callback should belong to the FTS settings page');
+
+    return $callback;
+}
+
+function wp_fts_test_capture_registered_admin_route(string $url, callable $callback): string
+{
+    $route = wp_fts_test_parse_admin_route($url);
+    $_GET = $route['params'];
+
+    ob_start();
+    try {
+        // WordPress admin dispatch reaches the page through the registered callback.
+        $callback('');
+        $html = ob_get_clean();
+
+        return is_string($html) ? $html : '';
+    } catch (Throwable $e) {
+        ob_end_clean();
+        throw $e;
+    }
+}
+
 /**
  * @return array<int,array{lang:string,title:string,query:string,preview:string}>
  */
@@ -3581,6 +3613,7 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
 
     try {
         $_POST = [];
+        $settingsCallback = wp_fts_test_registered_admin_settings_callback();
         $routes = [
             'settings' => [
                 'url' => '/wp-admin/options-general.php?page=wp-fts-settings',
@@ -3613,11 +3646,10 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
             } else {
                 assert_same($tab, (string) ($parsed['params']['tab'] ?? ''), "{$tab} route should keep the selected tab separate");
             }
-            $htmlByTab[$tab] = wp_fts_test_capture_admin_route($route['url']);
+            $htmlByTab[$tab] = wp_fts_test_capture_registered_admin_route($route['url'], $settingsCallback);
         }
 
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'nonesuch<script>'];
-        $fallbackHtml = wp_fts_test_capture_admin_settings_tab(null);
+        $fallbackHtml = wp_fts_test_capture_registered_admin_route('/wp-admin/options-general.php?page=wp-fts-settings&tab=nonesuch%3Cscript%3E', $settingsCallback);
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -3641,9 +3673,11 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
 
     assert_contains('aria-current="page">Indexed content</a>', $indexedHtml, 'indexed-content query tab should render Indexed content as active');
     assert_contains('<h2>Indexed content</h2>', $indexedHtml, 'indexed-content query tab should render the indexed-content panel');
+    assert_true(!str_contains($indexedHtml, '<h2>Settings</h2>'), 'indexed-content query tab should not fall back to the settings panel');
 
     assert_contains('aria-current="page">Analyzer packs</a>', $analyzerHtml, 'analyzer-packs query tab should render Analyzer packs as active');
     assert_contains('<h2>Analyzer packs</h2>', $analyzerHtml, 'analyzer-packs query tab should render the analyzer-packs panel');
+    assert_true(!str_contains($analyzerHtml, '<h2>Settings</h2>'), 'analyzer-packs query tab should not fall back to the settings panel');
 
     assert_contains('aria-current="page">Settings</a>', $fallbackHtml, 'invalid tab values should be sanitized back to Settings');
     assert_contains('<h2>Settings</h2>', $fallbackHtml, 'invalid tab values should render the Settings panel');
