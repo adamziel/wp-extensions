@@ -118,7 +118,8 @@ function verify_release_zip( $zip_path ) {
 		$root . '.autonomous-loop/goal.md',
 		$root . 'tests/bootstrap.php',
 		$root . 'phpunit.xml.dist',
-		$root . 'phpcs.xml.dist',
+		$root . 'phpstan.neon.dist',
+		$root . 'phpstan-stubs/wp-cli.php',
 		$root . 'run_autonomous_loop.sh',
 		$root . 'scripts/codex-loop.sh',
 		$root . 'tools/build-release.php',
@@ -138,6 +139,7 @@ function verify_release_zip( $zip_path ) {
 			|| false !== strpos( $path, '/tests/' )
 			|| false !== strpos( $path, '/tools/' )
 			|| false !== strpos( $path, '/dist/' )
+			|| false !== strpos( $path, '/phpstan-stubs/' )
 			|| false !== strpos( $path, '/vendor/bin/' )
 		) {
 			throw new RuntimeException( 'Release zip contains an excluded tree path: ' . $path );

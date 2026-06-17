@@ -1,0 +1,16 @@
+parameters:
+    level: 3
+    paths:
+        - universal-wordpress-importer.php
+        - src
+        - tests
+        - tools
+    excludePaths:
+        - dist
+        - vendor
+    scanFiles:
+        # WordPress is not installed in Composer CI; load generated core stubs.
+        - vendor/php-stubs/wordpress-stubs/wordpress-stubs.php
+        # Runtime-only symbols used by the plugin and php-toolkit metadata.
+        - phpstan-stubs/wp-cli.php
+        - phpstan-stubs/php-toolkit-http-client.php

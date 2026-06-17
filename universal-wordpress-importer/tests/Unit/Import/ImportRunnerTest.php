@@ -3400,6 +3400,10 @@ final class ImportRunnerTest extends TestCase {
 
 		$method->setAccessible( true );
 		$segments = $method->invokeArgs( $processor, array( $pdf, &$diagnostics ) );
+		$diagnostics += array(
+			'matched_streams' => 0,
+			'decode_failures' => 0,
+		);
 
 		$this->assertSame( array( $content_stream ), $segments );
 		$this->assertSame( 1, $diagnostics['matched_streams'] );
@@ -3424,6 +3428,11 @@ final class ImportRunnerTest extends TestCase {
 
 		$method->setAccessible( true );
 		$segments = $method->invokeArgs( $processor, array( $pdf, &$diagnostics ) );
+		$diagnostics += array(
+			'matched_streams'    => 0,
+			'malformed_streams'  => 0,
+			'decode_failures'    => 0,
+		);
 
 		$this->assertSame( array( $content_stream ), $segments );
 		$this->assertSame( 1, $diagnostics['matched_streams'] );
@@ -3450,6 +3459,11 @@ final class ImportRunnerTest extends TestCase {
 
 		$method->setAccessible( true );
 		$segments = $method->invokeArgs( $processor, array( $pdf, &$diagnostics ) );
+		$diagnostics += array(
+			'matched_streams'    => 0,
+			'malformed_streams'  => 0,
+			'decode_failures'    => 0,
+		);
 
 		$this->assertSame( array( $valid_stream ), $segments );
 		$this->assertSame( 1, $diagnostics['matched_streams'] );
@@ -3475,6 +3489,11 @@ final class ImportRunnerTest extends TestCase {
 
 		$method->setAccessible( true );
 		$segments = $method->invokeArgs( $processor, array( $pdf, &$diagnostics ) );
+		$diagnostics += array(
+			'matched_streams'    => 0,
+			'malformed_streams'  => 0,
+			'decode_failures'    => 0,
+		);
 
 		$this->assertSame( array( $content_stream ), $segments );
 		$this->assertSame( 1, $diagnostics['matched_streams'] );
@@ -7021,7 +7040,7 @@ final class ImportRunnerTest extends TestCase {
 			 * Fetches fake JSON.
 			 *
 			 * @param string $url URL.
-			 * @return void
+			 * @return array<int|string,mixed>
 			 * @throws \RuntimeException Always, to trigger single-URL fallback.
 			 */
 			public function fetch_json( $url ) {

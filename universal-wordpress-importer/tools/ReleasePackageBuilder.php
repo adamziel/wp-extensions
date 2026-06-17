@@ -161,7 +161,7 @@ class ReleasePackageBuilder {
 	private function run_preflight_checks() {
 		$this->run_command( array( 'composer', 'validate', '--strict' ), $this->repo_root, 'validate composer.json' );
 		$this->run_command( array( 'composer', 'test' ), $this->repo_root, 'run PHPUnit tests' );
-		$this->run_command( array( 'composer', 'lint' ), $this->repo_root, 'run PHPCS linting' );
+		$this->run_command( array( 'composer', 'lint' ), $this->repo_root, 'run PHPStan analysis' );
 		$this->run_command( array( 'git', 'diff', '--check' ), $this->repo_root, 'check for whitespace errors' );
 	}
 

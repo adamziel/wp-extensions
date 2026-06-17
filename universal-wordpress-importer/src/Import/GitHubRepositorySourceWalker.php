@@ -55,6 +55,8 @@ final class GitHubRepositorySourceWalker {
 	 * @param GitRepositoryFetcherInterface|null       $git_fetcher Optional Git sparse checkout fetcher.
 	 */
 	public function __construct( WordPressImportSessionStore $store, ImportRemoteArchiveFetcherInterface $fetcher = null, $cache_root = null, ImportRemoteContentFetcherInterface $content_fetcher = null, ImportRunnerControls $controls = null, GitRepositoryFetcherInterface $git_fetcher = null ) {
+		unset( $fetcher, $content_fetcher );
+
 		$this->store           = $store;
 		$this->git_fetcher     = $git_fetcher;
 		$this->cache_directory = $cache_root instanceof ImportCacheDirectory ? $cache_root : ( null === $cache_root ? ImportCacheDirectory::from_environment() : new ImportCacheDirectory( $cache_root ) );

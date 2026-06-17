@@ -2043,7 +2043,7 @@ final class ImportHtmlBlockConverter {
 			$blocks[] = $this->definition_pair_to_details_block( $list, $pair['term'], $pair['definitions'], $body_blocks );
 		}
 
-		return empty( $blocks ) ? null : $blocks;
+		return $blocks;
 	}
 
 	/**

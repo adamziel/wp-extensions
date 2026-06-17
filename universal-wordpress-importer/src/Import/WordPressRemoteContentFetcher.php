@@ -88,6 +88,7 @@ final class WordPressRemoteContentFetcher implements ImportRemoteContentFetcherI
 			)
 		);
 
+		/** @var array<string,mixed>|\WP_Error $response */
 		if ( function_exists( 'is_wp_error' ) && is_wp_error( $response ) ) {
 			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Runtime diagnostics are not rendered directly.
 			throw new RuntimeException( 'Remote URL request failed: ' . $response->get_error_message() );

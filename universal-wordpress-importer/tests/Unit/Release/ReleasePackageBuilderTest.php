@@ -90,7 +90,8 @@ class ReleasePackageBuilderTest extends TestCase {
 		$this->assertNotContains( 'universal-wordpress-importer/.autonomous-loop/goal.md', $paths );
 		$this->assertNotContains( 'universal-wordpress-importer/tests/bootstrap.php', $paths );
 		$this->assertNotContains( 'universal-wordpress-importer/phpunit.xml.dist', $paths );
-		$this->assertNotContains( 'universal-wordpress-importer/phpcs.xml.dist', $paths );
+		$this->assertNotContains( 'universal-wordpress-importer/phpstan.neon.dist', $paths );
+		$this->assertNotContains( 'universal-wordpress-importer/phpstan-stubs/wp-cli.php', $paths );
 		$this->assertNotContains( 'universal-wordpress-importer/run_autonomous_loop.sh', $paths );
 		$this->assertNotContains( 'universal-wordpress-importer/scripts/codex-loop.sh', $paths );
 		$this->assertNotContains( 'universal-wordpress-importer/tools/build-release.php', $paths );
@@ -633,14 +634,15 @@ class ReleasePackageBuilderTest extends TestCase {
 		$this->write_file( $repo . '/docs/release-packaging.md', "# Release Packaging\n" );
 		$this->write_file( $repo . '/tests/bootstrap.php', "<?php\n" );
 		$this->write_file( $repo . '/phpunit.xml.dist', "<phpunit />\n" );
-		$this->write_file( $repo . '/phpcs.xml.dist', "<ruleset />\n" );
+		$this->write_file( $repo . '/phpstan.neon.dist', "parameters:\n    level: 0\n" );
+		$this->write_file( $repo . '/phpstan-stubs/wp-cli.php', "<?php\nclass WP_CLI {}\n" );
 		$this->write_file( $repo . '/run_autonomous_loop.sh', "#!/usr/bin/env bash\n" );
 		$this->write_file( $repo . '/scripts/codex-loop.sh', "#!/usr/bin/env bash\n" );
 		$this->write_file( $repo . '/tools/build-release.php', "<?php\n" );
 		$this->write_file( $repo . '/.autonomous-loop/goal.md', "# Goal\n" );
 		$this->write_file(
 			$repo . '/.distignore',
-			".git\n.gitignore\n.distignore\n.autonomous-loop\n.codex-loop\ndist\ntests\ntools\nvendor/bin\nphpunit.xml.dist\nphpcs.xml.dist\nrun_autonomous_loop.sh\nscripts/codex-loop.sh\n"
+			".git\n.gitignore\n.distignore\n.autonomous-loop\n.codex-loop\ndist\ntests\ntools\nvendor/bin\nphpunit.xml.dist\nphpstan.neon.dist\nphpstan-stubs\nrun_autonomous_loop.sh\nscripts/codex-loop.sh\n"
 		);
 
 		return $repo;

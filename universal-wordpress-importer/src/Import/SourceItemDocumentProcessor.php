@@ -8927,10 +8927,6 @@ final class SourceItemDocumentProcessor {
 			$rows[] = $cells;
 		}
 
-		if ( empty( $rows ) ) {
-			return null;
-		}
-
 		$table = '<table><thead><tr>';
 		foreach ( $header as $cell ) {
 			$table .= '<th>' . $this->markdown_inline_to_html( $cell, $references ) . '</th>';

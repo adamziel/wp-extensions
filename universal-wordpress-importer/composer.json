@@ -9,9 +9,9 @@
     "wp-php-toolkit/git": "^0.1.5"
   },
   "require-dev": {
-    "dealerdirect/phpcodesniffer-composer-installer": "^1.1",
-    "phpunit/phpunit": "^8.5 || ^9.6",
-    "wp-coding-standards/wpcs": "^3.2"
+    "php-stubs/wordpress-stubs": "^6.9",
+    "phpstan/phpstan": "^1.12",
+    "phpunit/phpunit": "^8.5 || ^9.6"
   },
   "autoload": {
     "classmap": [
@@ -33,14 +33,11 @@
   },
   "scripts": {
     "build:release": "php tools/build-release.php",
-    "lint": "phpcs",
+    "lint": "phpstan analyse --configuration=phpstan.neon.dist --memory-limit=1G --no-progress",
     "smoke:release": "php tools/smoke-release-activation.php --build",
     "test": "phpunit"
   },
   "config": {
-    "allow-plugins": {
-      "dealerdirect/phpcodesniffer-composer-installer": true
-    },
     "sort-packages": true
   }
 }
