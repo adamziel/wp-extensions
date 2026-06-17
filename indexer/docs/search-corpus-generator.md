@@ -8,8 +8,11 @@ plugin archive.
 ## Default Language Scope
 
 The default generated languages are derived from the current README language
-support notes, `src/LanguagePipeline.php`, `src/Stemmer.php`,
-`src/AnalyzerPackValidator.php`, and committed analyzer-pack manifests under
+support notes, component files under
+`components/full-text-search/src/LanguagePipeline.php`,
+`components/full-text-search/src/Stemmer.php`, and
+`components/full-text-search/src/AnalyzerPackValidator.php`, plus committed
+analyzer-pack manifests under
 `resources/analyzer-packs/`.
 
 Current defaults:

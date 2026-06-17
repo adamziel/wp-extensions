@@ -32,7 +32,7 @@ final class WP_FTS_AnalyzerPackValidator
      */
     public static function default_polish_fixture_manifest(): string
     {
-        return dirname(__DIR__) . '/resources/analyzer-packs/pl-morfologik-polimorf-fixture/manifest.json';
+        return self::bundled_analyzer_pack_root() . '/pl-morfologik-polimorf-fixture/manifest.json';
     }
 
     /**
@@ -40,7 +40,7 @@ final class WP_FTS_AnalyzerPackValidator
      */
     public static function default_polish_playground_full_manifest(): string
     {
-        return dirname(__DIR__) . '/resources/analyzer-packs/pl-polimorf-20180722-full-playground/manifest.json';
+        return self::bundled_analyzer_pack_root() . '/pl-polimorf-20180722-full-playground/manifest.json';
     }
 
     /**
@@ -48,7 +48,7 @@ final class WP_FTS_AnalyzerPackValidator
      */
     public static function default_synthetic_bengali_fixture_manifest(): string
     {
-        return dirname(__DIR__) . '/resources/analyzer-packs/bn-synthetic-lemma-fixture/manifest.json';
+        return self::bundled_analyzer_pack_root() . '/bn-synthetic-lemma-fixture/manifest.json';
     }
 
     /**
@@ -59,7 +59,7 @@ final class WP_FTS_AnalyzerPackValidator
      */
     public static function bundled_unimorph_top_language_pack_manifests(): array
     {
-        $root = dirname(__DIR__) . '/resources/analyzer-packs';
+        $root = self::bundled_analyzer_pack_root();
         $paths = glob($root . '/*-unimorph-*/manifest.json');
         if (!is_array($paths)) {
             return [];
@@ -92,6 +92,26 @@ final class WP_FTS_AnalyzerPackValidator
         ksort($manifests, SORT_STRING);
 
         return $manifests;
+    }
+
+    /**
+     * Resolve bundled analyzer-pack resources from component or plugin layouts.
+     */
+    private static function bundled_analyzer_pack_root(): string
+    {
+        $candidates = [
+            dirname(__DIR__) . '/resources/analyzer-packs',
+            dirname(__DIR__, 3) . '/indexer/resources/analyzer-packs',
+            dirname(__DIR__, 4) . '/resources/analyzer-packs',
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_dir($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return $candidates[0];
     }
 
     /**

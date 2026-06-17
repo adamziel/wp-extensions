@@ -4,10 +4,10 @@ declare(strict_types=1);
 /**
  * Extracts searchable terms from HTML documents and plain-text queries.
  *
- * The analyzer is the bridge between WordPress/HTML input and the language
- * pipeline. It strips skipped elements, applies simple ancestor boosts, honors
- * `lang` and `xml:lang` scopes, removes stopwords, and returns weighted
- * occurrences that the indexer can namespace per language.
+ * The analyzer bridges HTML input and the language pipeline. It strips skipped
+ * elements, applies simple ancestor boosts, honors `lang` and `xml:lang`
+ * scopes, removes stopwords, and returns weighted occurrences that the indexer
+ * can namespace per language.
  */
 final class WP_FTS_Analyzer
 {
@@ -50,7 +50,7 @@ final class WP_FTS_Analyzer
      * - `skip_ancestors`: element names whose text should not be indexed.
      * - `boosts`: element-name to weight map; the largest ancestor boost wins.
      * - `default_lang`, `document_lang`, `query_lang`: language hints used when
-     *   content, options, and WordPress integrations do not provide one.
+     *   content, options, and resolver callbacks do not provide one.
      * - `document_language_resolver` and `query_language_resolver`: callables
      *   receiving the options array and returning a language candidate.
      * - `query_term_language_resolver`: deterministic per-query-token language
@@ -64,8 +64,8 @@ final class WP_FTS_Analyzer
      * - `segmenter_packs_by_lang`: optional source-backed tokenizer packs such
      *   as the Jieba-backed Chinese adapter. Missing or invalid packs fall back
      *   to the built-in n-gram tokenizer.
-     * - `html_processor_factory`: test hook that returns a `WP_HTML_Processor`
-     *   compatible object for the given HTML.
+     * - `html_processor_factory`: hook that returns a processor-like object for
+     *   the given HTML.
      *
      * @param array{
      *   skip_ancestors?:string[],
@@ -204,13 +204,12 @@ final class WP_FTS_Analyzer
      *
      * Use this for document indexing. `$html` may be a full document or a
      * fragment. Language is resolved from explicit options first, then analyzer
-     * defaults, then resolver callbacks and WordPress integrations. Nested
+     * defaults, then resolver callbacks. Nested
      * `lang`/`xml:lang` attributes override the document language for their text
      * scope.
      *
      * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int}|string|null $options
-     *        Either an options array or a legacy language string. `post_id`
-     *        allows Polylang/WPML integrations to resolve the document language.
+     *        Either an options array or a legacy language string.
      * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
      *         Occurrences in document order. `weight` is the strongest boost
      *         inherited from ancestor tags, and `lang` is the term language.
@@ -628,10 +627,10 @@ final class WP_FTS_Analyzer
     /**
      * Extract visible text segments and the language/weight for each segment.
      *
-     * WordPress's HTML processor is preferred because it understands browser-like
-     * parsing. When it is unavailable or cannot be created, the fallback parser
-     * keeps enough stack state to make skip, boost, and language-scope decisions
-     * deterministic for tests and non-WordPress use.
+     * A caller-provided HTML processor factory may provide browser-like parsing.
+     * When it is unavailable or cannot be created, the fallback parser keeps
+     * enough stack state to make skip, boost, and language-scope decisions
+     * deterministic.
      *
      * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int} $options
      * @return array<int,array{text:string,weight:float,lang:string,explicit_lang?:bool,detect_group?:int}>
@@ -641,7 +640,7 @@ final class WP_FTS_Analyzer
         $documentLang = $this->resolveDocumentLanguage($options);
         $autoDetect = $this->shouldAutoDetectDocumentLanguage($options);
 
-        if ($this->htmlProcessorFactory !== null || class_exists('WP_HTML_Processor')) {
+        if ($this->htmlProcessorFactory !== null) {
             $processor = $this->createProcessor($html);
             if ($processor === null) {
                 return $this->coalesceInlineLexicalSegments(
@@ -708,37 +707,25 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Create a WordPress HTML processor for a full document or fragment.
+     * Create a caller-provided HTML processor for a full document or fragment.
      *
-     * A custom factory is used as-is for tests. Native processor creation is
-     * wrapped in a catch block because invalid markup or version differences can
-     * throw; callers fall back to text stripping/parser logic on null.
+     * Processor creation is wrapped in a catch block because invalid markup or
+     * version differences can throw; callers fall back to parser logic on null.
      *
      * @param string $html HTML document or fragment.
      * @return mixed Processor-like object, or null when creation fails.
      */
     private function createProcessor(string $html): mixed
     {
-        if ($this->htmlProcessorFactory !== null) {
-            return ($this->htmlProcessorFactory)($html);
-        }
-
         try {
-            if (
-                $this->looksLikeFullDocument($html)
-                && method_exists('WP_HTML_Processor', 'create_full_parser')
-            ) {
-                return WP_HTML_Processor::create_full_parser($html);
-            }
-
-            return WP_HTML_Processor::create_fragment($html);
+            return ($this->htmlProcessorFactory)($html);
         } catch (Throwable) {
             return null;
         }
     }
 
     /**
-     * Heuristically decide whether WordPress should use full-document parsing.
+     * Heuristically decide whether input looks like a full HTML document.
      *
      * @param string $html HTML input from the caller.
      * @return bool True when document-level tags or doctype are present.
@@ -749,7 +736,7 @@ final class WP_FTS_Analyzer
     }
 
     /**
-     * Extract text with `WP_HTML_Processor` while tracking language scopes.
+     * Extract text with a processor-like object while tracking language scopes.
      *
      * `langByDepth` stores only depths that introduced a language. As the
      * processor moves through breadcrumbs, deeper scopes are pruned so optional
@@ -1155,18 +1142,14 @@ final class WP_FTS_Analyzer
     /**
      * Convert markup to plain text when structured parsing is unavailable.
      *
-     * WordPress's `wp_strip_all_tags()` is used when available. The fallback
-     * removes non-visible script/style-like blocks before decoding entities.
+     * Non-visible script/style-like blocks are removed before entities are
+     * decoded.
      *
      * @param string $html HTML document or fragment.
      * @return string Plain text candidate for analysis.
      */
     private function stripAllTags(string $html): string
     {
-        if (function_exists('wp_strip_all_tags')) {
-            return (string) wp_strip_all_tags($html);
-        }
-
         $html = preg_replace('/<(script|style|noscript|template)\b[^>]*>.*?<\/\1>/is', ' ', $html) ?? $html;
         return html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
@@ -1175,9 +1158,8 @@ final class WP_FTS_Analyzer
      * Resolve the primary document language for HTML extraction.
      *
      * Precedence is explicit caller hints (`lang`, `language`, `document_lang`,
-     * `locale`), constructor `document_lang`, custom resolver, per-post
-     * WordPress integrations, per-call `default_lang`, site language, then
-     * analyzer default.
+     * `locale`), constructor `document_lang`, custom resolver, per-call
+     * `default_lang`, then analyzer default.
      *
      * @param array<string,mixed> $options
      * @return string Canonical document language.
@@ -1191,9 +1173,7 @@ final class WP_FTS_Analyzer
             $options['locale'] ?? null,
             $this->documentLanguage,
             $this->callLanguageResolver($this->documentLanguageResolver, $options),
-            $this->wordpressDocumentLanguage($options),
             $options['default_lang'] ?? null,
-            $this->wordpressSiteLanguage(),
             $this->defaultLanguage,
         ]) ?? 'en';
     }
@@ -1202,8 +1182,7 @@ final class WP_FTS_Analyzer
      * Resolve the language used for query analysis.
      *
      * Precedence is explicit query hints, constructor `query_lang`, custom
-     * resolver, current WordPress language, per-call `default_lang`, site
-     * language, then analyzer default.
+     * resolver, per-call `default_lang`, then analyzer default.
      *
      * @param array<string,mixed> $options
      * @return string Canonical query language.
@@ -1217,9 +1196,7 @@ final class WP_FTS_Analyzer
             $options['locale'] ?? null,
             $this->queryLanguage,
             $this->callLanguageResolver($this->queryLanguageResolver, $options),
-            $this->wordpressQueryLanguage(),
             $options['default_lang'] ?? null,
-            $this->wordpressSiteLanguage(),
             $this->defaultLanguage,
         ]) ?? 'en';
     }
@@ -1408,7 +1385,7 @@ final class WP_FTS_Analyzer
             return false;
         }
 
-        return $this->canonicalLanguage($this->wordpressDocumentLanguage($options)) === null;
+        return true;
     }
 
     /**
@@ -1436,100 +1413,15 @@ final class WP_FTS_Analyzer
             return false;
         }
 
-        return $this->canonicalLanguage($this->wordpressQueryLanguage()) === null;
-    }
-
-    /**
-     * Resolve a post's language through common multilingual plugins.
-     *
-     * Polylang is checked first through `pll_get_post_language($postId,
-     * 'locale')`. WPML is checked through the `wpml_post_language_details`
-     * filter and accepts either array or object responses.
-     *
-     * @param array<string,mixed> $options
-     * @return string|null Raw language candidate, or null outside those plugins.
-     */
-    private function wordpressDocumentLanguage(array $options): ?string
-    {
-        $postId = isset($options['post_id']) ? (int) $options['post_id'] : 0;
-
-        if ($postId > 0 && function_exists('pll_get_post_language')) {
-            $language = pll_get_post_language($postId, 'locale');
-            if (is_scalar($language) && trim((string) $language) !== '') {
-                return (string) $language;
-            }
-        }
-
-        if ($postId > 0 && function_exists('apply_filters')) {
-            $details = apply_filters('wpml_post_language_details', null, $postId);
-            if (is_array($details)) {
-                return (string) ($details['locale'] ?? $details['language_code'] ?? '');
-            }
-            if (is_object($details)) {
-                return (string) ($details->locale ?? $details->language_code ?? '');
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Resolve the current query language from multilingual WordPress plugins.
-     *
-     * @return string|null Current language candidate from Polylang or WPML.
-     */
-    private function wordpressQueryLanguage(): ?string
-    {
-        if (function_exists('pll_current_language')) {
-            $language = pll_current_language('locale');
-            if (is_scalar($language) && trim((string) $language) !== '') {
-                return (string) $language;
-            }
-        }
-
-        if (function_exists('apply_filters')) {
-            $language = apply_filters('wpml_current_language', null);
-            if (is_scalar($language)) {
-                return (string) $language;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Resolve the site-level language from WordPress globals.
-     *
-     * `get_locale()` wins over `get_bloginfo('language')` because it usually
-     * carries a more specific region value.
-     *
-     * @return string|null Site language candidate, or null outside WordPress.
-     */
-    private function wordpressSiteLanguage(): ?string
-    {
-        if (function_exists('get_locale')) {
-            $locale = get_locale();
-            if (is_scalar($locale)) {
-                return (string) $locale;
-            }
-        }
-
-        if (function_exists('get_bloginfo')) {
-            $language = get_bloginfo('language');
-            if (is_scalar($language)) {
-                return (string) $language;
-            }
-        }
-
-        return null;
+        return true;
     }
 
     /**
      * Remove language scopes deeper than the processor's current depth.
      *
-     * The WordPress processor has already resolved optional/implicit end tags in
-     * its breadcrumb stack. Pruning by depth keeps `langByDepth` aligned with
-     * that canonical tree.
+     * The processor may have already resolved optional/implicit end tags in its
+     * breadcrumb stack. Pruning by depth keeps `langByDepth` aligned with that
+     * canonical tree.
      *
      * @param array<int,array{lang:string,explicit:bool}> $langByDepth
      */
@@ -2061,7 +1953,6 @@ final class WP_FTS_Analyzer
             'query_language_resolver' => $this->callableSignature($this->queryLanguageResolver),
             'query_term_language_resolver' => $this->callableSignature($this->queryTermLanguageResolver),
             'html_processor_factory' => $this->callableSignature($this->htmlProcessorFactory),
-            'html_processor_available' => class_exists('WP_HTML_Processor'),
         ];
 
         return 'wp-fts-analyzer-v6:' . sha1($this->stableJson($payload));

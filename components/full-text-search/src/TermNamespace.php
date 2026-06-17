@@ -183,9 +183,9 @@ final class WP_FTS_TermNamespace
     /**
      * Resolve the default language for analysis when a document/query is silent.
      *
-     * Explicit `default_lang` or `locale` options win. In WordPress this falls
-     * back to `get_locale()` and then `get_bloginfo('language')`; outside
-     * WordPress it returns `en`.
+     * Explicit `default_lang` or `locale` options win. Otherwise the reusable
+     * library returns `en`; framework adapters should pass their site or
+     * application language explicitly.
      *
      * @param array<string,mixed> $opts Optional caller-supplied language hints.
      * @return string Canonical default language.
@@ -195,20 +195,6 @@ final class WP_FTS_TermNamespace
         $configured = self::language_from_options($opts, null, ['default_lang', 'locale']);
         if ($configured !== null) {
             return $configured;
-        }
-
-        if (function_exists('get_locale')) {
-            $locale = get_locale();
-            if (is_string($locale) && trim($locale) !== '') {
-                return self::canonicalize_lang($locale);
-            }
-        }
-
-        if (function_exists('get_bloginfo')) {
-            $language = get_bloginfo('language');
-            if (is_string($language) && trim($language) !== '') {
-                return self::canonicalize_lang($language);
-            }
         }
 
         return 'en';

@@ -11,19 +11,21 @@ declare(strict_types=1);
 final class WP_FTS_Indexer
 {
     private const INDEX_SIGNATURE_VERSION = 'wp-fts-indexer-v2';
-    private const DEFAULT_REINDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
 
     /**
      * @param WP_FTS_Storage $storage Storage backend for terms, documents, and
      *        metadata. Backends may be language-aware or legacy aggregate-only.
      * @param object $analyzer Analyzer object exposing `analyze_content()`.
+     * @param object|null $postContentExtractor Optional adapter exposing
+     *        `extract(object $post, array $opts): array` for legacy
+     *        `index_post()` callers. New framework-neutral callers should use
+     *        `index_document()` or `index_document_fields()`.
      */
     public function __construct(
         private WP_FTS_Storage $storage,
         private object $analyzer,
-        private ?WP_FTS_PostContentExtractor $postContentExtractor = null,
+        private ?object $postContentExtractor = null,
     ) {
-        $this->postContentExtractor ??= new WP_FTS_PostContentExtractor();
     }
 
     /**
@@ -239,80 +241,17 @@ final class WP_FTS_Indexer
     }
 
     /**
-     * Reindex posts directly from WordPress using admin-search-aware defaults.
+     * Index one post-like object through an adapter extractor.
      *
-     * This method pages through `$wpdb->posts` by ascending ID and indexes each
-     * row through the post content extractor so full reindexes and incremental
-     * post-save reindexes preserve the same fields and metadata. `post_status`
-     * and `post_type` accept comma separated strings or arrays. `limit => 0`
-     * means no limit. Language is resolved per post unless an explicit language
-     * option is supplied.
-     *
-     * @param array{post_status?:string|string[],post_type?:string|string[],batch_size?:int,limit?:int,lang?:string,language?:string} $opts
-     *        WordPress query and language options.
-     * @return int Number of posts processed, including no-op reindexes.
-     * @throws RuntimeException Outside WordPress or without a `$wpdb` object.
-     * @throws InvalidArgumentException If list options normalize to an empty
-     *         list.
-     */
-    public function reindex_all(array $opts = []): int
-    {
-        global $wpdb;
-
-        if (!isset($wpdb) || !is_object($wpdb)) {
-            throw new RuntimeException('reindex_all requires the WordPress $wpdb global.');
-        }
-
-        $postStatuses = $this->normalize_list_option($opts['post_status'] ?? self::DEFAULT_REINDEX_POST_STATUSES);
-        $postTypes = $this->normalize_list_option($opts['post_type'] ?? 'post');
-        $batchSize = max(1, (int) ($opts['batch_size'] ?? 500));
-        $limit = max(0, (int) ($opts['limit'] ?? 0));
-        $last = 0;
-        $count = 0;
-
-        do {
-            $currentBatchSize = $limit > 0 ? min($batchSize, $limit - $count) : $batchSize;
-            if ($currentBatchSize <= 0) {
-                break;
-            }
-
-            $statusPlaceholders = implode(',', array_fill(0, count($postStatuses), '%s'));
-            $typePlaceholders = implode(',', array_fill(0, count($postTypes), '%s'));
-            $args = array_merge($postStatuses, $postTypes, [$last, $currentBatchSize]);
-
-            $sql = $wpdb->prepare(
-                "SELECT ID, post_content, post_title, post_excerpt, post_type, post_status, post_date_gmt, post_date
-FROM {$wpdb->posts}
-WHERE post_status IN ({$statusPlaceholders})
-  AND post_type IN ({$typePlaceholders})
-  AND ID > %d
-ORDER BY ID ASC
-LIMIT %d",
-                ...$args
-            );
-
-            $rows = $wpdb->get_results($sql);
-            foreach ($rows ?: [] as $row) {
-                $last = (int) $row->ID;
-                $this->index_post($row, $opts);
-                $count++;
-            }
-        } while (!empty($rows) && ($limit === 0 || $count < $limit));
-
-        $this->flush();
-
-        return $count;
-    }
-
-    /**
-     * Index one WordPress post-like object.
-     *
-     * The runtime plugin adapter uses this for incremental hook processing,
-     * while WP-CLI keeps `reindex_all()` as the manual full-control path.
+     * This method remains for compatibility with the original plugin API. The
+     * reusable library itself does not extract WordPress posts; callers should
+     * prefer `index_document_fields()` after their application has converted a
+     * domain object into weighted fields and metadata.
      *
      * @param object $post Object with `ID` and WordPress post-like properties.
      * @param array<string,mixed> $opts Optional language, extraction, field
      *        boost, and metadata overrides.
+     * @throws LogicException If no compatible extractor is available.
      */
     public function index_post(object $post, array $opts = []): bool
     {
@@ -323,14 +262,13 @@ LIMIT %d",
 
         $indexOptions = $opts;
         $indexOptions['post_id'] = $postId;
-        if (WP_FTS_TermNamespace::language_from_options($indexOptions, null, ['lang', 'language', 'primary_lang', 'document_lang']) === null) {
-            $metadataLang = $this->resolve_post_metadata_language($post);
-            if ($metadataLang !== null) {
-                $indexOptions['lang'] = $metadataLang;
-            }
+
+        $extractor = $this->postContentExtractor ?? $this->default_post_content_extractor();
+        if (!method_exists($extractor, 'extract')) {
+            throw new LogicException('Post content extractor must expose extract(object $post, array $opts).');
         }
 
-        $extracted = $this->postContentExtractor->extract($post, $indexOptions);
+        $extracted = $extractor->extract($post, $indexOptions);
         $metadata = $extracted['metadata'];
         if (isset($opts['metadata']) && is_array($opts['metadata'])) {
             $metadata = array_replace($metadata, $opts['metadata']);
@@ -339,6 +277,18 @@ LIMIT %d",
         $indexOptions['field_boosts'] = $extracted['field_boosts'];
 
         return $this->index_document_fields($postId, $extracted['fields'], $indexOptions);
+    }
+
+    /**
+     * Resolve the plugin-provided extractor for legacy `index_post()` callers.
+     */
+    private function default_post_content_extractor(): object
+    {
+        if (!class_exists('WP_FTS_PostContentExtractor')) {
+            throw new LogicException('index_post() requires a post content extractor adapter. Pass one to WP_FTS_Indexer or use index_document_fields().');
+        }
+
+        return new WP_FTS_PostContentExtractor();
     }
 
     /**
@@ -408,7 +358,7 @@ LIMIT %d",
             $opts,
             null,
             ['lang', 'language', 'primary_lang', 'document_lang', 'locale']
-        ) ?? $this->resolve_post_metadata_language_from_options($opts) ?? $default;
+        ) ?? $default;
     }
 
     /**
@@ -722,132 +672,6 @@ LIMIT %d",
         foreach ($langLengths as $lang => $length) {
             WP_FTS_StorageCompat::add_meta($this->storage, $lang, $docDelta, $docDelta * $length);
         }
-    }
-
-    /**
-     * Normalize a string-or-array option into a non-empty list.
-     *
-     * Used for WP-CLI and WordPress reindex options. Array values may themselves
-     * contain comma-separated strings, matching how WP-CLI passes repeatable
-     * options.
-     *
-     * @param string|array<int|string,mixed> $value Raw option value.
-     * @return string[]
-     * @throws InvalidArgumentException If no non-empty item remains.
-     */
-    private function normalize_list_option(string|array $value): array
-    {
-        $items = [];
-        foreach (is_array($value) ? $value : [$value] as $item) {
-            foreach (explode(',', (string) $item) as $part) {
-                $part = trim($part);
-                if ($part !== '') {
-                    $items[] = $part;
-                }
-            }
-        }
-        $items = array_values(array_unique($items));
-        if ($items === []) {
-            throw new InvalidArgumentException('List options must contain at least one value.');
-        }
-
-        return $items;
-    }
-
-    /**
-     * Resolve the language for one WordPress post row during bulk reindexing.
-     *
-     * Explicit options win. Otherwise Polylang and WPML are consulted with the
-     * row ID, then the configured default language is used.
-     *
-     * @param object $row `$wpdb->posts` row with an `ID` property.
-     * @param array<string,mixed> $opts Reindex options.
-     * @return string Canonical language for this post.
-     */
-    private function resolve_post_language(object $row, array $opts): string
-    {
-        $explicit = WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'primary_lang', 'document_lang']);
-        if ($explicit !== null) {
-            return $explicit;
-        }
-
-        return $this->resolve_post_metadata_language($row) ?? WP_FTS_TermNamespace::default_language($opts);
-    }
-
-    /**
-     * Resolve deliberate per-post language metadata from common multilingual plugins.
-     *
-     * Site locale is intentionally not returned here. It remains a fallback
-     * default so the analyzer can still fill untagged language gaps with
-     * detector evidence.
-     *
-     * @param object $row WordPress post-like row with an `ID` property.
-     * @return string|null Canonical language from Polylang/WPML, or null.
-     */
-    private function resolve_post_metadata_language(object $row): ?string
-    {
-        $postId = isset($row->ID) ? (int) $row->ID : 0;
-        $override = $this->resolve_plugin_post_language_override($postId);
-        if ($override !== null) {
-            return $override;
-        }
-
-        if ($postId > 0 && function_exists('pll_get_post_language')) {
-            $lang = pll_get_post_language($postId, 'locale');
-            if (is_scalar($lang) && trim((string) $lang) !== '') {
-                return WP_FTS_TermNamespace::canonicalize_lang((string) $lang);
-            }
-        }
-
-        if ($postId > 0 && function_exists('has_filter') && function_exists('apply_filters') && has_filter('wpml_post_language_details')) {
-            $details = apply_filters('wpml_post_language_details', null, $postId);
-            if (is_array($details)) {
-                $lang = $details['locale'] ?? $details['language_code'] ?? null;
-                if (is_scalar($lang) && trim((string) $lang) !== '') {
-                    return WP_FTS_TermNamespace::canonicalize_lang((string) $lang);
-                }
-            }
-            if (is_object($details)) {
-                $lang = $details->locale ?? $details->language_code ?? null;
-                if (is_scalar($lang) && trim((string) $lang) !== '') {
-                    return WP_FTS_TermNamespace::canonicalize_lang((string) $lang);
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private function resolve_plugin_post_language_override(int $postId): ?string
-    {
-        if ($postId <= 0 || !function_exists('get_post_meta')) {
-            return null;
-        }
-
-        $metaKey = class_exists('WP_FTS_Plugin') ? WP_FTS_Plugin::LANGUAGE_META_KEY : '_wp_fts_index_language';
-        $lang = get_post_meta($postId, $metaKey, true);
-        if (!is_scalar($lang) || trim((string) $lang) === '') {
-            return null;
-        }
-
-        $lang = WP_FTS_TermNamespace::canonicalize_lang((string) $lang);
-
-        return $lang !== '' && $lang !== 'auto' ? $lang : null;
-    }
-
-    /**
-     * Resolve per-post language metadata when callers only supplied a `post_id`.
-     *
-     * @param array<string,mixed> $opts Public document options.
-     */
-    private function resolve_post_metadata_language_from_options(array $opts): ?string
-    {
-        $postId = isset($opts['post_id']) && is_scalar($opts['post_id']) ? (int) $opts['post_id'] : 0;
-        if ($postId <= 0) {
-            return null;
-        }
-
-        return $this->resolve_post_metadata_language((object) ['ID' => $postId]);
     }
 
 }

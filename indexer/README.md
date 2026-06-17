@@ -7,6 +7,12 @@ full-text index for WordPress posts. It indexes post content into derived FTS
 tables, keeps those tables current from WordPress post lifecycle hooks, and can
 be managed or queried with WP-CLI.
 
+The plugin is now a thin WordPress adapter around the reusable
+`wp-php-toolkit/full-text-search` Composer component in
+`components/full-text-search/`. The component owns the framework-neutral FTS
+engine; this plugin owns WordPress hooks, post extraction, MySQL storage, admin
+UI, WP-CLI, REST/search integration, and Playground packaging.
+
 The Playground preview opens the admin-only Settings > Full-Text Search
 Sandbox tab. The sandbox prepares demo posts and indexes them automatically,
 shows indexed posts with pagination, lets you run language-aware searches, and
@@ -58,8 +64,11 @@ queries.
 
 ## Architecture
 
+- `wp-php-toolkit/full-text-search` provides the analyzer, term generation,
+  storage contracts, in-memory/file storage, `WP_FTS_Indexer`, and
+  `WP_FTS_Searcher`.
 - WordPress activation, post-save/status/delete hooks, cron, REST, and WP-CLI
-  wire into `WP_FTS_Indexer`.
+  live in the plugin adapter and wire WordPress posts into the component.
 - `WP_FTS_PostContentExtractor` extracts title, content, excerpt, rendered
   block deltas, taxonomy terms, and configured custom fields into weighted
   fields plus bounded result metadata.
@@ -72,7 +81,8 @@ queries.
   metadata such as post type, status, and date.
 - MySQL storage is the normal WordPress backend, including WordPress Playground
   when the SQLite integration presents a `$wpdb`-compatible database. File
-  storage remains a small local and test backend for non-WordPress contexts.
+  storage remains in the component as a small local and test backend for
+  non-WordPress contexts.
 
 The index is derived state. Rebuild it after content imports, analyzer changes,
 language-routing changes, or environment moves where the FTS tables were not
@@ -208,7 +218,7 @@ wp fts optimize
 - [Testing](docs/testing.md) documents the PHP, Snowball, BM25, and conditional
   integration test harnesses.
 - [Release packaging](docs/release-packaging.md) describes what should ship in
-  a plugin archive and how Composer dependencies are handled.
+  a plugin archive and how the component dependency is handled.
 - [Snowball compliance](docs/snowball-compliance.md) explains the dedicated
   Snowball fixture harness.
 - [Analyzer source locks](docs/analyzer-source-locks.md) define the manifest

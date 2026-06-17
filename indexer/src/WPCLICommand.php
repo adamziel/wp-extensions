@@ -64,7 +64,7 @@ final class WP_FTS_WPCLI_Command
             $options['lang'] = $lang;
         }
 
-        $count = $indexer->reindex_all($options);
+        $count = $this->reindex_posts($indexer, $options);
 
         WP_CLI::success($lang !== null ? "Indexed {$count} posts in {$lang}." : "Indexed {$count} posts.");
     }
@@ -457,7 +457,65 @@ final class WP_FTS_WPCLI_Command
      */
     private function indexer(): WP_FTS_Indexer
     {
-        return new WP_FTS_Indexer($this->storage(), WP_FTS_Plugin::runtime_analyzer());
+        return new WP_FTS_Indexer(
+            $this->storage(),
+            WP_FTS_Plugin::runtime_analyzer(),
+            new WP_FTS_PostContentExtractor()
+        );
+    }
+
+    /**
+     * Reindex WordPress posts in ascending ID batches.
+     *
+     * @param array{post_status:string[],post_type:string[],batch_size:int,limit:int,lang?:string} $options
+     */
+    private function reindex_posts(WP_FTS_Indexer $indexer, array $options): int
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb)) {
+            throw new RuntimeException('WP-CLI reindex requires $wpdb.');
+        }
+
+        $postStatuses = $this->non_empty_string_list($options['post_status'] ?? self::DEFAULT_REINDEX_POST_STATUSES, 'post_status');
+        $postTypes = $this->non_empty_string_list($options['post_type'] ?? ['post'], 'post_type');
+        $batchSize = max(1, (int) ($options['batch_size'] ?? 500));
+        $limit = max(0, (int) ($options['limit'] ?? 0));
+        $last = 0;
+        $count = 0;
+
+        do {
+            $currentBatchSize = $limit > 0 ? min($batchSize, $limit - $count) : $batchSize;
+            if ($currentBatchSize <= 0) {
+                break;
+            }
+
+            $statusPlaceholders = implode(',', array_fill(0, count($postStatuses), '%s'));
+            $typePlaceholders = implode(',', array_fill(0, count($postTypes), '%s'));
+            $args = array_merge($postStatuses, $postTypes, [$last, $currentBatchSize]);
+
+            $sql = $wpdb->prepare(
+                "SELECT ID, post_content, post_title, post_excerpt, post_type, post_status, post_date_gmt, post_date
+FROM {$wpdb->posts}
+WHERE post_status IN ({$statusPlaceholders})
+  AND post_type IN ({$typePlaceholders})
+  AND ID > %d
+ORDER BY ID ASC
+LIMIT %d",
+                ...$args
+            );
+
+            $rows = $wpdb->get_results($sql);
+            foreach ($rows ?: [] as $row) {
+                $last = (int) $row->ID;
+                $indexer->index_post($row, WP_FTS_Plugin::prepare_post_index_options($row, $options));
+                $count++;
+            }
+        } while (!empty($rows) && ($limit === 0 || $count < $limit));
+
+        $indexer->flush();
+
+        return $count;
     }
 
     /**
@@ -490,6 +548,32 @@ final class WP_FTS_WPCLI_Command
         $items = array_values(array_filter($items, static fn(string $item): bool => $item !== ''));
 
         return $items === [] ? (is_array($fallback) ? $fallback : [$fallback]) : $items;
+    }
+
+    /**
+     * Normalize an option list that must not be empty.
+     *
+     * @param mixed $value
+     * @return string[]
+     */
+    private function non_empty_string_list(mixed $value, string $name): array
+    {
+        $items = [];
+        foreach (is_array($value) ? $value : [$value] as $item) {
+            foreach (explode(',', (string) $item) as $part) {
+                $part = trim($part);
+                if ($part !== '') {
+                    $items[] = $part;
+                }
+            }
+        }
+
+        $items = array_values(array_unique($items));
+        if ($items === []) {
+            throw new InvalidArgumentException("{$name} must contain at least one value.");
+        }
+
+        return $items;
     }
 
     /**

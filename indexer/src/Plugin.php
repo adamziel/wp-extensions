@@ -1168,6 +1168,101 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Prepare WordPress post language/default options before calling the FTS
+     * component indexer.
+     *
+     * @param array<string,mixed> $opts Caller-supplied indexing options.
+     * @return array<string,mixed>
+     */
+    public static function prepare_post_index_options(object $post, array $opts = []): array
+    {
+        $options = $opts;
+        $site_language = self::site_language();
+        $options['default_lang'] ??= $site_language;
+
+        if (WP_FTS_TermNamespace::language_from_options($options, null, ['lang', 'language', 'primary_lang', 'document_lang']) === null) {
+            $metadata_language = self::wordpress_post_language($post);
+            if ($metadata_language !== null) {
+                $options['lang'] = $metadata_language;
+                $options['document_lang'] = $metadata_language;
+            }
+        }
+
+        return $options;
+    }
+
+    /**
+     * Resolve deliberate per-post language metadata from WordPress integrations.
+     */
+    private static function wordpress_post_language(object $post): ?string
+    {
+        $post_id = isset($post->ID) ? (int) $post->ID : 0;
+        $override = self::post_language_override($post_id);
+        if ($override !== null) {
+            return WP_FTS_TermNamespace::canonicalize_lang($override);
+        }
+
+        if ($post_id > 0 && function_exists('pll_get_post_language')) {
+            $language = pll_get_post_language($post_id, 'locale');
+            if (is_scalar($language) && trim((string) $language) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+            }
+        }
+
+        if ($post_id > 0 && function_exists('has_filter') && function_exists('apply_filters') && has_filter('wpml_post_language_details')) {
+            $details = apply_filters('wpml_post_language_details', null, $post_id);
+            if (is_array($details)) {
+                $language = $details['locale'] ?? $details['language_code'] ?? null;
+                if (is_scalar($language) && trim((string) $language) !== '') {
+                    return WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+                }
+            }
+            if (is_object($details)) {
+                $language = $details->locale ?? $details->language_code ?? null;
+                if (is_scalar($language) && trim((string) $language) !== '') {
+                    return WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve document language for analyzer callbacks from post_id options.
+     *
+     * @param array<string,mixed> $options
+     */
+    private static function wordpress_document_language_from_options(array $options): ?string
+    {
+        $post_id = isset($options['post_id']) && is_scalar($options['post_id']) ? (int) $options['post_id'] : 0;
+
+        return $post_id > 0 ? self::wordpress_post_language((object) ['ID' => $post_id]) : null;
+    }
+
+    /**
+     * Resolve the current WordPress query language from multilingual plugins.
+     */
+    private static function wordpress_query_language(): ?string
+    {
+        if (function_exists('pll_current_language')) {
+            $language = pll_current_language('locale');
+            if (is_scalar($language) && trim((string) $language) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+            }
+        }
+
+        if (function_exists('apply_filters')) {
+            $language = apply_filters('wpml_current_language', null);
+            if (is_scalar($language) && trim((string) $language) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Parse a nonce-protected POST action for the sandbox forms.
      */
     private static function sandbox_post_action(): string
@@ -1787,7 +1882,9 @@ final class WP_FTS_Plugin
      */
     public static function sandbox_demo_analyzer_options(): array
     {
-        return self::sanitize_runtime_analyzer_options(self::raw_sandbox_demo_analyzer_options());
+        return self::with_wordpress_analyzer_options(
+            self::sanitize_runtime_analyzer_options(self::raw_sandbox_demo_analyzer_options())
+        );
     }
 
     /**
@@ -1805,7 +1902,36 @@ final class WP_FTS_Plugin
      */
     public static function runtime_analyzer_options(): array
     {
-        return self::sanitize_runtime_analyzer_options(self::raw_runtime_analyzer_options());
+        return self::with_wordpress_analyzer_options(
+            self::sanitize_runtime_analyzer_options(self::raw_runtime_analyzer_options())
+        );
+    }
+
+    /**
+     * Add WordPress-only language and HTML parser integrations to component
+     * analyzer options.
+     *
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private static function with_wordpress_analyzer_options(array $options): array
+    {
+        $site_language = self::site_language();
+        $options['default_lang'] ??= $site_language;
+        $options['document_language_resolver'] ??= static function (array $analyzer_options): ?string {
+            return self::wordpress_document_language_from_options($analyzer_options);
+        };
+        $options['query_language_resolver'] ??= static function (array $analyzer_options): ?string {
+            return self::wordpress_query_language();
+        };
+
+        if (class_exists('WP_HTML_Processor')) {
+            $options['html_processor_factory'] ??= static function (string $html): mixed {
+                return self::create_wp_html_processor($html);
+            };
+        }
+
+        return $options;
     }
 
     /**
@@ -2902,7 +3028,52 @@ final class WP_FTS_Plugin
 
     private static function site_language(): string
     {
+        if (function_exists('get_locale')) {
+            $locale = get_locale();
+            if (is_scalar($locale) && trim((string) $locale) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $locale);
+            }
+        }
+
+        if (function_exists('get_bloginfo')) {
+            $language = get_bloginfo('language');
+            if (is_scalar($language) && trim((string) $language) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+            }
+        }
+
         return WP_FTS_TermNamespace::default_language();
+    }
+
+    /**
+     * Create a WordPress HTML processor for the framework-neutral analyzer.
+     */
+    private static function create_wp_html_processor(string $html): mixed
+    {
+        if (!class_exists('WP_HTML_Processor')) {
+            return null;
+        }
+
+        try {
+            if (
+                self::looks_like_full_html_document($html)
+                && method_exists('WP_HTML_Processor', 'create_full_parser')
+            ) {
+                return WP_HTML_Processor::create_full_parser($html);
+            }
+
+            return WP_HTML_Processor::create_fragment($html);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Heuristically decide whether WordPress should use full-document parsing.
+     */
+    private static function looks_like_full_html_document(string $html): bool
+    {
+        return (bool) preg_match('/<(?:!doctype|html|head|title)\b/i', $html);
     }
 
     /**
@@ -4493,7 +4664,11 @@ final class WP_FTS_Plugin
     private static function index_post(object $post, array $opts = [], ?WP_FTS_Analyzer $analyzer = null): void
     {
         self::maybe_upgrade_schema();
-        (new WP_FTS_Indexer(self::storage(false), $analyzer ?? self::runtime_analyzer()))->index_post($post, $opts);
+        (new WP_FTS_Indexer(
+            self::storage(false),
+            $analyzer ?? self::runtime_analyzer(),
+            new WP_FTS_PostContentExtractor()
+        ))->index_post($post, self::prepare_post_index_options($post, $opts));
     }
 
     /**

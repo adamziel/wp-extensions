@@ -44,8 +44,7 @@ final class WP_FTS_Searcher
      * `post_type`, `post_status`, `date_after`, and `date_before` filter only
      * when the storage backend exposes document metadata. Prefix/phrase search is
      * intentionally not emulated on whole-term postings; pass `search_extension`
-     * or use the `wp_fts_search_extension_results` filter to provide a backend
-     * that can do it honestly.
+     * to provide a backend that can do it honestly.
      *
      * @param array<string,mixed> $opts
      * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>}
@@ -719,7 +718,7 @@ final class WP_FTS_Searcher
      *
      * The built-in posting lists are whole-term only. Returning an empty or fuzzy
      * approximation for prefix/phrase would be misleading, so these modes require
-     * an explicit extension callback/filter that owns the storage contract.
+     * an explicit extension callback that owns the storage contract.
      *
      * @return array<string,mixed>|array<int,array<string,mixed>>|null
      */
@@ -735,14 +734,7 @@ final class WP_FTS_Searcher
             return is_array($results) ? $results : [];
         }
 
-        if (function_exists('apply_filters')) {
-            $results = apply_filters('wp_fts_search_extension_results', null, $query, $opts, $this->storage, $this->analyzer);
-            if ($results !== null) {
-                return is_array($results) ? $results : [];
-            }
-        }
-
-        throw new InvalidArgumentException('Prefix and phrase search require a search_extension callback or wp_fts_search_extension_results filter for the active storage backend.');
+        throw new InvalidArgumentException('Prefix and phrase search require a search_extension callback for the active storage backend.');
     }
 
     /**
