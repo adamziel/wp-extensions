@@ -779,7 +779,7 @@ final class WP_FTS_Plugin
     private static function render_analyzer_packs_tab(): void
     {
         echo '<h2>Analyzer packs</h2>';
-        echo '<p>Analyzer packs add language-specific tokenization or word-form matching. Runtime packs affect real site searches; sandbox packs are bundled so the demo queries have realistic language behavior.</p>';
+        echo '<p>Analyzer packs add language-specific tokenization or word-form matching. Runtime packs affect real site searches; sandbox packs are bundled so Sandbox searches have realistic language behavior.</p>';
         echo '<h3>Runtime analyzer packs</h3>';
         self::render_analyzer_pack_statuses(self::runtime_analyzer_pack_statuses());
         echo '<h3>Sandbox analyzer packs</h3>';
@@ -842,9 +842,6 @@ final class WP_FTS_Plugin
         $query = self::sandbox_search_query();
         $selected_language = self::sandbox_selected_language();
         $controls = self::sandbox_search_controls($search_submitted);
-        if ($query === '' && !$search_submitted) {
-            $query = 'mouse';
-        }
 
         $results = self::empty_sandbox_search_results($selected_language);
         if ($search_submitted) {
@@ -1604,26 +1601,6 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @return array<string,string>
-     */
-    private static function sandbox_demo_query_suggestions(): array
-    {
-        return [
-            'en' => 'mouse',
-            'pl' => 'kierować zamek',
-            'zh' => '搜索系统',
-            'hi' => 'अपनाना',
-            'es' => 'buscar',
-            'ar' => 'بئر',
-            'fr' => 'chercher',
-            'bn' => 'অনুরোধ',
-            'pt' => 'pesquisar',
-            'id' => 'abadi',
-            'ur' => 'کتاب فہرست',
-        ];
-    }
-
-    /**
      * @param array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}> $results
      */
     private static function sandbox_resolved_query_language(string $selected_language, string $searcher_language, array $results): string
@@ -2370,7 +2347,6 @@ final class WP_FTS_Plugin
     {
         echo '<h2>Sandbox</h2>';
         echo '<p>Try a query against the same index and saved settings this plugin uses elsewhere. Changes here affect only this test search.</p>';
-        self::render_sandbox_query_suggestions();
         echo '<form method="get" action="' . self::esc_url(self::admin_options_general_url()) . '">';
         echo '<input type="hidden" name="page" value="' . self::esc_attr(self::ADMIN_PAGE_SLUG) . '">';
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_TAB_FIELD) . '" value="' . self::esc_attr(self::ADMIN_SANDBOX_TAB) . '">';
@@ -2388,7 +2364,7 @@ final class WP_FTS_Plugin
             echo '<option value="' . self::esc_attr($language) . '"' . $selected . '>' . self::esc_html($label) . '</option>';
         }
         echo '</select>';
-        echo '<p class="description">Automatic searches across the sandbox demo languages. Site language uses the current WordPress language: ' . self::esc_html(self::sandbox_language_display(self::site_language())) . '.</p>';
+        echo '<p class="description">Automatic lets the analyzer infer the query language. Site language uses the current WordPress language: ' . self::esc_html(self::sandbox_language_display(self::site_language())) . '.</p>';
         echo '</td></tr>';
 
         echo '<tr><th scope="row"><label for="wp-fts-sandbox-mode">Search term matching</label></th><td>';
@@ -2452,21 +2428,6 @@ final class WP_FTS_Plugin
         echo '</tbody></table>';
         echo '<p><button type="submit" class="button button-primary" name="' . self::esc_attr(self::ADMIN_SEARCH_FIELD) . '" value="1">Search</button></p>';
         echo '</form>';
-    }
-
-    private static function render_sandbox_query_suggestions(): void
-    {
-        echo '<h3>Suggested queries</h3>';
-        echo '<table class="widefat striped">';
-        echo '<thead><tr><th scope="col">Language</th><th scope="col">Query</th></tr></thead>';
-        echo '<tbody>';
-        foreach (self::sandbox_demo_query_suggestions() as $language => $suggestion) {
-            echo '<tr>';
-            echo '<td>' . self::esc_html(self::sandbox_language_display($language)) . '</td>';
-            echo '<td><code>' . self::esc_html($suggestion) . '</code></td>';
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
     }
 
     /**

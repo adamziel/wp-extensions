@@ -3543,7 +3543,7 @@ test_case('authorized admin sandbox render includes search form and indexed post
     assert_contains('name="wp_fts_sandbox_query"', $html, 'sandbox page should include the search query field');
     assert_contains('Try a query against the same index and saved settings', $html, 'sandbox tab should explain that it searches the same index');
     assert_contains('name="tab" value="sandbox"', $html, 'sandbox form should preserve the selected tab on search submission');
-    assert_contains('value="mouse"', $html, 'sandbox page should default to the English pack-backed query suggestion');
+    assert_contains('id="wp-fts-sandbox-query" type="search" class="regular-text" name="wp_fts_sandbox_query" value=""', $html, 'sandbox page should leave the query field blank by default');
     assert_contains('name="wp_fts_sandbox_lang"', $html, 'sandbox page should include the query language selector');
     assert_contains('value="auto"', $html, 'sandbox language selector should include automatic detection');
     assert_contains('value="site"', $html, 'sandbox language selector should include the dynamic site-language option');
@@ -3578,10 +3578,11 @@ test_case('authorized admin sandbox render includes search form and indexed post
     assert_true(!str_contains($html, 'Build demo index'), 'sandbox page should not render the manual demo index button');
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_nonce"'), 'sandbox page should not render hidden action nonces for removed manual controls');
     assert_contains('Indexed content', $indexedHtml, 'indexed-content tab should render indexed-post storage state');
-    assert_contains('Suggested queries', $html, 'sandbox page should render compact demo query suggestions');
-    assert_contains('<th scope="col">Query</th>', $html, 'sandbox suggestion table should include a query column');
+    $oldPresetHeading = 'Suggested ' . 'queries';
+    assert_true(!str_contains($html, $oldPresetHeading), 'sandbox page should not render the removed query-preset heading');
+    assert_true(!str_contains($html, '<th scope="col">Query</th>'), 'sandbox page should not render a query-preset table column');
     foreach ($demo as $case) {
-        assert_contains('<code>' . esc_html($case['query']) . '</code>', $html, "sandbox page should suggest the {$case['lang']} demo query");
+        assert_true(!str_contains($html, '<td><code>' . esc_html($case['query']) . '</code></td>'), "sandbox page should not render the {$case['lang']} preset query");
     }
     assert_contains('<th scope="col">Language</th>', $indexedHtml, 'indexed-post table should include a language column');
     assert_contains('<th scope="col">Indexed length</th>', $indexedHtml, 'indexed-post table should include indexed token length');
