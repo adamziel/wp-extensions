@@ -131,7 +131,8 @@ Exclude:
 - `tests/`
 - `vendor/bin/`
 - `phpunit.xml.dist`
-- `phpcs.xml.dist`
+- `phpstan.neon.dist`
+- `phpstan-stubs/`
 - local logs, coverage output, and temporary files
 
 The repository includes `.distignore` with the maintained exclusion list used

@@ -53,6 +53,7 @@ final class WordPressRemoteArchiveFetcher implements ImportRemoteArchiveFetcherI
 			)
 		);
 
+		/** @var array<string,mixed>|\WP_Error $response */
 		if ( function_exists( 'is_wp_error' ) && is_wp_error( $response ) ) {
 			if ( file_exists( $target_path ) ) {
 				// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- Cleans up an importer-managed failed download cache file.

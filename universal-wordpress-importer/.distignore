@@ -8,6 +8,7 @@ tests
 tools
 vendor/bin
 phpunit.xml.dist
-phpcs.xml.dist
+phpstan.neon.dist
+phpstan-stubs
 run_autonomous_loop.sh
 scripts/codex-loop.sh
