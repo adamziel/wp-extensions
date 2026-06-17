@@ -10092,11 +10092,19 @@ test_case('search fast top-k candidate cap is explicit approximate opt-in', func
         'fast_top_k' => true,
         'candidate_cap' => 3,
     ]);
+    $fastAlias = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'approximate_top_k' => true,
+        'candidate_cap' => 3,
+    ]);
 
     assert_same(6, $exact['total'], 'exact search should count every candidate by default');
     assert_same(6, $exact['results'][0]['doc_id'] ?? null, 'exact search should rank the strongest late candidate first');
     assert_same($exact, $capWithoutFast, 'candidate_cap without fast_top_k should preserve exact default behavior');
     assert_same(3, $fast['total'], 'fast top-k should report only capped approximate candidates');
+    assert_same($fast, $fastAlias, 'approximate_top_k alias should enable the same explicit capped fast path');
     assert_true(($fast['results'][0]['doc_id'] ?? null) !== 6, 'fast top-k may miss a stronger candidate outside the cap');
 });
 

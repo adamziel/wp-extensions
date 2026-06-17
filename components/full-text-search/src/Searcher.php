@@ -580,7 +580,10 @@ final class WP_FTS_Searcher
      */
     private function fast_candidate_cap(array $opts, int $minimumCandidates): ?int
     {
-        $fastTopK = $opts['fast_top_k'] ?? $opts['approximate_top_k'] ?? false;
+        $fastTopK = $opts['fast_top_k'] ?? false;
+        if (!$this->truthy_option($fastTopK)) {
+            $fastTopK = $opts['approximate_top_k'] ?? false;
+        }
         if (!$this->truthy_option($fastTopK)) {
             return null;
         }

@@ -1102,7 +1102,21 @@ final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage
     {
         return $this->timed(
             'get_capped_postings',
-            fn(): array => $this->capped_postings_storage()->get_capped_postings($terms, $candidate_cap)
+            function () use ($terms, $candidate_cap): array {
+                if ($this->inner instanceof WP_FTS_Capped_Postings_Storage) {
+                    return $this->inner->get_capped_postings($terms, $candidate_cap);
+                }
+
+                $candidate_cap = max(1, $candidate_cap);
+                $result = $this->row_storage()->get_postings($terms);
+                foreach ($result as $term => $postings) {
+                    if (count($postings) > $candidate_cap) {
+                        $result[$term] = array_slice($postings, 0, $candidate_cap, true);
+                    }
+                }
+
+                return $result;
+            }
         );
     }
 
@@ -1118,15 +1132,6 @@ final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage
         }
 
         return $this->inner;
-    }
-
-    private function capped_postings_storage(): WP_FTS_Capped_Postings_Storage
-    {
-        if ($this->inner instanceof WP_FTS_Capped_Postings_Storage) {
-            return $this->inner;
-        }
-
-        return new WP_FTS_Row_Postings_Cap_Adapter($this->row_storage());
     }
 
     private function document_terms_storage(): WP_FTS_Document_Terms_Storage
