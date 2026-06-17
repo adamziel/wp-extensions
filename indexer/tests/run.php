@@ -745,10 +745,20 @@ function remove_directory_tree(string $directory): void
     rmdir($directory);
 }
 
-function write_synthetic_full_analyzer_pack(string $directory, int $rows, int $shards): string
+function write_synthetic_full_analyzer_pack(
+    string $directory,
+    int $rows,
+    int $shards,
+    string $language = 'pl',
+    string $packId = 'pl-polimorf-synthetic-full-streaming-fixture'
+): string
 {
     if ($rows < 1 || $shards < 1) {
         throw new WP_FTS_TestFailure('Synthetic analyzer pack requires positive row and shard counts.');
+    }
+    $language = WP_FTS_TermNamespace::canonicalize_lang($language);
+    if ($language === WP_FTS_TermNamespace::DEFAULT_LANG || trim($packId) === '') {
+        throw new WP_FTS_TestFailure('Synthetic analyzer pack requires a concrete language and pack id.');
     }
     if (!mkdir($directory . '/runtime', 0777, true) && !is_dir($directory . '/runtime')) {
         throw new WP_FTS_TestFailure("Could not create synthetic analyzer runtime directory: {$directory}");
@@ -801,8 +811,8 @@ function write_synthetic_full_analyzer_pack(string $directory, int $rows, int $s
 
     $manifest = [
         'schema_version' => 1,
-        'pack_id' => 'pl-polimorf-synthetic-full-streaming-fixture',
-        'language' => 'pl',
+        'pack_id' => $packId,
+        'language' => $language,
         'version' => 'streaming-regression-v1',
         'fixture_only' => false,
         'default_enabled' => false,
@@ -814,16 +824,16 @@ function write_synthetic_full_analyzer_pack(string $directory, int $rows, int $s
         ],
         'runtime' => [
             'format' => 'wp-fts-polish-lemma-tsv-v1',
-            'normalization' => 'WP_FTS_Normalizer pl with fold_diacritics=true',
+            'normalization' => 'WP_FTS_Normalizer ' . $language . ' with fold_diacritics=true',
             'ambiguity_policy' => 'ambiguous_surface_noop',
             'total_rows' => $rows,
             'total_sha256' => hash_final($runtimeDigest),
             'files' => $runtimeFiles,
         ],
         'source' => [
-            'name' => 'Synthetic PoliMorf streaming validator fixture',
+            'name' => 'Synthetic ' . $language . ' streaming validator fixture',
             'version' => 'test',
-            'url' => 'urn:wp-fts:test:synthetic-polimorf-streaming-validator',
+            'url' => 'urn:wp-fts:test:synthetic-' . $language . '-streaming-validator',
             'artifact_sha256' => str_repeat('a', 64),
             'byte_count' => 1,
         ],
@@ -3506,6 +3516,10 @@ test_case('authorized admin sandbox render includes search form and indexed post
         assert_contains($tabLabel, $html, "settings tabs should include {$tabLabel}");
     }
     assert_contains('Full-text search (FTS) builds its own searchable index', $html, 'admin page should define full-text search before showing controls');
+    assert_contains('wp-fts-admin-summary', $html, 'admin orientation should use compact help text instead of a heavy notice');
+    assert_true(!str_contains($html, '<div class="notice notice-info"><p><strong>What this does:</strong>'), 'admin orientation should not render as a large notice');
+    assert_contains('wp-fts-language-status', $html, 'site-language status should use compact help text');
+    assert_true(!str_contains($html, '<div class="notice notice-info"><p>Current site language'), 'site-language status should not render as a large notice');
     assert_contains('Demo posts and the full-text index are ready', $html, 'authorized first render should auto-seed the demo corpus and index');
     $demo = wp_fts_test_sandbox_demo_expectations();
     assert_same(count($demo), count($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? []), 'authorized first render should create the top-language demo posts');
@@ -3544,6 +3558,9 @@ test_case('authorized admin sandbox render includes search form and indexed post
     assert_contains('Try a query against the same index and saved settings', $html, 'sandbox tab should explain that it searches the same index');
     assert_contains('name="tab" value="sandbox"', $html, 'sandbox form should preserve the selected tab on search submission');
     assert_contains('id="wp-fts-sandbox-query" type="search" class="regular-text" name="wp_fts_sandbox_query" value=""', $html, 'sandbox page should leave the query field blank by default');
+    assert_contains('wp-fts-sandbox-compact-controls', $html, 'sandbox search controls should use a compact primary row');
+    assert_contains('<details class="wp-fts-sandbox-advanced">', $html, 'secondary sandbox controls should be collapsed behind details');
+    assert_contains('Filters and display options', $html, 'sandbox advanced controls should have a clear summary label');
     assert_contains('name="wp_fts_sandbox_lang"', $html, 'sandbox page should include the query language selector');
     assert_contains('value="auto"', $html, 'sandbox language selector should include automatic detection');
     assert_contains('value="site"', $html, 'sandbox language selector should include the dynamic site-language option');
@@ -3573,6 +3590,10 @@ test_case('authorized admin sandbox render includes search form and indexed post
     assert_contains('Runtime packs affect real site searches', $analyzerHtml, 'analyzer packs tab should explain runtime versus sandbox scope');
     assert_contains('Polish (pl)', $analyzerHtml, 'analyzer pack status should include the bundled Polish pack');
     assert_contains('<td>Active</td>', $analyzerHtml, 'analyzer pack status should identify active packs');
+    if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_contains('English (en)', $analyzerHtml, 'sandbox analyzer pack status should include the active base English pack');
+        assert_contains('en-unimorph-eng-66e0e9e8e2dc', $analyzerHtml, 'sandbox analyzer pack status should expose the English pack id');
+    }
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_action"'), 'sandbox page should not render mutating demo action controls');
     assert_true(!str_contains($html, 'Create or refresh demo posts'), 'sandbox page should not render the manual demo refresh button');
     assert_true(!str_contains($html, 'Build demo index'), 'sandbox page should not render the manual demo index button');
@@ -3591,6 +3612,7 @@ test_case('authorized admin sandbox render includes search form and indexed post
     assert_contains('Showing 1-10 of 11 indexed post(s).', $indexedHtml, 'indexed-post table should paginate the top-language demo corpus');
     if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
         assert_contains('Full morphology', $indexedHtml, 'indexed-content view should identify full morphology partitions');
+        assert_contains('English (en) - Full morphology', $indexedHtml, 'indexed-content view should align English indexed labels with the active base English pack');
     } else {
         assert_contains('Fixture morphology', $indexedHtml, 'indexed-content view should identify fixture morphology partitions when gzip is unavailable');
     }
@@ -3717,9 +3739,64 @@ test_case('settings page reports unsupported site language without storing fallb
     $html = wp_fts_test_capture_admin_settings_tab('settings');
 
     assert_contains('Current site language QAA (qaa) uses conservative fallback', $html, 'settings page should explicitly flag unsupported site languages');
-    assert_contains('full morphology is unavailable', $html, 'settings page should explain that full morphology is unavailable for unsupported site languages');
+    assert_contains('install or build an analyzer pack with the pack tooling and configure it for this language', $html, 'settings page should guide unsupported languages toward pack tooling instead of a missing UI control');
+    assert_true(!str_contains($html, 'enable an analyzer pack'), 'settings page should not promise a nonexistent analyzer-pack enable control');
     assert_contains('Change it on the <a href="/wp-admin/options-general.php">WordPress General Settings page</a>', $html, 'current site language description should link to General Settings');
+    assert_contains('wp-fts-language-status', $html, 'unsupported site-language status should use compact help text');
+    assert_true(!str_contains($html, '<div class="notice notice-info"><p>Current site language'), 'unsupported site-language status should not render as a large notice');
     assert_true(!str_contains($html, 'fallback_language'), 'settings page should not store a stale fallback language value');
+});
+
+test_case('settings page explains en-US support through active base English analyzer pack', function (): void {
+    $packDir = temp_directory_path('admin_en_base_pack');
+
+    try {
+        $manifest = write_synthetic_full_analyzer_pack($packDir, 3, 1, 'en', 'en-synthetic-full-status');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_locale'] = 'en_US';
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'lemmatizer_packs_by_lang' => [
+                'en' => $manifest,
+            ],
+        ];
+
+        $settingsHtml = wp_fts_test_capture_admin_settings_tab('settings');
+        $analyzerHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+
+        assert_contains('Current site language English (en-US) uses full morphology through the active base-language analyzer pack English (en)', $settingsHtml, 'site-language status should explain en-US support through the active base English pack');
+        assert_contains('Runtime search status - Full morphology', $settingsHtml, 'settings row should report full runtime morphology for en-US through the base pack');
+        assert_contains('English morphology is available through the active base-language analyzer pack English (en)', $settingsHtml, 'settings row should explain English dialect/locale coverage');
+        assert_true(!str_contains($settingsHtml, 'full morphology is unavailable'), 'en-US with active base English pack should not be described as unavailable');
+        assert_true(!str_contains($settingsHtml, 'enable an analyzer pack'), 'en-US with active base English pack should not mention a nonexistent enable control');
+        assert_contains('English (en)', $analyzerHtml, 'analyzer packs table should list the active base English pack');
+        assert_contains('en-synthetic-full-status', $analyzerHtml, 'analyzer packs table should expose the configured English pack id');
+        assert_contains('Full local pack', $analyzerHtml, 'analyzer packs table should label the synthetic English pack as full local data');
+    } finally {
+        remove_directory_tree($packDir);
+    }
+});
+
+test_case('settings page distinguishes en-US runtime fallback from sandbox English pack coverage', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so bundled sandbox UniMorph English pack coverage is skipped.');
+        return;
+    }
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_locale'] = 'en_US';
+
+    $settingsHtml = wp_fts_test_capture_admin_settings_tab('settings');
+    $analyzerHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+
+    assert_contains('Current site language English (en-US) uses conservative fallback for runtime site searches because no runtime analyzer pack covers it', $settingsHtml, 'site-language status should keep runtime fallback scope explicit for en-US when only sandbox has English');
+    assert_contains('Sandbox and indexed demo content can use English morphology through the active base-language analyzer pack English (en) for English dialects/locales', $settingsHtml, 'site-language status should explain sandbox English dialect coverage through the base en pack');
+    assert_true(!str_contains($settingsHtml, 'full morphology is unavailable'), 'sandbox English coverage should not be described as unavailable for en-US');
+    assert_true(!str_contains($settingsHtml, 'enable an analyzer pack'), 'sandbox English coverage should not mention a nonexistent enable control');
+    assert_contains('English (en)', $analyzerHtml, 'analyzer packs table should list the sandbox base English pack');
+    assert_contains('en-unimorph-eng-66e0e9e8e2dc', $analyzerHtml, 'analyzer packs table should expose the sandbox English pack id');
 });
 
 test_case('sandbox language fallback uses current site language dynamically', function (): void {

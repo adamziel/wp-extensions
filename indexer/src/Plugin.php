@@ -466,6 +466,7 @@ final class WP_FTS_Plugin
 
         echo '<div class="wrap">';
         echo '<h1>Full-Text Search</h1>';
+        self::render_admin_compact_styles();
         self::render_admin_orientation();
         self::render_admin_tabs($tab);
         self::render_site_language_status_notice();
@@ -541,11 +542,28 @@ final class WP_FTS_Plugin
         echo '</nav>';
     }
 
+    private static function render_admin_compact_styles(): void
+    {
+        echo '<style>';
+        echo '.wp-fts-admin-summary,.wp-fts-language-status{max-width:980px;margin:6px 0 10px;color:#50575e;}';
+        echo '.wp-fts-language-status{margin-top:8px;}';
+        echo '.wp-fts-sandbox-compact-controls{display:flex;flex-wrap:wrap;gap:12px 16px;align-items:flex-end;margin:8px 0 10px;}';
+        echo '.wp-fts-sandbox-field{display:flex;flex-direction:column;gap:4px;margin:0;}';
+        echo '.wp-fts-sandbox-field label,.wp-fts-sandbox-option-label{font-weight:600;}';
+        echo '.wp-fts-sandbox-field input[type=search]{min-width:280px;}';
+        echo '.wp-fts-sandbox-field input[type=number]{width:90px;}';
+        echo '.wp-fts-sandbox-advanced{margin:4px 0 12px;max-width:980px;}';
+        echo '.wp-fts-sandbox-advanced summary{cursor:pointer;color:#2271b1;}';
+        echo '.wp-fts-sandbox-advanced-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 18px;margin-top:10px;}';
+        echo '.wp-fts-sandbox-advanced-grid fieldset{border:0;margin:0;padding:0;}';
+        echo '.wp-fts-sandbox-advanced-grid p{margin:.35em 0;}';
+        echo '@media (max-width:600px){.wp-fts-sandbox-compact-controls{display:block}.wp-fts-sandbox-field{margin:0 0 10px}.wp-fts-sandbox-field input[type=search]{min-width:0;width:100%;}}';
+        echo '</style>';
+    }
+
     private static function render_admin_orientation(): void
     {
-        echo '<div class="notice notice-info">';
-        echo '<p><strong>What this does:</strong> Full-text search (FTS) builds its own searchable index for your content. When analyzer packs are available, searches can understand language-specific word forms instead of matching only the exact words typed. You can also choose whether this index replaces WordPress search on the public site and in the admin Posts screen.</p>';
-        echo '</div>';
+        echo '<p class="description wp-fts-admin-summary"><strong>What this does:</strong> Full-text search (FTS) builds its own searchable index for site content. Analyzer packs add language-specific word-form matching when available.</p>';
     }
 
     private static function render_settings_tab(): void
@@ -707,7 +725,7 @@ final class WP_FTS_Plugin
         $support = self::language_support_details($language, false);
         echo '<tr><th scope="row">Current site language</th><td>';
         echo '<p>' . self::esc_html(self::sandbox_language_display($language)) . '</p>';
-        echo '<p class="description">' . self::esc_html($support['label'] . ': ' . $support['reason']) . '</p>';
+        echo '<p class="description">' . self::esc_html('Runtime search status - ' . $support['label'] . ': ' . $support['reason']) . '</p>';
         echo '<p class="description">This value is read dynamically from WordPress. Change it on the <a href="' . self::esc_url(self::admin_options_general_url()) . '">WordPress General Settings page</a>.</p>';
         echo '</td></tr>';
     }
@@ -2350,83 +2368,82 @@ final class WP_FTS_Plugin
         echo '<form method="get" action="' . self::esc_url(self::admin_options_general_url()) . '">';
         echo '<input type="hidden" name="page" value="' . self::esc_attr(self::ADMIN_PAGE_SLUG) . '">';
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_TAB_FIELD) . '" value="' . self::esc_attr(self::ADMIN_SANDBOX_TAB) . '">';
-        echo '<table class="form-table" role="presentation"><tbody>';
+        echo '<div class="wp-fts-sandbox-compact-controls">';
 
-        echo '<tr><th scope="row"><label for="wp-fts-sandbox-query">Query text</label></th><td>';
+        echo '<p class="wp-fts-sandbox-field"><label for="wp-fts-sandbox-query">Query text</label>';
         echo '<input id="wp-fts-sandbox-query" type="search" class="regular-text" name="' . self::esc_attr(self::ADMIN_QUERY_FIELD) . '" value="' . self::esc_attr($query) . '">';
-        echo '<p class="description">Type the words a visitor or editor would search for.</p>';
-        echo '</td></tr>';
+        echo '<span class="description">Type the words a visitor or editor would search for.</span></p>';
 
-        echo '<tr><th scope="row"><label for="wp-fts-sandbox-lang">Query language</label></th><td>';
+        echo '<p class="wp-fts-sandbox-field"><label for="wp-fts-sandbox-lang">Query language</label>';
         echo '<select id="wp-fts-sandbox-lang" name="' . self::esc_attr(self::ADMIN_LANG_FIELD) . '">';
         foreach (self::sandbox_query_language_labels() as $language => $label) {
             $selected = $selected_language === $language ? ' selected="selected"' : '';
             echo '<option value="' . self::esc_attr($language) . '"' . $selected . '>' . self::esc_html($label) . '</option>';
         }
         echo '</select>';
-        echo '<p class="description">Automatic lets the analyzer infer the query language. Site language uses the current WordPress language: ' . self::esc_html(self::sandbox_language_display(self::site_language())) . '.</p>';
-        echo '</td></tr>';
+        echo '<span class="description">Automatic lets the analyzer infer the query language. Site language: ' . self::esc_html(self::sandbox_language_display(self::site_language())) . '.</span></p>';
 
-        echo '<tr><th scope="row"><label for="wp-fts-sandbox-mode">Search term matching</label></th><td>';
+        echo '<p class="wp-fts-sandbox-field"><label for="wp-fts-sandbox-mode">Search term matching</label>';
         echo '<select id="wp-fts-sandbox-mode" name="' . self::esc_attr(self::ADMIN_MODE_FIELD) . '">';
         self::render_option('OR', 'Match any word (broader)', $controls['mode']);
         self::render_option('AND', 'Require every word (stricter)', $controls['mode']);
         echo '</select>';
-        echo '<p class="description">Match any word is broader. Require every word shows only posts that match all searched words.</p>';
-        echo '</td></tr>';
+        echo '<span class="description">Match any word is broader. Require every word shows only posts that match all searched words.</span></p>';
 
-        echo '<tr><th scope="row"><label for="wp-fts-sandbox-limit">Results per page</label></th><td>';
+        echo '<p class="wp-fts-sandbox-field"><button type="submit" class="button button-primary" name="' . self::esc_attr(self::ADMIN_SEARCH_FIELD) . '" value="1">Search</button></p>';
+
+        echo '</div>';
+
+        echo '<details class="wp-fts-sandbox-advanced">';
+        echo '<summary>Filters and display options</summary>';
+        echo '<div class="wp-fts-sandbox-advanced-grid">';
+
+        echo '<p class="wp-fts-sandbox-field"><label for="wp-fts-sandbox-limit">Results per page</label>';
         echo '<input id="wp-fts-sandbox-limit" type="number" min="1" max="' . self::esc_attr((string) self::MAX_SEARCH_LIMIT) . '" name="' . self::esc_attr(self::ADMIN_LIMIT_FIELD) . '" value="' . self::esc_attr((string) $controls['limit']) . '">';
-        echo '<p class="description">Controls how many results are shown in this Sandbox search view.</p>';
-        echo '</td></tr>';
+        echo '<span class="description">Controls how many results are shown in this Sandbox search view.</span></p>';
 
-        echo '<tr><th scope="row"><label for="wp-fts-sandbox-snippet-length">Search result excerpt length</label></th><td>';
+        echo '<p class="wp-fts-sandbox-field"><label for="wp-fts-sandbox-snippet-length">Search result excerpt length</label>';
         echo '<input id="wp-fts-sandbox-snippet-length" type="number" min="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MIN) . '" max="' . self::esc_attr((string) self::SETTINGS_SNIPPET_MAX) . '" name="' . self::esc_attr(self::ADMIN_SNIPPET_LENGTH_FIELD) . '" value="' . self::esc_attr((string) $controls['snippet_length']) . '">';
-        echo '<p class="description">A search result excerpt is the short piece of post text shown around a matching word. Longer excerpts show more surrounding text; shorter excerpts make result tables easier to scan.</p>';
-        echo '</td></tr>';
+        echo '<span class="description">A search result excerpt is the short piece of post text shown around a matching word.</span></p>';
 
-        echo '<tr><th scope="row">Highlight matches</th><td>';
+        echo '<fieldset><legend class="wp-fts-sandbox-option-label">Highlight matches</legend>';
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HIGHLIGHT_FIELD) . '" value="0">';
         echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_HIGHLIGHT_FIELD) . '" value="1"' . ($controls['highlight'] ? ' checked="checked"' : '') . '> On</label>';
         echo '<p class="description">Highlights matching words inside generated excerpts.</p>';
-        echo '</td></tr>';
+        echo '</fieldset>';
 
-        echo '<tr><th scope="row">Language fallback</th><td>';
-        echo '<fieldset><legend class="screen-reader-text">Language fallback</legend>';
+        echo '<fieldset><legend class="wp-fts-sandbox-option-label">Language fallback</legend>';
         echo '<p><label><input type="radio" name="' . self::esc_attr(self::ADMIN_LANGUAGE_FALLBACK_FIELD) . '" value="1"' . ($controls['language_fallback'] ? ' checked="checked"' : '') . '> Also try the current WordPress site language when needed</label></p>';
         echo '<p><label><input type="radio" name="' . self::esc_attr(self::ADMIN_LANGUAGE_FALLBACK_FIELD) . '" value="0"' . (!$controls['language_fallback'] ? ' checked="checked"' : '') . '> Search only the selected query language</label></p>';
         echo '<p class="description">If the selected query language is unsupported or produces no matches, the Sandbox can also try the current site language. That language is read dynamically from WordPress and may broaden the result set.</p>';
         echo '</fieldset>';
-        echo '</td></tr>';
 
-        echo '<tr><th scope="row">Post types to include</th><td>';
+        echo '<fieldset><legend class="wp-fts-sandbox-option-label">Post types to include</legend>';
         foreach (self::settings_post_type_choices() as $post_type) {
             $checked = in_array($post_type, $controls['post_types'], true) ? ' checked="checked"' : '';
             echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_POST_TYPE_FIELD) . '[]" value="' . self::esc_attr($post_type) . '"' . $checked . '> <code>' . self::esc_html($post_type) . '</code></label><br>';
         }
         echo '<p class="description">Narrows results to selected indexed content types.</p>';
-        echo '</td></tr>';
+        echo '</fieldset>';
 
-        echo '<tr><th scope="row">Post statuses to include</th><td>';
+        echo '<fieldset><legend class="wp-fts-sandbox-option-label">Post statuses to include</legend>';
         foreach (self::sandbox_post_status_choices() as $status) {
             $checked = in_array($status, $controls['post_statuses'], true) ? ' checked="checked"' : '';
             echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_POST_STATUS_FIELD) . '[]" value="' . self::esc_attr($status) . '"' . $checked . '> <code>' . self::esc_html($status) . '</code></label><br>';
         }
         echo '<p class="description">Draft, pending, future, and private rows still respect normal WordPress read permissions.</p>';
-        echo '</td></tr>';
+        echo '</fieldset>';
 
-        echo '<tr><th scope="row"><label for="wp-fts-sandbox-date-after">Date after</label></th><td>';
+        echo '<p class="wp-fts-sandbox-field"><label for="wp-fts-sandbox-date-after">Date after</label>';
         echo '<input id="wp-fts-sandbox-date-after" type="date" name="' . self::esc_attr(self::ADMIN_DATE_AFTER_FIELD) . '" value="' . self::esc_attr($controls['date_after']) . '">';
-        echo '<p class="description">Shows only posts dated on or after this date.</p>';
-        echo '</td></tr>';
+        echo '<span class="description">Shows only posts dated on or after this date.</span></p>';
 
-        echo '<tr><th scope="row"><label for="wp-fts-sandbox-date-before">Date before</label></th><td>';
+        echo '<p class="wp-fts-sandbox-field"><label for="wp-fts-sandbox-date-before">Date before</label>';
         echo '<input id="wp-fts-sandbox-date-before" type="date" name="' . self::esc_attr(self::ADMIN_DATE_BEFORE_FIELD) . '" value="' . self::esc_attr($controls['date_before']) . '">';
-        echo '<p class="description">Shows only posts dated on or before this date.</p>';
-        echo '</td></tr>';
+        echo '<span class="description">Shows only posts dated on or before this date.</span></p>';
 
-        echo '</tbody></table>';
-        echo '<p><button type="submit" class="button button-primary" name="' . self::esc_attr(self::ADMIN_SEARCH_FIELD) . '" value="1">Search</button></p>';
+        echo '</div>';
+        echo '</details>';
         echo '</form>';
     }
 
@@ -2754,7 +2771,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @return array{label:string,full:bool,reason:string}
+     * @return array{label:string,full:bool,reason:string,matched_language:string}
      */
     private static function language_support_details(string $language, bool $include_sandbox): array
     {
@@ -2780,7 +2797,8 @@ final class WP_FTS_Plugin
                     return [
                         'label' => 'Full morphology',
                         'full' => true,
-                        'reason' => 'An active full analyzer pack is available.',
+                        'reason' => self::language_support_reason($language, $status_language, 'full'),
+                        'matched_language' => $status_language,
                     ];
                 }
                 $fixture = true;
@@ -2793,7 +2811,8 @@ final class WP_FTS_Plugin
             return [
                 'label' => 'Fixture morphology',
                 'full' => false,
-                'reason' => 'Only a fixture-sized analyzer pack is active.',
+                'reason' => 'Only a fixture-sized analyzer pack is active for this language, so coverage is limited to reviewed test forms.',
+                'matched_language' => $language,
             ];
         }
         if ($tokenizer) {
@@ -2801,32 +2820,84 @@ final class WP_FTS_Plugin
                 'label' => 'Tokenizer pack',
                 'full' => false,
                 'reason' => 'A tokenizer pack is active, but full morphology is unavailable.',
+                'matched_language' => $language,
             ];
         }
 
         return [
             'label' => 'Conservative fallback',
             'full' => false,
-            'reason' => 'Full morphology is unavailable for this language.',
+            'reason' => 'No active analyzer pack covers this language. Exact-word search and conservative fallback will be used until an analyzer pack is installed or generated with the pack tooling and configured for this language.',
+            'matched_language' => '',
         ];
+    }
+
+    private static function language_support_reason(string $language, string $matched_language, string $support): string
+    {
+        if ($support !== 'full') {
+            return '';
+        }
+
+        if ($matched_language !== '' && $matched_language !== $language) {
+            if ($matched_language === 'en' && self::base_language($language) === 'en') {
+                return sprintf(
+                    'English morphology is available through the active base-language analyzer pack %s, which applies to English dialects/locales such as %s.',
+                    self::sandbox_language_display($matched_language),
+                    self::sandbox_language_display($language)
+                );
+            }
+
+            return sprintf(
+                'Full morphology is available through the active base-language analyzer pack %s, which applies to %s.',
+                self::sandbox_language_display($matched_language),
+                self::sandbox_language_display($language)
+            );
+        }
+
+        return 'An active full analyzer pack is available for this language.';
     }
 
     private static function render_site_language_status_notice(): void
     {
         $language = self::site_language();
-        $support = self::language_support_details($language, false);
-        if ($support['full']) {
+        $runtime_support = self::language_support_details($language, false);
+        if ($runtime_support['full']) {
+            if (($runtime_support['matched_language'] ?? '') !== '' && $runtime_support['matched_language'] !== WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG)) {
+                echo '<p class="description wp-fts-language-status">' . self::esc_html(
+                    sprintf(
+                        'Current site language %s uses full morphology through the active base-language analyzer pack %s for this language family.',
+                        self::sandbox_language_display($language),
+                        self::sandbox_language_display($runtime_support['matched_language'])
+                    )
+                ) . '</p>';
+            }
             return;
         }
 
-        self::render_sandbox_notice(
-            'info',
+        $page_support = self::language_support_details($language, true);
+        if ($page_support['full'] && ($page_support['matched_language'] ?? '') !== '') {
+            $message = self::base_language($language) === 'en' && $page_support['matched_language'] === 'en'
+                ? sprintf(
+                    'Current site language %s uses conservative fallback for runtime site searches because no runtime analyzer pack covers it. Sandbox and indexed demo content can use English morphology through the active base-language analyzer pack %s for English dialects/locales.',
+                    self::sandbox_language_display($language),
+                    self::sandbox_language_display($page_support['matched_language'])
+                )
+                : sprintf(
+                    'Current site language %s uses conservative fallback for runtime site searches because no runtime analyzer pack covers it. Sandbox and indexed demo content can use full morphology through the active base-language analyzer pack %s.',
+                    self::sandbox_language_display($language),
+                    self::sandbox_language_display($page_support['matched_language'])
+                );
+            echo '<p class="description wp-fts-language-status">' . self::esc_html($message) . '</p>';
+            return;
+        }
+
+        echo '<p class="description wp-fts-language-status">' . self::esc_html(
             sprintf(
-                'Current site language %s uses %s because full morphology is unavailable. Exact-word search still works; enable an analyzer pack for this language to match language-specific word forms.',
+                'Current site language %s uses %s. Exact-word search still works; install or build an analyzer pack with the pack tooling and configure it for this language to match language-specific word forms.',
                 self::sandbox_language_display($language),
-                strtolower($support['label'])
+                strtolower($runtime_support['label'])
             )
-        );
+        ) . '</p>';
     }
 
     private static function site_language(): string
