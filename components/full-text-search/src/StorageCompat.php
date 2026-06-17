@@ -577,7 +577,7 @@ final class WP_FTS_StorageCompat
     }
 
     /**
-     * Normalize positive document ids.
+     * Normalize non-negative document ids.
      *
      * @param int[] $docIds
      * @return int[]
@@ -587,7 +587,7 @@ final class WP_FTS_StorageCompat
         $normalized = [];
         foreach ($docIds as $docId) {
             $docId = (int) $docId;
-            if ($docId > 0) {
+            if ($docId >= 0) {
                 $normalized[$docId] = true;
             }
         }

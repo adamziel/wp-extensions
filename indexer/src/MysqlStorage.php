@@ -500,7 +500,7 @@ ORDER BY m.doc_id ASC",
         ?string $date_after = null,
         ?string $date_before = null
     ): array {
-        $doc_ids = array_values(array_unique(array_filter(array_map('intval', $doc_ids), static fn(int $id): bool => $id > 0)));
+        $doc_ids = array_values(array_unique(array_filter(array_map('intval', $doc_ids), static fn(int $id): bool => $id >= 0)));
         if ($doc_ids === []) {
             return [];
         }
@@ -553,7 +553,7 @@ ORDER BY m.doc_id ASC',
         foreach ($this->get_results($sql, 'filter FTS document metadata') as $row) {
             $ids[] = (int) ($row->doc_id ?? 0);
         }
-        $ids = array_values(array_unique(array_filter($ids, static fn(int $id): bool => $id > 0)));
+        $ids = array_values(array_unique(array_filter($ids, static fn(int $id): bool => $id >= 0)));
         sort($ids, SORT_NUMERIC);
 
         return $ids;

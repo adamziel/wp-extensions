@@ -1483,9 +1483,17 @@ test_case('storage metadata filter capability matches active scalar filters', fu
             assert_true($storage instanceof WP_FTS_DocumentMetadataStorage, "{$name} storage should expose document metadata");
             assert_true($storage instanceof WP_FTS_DocumentMetadataFilterStorage, "{$name} storage should expose metadata filtering");
 
+            $storage->put_doc(0, 'en', ['en' => 4], 'hash-0');
             foreach ([1, 2, 3, 4] as $docId) {
                 $storage->put_doc($docId, 'en', ['en' => 4], 'hash-' . $docId);
             }
+            $storage->put_doc_metadata(0, [
+                'post_id' => 0,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-02-11 10:00:00',
+                'title' => 'Zero Published Post',
+            ]);
             $storage->put_doc_metadata(1, [
                 'post_id' => 1,
                 'post_type' => 'post',
@@ -1524,6 +1532,15 @@ test_case('storage metadata filter capability matches active scalar filters', fu
                 '2026-01-01',
                 '2026-12-31'
             ), "{$name} metadata filter should match post/status/date filters");
+
+            assert_same([0], WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
+                $storage,
+                [0, 1, -1],
+                ['post'],
+                ['publish'],
+                '2026-02-11',
+                '2026-02-11'
+            ), "{$name} metadata filter should preserve document id zero");
 
             assert_same([2], WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
                 $storage,
@@ -9133,6 +9150,28 @@ test_case('auto-detected document and query languages meet in search', function 
     assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('en', 'fuehrung'), $terms, true), 'detected document should not fall back to the site/default namespace');
 });
 
+test_case('plain indexed fields preserve automatic document language detection', function (): void {
+    $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $text = 'Zażółć gęślą jaźń oraz Łódź';
+    $indexer->index_document_fields(10, [
+        ['name' => 'title', 'text' => $text],
+    ]);
+
+    $htmlLangs = test_lang_by_term($analyzer->analyze_content('<div>' . htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8') . '</div>'));
+    $plainLangs = test_lang_by_term($analyzer->analyze_plain_content($text));
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+
+    assert_same('pl', $htmlLangs['oraz'] ?? null, 'escaped-wrapper Polish fixture should detect the Polish namespace');
+    assert_same('pl', $plainLangs['oraz'] ?? null, 'plain analyzer path should match escaped-wrapper language detection');
+    assert_true(in_array(WP_FTS_TermNamespace::namespace_term('pl', 'oraz'), $storage->all_terms(), true), 'plain field should index Polish terms into the detected namespace');
+    assert_true(!in_array(WP_FTS_TermNamespace::namespace_term('en', 'oraz'), $storage->all_terms(), true), 'plain field should not fall back to the default namespace');
+    assert_same([10], array_column($searcher->search('oraz', ['lang' => 'pl']), 'doc_id'), 'explicit Polish search should find the auto-detected plain field');
+    assert_same([], $searcher->search('oraz', ['lang' => 'en']), 'explicit English search should not match the auto-detected Polish plain field');
+});
+
 test_case('untagged query spans use document-parity language detection for AND recall', function (): void {
     $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
     $storage = new WP_FTS_Storage_InMemory();
@@ -10048,6 +10087,54 @@ test_case('search product options filter metadata and return pagination snippets
     ]);
     assert_same(2, $paged['total'], 'unfiltered total should include both matching posts');
     assert_same(2, $paged['results'][0]['doc_id'], 'offset should page through ordered results');
+});
+
+test_case('metadata-filtered search preserves document id zero', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer(['auto_detect_language' => false]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document_fields(0, [['name' => 'content', 'text' => 'zero needle']], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 0,
+            'post_type' => 'page',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-06-17 00:00:00',
+            'title' => 'Zero Needle',
+            'search_text' => 'zero needle',
+        ],
+    ]);
+    $indexer->index_document_fields(1, [['name' => 'content', 'text' => 'zero needle']], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 1,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-06-17 00:00:00',
+            'title' => 'Nonzero Needle',
+            'search_text' => 'zero needle',
+        ],
+    ]);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $unfiltered = $searcher->search('needle', [
+        'lang' => 'en',
+        'include_total' => true,
+        'limit' => 10,
+    ]);
+    $filtered = $searcher->search('needle', [
+        'lang' => 'en',
+        'include_total' => true,
+        'include_metadata' => true,
+        'post_type' => 'page',
+        'post_status' => 'publish',
+    ]);
+
+    assert_true(in_array(0, array_column($unfiltered['results'], 'doc_id'), true), 'unfiltered search should return document id zero');
+    assert_same(1, $filtered['total'], 'metadata filters should keep the matching zero-id document');
+    assert_same(0, $filtered['results'][0]['doc_id'] ?? null, 'metadata-filtered search should preserve document id zero');
+    assert_same('Zero Needle', $filtered['results'][0]['title'] ?? null, 'zero-id filtered result should still be metadata-enriched');
 });
 
 test_case('search snippets highlight analyzed Unicode words across inline HTML without marking hidden text', function (): void {

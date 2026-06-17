@@ -277,6 +277,9 @@ final class WP_FTS_Analyzer
     {
         $options = $this->normalizeLanguageOptions($options, 'document');
         $lang = $this->resolveDocumentLanguage($options);
+        if ($this->shouldAutoDetectDocumentLanguage($options)) {
+            $lang = $this->detectSegmentLanguage($text, $lang);
+        }
         $nextPosition = 0;
         $tokens = [];
 
