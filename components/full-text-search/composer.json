@@ -1,0 +1,21 @@
+{
+  "name": "wp-php-toolkit/full-text-search",
+  "description": "Framework-agnostic pure-PHP full-text search engine extracted from the WordPress FTS Indexer plugin.",
+  "type": "library",
+  "license": "GPL-2.0-or-later",
+  "require": {
+    "php": ">=8.1",
+    "wamania/php-stemmer": "^3.0"
+  },
+  "autoload": {
+    "files": [
+      "src/bootstrap.php"
+    ]
+  },
+  "scripts": {
+    "test": "php tests/smoke.php"
+  },
+  "config": {
+    "sort-packages": true
+  }
+}

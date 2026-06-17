@@ -7,7 +7,7 @@ if (PHP_SAPI !== 'cli') {
     exit(1);
 }
 
-require_once dirname(__DIR__) . '/src/TokenizerSourceCandidateLockVerifier.php';
+require_once dirname(__DIR__) . '/src/bootstrap.php';
 
 exit(wp_fts_verify_thai_tokenizer_source_candidate_lock_main($_SERVER['argv'] ?? []));
 

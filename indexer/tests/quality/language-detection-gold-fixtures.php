@@ -470,7 +470,12 @@ test_case('quality language detection gold fixtures honor explicit and multiling
     };
 
     try {
-        $analyzer = new WP_FTS_Analyzer(['default_lang' => 'en']);
+        $analyzer_options = WP_FTS_Plugin::runtime_analyzer_options();
+        $analyzer_options['lemmatizer_packs_by_lang'] = [];
+        $analyzer_options['lemma_packs_by_lang'] = [];
+        $analyzer_options['polish_lemma_pack'] = false;
+        $analyzer_options['polish_lemmatizer_pack'] = false;
+        $analyzer = new WP_FTS_Analyzer($analyzer_options);
 
         $polylang = test_lang_by_term($analyzer->analyze_content('<p>oraz jest</p>', ['post_id' => 10]));
         assert_same('pl-PL', $polylang['oraz'] ?? null, 'Polylang post locale should resolve untagged document language');

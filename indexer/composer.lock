@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "18bbd5490e7b33bc8dc145a2f8fc2908",
+    "content-hash": "6dd32101b43f4265d043c7557a26f7da",
     "packages": [
         {
             "name": "symfony/polyfill-iconv",
@@ -628,6 +628,38 @@
                 "source": "https://github.com/wamania/php-stemmer/tree/v3.0.1"
             },
             "time": "2023-05-11T10:50:27+00:00"
+        },
+        {
+            "name": "wp-php-toolkit/full-text-search",
+            "version": "0.1.0",
+            "dist": {
+                "type": "path",
+                "url": "../components/full-text-search",
+                "reference": "df1b85cfe979ae2de3c03bef2e0bb91b41deba64"
+            },
+            "require": {
+                "php": ">=8.1",
+                "wamania/php-stemmer": "^3.0"
+            },
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "src/bootstrap.php"
+                ]
+            },
+            "scripts": {
+                "test": [
+                    "php tests/smoke.php"
+                ]
+            },
+            "license": [
+                "GPL-2.0-or-later"
+            ],
+            "description": "Framework-agnostic pure-PHP full-text search engine extracted from the WordPress FTS Indexer plugin.",
+            "transport-options": {
+                "symlink": false,
+                "relative": true
+            }
         }
     ],
     "packages-dev": [],

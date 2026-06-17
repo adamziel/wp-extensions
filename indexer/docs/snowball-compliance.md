@@ -89,10 +89,13 @@ separately.
 
 The bundled generated Arabic, English, Spanish, French, Hindi, Portuguese, and
 Indonesian paths preserve the Snowball BSD-3-Clause notice in
-`src/ArabicSnowballStemmer.php`, `src/EnglishSnowballStemmer.php`,
-`src/SpanishSnowballStemmer.php`, `src/FrenchSnowballStemmer.php`,
-`src/HindiSnowballStemmer.php`, `src/PortugueseSnowballStemmer.php`, and
-`src/IndonesianSnowballStemmer.php`.
+`components/full-text-search/src/ArabicSnowballStemmer.php`,
+`components/full-text-search/src/EnglishSnowballStemmer.php`,
+`components/full-text-search/src/SpanishSnowballStemmer.php`,
+`components/full-text-search/src/FrenchSnowballStemmer.php`,
+`components/full-text-search/src/HindiSnowballStemmer.php`,
+`components/full-text-search/src/PortugueseSnowballStemmer.php`, and
+`components/full-text-search/src/IndonesianSnowballStemmer.php`.
 Missing Composer dependencies do not affect bundled Arabic, English, Spanish,
 French, Hindi, Portuguese, or Indonesian compliance; they only skip Wamania-backed
 Catalan and Dutch Porter runtime comparisons.

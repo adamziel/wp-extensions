@@ -1,7 +1,9 @@
 # Release Packaging
 
 Release archives should package the `indexer` directory as the WordPress plugin
-root. The archive should expand to:
+root. The reusable FTS engine ships through Composer under `vendor/`; source
+checkouts can also load it from the adjacent `components/full-text-search`
+directory. The archive should expand to:
 
 ```text
 indexer/
@@ -11,7 +13,8 @@ indexer/
   README.md
   docs/
   src/
-  vendor/        # present in release archives after composer install
+  vendor/
+    wp-php-toolkit/full-text-search/
 ```
 
 Do not package the whole monorepo as a WordPress plugin. WordPress discovers
@@ -29,7 +32,8 @@ Ship:
 - `composer.lock`;
 - `README.md`;
 - `docs/*.md`;
-- runtime Composer dependencies under `vendor/` for release archives.
+- runtime Composer dependencies under `vendor/`, including
+  `wp-php-toolkit/full-text-search`, for release archives.
 
 Do not ship:
 
@@ -49,19 +53,19 @@ The source tree tracks `composer.json` and `composer.lock`, and ignores
 archive should install production dependencies from the committed lockfile
 before the ZIP is built.
 
-Current runtime dependency:
+Current runtime dependencies:
 
+- `wp-php-toolkit/full-text-search`, the framework-neutral FTS component used
+  by the plugin adapter;
 - `wamania/php-stemmer`, used only when stemming is enabled and the language is
   one of the optional Wamania-backed allowlist entries: Catalan (`ca`) or Dutch
   Porter (`nl`).
 
-The plugin bootstrap loads `vendor/autoload.php` only when it exists. Missing
-vendor dependencies do not stop the plugin from loading. Bundled English
-Snowball/Porter2, bundled Arabic Snowball, bundled Spanish Snowball, bundled
-French Snowball, bundled Hindi Snowball, bundled Portuguese Snowball, and
-bundled Indonesian Snowball stemming remain available without Composer; missing
-vendor dependencies only make the Snowball harness skip Wamania-backed Catalan
-and Dutch Porter runtime comparisons.
+The plugin bootstrap loads `vendor/autoload.php` when it exists. If Composer
+vendor files are absent, it falls back to `../components/full-text-search` for
+monorepo development and Playground source previews. A standalone plugin ZIP
+must include vendor files because the adjacent monorepo component will not exist
+inside `wp-content/plugins/indexer`.
 
 ## Build A ZIP
 
@@ -69,12 +73,17 @@ Run from the monorepo checkout:
 
 ```sh
 PLUGIN_SRC=/path/to/wp-extensions/indexer
+MONOREPO_ROOT=/path/to/wp-extensions
 BUILD="$(mktemp -d)"
 mkdir -p "$BUILD/indexer"
 
 rsync -a --delete \
   --exclude-from="$PLUGIN_SRC/.distignore" \
   "$PLUGIN_SRC/" "$BUILD/indexer/"
+
+mkdir -p "$BUILD/components"
+rsync -a --delete \
+  "$MONOREPO_ROOT/components/full-text-search/" "$BUILD/components/full-text-search/"
 
 composer install --no-dev --optimize-autoloader --working-dir="$BUILD/indexer"
 

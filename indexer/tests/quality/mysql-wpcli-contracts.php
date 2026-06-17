@@ -729,6 +729,7 @@ namespace {
         $expectedHooks = [
             WP_FTS_Plugin::CRON_HOOK,
             'add_meta_boxes',
+            'admin_init',
             'admin_menu',
             'before_delete_post',
             'loop_end',

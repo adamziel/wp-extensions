@@ -745,10 +745,20 @@ function remove_directory_tree(string $directory): void
     rmdir($directory);
 }
 
-function write_synthetic_full_analyzer_pack(string $directory, int $rows, int $shards): string
+function write_synthetic_full_analyzer_pack(
+    string $directory,
+    int $rows,
+    int $shards,
+    string $language = 'pl',
+    string $packId = 'pl-polimorf-synthetic-full-streaming-fixture'
+): string
 {
     if ($rows < 1 || $shards < 1) {
         throw new WP_FTS_TestFailure('Synthetic analyzer pack requires positive row and shard counts.');
+    }
+    $language = WP_FTS_TermNamespace::canonicalize_lang($language);
+    if ($language === WP_FTS_TermNamespace::DEFAULT_LANG || trim($packId) === '') {
+        throw new WP_FTS_TestFailure('Synthetic analyzer pack requires a concrete language and pack id.');
     }
     if (!mkdir($directory . '/runtime', 0777, true) && !is_dir($directory . '/runtime')) {
         throw new WP_FTS_TestFailure("Could not create synthetic analyzer runtime directory: {$directory}");
@@ -801,8 +811,8 @@ function write_synthetic_full_analyzer_pack(string $directory, int $rows, int $s
 
     $manifest = [
         'schema_version' => 1,
-        'pack_id' => 'pl-polimorf-synthetic-full-streaming-fixture',
-        'language' => 'pl',
+        'pack_id' => $packId,
+        'language' => $language,
         'version' => 'streaming-regression-v1',
         'fixture_only' => false,
         'default_enabled' => false,
@@ -814,16 +824,16 @@ function write_synthetic_full_analyzer_pack(string $directory, int $rows, int $s
         ],
         'runtime' => [
             'format' => 'wp-fts-polish-lemma-tsv-v1',
-            'normalization' => 'WP_FTS_Normalizer pl with fold_diacritics=true',
+            'normalization' => 'WP_FTS_Normalizer ' . $language . ' with fold_diacritics=true',
             'ambiguity_policy' => 'ambiguous_surface_noop',
             'total_rows' => $rows,
             'total_sha256' => hash_final($runtimeDigest),
             'files' => $runtimeFiles,
         ],
         'source' => [
-            'name' => 'Synthetic PoliMorf streaming validator fixture',
+            'name' => 'Synthetic ' . $language . ' streaming validator fixture',
             'version' => 'test',
-            'url' => 'urn:wp-fts:test:synthetic-polimorf-streaming-validator',
+            'url' => 'urn:wp-fts:test:synthetic-' . $language . '-streaming-validator',
             'artifact_sha256' => str_repeat('a', 64),
             'byte_count' => 1,
         ],
@@ -2551,6 +2561,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_cleared_hooks'] = [];
     $GLOBALS['wp_fts_test_rest_routes'] = [];
     $GLOBALS['wp_fts_test_admin_pages'] = [];
+    $GLOBALS['wp_fts_test_registered_settings'] = [];
     $GLOBALS['wp_fts_test_meta_boxes'] = [];
     $GLOBALS['wp_fts_test_posts'] = [];
     $GLOBALS['wp_fts_test_post_meta'] = [];
@@ -2572,6 +2583,8 @@ function wp_fts_test_reset_wordpress_fakes(): void
         'secret' => (object) ['public' => false, 'exclude_from_search' => true],
     ];
     $GLOBALS['wp_fts_test_caps'] = [];
+    $GLOBALS['wp_fts_test_locale'] = '';
+    $GLOBALS['wp_fts_test_bloginfo'] = ['language' => ''];
     $GLOBALS['wp_fts_test_revisions'] = [];
     $GLOBALS['wp_fts_test_autosaves'] = [];
     WP_CLI::$commands = [];
@@ -2750,6 +2763,7 @@ if (!function_exists('add_management_page')) {
     function add_management_page(string $page_title, string $menu_title, string $capability, string $menu_slug, mixed $callback = '', mixed ...$unused): string
     {
         $GLOBALS['wp_fts_test_admin_pages'][] = [
+            'parent' => 'tools.php',
             'page_title' => $page_title,
             'menu_title' => $menu_title,
             'capability' => $capability,
@@ -2758,6 +2772,33 @@ if (!function_exists('add_management_page')) {
         ];
 
         return 'tools_page_' . $menu_slug;
+    }
+}
+
+if (!function_exists('add_options_page')) {
+    function add_options_page(string $page_title, string $menu_title, string $capability, string $menu_slug, mixed $callback = '', mixed ...$unused): string
+    {
+        $GLOBALS['wp_fts_test_admin_pages'][] = [
+            'parent' => 'options-general.php',
+            'page_title' => $page_title,
+            'menu_title' => $menu_title,
+            'capability' => $capability,
+            'menu_slug' => $menu_slug,
+            'callback' => $callback,
+        ];
+
+        return 'settings_page_' . $menu_slug;
+    }
+}
+
+if (!function_exists('register_setting')) {
+    function register_setting(string $option_group, string $option_name, array $args = []): void
+    {
+        $GLOBALS['wp_fts_test_registered_settings'][] = [
+            'option_group' => $option_group,
+            'option_name' => $option_name,
+            'args' => $args,
+        ];
     }
 }
 
@@ -2782,6 +2823,22 @@ if (!function_exists('admin_url')) {
     function admin_url(string $path = ''): string
     {
         return '/wp-admin/' . ltrim($path, '/');
+    }
+}
+
+if (!function_exists('get_locale')) {
+    function get_locale(): string
+    {
+        return (string) ($GLOBALS['wp_fts_test_locale'] ?? '');
+    }
+}
+
+if (!function_exists('get_bloginfo')) {
+    function get_bloginfo(string $show = ''): string
+    {
+        $bloginfo = $GLOBALS['wp_fts_test_bloginfo'] ?? [];
+
+        return is_array($bloginfo) ? (string) ($bloginfo[$show] ?? '') : '';
     }
 }
 
@@ -3102,6 +3159,79 @@ function wp_fts_test_capture_admin_sandbox(): string
     }
 }
 
+function wp_fts_test_capture_admin_settings_tab(?string $tab = null): string
+{
+    ob_start();
+    try {
+        WP_FTS_Plugin::render_admin_settings_page($tab);
+        $html = ob_get_clean();
+
+        return is_string($html) ? $html : '';
+    } catch (Throwable $e) {
+        ob_end_clean();
+        throw $e;
+    }
+}
+
+/**
+ * @return array{path:string,params:array<string,mixed>}
+ */
+function wp_fts_test_parse_admin_route(string $url): array
+{
+    $parts = parse_url($url);
+    if (!is_array($parts)) {
+        throw new WP_FTS_TestFailure("Could not parse admin route: {$url}");
+    }
+
+    $params = [];
+    parse_str((string) ($parts['query'] ?? ''), $params);
+
+    return [
+        'path' => (string) ($parts['path'] ?? ''),
+        'params' => $params,
+    ];
+}
+
+function wp_fts_test_capture_admin_route(string $url): string
+{
+    $route = wp_fts_test_parse_admin_route($url);
+    $_GET = $route['params'];
+
+    return wp_fts_test_capture_admin_settings_tab(null);
+}
+
+function wp_fts_test_registered_admin_settings_callback(): callable
+{
+    WP_FTS_Plugin::register_admin_menu();
+    $page = $GLOBALS['wp_fts_test_admin_pages'][0] ?? null;
+    $callback = is_array($page) ? ($page['callback'] ?? null) : null;
+    if (!is_callable($callback)) {
+        throw new WP_FTS_TestFailure('Settings page did not register a callable admin callback.');
+    }
+
+    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, $page['menu_slug'] ?? null, 'registered admin callback should belong to the FTS settings page');
+
+    return $callback;
+}
+
+function wp_fts_test_capture_registered_admin_route(string $url, callable $callback): string
+{
+    $route = wp_fts_test_parse_admin_route($url);
+    $_GET = $route['params'];
+
+    ob_start();
+    try {
+        // WordPress admin dispatch reaches the page through the registered callback.
+        $callback('');
+        $html = ob_get_clean();
+
+        return is_string($html) ? $html : '';
+    } catch (Throwable $e) {
+        ob_end_clean();
+        throw $e;
+    }
+}
+
 /**
  * @return array<int,array{lang:string,title:string,query:string,preview:string}>
  */
@@ -3219,6 +3349,7 @@ PHP;
     $expectedHooks = [
         WP_FTS_Plugin::CRON_HOOK,
         'add_meta_boxes',
+        'admin_init',
         'admin_menu',
         'before_delete_post',
         'loop_end',
@@ -3241,17 +3372,59 @@ PHP;
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
 });
 
-test_case('admin menu registration exposes a Tools FTS sandbox page', function (): void {
+test_case('admin menu registration exposes Settings Full-Text Search page and option', function (): void {
     wp_fts_test_reset_wordpress_fakes();
 
     WP_FTS_Plugin::register_admin_menu();
+    WP_FTS_Plugin::register_settings();
     $page = $GLOBALS['wp_fts_test_admin_pages'][0] ?? null;
+    $setting = $GLOBALS['wp_fts_test_registered_settings'][0] ?? null;
 
-    assert_same('FTS Sandbox', $page['page_title'] ?? null, 'admin page should use a clear page title');
-    assert_same('FTS Sandbox', $page['menu_title'] ?? null, 'admin page should use a clear Tools menu label');
+    assert_same('options-general.php', $page['parent'] ?? null, 'admin page should register under Settings');
+    assert_same('Full-Text Search', $page['page_title'] ?? null, 'admin page should use a clear page title');
+    assert_same('Full-Text Search', $page['menu_title'] ?? null, 'admin page should use a clear Settings menu label');
     assert_same(WP_FTS_Plugin::ADMIN_CAPABILITY, $page['capability'] ?? null, 'admin page should require the configured capability');
-    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, $page['menu_slug'] ?? null, 'admin page should use the stable sandbox slug');
-    assert_same([WP_FTS_Plugin::class, 'render_admin_sandbox'], $page['callback'] ?? null, 'admin page should render through the plugin callback');
+    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, $page['menu_slug'] ?? null, 'admin page should use the stable settings slug');
+    assert_same([WP_FTS_Plugin::class, 'render_admin_settings_page'], $page['callback'] ?? null, 'admin page should render through the settings callback');
+    assert_same('wp_fts_settings', $setting['option_group'] ?? null, 'settings should use the wp_fts_settings group');
+    assert_same(WP_FTS_Plugin::SETTINGS_OPTION, $setting['option_name'] ?? null, 'settings should register the wp_fts_settings option');
+    assert_same(['post', 'page'], WP_FTS_Plugin::default_settings()['index_post_types'], 'default settings should index both posts and pages');
+    assert_same(true, WP_FTS_Plugin::default_settings()['language_fallback'], 'default settings should enable language fallback');
+});
+
+test_case('settings sanitization maps replacement checkboxes and legacy scope to existing booleans', function (): void {
+    $checkboxes = WP_FTS_Plugin::sanitize_settings([
+        'replace_frontend_search' => '1',
+        'replace_admin_post_search' => '0',
+        'auto_index' => '0',
+    ]);
+    assert_same(true, $checkboxes['replace_frontend_search'], 'frontend replacement checkbox should enable the public-site replacement boolean');
+    assert_same(false, $checkboxes['replace_admin_post_search'], 'admin replacement checkbox should disable the wp-admin replacement boolean');
+    assert_same(false, $checkboxes['auto_index'], 'auto-index checkbox should disable automatic indexing when unchecked');
+
+    $autoIndex = WP_FTS_Plugin::sanitize_settings([
+        'auto_index' => '1',
+    ]);
+    assert_same(true, $autoIndex['auto_index'], 'auto-index checkbox should enable automatic indexing when checked');
+
+    $adminOnly = WP_FTS_Plugin::sanitize_settings([
+        'replace_search_scope' => 'admin',
+    ]);
+    assert_same(false, $adminOnly['replace_frontend_search'], 'admin replacement scope should leave frontend replacement disabled');
+    assert_same(true, $adminOnly['replace_admin_post_search'], 'admin replacement scope should enable admin Posts replacement');
+
+    $none = WP_FTS_Plugin::sanitize_settings([
+        'replace_search_scope' => 'none',
+    ]);
+    assert_same(false, $none['replace_frontend_search'], 'none replacement scope should disable frontend replacement');
+    assert_same(false, $none['replace_admin_post_search'], 'none replacement scope should disable admin replacement');
+
+    $legacy = WP_FTS_Plugin::sanitize_settings([
+        'replace_frontend_search' => '0',
+        'replace_admin_post_search' => '1',
+    ]);
+    assert_same(false, $legacy['replace_frontend_search'], 'legacy frontend replacement boolean should still sanitize');
+    assert_same(true, $legacy['replace_admin_post_search'], 'legacy admin replacement boolean should still sanitize');
 });
 
 test_case('post language meta box defaults to automatic detection and stores overrides', function (): void {
@@ -3328,51 +3501,481 @@ test_case('authorized admin sandbox render includes search form and indexed post
 
     try {
         $html = wp_fts_test_capture_admin_sandbox();
+        $settingsHtml = wp_fts_test_capture_admin_settings_tab('settings');
+        $indexedHtml = wp_fts_test_capture_admin_settings_tab('indexed-content');
+        $analyzerHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
         $wpdb = $oldWpdb;
     }
 
-    assert_contains('Pure PHP FTS Sandbox', $html, 'sandbox page should render for authorized admins');
-    assert_contains('Demo posts and FTS index are ready', $html, 'authorized first render should auto-seed the demo corpus and index');
+    assert_contains('Full-Text Search', $html, 'sandbox tab should render inside the Full-Text Search settings page');
+    assert_contains('nav-tab-active', $html, 'settings page should render WordPress-style tabs');
+    foreach (['Settings', 'Sandbox', 'Indexed content', 'Analyzer packs'] as $tabLabel) {
+        assert_contains($tabLabel, $html, "settings tabs should include {$tabLabel}");
+    }
+    assert_contains('Full-text search (FTS) builds its own searchable index', $html, 'admin page should define full-text search before showing controls');
+    assert_contains('wp-fts-admin-summary', $html, 'admin orientation should use compact help text instead of a heavy notice');
+    assert_true(!str_contains($html, '<div class="notice notice-info"><p><strong>What this does:</strong>'), 'admin orientation should not render as a large notice');
+    assert_contains('wp-fts-language-status', $html, 'site-language status should use compact help text');
+    assert_true(!str_contains($html, '<div class="notice notice-info"><p>Current site language'), 'site-language status should not render as a large notice');
+    assert_contains('Demo posts and the full-text index are ready', $html, 'authorized first render should auto-seed the demo corpus and index');
     $demo = wp_fts_test_sandbox_demo_expectations();
     assert_same(count($demo), count($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? []), 'authorized first render should create the top-language demo posts');
     assert_true($fake->terms !== [], 'authorized first render should build FTS terms for the demo corpus');
+    foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Customer-facing search behavior', 'Language handling'] as $groupLabel) {
+        assert_contains($groupLabel, $settingsHtml, "settings tab should group controls by {$groupLabel}");
+    }
+    assert_contains('Content types in the index', $settingsHtml, 'settings tab should render post-type configuration');
+    assert_contains('value="post" checked="checked"', $settingsHtml, 'settings defaults should include posts');
+    assert_contains('value="page" checked="checked"', $settingsHtml, 'settings defaults should include pages');
+    assert_contains('name="_wp_http_referer" value="/wp-admin/options-general.php?page=wp-fts-settings"', $settingsHtml, 'settings form should preserve a settings-page referrer after save');
+    assert_contains('Automatically update the search index when content changes', $settingsHtml, 'settings auto-index control should use a plain checkbox label');
+    assert_contains('type="hidden" name="wp_fts_settings[auto_index]" value="0"', $settingsHtml, 'settings auto-index checkbox should post an unchecked value');
+    assert_contains('type="checkbox" name="wp_fts_settings[auto_index]" value="1" checked="checked"', $settingsHtml, 'settings auto-index checkbox should render checked by default');
+    assert_true(!str_contains($settingsHtml, 'type="radio" name="wp_fts_settings[auto_index]"'), 'settings auto-index control should no longer render as radios');
+    assert_contains('Use full-text search on the public site', $settingsHtml, 'settings replacement behavior should expose the public-site checkbox');
+    assert_contains('Use full-text search in wp-admin post search', $settingsHtml, 'settings replacement behavior should expose the wp-admin checkbox');
+    assert_contains('type="hidden" name="wp_fts_settings[replace_frontend_search]" value="0"', $settingsHtml, 'public-site replacement checkbox should post an unchecked value');
+    assert_contains('type="checkbox" name="wp_fts_settings[replace_frontend_search]" value="1" checked="checked"', $settingsHtml, 'public-site replacement checkbox should be checked by default');
+    assert_contains('type="hidden" name="wp_fts_settings[replace_admin_post_search]" value="0"', $settingsHtml, 'wp-admin replacement checkbox should post an unchecked value');
+    assert_contains('type="checkbox" name="wp_fts_settings[replace_admin_post_search]" value="1" checked="checked"', $settingsHtml, 'wp-admin replacement checkbox should be checked by default');
+    assert_true(!str_contains($settingsHtml, 'name="wp_fts_settings[replace_search_scope]"'), 'settings replacement behavior should no longer render the legacy scope radio group');
+    assert_contains('Search result excerpt length', $settingsHtml, 'settings should use clearer excerpt length copy');
+    assert_contains('short piece of post text shown around a matching word', $settingsHtml, 'settings should explain search result excerpts in plain language');
+    assert_contains('Search term matching', $settingsHtml, 'settings should use product-style search matching language');
+    assert_contains('Match any word (broader)', $settingsHtml, 'settings should describe the broad matching option without making OR the primary label');
+    assert_contains('Require every word (stricter)', $settingsHtml, 'settings should describe the strict matching option without making AND the primary label');
+    assert_true(!str_contains($settingsHtml, '>Match mode<'), 'settings UI should not expose the old Match mode label');
+    assert_contains('Results per page', $settingsHtml, 'settings should rename result limit to results per page');
+    assert_contains('shown on one page or search view', $settingsHtml, 'settings results-per-page help should explain the page/search-view behavior');
+    assert_contains('name="wp_fts_settings[language_fallback]" value="1" checked="checked"', $settingsHtml, 'settings defaults should enable language fallback');
+    assert_contains('If the query language is unsupported or produces no matches', $settingsHtml, 'settings language fallback copy should explain unsupported languages and no-match fallback');
+    assert_contains('not copied into this plugin setting', $settingsHtml, 'settings language fallback copy should explain that site language is read dynamically');
+    assert_contains('href="/wp-admin/options-general.php"', $settingsHtml, 'current site language description should link to General Settings');
     assert_contains('name="wp_fts_sandbox_query"', $html, 'sandbox page should include the search query field');
-    assert_contains('value="mouse"', $html, 'sandbox page should default to the English pack-backed query suggestion');
+    assert_contains('Try a query against the same index and saved settings', $html, 'sandbox tab should explain that it searches the same index');
+    assert_contains('name="tab" value="sandbox"', $html, 'sandbox form should preserve the selected tab on search submission');
+    assert_contains('id="wp-fts-sandbox-query" type="search" class="regular-text" name="wp_fts_sandbox_query" value=""', $html, 'sandbox page should leave the query field blank by default');
+    assert_contains('wp-fts-sandbox-compact-controls', $html, 'sandbox search controls should use a compact primary row');
+    assert_contains('<details class="wp-fts-sandbox-advanced">', $html, 'secondary sandbox controls should be collapsed behind details');
+    assert_contains('Filters and display options', $html, 'sandbox advanced controls should have a clear summary label');
     assert_contains('name="wp_fts_sandbox_lang"', $html, 'sandbox page should include the query language selector');
     assert_contains('value="auto"', $html, 'sandbox language selector should include automatic detection');
+    assert_contains('value="site"', $html, 'sandbox language selector should include the dynamic site-language option');
     assert_contains('value="en"', $html, 'sandbox language selector should include English');
     assert_contains('value="pl"', $html, 'sandbox language selector should include Polish');
     assert_contains('value="de"', $html, 'sandbox language selector should include German');
     foreach (['zh', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ur', 'ru'] as $language) {
         assert_contains('value="' . $language . '"', $html, "sandbox language selector should include {$language}");
     }
-    assert_contains('Analyzer packs', $html, 'sandbox page should show configured analyzer pack status');
-    assert_contains('Polish (pl)', $html, 'sandbox analyzer pack status should include the bundled Polish pack');
-    assert_contains('<td>Active</td>', $html, 'sandbox analyzer pack status should identify active packs');
+    assert_contains('name="wp_fts_sandbox_mode"', $html, 'sandbox page should expose search term matching');
+    assert_contains('Match any word (broader)', $html, 'sandbox page should describe broader matching clearly');
+    assert_contains('Require every word (stricter)', $html, 'sandbox page should describe stricter matching clearly');
+    assert_contains('name="wp_fts_sandbox_limit"', $html, 'sandbox page should expose results per page');
+    assert_contains('Results per page', $html, 'sandbox page should rename maximum results to results per page');
+    assert_contains('name="wp_fts_sandbox_snippet_length"', $html, 'sandbox page should expose search result excerpt length');
+    assert_contains('Search result excerpt length', $html, 'sandbox page should use clearer excerpt copy');
+    assert_contains('short piece of post text shown around a matching word', $html, 'sandbox page should explain excerpts inline');
+    assert_contains('name="wp_fts_sandbox_highlight"', $html, 'sandbox page should expose highlight toggle');
+    assert_contains('name="wp_fts_sandbox_language_fallback"', $html, 'sandbox page should expose language fallback toggle');
+    assert_contains('Also try the current WordPress site language when needed', $html, 'sandbox language fallback should be an explicit behavior choice');
+    assert_contains('That language is read dynamically from WordPress', $html, 'sandbox language fallback should explain dynamic site language lookup');
+    assert_contains('name="wp_fts_sandbox_post_type[]"', $html, 'sandbox page should expose post type filters');
+    assert_contains('name="wp_fts_sandbox_post_status[]"', $html, 'sandbox page should expose post status filters');
+    assert_contains('name="wp_fts_sandbox_date_after"', $html, 'sandbox page should expose date-after filter');
+    assert_contains('name="wp_fts_sandbox_date_before"', $html, 'sandbox page should expose date-before filter');
+    assert_contains('Analyzer packs', $analyzerHtml, 'analyzer packs tab should be reachable from the settings page');
+    assert_contains('Runtime packs affect real site searches', $analyzerHtml, 'analyzer packs tab should explain runtime versus sandbox scope');
+    assert_contains('Polish (pl)', $analyzerHtml, 'analyzer pack status should include the bundled Polish pack');
+    assert_contains('<td>Active</td>', $analyzerHtml, 'analyzer pack status should identify active packs');
+    if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_contains('English (en)', $analyzerHtml, 'sandbox analyzer pack status should include the active base English pack');
+        assert_contains('en-unimorph-eng-66e0e9e8e2dc', $analyzerHtml, 'sandbox analyzer pack status should expose the English pack id');
+    }
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_action"'), 'sandbox page should not render mutating demo action controls');
     assert_true(!str_contains($html, 'Create or refresh demo posts'), 'sandbox page should not render the manual demo refresh button');
     assert_true(!str_contains($html, 'Build demo index'), 'sandbox page should not render the manual demo index button');
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_nonce"'), 'sandbox page should not render hidden action nonces for removed manual controls');
-    assert_contains('Indexed posts', $html, 'sandbox page should render indexed-post storage state');
-    assert_contains('Automatic detection is the default', $html, 'sandbox page should document automatic post language behavior');
-    assert_contains('Suggested queries', $html, 'sandbox page should render compact demo query suggestions');
-    assert_contains('<th scope="col">Query</th>', $html, 'sandbox suggestion table should include a query column');
+    assert_contains('Indexed content', $indexedHtml, 'indexed-content tab should render indexed-post storage state');
+    $oldPresetHeading = 'Suggested ' . 'queries';
+    assert_true(!str_contains($html, $oldPresetHeading), 'sandbox page should not render the removed query-preset heading');
+    assert_true(!str_contains($html, '<th scope="col">Query</th>'), 'sandbox page should not render a query-preset table column');
     foreach ($demo as $case) {
-        assert_contains('<code>' . esc_html($case['query']) . '</code>', $html, "sandbox page should suggest the {$case['lang']} demo query");
+        assert_true(!str_contains($html, '<td><code>' . esc_html($case['query']) . '</code></td>'), "sandbox page should not render the {$case['lang']} preset query");
     }
-    assert_contains('<th scope="col">Language</th>', $html, 'sandbox indexed-post table should include a language column');
-    assert_contains('<th scope="col">Indexed length</th>', $html, 'sandbox indexed-post table should include indexed token length');
-    assert_contains('<th scope="col">Indexed terms</th>', $html, 'sandbox indexed-post table should include stored FTS terms');
-    assert_contains('<th scope="col">Content preview</th>', $html, 'sandbox indexed-post table should include a content preview column');
-    assert_contains('Showing 1-10 of 11 indexed post(s).', $html, 'sandbox indexed-post table should paginate the top-language demo corpus');
+    assert_contains('<th scope="col">Language</th>', $indexedHtml, 'indexed-post table should include a language column');
+    assert_contains('<th scope="col">Indexed length</th>', $indexedHtml, 'indexed-post table should include indexed token length');
+    assert_contains('<th scope="col">Indexed terms</th>', $indexedHtml, 'indexed-post table should include stored FTS terms');
+    assert_contains('<th scope="col">Content preview</th>', $indexedHtml, 'indexed-post table should include a content preview column');
+    assert_contains('Showing 1-10 of 11 indexed post(s).', $indexedHtml, 'indexed-post table should paginate the top-language demo corpus');
+    if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_contains('Full morphology', $indexedHtml, 'indexed-content view should identify full morphology partitions');
+        assert_contains('English (en) - Full morphology', $indexedHtml, 'indexed-content view should align English indexed labels with the active base English pack');
+    } else {
+        assert_contains('Fixture morphology', $indexedHtml, 'indexed-content view should identify fixture morphology partitions when gzip is unavailable');
+    }
     foreach (array_slice($demo, 0, 10) as $case) {
-        assert_contains($case['title'], $html, "sandbox indexed-post table should list the {$case['lang']} demo title from index metadata");
-        assert_contains($case['preview'], $html, "sandbox indexed-post table should preview the {$case['lang']} indexed content");
+        assert_contains($case['title'], $indexedHtml, "indexed-post table should list the {$case['lang']} demo title from index metadata");
+        assert_contains($case['preview'], $indexedHtml, "indexed-post table should preview the {$case['lang']} indexed content");
     }
-    assert_true(!str_contains($html, 'FTS Sandbox: Urdu Suffix Baseline'), 'first indexed-post page should keep the eleventh demo row on page two');
+    assert_true(!str_contains($indexedHtml, 'FTS Sandbox: Urdu Suffix Baseline'), 'first indexed-post page should keep the eleventh demo row on page two');
+});
+
+test_case('admin settings tabs honor sanitized tab URLs and render selected tab', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+
+    try {
+        $_POST = [];
+        $settingsCallback = wp_fts_test_registered_admin_settings_callback();
+        $routes = [
+            'settings' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings',
+                'label' => 'Settings',
+                'heading' => '<h2>Settings</h2>',
+            ],
+            'sandbox' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=sandbox',
+                'label' => 'Sandbox',
+                'heading' => '<h2>Sandbox</h2>',
+            ],
+            'indexed-content' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=indexed-content',
+                'label' => 'Indexed content',
+                'heading' => '<h2>Indexed content</h2>',
+            ],
+            'analyzer-packs' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=analyzer-packs',
+                'label' => 'Analyzer packs',
+                'heading' => '<h2>Analyzer packs</h2>',
+            ],
+        ];
+        $htmlByTab = [];
+        foreach ($routes as $tab => $route) {
+            $parsed = wp_fts_test_parse_admin_route($route['url']);
+            assert_same('/wp-admin/options-general.php', $parsed['path'], "{$tab} route should target General Settings");
+            assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($parsed['params']['page'] ?? ''), "{$tab} route should keep the FTS page slug separate");
+            if ($tab === 'settings') {
+                assert_true(!isset($parsed['params']['tab']), 'settings route should use the base plugin settings URL');
+            } else {
+                assert_same($tab, (string) ($parsed['params']['tab'] ?? ''), "{$tab} route should keep the selected tab separate");
+            }
+            $htmlByTab[$tab] = wp_fts_test_capture_registered_admin_route($route['url'], $settingsCallback);
+        }
+
+        $fallbackHtml = wp_fts_test_capture_registered_admin_route('/wp-admin/options-general.php?page=wp-fts-settings&tab=nonesuch%3Cscript%3E', $settingsCallback);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    $settingsHtml = $htmlByTab['settings'];
+    $sandboxHtml = $htmlByTab['sandbox'];
+    $indexedHtml = $htmlByTab['indexed-content'];
+    $analyzerHtml = $htmlByTab['analyzer-packs'];
+
+    assert_contains('href="/wp-admin/options-general.php?page=wp-fts-settings"', $settingsHtml, 'settings tab link should target the base settings page URL');
+    assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=sandbox', $sandboxHtml, 'tab links should target the sandbox tab URL');
+    assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=indexed-content', $sandboxHtml, 'tab links should target the indexed-content tab URL');
+    assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=analyzer-packs', $sandboxHtml, 'tab links should target the analyzer-packs tab URL');
+    assert_contains('aria-current="page">Settings</a>', $settingsHtml, 'direct settings URL should render Settings as active');
+    assert_contains('<h2>Settings</h2>', $settingsHtml, 'direct settings URL should render the Settings panel');
+    assert_contains('aria-current="page">Sandbox</a>', $sandboxHtml, 'sandbox query tab should render Sandbox as active');
+    assert_contains('<h2>Sandbox</h2>', $sandboxHtml, 'sandbox query tab should render the sandbox panel');
+    assert_true(!str_contains($sandboxHtml, '<h2>Settings</h2>'), 'sandbox query tab should not fall back to the settings panel');
+
+    assert_contains('aria-current="page">Indexed content</a>', $indexedHtml, 'indexed-content query tab should render Indexed content as active');
+    assert_contains('<h2>Indexed content</h2>', $indexedHtml, 'indexed-content query tab should render the indexed-content panel');
+    assert_true(!str_contains($indexedHtml, '<h2>Settings</h2>'), 'indexed-content query tab should not fall back to the settings panel');
+
+    assert_contains('aria-current="page">Analyzer packs</a>', $analyzerHtml, 'analyzer-packs query tab should render Analyzer packs as active');
+    assert_contains('<h2>Analyzer packs</h2>', $analyzerHtml, 'analyzer-packs query tab should render the analyzer-packs panel');
+    assert_true(!str_contains($analyzerHtml, '<h2>Settings</h2>'), 'analyzer-packs query tab should not fall back to the settings panel');
+
+    assert_contains('aria-current="page">Settings</a>', $fallbackHtml, 'invalid tab values should be sanitized back to Settings');
+    assert_contains('<h2>Settings</h2>', $fallbackHtml, 'invalid tab values should render the Settings panel');
+    assert_true(!str_contains($fallbackHtml, '<script>'), 'invalid tab values should not be reflected into the admin page');
+});
+
+test_case('playground blueprint preserves sandbox landing tab', function (): void {
+    $blueprintPath = __DIR__ . '/../playground/blueprint.json';
+    $json = file_get_contents($blueprintPath);
+    if (!is_string($json)) {
+        throw new WP_FTS_TestFailure('Could not read playground blueprint.');
+    }
+
+    $blueprint = json_decode($json, true);
+    assert_true(is_array($blueprint), 'playground blueprint should decode as JSON');
+
+    $landingPage = is_scalar($blueprint['landingPage'] ?? null) ? (string) $blueprint['landingPage'] : '';
+    assert_same('/wp-admin/options-general.php?page=wp-fts-settings&tab=sandbox', $landingPage, 'playground landing page should use a normal admin query string');
+    assert_true(!str_contains($landingPage, '%26'), 'playground landing page should not encode the tab separator into the page slug');
+
+    $route = wp_fts_test_parse_admin_route($landingPage);
+    assert_same('/wp-admin/options-general.php', $route['path'], 'playground landing page should target General Settings');
+    assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($route['params']['page'] ?? ''), 'playground landing page should target the FTS settings page');
+    assert_same('sandbox', (string) ($route['params']['tab'] ?? ''), 'playground landing page should target the Sandbox tab');
+
+    $brokenRoute = wp_fts_test_parse_admin_route('/wp-admin/options-general.php?page=wp-fts-settings%26tab=sandbox');
+    assert_same('wp-fts-settings&tab=sandbox', (string) ($brokenRoute['params']['page'] ?? ''), 'real query parsing treats encoded ampersand as part of the page value');
+    assert_true(!isset($brokenRoute['params']['tab']), 'real query parsing does not recover a tab parameter from an encoded ampersand');
+});
+
+test_case('settings page reports unsupported site language without storing fallback language', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_locale'] = 'qaa';
+
+    $html = wp_fts_test_capture_admin_settings_tab('settings');
+
+    assert_contains('Current site language QAA (qaa) uses conservative fallback', $html, 'settings page should explicitly flag unsupported site languages');
+    assert_contains('install or build an analyzer pack with the pack tooling and configure it for this language', $html, 'settings page should guide unsupported languages toward pack tooling instead of a missing UI control');
+    assert_true(!str_contains($html, 'enable an analyzer pack'), 'settings page should not promise a nonexistent analyzer-pack enable control');
+    assert_contains('Change it on the <a href="/wp-admin/options-general.php">WordPress General Settings page</a>', $html, 'current site language description should link to General Settings');
+    assert_contains('wp-fts-language-status', $html, 'unsupported site-language status should use compact help text');
+    assert_true(!str_contains($html, '<div class="notice notice-info"><p>Current site language'), 'unsupported site-language status should not render as a large notice');
+    assert_true(!str_contains($html, 'fallback_language'), 'settings page should not store a stale fallback language value');
+});
+
+test_case('settings page explains en-US support through active base English analyzer pack', function (): void {
+    $packDir = temp_directory_path('admin_en_base_pack');
+
+    try {
+        $manifest = write_synthetic_full_analyzer_pack($packDir, 3, 1, 'en', 'en-synthetic-full-status');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_locale'] = 'en_US';
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'lemmatizer_packs_by_lang' => [
+                'en' => $manifest,
+            ],
+        ];
+
+        $settingsHtml = wp_fts_test_capture_admin_settings_tab('settings');
+        $analyzerHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+
+        assert_contains('Current site language English (en-US) uses full morphology through the active base-language analyzer pack English (en)', $settingsHtml, 'site-language status should explain en-US support through the active base English pack');
+        assert_contains('Runtime search status - Full morphology', $settingsHtml, 'settings row should report full runtime morphology for en-US through the base pack');
+        assert_contains('English morphology is available through the active base-language analyzer pack English (en)', $settingsHtml, 'settings row should explain English dialect/locale coverage');
+        assert_true(!str_contains($settingsHtml, 'full morphology is unavailable'), 'en-US with active base English pack should not be described as unavailable');
+        assert_true(!str_contains($settingsHtml, 'enable an analyzer pack'), 'en-US with active base English pack should not mention a nonexistent enable control');
+        assert_contains('English (en)', $analyzerHtml, 'analyzer packs table should list the active base English pack');
+        assert_contains('en-synthetic-full-status', $analyzerHtml, 'analyzer packs table should expose the configured English pack id');
+        assert_contains('Full local pack', $analyzerHtml, 'analyzer packs table should label the synthetic English pack as full local data');
+    } finally {
+        remove_directory_tree($packDir);
+    }
+});
+
+test_case('settings page distinguishes en-US runtime fallback from sandbox English pack coverage', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so bundled sandbox UniMorph English pack coverage is skipped.');
+        return;
+    }
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_locale'] = 'en_US';
+
+    $settingsHtml = wp_fts_test_capture_admin_settings_tab('settings');
+    $analyzerHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+
+    assert_contains('Current site language English (en-US) uses conservative fallback for runtime site searches because no runtime analyzer pack covers it', $settingsHtml, 'site-language status should keep runtime fallback scope explicit for en-US when only sandbox has English');
+    assert_contains('Sandbox and indexed demo content can use English morphology through the active base-language analyzer pack English (en) for English dialects/locales', $settingsHtml, 'site-language status should explain sandbox English dialect coverage through the base en pack');
+    assert_true(!str_contains($settingsHtml, 'full morphology is unavailable'), 'sandbox English coverage should not be described as unavailable for en-US');
+    assert_true(!str_contains($settingsHtml, 'enable an analyzer pack'), 'sandbox English coverage should not mention a nonexistent enable control');
+    assert_contains('English (en)', $analyzerHtml, 'analyzer packs table should list the sandbox base English pack');
+    assert_contains('en-unimorph-eng-66e0e9e8e2dc', $analyzerHtml, 'analyzer packs table should expose the sandbox English pack id');
+});
+
+test_case('sandbox language fallback uses current site language dynamically', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $english = (object) [
+        'ID' => 611,
+        'post_title' => 'English Dynamic Fallback',
+        'post_content' => '<p>fallbackneedle appears in English.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $polish = (object) [
+        'ID' => 612,
+        'post_title' => 'Polish Dynamic Fallback',
+        'post_content' => '<p>fallbackneedle pojawia sie po polsku.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+
+    $render = static function (): string {
+        $_POST = [];
+        $_GET = [
+            'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
+            'tab' => 'sandbox',
+            'wp_fts_sandbox_query' => 'fallbackneedle',
+            'wp_fts_sandbox_lang' => 'es',
+            'wp_fts_sandbox_search' => '1',
+            'wp_fts_sandbox_language_fallback' => '1',
+            'wp_fts_sandbox_highlight' => '1',
+        ];
+
+        return wp_fts_test_capture_admin_sandbox();
+    };
+
+    try {
+        $GLOBALS['wp_fts_test_posts'][611] = $english;
+        $GLOBALS['wp_fts_test_posts'][612] = $polish;
+        update_post_meta(611, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
+        update_post_meta(612, WP_FTS_Plugin::LANGUAGE_META_KEY, 'pl');
+        WP_FTS_Plugin::handle_post_save(611, $english, true);
+        WP_FTS_Plugin::handle_post_save(612, $polish, true);
+
+        $GLOBALS['wp_fts_test_locale'] = 'en';
+        $englishHtml = $render();
+        assert_contains('English Dynamic Fallback', $englishHtml, 'site-language fallback should use the current English site language');
+        assert_true(!str_contains($englishHtml, 'Polish Dynamic Fallback'), 'English site-language fallback should not search the Polish partition');
+
+        $GLOBALS['wp_fts_test_locale'] = 'pl';
+        $polishHtml = $render();
+        assert_contains('Polish Dynamic Fallback', $polishHtml, 'site-language fallback should reflect a changed site language without resaving settings');
+        assert_true(!str_contains($polishHtml, 'English Dynamic Fallback'), 'Polish site-language fallback should not keep the old English fallback');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('sandbox passes search knobs to Searcher options', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $posts = [
+        621 => ['title' => 'Alpha Beta Post', 'type' => 'post', 'status' => 'publish', 'date' => '2026-06-10 00:00:00', 'content' => '<p>alpha beta gamma content.</p>'],
+        622 => ['title' => 'Alpha Beta Page', 'type' => 'page', 'status' => 'publish', 'date' => '2026-06-10 00:00:00', 'content' => '<p>alpha beta page content.</p>'],
+        623 => ['title' => 'Alpha Beta Draft', 'type' => 'post', 'status' => 'draft', 'date' => '2026-06-10 00:00:00', 'content' => '<p>alpha beta draft content.</p>'],
+        624 => ['title' => 'Older Alpha Beta Post', 'type' => 'post', 'status' => 'publish', 'date' => '2026-05-01 00:00:00', 'content' => '<p>alpha beta old content.</p>'],
+        625 => ['title' => 'Alpha Only Post', 'type' => 'post', 'status' => 'publish', 'date' => '2026-06-10 00:00:00', 'content' => '<p>alpha only content.</p>'],
+    ];
+
+    try {
+        foreach ($posts as $postId => $data) {
+            $post = (object) [
+                'ID' => $postId,
+                'post_title' => $data['title'],
+                'post_content' => $data['content'],
+                'post_excerpt' => '',
+                'post_status' => $data['status'],
+                'post_type' => $data['type'],
+                'post_date_gmt' => $data['date'],
+            ];
+            $GLOBALS['wp_fts_test_posts'][$postId] = $post;
+            update_post_meta($postId, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
+            WP_FTS_Plugin::handle_post_save($postId, $post, true);
+        }
+
+        $_POST = [];
+        $_GET = [
+            'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
+            'tab' => 'sandbox',
+            'wp_fts_sandbox_query' => 'alpha beta',
+            'wp_fts_sandbox_lang' => 'en',
+            'wp_fts_sandbox_search' => '1',
+            'wp_fts_sandbox_mode' => 'AND',
+            'wp_fts_sandbox_limit' => '1',
+            'wp_fts_sandbox_snippet_length' => '40',
+            'wp_fts_sandbox_highlight' => '0',
+            'wp_fts_sandbox_language_fallback' => '0',
+            'wp_fts_sandbox_post_type' => ['post'],
+            'wp_fts_sandbox_post_status' => ['publish'],
+            'wp_fts_sandbox_date_after' => '2026-06-01',
+            'wp_fts_sandbox_date_before' => '2026-06-11',
+        ];
+
+        $html = wp_fts_test_capture_admin_sandbox();
+        assert_contains('Search returned 1 result(s).', $html, 'sandbox result limit and filters should produce a single result');
+        assert_contains('Alpha Beta Post', $html, 'sandbox should include the matching post result');
+        assert_true(!str_contains($html, 'Alpha Beta Page'), 'sandbox post type filter should exclude pages');
+        assert_true(!str_contains($html, 'Alpha Beta Draft'), 'sandbox post status filter should exclude drafts');
+        assert_true(!str_contains($html, 'Older Alpha Beta Post'), 'sandbox date filters should exclude old content');
+        assert_true(!str_contains($html, 'Alpha Only Post'), 'sandbox AND mode should require all query terms');
+        assert_true(!str_contains($html, '<mark>'), 'sandbox highlight toggle should reach snippet generation');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('indexed content flags unsupported conservative language partitions', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $post = (object) [
+        'ID' => 631,
+        'post_title' => 'Unsupported Language Partition',
+        'post_content' => '<p>unsupported partition content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+
+    try {
+        $GLOBALS['wp_fts_test_posts'][631] = $post;
+        (new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer(['default_lang' => 'qaa'])))->index_document_fields(631, [
+            ['name' => 'content', 'text' => 'unsupported partition content'],
+        ], [
+            'lang' => 'qaa',
+            'metadata' => [
+                'post_id' => 631,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'title' => 'Unsupported Language Partition',
+                'search_text' => 'unsupported partition content',
+                'language' => 'qaa',
+            ],
+        ]);
+
+        $html = wp_fts_test_capture_admin_settings_tab('indexed-content');
+        assert_contains('Unsupported Language Partition', $html, 'indexed content tab should include the unsupported-language post');
+        assert_contains('QAA (qaa) - Conservative fallback', $html, 'indexed content tab should flag unsupported language partitions as conservative fallback');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('admin sandbox indexed terms expose stored Polish lemmas for split inline HTML', function (): void {
@@ -3416,11 +4019,13 @@ test_case('admin sandbox indexed terms expose stored Polish lemmas for split inl
         ];
 
         $html = wp_fts_test_capture_admin_sandbox();
+        $indexedHtml = wp_fts_test_capture_admin_settings_tab('indexed-content');
 
-        assert_contains('<th scope="col">Indexed terms</th>', $html, 'indexed-post diagnostics should include the indexed terms column');
+        assert_contains('<th scope="col">Indexed terms</th>', $indexedHtml, 'indexed-post diagnostics should include the indexed terms column');
         assert_contains('Custom Polish Split Surface', $html, 'sandbox search should find the post with split inline Polish text');
-        assert_contains('<code>pl:chrzastka</code>', $html, 'indexed terms should show the stored Polish lemma for chrząstki');
-        assert_contains('<code>pl:chrzastek</code>', $html, 'indexed terms should show the alternate stored Polish lemma for chrząstki');
+        assert_contains('<code>pl:chrzastka</code>', $indexedHtml, 'indexed terms should show the stored Polish lemma for chrząstki');
+        assert_contains('<code>pl:chrzastek</code>', $indexedHtml, 'indexed terms should show the alternate stored Polish lemma for chrząstki');
+        assert_contains('Full morphology', $indexedHtml, 'indexed content should flag the Polish partition as full morphology when the pack is active');
         assert_contains('<mark>chr', $html, 'sandbox search should highlight the matched split surface');
         assert_contains('ząs', $html, 'sandbox search highlight should include the formatted middle of the split surface');
         assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'chrząstki')]), 'sandbox diagnostics should reflect stored lemmas rather than hard-coded Polish surface forms');
@@ -3451,7 +4056,7 @@ test_case('unauthorized admin sandbox render is blocked safely', function (): vo
         $wpdb = $oldWpdb;
     }
 
-    assert_contains('You do not have permission to use the FTS sandbox.', $html, 'sandbox page should show a safe unauthorized message');
+    assert_contains('You do not have permission to manage Full-Text Search settings.', $html, 'settings page should show a safe unauthorized message');
     assert_true(!str_contains($html, 'name="wp_fts_sandbox_action"'), 'unauthorized sandbox page should not render mutating action controls');
     assert_same([], $GLOBALS['wp_fts_test_posts'], 'unauthorized sandbox render should not create demo posts');
     assert_same([], $GLOBALS['wp_fts_test_options'], 'unauthorized sandbox render should not write demo options');
@@ -3596,7 +4201,7 @@ test_case('initial authorized sandbox page load auto-seeds and automatic demo se
         $demoPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
         $demo = wp_fts_test_sandbox_demo_expectations();
         assert_same(count($demo), count($demoPostIds), 'initial authorized page load should create the top-language demo posts without POST');
-        assert_contains('Demo posts and FTS index are ready', $initialHtml, 'initial authorized page load should report the one-time auto-seed');
+        assert_contains('Demo posts and the full-text index are ready', $initialHtml, 'initial authorized page load should report the one-time auto-seed');
         assert_true($fake->terms !== [], 'initial authorized page load should build the demo index without POST');
         $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($demoPostIds);
         foreach ($demo as $offset => $case) {
@@ -3604,7 +4209,7 @@ test_case('initial authorized sandbox page load auto-seeds and automatic demo se
         }
 
         $secondHtml = $render();
-        assert_true(!str_contains($secondHtml, 'Demo posts and FTS index are ready'), 'ready sandbox should not repeat the first-load auto-seed notice');
+        assert_true(!str_contains($secondHtml, 'Demo posts and the full-text index are ready'), 'ready sandbox should not repeat the first-load auto-seed notice');
 
         foreach ($demo as $case) {
             $html = $search($case['query']);
@@ -3743,7 +4348,7 @@ test_case('admin sandbox demo indexing supports requested and detected languages
             'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
         ];
         $indexHtml = wp_fts_test_capture_admin_sandbox();
-        assert_contains('Processed 11 demo post(s) into the FTS index.', $indexHtml, 'index action should report the processed demo corpus');
+        assert_contains('Processed 11 demo post(s) into the full-text index.', $indexHtml, 'index action should report the processed demo corpus');
         assert_true($fake->terms !== [], 'index action should write FTS terms for the demo corpus');
         $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($demoPostIds);
         foreach ($demo as $offset => $case) {
@@ -3831,11 +4436,11 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
 
-    $renderSandbox = static function (array $get = []): string {
+    $renderIndexed = static function (array $get = []): string {
         $_POST = [];
         $_GET = array_merge(['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG], $get);
 
-        return wp_fts_test_capture_admin_sandbox();
+        return wp_fts_test_capture_admin_settings_tab('indexed-content');
     };
     $refreshDemo = static function (): string {
         $_GET = [];
@@ -3872,7 +4477,9 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
             WP_FTS_Plugin::handle_post_save($post_id, $post, true);
         }
 
-        $pageTwoHtml = $renderSandbox(['wp_fts_sandbox_posts_page' => '2']);
+        wp_fts_test_capture_admin_sandbox();
+
+        $pageTwoHtml = $renderIndexed(['wp_fts_sandbox_posts_page' => '2']);
         assert_contains('Showing 11-20 of 23 indexed post(s).', $pageTwoHtml, 'sandbox indexed-post table should paginate storage-derived rows');
         assert_contains('Page 2 of 3', $pageTwoHtml, 'sandbox indexed-post table should render page count');
         assert_contains('Previous', $pageTwoHtml, 'sandbox indexed-post table should link back to the first page');
@@ -3885,7 +4492,7 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
         assert_true(!str_contains($pageTwoHtml, 'Create or refresh demo posts'), 'paginated sandbox page should still hide manual demo refresh controls');
         assert_true(!str_contains($pageTwoHtml, 'Build demo index'), 'paginated sandbox page should still hide manual demo index controls');
 
-        $pageOneHtml = $renderSandbox(['wp_fts_sandbox_posts_page' => '1']);
+        $pageOneHtml = $renderIndexed(['wp_fts_sandbox_posts_page' => '1']);
         assert_contains('FTS Sandbox: English Mice', $pageOneHtml, 'first indexed-post page should list the auto-seeded demo index row');
         assert_contains('FTS Sandbox: Indonesian Abadi', $pageOneHtml, 'first indexed-post page should include demo rows up to the page limit');
         assert_true(!str_contains($pageOneHtml, 'FTS Sandbox: Urdu Suffix Baseline'), 'first indexed-post page should not leak the second demo page row');
@@ -3903,7 +4510,7 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
         assert_true($refreshedPostIds[0] !== $initialPostIds[0], 'missing English demo post should be recreated with a new ID');
 
         $indexHtml = $indexDemo();
-        assert_contains('Processed 11 demo post(s) into the FTS index.', $indexHtml, 'manual-compatible index action should process the refreshed demo corpus');
+        assert_contains('Processed 11 demo post(s) into the full-text index.', $indexHtml, 'manual-compatible index action should process the refreshed demo corpus');
         assert_true(!str_contains($indexHtml, 'name="wp_fts_sandbox_action"'), 'manual-compatible action responses should still not render action controls');
         $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($refreshedPostIds);
         foreach ($demo as $offset => $case) {
@@ -4039,6 +4646,45 @@ test_case('runtime post hooks index visible posts immediately and tombstone invi
         $GLOBALS['wp_fts_test_revisions'][102] = true;
         WP_FTS_Plugin::handle_post_save(102, (object) ['ID' => 102, 'post_status' => 'publish', 'post_type' => 'post'], true);
         assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'revision saves should not enqueue indexing work');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('disabled auto-index blocks status transition indexing but still tombstones departures', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $settings = array_replace(WP_FTS_Plugin::default_settings(), ['auto_index' => false]);
+    $post = (object) [
+        'ID' => 111,
+        'post_title' => 'Manual indexing only',
+        'post_content' => '<p>manualtransitionneedle remains manual.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-16 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][111] = $post;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $settings;
+
+    try {
+        WP_FTS_Plugin::handle_status_transition('publish', 'draft', $post);
+        assert_true(!isset($fake->docs[111]), 'disabled auto-index should not index when a post transitions into a searchable status');
+        assert_same([], WP_FTS_Plugin::search('manualtransitionneedle', ['limit' => 10]), 'blocked transition indexing should leave FTS results empty');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace($settings, ['auto_index' => true]);
+        WP_FTS_Plugin::handle_post_save(111, $post, true);
+        assert_true(($fake->docs[111]['is_deleted'] ?? 1) === 0, 'test setup should create an active indexed document');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $settings;
+        $post->post_status = 'trash';
+        WP_FTS_Plugin::handle_status_transition('trash', 'publish', $post);
+        assert_true(($fake->docs[111]['is_deleted'] ?? 0) === 1, 'disabled auto-index should still tombstone posts leaving searchable status');
+        assert_same([], WP_FTS_Plugin::search('manualtransitionneedle', ['limit' => 10]), 'tombstoned posts should disappear even when auto-index is disabled');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -4625,6 +5271,26 @@ test_case('admin Posts list search replacement can be disabled independently', f
     } finally {
         $wpdb = $oldWpdb;
     }
+});
+
+test_case('admin Posts list search replacement skips post when it is not an indexed post type', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_is_admin'] = true;
+    $GLOBALS['pagenow'] = 'edit.php';
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['index_post_types' => ['page']]
+    );
+
+    $query = new WP_FTS_Test_Query([
+        's' => 'uncheckedpostneedle',
+        'posts_per_page' => 10,
+        'post_type' => 'post',
+    ]);
+
+    WP_FTS_Plugin::prepare_admin_post_search_query($query);
+    assert_same(null, $query->get('wp_fts_admin_post_search_candidate', null), 'admin Posts list search should not be marked for FTS replacement when post indexing is disabled');
+    assert_same(null, WP_FTS_Plugin::replace_admin_post_search_posts(null, $query), 'admin Posts list search should fall back to native WordPress search when post indexing is disabled');
 });
 
 test_case('admin Posts list search replacement avoids REST cron secondary sandbox and constrained queries', function (): void {
@@ -7309,6 +7975,25 @@ test_case('polish compressed full playground pack validates and lazy-loads full-
         'samochodami' => 'samochod',
     ] as $surface => $lemma) {
         assert_same($lemma, $lemmatizer->stem($surface, 'pl'), "{$surface} should map through a compressed full-pack-only shard");
+    }
+
+    $pack = WP_FTS_LanguageLemmaPack::from_manifest_file($manifest);
+    foreach ([
+        'zamki' => 'zamek',
+        'zamkach' => 'zamek',
+        'wyszukujemy' => 'wyszukiwac',
+    ] as $surface => $lemma) {
+        $analyses = test_analysis_terms($pack->analyze($surface, 'pl'));
+        assert_true(in_array($lemma, $analyses, true), "{$surface} should still map through the compressed full Polish pack");
+
+        $stats = $pack->last_lookup_stats();
+        assert_same($surface, $stats['term'], "{$surface} lookup stats should record the normalized term");
+        assert_same(1, $stats['candidate_files'], "{$surface} lookup should narrow to one runtime shard by manifest range");
+        assert_same(1, $stats['files_opened'], "{$surface} lookup should open only the narrowed runtime shard");
+        assert_true(in_array('gzip-binary-search', $stats['modes'], true), "{$surface} lookup should use gzip binary search");
+        assert_true(!in_array('stream-scan', $stats['modes'], true), "{$surface} lookup should not stream-scan the full shard");
+        assert_true($stats['lines_read'] <= 64, "{$surface} lookup should inspect a bounded number of runtime rows");
+        assert_true($stats['bytes_loaded'] > 0 && $stats['bytes_loaded'] <= 3000000, "{$surface} lookup should load one bounded decoded shard");
     }
 });
 

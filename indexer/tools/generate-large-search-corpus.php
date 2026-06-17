@@ -443,9 +443,13 @@ final class WP_FTS_LargeSearchCorpusGenerator
     public static function derive_supported_language_scope(?string $pluginRoot = null): array
     {
         $pluginRoot ??= dirname(__DIR__);
+        $componentRoot = dirname($pluginRoot) . '/components/full-text-search';
+        if (!is_dir($componentRoot . '/src')) {
+            $componentRoot = $pluginRoot . '/vendor/wp-php-toolkit/full-text-search';
+        }
         $readmePath = $pluginRoot . '/README.md';
-        $stemmerPath = $pluginRoot . '/src/Stemmer.php';
-        $pipelinePath = $pluginRoot . '/src/LanguagePipeline.php';
+        $stemmerPath = $componentRoot . '/src/Stemmer.php';
+        $pipelinePath = $componentRoot . '/src/LanguagePipeline.php';
         $packRoot = $pluginRoot . '/resources/analyzer-packs';
 
         $readme = is_file($readmePath) ? (string) file_get_contents($readmePath) : '';

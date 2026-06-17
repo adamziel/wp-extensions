@@ -2,6 +2,21 @@
 
 Small WordPress extensions and experiments.
 
+## Pure PHP FTS Indexer
+
+`indexer/` is the active WordPress full-text search plugin. It builds and
+maintains derived FTS tables for WordPress posts, exposes WP-CLI and admin
+search surfaces, and includes the language-aware sandbox used for Playground
+previews.
+
+[![Try in Playground](https://github.com/WordPress/action-wp-playground-pr-preview/raw/main/assets/playground-preview-button.svg)](https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/blueprint.json)
+
+The Playground preview installs the packaged plugin and opens
+`Settings > Full-Text Search` on the Sandbox tab.
+
+See [indexer/README.md](indexer/README.md) for setup, architecture,
+language/analyzer notes, and development checks.
+
 ## Universal WordPress Importer
 
 `universal-wordpress-importer/` is a WordPress plugin for durable,
@@ -195,6 +210,8 @@ code such as the WordPress Interactivity API.
 ### Development Checks
 
 ```bash
+php indexer/tests/run.php
+php -n indexer/tests/run.php
 find static-site-generator -name '*.php' -print0 | xargs -0 -n1 php -l
 php static-site-generator/tests/path-utils-test.php
 php static-site-generator/tests/url-collector-test.php

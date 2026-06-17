@@ -7,8 +7,8 @@ require_once __DIR__ . '/../src/bootstrap.php';
  * Deterministic native many-language benchmark for the current indexer plugin.
  *
  * The current native plugin has language partitions, custom analyzer extension
- * points, and bounded explicit-language search. It does not have the older
- * language-fts-playground custom resource-root repository. This benchmark uses
+ * points, and bounded explicit-language search. It does not use a separate
+ * custom resource-root repository. This benchmark uses
  * the closest native equivalent: generated in-memory language profiles, a
  * generated language-aware analyzer, bounded preflight routing, and the
  * production indexer/searcher/storage path for final retrieval.
