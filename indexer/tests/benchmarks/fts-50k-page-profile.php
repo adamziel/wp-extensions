@@ -866,7 +866,7 @@ final class WP_FTS_Profiled_Analyzer
 /**
  * Timing adapter for storage calls made by the indexer and searcher.
  */
-class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage
+class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage
 {
     /** @var array<string,array{calls:int,total_ms:float}> */
     private array $timers = [];
@@ -932,6 +932,26 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
     public function get_doc_metadata(array $doc_ids): array
     {
         return $this->timed('get_doc_metadata', fn(): array => $this->inner->get_doc_metadata($doc_ids));
+    }
+
+    public function filter_doc_ids_by_metadata(
+        array $doc_ids,
+        array $post_types = [],
+        array $post_statuses = [],
+        ?string $date_after = null,
+        ?string $date_before = null
+    ): array {
+        return $this->timed(
+            'filter_doc_ids_by_metadata',
+            fn(): array => WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
+                $this->inner,
+                $doc_ids,
+                $post_types,
+                $post_statuses,
+                $date_after,
+                $date_before
+            )
+        );
     }
 
     public function get_meta(?string $lang = null): array

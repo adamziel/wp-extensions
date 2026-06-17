@@ -30,3 +30,32 @@ interface WP_FTS_DocumentMetadataStorage
      */
     public function get_doc_metadata(array $doc_ids): array;
 }
+
+/**
+ * Optional storage capability for filtering by indexed metadata fields.
+ *
+ * Search only needs a small scalar subset of metadata to apply post type,
+ * status, and date filters. Backends that expose this capability can avoid
+ * hydrating full snippet/result metadata for every candidate before pagination.
+ */
+interface WP_FTS_DocumentMetadataFilterStorage
+{
+    /**
+     * Return active document ids whose stored metadata matches all filters.
+     *
+     * Empty filter arrays mean "any value". Date filters are inclusive and use
+     * the same normalized GMT string boundaries as `WP_FTS_Searcher`.
+     *
+     * @param int[] $doc_ids Candidate document ids to filter.
+     * @param string[] $post_types Allowed post types.
+     * @param string[] $post_statuses Allowed post statuses.
+     * @return int[] Sorted matching document ids.
+     */
+    public function filter_doc_ids_by_metadata(
+        array $doc_ids,
+        array $post_types = [],
+        array $post_statuses = [],
+        ?string $date_after = null,
+        ?string $date_before = null
+    ): array;
+}

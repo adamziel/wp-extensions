@@ -1476,6 +1476,79 @@ function cleanup_storage(WP_FTS_Storage $storage): void
     }
 }
 
+test_case('storage metadata filter capability matches active scalar filters', function (): void {
+    foreach (storage_factories('metadata_filter_capability') as $name => $factory) {
+        $storage = $factory();
+        try {
+            assert_true($storage instanceof WP_FTS_DocumentMetadataStorage, "{$name} storage should expose document metadata");
+            assert_true($storage instanceof WP_FTS_DocumentMetadataFilterStorage, "{$name} storage should expose metadata filtering");
+
+            foreach ([1, 2, 3, 4] as $docId) {
+                $storage->put_doc($docId, 'en', ['en' => 4], 'hash-' . $docId);
+            }
+            $storage->put_doc_metadata(1, [
+                'post_id' => 1,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-02-10 10:00:00',
+                'title' => 'Published Post',
+                'search_text' => str_repeat('large metadata ', 200),
+            ]);
+            $storage->put_doc_metadata(2, [
+                'post_id' => 2,
+                'post_type' => 'page',
+                'post_status' => 'draft',
+                'post_date_gmt' => '2026-02-10 10:00:00',
+                'title' => 'Draft Page',
+            ]);
+            $storage->put_doc_metadata(3, [
+                'post_id' => 3,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2025-12-31 23:59:59',
+                'title' => 'Old Post',
+            ]);
+            $storage->put_doc_metadata(4, [
+                'post_id' => 4,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '',
+                'title' => 'Undated Post',
+            ]);
+
+            assert_same([1], WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
+                $storage,
+                [4, 3, 2, 1],
+                ['post,page'],
+                ['publish'],
+                '2026-01-01',
+                '2026-12-31'
+            ), "{$name} metadata filter should match post/status/date filters");
+
+            assert_same([2], WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
+                $storage,
+                [1, 2, 3, 4],
+                [],
+                ['draft'],
+                null,
+                null
+            ), "{$name} metadata filter should allow empty post type filter");
+
+            $storage->delete_doc(1);
+            assert_same([], WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
+                $storage,
+                [1],
+                ['post'],
+                ['publish'],
+                null,
+                null
+            ), "{$name} metadata filter should exclude tombstoned documents");
+        } finally {
+            cleanup_storage($storage);
+        }
+    }
+});
+
 test_case('storage records per-language doc lengths and excludes tombstones from stats', function (): void {
     foreach (storage_factories('lang_lengths') as $name => $factory) {
         $storage = $factory();
@@ -2092,6 +2165,35 @@ final class WP_FTS_Test_WPDB
             return $rows;
         }
 
+        if (str_starts_with($sql, 'SELECT m.doc_id') && str_contains($sql, 'FROM wp_fts_docmeta')) {
+            $offset = 0;
+            $docIds = $this->prepared_in_args($sql, 'm.doc_id', '%d', $args, $offset);
+            $postTypes = $this->prepared_in_args($sql, 'm.post_type', '%s', $args, $offset);
+            $postStatuses = $this->prepared_in_args($sql, 'm.post_status', '%s', $args, $offset);
+            $dateAfter = str_contains($sql, 'm.post_date_gmt >= %s') ? (string) ($args[$offset++] ?? '') : null;
+            $dateBefore = str_contains($sql, 'm.post_date_gmt <= %s') ? (string) ($args[$offset++] ?? '') : null;
+
+            $rows = [];
+            foreach (array_map('intval', $docIds) as $docId) {
+                if (($this->docs[$docId]['is_deleted'] ?? 1) !== 0 || !isset($this->docMeta[$docId])) {
+                    continue;
+                }
+
+                if (WP_FTS_StorageCompat::metadata_matches_filters(
+                    $this->docMeta[$docId],
+                    array_map('strval', $postTypes),
+                    array_map('strval', $postStatuses),
+                    $dateAfter,
+                    $dateBefore
+                )) {
+                    $rows[] = (object) ['doc_id' => $docId];
+                }
+            }
+            usort($rows, static fn(object $a, object $b): int => (int) $a->doc_id <=> (int) $b->doc_id);
+
+            return $rows;
+        }
+
         if (str_starts_with($sql, 'SELECT k, v FROM wp_fts_meta WHERE lang = %s')) {
             $rows = [];
             foreach ($this->meta[(string) $args[0]] ?? [] as $key => $value) {
@@ -2203,6 +2305,23 @@ final class WP_FTS_Test_WPDB
         }
 
         return [(string) $statement, []];
+    }
+
+    /**
+     * @param array<int,mixed> $args
+     * @return array<int,mixed>
+     */
+    private function prepared_in_args(string $sql, string $column, string $placeholder, array $args, int &$offset): array
+    {
+        if (preg_match('/' . preg_quote($column, '/') . ' IN \(([^)]*)\)/', $sql, $matches) !== 1) {
+            return [];
+        }
+
+        $count = substr_count($matches[1], $placeholder);
+        $values = array_slice($args, $offset, $count);
+        $offset += $count;
+
+        return $values;
     }
 }
 

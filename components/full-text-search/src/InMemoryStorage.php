@@ -7,7 +7,7 @@ declare(strict_types=1);
  * State lives in PHP arrays, supports rollback logs, and mirrors the
  * language-aware storage contract without any persistence layer.
  */
-final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Document_Terms_Storage
+final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Document_Terms_Storage
 {
     /** @var array<string,array{df:int,postings:string}> Encoded row cache for blob-shaped compatibility reads. */
     private array $terms = [];
@@ -263,6 +263,42 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         ksort($metadata, SORT_NUMERIC);
 
         return $metadata;
+    }
+
+    /**
+     * Return active candidate ids whose scalar metadata matches the filters.
+     *
+     * @param int[] $doc_ids
+     * @param string[] $post_types
+     * @param string[] $post_statuses
+     * @return int[]
+     */
+    public function filter_doc_ids_by_metadata(
+        array $doc_ids,
+        array $post_types = [],
+        array $post_statuses = [],
+        ?string $date_after = null,
+        ?string $date_before = null
+    ): array {
+        $matches = [];
+        foreach (array_unique(array_map('intval', $doc_ids)) as $docId) {
+            if (!isset($this->docs[$docId], $this->docMetadata[$docId]) || $this->docs[$docId]['deleted']) {
+                continue;
+            }
+
+            if (WP_FTS_StorageCompat::metadata_matches_filters(
+                $this->docMetadata[$docId],
+                $post_types,
+                $post_statuses,
+                $date_after,
+                $date_before
+            )) {
+                $matches[] = $docId;
+            }
+        }
+        sort($matches, SORT_NUMERIC);
+
+        return $matches;
     }
 
     /**

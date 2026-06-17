@@ -7,7 +7,7 @@ declare(strict_types=1);
  * The backend stores binary postings as base64 in a versioned JSON payload,
  * supports snapshot rollback, and persists immediately outside transactions.
  */
-final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage
+final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage
 {
     private string $path;
 
@@ -184,6 +184,42 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetada
         ksort($metadata, SORT_NUMERIC);
 
         return $metadata;
+    }
+
+    /**
+     * Return active candidate ids whose scalar metadata matches the filters.
+     *
+     * @param int[] $doc_ids
+     * @param string[] $post_types
+     * @param string[] $post_statuses
+     * @return int[]
+     */
+    public function filter_doc_ids_by_metadata(
+        array $doc_ids,
+        array $post_types = [],
+        array $post_statuses = [],
+        ?string $date_after = null,
+        ?string $date_before = null
+    ): array {
+        $matches = [];
+        foreach (array_unique(array_map('intval', $doc_ids)) as $docId) {
+            if (!isset($this->docs[$docId], $this->docMetadata[$docId]) || $this->docs[$docId]['deleted']) {
+                continue;
+            }
+
+            if (WP_FTS_StorageCompat::metadata_matches_filters(
+                $this->docMetadata[$docId],
+                $post_types,
+                $post_statuses,
+                $date_after,
+                $date_before
+            )) {
+                $matches[] = $docId;
+            }
+        }
+        sort($matches, SORT_NUMERIC);
+
+        return $matches;
     }
 
     /**

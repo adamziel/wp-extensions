@@ -10,7 +10,7 @@ declare(strict_types=1);
  * flag, and per-language lengths live in a separate table so BM25 can score
  * inside one language partition without mixing collection statistics.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_Document_Terms_Storage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage
 {
     private object $wpdb;
     private string $termsTable;
@@ -483,6 +483,80 @@ ORDER BY m.doc_id ASC",
         ksort($metadata, SORT_NUMERIC);
 
         return $metadata;
+    }
+
+    /**
+     * Return active candidate ids whose indexed scalar metadata matches filters.
+     *
+     * @param int[] $doc_ids
+     * @param string[] $post_types
+     * @param string[] $post_statuses
+     * @return int[]
+     */
+    public function filter_doc_ids_by_metadata(
+        array $doc_ids,
+        array $post_types = [],
+        array $post_statuses = [],
+        ?string $date_after = null,
+        ?string $date_before = null
+    ): array {
+        $doc_ids = array_values(array_unique(array_filter(array_map('intval', $doc_ids), static fn(int $id): bool => $id > 0)));
+        if ($doc_ids === []) {
+            return [];
+        }
+
+        $where = ['d.is_deleted = 0'];
+        $args = [];
+
+        $docPlaceholders = implode(',', array_fill(0, count($doc_ids), '%d'));
+        $where[] = "m.doc_id IN ({$docPlaceholders})";
+        array_push($args, ...$doc_ids);
+
+        $post_types = WP_FTS_StorageCompat::normalize_metadata_filter_values($post_types);
+        if ($post_types !== []) {
+            $placeholders = implode(',', array_fill(0, count($post_types), '%s'));
+            $where[] = "m.post_type IN ({$placeholders})";
+            array_push($args, ...$post_types);
+        }
+
+        $post_statuses = WP_FTS_StorageCompat::normalize_metadata_filter_values($post_statuses);
+        if ($post_statuses !== []) {
+            $placeholders = implode(',', array_fill(0, count($post_statuses), '%s'));
+            $where[] = "m.post_status IN ({$placeholders})";
+            array_push($args, ...$post_statuses);
+        }
+
+        $date_after = WP_FTS_StorageCompat::normalize_metadata_filter_date($date_after, false);
+        $date_before = WP_FTS_StorageCompat::normalize_metadata_filter_date($date_before, true);
+        if ($date_after !== null || $date_before !== null) {
+            $where[] = "m.post_date_gmt <> ''";
+        }
+        if ($date_after !== null) {
+            $where[] = 'm.post_date_gmt >= %s';
+            $args[] = $date_after;
+        }
+        if ($date_before !== null) {
+            $where[] = 'm.post_date_gmt <= %s';
+            $args[] = $date_before;
+        }
+
+        $sql = $this->wpdb->prepare(
+            "SELECT m.doc_id
+FROM {$this->docMetaTable} m
+INNER JOIN {$this->docsTable} d ON d.doc_id = m.doc_id
+WHERE " . implode(' AND ', $where) . '
+ORDER BY m.doc_id ASC',
+            ...$args
+        );
+
+        $ids = [];
+        foreach ($this->get_results($sql, 'filter FTS document metadata') as $row) {
+            $ids[] = (int) ($row->doc_id ?? 0);
+        }
+        $ids = array_values(array_unique(array_filter($ids, static fn(int $id): bool => $id > 0)));
+        sort($ids, SORT_NUMERIC);
+
+        return $ids;
     }
 
     /**

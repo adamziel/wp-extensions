@@ -252,6 +252,136 @@ final class WP_FTS_StorageCompat
     }
 
     /**
+     * Return active candidate ids that match product metadata filters.
+     *
+     * Backends with a scalar metadata-filter capability can answer this without
+     * hydrating large snippet/result metadata. Legacy backends fall back to
+     * normal metadata reads, preserving behavior.
+     *
+     * @param int[] $docIds
+     * @param string[] $postTypes
+     * @param string[] $postStatuses
+     * @return int[] Sorted matching document ids.
+     */
+    public static function filter_doc_ids_by_metadata(
+        WP_FTS_Storage $storage,
+        array $docIds,
+        array $postTypes = [],
+        array $postStatuses = [],
+        ?string $dateAfter = null,
+        ?string $dateBefore = null
+    ): array {
+        $docIds = self::normalize_doc_ids($docIds);
+        if ($docIds === []) {
+            return [];
+        }
+
+        $postTypes = self::normalize_metadata_filter_values($postTypes);
+        $postStatuses = self::normalize_metadata_filter_values($postStatuses);
+        $dateAfter = self::normalize_metadata_filter_date($dateAfter, false);
+        $dateBefore = self::normalize_metadata_filter_date($dateBefore, true);
+
+        if ($storage instanceof WP_FTS_DocumentMetadataFilterStorage) {
+            return self::normalize_doc_ids($storage->filter_doc_ids_by_metadata(
+                $docIds,
+                $postTypes,
+                $postStatuses,
+                $dateAfter,
+                $dateBefore
+            ));
+        }
+
+        $metadata = self::get_doc_metadata($storage, $docIds);
+        $matches = [];
+        foreach ($docIds as $docId) {
+            if (self::metadata_matches_filters($metadata[$docId] ?? null, $postTypes, $postStatuses, $dateAfter, $dateBefore)) {
+                $matches[] = $docId;
+            }
+        }
+
+        return $matches;
+    }
+
+    /**
+     * Check one metadata row against normalized scalar filters.
+     *
+     * @param array<string,mixed>|null $metadata
+     * @param string[] $postTypes
+     * @param string[] $postStatuses
+     */
+    public static function metadata_matches_filters(
+        ?array $metadata,
+        array $postTypes = [],
+        array $postStatuses = [],
+        ?string $dateAfter = null,
+        ?string $dateBefore = null
+    ): bool {
+        if ($metadata === null) {
+            return false;
+        }
+
+        if ($postTypes !== [] && !in_array((string) ($metadata['post_type'] ?? ''), $postTypes, true)) {
+            return false;
+        }
+
+        if ($postStatuses !== [] && !in_array((string) ($metadata['post_status'] ?? ''), $postStatuses, true)) {
+            return false;
+        }
+
+        $date = (string) ($metadata['post_date_gmt'] ?? '');
+        if ($dateAfter !== null && ($date === '' || strcmp($date, $dateAfter) < 0)) {
+            return false;
+        }
+
+        if ($dateBefore !== null && ($date === '' || strcmp($date, $dateBefore) > 0)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Normalize comma-separated metadata filter values.
+     *
+     * @param mixed $value
+     * @return string[]
+     */
+    public static function normalize_metadata_filter_values(mixed $value): array
+    {
+        $items = [];
+        foreach (is_array($value) ? $value : [$value] as $item) {
+            foreach (explode(',', (string) $item) as $part) {
+                $part = trim($part);
+                if ($part !== '') {
+                    $items[$part] = true;
+                }
+            }
+        }
+
+        $result = array_keys($items);
+        sort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * Normalize date-only filters to lexicographic SQL datetime boundaries.
+     */
+    public static function normalize_metadata_filter_date(mixed $value, bool $endOfDay): ?string
+    {
+        if (!is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        $date = trim((string) $value);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1) {
+            return $date . ($endOfDay ? ' 23:59:59' : ' 00:00:00');
+        }
+
+        return $date;
+    }
+
+    /**
      * Extract per-language lengths from a document row.
      *
      * New rows use `lang_lengths`. Older rows may expose `doc_lengths`,
@@ -444,6 +574,28 @@ final class WP_FTS_StorageCompat
         sort($normalized, SORT_STRING);
 
         return $limit > 0 ? array_slice($normalized, 0, $limit) : $normalized;
+    }
+
+    /**
+     * Normalize positive document ids.
+     *
+     * @param int[] $docIds
+     * @return int[]
+     */
+    private static function normalize_doc_ids(array $docIds): array
+    {
+        $normalized = [];
+        foreach ($docIds as $docId) {
+            $docId = (int) $docId;
+            if ($docId > 0) {
+                $normalized[$docId] = true;
+            }
+        }
+
+        $result = array_keys($normalized);
+        sort($result, SORT_NUMERIC);
+
+        return $result;
     }
 
     /**

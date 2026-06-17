@@ -82,10 +82,19 @@ final class WP_FTS_Searcher
 
         $metadata = [];
         if ($this->has_metadata_filters($opts)) {
-            $metadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, array_column($results, 'doc_id'));
+            $filter = $this->metadata_filter_values($opts);
+            $matchingDocIds = WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
+                $this->storage,
+                array_column($results, 'doc_id'),
+                $filter['post_types'],
+                $filter['post_statuses'],
+                $filter['date_after'],
+                $filter['date_before']
+            );
+            $matchingDocIds = array_fill_keys($matchingDocIds, true);
             $results = array_values(array_filter(
                 $results,
-                fn(array $row): bool => $this->metadata_matches($metadata[(int) $row['doc_id']] ?? null, $opts)
+                static fn(array $row): bool => isset($matchingDocIds[(int) $row['doc_id']])
             ));
         }
 
@@ -835,48 +844,27 @@ final class WP_FTS_Searcher
      */
     private function has_metadata_filters(array $opts): bool
     {
-        foreach (['post_type', 'post_types', 'post_status', 'post_statuses', 'date_after', 'after', 'post_date_after', 'date_before', 'before', 'post_date_before'] as $key) {
-            if (array_key_exists($key, $opts) && $this->normalize_filter_list($opts[$key]) !== []) {
-                return true;
-            }
-        }
+        $filter = $this->metadata_filter_values($opts);
 
-        return false;
+        return $filter['post_types'] !== []
+            || $filter['post_statuses'] !== []
+            || $filter['date_after'] !== null
+            || $filter['date_before'] !== null;
     }
 
     /**
-     * Apply post type/status/date filters to one metadata row.
+     * Normalize public metadata filter options once per search path.
      *
-     * @param array<string,mixed>|null $metadata
+     * @return array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}
      */
-    private function metadata_matches(?array $metadata, array $opts): bool
+    private function metadata_filter_values(array $opts): array
     {
-        if ($metadata === null) {
-            return false;
-        }
-
-        $postTypes = $this->normalize_filter_list($opts['post_type'] ?? $opts['post_types'] ?? []);
-        if ($postTypes !== [] && !in_array((string) ($metadata['post_type'] ?? ''), $postTypes, true)) {
-            return false;
-        }
-
-        $postStatuses = $this->normalize_filter_list($opts['post_status'] ?? $opts['post_statuses'] ?? []);
-        if ($postStatuses !== [] && !in_array((string) ($metadata['post_status'] ?? ''), $postStatuses, true)) {
-            return false;
-        }
-
-        $date = (string) ($metadata['post_date_gmt'] ?? '');
-        $after = $this->date_filter($opts['date_after'] ?? $opts['after'] ?? $opts['post_date_after'] ?? null, false);
-        if ($after !== null && ($date === '' || strcmp($date, $after) < 0)) {
-            return false;
-        }
-
-        $before = $this->date_filter($opts['date_before'] ?? $opts['before'] ?? $opts['post_date_before'] ?? null, true);
-        if ($before !== null && ($date === '' || strcmp($date, $before) > 0)) {
-            return false;
-        }
-
-        return true;
+        return [
+            'post_types' => $this->normalize_filter_list($opts['post_type'] ?? $opts['post_types'] ?? []),
+            'post_statuses' => $this->normalize_filter_list($opts['post_status'] ?? $opts['post_statuses'] ?? []),
+            'date_after' => $this->date_filter($opts['date_after'] ?? $opts['after'] ?? $opts['post_date_after'] ?? null, false),
+            'date_before' => $this->date_filter($opts['date_before'] ?? $opts['before'] ?? $opts['post_date_before'] ?? null, true),
+        ];
     }
 
     /**
@@ -886,20 +874,7 @@ final class WP_FTS_Searcher
      */
     private function normalize_filter_list(mixed $value): array
     {
-        $items = [];
-        foreach (is_array($value) ? $value : [$value] as $item) {
-            foreach (explode(',', (string) $item) as $part) {
-                $part = trim($part);
-                if ($part !== '') {
-                    $items[$part] = true;
-                }
-            }
-        }
-
-        $result = array_keys($items);
-        sort($result, SORT_STRING);
-
-        return $result;
+        return WP_FTS_StorageCompat::normalize_metadata_filter_values($value);
     }
 
     /**
@@ -907,16 +882,7 @@ final class WP_FTS_Searcher
      */
     private function date_filter(mixed $value, bool $endOfDay): ?string
     {
-        if (!is_scalar($value) || trim((string) $value) === '') {
-            return null;
-        }
-
-        $date = trim((string) $value);
-        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1) {
-            return $date . ($endOfDay ? ' 23:59:59' : ' 00:00:00');
-        }
-
-        return $date;
+        return WP_FTS_StorageCompat::normalize_metadata_filter_date($value, $endOfDay);
     }
 
     /**
