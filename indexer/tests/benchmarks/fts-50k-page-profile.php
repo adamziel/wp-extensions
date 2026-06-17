@@ -40,7 +40,7 @@ final class WP_FTS_FiftyK_Page_Profile_Benchmark
     }
 
     /**
-     * @param array{documents?:int,iterations?:int,warmup?:int,progress?:bool,progress_every?:int} $overrides
+     * @param array{documents?:int,iterations?:int,warmup?:int,progress?:bool,progress_every?:int,fast_top_k?:bool,candidate_cap?:int} $overrides
      * @return array<string,mixed>
      */
     public static function run(string $profileName = 'ci', array $overrides = []): array
@@ -141,7 +141,7 @@ final class WP_FTS_FiftyK_Page_Profile_Benchmark
         $indexAnalyzerTotalMs = self::timer_total_ms($indexAnalyzer);
 
         $queryResults = [];
-        foreach (self::queries($documentCount) as $queryId => $definition) {
+        foreach (self::queries($documentCount, self::search_option_overrides($overrides)) as $queryId => $definition) {
             if ($progress) {
                 fwrite(STDERR, "progress: measuring_query={$queryId}\n");
             }
@@ -179,6 +179,8 @@ final class WP_FTS_FiftyK_Page_Profile_Benchmark
                 'language' => 'en',
                 'iterations' => $iterations,
                 'warmup' => $warmup,
+                'fast_top_k' => !empty($overrides['fast_top_k']),
+                'candidate_cap' => isset($overrides['candidate_cap']) ? (int) $overrides['candidate_cap'] : null,
             ],
             'storage_backend' => [
                 'class' => get_class($storage->inner()),
@@ -312,7 +314,7 @@ final class WP_FTS_FiftyK_Page_Profile_Benchmark
                 continue;
             }
             if ($arg === '--help' || $arg === '-h') {
-                fwrite(STDOUT, "Usage: php tests/benchmarks/fts-50k-page-profile.php [--profile=ci|expanded|50k] [--documents=N] [--iterations=N] [--warmup=N] [--progress] [--progress-every=N] [--json]\n");
+                fwrite(STDOUT, "Usage: php tests/benchmarks/fts-50k-page-profile.php [--profile=ci|expanded|50k] [--documents=N] [--iterations=N] [--warmup=N] [--progress] [--progress-every=N] [--fast-top-k] [--candidate-cap=N] [--json]\n");
                 return 0;
             }
             if (str_starts_with($arg, '--profile=')) {
@@ -334,6 +336,14 @@ final class WP_FTS_FiftyK_Page_Profile_Benchmark
             if (str_starts_with($arg, '--progress-every=')) {
                 $overrides['progress'] = true;
                 $overrides['progress_every'] = self::positive_int_arg($arg, '--progress-every=');
+                continue;
+            }
+            if ($arg === '--fast-top-k') {
+                $overrides['fast_top_k'] = true;
+                continue;
+            }
+            if (str_starts_with($arg, '--candidate-cap=')) {
+                $overrides['candidate_cap'] = self::positive_int_arg($arg, '--candidate-cap=');
                 continue;
             }
 
@@ -424,9 +434,9 @@ final class WP_FTS_FiftyK_Page_Profile_Benchmark
     /**
      * @return array<string,array{query:string,options:array<string,mixed>}>
      */
-    private static function queries(int $documentCount): array
+    private static function queries(int $documentCount, array $optionOverrides = []): array
     {
-        return [
+        $queries = [
             'broad_common_or' => [
                 'query' => 'wordpress page performance',
                 'options' => [
@@ -464,6 +474,35 @@ final class WP_FTS_FiftyK_Page_Profile_Benchmark
                 ],
             ],
         ];
+
+        if ($optionOverrides === []) {
+            return $queries;
+        }
+
+        foreach ($queries as &$definition) {
+            $definition['options'] = array_replace($definition['options'], $optionOverrides);
+        }
+        unset($definition);
+
+        return $queries;
+    }
+
+    /**
+     * @param array<string,mixed> $overrides
+     * @return array<string,mixed>
+     */
+    private static function search_option_overrides(array $overrides): array
+    {
+        if (empty($overrides['fast_top_k'])) {
+            return [];
+        }
+
+        $options = ['fast_top_k' => true];
+        if (isset($overrides['candidate_cap'])) {
+            $options['candidate_cap'] = (int) $overrides['candidate_cap'];
+        }
+
+        return $options;
     }
 
     /**
@@ -1044,7 +1083,7 @@ class WP_FTS_Profiled_Storage implements WP_FTS_Storage, WP_FTS_DocumentMetadata
  * Timing adapter that preserves row-postings capabilities when the wrapped
  * backend actually supports them.
  */
-final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage implements WP_FTS_Row_Postings_Storage, WP_FTS_Document_Terms_Storage
+final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Document_Terms_Storage
 {
     public function replace_doc_postings(int $doc_id, array $term_frequencies): void
     {
@@ -1059,6 +1098,14 @@ final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage
         return $this->timed('get_postings', fn(): array => $this->row_storage()->get_postings($terms));
     }
 
+    public function get_capped_postings(array $terms, int $candidate_cap): array
+    {
+        return $this->timed(
+            'get_capped_postings',
+            fn(): array => $this->capped_postings_storage()->get_capped_postings($terms, $candidate_cap)
+        );
+    }
+
     public function terms_for_doc(int $doc_id): array
     {
         return $this->timed('terms_for_doc', fn(): array => $this->document_terms_storage()->terms_for_doc($doc_id));
@@ -1071,6 +1118,15 @@ final class WP_FTS_Profiled_Row_Postings_Storage extends WP_FTS_Profiled_Storage
         }
 
         return $this->inner;
+    }
+
+    private function capped_postings_storage(): WP_FTS_Capped_Postings_Storage
+    {
+        if ($this->inner instanceof WP_FTS_Capped_Postings_Storage) {
+            return $this->inner;
+        }
+
+        return new WP_FTS_Row_Postings_Cap_Adapter($this->row_storage());
     }
 
     private function document_terms_storage(): WP_FTS_Document_Terms_Storage

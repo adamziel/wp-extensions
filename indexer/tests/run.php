@@ -9970,7 +9970,7 @@ test_case('search bounded top-k matches full-sort ordering for deterministic cor
     assert_search_results_equal($full['results'], $bounded, 'bounded top-k should match full-sort top window');
 });
 
-test_case('search bounded top-k bypasses totals offsets and metadata filters', function (): void {
+test_case('search bounded top-k preserves totals offsets and exact metadata filters', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $analyzer = new WP_FTS_Analyzer([
         'enable_stemming' => false,
@@ -10003,7 +10003,7 @@ test_case('search bounded top-k bypasses totals offsets and metadata filters', f
     assert_true((bool) $gate->invoke($searcher, ['limit' => 5], 0), 'plain first-page search should use bounded top-k');
     assert_true(!(bool) $gate->invoke($searcher, ['limit' => 5, 'include_total' => true], 0), 'include_total should bypass bounded top-k');
     assert_true(!(bool) $gate->invoke($searcher, ['limit' => 5], 5), 'offset should bypass bounded top-k');
-    assert_true(!(bool) $gate->invoke($searcher, ['limit' => 5, 'post_type' => 'page'], 0), 'metadata filters should bypass bounded top-k');
+    assert_true((bool) $gate->invoke($searcher, ['limit' => 5, 'post_type' => 'page'], 0), 'metadata filters should use exact bounded top-k');
 
     $full = $searcher->search('shared', [
         'lang' => 'en',
@@ -10022,6 +10022,11 @@ test_case('search bounded top-k bypasses totals offsets and metadata filters', f
         'include_total' => true,
         'post_type' => 'page',
     ]);
+    $filteredBounded = $searcher->search('shared', [
+        'lang' => 'en',
+        'limit' => 5,
+        'post_type' => 'page',
+    ]);
 
     assert_same(24, $full['total'], 'full total should include every matching document');
     assert_same(
@@ -10030,9 +10035,69 @@ test_case('search bounded top-k bypasses totals offsets and metadata filters', f
         'offset path should return the full-sort result window'
     );
     assert_same(12, $filtered['total'], 'metadata filter path should compute exact filtered total');
+    assert_search_results_equal($filtered['results'], $filteredBounded, 'metadata-filtered bounded top-k should match exact filtered result window');
+    $scoreByDoc = [];
+    foreach ($full['results'] as $row) {
+        $scoreByDoc[(int) $row['doc_id']] = (float) $row['score'];
+    }
     foreach ($filtered['results'] as $row) {
         assert_true((int) $row['doc_id'] % 2 === 0, 'metadata filter path should keep only page documents');
+        assert_float_near(
+            $scoreByDoc[(int) $row['doc_id']] ?? -1.0,
+            (float) $row['score'],
+            'metadata filter path should preserve unfiltered BM25 score for doc ' . (int) $row['doc_id']
+        );
     }
+});
+
+test_case('search fast top-k candidate cap is explicit approximate opt-in', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    for ($docId = 1; $docId <= 6; $docId++) {
+        $tokens = array_fill(0, $docId === 6 ? 12 : 1, 'needle');
+        $indexer->index_document_fields($docId, [['name' => 'content', 'text' => implode(' ', $tokens)]], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => $docId,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-06-17 00:00:00',
+                'title' => 'Candidate cap ' . $docId,
+                'search_text' => implode(' ', $tokens),
+            ],
+        ]);
+    }
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $exact = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+    ]);
+    $capWithoutFast = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'candidate_cap' => 3,
+    ]);
+    $fast = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'fast_top_k' => true,
+        'candidate_cap' => 3,
+    ]);
+
+    assert_same(6, $exact['total'], 'exact search should count every candidate by default');
+    assert_same(6, $exact['results'][0]['doc_id'] ?? null, 'exact search should rank the strongest late candidate first');
+    assert_same($exact, $capWithoutFast, 'candidate_cap without fast_top_k should preserve exact default behavior');
+    assert_same(3, $fast['total'], 'fast top-k should report only capped approximate candidates');
+    assert_true(($fast['results'][0]['doc_id'] ?? null) !== 6, 'fast top-k may miss a stronger candidate outside the cap');
 });
 
 test_case('search product options filter metadata and return pagination snippets', function (): void {

@@ -7,7 +7,7 @@ declare(strict_types=1);
  * State lives in PHP arrays, supports rollback logs, and mirrors the
  * language-aware storage contract without any persistence layer.
  */
-final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Document_Terms_Storage
+final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Document_Terms_Storage
 {
     /** @var array<string,array{df:int,postings:string}> Encoded row cache for blob-shaped compatibility reads. */
     private array $terms = [];
@@ -15,17 +15,28 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     /** @var array<string,array<int,int>> Decoded term => doc_id => weighted tf postings. */
     private array $postingsByTerm = [];
 
+    /** @var array<string,bool> True when a decoded posting list is already sorted by doc id. */
+    private array $postingsSortedByTerm = [];
+
     /** @var array<int,array<string,bool>> Reverse map used for fast document replacement. */
     private array $termsByDoc = [];
 
     /** @var array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}> */
     private array $docs = [];
 
+    /** @var int[]|null Sorted active document ids, built lazily for large reads. */
+    private ?array $activeDocIdsCache = null;
+
+    /** @var array<string,array<int,int>> Cached all-active document lengths by language key. */
+    private array $docLengthsByLangCache = [];
+
     /** @var array<int,array<string,mixed>> */
     private array $docMetadata = [];
 
     /** @var array<string,array{doc_count:int,len_sum:int}> */
     private array $meta = [];
+
+    private bool $metaDirty = true;
 
     /** @var array<int,array<string,mixed>> Lazy rollback logs for active transactions. */
     private array $transactions = [];
@@ -81,6 +92,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         }
         unset($this->postingsByTerm[$term]);
         unset($this->terms[$term]);
+        unset($this->postingsSortedByTerm[$term]);
     }
 
     /**
@@ -99,6 +111,9 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
             unset($this->terms[$term]);
             if (($this->postingsByTerm[$term] ?? []) === []) {
                 unset($this->postingsByTerm[$term], $this->terms[$term]);
+                unset($this->postingsSortedByTerm[$term]);
+            } else {
+                $this->postingsSortedByTerm[$term] = false;
             }
         }
         unset($this->termsByDoc[$doc_id]);
@@ -113,6 +128,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
             $this->remember_term($term);
             $this->remember_posting($term, $doc_id);
             $this->postingsByTerm[$term][$doc_id] = $tf;
+            $this->postingsSortedByTerm[$term] = false;
             $this->termsByDoc[$doc_id][$term] = true;
             unset($this->terms[$term]);
         }
@@ -128,17 +144,59 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     {
         $result = [];
         foreach (array_unique(array_map('strval', $terms)) as $term) {
-            if (!isset($this->postingsByTerm[$term]) || $this->postingsByTerm[$term] === []) {
-                continue;
+            $postings = $this->sorted_postings_for_term($term);
+            if ($postings !== []) {
+                $result[$term] = $postings;
             }
-
-            $postings = $this->postingsByTerm[$term];
-            ksort($postings, SORT_NUMERIC);
-            $result[$term] = $postings;
         }
         ksort($result, SORT_STRING);
 
         return $result;
+    }
+
+    /**
+     * Fetch a deterministic prefix of each requested posting list for opt-in
+     * approximate fast top-K search.
+     *
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array<int,int>>
+     */
+    public function get_capped_postings(array $terms, int $candidate_cap): array
+    {
+        $candidate_cap = max(1, (int) $candidate_cap);
+        $result = [];
+        foreach (array_unique(array_map('strval', $terms)) as $term) {
+            $postings = $this->sorted_postings_for_term($term);
+            if ($postings === []) {
+                continue;
+            }
+
+            $result[$term] = count($postings) > $candidate_cap
+                ? array_slice($postings, 0, $candidate_cap, true)
+                : $postings;
+        }
+        ksort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * Return one decoded posting list sorted by document id.
+     *
+     * @return array<int,int>
+     */
+    private function sorted_postings_for_term(string $term): array
+    {
+        if (!isset($this->postingsByTerm[$term]) || $this->postingsByTerm[$term] === []) {
+            return [];
+        }
+
+        if (empty($this->postingsSortedByTerm[$term])) {
+            ksort($this->postingsByTerm[$term], SORT_NUMERIC);
+            $this->postingsSortedByTerm[$term] = true;
+        }
+
+        return $this->postingsByTerm[$term];
     }
 
     /**
@@ -165,6 +223,11 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     public function get_doc_lengths(array $doc_ids, ?string $lang = null): array
     {
         $lang = $lang === null ? null : $this->normalize_lang($lang);
+        $cachedLengths = $this->cached_all_doc_lengths($doc_ids, $lang);
+        if ($cachedLengths !== null) {
+            return $cachedLengths;
+        }
+
         $lengths = [];
         foreach (array_unique(array_map('intval', $doc_ids)) as $docId) {
             if (isset($this->docs[$docId]) && !$this->docs[$docId]['deleted']) {
@@ -213,6 +276,8 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
             'content_hash' => $contentHash,
             'deleted' => false,
         ];
+        $this->clear_document_read_cache();
+        $this->metaDirty = true;
     }
 
     /**
@@ -229,10 +294,14 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
                 'content_hash' => null,
                 'deleted' => true,
             ];
+            $this->clear_document_read_cache();
+            $this->metaDirty = true;
             return;
         }
 
         $this->docs[$doc_id]['deleted'] = true;
+        $this->clear_document_read_cache();
+        $this->metaDirty = true;
     }
 
     /**
@@ -311,7 +380,9 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
      */
     public function get_meta(?string $lang = null): array
     {
-        $this->sync_meta_from_docs();
+        if ($this->metaDirty) {
+            $this->sync_meta_from_docs();
+        }
         if ($lang === null) {
             return $this->aggregate_meta();
         }
@@ -407,17 +478,21 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         }
         foreach (array_reverse($transaction['postingsByTerm'], true) as $term => $entry) {
             $this->restore_entry($this->postingsByTerm, $term, $entry);
+            unset($this->postingsSortedByTerm[(string) $term]);
         }
         foreach (array_reverse($transaction['postingsByTermDoc'], true) as $term => $docEntries) {
             foreach (array_reverse($docEntries, true) as $docId => $entry) {
                 if (!empty($entry['exists'])) {
                     $this->postingsByTerm[(string) $term][(int) $docId] = (int) $entry['value'];
+                    $this->postingsSortedByTerm[(string) $term] = false;
                     continue;
                 }
 
                 unset($this->postingsByTerm[(string) $term][(int) $docId]);
+                $this->postingsSortedByTerm[(string) $term] = false;
                 if (($this->postingsByTerm[(string) $term] ?? []) === []) {
                     unset($this->postingsByTerm[(string) $term]);
+                    unset($this->postingsSortedByTerm[(string) $term]);
                 }
             }
         }
@@ -427,12 +502,14 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         foreach (array_reverse($transaction['docs'], true) as $docId => $entry) {
             $this->restore_entry($this->docs, (int) $docId, $entry);
         }
+        $this->clear_document_read_cache();
         foreach (array_reverse($transaction['docMetadata'], true) as $docId => $entry) {
             $this->restore_entry($this->docMetadata, (int) $docId, $entry);
         }
         foreach (array_reverse($transaction['meta'], true) as $lang => $entry) {
             $this->restore_entry($this->meta, $lang, $entry);
         }
+        $this->metaDirty = true;
     }
 
     /**
@@ -467,10 +544,12 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
 
                 if ($postings === []) {
                     unset($this->postingsByTerm[$term], $this->terms[$term]);
+                    unset($this->postingsSortedByTerm[$term]);
                     continue;
                 }
 
                 $this->postingsByTerm[$term] = $postings;
+                $this->postingsSortedByTerm[$term] = false;
                 unset($this->terms[$term]);
             }
         }
@@ -483,6 +562,99 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
 
         $this->sync_meta_from_docs();
         ksort($this->docs, SORT_NUMERIC);
+        $this->clear_document_read_cache();
+    }
+
+    /**
+     * Return cached lengths when the caller requests every active document in
+     * sorted order; otherwise fall back to the general partial-read path.
+     *
+     * @param int[] $docIds
+     * @return array<int,int>|null
+     */
+    private function cached_all_doc_lengths(array $docIds, ?string $lang): ?array
+    {
+        if (count($docIds) < 1024 || $this->memory_limit_bytes() < 256 * 1024 * 1024) {
+            return null;
+        }
+
+        $activeDocIds = $this->active_doc_ids_cache();
+        if (count($docIds) !== count($activeDocIds)) {
+            return null;
+        }
+
+        foreach ($activeDocIds as $index => $docId) {
+            if (!array_key_exists($index, $docIds) || (int) $docIds[$index] !== $docId) {
+                return null;
+            }
+        }
+
+        $cacheKey = $lang ?? "\0";
+        if (!array_key_exists($cacheKey, $this->docLengthsByLangCache)) {
+            $lengths = [];
+            foreach ($activeDocIds as $docId) {
+                $doc = $this->docs[$docId] ?? null;
+                if ($doc === null || $doc['deleted']) {
+                    continue;
+                }
+
+                if ($lang === null) {
+                    $lengths[$docId] = $doc['doc_len'];
+                    continue;
+                }
+
+                if (isset($doc['lang_lengths'][$lang])) {
+                    $lengths[$docId] = $doc['lang_lengths'][$lang];
+                }
+            }
+            $this->docLengthsByLangCache[$cacheKey] = $lengths;
+        }
+
+        return $this->docLengthsByLangCache[$cacheKey];
+    }
+
+    /**
+     * @return int[]
+     */
+    private function active_doc_ids_cache(): array
+    {
+        if ($this->activeDocIdsCache !== null) {
+            return $this->activeDocIdsCache;
+        }
+
+        $ids = [];
+        foreach ($this->docs as $docId => $doc) {
+            if (!$doc['deleted']) {
+                $ids[] = (int) $docId;
+            }
+        }
+        sort($ids, SORT_NUMERIC);
+        $this->activeDocIdsCache = $ids;
+
+        return $this->activeDocIdsCache;
+    }
+
+    private function clear_document_read_cache(): void
+    {
+        $this->activeDocIdsCache = null;
+        $this->docLengthsByLangCache = [];
+    }
+
+    private function memory_limit_bytes(): int
+    {
+        $limit = trim((string) ini_get('memory_limit'));
+        if ($limit === '' || $limit === '-1') {
+            return PHP_INT_MAX;
+        }
+
+        $unit = strtolower(substr($limit, -1));
+        $number = (float) $limit;
+        return match ($unit) {
+            'g' => (int) ($number * 1024 * 1024 * 1024),
+            'm' => (int) ($number * 1024 * 1024),
+            'k' => (int) ($number * 1024),
+            default => (int) $number,
+        };
     }
 
     private function remember_term(string $term): void
@@ -616,7 +788,11 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
 
         if (!isset($this->terms[$term])) {
             $postings = $this->postingsByTerm[$term];
-            ksort($postings, SORT_NUMERIC);
+            if (empty($this->postingsSortedByTerm[$term])) {
+                ksort($postings, SORT_NUMERIC);
+                $this->postingsByTerm[$term] = $postings;
+                $this->postingsSortedByTerm[$term] = true;
+            }
             $this->terms[$term] = [
                 'df' => count($postings),
                 'postings' => WP_FTS_PostingsCodec::encode($postings),
@@ -658,11 +834,13 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
 
         if ($normalized === []) {
             unset($this->postingsByTerm[$term], $this->terms[$term]);
+            unset($this->postingsSortedByTerm[$term]);
             return;
         }
 
         ksort($normalized, SORT_NUMERIC);
         $this->postingsByTerm[$term] = $normalized;
+        $this->postingsSortedByTerm[$term] = true;
         if ($encodedPostings !== null) {
             $this->terms[$term] = [
                 'df' => count($normalized),
@@ -780,6 +958,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         ksort($meta, SORT_STRING);
 
         $this->meta = $meta;
+        $this->metaDirty = false;
     }
 
     /**

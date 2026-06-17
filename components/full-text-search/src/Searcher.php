@@ -42,9 +42,12 @@ final class WP_FTS_Searcher
      * `results`; `include_metadata` adds WordPress result fields; and
      * `include_snippets` builds bounded snippets from stored extracted text.
      * `post_type`, `post_status`, `date_after`, and `date_before` filter only
-     * when the storage backend exposes document metadata. Prefix/phrase search is
-     * intentionally not emulated on whole-term postings; pass `search_extension`
-     * to provide a backend that can do it honestly.
+     * when the storage backend exposes document metadata. `fast_top_k` with a
+     * `candidate_cap` or `max_candidates` value enables an explicit approximate
+     * first-page mode that can trade recall, ranking, and total-count accuracy for
+     * latency. It is disabled by default. Prefix/phrase search is intentionally
+     * not emulated on whole-term postings; pass `search_extension` to provide a
+     * backend that can do it honestly.
      *
      * @param array<string,mixed> $opts
      * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>}
@@ -74,38 +77,19 @@ final class WP_FTS_Searcher
             return $this->format_response([], 0, $opts, $responseLang);
         }
 
+        $metadataFilter = $this->has_metadata_filters($opts) ? $this->metadata_filter_values($opts) : null;
         $useBoundedTopK = $this->can_use_bounded_top_k($opts, $offset);
-        $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null);
+        $candidateCap = $this->fast_candidate_cap($opts, $limit + $offset);
+        $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $candidateCap);
         if (!$useBoundedTopK) {
             usort($results, [self::class, 'compare_ranked_results']);
-        }
-
-        $metadata = [];
-        if ($this->has_metadata_filters($opts)) {
-            $filter = $this->metadata_filter_values($opts);
-            $matchingDocIds = WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
-                $this->storage,
-                array_column($results, 'doc_id'),
-                $filter['post_types'],
-                $filter['post_statuses'],
-                $filter['date_after'],
-                $filter['date_before']
-            );
-            $matchingDocIds = array_fill_keys($matchingDocIds, true);
-            $results = array_values(array_filter(
-                $results,
-                static fn(array $row): bool => isset($matchingDocIds[(int) $row['doc_id']])
-            ));
         }
 
         $total = count($results);
         $page = $useBoundedTopK ? $results : array_slice($results, $offset, $limit);
         if ($this->should_enrich_results($opts) && $page !== []) {
             $pageIds = array_column($page, 'doc_id');
-            $pageMetadata = $metadata;
-            if ($pageMetadata === []) {
-                $pageMetadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, $pageIds);
-            }
+            $pageMetadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, $pageIds);
             $page = $this->enrich_results($page, $pageMetadata, $query, $opts, $groups, $responseLang);
         }
 
@@ -123,10 +107,20 @@ final class WP_FTS_Searcher
      *
      * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
      * @param int|null $topLimit Keep only the best K ranked rows when callers do
-     *        not need totals, offsets, or metadata-filtered result sets.
+     *        not need totals or offsets.
+     * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
+     *        Optional exact metadata filter to apply before scoring.
+     * @param int|null $candidateCap Approximate opt-in cap on candidate ids to
+     *        score. Null keeps default exact behavior.
      * @return array<int,array{doc_id:int,score:float,_rank:int}>
      */
-    private function score_query_groups(array $groups, string $mode, ?int $topLimit = null): array
+    private function score_query_groups(
+        array $groups,
+        string $mode,
+        ?int $topLimit = null,
+        ?array $metadataFilter = null,
+        ?int $candidateCap = null
+    ): array
     {
         $termsByKey = [];
         foreach ($groups as $groupId => $alternatives) {
@@ -144,7 +138,7 @@ final class WP_FTS_Searcher
             return [];
         }
 
-        $postingsByTerm = WP_FTS_StorageCompat::get_postings($this->storage, array_keys($termsByKey));
+        $postingsByTerm = WP_FTS_StorageCompat::get_postings($this->storage, array_keys($termsByKey), $candidateCap);
         if ($postingsByTerm === []) {
             return [];
         }
@@ -164,10 +158,12 @@ final class WP_FTS_Searcher
             }
         }
 
-        /** @var array<int,array<string,int>> $candidateTermTfs */
-        $candidateTermTfs = [];
         /** @var array<string,array<int,int>> $decodedByTerm */
         $decodedByTerm = [];
+        /** @var array<int,bool> $allCandidateDocIds */
+        $allCandidateDocIds = [];
+        /** @var array<int,array<int,bool>> $groupDocIds */
+        $groupDocIds = [];
 
         foreach ($postingsByTerm as $term => $postings) {
             if (!isset($termsByKey[$term])) {
@@ -175,16 +171,43 @@ final class WP_FTS_Searcher
             }
 
             $decodedByTerm[$term] = $postings;
+        }
+
+        foreach ($decodedByTerm as $term => $postings) {
             foreach ($postings as $docId => $tf) {
-                $candidateTermTfs[$docId][$term] = $tf;
+                $docId = (int) $docId;
+                $allCandidateDocIds[$docId] = true;
+                if ($mode === 'AND') {
+                    foreach ($termsByKey[$term]['groups'] as $groupId => $_rank) {
+                        $groupDocIds[$groupId][$docId] = true;
+                    }
+                }
+            }
+
+            if ($candidateCap !== null && $mode === 'OR' && count($allCandidateDocIds) >= $candidateCap) {
+                $allCandidateDocIds = $this->cap_doc_id_set($allCandidateDocIds, $candidateCap);
+                break;
             }
         }
 
-        if ($candidateTermTfs === []) {
+        if ($allCandidateDocIds === []) {
             return [];
         }
 
-        $candidateDocIds = array_keys($candidateTermTfs);
+        $scoringDocIds = $mode === 'AND'
+            ? $this->intersect_group_doc_ids($groupDocIds, count($groups))
+            : $allCandidateDocIds;
+        if ($scoringDocIds === []) {
+            return [];
+        }
+        if ($candidateCap !== null) {
+            $scoringDocIds = $this->cap_doc_id_set($scoringDocIds, $candidateCap);
+        }
+
+        // Default IDF stays based on the full active posting lists, not on the
+        // later AND/metadata-restricted scoring set. Opt-in fast mode uses an
+        // approximate stored posting count to avoid scanning every active row.
+        $docLengthCandidateIds = $candidateCap === null ? array_keys($allCandidateDocIds) : array_keys($scoringDocIds);
         $languages = [];
         foreach ($termsByKey as $termInfo) {
             $languages[$termInfo['lang']] = true;
@@ -195,7 +218,7 @@ final class WP_FTS_Searcher
         /** @var array<string,array{doc_count:int,len_sum:int}> $metaByLang */
         $metaByLang = [];
         foreach (array_keys($languages) as $lang) {
-            $docLengths = WP_FTS_StorageCompat::get_doc_lengths($this->storage, $candidateDocIds, $lang);
+            $docLengths = WP_FTS_StorageCompat::get_doc_lengths($this->storage, $docLengthCandidateIds, $lang);
             if ($docLengths === []) {
                 continue;
             }
@@ -213,51 +236,120 @@ final class WP_FTS_Searcher
             return [];
         }
 
-        $activeDf = [];
+        /** @var array<string,array<int,bool>> $activeDocIdsByLang */
+        $activeDocIdsByLang = [];
+        foreach ($docLengthsByLang as $lang => $docLengths) {
+            $activeDocIdsByLang[$lang] = array_fill_keys(array_keys($docLengths), true);
+        }
+
+        if ($metadataFilter !== null) {
+            $matchingDocIds = WP_FTS_StorageCompat::filter_doc_ids_by_metadata(
+                $this->storage,
+                array_keys($scoringDocIds),
+                $metadataFilter['post_types'],
+                $metadataFilter['post_statuses'],
+                $metadataFilter['date_after'],
+                $metadataFilter['date_before']
+            );
+            $scoringDocIds = array_fill_keys($matchingDocIds, true);
+            if ($scoringDocIds === []) {
+                return [];
+            }
+        }
+
+        /** @var array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms */
+        $scoringTerms = [];
         foreach ($decodedByTerm as $term => $postings) {
             $lang = $termsByKey[$term]['lang'];
-            $activeDf[$term] = isset($docLengthsByLang[$lang])
-                ? $this->active_doc_freqs([$term => $postings], $docLengthsByLang[$lang])[$term]
-                : 0;
+            if (!isset($docLengthsByLang[$lang], $metaByLang[$lang], $activeDocIdsByLang[$lang])) {
+                continue;
+            }
+
+            if ($candidateCap === null) {
+                $df = 0;
+                foreach ($postings as $docId => $_tf) {
+                    if (isset($activeDocIdsByLang[$lang][(int) $docId])) {
+                        $df++;
+                    }
+                }
+            } else {
+                $df = count($postings);
+            }
+            if ($df <= 0) {
+                continue;
+            }
+
+            $meta = $metaByLang[$lang];
+            $docCount = max(0, (int) $meta['doc_count']);
+            if ($docCount === 0) {
+                continue;
+            }
+
+            $groupsForTerm = $termsByKey[$term]['groups'];
+            $avgDocLen = $meta['len_sum'] > 0 ? $meta['len_sum'] / $docCount : 1.0;
+            $idf = log(1.0 + (($docCount - $df + 0.5) / ($df + 0.5)));
+            $multiplier = $this->query_rank_score_multiplier($groupsForTerm);
+            $scoringTerms[$term] = [
+                'lang' => $lang,
+                'doc_count' => $docCount,
+                'avg_doc_len' => $avgDocLen,
+                'idf' => $idf,
+                'groups' => $groupsForTerm,
+                'min_rank' => min($groupsForTerm),
+                'max_rank' => max($groupsForTerm),
+                'multiplier' => $multiplier,
+            ];
+        }
+        if ($scoringTerms === []) {
+            return [];
+        }
+
+        /** @var array<int,float> $scores */
+        $scores = [];
+        /** @var array<int,int> $bestRankByDoc */
+        $bestRankByDoc = [];
+        /** @var array<int,array<int,int>> $matchedGroupRanksByDoc */
+        $matchedGroupRanksByDoc = [];
+        if ($this->should_score_by_doc($scoringDocIds, $decodedByTerm, $scoringTerms, $mode, $metadataFilter, $candidateCap)) {
+            $this->score_candidate_docs(
+                $scoringDocIds,
+                $decodedByTerm,
+                $docLengthsByLang,
+                $scoringTerms,
+                $mode,
+                $scores,
+                $bestRankByDoc,
+                $matchedGroupRanksByDoc
+            );
+        } else {
+            $this->score_posting_terms(
+                $scoringDocIds,
+                $decodedByTerm,
+                $docLengthsByLang,
+                $scoringTerms,
+                $mode,
+                $scores,
+                $bestRankByDoc,
+                $matchedGroupRanksByDoc
+            );
+        }
+        if ($scores === []) {
+            return [];
         }
 
         $results = [];
-        foreach ($candidateTermTfs as $docId => $termTfs) {
-            $score = 0.0;
-            $matchedGroups = [];
-            foreach ($termTfs as $term => $tf) {
-                $lang = $termsByKey[$term]['lang'];
-                if (!isset($docLengthsByLang[$lang][$docId], $metaByLang[$lang])) {
-                    continue;
-                }
-
-                $df = $activeDf[$term] ?? 0;
-                if ($df <= 0) {
-                    continue;
-                }
-
-                $meta = $metaByLang[$lang];
-                $docCount = max(0, (int) $meta['doc_count']);
-                if ($docCount === 0) {
-                    continue;
-                }
-
-                $avgDocLen = $meta['len_sum'] > 0 ? $meta['len_sum'] / $docCount : 1.0;
-                $score += $this->bm25($tf, $docLengthsByLang[$lang][$docId], $docCount, $df, $avgDocLen)
-                    * $this->query_rank_score_multiplier($termsByKey[$term]['groups']);
-                foreach ($termsByKey[$term]['groups'] as $groupId => $rank) {
-                    $matchedGroups[$groupId] = min($matchedGroups[$groupId] ?? $rank, $rank);
-                }
-            }
-
-            if ($mode === 'AND' && count($matchedGroups) < count($groups)) {
+        foreach ($scores as $docId => $score) {
+            if ($mode === 'AND' && count($matchedGroupRanksByDoc[$docId] ?? []) < count($groups)) {
                 continue;
             }
             if ($score > 0.0) {
+                $rank = $mode === 'AND'
+                    ? max($matchedGroupRanksByDoc[$docId])
+                    : ($bestRankByDoc[$docId] ?? 0);
                 $row = [
                     'doc_id' => (int) $docId,
                     'score' => $score,
-                    '_rank' => $mode === 'AND' ? max($matchedGroups) : min($matchedGroups),
+                    '_rank' => $rank,
                 ];
                 if ($topLimit === null) {
                     $results[] = $row;
@@ -271,13 +363,257 @@ final class WP_FTS_Searcher
     }
 
     /**
+     * Keep the first N candidate ids in deterministic posting order.
+     *
+     * @param array<int,bool> $docIds
+     * @return array<int,bool>
+     */
+    private function cap_doc_id_set(array $docIds, int $candidateCap): array
+    {
+        $candidateCap = max(1, $candidateCap);
+        if (count($docIds) <= $candidateCap) {
+            return $docIds;
+        }
+
+        return array_slice($docIds, 0, $candidateCap, true);
+    }
+
+    /**
+     * Pick a scoring loop that avoids scanning irrelevant posting rows.
+     *
+     * @param array<int,bool> $scoringDocIds
+     * @param array<string,array<int,int>> $decodedByTerm
+     * @param array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms
+     * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
+     */
+    private function should_score_by_doc(
+        array $scoringDocIds,
+        array $decodedByTerm,
+        array $scoringTerms,
+        string $mode,
+        ?array $metadataFilter,
+        ?int $candidateCap
+    ): bool {
+        if ($candidateCap !== null || $mode === 'AND' || $metadataFilter !== null) {
+            return true;
+        }
+
+        return count($scoringDocIds) * max(1, count($scoringTerms)) < $this->posting_row_count($decodedByTerm, $scoringTerms);
+    }
+
+    /**
+     * @param array<string,array<int,int>> $decodedByTerm
+     * @param array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms
+     */
+    private function posting_row_count(array $decodedByTerm, array $scoringTerms): int
+    {
+        $count = 0;
+        foreach (array_keys($scoringTerms) as $term) {
+            $count += count($decodedByTerm[$term] ?? []);
+        }
+
+        return $count;
+    }
+
+    /**
+     * Score by candidate document when the candidate set is narrower than the
+     * fetched postings.
+     *
+     * @param array<int,bool> $scoringDocIds
+     * @param array<string,array<int,int>> $decodedByTerm
+     * @param array<string,array<int,int>> $docLengthsByLang
+     * @param array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms
+     * @param array<int,float> $scores
+     * @param array<int,int> $bestRankByDoc
+     * @param array<int,array<int,int>> $matchedGroupRanksByDoc
+     */
+    private function score_candidate_docs(
+        array $scoringDocIds,
+        array $decodedByTerm,
+        array $docLengthsByLang,
+        array $scoringTerms,
+        string $mode,
+        array &$scores,
+        array &$bestRankByDoc,
+        array &$matchedGroupRanksByDoc
+    ): void {
+        foreach ($scoringDocIds as $docId => $_present) {
+            $docId = (int) $docId;
+            foreach ($scoringTerms as $term => $termInfo) {
+                $lang = $termInfo['lang'];
+                if (!isset($decodedByTerm[$term][$docId], $docLengthsByLang[$lang][$docId])) {
+                    continue;
+                }
+
+                $score = $this->bm25_with_idf(
+                    (int) $decodedByTerm[$term][$docId],
+                    $docLengthsByLang[$lang][$docId],
+                    $termInfo['idf'],
+                    $termInfo['avg_doc_len']
+                ) * $termInfo['multiplier'];
+                if ($score <= 0.0) {
+                    continue;
+                }
+
+                $scores[$docId] = ($scores[$docId] ?? 0.0) + $score;
+                if ($mode === 'AND') {
+                    foreach ($termInfo['groups'] as $groupId => $rank) {
+                        $matchedGroupRanksByDoc[$docId][$groupId] = min(
+                            $matchedGroupRanksByDoc[$docId][$groupId] ?? $rank,
+                            $rank
+                        );
+                    }
+                } else {
+                    $bestRankByDoc[$docId] = min($bestRankByDoc[$docId] ?? $termInfo['min_rank'], $termInfo['min_rank']);
+                }
+            }
+        }
+    }
+
+    /**
+     * Score by posting row for broad exact queries where every fetched row is a
+     * real candidate.
+     *
+     * @param array<int,bool> $scoringDocIds
+     * @param array<string,array<int,int>> $decodedByTerm
+     * @param array<string,array<int,int>> $docLengthsByLang
+     * @param array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms
+     * @param array<int,float> $scores
+     * @param array<int,int> $bestRankByDoc
+     * @param array<int,array<int,int>> $matchedGroupRanksByDoc
+     */
+    private function score_posting_terms(
+        array $scoringDocIds,
+        array $decodedByTerm,
+        array $docLengthsByLang,
+        array $scoringTerms,
+        string $mode,
+        array &$scores,
+        array &$bestRankByDoc,
+        array &$matchedGroupRanksByDoc
+    ): void {
+        foreach ($scoringTerms as $term => $termInfo) {
+            $lang = $termInfo['lang'];
+            $docLengths = $docLengthsByLang[$lang];
+            foreach ($decodedByTerm[$term] as $docId => $tf) {
+                $docId = (int) $docId;
+                if (!isset($scoringDocIds[$docId], $docLengths[$docId])) {
+                    continue;
+                }
+
+                $score = $this->bm25_with_idf(
+                    (int) $tf,
+                    $docLengths[$docId],
+                    $termInfo['idf'],
+                    $termInfo['avg_doc_len']
+                ) * $termInfo['multiplier'];
+                if ($score <= 0.0) {
+                    continue;
+                }
+
+                $scores[$docId] = ($scores[$docId] ?? 0.0) + $score;
+                if ($mode === 'AND') {
+                    foreach ($termInfo['groups'] as $groupId => $rank) {
+                        $matchedGroupRanksByDoc[$docId][$groupId] = min(
+                            $matchedGroupRanksByDoc[$docId][$groupId] ?? $rank,
+                            $rank
+                        );
+                    }
+                } else {
+                    $bestRankByDoc[$docId] = min($bestRankByDoc[$docId] ?? $termInfo['min_rank'], $termInfo['min_rank']);
+                }
+            }
+        }
+    }
+
+    /**
+     * Intersect AND query candidate groups, starting with the rarest group.
+     *
+     * @param array<int,array<int,bool>> $groupDocIds
+     * @return array<int,bool>
+     */
+    private function intersect_group_doc_ids(array $groupDocIds, int $groupCount): array
+    {
+        if (count($groupDocIds) < $groupCount) {
+            return [];
+        }
+
+        uasort($groupDocIds, static fn(array $a, array $b): int => count($a) <=> count($b));
+        $intersected = null;
+        foreach ($groupDocIds as $docIds) {
+            if ($docIds === []) {
+                return [];
+            }
+
+            if ($intersected === null) {
+                $intersected = $docIds;
+                continue;
+            }
+
+            foreach (array_keys($intersected) as $docId) {
+                if (!isset($docIds[(int) $docId])) {
+                    unset($intersected[$docId]);
+                }
+            }
+            if ($intersected === []) {
+                return [];
+            }
+        }
+
+        return $intersected ?? [];
+    }
+
+    /**
      * Use bounded top-K only when callers need the first page by ranking.
      */
     private function can_use_bounded_top_k(array $opts, int $offset): bool
     {
         return $offset === 0
-            && empty($opts['include_total'])
-            && !$this->has_metadata_filters($opts);
+            && empty($opts['include_total']);
+    }
+
+    /**
+     * Resolve the opt-in approximate candidate cap.
+     *
+     * `candidate_cap`/`max_candidates` alone are inert so callers cannot
+     * accidentally degrade recall. `fast_top_k` may be boolean or an integer cap.
+     */
+    private function fast_candidate_cap(array $opts, int $minimumCandidates): ?int
+    {
+        $fastTopK = $opts['fast_top_k'] ?? $opts['approximate_top_k'] ?? false;
+        if (!$this->truthy_option($fastTopK)) {
+            return null;
+        }
+
+        $cap = $this->positive_int_option($opts['candidate_cap'] ?? $opts['max_candidates'] ?? null);
+        if ($cap === null && is_numeric($fastTopK) && (int) $fastTopK > 1) {
+            $cap = (int) $fastTopK;
+        }
+        if ($cap === null) {
+            $cap = max(100, max(1, $minimumCandidates) * 100);
+        }
+
+        return max(max(1, $minimumCandidates), $cap);
+    }
+
+    /**
+     * Return a positive integer option or null for unset/invalid values.
+     */
+    private function positive_int_option(mixed $value): ?int
+    {
+        if (is_int($value)) {
+            return $value > 0 ? $value : null;
+        }
+
+        if (is_string($value) && preg_match('/^[1-9][0-9]*$/', trim($value)) === 1) {
+            return (int) trim($value);
+        }
+
+        if (is_float($value) && $value >= 1.0) {
+            return (int) $value;
+        }
+
+        return null;
     }
 
     /**
@@ -1472,6 +1808,16 @@ final class WP_FTS_Searcher
     private function bm25(int $tf, int $docLen, int $docCount, int $docFreq, float $avgDocLen): float
     {
         $idf = log(1.0 + (($docCount - $docFreq + 0.5) / ($docFreq + 0.5)));
+        $normalizer = $tf + $this->k1 * (1.0 - $this->b + $this->b * ($docLen / max(1.0, $avgDocLen)));
+
+        return $idf * (($tf * ($this->k1 + 1.0)) / $normalizer);
+    }
+
+    /**
+     * Compute a BM25 contribution when the query-level IDF is already cached.
+     */
+    private function bm25_with_idf(int $tf, int $docLen, float $idf, float $avgDocLen): float
+    {
         $normalizer = $tf + $this->k1 * (1.0 - $this->b + $this->b * ($docLen / max(1.0, $avgDocLen)));
 
         return $idf * (($tf * ($this->k1 + 1.0)) / $normalizer);

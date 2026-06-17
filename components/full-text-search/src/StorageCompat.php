@@ -35,13 +35,19 @@ final class WP_FTS_StorageCompat
      * keep using `get_terms()` plus `WP_FTS_PostingsCodec` for compatibility.
      *
      * @param string[] $terms
+     * @param int|null $candidateCap Optional approximate per-term cap for
+     *        explicit fast top-K searches.
      * @return array<string,array<int,int>>
      */
-    public static function get_postings(WP_FTS_Storage $storage, array $terms): array
+    public static function get_postings(WP_FTS_Storage $storage, array $terms, ?int $candidateCap = null): array
     {
         $terms = array_values(array_unique(array_map('strval', $terms)));
         if ($terms === []) {
             return [];
+        }
+
+        if ($candidateCap !== null && $candidateCap > 0 && $storage instanceof WP_FTS_Capped_Postings_Storage) {
+            return $storage->get_capped_postings($terms, $candidateCap);
         }
 
         if ($storage instanceof WP_FTS_Row_Postings_Storage) {

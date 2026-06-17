@@ -178,6 +178,23 @@ interface WP_FTS_Row_Postings_Storage extends WP_FTS_Storage
 }
 
 /**
+ * Optional approximate fast-read extension for capped first-page search.
+ *
+ * Implementations may return at most `$candidate_cap` postings per requested
+ * term, in deterministic document-id order. This is only used when callers
+ * explicitly enable approximate fast top-K search; exact search continues to use
+ * the full row-postings contract.
+ */
+interface WP_FTS_Capped_Postings_Storage extends WP_FTS_Storage
+{
+    /**
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array<int,int>> term => doc_id => weighted tf
+     */
+    public function get_capped_postings(array $terms, int $candidate_cap): array;
+}
+
+/**
  * Optional storage extension for backends that can read document terms directly.
  *
  * Blob-backed stores can derive this through `all_terms()` plus decoded
