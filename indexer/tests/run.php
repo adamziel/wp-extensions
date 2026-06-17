@@ -10108,6 +10108,32 @@ test_case('search fast top-k candidate cap is explicit approximate opt-in', func
     assert_true(($fast['results'][0]['doc_id'] ?? null) !== 6, 'fast top-k may miss a stronger candidate outside the cap');
 });
 
+test_case('in-memory capped postings avoid full sort on append-ordered rows', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $term = WP_FTS_TermNamespace::namespace_term('en', 'needle');
+
+    for ($docId = 1; $docId <= 8; $docId++) {
+        $storage->replace_doc_postings($docId, [$term => 1]);
+    }
+
+    $sortedProperty = new ReflectionProperty(WP_FTS_Storage_InMemory::class, 'postingsSortedByTerm');
+    $sortedProperty->setAccessible(true);
+    $sortedFlags = $sortedProperty->getValue($storage);
+    assert_true(!empty($sortedFlags[$term]), 'sequential row-posting writes should keep the term sorted');
+    assert_same([1 => 1, 2 => 1, 3 => 1], $storage->get_capped_postings([$term], 3)[$term] ?? [], 'capped postings should return the sorted deterministic prefix');
+
+    $sortedFlags = $sortedProperty->getValue($storage);
+    assert_true(!empty($sortedFlags[$term]), 'capped prefix reads should not invalidate sorted append state');
+
+    $storage->replace_doc_postings(0, [$term => 4]);
+    $sortedFlags = $sortedProperty->getValue($storage);
+    assert_true(empty($sortedFlags[$term]), 'out-of-order row-posting writes should mark the term unsorted');
+    assert_same([0 => 4, 1 => 1, 2 => 1], $storage->get_capped_postings([$term], 3)[$term] ?? [], 'unsorted capped postings should still return the lowest doc ids');
+
+    $sortedFlags = $sortedProperty->getValue($storage);
+    assert_true(empty($sortedFlags[$term]), 'bounded selection should avoid materializing a full sorted posting list');
+});
+
 test_case('search product options filter metadata and return pagination snippets', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $analyzer = new WP_FTS_Analyzer();

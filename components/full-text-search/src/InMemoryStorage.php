@@ -107,13 +107,14 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         foreach (array_keys($this->termsByDoc[$doc_id] ?? []) as $term) {
             $this->remember_term($term);
             $this->remember_posting($term, $doc_id);
+            $wasSorted = !empty($this->postingsSortedByTerm[$term]);
             unset($this->postingsByTerm[$term][$doc_id]);
             unset($this->terms[$term]);
             if (($this->postingsByTerm[$term] ?? []) === []) {
                 unset($this->postingsByTerm[$term], $this->terms[$term]);
                 unset($this->postingsSortedByTerm[$term]);
             } else {
-                $this->postingsSortedByTerm[$term] = false;
+                $this->postingsSortedByTerm[$term] = $wasSorted;
             }
         }
         unset($this->termsByDoc[$doc_id]);
@@ -127,8 +128,11 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
 
             $this->remember_term($term);
             $this->remember_posting($term, $doc_id);
+            $postings = $this->postingsByTerm[$term] ?? [];
+            $wasSorted = $postings === [] || !empty($this->postingsSortedByTerm[$term]);
+            $appendsInOrder = $postings === [] || $doc_id > (int) array_key_last($postings);
             $this->postingsByTerm[$term][$doc_id] = $tf;
-            $this->postingsSortedByTerm[$term] = false;
+            $this->postingsSortedByTerm[$term] = $wasSorted && $appendsInOrder;
             $this->termsByDoc[$doc_id][$term] = true;
             unset($this->terms[$term]);
         }
@@ -166,18 +170,81 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         $candidate_cap = max(1, (int) $candidate_cap);
         $result = [];
         foreach (array_unique(array_map('strval', $terms)) as $term) {
-            $postings = $this->sorted_postings_for_term($term);
+            $postings = $this->capped_postings_for_term($term, $candidate_cap);
             if ($postings === []) {
                 continue;
             }
 
-            $result[$term] = count($postings) > $candidate_cap
-                ? array_slice($postings, 0, $candidate_cap, true)
-                : $postings;
+            $result[$term] = $postings;
         }
         ksort($result, SORT_STRING);
 
         return $result;
+    }
+
+    /**
+     * Return a deterministic doc-id prefix without sorting the full list when a
+     * row-posting workload has appended documents in order.
+     *
+     * @return array<int,int>
+     */
+    private function capped_postings_for_term(string $term, int $candidateCap): array
+    {
+        if (!isset($this->postingsByTerm[$term]) || $this->postingsByTerm[$term] === []) {
+            return [];
+        }
+
+        $postings = $this->postingsByTerm[$term];
+        if (count($postings) <= $candidateCap) {
+            return $this->sorted_postings_for_term($term);
+        }
+
+        if (!empty($this->postingsSortedByTerm[$term])) {
+            return array_slice($postings, 0, $candidateCap, true);
+        }
+
+        return $this->bounded_sorted_posting_prefix($postings, $candidateCap);
+    }
+
+    /**
+     * Select the lowest N document ids from an unsorted posting map without a
+     * full-array sort. This path is for out-of-order replacements; normal bulk
+     * indexing keeps posting maps sorted incrementally.
+     *
+     * @param array<int,int> $postings
+     * @return array<int,int>
+     */
+    private function bounded_sorted_posting_prefix(array $postings, int $candidateCap): array
+    {
+        $queue = new SplPriorityQueue();
+        $queue->setExtractFlags(SplPriorityQueue::EXTR_BOTH);
+
+        foreach ($postings as $docId => $tf) {
+            $docId = (int) $docId;
+            if ($queue->count() < $candidateCap) {
+                $queue->insert(['doc_id' => $docId, 'tf' => max(1, (int) $tf)], $docId);
+                continue;
+            }
+
+            $largest = $queue->top();
+            if ($docId >= (int) $largest['priority']) {
+                continue;
+            }
+
+            $queue->extract();
+            $queue->insert(['doc_id' => $docId, 'tf' => max(1, (int) $tf)], $docId);
+        }
+
+        $prefix = [];
+        while (!$queue->isEmpty()) {
+            $row = $queue->extract();
+            $data = is_array($row['data']) ? $row['data'] : [];
+            $docId = (int) ($data['doc_id'] ?? 0);
+            $prefix[$docId] = max(1, (int) ($data['tf'] ?? 1));
+        }
+        ksort($prefix, SORT_NUMERIC);
+
+        return $prefix;
     }
 
     /**
@@ -537,6 +604,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
 
         if ($deleted !== []) {
             foreach ($this->postingsByTerm as $term => $postings) {
+                $wasSorted = !empty($this->postingsSortedByTerm[$term]);
                 foreach ($deleted as $docId => $_) {
                     unset($postings[$docId]);
                     unset($this->termsByDoc[$docId][$term]);
@@ -549,7 +617,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
                 }
 
                 $this->postingsByTerm[$term] = $postings;
-                $this->postingsSortedByTerm[$term] = false;
+                $this->postingsSortedByTerm[$term] = $wasSorted;
                 unset($this->terms[$term]);
             }
         }
