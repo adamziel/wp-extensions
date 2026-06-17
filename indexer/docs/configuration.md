@@ -602,6 +602,21 @@ wp fts search "query text" --mode=AND --limit=10 --lang=en
 `OR` is the default and returns documents matching any query term. `AND` requires
 every query term to be present. `limit` is clamped to at least 1.
 
+Broad searches automatically switch to approximate fast top-K mode when the
+analyzed query's estimated active candidate count exceeds 2000 documents. Fast
+mode caps scored candidates at 1000 by default, which improves latency but can
+change recall, ranking, and total counts. Programmatic callers can force exact
+scoring with `exact_top_k`, `exact`, or an explicit false `fast_top_k`; explicit
+`fast_top_k`/`approximate_top_k` still enables approximate mode directly.
+
+The automatic policy can be tuned in `wp-config.php` before the plugin loads:
+
+```php
+define('WP_FTS_FAST_MODE_THRESHOLD', 2000);
+define('WP_FTS_FAST_MODE_CANDIDATE_CAP', 1000);
+define('WP_FTS_FAST_MODE_ENABLED', true);
+```
+
 Programmatic callers can set BM25 parameters in the searcher constructor:
 
 ```php

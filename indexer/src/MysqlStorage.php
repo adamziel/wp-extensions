@@ -10,7 +10,7 @@ declare(strict_types=1);
  * flag, and per-language lengths live in a separate table so BM25 can score
  * inside one language partition without mixing collection statistics.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage
 {
     private object $wpdb;
     private string $termsTable;
@@ -178,6 +178,55 @@ ORDER BY term ASC, doc_id ASC",
             );
             foreach ($this->postings_from_rows($fallbackRows, array_keys($missing)) as $term => $postings) {
                 $postingsByTerm[$term] = $postings;
+            }
+        }
+
+        ksort($postingsByTerm, SORT_STRING);
+
+        return $postingsByTerm;
+    }
+
+    /**
+     * Fetch a deterministic document-id prefix for each requested term.
+     *
+     * This powers approximate fast top-K search without materializing broad
+     * posting lists. One bounded query per term keeps SQL portable across MySQL
+     * variants and the SQLite-backed Playground runtime.
+     *
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array<int,int>> term => doc_id => weighted tf
+     */
+    public function get_capped_postings(array $terms, int $candidate_cap): array
+    {
+        $terms = $this->normalize_terms($terms);
+        if ($terms === []) {
+            return [];
+        }
+
+        $candidate_cap = max(1, (int) $candidate_cap);
+        $postingsByTerm = [];
+        foreach ($terms as $term) {
+            $rows = $this->get_results($this->wpdb->prepare(
+                "SELECT term, doc_id, tf FROM {$this->postingsTable}
+WHERE term = %s
+ORDER BY doc_id ASC
+LIMIT %d",
+                $term,
+                $candidate_cap
+            ), 'read capped FTS row postings');
+            foreach ($this->postings_from_rows($rows ?: [], [$term]) as $rowTerm => $postings) {
+                $postingsByTerm[$rowTerm] = array_slice($postings, 0, $candidate_cap, true);
+            }
+        }
+
+        $missing = array_diff_key(array_fill_keys($terms, true), $postingsByTerm);
+        if ($missing !== [] && $this->is_sqlite_runtime()) {
+            $fallbackRows = $this->get_results(
+                "SELECT term, doc_id, tf FROM {$this->postingsTable} ORDER BY term ASC, doc_id ASC",
+                'read capped FTS SQLite fallback row postings'
+            );
+            foreach ($this->postings_from_rows($fallbackRows, array_keys($missing)) as $term => $postings) {
+                $postingsByTerm[$term] = array_slice($postings, 0, $candidate_cap, true);
             }
         }
 

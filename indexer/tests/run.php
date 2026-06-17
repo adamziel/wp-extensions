@@ -716,6 +716,33 @@ function build_index(WP_FTS_Storage $storage, WP_FTS_Analyzer $analyzer, array $
     return $indexer;
 }
 
+/**
+ * Seed one analyzed English term directly for search-policy tests.
+ *
+ * @param callable(int):array<string,mixed>|null $metadataFactory
+ * @return array{0:WP_FTS_Searcher,1:WP_FTS_Storage_InMemory}
+ */
+function single_term_search_fixture(int $documentCount, int $strongDocId = 0, ?callable $metadataFactory = null): array
+{
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $term = WP_FTS_TermNamespace::namespace_term('en', 'needle');
+
+    for ($docId = 1; $docId <= $documentCount; $docId++) {
+        $tf = $docId === $strongDocId ? 20 : 1;
+        $storage->replace_doc_postings($docId, [$term => $tf]);
+        $storage->put_doc($docId, 'en', ['en' => $tf], 'single-term-' . $docId);
+        if ($metadataFactory !== null) {
+            $storage->put_doc_metadata($docId, $metadataFactory($docId));
+        }
+    }
+
+    return [new WP_FTS_Searcher($storage, $analyzer), $storage];
+}
+
 function temp_index_path(string $suffix): string
 {
     return sys_get_temp_dir() . '/wp_fts_' . getmypid() . '_' . $suffix . '_' . bin2hex(random_bytes(4)) . '.json';
@@ -2095,6 +2122,22 @@ final class WP_FTS_Test_WPDB
                         'doc_freq' => $this->terms[$term]['doc_freq'],
                     ];
                 }
+            }
+            return $rows;
+        }
+
+        if (
+            str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
+            && str_contains($sql, 'WHERE term = %s')
+            && str_contains($sql, 'LIMIT %d')
+        ) {
+            $term = (string) ($args[0] ?? '');
+            $limit = max(0, (int) ($args[1] ?? 0));
+            $rows = [];
+            $postings = $this->postings[$term] ?? [];
+            ksort($postings, SORT_NUMERIC);
+            foreach (array_slice($postings, 0, $limit, true) as $docId => $tf) {
+                $rows[] = (object) ['term' => $term, 'doc_id' => (int) $docId, 'tf' => (int) $tf];
             }
             return $rows;
         }
@@ -10050,6 +10093,65 @@ test_case('search bounded top-k preserves totals offsets and exact metadata filt
     }
 });
 
+test_case('search auto fast mode keeps threshold-sized candidate sets exact', function (): void {
+    [$searcher] = single_term_search_fixture(2000, 2000);
+
+    $payload = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+    ]);
+
+    assert_same(2000, $payload['total'], 'candidate count equal to the default threshold should stay exact');
+    assert_same(2000, $payload['results'][0]['doc_id'] ?? null, 'exact threshold-sized search should keep the strongest late candidate');
+});
+
+test_case('search auto fast mode switches above threshold and explicit exact disables it', function (): void {
+    [$searcher] = single_term_search_fixture(2001, 2001);
+
+    $auto = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+    ]);
+    $explicitExact = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'fast_top_k' => false,
+    ]);
+
+    assert_same(1000, $auto['total'], 'auto fast mode should use the default candidate cap above the threshold');
+    assert_true(($auto['results'][0]['doc_id'] ?? null) !== 2001, 'auto fast mode may miss a stronger candidate outside the cap');
+    assert_same(2001, $explicitExact['total'], 'explicit false fast_top_k should force exact scoring above the threshold');
+    assert_same(2001, $explicitExact['results'][0]['doc_id'] ?? null, 'explicit exact search should keep the strongest late candidate');
+});
+
+test_case('search auto fast mode applies metadata filters before threshold switch when probed', function (): void {
+    [$searcher] = single_term_search_fixture(
+        2001,
+        2001,
+        static fn(int $docId): array => [
+            'post_id' => $docId,
+            'post_type' => $docId === 2001 ? 'page' : 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-06-17 00:00:00',
+            'title' => 'Filtered candidate ' . $docId,
+            'search_text' => 'needle',
+        ]
+    );
+
+    $payload = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'post_type' => 'page',
+    ]);
+
+    assert_same(1, $payload['total'], 'filtered candidate count below threshold should remain exact');
+    assert_same(2001, $payload['results'][0]['doc_id'] ?? null, 'metadata-filtered exact search should keep the matching late candidate');
+});
+
 test_case('search fast top-k candidate cap is explicit approximate opt-in', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $analyzer = new WP_FTS_Analyzer([
@@ -10439,6 +10541,9 @@ test_case('mysql storage emits language-aware binary schema and stores per-langu
     $storage->put_term($plTerm, 1, WP_FTS_PostingsCodec::encode([7 => 2]));
     $storage->put_term($enTerm, 1, WP_FTS_PostingsCodec::encode([8 => 1]));
     assert_same([$enTerm, $plTerm], $storage->all_terms(), 'binary namespaced terms should remain separate rows');
+    $capTerm = WP_FTS_TermNamespace::term_key('capped', 'en');
+    $storage->put_term($capTerm, 4, WP_FTS_PostingsCodec::encode([5 => 1, 2 => 4, 9 => 1, 1 => 3]));
+    assert_same([1 => 3, 2 => 4], $storage->get_capped_postings([$capTerm], 2)[$capTerm] ?? [], 'MySQL capped postings should return the deterministic lowest doc-id prefix');
 
     $storage->put_doc(7, 'pl_PL', ['pl_PL' => 4, 'en' => 2], 'abc123');
     $storage->put_doc_metadata(7, [
@@ -10660,6 +10765,31 @@ test_case('quality discovery loads tests/quality files', function (): void {
     assert_true(in_array('000-discovery-sentinel.php', $discovered, true), 'quality discovery should record the sentinel file');
     assert_true(in_array('harness-metrics.php', $discovered, true), 'quality discovery should record the metrics test file');
     assert_same(1, $GLOBALS['wp_fts_quality_discovery_sentinel'] ?? 0, 'quality discovery should include tests/quality/*.php exactly once');
+});
+
+test_case('search auto fast mode constants override threshold and candidate cap', function (): void {
+    if (defined('WP_FTS_FAST_MODE_THRESHOLD') && constant('WP_FTS_FAST_MODE_THRESHOLD') !== 2) {
+        throw new WP_FTS_TestPending('WP_FTS_FAST_MODE_THRESHOLD is already defined by the process.');
+    }
+    if (defined('WP_FTS_FAST_MODE_CANDIDATE_CAP') && constant('WP_FTS_FAST_MODE_CANDIDATE_CAP') !== 2) {
+        throw new WP_FTS_TestPending('WP_FTS_FAST_MODE_CANDIDATE_CAP is already defined by the process.');
+    }
+    if (!defined('WP_FTS_FAST_MODE_THRESHOLD')) {
+        define('WP_FTS_FAST_MODE_THRESHOLD', 2);
+    }
+    if (!defined('WP_FTS_FAST_MODE_CANDIDATE_CAP')) {
+        define('WP_FTS_FAST_MODE_CANDIDATE_CAP', 2);
+    }
+
+    [$searcher] = single_term_search_fixture(3, 3);
+    $payload = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+    ]);
+
+    assert_same(2, $payload['total'], 'constant candidate cap should apply after constant threshold switches on fast mode');
+    assert_true(($payload['results'][0]['doc_id'] ?? null) !== 3, 'constant-capped auto fast mode may miss a stronger late candidate');
 });
 
 $failures = 0;
