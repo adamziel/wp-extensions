@@ -263,6 +263,45 @@ final class WP_FTS_Analyzer
     }
 
     /**
+     * Analyze text that callers already extracted from document content.
+     *
+     * This preserves the document-language option semantics of
+     * `analyze_content()` while skipping HTML segmentation for field values that
+     * are known to be plain text, such as titles, excerpts, taxonomy labels, and
+     * custom-field values.
+     *
+     * @param array{lang?:string,language?:string,document_lang?:string,locale?:string,post_id?:int}|string|null $options
+     * @return array<int,array{term:string,weight:float,lang:string,position?:int,rank?:int,source?:string}>
+     */
+    public function analyze_plain_content(string $text, array|string|null $options = []): array
+    {
+        $options = $this->normalizeLanguageOptions($options, 'document');
+        $lang = $this->resolveDocumentLanguage($options);
+        $nextPosition = 0;
+        $tokens = [];
+
+        foreach ($this->renumberAnalyzedPositions($this->analyzeText($text, $lang), $nextPosition) as $term) {
+            if ($this->isStopword($term['term'], $term['lang'])) {
+                continue;
+            }
+
+            $row = [
+                'term' => $term['term'],
+                'weight' => 1.0,
+                'lang' => $term['lang'],
+            ];
+            foreach (['position', 'rank', 'source'] as $key) {
+                if (array_key_exists($key, $term)) {
+                    $row[$key] = $term[$key];
+                }
+            }
+            $tokens[] = $row;
+        }
+
+        return $tokens;
+    }
+
+    /**
      * Query analysis intentionally skips only the HTML extraction stage.
      *
      * Use this for user search text. By default it returns plain term strings

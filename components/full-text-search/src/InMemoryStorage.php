@@ -4,13 +4,19 @@ declare(strict_types=1);
 /**
  * Volatile storage backend used by tests and embedded in-process indexing.
  *
- * State lives in PHP arrays, supports rollback snapshots, and mirrors the
+ * State lives in PHP arrays, supports rollback logs, and mirrors the
  * language-aware storage contract without any persistence layer.
  */
-final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage
+final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Document_Terms_Storage
 {
-    /** @var array<string,array{df:int,postings:string}> */
+    /** @var array<string,array{df:int,postings:string}> Encoded row cache for blob-shaped compatibility reads. */
     private array $terms = [];
+
+    /** @var array<string,array<int,int>> Decoded term => doc_id => weighted tf postings. */
+    private array $postingsByTerm = [];
+
+    /** @var array<int,array<string,bool>> Reverse map used for fast document replacement. */
+    private array $termsByDoc = [];
 
     /** @var array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}> */
     private array $docs = [];
@@ -21,8 +27,8 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     /** @var array<string,array{doc_count:int,len_sum:int}> */
     private array $meta = [];
 
-    /** @var array<int,array{terms:array<string,array{df:int,postings:string}>,docs:array<int,array{primary_lang:string,lang_lengths:array<string,int>,doc_len:int,content_hash:?string,deleted:bool}>,docMetadata:array<int,array<string,mixed>>,meta:array<string,array{doc_count:int,len_sum:int}>}> */
-    private array $snapshots = [];
+    /** @var array<int,array<string,mixed>> Lazy rollback logs for active transactions. */
+    private array $transactions = [];
 
     /**
      * Return existing term rows for the requested keys.
@@ -34,8 +40,9 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     {
         $result = [];
         foreach (array_unique($terms) as $term) {
-            if (isset($this->terms[$term])) {
-                $result[$term] = $this->terms[$term];
+            $row = $this->encoded_term_row((string) $term);
+            if ($row !== null) {
+                $result[(string) $term] = $row;
             }
         }
 
@@ -50,15 +57,12 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     public function put_term(string $term, int $df, string $postings): void
     {
         if ($df <= 0) {
-            unset($this->terms[$term]);
+            $this->delete_term($term);
             return;
         }
 
-        $this->terms[$term] = [
-            'df' => $df,
-            'postings' => $postings,
-        ];
-        ksort($this->terms, SORT_STRING);
+        $decoded = WP_FTS_PostingsCodec::decode($postings);
+        $this->replace_term_postings($term, $decoded, $postings);
     }
 
     /**
@@ -66,7 +70,88 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
      */
     public function delete_term(string $term): void
     {
+        $this->remember_term($term);
+        $this->remember_postings_by_term($term);
+        foreach (array_keys($this->postingsByTerm[$term] ?? []) as $docId) {
+            $this->remember_terms_by_doc((int) $docId);
+            unset($this->termsByDoc[(int) $docId][$term]);
+            if (($this->termsByDoc[(int) $docId] ?? []) === []) {
+                unset($this->termsByDoc[(int) $docId]);
+            }
+        }
+        unset($this->postingsByTerm[$term]);
         unset($this->terms[$term]);
+    }
+
+    /**
+     * Replace all postings for one document without rewriting term blobs.
+     *
+     * @param array<string,int> $term_frequencies Stored term key => weighted tf.
+     */
+    public function replace_doc_postings(int $doc_id, array $term_frequencies): void
+    {
+        $doc_id = (int) $doc_id;
+        $this->remember_terms_by_doc($doc_id);
+        foreach (array_keys($this->termsByDoc[$doc_id] ?? []) as $term) {
+            $this->remember_term($term);
+            $this->remember_posting($term, $doc_id);
+            unset($this->postingsByTerm[$term][$doc_id]);
+            unset($this->terms[$term]);
+            if (($this->postingsByTerm[$term] ?? []) === []) {
+                unset($this->postingsByTerm[$term], $this->terms[$term]);
+            }
+        }
+        unset($this->termsByDoc[$doc_id]);
+
+        foreach ($term_frequencies as $term => $tf) {
+            $tf = max(1, (int) $tf);
+            $term = (string) $term;
+            if ($term === '') {
+                continue;
+            }
+
+            $this->remember_term($term);
+            $this->remember_posting($term, $doc_id);
+            $this->postingsByTerm[$term][$doc_id] = $tf;
+            $this->termsByDoc[$doc_id][$term] = true;
+            unset($this->terms[$term]);
+        }
+    }
+
+    /**
+     * Fetch decoded postings directly for scoring.
+     *
+     * @param string[] $terms Stored term keys.
+     * @return array<string,array<int,int>>
+     */
+    public function get_postings(array $terms): array
+    {
+        $result = [];
+        foreach (array_unique(array_map('strval', $terms)) as $term) {
+            if (!isset($this->postingsByTerm[$term]) || $this->postingsByTerm[$term] === []) {
+                continue;
+            }
+
+            $postings = $this->postingsByTerm[$term];
+            ksort($postings, SORT_NUMERIC);
+            $result[$term] = $postings;
+        }
+        ksort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * Return terms currently posted by one document.
+     *
+     * @return string[]
+     */
+    public function terms_for_doc(int $doc_id): array
+    {
+        $terms = array_keys($this->termsByDoc[(int) $doc_id] ?? []);
+        sort($terms, SORT_STRING);
+
+        return $terms;
     }
 
     /**
@@ -114,6 +199,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
      */
     public function put_doc(int $doc_id, string|int $primary_lang, array|string $lang_lengths, ?string $hash = null): void
     {
+        $this->remember_doc($doc_id);
         [$primaryLang, $normalizedLengths, $contentHash] = $this->normalize_put_doc_args(
             $primary_lang,
             $lang_lengths,
@@ -127,7 +213,6 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
             'content_hash' => $contentHash,
             'deleted' => false,
         ];
-        ksort($this->docs, SORT_NUMERIC);
     }
 
     /**
@@ -135,6 +220,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
      */
     public function delete_doc(int $doc_id): void
     {
+        $this->remember_doc($doc_id);
         if (!isset($this->docs[$doc_id])) {
             $this->docs[$doc_id] = [
                 'primary_lang' => '',
@@ -143,7 +229,6 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
                 'content_hash' => null,
                 'deleted' => true,
             ];
-            ksort($this->docs, SORT_NUMERIC);
             return;
         }
 
@@ -157,8 +242,8 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
      */
     public function put_doc_metadata(int $doc_id, array $metadata): void
     {
+        $this->remember_doc_metadata($doc_id);
         $this->docMetadata[$doc_id] = WP_FTS_StorageCompat::normalize_doc_metadata($metadata);
-        ksort($this->docMetadata, SORT_NUMERIC);
     }
 
     /**
@@ -208,6 +293,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     public function add_meta(string|int $lang, int $d_docs, ?int $d_len = null): void
     {
         [$normalizedLang, $docDelta, $lenDelta] = $this->normalize_meta_args($lang, $d_docs, $d_len);
+        $this->remember_meta($normalizedLang);
         $current = $this->meta[$normalizedLang] ?? ['doc_count' => 0, 'len_sum' => 0];
         $this->meta[$normalizedLang] = [
             'doc_count' => max(0, $current['doc_count'] + $docDelta),
@@ -222,7 +308,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
      */
     public function all_terms(): array
     {
-        $terms = array_keys($this->terms);
+        $terms = array_keys($this->postingsByTerm);
         sort($terms, SORT_STRING);
 
         return $terms;
@@ -247,40 +333,70 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     }
 
     /**
-     * Start an in-memory rollback scope by snapshotting arrays.
+     * Start an in-memory rollback scope.
      */
     public function begin_transaction(): void
     {
-        $this->snapshots[] = [
-            'terms' => $this->terms,
-            'docs' => $this->docs,
-            'docMetadata' => $this->docMetadata,
-            'meta' => $this->meta,
+        $this->transactions[] = [
+            'terms' => [],
+            'postingsByTerm' => [],
+            'postingsByTermDoc' => [],
+            'termsByDoc' => [],
+            'docs' => [],
+            'docMetadata' => [],
+            'meta' => [],
         ];
     }
 
     /**
-     * Commit the current rollback scope by discarding its snapshot.
+     * Commit the current rollback scope by discarding its change log.
      */
     public function commit(): void
     {
-        array_pop($this->snapshots);
+        array_pop($this->transactions);
     }
 
     /**
-     * Restore the latest rollback snapshot when one exists.
+     * Restore the latest rollback change log when one exists.
      */
     public function rollback(): void
     {
-        $snapshot = array_pop($this->snapshots);
-        if ($snapshot === null) {
+        $transaction = array_pop($this->transactions);
+        if ($transaction === null) {
             return;
         }
 
-        $this->terms = $snapshot['terms'];
-        $this->docs = $snapshot['docs'];
-        $this->docMetadata = $snapshot['docMetadata'];
-        $this->meta = $snapshot['meta'];
+        foreach (array_reverse($transaction['terms'], true) as $term => $entry) {
+            $this->restore_entry($this->terms, $term, $entry);
+        }
+        foreach (array_reverse($transaction['postingsByTerm'], true) as $term => $entry) {
+            $this->restore_entry($this->postingsByTerm, $term, $entry);
+        }
+        foreach (array_reverse($transaction['postingsByTermDoc'], true) as $term => $docEntries) {
+            foreach (array_reverse($docEntries, true) as $docId => $entry) {
+                if (!empty($entry['exists'])) {
+                    $this->postingsByTerm[(string) $term][(int) $docId] = (int) $entry['value'];
+                    continue;
+                }
+
+                unset($this->postingsByTerm[(string) $term][(int) $docId]);
+                if (($this->postingsByTerm[(string) $term] ?? []) === []) {
+                    unset($this->postingsByTerm[(string) $term]);
+                }
+            }
+        }
+        foreach (array_reverse($transaction['termsByDoc'], true) as $docId => $entry) {
+            $this->restore_entry($this->termsByDoc, (int) $docId, $entry);
+        }
+        foreach (array_reverse($transaction['docs'], true) as $docId => $entry) {
+            $this->restore_entry($this->docs, (int) $docId, $entry);
+        }
+        foreach (array_reverse($transaction['docMetadata'], true) as $docId => $entry) {
+            $this->restore_entry($this->docMetadata, (int) $docId, $entry);
+        }
+        foreach (array_reverse($transaction['meta'], true) as $lang => $entry) {
+            $this->restore_entry($this->meta, $lang, $entry);
+        }
     }
 
     /**
@@ -298,6 +414,7 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
      */
     public function optimize(): void
     {
+        $this->remember_full_state();
         $deleted = [];
         foreach ($this->docs as $docId => $doc) {
             if ($doc['deleted']) {
@@ -306,32 +423,218 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
         }
 
         if ($deleted !== []) {
-            foreach ($this->terms as $term => $row) {
-                $postings = WP_FTS_PostingsCodec::decode($row['postings']);
+            foreach ($this->postingsByTerm as $term => $postings) {
                 foreach ($deleted as $docId => $_) {
                     unset($postings[$docId]);
+                    unset($this->termsByDoc[$docId][$term]);
                 }
 
                 if ($postings === []) {
-                    unset($this->terms[$term]);
+                    unset($this->postingsByTerm[$term], $this->terms[$term]);
                     continue;
                 }
 
-                $this->terms[$term] = [
-                    'df' => count($postings),
-                    'postings' => WP_FTS_PostingsCodec::encode($postings),
-                ];
+                $this->postingsByTerm[$term] = $postings;
+                unset($this->terms[$term]);
             }
         }
 
         foreach ($deleted as $docId => $_) {
             unset($this->docs[$docId]);
             unset($this->docMetadata[$docId]);
+            unset($this->termsByDoc[$docId]);
         }
 
         $this->sync_meta_from_docs();
-        ksort($this->terms, SORT_STRING);
         ksort($this->docs, SORT_NUMERIC);
+    }
+
+    private function remember_term(string $term): void
+    {
+        $this->remember_entry('terms', $term, $this->terms);
+    }
+
+    private function remember_postings_by_term(string $term): void
+    {
+        $this->remember_entry('postingsByTerm', $term, $this->postingsByTerm);
+    }
+
+    private function remember_posting(string $term, int $docId): void
+    {
+        if ($this->transactions === []) {
+            return;
+        }
+
+        foreach (array_keys($this->transactions) as $index) {
+            if (isset($this->transactions[$index]['postingsByTermDoc'][$term])
+                && array_key_exists($docId, $this->transactions[$index]['postingsByTermDoc'][$term])) {
+                continue;
+            }
+
+            $exists = isset($this->postingsByTerm[$term]) && array_key_exists($docId, $this->postingsByTerm[$term]);
+            $this->transactions[$index]['postingsByTermDoc'][$term][$docId] = [
+                'exists' => $exists,
+                'value' => $exists ? $this->postingsByTerm[$term][$docId] : null,
+            ];
+        }
+    }
+
+    private function remember_terms_by_doc(int $docId): void
+    {
+        $this->remember_entry('termsByDoc', $docId, $this->termsByDoc);
+    }
+
+    private function remember_doc(int $docId): void
+    {
+        $this->remember_entry('docs', $docId, $this->docs);
+    }
+
+    private function remember_doc_metadata(int $docId): void
+    {
+        $this->remember_entry('docMetadata', $docId, $this->docMetadata);
+    }
+
+    private function remember_meta(string $lang): void
+    {
+        $this->remember_entry('meta', $lang, $this->meta);
+    }
+
+    /**
+     * Record current values for a bucket key in every active transaction.
+     *
+     * @param array<string|int,mixed> $source
+     */
+    private function remember_entry(string $bucket, string|int $key, array $source): void
+    {
+        if ($this->transactions === []) {
+            return;
+        }
+
+        foreach (array_keys($this->transactions) as $index) {
+            if (array_key_exists($key, $this->transactions[$index][$bucket])) {
+                continue;
+            }
+
+            $exists = array_key_exists($key, $source);
+            $this->transactions[$index][$bucket][$key] = [
+                'exists' => $exists,
+                'value' => $exists ? $source[$key] : null,
+            ];
+        }
+    }
+
+    /**
+     * Record all storage arrays for broad operations such as optimize().
+     */
+    private function remember_full_state(): void
+    {
+        if ($this->transactions === []) {
+            return;
+        }
+
+        foreach (array_keys($this->terms) as $term) {
+            $this->remember_term((string) $term);
+        }
+        foreach (array_keys($this->postingsByTerm) as $term) {
+            $this->remember_postings_by_term((string) $term);
+        }
+        foreach (array_keys($this->termsByDoc) as $docId) {
+            $this->remember_terms_by_doc((int) $docId);
+        }
+        foreach (array_keys($this->docs) as $docId) {
+            $this->remember_doc((int) $docId);
+        }
+        foreach (array_keys($this->docMetadata) as $docId) {
+            $this->remember_doc_metadata((int) $docId);
+        }
+        foreach (array_keys($this->meta) as $lang) {
+            $this->remember_meta((string) $lang);
+        }
+    }
+
+    /**
+     * @param array<string|int,mixed> $target
+     * @param array{exists:bool,value:mixed} $entry
+     */
+    private function restore_entry(array &$target, string|int $key, array $entry): void
+    {
+        if (!empty($entry['exists'])) {
+            $target[$key] = $entry['value'];
+            return;
+        }
+
+        unset($target[$key]);
+    }
+
+    /**
+     * Return an encoded term row, materializing the compatibility cache lazily.
+     *
+     * @return array{df:int,postings:string}|null
+     */
+    private function encoded_term_row(string $term): ?array
+    {
+        if (!isset($this->postingsByTerm[$term]) || $this->postingsByTerm[$term] === []) {
+            unset($this->terms[$term]);
+            return null;
+        }
+
+        if (!isset($this->terms[$term])) {
+            $postings = $this->postingsByTerm[$term];
+            ksort($postings, SORT_NUMERIC);
+            $this->terms[$term] = [
+                'df' => count($postings),
+                'postings' => WP_FTS_PostingsCodec::encode($postings),
+            ];
+        }
+
+        return $this->terms[$term];
+    }
+
+    /**
+     * Replace all postings for one term and keep reverse document mappings in sync.
+     *
+     * @param array<int,int> $postings doc_id => weighted tf.
+     */
+    private function replace_term_postings(string $term, array $postings, ?string $encodedPostings = null): void
+    {
+        $this->remember_term($term);
+        $this->remember_postings_by_term($term);
+        foreach (array_keys($this->postingsByTerm[$term] ?? []) as $docId) {
+            $this->remember_terms_by_doc((int) $docId);
+            unset($this->termsByDoc[(int) $docId][$term]);
+            if (($this->termsByDoc[(int) $docId] ?? []) === []) {
+                unset($this->termsByDoc[(int) $docId]);
+            }
+        }
+
+        $normalized = [];
+        foreach ($postings as $docId => $tf) {
+            $docId = (int) $docId;
+            $tf = max(1, (int) $tf);
+            if ($docId < 0) {
+                continue;
+            }
+
+            $normalized[$docId] = $tf;
+            $this->remember_terms_by_doc($docId);
+            $this->termsByDoc[$docId][$term] = true;
+        }
+
+        if ($normalized === []) {
+            unset($this->postingsByTerm[$term], $this->terms[$term]);
+            return;
+        }
+
+        ksort($normalized, SORT_NUMERIC);
+        $this->postingsByTerm[$term] = $normalized;
+        if ($encodedPostings !== null) {
+            $this->terms[$term] = [
+                'df' => count($normalized),
+                'postings' => $encodedPostings,
+            ];
+        } else {
+            unset($this->terms[$term]);
+        }
     }
 
     /**

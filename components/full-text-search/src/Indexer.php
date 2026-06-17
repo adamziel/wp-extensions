@@ -115,11 +115,11 @@ final class WP_FTS_Indexer
         foreach ($fields as $field) {
             $fieldOpts = $opts;
             $fieldOpts['field_name'] = $field['name'];
-            $html = isset($field['html'])
-                ? (string) $field['html']
-                : '<div>' . htmlspecialchars($field['text'], ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8') . '</div>';
+            $fieldOccurrences = isset($field['html'])
+                ? $this->analyze_content((string) $field['html'], $fieldOpts, $primaryLang)
+                : $this->analyze_plain_content((string) $field['text'], $fieldOpts, $primaryLang);
 
-            foreach ($this->analyze_content($html, $fieldOpts, $primaryLang) as $occurrence) {
+            foreach ($fieldOccurrences as $occurrence) {
                 if (is_array($occurrence)) {
                     $occurrence['weight'] = (float) ($occurrence['weight'] ?? 1.0) * $field['boost'];
                 }
@@ -413,6 +413,40 @@ final class WP_FTS_Indexer
             throw new LogicException('Analyzer must provide analyze_content().');
         }
 
+        return $this->analyzer->analyze_content($html, $this->analysis_options($opts, $primaryLang));
+    }
+
+    /**
+     * Analyze a field value that is already plain text.
+     *
+     * New analyzers can skip HTML segmentation for these fields. Older analyzer
+     * objects fall back to the existing HTML wrapper so the public indexer
+     * contract stays compatible.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function analyze_plain_content(string $text, array $opts, string $primaryLang): array
+    {
+        $analysisOpts = $this->analysis_options($opts, $primaryLang);
+        if (is_callable([$this->analyzer, 'analyze_plain_content'])) {
+            return $this->analyzer->analyze_plain_content($text, $analysisOpts);
+        }
+
+        return $this->analyze_content(
+            '<div>' . htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8') . '</div>',
+            $opts,
+            $primaryLang
+        );
+    }
+
+    /**
+     * Fill analyzer options with the resolved document language.
+     *
+     * @param array<string,mixed> $opts
+     * @return array<string,mixed>
+     */
+    private function analysis_options(array $opts, string $primaryLang): array
+    {
         $analysisOpts = $opts;
         $analysisOpts['default_lang'] = $primaryLang;
         if (WP_FTS_TermNamespace::language_from_options($opts, null, ['lang', 'language', 'primary_lang', 'document_lang']) !== null) {
@@ -421,7 +455,7 @@ final class WP_FTS_Indexer
             $analysisOpts['language'] = $primaryLang;
         }
 
-        return $this->analyzer->analyze_content($html, $analysisOpts);
+        return $analysisOpts;
     }
 
     /**
