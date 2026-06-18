@@ -1,0 +1,95 @@
+{
+    "schema_version": 1,
+    "pack_id": "fa-unimorph-fas-b0e4f832b6ff",
+    "language": "fa",
+    "version": "b0e4f832b6ff-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer fa with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 3701,
+        "total_sha256": "808191d8ca01508ec5e185bea7cb8eedd38d420f8094a4f1f543f3151b5cb55d",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "9f369392ce4f0c538601aa4a3abfb92988d7abc9297eca77666e02ea323dfd48",
+                "rows": 3701,
+                "first_surface": "افشارد",
+                "last_surface": "یافتین",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph fas Persian inflection table",
+        "version": "b0e4f832b6ff-unimorph-v1",
+        "file": "fas",
+        "url": "https://github.com/unimorph/fas/blob/b0e4f832b6ffe5fc2457b8549c02525955b2ff97/fas",
+        "repository_url": "https://github.com/unimorph/fas",
+        "commit": "b0e4f832b6ffe5fc2457b8549c02525955b2ff97",
+        "artifact_sha256": "58e271562c184ed0bc38d85bf91e0d5427c32e4b5a55f2bf42bbdeb0843ca232",
+        "byte_count": 2104724,
+        "files": [
+            {
+                "path": "fas",
+                "sha256": "58e271562c184ed0bc38d85bf91e0d5427c32e4b5a55f2bf42bbdeb0843ca232",
+                "byte_count": 2104724
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "fas",
+            "source_files": 1,
+            "files": [
+                "fas"
+            ],
+            "source_lines": 37129,
+            "blank_lines": 1,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 31539,
+            "rows_with_features": 5589,
+            "accepted_rows": 5589
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph fas contributors; source repository https://github.com/unimorph/fas"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=fa --pack-id=fa-unimorph-fas-b0e4f832b6ff --version=b0e4f832b6ff-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/fas/blob/b0e4f832b6ffe5fc2457b8549c02525955b2ff97/fas --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

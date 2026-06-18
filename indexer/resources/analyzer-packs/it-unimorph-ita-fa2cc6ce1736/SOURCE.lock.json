@@ -1,0 +1,69 @@
+{
+    "schema_version": "wp-fts-unimorph-lemma-pack-source-lock/v1",
+    "pack": {
+        "id": "it-unimorph-ita-fa2cc6ce1736",
+        "language": "it",
+        "kind": "lemmatizer",
+        "status": "production_candidate",
+        "runtime_pack_committed": true,
+        "default_enabled": false
+    },
+    "source": {
+        "name": "UniMorph ita Italian inflection table",
+        "version": "fa2cc6ce1736-unimorph-v1",
+        "url": "https://github.com/unimorph/ita/blob/fa2cc6ce173643e748bd8f4162709365bdc98805/ita",
+        "repository_url": "https://github.com/unimorph/ita",
+        "commit": "fa2cc6ce173643e748bd8f4162709365bdc98805",
+        "file": "ita",
+        "files": [
+            {
+                "path": "ita",
+                "sha256": "6347bb15b3d2c3dafcbe4adc0e7beaa97a8bc61bcccc345079afb154c03f1321",
+                "byte_count": 19801423
+            }
+        ],
+        "artifact_sha256": "6347bb15b3d2c3dafcbe4adc0e7beaa97a8bc61bcccc345079afb154c03f1321",
+        "byte_count": 19801423,
+        "license": {
+            "spdx_id": "CC-BY-SA-3.0",
+            "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+            "notice_path": "NOTICE.txt",
+            "evidence_path": "README.md",
+            "evidence_sha256": "906c65c2a25b62ff77ed98f411ec07a4883999eb04ade6994726703aebb82283"
+        }
+    },
+    "columns": {
+        "format": "unimorph-three-column-tsv-v1",
+        "lemma_column": 0,
+        "surface_column": 1,
+        "features_column": 2
+    },
+    "importer": {
+        "path": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
+        "commit": "recorded-in-task-result",
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=it --pack-id=it-unimorph-ita-fa2cc6ce1736 --version=fa2cc6ce1736-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ita/blob/fa2cc6ce173643e748bd8f4162709365bdc98805/ita --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+    },
+    "runtime": {
+        "manifest_sha256": "9f9517c73705d34d3992de3461fdf9b9236adc07c459ef1453a51d949fca4868",
+        "row_count": 321279,
+        "file_count": 4,
+        "byte_count": 866089,
+        "digest_sha256": "5b949489569d73f0b02320ed82ace872d6e0eb0f4ff4c7a9502badf826830b17",
+        "contains_third_party_data": true,
+        "committed": true,
+        "compression": "gzip"
+    },
+    "behavior": {
+        "oov_policy": "return_original_normalized_term",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "unsupported_language_policy": "return_original_normalized_term"
+    },
+    "release": {
+        "default_enabled": false,
+        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+    },
+    "attribution": {
+        "upstream": "UniMorph ita contributors; source repository https://github.com/unimorph/ita"
+    }
+}

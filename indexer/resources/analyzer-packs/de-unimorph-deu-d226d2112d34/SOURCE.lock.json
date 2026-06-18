@@ -1,0 +1,69 @@
+{
+    "schema_version": "wp-fts-unimorph-lemma-pack-source-lock/v1",
+    "pack": {
+        "id": "de-unimorph-deu-d226d2112d34",
+        "language": "de",
+        "kind": "lemmatizer",
+        "status": "production_candidate",
+        "runtime_pack_committed": true,
+        "default_enabled": false
+    },
+    "source": {
+        "name": "UniMorph deu German inflection table",
+        "version": "d226d2112d34-unimorph-v1",
+        "url": "https://github.com/unimorph/deu/blob/d226d2112d3490d8f04ece10d4538123d4297a39/deu",
+        "repository_url": "https://github.com/unimorph/deu",
+        "commit": "d226d2112d3490d8f04ece10d4538123d4297a39",
+        "file": "deu",
+        "files": [
+            {
+                "path": "deu",
+                "sha256": "8bc98487e3caf86188e2c072ebf2dc734f2ca35afef016bb399eb5a43e69d7c0",
+                "byte_count": 18932560
+            }
+        ],
+        "artifact_sha256": "8bc98487e3caf86188e2c072ebf2dc734f2ca35afef016bb399eb5a43e69d7c0",
+        "byte_count": 18932560,
+        "license": {
+            "spdx_id": "CC-BY-SA-3.0",
+            "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+            "notice_path": "NOTICE.txt",
+            "evidence_path": "README.md",
+            "evidence_sha256": "b682a65551700b916de2ea47e149583df7a6b6c4105504caec1c6ee3b8c84f88"
+        }
+    },
+    "columns": {
+        "format": "unimorph-three-column-tsv-v1",
+        "lemma_column": 0,
+        "surface_column": 1,
+        "features_column": 2
+    },
+    "importer": {
+        "path": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
+        "commit": "recorded-in-task-result",
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=de --pack-id=de-unimorph-deu-d226d2112d34 --version=d226d2112d34-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/deu/blob/d226d2112d3490d8f04ece10d4538123d4297a39/deu --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+    },
+    "runtime": {
+        "manifest_sha256": "68c26519f579b303aac3542bc40e3e3ae215749c3627d0539fcb34d34ff97ae4",
+        "row_count": 170700,
+        "file_count": 2,
+        "byte_count": 565109,
+        "digest_sha256": "551ac706ad1502bdfb0e1b1cc1bd3648912380a1b28deb8d6162ea929e2434eb",
+        "contains_third_party_data": true,
+        "committed": true,
+        "compression": "gzip"
+    },
+    "behavior": {
+        "oov_policy": "return_original_normalized_term",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "unsupported_language_policy": "return_original_normalized_term"
+    },
+    "release": {
+        "default_enabled": false,
+        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+    },
+    "attribution": {
+        "upstream": "UniMorph deu contributors; source repository https://github.com/unimorph/deu"
+    }
+}

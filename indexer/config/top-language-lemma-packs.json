@@ -100,6 +100,96 @@
       "pack_required": false,
       "accepted_importers": ["lemma-tsv"],
       "notes": "Reference lane for pack-backed behavior."
+    },
+    {
+      "language": "ru",
+      "label": "Russian",
+      "role": "next-10",
+      "support_kind": "lemma_pack",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence."
+    },
+    {
+      "language": "de",
+      "label": "German",
+      "role": "next-10",
+      "support_kind": "lemma_pack",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence."
+    },
+    {
+      "language": "ja",
+      "label": "Japanese",
+      "role": "next-10",
+      "support_kind": "tokenizer",
+      "pack_required": false,
+      "accepted_importers": [],
+      "notes": "Japanese uses deterministic CJK n-gram tokenization for substring recall; the pinned UniMorph source submodule is retained for future external pack work, but no Japanese runtime lemma pack is committed because the current PHP pipeline has no source-backed Japanese word segmenter."
+    },
+    {
+      "language": "ko",
+      "label": "Korean",
+      "role": "next-10",
+      "support_kind": "tokenizer",
+      "pack_required": false,
+      "accepted_importers": [],
+      "notes": "Korean uses deterministic Hangul n-gram tokenization for substring recall; the pinned UniMorph source submodule is retained for future external pack work, but no Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed Korean word segmenter."
+    },
+    {
+      "language": "te",
+      "label": "Telugu",
+      "role": "next-10",
+      "support_kind": "lemma_pack",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence."
+    },
+    {
+      "language": "tr",
+      "label": "Turkish",
+      "role": "next-10",
+      "support_kind": "lemma_pack",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence with Turkish-aware casing."
+    },
+    {
+      "language": "it",
+      "label": "Italian",
+      "role": "next-10",
+      "support_kind": "lemma_pack",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence."
+    },
+    {
+      "language": "fa",
+      "label": "Persian",
+      "role": "next-10",
+      "support_kind": "lemma_pack",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence and Persian-specific detector evidence."
+    },
+    {
+      "language": "uk",
+      "label": "Ukrainian",
+      "role": "next-10",
+      "support_kind": "lemma_pack",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence from the ukr file; the larger upstream archive is retained only in the source submodule."
+    },
+    {
+      "language": "nl",
+      "label": "Dutch",
+      "role": "next-10",
+      "support_kind": "lemma_pack",
+      "pack_required": true,
+      "accepted_importers": ["lemma-tsv", "conllu", "unimorph"],
+      "notes": "Committed UniMorph-derived analyzer pack provides source-backed lemma evidence; the older optional Wamania Dutch Porter path remains only a fallback when no pack is configured."
     }
   ]
 }

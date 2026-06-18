@@ -134,7 +134,7 @@ test_case('large search corpus generator parses CLI options', function (): void 
 test_case('large search corpus generator derives default language scope from repo state', function (): void {
     $scope = WP_FTS_LargeSearchCorpusGenerator::derive_supported_language_scope(dirname(__DIR__, 2));
     assert_same(
-        ['en', 'ar', 'bn', 'ca', 'de', 'es', 'fr', 'hi', 'id', 'nl', 'pl', 'pt', 'ru', 'ur', 'zh'],
+        ['en', 'ar', 'bn', 'ca', 'de', 'es', 'fa', 'fr', 'hi', 'id', 'it', 'ja', 'ko', 'nl', 'pl', 'pt', 'ru', 'te', 'tr', 'uk', 'ur', 'zh'],
         $scope['languages'],
         'default corpus languages follow README, pipeline, stemmer, and pack manifests'
     );

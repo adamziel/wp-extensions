@@ -23,15 +23,22 @@ Current defaults:
 | `ar` | `--per-language-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
 | `bn` | `--per-language-docs` | README top routing set, baseline stemmer route, committed UniMorph analyzer pack. |
 | `ca` | `--per-language-docs` | Optional Snowball support through the verified Wamania-backed Catalan path. |
-| `de` | `--per-language-docs` | README explicit conservative language partition. |
+| `de` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
 | `es` | `--per-language-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
+| `fa` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
 | `fr` | `--per-language-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
 | `hi` | `--per-language-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
 | `id` | `--per-language-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
-| `nl` | `--per-language-docs` | Optional Snowball support through the verified Wamania-backed Dutch Porter path. |
+| `it` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
+| `ja` | `--per-language-docs` | README next-language set and deterministic CJK fallback tokenizer lane. |
+| `ko` | `--per-language-docs` | README next-language set and deterministic Hangul fallback tokenizer lane. |
+| `nl` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack; Dutch Porter remains a no-pack fallback. |
 | `pl` | `--per-language-docs` | README explicit partition, Polish pipeline route, committed Polish analyzer packs. |
 | `pt` | `--per-language-docs` | README top routing set, bundled Snowball path, committed UniMorph analyzer pack. |
-| `ru` | `--per-language-docs` | README explicit conservative language partition. |
+| `ru` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
+| `te` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
+| `tr` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
+| `uk` | `--per-language-docs` | README next-language set, committed UniMorph analyzer pack. |
 | `ur` | `--per-language-docs` | README top routing set and baseline Urdu suffix route; no committed Urdu pack is claimed. |
 | `zh` | `--per-language-docs` | README top routing set and deterministic CJK fallback/optional Jieba tokenizer lane. |
 

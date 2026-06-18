@@ -1,0 +1,103 @@
+{
+    "schema_version": 1,
+    "pack_id": "de-unimorph-deu-d226d2112d34",
+    "language": "de",
+    "version": "d226d2112d34-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer de with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 170700,
+        "total_sha256": "551ac706ad1502bdfb0e1b1cc1bd3648912380a1b28deb8d6162ea929e2434eb",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "e4bdde02860fc9a3abfc837a164e73da7152f524acae853959ee15ce7f71e223",
+                "rows": 100000,
+                "first_surface": "175er",
+                "last_surface": "nottaufe",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0002.tsv.gz",
+                "sha256": "9c7e0c56a9444639fc696dff081394959f5ca0b3b9b76ebdcc6f1a7783ec49df",
+                "rows": 70700,
+                "first_surface": "nottaufen",
+                "last_surface": "étangs",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph deu German inflection table",
+        "version": "d226d2112d34-unimorph-v1",
+        "file": "deu",
+        "url": "https://github.com/unimorph/deu/blob/d226d2112d3490d8f04ece10d4538123d4297a39/deu",
+        "repository_url": "https://github.com/unimorph/deu",
+        "commit": "d226d2112d3490d8f04ece10d4538123d4297a39",
+        "artifact_sha256": "8bc98487e3caf86188e2c072ebf2dc734f2ca35afef016bb399eb5a43e69d7c0",
+        "byte_count": 18932560,
+        "files": [
+            {
+                "path": "deu",
+                "sha256": "8bc98487e3caf86188e2c072ebf2dc734f2ca35afef016bb399eb5a43e69d7c0",
+                "byte_count": 18932560
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "deu",
+            "source_files": 1,
+            "files": [
+                "deu"
+            ],
+            "source_lines": 519143,
+            "blank_lines": 0,
+            "comment_lines": 0,
+            "placeholder_rows": 27,
+            "invalid_runtime_token_rows": 71712,
+            "rows_with_features": 447404,
+            "accepted_rows": 447404
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph deu contributors; source repository https://github.com/unimorph/deu"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=de --pack-id=de-unimorph-deu-d226d2112d34 --version=d226d2112d34-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/deu/blob/d226d2112d3490d8f04ece10d4538123d4297a39/deu --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

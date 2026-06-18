@@ -52,11 +52,11 @@ Current language support is best read by tier:
 | Language or partition | What works today | What it does not claim |
 | --- | --- | --- |
 | Polish (`pl`) | Explicit routing plus the strongest morphology path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases, and `polish_stemming => 'verified'` enables a compact fixture-backed stemmer slice. | Default fallback remains conservative when no valid pack or verified mode is enabled; bundled packs remain opt-in/default-disabled outside the sandbox path. |
-| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`) | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Not synonym expansion, phrase search, cross-language merging, or a default-enabled analyzer path. Built-in stemmers/baselines remain fallback behavior when packs are not configured. |
-| Catalan (`ca`), Dutch Porter (`nl`) | Optional Wamania-backed Snowball stemming when Composer dependencies are present and the compliance harness accepts them. | No broad Wamania language claim beyond the allowlist. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Not synonym expansion, phrase search, cross-language merging, or a default-enabled production analyzer path. Built-in stemmers/baselines/no-op behavior remain fallback behavior when packs are not configured. |
+| Japanese (`ja`), Korean (`ko`) | Selectable/detectable partitions using deterministic CJK/Hangul fallback tokenization. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline lacks a source-backed word segmenter for those languages. |
+| Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball stemming when Composer dependencies are present and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; no broad Wamania language claim is made beyond the allowlist. |
 | Chinese (`zh`) | Deterministic CJK fallback n-grams up to 4 characters, plus optional Jieba dictionary segmentation from the pinned source submodule when configured. | Jieba is segmentation only, default-disabled outside the sandbox, and not morphology, synonym expansion, phrase search, or broad Simplified/Traditional conversion. |
-| Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common feminine, masculine, Arabic-loan, and plural-oblique forms. | UniMorph Urdu is license-blocked because `unimorph/urd` has no redistribution license evidence; no generated Urdu pack is bundled. Persian-like text is not merged into Urdu routing. |
-| German (`de`), Russian (`ru`), other explicit partitions | Language namespace/routing support with conservative normalized tokens unless a documented analyzer exists. | No unverified morphology claim. |
+| Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common feminine, masculine, Arabic-loan, and plural-oblique forms. | UniMorph Urdu is license-blocked because `unimorph/urd` has no redistribution license evidence; no generated Urdu pack is bundled. Persian (`fa`) is now its own partition and is not merged into Urdu routing. |
 | Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` can enable local manifest-backed, language-matched packs. | Invalid, missing, disabled, or mismatched packs do not stop indexing; they fall back to the built-in analyzer path. |
 
 Morphology support must come from verified algorithms, analyzers, or
@@ -87,7 +87,8 @@ Stemming is enabled by default and can be disabled with
   Stempel, Morfologik, PoliMorf, or dictionary lemmatizer.
 - Generic opt-in lemma-pack infrastructure exists through
   `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. Bundled source-backed
-  UniMorph packs exist for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`.
+  UniMorph packs exist for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, `id`,
+  `ru`, `de`, `te`, `tr`, `it`, `fa`, `uk`, and `nl`.
   They are enabled automatically only for the admin/Playground sandbox and
   remain default-disabled elsewhere. The old synthetic `bn` contract pack
   remains a fixture-only runtime contract test; it is not product Bengali
@@ -99,10 +100,16 @@ Stemming is enabled by default and can be disabled with
   can provide source-backed lemmatization when enabled. Urdu remains a recall
   baseline, not Snowball-compliant, lemmatizer-backed, or dictionary-backed.
 - Arabic (`ar`) and Urdu (`ur`) normalize away Arabic-script combining
-  marks/harakat and tatweel. Arabic then uses the bundled generated Snowball
-  stemmer verified against the official compressed Arabic fixture data; Urdu
-  strips only common feminine, masculine, Arabic-loan, and plural-oblique
-  suffixes. Persian-like text is not merged into Urdu routing.
+  marks/harakat and tatweel; Persian (`fa`) applies the same mark normalization
+  before any configured Persian lemma pack. Arabic then uses the bundled
+  generated Snowball stemmer verified against the official compressed Arabic
+  fixture data; Urdu strips only common feminine, masculine, Arabic-loan, and
+  plural-oblique suffixes. Persian text is routed to the Persian partition when
+  detector evidence is clear.
+- Punjabi (`pa`/`pnb`), Javanese (`jv`), Vietnamese (`vi`), Marathi (`mr`), and
+  Tamil (`ta`) were not included in the committed next pack set because this
+  repository did not have a practical source-backed analyzer or tokenizer route
+  for them during this pass.
 - A full CLARIN-PL PoliMorf external pack builder exists for local/offline
   generation. It verifies the approved source artifact, writes the generated
   runtime pack outside the plugin package, and validates the resulting manifest.

@@ -193,7 +193,7 @@ final class WP_FTS_Normalizer
             return $this->normalize_chinese_dialect($token, $language);
         }
 
-        if ($base === 'ar' || $base === 'ur') {
+        if ($base === 'ar' || $base === 'fa' || $base === 'ur') {
             return $this->normalize_arabic_script_marks($token);
         }
 

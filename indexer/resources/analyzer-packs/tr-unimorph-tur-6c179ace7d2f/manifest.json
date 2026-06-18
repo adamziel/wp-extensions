@@ -1,0 +1,111 @@
+{
+    "schema_version": 1,
+    "pack_id": "tr-unimorph-tur-6c179ace7d2f",
+    "language": "tr",
+    "version": "6c179ace7d2f-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer tr with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 223646,
+        "total_sha256": "af5f9d2e60e66e86bfef0e493c5a9f0725db2ddb94112e2a8502dfcd866dd21b",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "2d73017f7f26451884931f201e450b8cce160e0279cf1903d69e9f3d2453a944",
+                "rows": 100000,
+                "first_surface": "abacı",
+                "last_surface": "kanıtlıyor",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0002.tsv.gz",
+                "sha256": "f3000c21960d9fd42aa7d65896d039590a8e01dfae8c5e8d96f82261112e0893",
+                "rows": 100000,
+                "first_surface": "kanıtlıyordu",
+                "last_surface": "utuyuz",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0003.tsv.gz",
+                "sha256": "8dbbf681bc1b1be4886308f6e0337e04c3a92925a8b353248e548d53a672fffd",
+                "rows": 23646,
+                "first_surface": "uy",
+                "last_surface": "ısıyı",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph tur Turkish inflection table",
+        "version": "6c179ace7d2f-unimorph-v1",
+        "file": "tur",
+        "url": "https://github.com/unimorph/tur/blob/6c179ace7d2f3d7f3484020e5304c1544d07bb6b/tur",
+        "repository_url": "https://github.com/unimorph/tur",
+        "commit": "6c179ace7d2f3d7f3484020e5304c1544d07bb6b",
+        "artifact_sha256": "4ae44f4b039c344f7078d8073b968b0d67133d1e9d7e653ce8aba5ed24387957",
+        "byte_count": 31596675,
+        "files": [
+            {
+                "path": "tur",
+                "sha256": "4ae44f4b039c344f7078d8073b968b0d67133d1e9d7e653ce8aba5ed24387957",
+                "byte_count": 31596675
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "tur",
+            "source_files": 1,
+            "files": [
+                "tur"
+            ],
+            "source_lines": 570420,
+            "blank_lines": 0,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 321539,
+            "rows_with_features": 248881,
+            "accepted_rows": 248881
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph tur contributors; source repository https://github.com/unimorph/tur"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=tr --pack-id=tr-unimorph-tur-6c179ace7d2f --version=6c179ace7d2f-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/tur/blob/6c179ace7d2f3d7f3484020e5304c1544d07bb6b/tur --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

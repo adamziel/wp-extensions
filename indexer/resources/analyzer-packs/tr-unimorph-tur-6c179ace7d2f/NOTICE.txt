@@ -1,0 +1,15 @@
+UniMorph tur Turkish inflection table 6c179ace7d2f-unimorph-v1
+Source URL: https://github.com/unimorph/tur/blob/6c179ace7d2f3d7f3484020e5304c1544d07bb6b/tur
+Source repository: https://github.com/unimorph/tur
+Source commit: 6c179ace7d2f3d7f3484020e5304c1544d07bb6b
+Source file path: tur
+Source artifact SHA-256: 4ae44f4b039c344f7078d8073b968b0d67133d1e9d7e653ce8aba5ed24387957
+Source artifact byte count: 31596675
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 87927068be9e804ff6945a7f7eafcd2ce8c23b2759ba1cfb41ed251c4f2e6e13
+Attribution: UniMorph tur contributors; source repository https://github.com/unimorph/tur
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

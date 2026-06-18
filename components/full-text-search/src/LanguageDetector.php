@@ -87,9 +87,9 @@ final class WP_FTS_LanguageDetector
      */
     public function index_signature(): string
     {
-        return 'wp-fts-language-detector-v4:' . sha1($this->stableJson([
+        return 'wp-fts-language-detector-v5:' . sha1($this->stableJson([
             'contract' => 'wp-fts-language-detector',
-            'version' => 4,
+            'version' => 5,
             'minimum_score' => $this->minimumScore,
             'minimum_lead' => $this->minimumLead,
             'evidence_terms' => $this->sortedStringSetMap($this->evidenceTerms),
@@ -141,12 +141,20 @@ final class WP_FTS_LanguageDetector
             'de' => ['der', 'die', 'das', 'und', 'ist', 'mit', 'fuer', 'suche'],
             'en' => ['the', 'and', 'with', 'from', 'this', 'that', 'search', 'index'],
             'es' => ['el', 'los', 'las', 'para', 'con', 'buscar', 'busqueda', 'datos', 'espanol'],
+            'fa' => ['فارسی', 'جستجو', 'فهرست', 'داده', 'زبان', 'گزارش'],
             'fr' => ['le', 'les', 'des', 'est', 'avec', 'pour', 'recherche', 'francais', 'donnees'],
             'hi' => ['यह', 'और', 'के', 'लिए', 'हिंदी', 'खोज'],
             'id' => ['yang', 'dan', 'dengan', 'untuk', 'pencarian', 'bahasa', 'indonesia'],
+            'it' => ['il', 'la', 'gli', 'con', 'per', 'ricerca', 'dati', 'italiano'],
+            'ja' => ['検索', '索引', '日本語', 'できます'],
+            'ko' => ['검색', '색인', '한국어', '문서'],
             'nl' => ['de', 'het', 'een', 'van', 'voor', 'zoeken'],
             'pl' => ['oraz', 'jest', 'dla', 'nie', 'sie', 'szukaj', 'wyszukaj'],
             'pt' => ['a', 'que', 'com', 'para', 'pesquisa', 'portugues', 'dados'],
+            'ru' => ['и', 'это', 'для', 'поиск', 'индекс', 'русский', 'данные'],
+            'te' => ['తెలుగు', 'శోధన', 'సూచిక', 'భాష', 'పత్రం'],
+            'tr' => ['ve', 'ile', 'icin', 'arama', 'dizin', 'turkce', 'veri'],
+            'uk' => ['і', 'для', 'пошук', 'індекс', 'українська', 'мова', 'дані'],
             'ur' => ['یہ', 'اور', 'ہے', 'میں', 'اردو', 'تلاش', 'فہرست'],
         ];
     }
@@ -182,9 +190,12 @@ final class WP_FTS_LanguageDetector
             'zh' => ['pattern' => '/\p{Han}/u', 'score' => 4],
             'ja' => ['pattern' => '/[\p{Hiragana}\p{Katakana}]/u', 'score' => 6],
             'ko' => ['pattern' => '/\p{Hangul}/u', 'score' => 4],
+            'uk' => ['pattern' => '/[ЄІЇҐєіїґ]/u', 'score' => 6],
             'ru' => ['pattern' => '/\p{Cyrillic}/u', 'score' => 4],
             'hi' => ['pattern' => '/[\x{0900}-\x{097F}]/u', 'score' => 4],
             'bn' => ['pattern' => '/[\x{0980}-\x{09FF}]/u', 'score' => 4],
+            'te' => ['pattern' => '/[\x{0C00}-\x{0C7F}]/u', 'score' => 4],
+            'fa' => ['pattern' => '/[\x{067E}\x{0686}\x{0698}\x{06AF}\x{06A9}\x{06CC}]/u', 'score' => 5],
             'ur' => ['pattern' => '/[\x{0679}\x{0688}\x{0691}\x{06BA}\x{06BE}\x{06C1}\x{06D2}\x{06D3}]/u', 'score' => 6],
             // Arabic script is shared by unsupported Perso-Arabic languages; require lexical evidence too.
             'ar' => ['pattern' => '/[\x{0600}-\x{06FF}\x{0750}-\x{077F}\x{08A0}-\x{08FF}]/u', 'score' => 2],
@@ -214,6 +225,7 @@ final class WP_FTS_LanguageDetector
             'fr' => ['pattern' => '/[ÀÂÆÇÈÉÊËÎÏÔŒÙÛŸàâæçèéêëîïôœùûÿ]/u', 'score' => 2],
             'pl' => ['pattern' => '/[ĄĆĘŁŃÓŚŹŻąćęłńóśźż]/u', 'score' => 3],
             'pt' => ['pattern' => '/[ÃÕãõ]/u', 'score' => 2],
+            'tr' => ['pattern' => '/[ĞİŞğıış]/u', 'score' => 3],
         ];
 
         foreach ($patterns as $key => $evidence) {

@@ -1,0 +1,69 @@
+{
+    "schema_version": "wp-fts-unimorph-lemma-pack-source-lock/v1",
+    "pack": {
+        "id": "tr-unimorph-tur-6c179ace7d2f",
+        "language": "tr",
+        "kind": "lemmatizer",
+        "status": "production_candidate",
+        "runtime_pack_committed": true,
+        "default_enabled": false
+    },
+    "source": {
+        "name": "UniMorph tur Turkish inflection table",
+        "version": "6c179ace7d2f-unimorph-v1",
+        "url": "https://github.com/unimorph/tur/blob/6c179ace7d2f3d7f3484020e5304c1544d07bb6b/tur",
+        "repository_url": "https://github.com/unimorph/tur",
+        "commit": "6c179ace7d2f3d7f3484020e5304c1544d07bb6b",
+        "file": "tur",
+        "files": [
+            {
+                "path": "tur",
+                "sha256": "4ae44f4b039c344f7078d8073b968b0d67133d1e9d7e653ce8aba5ed24387957",
+                "byte_count": 31596675
+            }
+        ],
+        "artifact_sha256": "4ae44f4b039c344f7078d8073b968b0d67133d1e9d7e653ce8aba5ed24387957",
+        "byte_count": 31596675,
+        "license": {
+            "spdx_id": "CC-BY-SA-3.0",
+            "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+            "notice_path": "NOTICE.txt",
+            "evidence_path": "README.md",
+            "evidence_sha256": "87927068be9e804ff6945a7f7eafcd2ce8c23b2759ba1cfb41ed251c4f2e6e13"
+        }
+    },
+    "columns": {
+        "format": "unimorph-three-column-tsv-v1",
+        "lemma_column": 0,
+        "surface_column": 1,
+        "features_column": 2
+    },
+    "importer": {
+        "path": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
+        "commit": "recorded-in-task-result",
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=tr --pack-id=tr-unimorph-tur-6c179ace7d2f --version=6c179ace7d2f-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/tur/blob/6c179ace7d2f3d7f3484020e5304c1544d07bb6b/tur --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+    },
+    "runtime": {
+        "manifest_sha256": "ca9f3c2881377fd5e45f2c05c815101b97af9a206fde6831fd451609a095e366",
+        "row_count": 223646,
+        "file_count": 3,
+        "byte_count": 571645,
+        "digest_sha256": "af5f9d2e60e66e86bfef0e493c5a9f0725db2ddb94112e2a8502dfcd866dd21b",
+        "contains_third_party_data": true,
+        "committed": true,
+        "compression": "gzip"
+    },
+    "behavior": {
+        "oov_policy": "return_original_normalized_term",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "unsupported_language_policy": "return_original_normalized_term"
+    },
+    "release": {
+        "default_enabled": false,
+        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+    },
+    "attribution": {
+        "upstream": "UniMorph tur contributors; source repository https://github.com/unimorph/tur"
+    }
+}

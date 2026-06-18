@@ -1,0 +1,15 @@
+UniMorph rus Russian inflection table 50dcabfd0a04-unimorph-v1
+Source URL: https://github.com/unimorph/rus/blob/50dcabfd0a04bd4d187ffb0d5cdd54af94863dec/rus
+Source repository: https://github.com/unimorph/rus
+Source commit: 50dcabfd0a04bd4d187ffb0d5cdd54af94863dec
+Source file path: rus
+Source artifact SHA-256: 6c13f849fc12844b23f46e70a02a45a2f537e60c62c8ffd8798bdff3991dc880
+Source artifact byte count: 25151401
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: a8b716c95231d5e39068cc0f2185248daf9f1b6e092ec3137b98f57ee43c4cb0
+Attribution: UniMorph rus contributors; source repository https://github.com/unimorph/rus
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

@@ -1,0 +1,15 @@
+UniMorph deu German inflection table d226d2112d34-unimorph-v1
+Source URL: https://github.com/unimorph/deu/blob/d226d2112d3490d8f04ece10d4538123d4297a39/deu
+Source repository: https://github.com/unimorph/deu
+Source commit: d226d2112d3490d8f04ece10d4538123d4297a39
+Source file path: deu
+Source artifact SHA-256: 8bc98487e3caf86188e2c072ebf2dc734f2ca35afef016bb399eb5a43e69d7c0
+Source artifact byte count: 18932560
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: b682a65551700b916de2ea47e149583df7a6b6c4105504caec1c6ee3b8c84f88
+Attribution: UniMorph deu contributors; source repository https://github.com/unimorph/deu
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

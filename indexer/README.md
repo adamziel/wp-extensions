@@ -167,17 +167,19 @@ text and indexed analyzer output differ.
 The baseline selectable and detectable routing set covers English (`en`),
 Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French
 (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`).
-Polish (`pl`), German (`de`), Russian (`ru`), and other explicit partitions can
-be routed when callers provide language hints.
+The next language set adds Russian (`ru`), German (`de`), Japanese (`ja`),
+Korean (`ko`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`),
+Ukrainian (`uk`), and Dutch (`nl`). Polish (`pl`) remains the reference
+morphology lane.
 
 | Language or partition | Current analyzer tier | Boundary |
 | --- | --- | --- |
 | Polish (`pl`) | Strongest path when an opt-in analyzer/lemma pack is valid. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases; the default fallback is conservative unless a valid pack or verified mode is enabled. | The committed Polish full pack and fixtures remain opt-in/default-disabled outside the sandbox path. |
-| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Packs are CC BY-SA 3.0 data, default-disabled, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline behavior remains the fallback when no pack is configured. |
-| Catalan (`ca`), Dutch Porter (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Other Wamania languages are treated as no-ops unless they become verified. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Packs are CC BY-SA-family or upstream-declared data, default-disabled for production runtime, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline/no-op behavior remains the fallback when no pack is configured. |
+| Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages are treated as no-ops unless they become verified. |
 | Chinese (`zh`) | Deterministic CJK fallback plus optional Jieba dictionary segmentation from the pinned `indexer/resources/sources/jieba` submodule via `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Fallback n-grams remain enabled for unknown/subword recall. |
+| Japanese (`ja`), Korean (`ko`) | Deterministic CJK/Hangul fallback tokenization with selectable/detectable language partitions. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed word segmenter for those languages. Pinned UniMorph source submodules are retained for future external-pack work. |
 | Urdu (`ur`) | Arabic-script mark/tatweel normalization plus deterministic suffix baseline for common plural-oblique forms. | UniMorph Urdu imports technically, but the upstream `unimorph/urd` repository has no license evidence, so no generated Urdu pack is committed. |
-| German (`de`), Russian (`ru`), and other explicit partitions | Language namespace/routing support with conservative analysis unless a documented analyzer is available. | Unsupported morphology returns the normalized token unchanged. |
 | Generic packs | `lemma_packs_by_lang` / `lemmatizer_packs_by_lang` accept local manifest-backed packs with matching `language` values. | Missing, invalid, disabled, or language-mismatched packs fall back safely. |
 
 Morphology support must come from verified algorithms, analyzers, or
@@ -188,9 +190,9 @@ Importer availability is not the same as pack-backed language support. To audit
 top-language readiness, run
 `php tools/audit-top-language-lemma-packs.php --pack-root=/path --json --require-pack-backed`.
 Languages reported as missing, fixture-only, or license-blocked are not ready to
-claim pack-backed quality. Chinese is a tokenizer lane rather than a missing
-lemma pack; its optional Jieba source is a git submodule, not copied dictionary
-rows in this repository.
+claim pack-backed quality. Chinese, Japanese, and Korean are tokenizer lanes
+rather than missing UniMorph lemma packs; their optional or future source data is
+kept as git submodules, not copied dictionary rows in this repository.
 
 The analyzer also provides CJK fallback tokenization with one-character runs
 kept as-is and longer runs emitted as character unigrams plus deterministic

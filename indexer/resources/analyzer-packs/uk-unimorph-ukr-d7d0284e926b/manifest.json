@@ -1,0 +1,95 @@
+{
+    "schema_version": 1,
+    "pack_id": "uk-unimorph-ukr-d7d0284e926b",
+    "language": "uk",
+    "version": "d7d0284e926b-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer uk with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 14229,
+        "total_sha256": "e9ca8689afdcde99f5b6ab77e91c66ef6a551561349afc7917e3c37e708c6088",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "13f1b2eef98a39471a470f6ac5eb6974b267a862e8cbf53b201d1b67f61b6add",
+                "rows": 14229,
+                "first_surface": "абажур",
+                "last_surface": "ґудзиків",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph ukr Ukrainian inflection table",
+        "version": "d7d0284e926b-unimorph-v1",
+        "file": "ukr",
+        "url": "https://github.com/unimorph/ukr/blob/d7d0284e926b7d4947c52aaafd1d7f8a40a2dec0/ukr",
+        "repository_url": "https://github.com/unimorph/ukr",
+        "commit": "d7d0284e926b7d4947c52aaafd1d7f8a40a2dec0",
+        "artifact_sha256": "c0ad5ba0348b829b2363a215f712b84c4d302535ebb97557d93082e4f32eab42",
+        "byte_count": 870660,
+        "files": [
+            {
+                "path": "ukr",
+                "sha256": "c0ad5ba0348b829b2363a215f712b84c4d302535ebb97557d93082e4f32eab42",
+                "byte_count": 870660
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "ukr",
+            "source_files": 1,
+            "files": [
+                "ukr"
+            ],
+            "source_lines": 20905,
+            "blank_lines": 1,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 363,
+            "rows_with_features": 20541,
+            "accepted_rows": 20541
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph ukr contributors; source repository https://github.com/unimorph/ukr; imported ukr file only"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=uk --pack-id=uk-unimorph-ukr-d7d0284e926b --version=d7d0284e926b-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ukr/blob/d7d0284e926b7d4947c52aaafd1d7f8a40a2dec0/ukr --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

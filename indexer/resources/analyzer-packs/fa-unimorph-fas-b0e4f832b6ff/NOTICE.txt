@@ -1,0 +1,15 @@
+UniMorph fas Persian inflection table b0e4f832b6ff-unimorph-v1
+Source URL: https://github.com/unimorph/fas/blob/b0e4f832b6ffe5fc2457b8549c02525955b2ff97/fas
+Source repository: https://github.com/unimorph/fas
+Source commit: b0e4f832b6ffe5fc2457b8549c02525955b2ff97
+Source file path: fas
+Source artifact SHA-256: 58e271562c184ed0bc38d85bf91e0d5427c32e4b5a55f2bf42bbdeb0843ca232
+Source artifact byte count: 2104724
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 0707199041c6e209f8080ccaf8a18172fa4fea18251438e2cb2a420fe9c6b5a8
+Attribution: UniMorph fas contributors; source repository https://github.com/unimorph/fas
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.
