@@ -14,6 +14,8 @@ final class WP_FTS_Plugin
     public const SCHEMA_VERSION_OPTION = 'wp_fts_schema_version';
     public const QUEUE_OPTION = 'wp_fts_pending_index_post_ids';
     public const CRON_HOOK = 'wp_fts_process_index_queue';
+    public const INDEX_LOCK_OPTION = 'wp_fts_indexing_lock';
+    public const INDEX_HEALTH_OPTION = 'wp_fts_index_health';
     public const REST_NAMESPACE = 'wp-fts/v1';
     public const REST_SEARCH_ROUTE = '/search';
     public const ADMIN_PAGE_SLUG = 'wp-fts-settings';
@@ -27,7 +29,17 @@ final class WP_FTS_Plugin
     public const SEARCH_REPLACEMENT_PRIORITY = 999;
     public const LANGUAGE_META_KEY = '_wp_fts_index_language';
     public const DEFAULT_BATCH_SIZE = 25;
+    public const DEFAULT_CRON_INDEX_BATCH_SIZE = 20;
+    public const DEFAULT_MANUAL_INDEX_BATCH_SIZE = 100;
     public const MAX_SEARCH_LIMIT = 50;
+    private const DEFAULT_CRON_INDEX_TIME_BUDGET = 10.0;
+    private const DEFAULT_MANUAL_INDEX_TIME_BUDGET = 20.0;
+    private const DEFAULT_INDEX_MEMORY_MARGIN_BYTES = 16777216;
+    private const DEFAULT_INDEX_LOCK_TTL = 300;
+    private const MAX_CRON_INDEX_BATCH_SIZE = 500;
+    private const MAX_MANUAL_INDEX_BATCH_SIZE = 1000;
+    private const MAX_INDEX_TIME_BUDGET = 300.0;
+    private const MAX_INDEX_MEMORY_MARGIN_BYTES = 536870912;
     private const ADMIN_NONCE_ACTION = 'wp_fts_sandbox_admin_action';
     private const ADMIN_NONCE_FIELD = 'wp_fts_sandbox_nonce';
     private const ADMIN_ACTION_FIELD = 'wp_fts_sandbox_action';
@@ -108,7 +120,7 @@ final class WP_FTS_Plugin
         add_action('transition_post_status', [self::class, 'handle_status_transition'], 10, 3);
         add_action('trashed_post', [self::class, 'handle_post_delete'], 10, 1);
         add_action('before_delete_post', [self::class, 'handle_post_delete'], 10, 1);
-        add_action(self::CRON_HOOK, [self::class, 'process_queue'], 10, 0);
+        add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
         add_action('admin_init', [self::class, 'register_settings'], 10, 0);
@@ -165,6 +177,8 @@ final class WP_FTS_Plugin
         self::delete_option(self::SANDBOX_DEMO_POSTS_OPTION);
         self::delete_option(self::ANALYZER_OPTIONS_OPTION);
         self::delete_option(self::SETTINGS_OPTION);
+        self::delete_option(self::INDEX_LOCK_OPTION);
+        self::delete_option(self::INDEX_HEALTH_OPTION);
     }
 
     /**
@@ -308,6 +322,50 @@ final class WP_FTS_Plugin
         }
 
         return $processed;
+    }
+
+    /**
+     * WP-Cron entry point for bounded queue and backfill indexing work.
+     *
+     * @return array<string,mixed> Small batch summary suitable for logs/tests.
+     */
+    public static function process_scheduled_indexing(): array
+    {
+        return self::process_indexing_batch('cron');
+    }
+
+    /**
+     * Manual entry point for the later health UI to advance indexing on demand.
+     *
+     * @param array<string,mixed> $opts Optional overrides for tests or callers.
+     * @return array<string,mixed> Small batch summary suitable for UI feedback.
+     */
+    public static function process_manual_index_batch(array $opts = []): array
+    {
+        return self::process_indexing_batch('manual', $opts);
+    }
+
+    /**
+     * Return compact indexing health state for the later admin dashboard.
+     *
+     * @return array<string,mixed>
+     */
+    public static function search_health(): array
+    {
+        $state = self::index_health_state();
+        $pending_queue_count = count(self::pending_queue());
+        $has_more = (bool) ($state['has_more'] ?? false);
+        if ($pending_queue_count > 0) {
+            $has_more = true;
+        } elseif (self::has_eligible_unindexed_content()) {
+            $has_more = true;
+        }
+
+        $state['pending_queue_count'] = $pending_queue_count;
+        $state['has_more'] = $has_more;
+        $state['lock_active'] = self::index_lock_active();
+
+        return $state;
     }
 
     /**
@@ -4532,6 +4590,510 @@ final class WP_FTS_Plugin
         sort($ids, SORT_NUMERIC);
 
         return $ids;
+    }
+
+    /**
+     * Run one bounded indexing batch across save-hook queue work and backfill.
+     *
+     * @param array<string,mixed> $opts Optional caller/test overrides.
+     * @return array<string,mixed>
+     */
+    private static function process_indexing_batch(string $mode, array $opts = []): array
+    {
+        $mode = $mode === 'cron' ? 'cron' : 'manual';
+        $batch_size = self::index_batch_size($mode, $opts);
+        $summary = self::default_index_batch_summary($mode, $batch_size);
+
+        $token = self::acquire_index_lock($mode);
+        if ($token === null) {
+            $summary['skipped_locked'] = true;
+            $summary['has_more'] = true;
+            self::update_index_health_state($summary);
+
+            return $summary;
+        }
+
+        try {
+            $budget = self::index_resource_budget($mode, $opts);
+            $analyzer = self::runtime_analyzer();
+            self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer);
+
+            $remaining_capacity = max(0, $batch_size - (int) $summary['processed']);
+            if ($remaining_capacity > 0 && !self::index_resource_budget_exhausted($budget, (int) $summary['processed'])) {
+                self::process_backfill_for_index_batch($remaining_capacity, $budget, $summary, $analyzer);
+            } elseif ($remaining_capacity > 0) {
+                $summary['stopped_by_budget'] = true;
+                $summary['has_more'] = true;
+            }
+
+            if (self::pending_queue() !== []) {
+                $summary['has_more'] = true;
+            }
+
+            self::update_index_health_state($summary);
+        } finally {
+            self::release_index_lock($token);
+        }
+
+        if ($mode === 'cron' && !empty($summary['has_more'])) {
+            self::schedule_queue_processor();
+        }
+
+        return $summary;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function default_index_batch_summary(string $mode, int $batch_size): array
+    {
+        return [
+            'mode' => $mode,
+            'batch_size' => $batch_size,
+            'processed' => 0,
+            'queue_processed' => 0,
+            'backfill_processed' => 0,
+            'has_more' => false,
+            'skipped_locked' => false,
+            'stopped_by_budget' => false,
+            'last_indexed_post_id' => 0,
+            'last_indexed_post_title' => '',
+            'last_indexed_at' => '',
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $budget
+     * @param array<string,mixed> $summary
+     */
+    private static function process_queue_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): void
+    {
+        $queue = self::pending_queue();
+        if ($queue === [] || $limit <= 0) {
+            return;
+        }
+
+        $claimed = array_slice($queue, 0, $limit);
+        $remaining = array_slice($queue, count($claimed));
+        $processed_ids = [];
+        $index = 0;
+
+        for ($index = 0, $count = count($claimed); $index < $count; $index++) {
+            if (self::index_resource_budget_exhausted($budget, (int) $summary['processed'])) {
+                $summary['stopped_by_budget'] = true;
+                $summary['has_more'] = true;
+                break;
+            }
+
+            $post_id = (int) $claimed[$index];
+            $post = self::post_object($post_id);
+            if ($post !== null && self::is_indexable_post($post)) {
+                self::index_post($post, [], $analyzer);
+                self::remember_indexed_post_in_summary($summary, $post);
+            } else {
+                self::tombstone_post($post_id);
+            }
+
+            $processed_ids[] = $post_id;
+            $summary['processed'] = (int) $summary['processed'] + 1;
+            $summary['queue_processed'] = (int) $summary['queue_processed'] + 1;
+        }
+
+        $unprocessed_claimed = array_slice($claimed, $index);
+        $queue = self::finish_queue_batch($processed_ids, array_merge($unprocessed_claimed, $remaining));
+        if ($queue !== []) {
+            $summary['has_more'] = true;
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $budget
+     * @param array<string,mixed> $summary
+     */
+    private static function process_backfill_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): void
+    {
+        if ($limit <= 0) {
+            return;
+        }
+
+        $rows = self::select_eligible_unindexed_posts($limit + 1);
+        if ($rows === []) {
+            return;
+        }
+
+        $work = array_slice($rows, 0, $limit);
+        $processed_rows = 0;
+        foreach ($work as $post) {
+            if (self::index_resource_budget_exhausted($budget, (int) $summary['processed'])) {
+                $summary['stopped_by_budget'] = true;
+                $summary['has_more'] = true;
+                break;
+            }
+
+            if (self::is_indexable_post($post)) {
+                self::index_post($post, [], $analyzer);
+                self::remember_indexed_post_in_summary($summary, $post);
+            } elseif (isset($post->ID)) {
+                self::tombstone_post((int) $post->ID);
+            }
+
+            $processed_rows++;
+            $summary['processed'] = (int) $summary['processed'] + 1;
+            $summary['backfill_processed'] = (int) $summary['backfill_processed'] + 1;
+        }
+
+        if (count($rows) > $processed_rows) {
+            $summary['has_more'] = true;
+        }
+    }
+
+    /**
+     * @return object[]
+     */
+    private static function select_eligible_unindexed_posts(int $limit): array
+    {
+        global $wpdb;
+
+        $limit = max(1, $limit);
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'prepare') || !method_exists($wpdb, 'get_results')) {
+            return [];
+        }
+
+        $post_types = self::configured_backfill_post_types();
+        if ($post_types === []) {
+            return [];
+        }
+
+        $clauses = [];
+        $args = [];
+
+        $public_placeholders = implode(',', array_fill(0, count($post_types), '%s'));
+        $clauses[] = "(p.post_status = %s AND p.post_type IN ({$public_placeholders}))";
+        $args[] = 'publish';
+        array_push($args, ...$post_types);
+
+        if (in_array('post', $post_types, true)) {
+            $status_placeholders = implode(',', array_fill(0, count(self::ADMIN_POST_SEARCH_POST_STATUSES), '%s'));
+            $clauses[] = "(p.post_type = %s AND p.post_status IN ({$status_placeholders}))";
+            $args[] = 'post';
+            array_push($args, ...self::ADMIN_POST_SEARCH_POST_STATUSES);
+        }
+
+        $posts_table = isset($wpdb->posts) && is_scalar($wpdb->posts)
+            ? (string) $wpdb->posts
+            : (string) ($wpdb->prefix ?? '') . 'posts';
+        $docs_table = (string) ($wpdb->prefix ?? '') . 'fts_docs';
+        $args[] = $limit;
+
+        $sql = $wpdb->prepare(
+            "SELECT p.ID, p.post_content, p.post_title, p.post_excerpt, p.post_type, p.post_status, p.post_password, p.post_date_gmt, p.post_date
+FROM {$posts_table} p
+LEFT JOIN {$docs_table} d ON d.doc_id = p.ID AND d.is_deleted = 0
+WHERE d.doc_id IS NULL
+  AND p.post_password = ''
+  AND (" . implode(' OR ', $clauses) . ")
+ORDER BY p.ID ASC
+LIMIT %d",
+            ...$args
+        );
+
+        $rows = $wpdb->get_results($sql);
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        return array_values(array_filter($rows, static fn(mixed $row): bool => is_object($row)));
+    }
+
+    private static function has_eligible_unindexed_content(): bool
+    {
+        return self::select_eligible_unindexed_posts(1) !== [];
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function configured_backfill_post_types(): array
+    {
+        $types = [];
+        foreach (self::settings()['index_post_types'] as $post_type) {
+            $post_type = is_scalar($post_type) ? (string) $post_type : '';
+            if ($post_type !== '' && self::is_public_searchable_post_type($post_type)) {
+                $types[$post_type] = true;
+            }
+        }
+
+        $result = array_keys($types);
+        sort($result, SORT_STRING);
+
+        return $result;
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function remember_indexed_post_in_summary(array &$summary, object $post): void
+    {
+        $post_id = isset($post->ID) ? (int) $post->ID : 0;
+        if ($post_id <= 0) {
+            return;
+        }
+
+        $summary['last_indexed_post_id'] = $post_id;
+        $summary['last_indexed_post_title'] = isset($post->post_title) && is_scalar($post->post_title) ? (string) $post->post_title : '';
+        $summary['last_indexed_at'] = self::current_gmt_datetime();
+    }
+
+    /**
+     * @param array<string,mixed> $opts
+     */
+    private static function index_batch_size(string $mode, array $opts): int
+    {
+        if (isset($opts['batch_size']) && is_numeric($opts['batch_size'])) {
+            return self::clamp_int((int) $opts['batch_size'], 1, self::MAX_MANUAL_INDEX_BATCH_SIZE);
+        }
+
+        if ($mode === 'cron') {
+            return self::configured_int_constant(
+                'WP_FTS_CRON_INDEX_BATCH_SIZE',
+                self::DEFAULT_CRON_INDEX_BATCH_SIZE,
+                1,
+                self::MAX_CRON_INDEX_BATCH_SIZE
+            );
+        }
+
+        return self::configured_int_constant(
+            'WP_FTS_MANUAL_INDEX_BATCH_SIZE',
+            self::DEFAULT_MANUAL_INDEX_BATCH_SIZE,
+            1,
+            self::MAX_MANUAL_INDEX_BATCH_SIZE
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $opts
+     * @return array<string,mixed>
+     */
+    private static function index_resource_budget(string $mode, array $opts): array
+    {
+        $default_time = $mode === 'cron' ? self::DEFAULT_CRON_INDEX_TIME_BUDGET : self::DEFAULT_MANUAL_INDEX_TIME_BUDGET;
+        $time_budget = isset($opts['time_budget']) && is_numeric($opts['time_budget'])
+            ? self::clamp_float((float) $opts['time_budget'], 0.0, self::MAX_INDEX_TIME_BUDGET)
+            : self::configured_float_constant(
+                $mode === 'cron' ? 'WP_FTS_CRON_INDEX_TIME_BUDGET' : 'WP_FTS_MANUAL_INDEX_TIME_BUDGET',
+                $default_time,
+                0.01,
+                self::MAX_INDEX_TIME_BUDGET
+            );
+
+        return [
+            'deadline' => microtime(true) + $time_budget,
+            'memory_limit' => self::memory_limit_bytes(),
+            'memory_margin' => self::configured_int_constant(
+                'WP_FTS_INDEX_MEMORY_MARGIN_BYTES',
+                self::DEFAULT_INDEX_MEMORY_MARGIN_BYTES,
+                1048576,
+                self::MAX_INDEX_MEMORY_MARGIN_BYTES
+            ),
+            'callback' => is_callable($opts['budget_check'] ?? null) ? $opts['budget_check'] : null,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $budget
+     */
+    private static function index_resource_budget_exhausted(array $budget, int $processed): bool
+    {
+        if (is_callable($budget['callback'] ?? null) && (bool) call_user_func($budget['callback'], $processed)) {
+            return true;
+        }
+
+        if (isset($budget['deadline']) && is_float($budget['deadline']) && microtime(true) >= $budget['deadline']) {
+            return true;
+        }
+
+        $memory_limit = isset($budget['memory_limit']) ? (int) $budget['memory_limit'] : 0;
+        if ($memory_limit > 0) {
+            $memory_margin = isset($budget['memory_margin']) ? max(0, (int) $budget['memory_margin']) : 0;
+            if (memory_get_usage(true) + $memory_margin >= $memory_limit) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function acquire_index_lock(string $mode): ?string
+    {
+        $now = time();
+        $existing = self::get_option(self::INDEX_LOCK_OPTION, null);
+        if (self::lock_payload_active($existing, $now)) {
+            return null;
+        }
+        if ($existing !== null) {
+            self::delete_option(self::INDEX_LOCK_OPTION);
+        }
+
+        $ttl = self::configured_int_constant('WP_FTS_INDEX_LOCK_TTL', self::DEFAULT_INDEX_LOCK_TTL, 30, 3600);
+        $token = bin2hex(random_bytes(12));
+        $payload = [
+            'token' => $token,
+            'mode' => $mode,
+            'started_at' => $now,
+            'expires_at' => $now + $ttl,
+        ];
+
+        if (function_exists('add_option')) {
+            return add_option(self::INDEX_LOCK_OPTION, $payload, '', 'no') ? $token : null;
+        }
+
+        self::set_option(self::INDEX_LOCK_OPTION, $payload);
+        $stored = self::get_option(self::INDEX_LOCK_OPTION, null);
+
+        return is_array($stored) && ($stored['token'] ?? null) === $token ? $token : null;
+    }
+
+    private static function release_index_lock(string $token): void
+    {
+        $lock = self::get_option(self::INDEX_LOCK_OPTION, null);
+        if (is_array($lock) && ($lock['token'] ?? null) === $token) {
+            self::delete_option(self::INDEX_LOCK_OPTION);
+        }
+    }
+
+    private static function index_lock_active(): bool
+    {
+        return self::lock_payload_active(self::get_option(self::INDEX_LOCK_OPTION, null), time());
+    }
+
+    private static function lock_payload_active(mixed $payload, int $now): bool
+    {
+        return is_array($payload)
+            && isset($payload['expires_at'])
+            && is_scalar($payload['expires_at'])
+            && (int) $payload['expires_at'] > $now;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function index_health_state(): array
+    {
+        $raw = self::get_option(self::INDEX_HEALTH_OPTION, []);
+        if (!is_array($raw)) {
+            return self::default_index_health_state();
+        }
+
+        $state = array_replace(self::default_index_health_state(), $raw);
+        $state['last_batch_processed'] = max(0, (int) $state['last_batch_processed']);
+        $state['last_batch_queue_processed'] = max(0, (int) $state['last_batch_queue_processed']);
+        $state['last_batch_backfill_processed'] = max(0, (int) $state['last_batch_backfill_processed']);
+        $state['last_indexed_post_id'] = max(0, (int) $state['last_indexed_post_id']);
+        $state['last_indexed_post_title'] = is_scalar($state['last_indexed_post_title']) ? (string) $state['last_indexed_post_title'] : '';
+        $state['last_indexed_at'] = is_scalar($state['last_indexed_at']) ? (string) $state['last_indexed_at'] : '';
+        $state['last_run_at'] = is_scalar($state['last_run_at']) ? (string) $state['last_run_at'] : '';
+        $state['last_mode'] = is_scalar($state['last_mode']) ? (string) $state['last_mode'] : '';
+        $state['has_more'] = (bool) $state['has_more'];
+        $state['last_skipped_locked'] = (bool) $state['last_skipped_locked'];
+        $state['last_stopped_by_budget'] = (bool) $state['last_stopped_by_budget'];
+
+        return $state;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function default_index_health_state(): array
+    {
+        return [
+            'last_batch_processed' => 0,
+            'last_batch_queue_processed' => 0,
+            'last_batch_backfill_processed' => 0,
+            'has_more' => false,
+            'last_indexed_post_id' => 0,
+            'last_indexed_post_title' => '',
+            'last_indexed_at' => '',
+            'last_skipped_locked' => false,
+            'last_stopped_by_budget' => false,
+            'last_mode' => '',
+            'last_run_at' => '',
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function update_index_health_state(array $summary): void
+    {
+        $state = self::index_health_state();
+        $state['last_batch_processed'] = max(0, (int) ($summary['processed'] ?? 0));
+        $state['last_batch_queue_processed'] = max(0, (int) ($summary['queue_processed'] ?? 0));
+        $state['last_batch_backfill_processed'] = max(0, (int) ($summary['backfill_processed'] ?? 0));
+        $state['has_more'] = (bool) ($summary['has_more'] ?? false);
+        $state['last_skipped_locked'] = (bool) ($summary['skipped_locked'] ?? false);
+        $state['last_stopped_by_budget'] = (bool) ($summary['stopped_by_budget'] ?? false);
+        $state['last_mode'] = is_scalar($summary['mode'] ?? null) ? (string) $summary['mode'] : '';
+        $state['last_run_at'] = self::current_gmt_datetime();
+
+        if ((int) ($summary['last_indexed_post_id'] ?? 0) > 0) {
+            $state['last_indexed_post_id'] = (int) $summary['last_indexed_post_id'];
+            $state['last_indexed_post_title'] = is_scalar($summary['last_indexed_post_title'] ?? null) ? (string) $summary['last_indexed_post_title'] : '';
+            $state['last_indexed_at'] = is_scalar($summary['last_indexed_at'] ?? null) ? (string) $summary['last_indexed_at'] : self::current_gmt_datetime();
+        }
+
+        self::set_option(self::INDEX_HEALTH_OPTION, $state);
+    }
+
+    private static function configured_int_constant(string $name, int $default, int $min, int $max): int
+    {
+        $value = defined($name) ? constant($name) : $default;
+        if (!is_numeric($value)) {
+            $value = $default;
+        }
+
+        return self::clamp_int((int) $value, $min, $max);
+    }
+
+    private static function configured_float_constant(string $name, float $default, float $min, float $max): float
+    {
+        $value = defined($name) ? constant($name) : $default;
+        if (!is_numeric($value)) {
+            $value = $default;
+        }
+
+        return self::clamp_float((float) $value, $min, $max);
+    }
+
+    private static function clamp_float(float $value, float $min, float $max): float
+    {
+        return min($max, max($min, $value));
+    }
+
+    private static function memory_limit_bytes(): int
+    {
+        $raw = ini_get('memory_limit');
+        if (!is_string($raw) || trim($raw) === '' || trim($raw) === '-1') {
+            return 0;
+        }
+
+        $raw = trim($raw);
+        $unit = strtolower(substr($raw, -1));
+        $number = is_numeric($unit) ? (float) $raw : (float) substr($raw, 0, -1);
+        if ($number <= 0) {
+            return 0;
+        }
+
+        return match ($unit) {
+            'g' => (int) ($number * 1073741824),
+            'm' => (int) ($number * 1048576),
+            'k' => (int) ($number * 1024),
+            default => (int) $number,
+        };
+    }
+
+    private static function current_gmt_datetime(): string
+    {
+        return gmdate('Y-m-d H:i:s');
     }
 
     /**

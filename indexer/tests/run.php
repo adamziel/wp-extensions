@@ -2332,6 +2332,43 @@ final class WP_FTS_Test_WPDB
             return $rows;
         }
 
+        if (str_starts_with($sql, 'SELECT p.ID, p.post_content, p.post_title')) {
+            $offset = 0;
+            $publicStatus = str_contains($sql, 'p.post_status = %s') ? (string) ($args[$offset++] ?? '') : '';
+            $publicTypes = $this->prepared_in_args($sql, 'p.post_type', '%s', $args, $offset);
+            $adminType = null;
+            $adminStatuses = [];
+            if (str_contains($sql, 'p.post_type = %s')) {
+                $adminType = (string) ($args[$offset++] ?? '');
+                $adminStatuses = $this->prepared_in_args($sql, 'p.post_status', '%s', $args, $offset);
+            }
+            $limit = max(0, (int) ($args[$offset] ?? $args[count($args) - 1] ?? 0));
+
+            $rows = [];
+            foreach ($this->postRows as $row) {
+                $postId = isset($row->ID) ? (int) $row->ID : 0;
+                if ($postId <= 0 || ($this->docs[$postId]['is_deleted'] ?? 1) === 0) {
+                    continue;
+                }
+
+                if (isset($row->post_password) && (string) $row->post_password !== '') {
+                    continue;
+                }
+
+                $type = isset($row->post_type) ? (string) $row->post_type : 'post';
+                $status = isset($row->post_status) ? (string) $row->post_status : 'draft';
+                $publicEligible = $publicStatus !== '' && $status === $publicStatus && in_array($type, array_map('strval', $publicTypes), true);
+                $adminEligible = $adminType !== null && $type === $adminType && in_array($status, array_map('strval', $adminStatuses), true);
+                if ($publicEligible || $adminEligible) {
+                    $rows[] = $row;
+                }
+            }
+
+            usort($rows, static fn(object $a, object $b): int => (int) $a->ID <=> (int) $b->ID);
+
+            return array_slice($rows, 0, $limit);
+        }
+
         if (str_starts_with($sql, 'SELECT ID, post_content, post_title')) {
             $last = (int) $args[count($args) - 2];
             $limit = (int) $args[count($args) - 1];
@@ -2792,6 +2829,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_deactivation_hooks'] = [];
     $GLOBALS['wp_fts_test_uninstall_hooks'] = [];
     $GLOBALS['wp_fts_test_options'] = [];
+    $GLOBALS['wp_fts_test_added_options'] = [];
     $GLOBALS['wp_fts_test_scheduled'] = [];
     $GLOBALS['wp_fts_test_cleared_hooks'] = [];
     $GLOBALS['wp_fts_test_rest_routes'] = [];
@@ -2907,6 +2945,24 @@ if (!function_exists('update_option')) {
         $GLOBALS['wp_fts_test_options'][$name] = $value;
 
         return $old !== $value;
+    }
+}
+
+if (!function_exists('add_option')) {
+    function add_option(string $name, mixed $value = '', string $deprecated = '', string|bool|null $autoload = null): bool
+    {
+        if (array_key_exists($name, $GLOBALS['wp_fts_test_options'])) {
+            return false;
+        }
+
+        $GLOBALS['wp_fts_test_options'][$name] = $value;
+        $GLOBALS['wp_fts_test_added_options'][] = [
+            'name' => $name,
+            'value' => $value,
+            'autoload' => $autoload,
+        ];
+
+        return true;
     }
 }
 
@@ -3565,6 +3621,28 @@ function wp_fts_test_legacy_sandbox_demo_signatures(): array
         ['title' => 'FTS Sandbox: Indonesian Abadi', 'slug' => 'wp-fts-sandbox-indonesian-abadi'],
         ['title' => 'FTS Sandbox: Urdu Suffix Baseline', 'slug' => 'wp-fts-sandbox-urdu-suffix-baseline'],
     ];
+}
+
+function wp_fts_test_backfill_post(int $post_id, string $post_type = 'post', string $post_status = 'publish', ?string $title = null): object
+{
+    return (object) [
+        'ID' => $post_id,
+        'post_title' => $title ?? 'Backfill ' . $post_id,
+        'post_content' => '<p>batchindexneedle ' . $post_id . '</p>',
+        'post_excerpt' => '',
+        'post_type' => $post_type,
+        'post_status' => $post_status,
+        'post_password' => '',
+        'post_date_gmt' => '2026-06-18 00:00:00',
+        'post_date' => '2026-06-18 00:00:00',
+    ];
+}
+
+function wp_fts_test_seed_backfill_posts(WP_FTS_Test_WPDB $wpdb, int $count, int $start_id = 1, string $post_type = 'post', string $post_status = 'publish'): void
+{
+    for ($i = 0; $i < $count; $i++) {
+        $wpdb->postRows[] = wp_fts_test_backfill_post($start_id + $i, $post_type, $post_status);
+    }
 }
 
 wp_fts_test_reset_wordpress_fakes();
@@ -4718,12 +4796,15 @@ test_case('activation repairs schema stores version and surfaces database failur
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 30);
 
     try {
         WP_FTS_Plugin::activate();
         assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'activation should store schema version option');
         assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'activation should create or repair all FTS tables');
         assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'activation should schedule the queue processor');
+        assert_same([], $fake->docs, 'activation should not immediately backfill existing content');
+        assert_same([], $fake->terms, 'activation should not write FTS terms for existing content');
 
         WP_FTS_Plugin::maybe_upgrade_schema();
         assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'current schema version should avoid redundant runtime repair');
@@ -4748,6 +4829,134 @@ test_case('activation repairs schema stores version and surfaces database failur
         $wpdb = $oldWpdb;
     }
     assert_true($thrown, 'activation should throw on schema write failure');
+});
+
+test_case('scheduled indexing cron backfills only the default batch and reschedules remaining work', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 25);
+
+    try {
+        WP_FTS_Plugin::activate();
+        unset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]);
+
+        $result = WP_FTS_Plugin::process_scheduled_indexing();
+        assert_same(20, $result['processed'], 'cron should process the default 20-item indexing batch');
+        assert_same(20, $result['backfill_processed'], 'cron should spend the default batch on backfill when the queue is empty');
+        assert_same(20, count($fake->docs), 'cron should not backfill all existing content in one run');
+        assert_true((bool) $result['has_more'], 'cron should report that more eligible content remains');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'cron should schedule another run when backfill work remains');
+        assert_same(20, WP_FTS_Plugin::search_health()['last_batch_processed'], 'health state should retain the last cron batch size');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('manual indexing API backfills up to the default 100-item batch', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 125);
+
+    try {
+        $result = WP_FTS_Plugin::process_manual_index_batch();
+        assert_same(100, $result['processed'], 'manual indexing should process the default 100-item batch');
+        assert_same(100, $result['backfill_processed'], 'manual indexing should apply its batch to backfill when the queue is empty');
+        assert_same(100, count($fake->docs), 'manual indexing should leave later content for another batch');
+        assert_true((bool) $result['has_more'], 'manual indexing should report remaining eligible content');
+        assert_true(!isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'manual indexing should not schedule cron directly');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('shared indexing lock prevents overlapping manual and cron batches', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 3);
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'already-running',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+
+    try {
+        $result = WP_FTS_Plugin::process_manual_index_batch();
+        assert_same(0, $result['processed'], 'manual batch should skip while another batch lock is active');
+        assert_same(true, $result['skipped_locked'], 'manual batch should report a lock skip');
+        assert_same([], $fake->docs, 'lock skip should not index content');
+        assert_same(true, WP_FTS_Plugin::search_health()['last_skipped_locked'], 'health state should record the lock skip');
+        assert_same('already-running', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'lock skip should leave the active lock untouched');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('manual indexing resource budget can stop a batch early', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 5);
+
+    try {
+        $result = WP_FTS_Plugin::process_manual_index_batch([
+            'budget_check' => static fn(int $processed): bool => $processed >= 1,
+        ]);
+        assert_same(1, $result['processed'], 'manual budget should allow the first post and stop before the second');
+        assert_same(true, $result['stopped_by_budget'], 'manual batch should report the resource-budget stop');
+        assert_same(true, $result['has_more'], 'budget stop should leave a has-more signal');
+        assert_same(1, count($fake->docs), 'budget stop should keep the indexed row count bounded');
+        assert_same(true, WP_FTS_Plugin::search_health()['last_stopped_by_budget'], 'health state should record the budget stop');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('batch backfill includes pages from default settings', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $fake->postRows = [
+        wp_fts_test_backfill_post(201, 'page', 'publish', 'Backfill Page'),
+        wp_fts_test_backfill_post(202, 'post', 'publish', 'Backfill Post'),
+        wp_fts_test_backfill_post(203, 'page', 'draft', 'Draft Page'),
+    ];
+
+    try {
+        $result = WP_FTS_Plugin::process_manual_index_batch();
+        assert_same(2, $result['processed'], 'default backfill should index the publish page and publish post only');
+        assert_same([201, 202], array_keys($fake->docs), 'default backfill should include pages and exclude non-public page statuses');
+
+        $backfillSelect = null;
+        foreach ($fake->prepared as $prepared) {
+            if (str_starts_with($prepared['sql'], 'SELECT p.ID, p.post_content, p.post_title')) {
+                $backfillSelect = $prepared;
+                break;
+            }
+        }
+        assert_true($backfillSelect !== null, 'backfill should use a bounded database query');
+        assert_true(in_array('page', $backfillSelect['args'], true), 'backfill source query should include the default page post type');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('deactivation and uninstall keep index data while clearing operational state', function (): void {
