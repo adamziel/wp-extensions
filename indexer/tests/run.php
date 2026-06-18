@@ -11,6 +11,16 @@ final class WP_FTS_TestPending extends RuntimeException
 {
 }
 
+final class WP_FTS_TestRedirect extends RuntimeException
+{
+    public function __construct(
+        public string $location,
+        public int $status = 302,
+    ) {
+        parent::__construct("Redirect to {$location}");
+    }
+}
+
 final class WP_FTS_Fake_HTML_Processor
 {
     private int $offset = -1;
@@ -1974,6 +1984,51 @@ final class WP_FTS_Test_WPDB
         return new WP_FTS_Test_Prepared_SQL($sql, $args);
     }
 
+    public function get_var(mixed $statement, int $x = 0, int $y = 0): mixed
+    {
+        [$sql, $args] = $this->statement_parts($statement);
+        if (str_starts_with($sql, 'SELECT COUNT(DISTINCT p.ID)')) {
+            $offset = 0;
+            $publicStatus = str_contains($sql, 'p.post_status = %s') ? (string) ($args[$offset++] ?? '') : '';
+            $publicTypes = $this->prepared_in_args($sql, 'p.post_type', '%s', $args, $offset);
+            $adminType = null;
+            $adminStatuses = [];
+            if (str_contains($sql, 'p.post_type = %s')) {
+                $adminType = (string) ($args[$offset++] ?? '');
+                $adminStatuses = $this->prepared_in_args($sql, 'p.post_status', '%s', $args, $offset);
+            }
+            $requiresIndexedDoc = str_contains($sql, 'JOIN wp_fts_docs d');
+
+            $counted = [];
+            foreach ($this->postRows as $row) {
+                $postId = isset($row->ID) ? (int) $row->ID : 0;
+                if ($postId <= 0) {
+                    continue;
+                }
+
+                if ($requiresIndexedDoc && ($this->docs[$postId]['is_deleted'] ?? 1) !== 0) {
+                    continue;
+                }
+
+                if (isset($row->post_password) && (string) $row->post_password !== '') {
+                    continue;
+                }
+
+                $type = isset($row->post_type) ? (string) $row->post_type : 'post';
+                $status = isset($row->post_status) ? (string) $row->post_status : 'draft';
+                $publicEligible = $publicStatus !== '' && $status === $publicStatus && in_array($type, array_map('strval', $publicTypes), true);
+                $adminEligible = $adminType !== null && $type === $adminType && in_array($status, array_map('strval', $adminStatuses), true);
+                if ($publicEligible || $adminEligible) {
+                    $counted[$postId] = true;
+                }
+            }
+
+            return count($counted);
+        }
+
+        return null;
+    }
+
     public function query(mixed $statement): int|bool
     {
         [$sql, $args] = $this->statement_parts($statement);
@@ -2845,9 +2900,12 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_filters'] = [];
     $GLOBALS['wp_fts_test_upload_dir'] = null;
     $GLOBALS['wp_fts_test_upload_error'] = false;
+    $GLOBALS['wp_fts_test_redirects'] = [];
     $GLOBALS['wp_fts_test_is_admin'] = false;
+    $GLOBALS['wp_fts_test_is_ajax'] = false;
     $GLOBALS['wp_fts_test_is_cron'] = false;
     $GLOBALS['wp_fts_test_is_rest'] = false;
+    $GLOBALS['wp_fts_test_is_network_admin'] = false;
     unset($GLOBALS['pagenow']);
     $GLOBALS['wp_fts_test_current_screen'] = null;
     $GLOBALS['wp_query'] = null;
@@ -3115,6 +3173,19 @@ if (!function_exists('admin_url')) {
     function admin_url(string $path = ''): string
     {
         return '/wp-admin/' . ltrim($path, '/');
+    }
+}
+
+if (!function_exists('wp_safe_redirect')) {
+    function wp_safe_redirect(string $location, int $status = 302, string $x_redirect_by = 'WordPress'): bool
+    {
+        $GLOBALS['wp_fts_test_redirects'][] = [
+            'location' => $location,
+            'status' => $status,
+            'x_redirect_by' => $x_redirect_by,
+        ];
+
+        throw new WP_FTS_TestRedirect($location, $status);
     }
 }
 
@@ -3430,6 +3501,13 @@ if (!function_exists('is_admin')) {
     }
 }
 
+if (!function_exists('is_network_admin')) {
+    function is_network_admin(): bool
+    {
+        return !empty($GLOBALS['wp_fts_test_is_network_admin']);
+    }
+}
+
 if (!function_exists('get_current_screen')) {
     function get_current_screen(): ?object
     {
@@ -3443,6 +3521,13 @@ if (!function_exists('wp_doing_cron')) {
     function wp_doing_cron(): bool
     {
         return !empty($GLOBALS['wp_fts_test_is_cron']);
+    }
+}
+
+if (!function_exists('wp_doing_ajax')) {
+    function wp_doing_ajax(): bool
+    {
+        return !empty($GLOBALS['wp_fts_test_is_ajax']);
     }
 }
 
@@ -3688,6 +3773,7 @@ PHP;
         WP_FTS_Plugin::CRON_HOOK,
         'add_meta_boxes',
         'admin_init',
+        'admin_init',
         'admin_menu',
         'before_delete_post',
         'loop_end',
@@ -3889,7 +3975,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
 
     assert_contains('Full-Text Search', $html, 'sandbox tab should render inside the Full-Text Search settings page');
     assert_contains('nav-tab-active', $html, 'settings page should render WordPress-style tabs');
-    foreach (['Settings', 'Sandbox', 'Indexed content', 'Analyzer packs'] as $tabLabel) {
+    foreach (['Health', 'Settings', 'Sandbox', 'Indexed content', 'Analyzer packs'] as $tabLabel) {
         assert_contains($tabLabel, $html, "settings tabs should include {$tabLabel}");
     }
     assert_contains('Full-text search (FTS) builds its own searchable index', $html, 'admin page should define full-text search before showing controls');
@@ -3908,7 +3994,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('Content types in the index', $settingsHtml, 'settings tab should render post-type configuration');
     assert_contains('value="post" checked="checked"', $settingsHtml, 'settings defaults should include posts');
     assert_contains('value="page" checked="checked"', $settingsHtml, 'settings defaults should include pages');
-    assert_contains('name="_wp_http_referer" value="/wp-admin/options-general.php?page=wp-fts-settings"', $settingsHtml, 'settings form should preserve a settings-page referrer after save');
+    assert_contains('name="_wp_http_referer" value="/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=settings"', $settingsHtml, 'settings form should preserve the explicit settings-tab referrer after save');
     assert_contains('Automatically update the search index when content changes', $settingsHtml, 'settings auto-index control should use a plain checkbox label');
     assert_contains('type="hidden" name="wp_fts_settings[auto_index]" value="0"', $settingsHtml, 'settings auto-index checkbox should post an unchecked value');
     assert_contains('type="checkbox" name="wp_fts_settings[auto_index]" value="1" checked="checked"', $settingsHtml, 'settings auto-index checkbox should render checked by default');
@@ -3990,7 +4076,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
     }
 });
 
-test_case('admin settings tabs honor sanitized tab URLs and render selected tab', function (): void {
+test_case('admin settings route defaults to Health and direct tab URLs render selected panels', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -4005,8 +4091,13 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
         $_POST = [];
         $settingsCallback = wp_fts_test_registered_admin_settings_callback();
         $routes = [
-            'settings' => [
+            'health' => [
                 'url' => '/wp-admin/options-general.php?page=wp-fts-settings',
+                'label' => 'Health',
+                'heading' => '<h2>Search health</h2>',
+            ],
+            'settings' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=settings',
                 'label' => 'Settings',
                 'heading' => '<h2>Settings</h2>',
             ],
@@ -4031,8 +4122,8 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
             $parsed = wp_fts_test_parse_admin_route($route['url']);
             assert_same('/wp-admin/options-general.php', $parsed['path'], "{$tab} route should target General Settings");
             assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($parsed['params']['page'] ?? ''), "{$tab} route should keep the FTS page slug separate");
-            if ($tab === 'settings') {
-                assert_true(!isset($parsed['params']['tab']), 'settings route should use the base plugin settings URL');
+            if ($tab === 'health') {
+                assert_true(!isset($parsed['params']['tab']), 'health route should use the base plugin settings URL');
             } else {
                 assert_same($tab, (string) ($parsed['params']['tab'] ?? ''), "{$tab} route should keep the selected tab separate");
             }
@@ -4046,17 +4137,22 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
         $wpdb = $oldWpdb;
     }
 
+    $healthHtml = $htmlByTab['health'];
     $settingsHtml = $htmlByTab['settings'];
     $sandboxHtml = $htmlByTab['sandbox'];
     $indexedHtml = $htmlByTab['indexed-content'];
     $analyzerHtml = $htmlByTab['analyzer-packs'];
 
-    assert_contains('href="/wp-admin/options-general.php?page=wp-fts-settings"', $settingsHtml, 'settings tab link should target the base settings page URL');
+    assert_contains('href="/wp-admin/options-general.php?page=wp-fts-settings"', $healthHtml, 'health tab link should target the base settings page URL');
+    assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=settings', $healthHtml, 'tab links should target the explicit settings tab URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=sandbox', $sandboxHtml, 'tab links should target the sandbox tab URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=indexed-content', $sandboxHtml, 'tab links should target the indexed-content tab URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=analyzer-packs', $sandboxHtml, 'tab links should target the analyzer-packs tab URL');
-    assert_contains('aria-current="page">Settings</a>', $settingsHtml, 'direct settings URL should render Settings as active');
-    assert_contains('<h2>Settings</h2>', $settingsHtml, 'direct settings URL should render the Settings panel');
+    assert_contains('aria-current="page">Health</a>', $healthHtml, 'base settings URL should render Health as active');
+    assert_contains('<h2>Search health</h2>', $healthHtml, 'base settings URL should render the Health panel');
+    assert_true(!str_contains($healthHtml, '<h2>Settings</h2>'), 'base settings URL should not render the Settings panel');
+    assert_contains('aria-current="page">Settings</a>', $settingsHtml, 'direct settings tab URL should render Settings as active');
+    assert_contains('<h2>Settings</h2>', $settingsHtml, 'direct settings tab URL should render the Settings panel');
     assert_contains('aria-current="page">Sandbox</a>', $sandboxHtml, 'sandbox query tab should render Sandbox as active');
     assert_contains('<h2>Sandbox</h2>', $sandboxHtml, 'sandbox query tab should render the sandbox panel');
     assert_true(!str_contains($sandboxHtml, '<h2>Settings</h2>'), 'sandbox query tab should not fall back to the settings panel');
@@ -4069,9 +4165,196 @@ test_case('admin settings tabs honor sanitized tab URLs and render selected tab'
     assert_contains('<h2>Analyzer packs</h2>', $analyzerHtml, 'analyzer-packs query tab should render the analyzer-packs panel');
     assert_true(!str_contains($analyzerHtml, '<h2>Settings</h2>'), 'analyzer-packs query tab should not fall back to the settings panel');
 
-    assert_contains('aria-current="page">Settings</a>', $fallbackHtml, 'invalid tab values should be sanitized back to Settings');
-    assert_contains('<h2>Settings</h2>', $fallbackHtml, 'invalid tab values should render the Settings panel');
+    assert_contains('aria-current="page">Health</a>', $fallbackHtml, 'invalid tab values should be sanitized back to Health');
+    assert_contains('<h2>Search health</h2>', $fallbackHtml, 'invalid tab values should render the Health panel');
     assert_true(!str_contains($fallbackHtml, '<script>'), 'invalid tab values should not be reflected into the admin page');
+});
+
+test_case('activation sets redirect flag and safe admin init redirects to Health', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $_GET = [];
+        WP_FTS_Plugin::activate();
+        assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION] ?? null, 'single-site activation should set a one-shot redirect flag');
+
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $redirect = null;
+        try {
+            WP_FTS_Plugin::maybe_redirect_after_activation();
+        } catch (WP_FTS_TestRedirect $e) {
+            $redirect = $e;
+        }
+        assert_true($redirect instanceof WP_FTS_TestRedirect, 'safe admin_init should redirect after activation');
+        assert_same('/wp-admin/options-general.php?page=wp-fts-settings', $redirect->location, 'activation redirect should land on the Health/default tab');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION]), 'successful redirect should consume the one-shot flag');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $_GET = [];
+        WP_FTS_Plugin::activate(true);
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION]), 'network activation should not set a redirect flag');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $_GET = ['activate-multi' => '1'];
+        WP_FTS_Plugin::activate();
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION]), 'bulk activation should not set a redirect flag');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $_GET = [];
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION] = 1;
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['wp_fts_test_is_ajax'] = true;
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        WP_FTS_Plugin::maybe_redirect_after_activation();
+        assert_same([], $GLOBALS['wp_fts_test_redirects'], 'AJAX admin_init should not redirect');
+        assert_same(1, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION] ?? null, 'unsafe admin_init should preserve the flag for a later safe request');
+    } finally {
+        $_GET = $oldGet;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('health dashboard displays search state counts and last indexed content without demo controls', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        [
+            'replace_frontend_search' => true,
+            'replace_admin_post_search' => false,
+            'index_post_types' => ['post', 'page'],
+        ]
+    );
+    $fake->postRows = [
+        wp_fts_test_backfill_post(701, 'post', 'publish', 'Health First Indexed'),
+        wp_fts_test_backfill_post(702, 'post', 'publish', 'Health Waiting Post'),
+        wp_fts_test_backfill_post(703, 'page', 'publish', 'Health Remaining Page'),
+    ];
+
+    try {
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [702];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('<h2>Search health</h2>', $html, 'default admin page should render the Health dashboard');
+    assert_contains('<th scope="row">Public site search</th><td>Enabled</td>', $html, 'health dashboard should show public search replacement state');
+    assert_contains('<th scope="row">wp-admin Posts search</th><td>Disabled</td>', $html, 'health dashboard should show admin search replacement state');
+    assert_contains('<th scope="row">Indexed post types</th><td>page, post</td>', $html, 'health dashboard should show configured indexed post types');
+    assert_contains('<th scope="row">Eligible content</th><td>3</td>', $html, 'health dashboard should show total eligible content');
+    assert_contains('<th scope="row">Indexed</th><td>1</td>', $html, 'health dashboard should show indexed count');
+    assert_contains('<th scope="row">Waiting in the update queue</th><td>1</td>', $html, 'health dashboard should show pending queued count');
+    assert_contains('<th scope="row">Remaining to index</th><td>2</td>', $html, 'health dashboard should show remaining unindexed count');
+    assert_contains('Health First Indexed (ID 701)', $html, 'health dashboard should show last indexed title and ID');
+    assert_contains('<th scope="row">Last batch</th><td>Manual at ', $html, 'health dashboard should show last batch time and mode');
+    assert_contains('<th scope="row">Last batch processed</th><td>1 total (0 waiting updates, 1 remaining content)</td>', $html, 'health dashboard should show last batch processed counts');
+    assert_contains('Index the next batch now', $html, 'health dashboard should expose one primary manual indexing action');
+    assert_contains('wp_fts_health_nonce', $html, 'health manual action should use a dedicated nonce field');
+    assert_true(!str_contains($html, 'wp_fts_sandbox_action'), 'health dashboard should not render sandbox demo action controls');
+    assert_true(!str_contains($html, 'Create or refresh demo posts'), 'health dashboard should not reintroduce demo post creation controls');
+    assert_true(!str_contains($html, 'Build demo index'), 'health dashboard should not reintroduce demo indexing controls');
+});
+
+test_case('health manual batch POST requires capability and nonce before indexing', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $fake->postRows = [
+        wp_fts_test_backfill_post(711, 'post', 'publish', 'Manual Health Action'),
+    ];
+    $validPost = [
+        'wp_fts_health_action' => 'index_next_batch',
+        'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = $validPost;
+        wp_fts_test_capture_admin_settings_tab(null);
+        assert_same([], $fake->docs, 'manual health action should not index without capability');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $_POST = [
+            'wp_fts_health_action' => 'index_next_batch',
+            'wp_fts_health_nonce' => 'not-a-valid-nonce',
+        ];
+        $invalidHtml = wp_fts_test_capture_admin_settings_tab(null);
+        assert_contains('The indexing action could not be verified', $invalidHtml, 'invalid manual health nonce should show an error');
+        assert_same([], $fake->docs, 'invalid manual health nonce should not index content');
+
+        $_POST = $validPost;
+        $validHtml = wp_fts_test_capture_admin_settings_tab(null);
+        assert_contains('Indexed 1 item. The index is up to date for the current settings.', $validHtml, 'valid manual health action should report the processed batch');
+        assert_true(isset($fake->docs[711]), 'valid manual health action should call the manual batch path and index content');
+        assert_same('manual', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['last_mode'] ?? null, 'manual health action should update health state as a manual batch');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('health manual batch lock skip displays no-overlap notice', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'already-running',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    $fake->postRows = [
+        wp_fts_test_backfill_post(721, 'post', 'publish', 'Locked Health Action'),
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [
+            'wp_fts_health_action' => 'index_next_batch',
+            'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+        ];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('Another indexing batch is already running. No overlapping batch was started; try again shortly.', $html, 'manual health lock skip should explain that no overlap occurred');
+    assert_same([], $fake->docs, 'manual health lock skip should not index content');
+    assert_same(true, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['last_skipped_locked'] ?? null, 'manual health lock skip should update health state');
 });
 
 test_case('playground blueprint preserves sandbox landing tab', function (): void {

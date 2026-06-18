@@ -21,6 +21,7 @@ final class WP_FTS_Plugin
     public const ADMIN_PAGE_SLUG = 'wp-fts-settings';
     public const ADMIN_CAPABILITY = 'manage_options';
     public const SETTINGS_OPTION = 'wp_fts_settings';
+    public const ACTIVATION_REDIRECT_OPTION = 'wp_fts_activation_redirect';
     public const SANDBOX_DEMO_POSTS_OPTION = 'wp_fts_sandbox_demo_post_ids';
     public const ANALYZER_OPTIONS_OPTION = 'wp_fts_analyzer_options';
     public const ANALYZER_OPTIONS_FILTER = 'wp_fts_analyzer_options';
@@ -45,11 +46,16 @@ final class WP_FTS_Plugin
     private const ADMIN_ACTION_FIELD = 'wp_fts_sandbox_action';
     private const ADMIN_CLEANUP_LEGACY_DEMO_ACTION = 'cleanup_legacy_demo_posts';
     private const LEGACY_DEMO_CREATION_ACTIONS = ['refresh_demo', 'index_demo'];
+    private const ADMIN_HEALTH_NONCE_ACTION = 'wp_fts_health_admin_action';
+    private const ADMIN_HEALTH_NONCE_FIELD = 'wp_fts_health_nonce';
+    private const ADMIN_HEALTH_ACTION_FIELD = 'wp_fts_health_action';
+    private const ADMIN_HEALTH_MANUAL_BATCH_ACTION = 'index_next_batch';
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
     private const ADMIN_POSTS_PAGE_FIELD = 'wp_fts_sandbox_posts_page';
     private const ADMIN_TAB_FIELD = 'tab';
+    private const ADMIN_HEALTH_TAB = 'health';
     private const ADMIN_SETTINGS_TAB = 'settings';
     private const ADMIN_SANDBOX_TAB = 'sandbox';
     private const ADMIN_INDEXED_TAB = 'indexed-content';
@@ -123,6 +129,7 @@ final class WP_FTS_Plugin
         add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
+        add_action('admin_init', [self::class, 'maybe_redirect_after_activation'], 1, 0);
         add_action('admin_init', [self::class, 'register_settings'], 10, 0);
         add_action('add_meta_boxes', [self::class, 'register_language_meta_box'], 10, 0);
         add_action('save_post', [self::class, 'save_post_language_override'], 5, 3);
@@ -147,10 +154,103 @@ final class WP_FTS_Plugin
     /**
      * Activation creates or repairs tables and records the schema contract version.
      */
-    public static function activate(): void
+    public static function activate(bool $network_wide = false): void
     {
         self::upgrade_schema();
         self::schedule_queue_processor();
+        self::maybe_set_activation_redirect_flag($network_wide);
+    }
+
+    /**
+     * Redirect a safely activated admin to the Health tab once after install.
+     */
+    public static function maybe_redirect_after_activation(): void
+    {
+        if (!self::activation_redirect_flag_enabled(self::get_option(self::ACTIVATION_REDIRECT_OPTION, false))) {
+            return;
+        }
+
+        if (!self::should_redirect_after_activation()) {
+            return;
+        }
+
+        self::delete_option(self::ACTIVATION_REDIRECT_OPTION);
+        $url = self::admin_page_url(self::ADMIN_HEALTH_TAB);
+
+        if (function_exists('wp_safe_redirect')) {
+            wp_safe_redirect($url);
+            exit;
+        }
+
+        if (function_exists('wp_redirect')) {
+            wp_redirect($url);
+            exit;
+        }
+    }
+
+    private static function maybe_set_activation_redirect_flag(bool $network_wide): void
+    {
+        if (
+            $network_wide
+            || self::is_bulk_activation_request()
+            || self::is_ajax_request()
+            || self::is_rest_request()
+            || self::is_cron_request()
+            || self::is_cli_request()
+        ) {
+            return;
+        }
+
+        if (function_exists('add_option') && add_option(self::ACTIVATION_REDIRECT_OPTION, 1, '', 'no')) {
+            return;
+        }
+
+        self::set_option(self::ACTIVATION_REDIRECT_OPTION, 1);
+    }
+
+    private static function should_redirect_after_activation(): bool
+    {
+        if (!self::is_admin_request()) {
+            return false;
+        }
+
+        if (function_exists('is_network_admin') && is_network_admin()) {
+            return false;
+        }
+
+        if (
+            self::is_bulk_activation_request()
+            || self::is_ajax_request()
+            || self::is_rest_request()
+            || self::is_cron_request()
+            || self::is_cli_request()
+        ) {
+            return false;
+        }
+
+        if (!function_exists('current_user_can') || !current_user_can(self::ADMIN_CAPABILITY)) {
+            return false;
+        }
+
+        if (self::request_text_value($_GET, 'page', 80) === self::ADMIN_PAGE_SLUG) {
+            self::delete_option(self::ACTIVATION_REDIRECT_OPTION);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function activation_redirect_flag_enabled(mixed $flag): bool
+    {
+        if (is_bool($flag)) {
+            return $flag;
+        }
+
+        if (is_scalar($flag)) {
+            return !in_array(strtolower(trim((string) $flag)), ['', '0', 'false', 'no', 'off'], true);
+        }
+
+        return false;
     }
 
     /**
@@ -369,6 +469,38 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Return bounded aggregate counts for the admin Health tab.
+     *
+     * @return array{total_eligible:int,indexed:int,pending:int,remaining:int}
+     */
+    private static function search_health_counts(): array
+    {
+        $total = self::count_eligible_content();
+        $indexed = min($total, self::count_indexed_eligible_content());
+        $pending = count(self::pending_queue());
+
+        return [
+            'total_eligible' => $total,
+            'indexed' => $indexed,
+            'pending' => $pending,
+            'remaining' => max(0, $total - $indexed),
+        ];
+    }
+
+    /**
+     * @return array{total_eligible:int,indexed:int,pending:int,remaining:int}
+     */
+    private static function empty_search_health_counts(): array
+    {
+        return [
+            'total_eligible' => 0,
+            'indexed' => 0,
+            'pending' => count(self::pending_queue()),
+            'remaining' => 0,
+        ];
+    }
+
+    /**
      * Register the public REST search endpoint.
      */
     public static function register_rest_routes(): void
@@ -523,12 +655,17 @@ final class WP_FTS_Plugin
         self::render_admin_orientation();
         self::render_admin_tabs($tab);
         self::render_site_language_status_notice();
+        foreach (self::handle_admin_health_post_action() as $message) {
+            self::render_sandbox_notice($message[0], $message[1]);
+        }
         foreach (self::handle_admin_sandbox_post_action() as $message) {
             self::render_sandbox_notice($message[0], $message[1]);
         }
         self::render_legacy_sandbox_demo_cleanup_affordance($tab);
 
-        if ($tab === self::ADMIN_SANDBOX_TAB) {
+        if ($tab === self::ADMIN_HEALTH_TAB) {
+            self::render_health_tab();
+        } elseif ($tab === self::ADMIN_SANDBOX_TAB) {
             self::render_admin_sandbox_tab();
         } elseif ($tab === self::ADMIN_INDEXED_TAB) {
             self::render_indexed_content_tab();
@@ -563,6 +700,7 @@ final class WP_FTS_Plugin
     private static function admin_tabs(): array
     {
         return [
+            self::ADMIN_HEALTH_TAB => 'Health',
             self::ADMIN_SETTINGS_TAB => 'Settings',
             self::ADMIN_SANDBOX_TAB => 'Sandbox',
             self::ADMIN_INDEXED_TAB => 'Indexed content',
@@ -579,7 +717,7 @@ final class WP_FTS_Plugin
     {
         $tab = self::sanitize_key($tab);
 
-        return array_key_exists($tab, self::admin_tabs()) ? $tab : self::ADMIN_SETTINGS_TAB;
+        return array_key_exists($tab, self::admin_tabs()) ? $tab : self::ADMIN_HEALTH_TAB;
     }
 
     private static function render_admin_tabs(string $current_tab): void
@@ -597,6 +735,91 @@ final class WP_FTS_Plugin
             echo '</a>';
         }
         echo '</nav>';
+    }
+
+    /**
+     * @return array<int,array{0:string,1:string}>
+     */
+    private static function handle_admin_health_post_action(): array
+    {
+        if (!self::health_post_action_submitted()) {
+            return [];
+        }
+
+        if (!self::can_manage_admin_sandbox()) {
+            return [['error', 'You do not have permission to index content.']];
+        }
+
+        if (!self::verify_health_nonce()) {
+            return [['error', 'The indexing action could not be verified. Reload the page and try again.']];
+        }
+
+        if (self::health_post_action() !== self::ADMIN_HEALTH_MANUAL_BATCH_ACTION) {
+            return [['error', 'Unsupported indexing action. No changes were made.']];
+        }
+
+        try {
+            return [self::manual_index_batch_notice(self::process_manual_index_batch())];
+        } catch (Throwable $e) {
+            return [['error', 'Could not index the next batch: ' . $e->getMessage()]];
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     * @return array{0:string,1:string}
+     */
+    private static function manual_index_batch_notice(array $summary): array
+    {
+        $processed = max(0, (int) ($summary['processed'] ?? 0));
+
+        if (!empty($summary['skipped_locked'])) {
+            return ['info', 'Another indexing batch is already running. No overlapping batch was started; try again shortly.'];
+        }
+
+        if (!empty($summary['stopped_by_budget'])) {
+            return [
+                'info',
+                sprintf(
+                    'Indexed %d %s, then stopped safely before a resource limit was reached. More content remains.',
+                    $processed,
+                    self::item_count_label($processed)
+                ),
+            ];
+        }
+
+        if ($processed > 0 && !empty($summary['has_more'])) {
+            return [
+                'success',
+                sprintf(
+                    'Indexed %d %s. More content remains; WP-Cron will keep indexing small batches in the background.',
+                    $processed,
+                    self::item_count_label($processed)
+                ),
+            ];
+        }
+
+        if ($processed > 0) {
+            return [
+                'success',
+                sprintf(
+                    'Indexed %d %s. The index is up to date for the current settings.',
+                    $processed,
+                    self::item_count_label($processed)
+                ),
+            ];
+        }
+
+        if (!empty($summary['has_more'])) {
+            return ['info', 'No content was indexed in this batch, but more content may remain. WP-Cron will keep working in the background.'];
+        }
+
+        return ['info', 'No new eligible content needed indexing. The index is up to date for the current settings.'];
+    }
+
+    private static function item_count_label(int $count): string
+    {
+        return $count === 1 ? 'item' : 'items';
     }
 
     /**
@@ -823,6 +1046,9 @@ final class WP_FTS_Plugin
         echo '<style>';
         echo '.wp-fts-admin-summary,.wp-fts-language-status{max-width:980px;margin:6px 0 10px;color:#50575e;}';
         echo '.wp-fts-language-status{margin-top:8px;}';
+        echo '.wp-fts-health-copy{max-width:760px;}';
+        echo '.wp-fts-health-table{max-width:760px;margin:8px 0 18px;}';
+        echo '.wp-fts-health-table th{width:230px;}';
         echo '.wp-fts-sandbox-compact-controls{display:flex;flex-wrap:wrap;gap:12px 16px;align-items:flex-end;margin:8px 0 10px;}';
         echo '.wp-fts-sandbox-field{display:flex;flex-direction:column;gap:4px;margin:0;}';
         echo '.wp-fts-sandbox-field label,.wp-fts-sandbox-option-label{font-weight:600;}';
@@ -833,13 +1059,146 @@ final class WP_FTS_Plugin
         echo '.wp-fts-sandbox-advanced-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 18px;margin-top:10px;}';
         echo '.wp-fts-sandbox-advanced-grid fieldset{border:0;margin:0;padding:0;}';
         echo '.wp-fts-sandbox-advanced-grid p{margin:.35em 0;}';
-        echo '@media (max-width:600px){.wp-fts-sandbox-compact-controls{display:block}.wp-fts-sandbox-field{margin:0 0 10px}.wp-fts-sandbox-field input[type=search]{min-width:0;width:100%;}}';
+        echo '@media (max-width:600px){.wp-fts-health-table th{width:auto}.wp-fts-sandbox-compact-controls{display:block}.wp-fts-sandbox-field{margin:0 0 10px}.wp-fts-sandbox-field input[type=search]{min-width:0;width:100%;}}';
         echo '</style>';
     }
 
     private static function render_admin_orientation(): void
     {
         echo '<p class="description wp-fts-admin-summary"><strong>What this does:</strong> Full-text search (FTS) builds its own searchable index for site content. Analyzer packs add language-specific word-form matching when available.</p>';
+    }
+
+    private static function render_health_tab(): void
+    {
+        $settings = self::settings();
+        $health = self::search_health();
+        try {
+            $counts = self::search_health_counts();
+        } catch (Throwable $e) {
+            $counts = self::empty_search_health_counts();
+            self::render_sandbox_notice('error', 'Could not read index counts: ' . $e->getMessage());
+        }
+
+        echo '<h2>Search health</h2>';
+        echo '<p class="wp-fts-health-copy">The plugin builds the search index in small batches so large sites stay responsive. WP-Cron continues indexing a small amount in the background. Use the button below to index the next larger batch now; large sites may need several batches, and that is intentional.</p>';
+
+        echo '<h3>Status summary</h3>';
+        echo '<table class="widefat striped wp-fts-health-table"><tbody>';
+        self::render_health_status_row('Public site search', !empty($settings['replace_frontend_search']) ? 'Enabled' : 'Disabled');
+        self::render_health_status_row('wp-admin Posts search', !empty($settings['replace_admin_post_search']) ? 'Enabled' : 'Disabled');
+        self::render_health_status_row('Indexed post types', self::health_post_type_summary($settings['index_post_types']));
+        self::render_health_status_row('Eligible content', (string) $counts['total_eligible']);
+        self::render_health_status_row('Indexed', (string) $counts['indexed']);
+        self::render_health_status_row('Waiting in the update queue', (string) $counts['pending']);
+        self::render_health_status_row('Remaining to index', (string) $counts['remaining']);
+        echo '</tbody></table>';
+
+        echo '<h3>Latest batch</h3>';
+        echo '<table class="widefat striped wp-fts-health-table"><tbody>';
+        self::render_health_status_row('Last indexed content', self::last_indexed_content_summary($health));
+        self::render_health_status_row('Last batch', self::last_batch_summary($health));
+        self::render_health_status_row('Last batch processed', self::last_batch_processed_summary($health));
+        self::render_health_status_row('Batch status', self::last_batch_status_summary($health));
+        echo '</tbody></table>';
+
+        echo '<h3>Indexing controls</h3>';
+        echo '<p class="wp-fts-health-copy">This indexes the next bounded batch now. It does not create demo posts, and it does not try to index the whole site in one request.</p>';
+        echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">';
+        self::render_health_nonce_field();
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_HEALTH_MANUAL_BATCH_ACTION) . '">';
+        echo '<p><button type="submit" class="button button-primary">Index the next batch now</button></p>';
+        echo '</form>';
+    }
+
+    private static function render_health_status_row(string $label, string $value): void
+    {
+        echo '<tr><th scope="row">' . self::esc_html($label) . '</th><td>' . self::esc_html($value) . '</td></tr>';
+    }
+
+    /**
+     * @param string[] $post_types
+     */
+    private static function health_post_type_summary(array $post_types): string
+    {
+        $post_types = array_values(array_filter(
+            array_map(static fn(mixed $post_type): string => is_scalar($post_type) ? (string) $post_type : '', $post_types),
+            static fn(string $post_type): bool => $post_type !== ''
+        ));
+        sort($post_types, SORT_STRING);
+
+        return $post_types === [] ? 'No post types selected' : implode(', ', $post_types);
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function last_indexed_content_summary(array $health): string
+    {
+        $post_id = max(0, (int) ($health['last_indexed_post_id'] ?? 0));
+        if ($post_id <= 0) {
+            return 'No indexed content recorded yet.';
+        }
+
+        $title = is_scalar($health['last_indexed_post_title'] ?? null) ? trim((string) $health['last_indexed_post_title']) : '';
+        if ($title === '') {
+            $title = self::post_title($post_id);
+        }
+
+        return sprintf('%s (ID %d)', $title !== '' ? $title : '(untitled)', $post_id);
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function last_batch_summary(array $health): string
+    {
+        $mode = is_scalar($health['last_mode'] ?? null) ? (string) $health['last_mode'] : '';
+        $time = is_scalar($health['last_run_at'] ?? null) ? (string) $health['last_run_at'] : '';
+        if ($mode === '' && $time === '') {
+            return 'No batch has run yet.';
+        }
+
+        $mode_label = $mode === 'cron' ? 'WP-Cron' : ($mode === 'manual' ? 'Manual' : 'Unknown');
+        return $time !== '' ? sprintf('%s at %s UTC', $mode_label, $time) : $mode_label;
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function last_batch_processed_summary(array $health): string
+    {
+        return sprintf(
+            '%d total (%d waiting updates, %d remaining content)',
+            max(0, (int) ($health['last_batch_processed'] ?? 0)),
+            max(0, (int) ($health['last_batch_queue_processed'] ?? 0)),
+            max(0, (int) ($health['last_batch_backfill_processed'] ?? 0))
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function last_batch_status_summary(array $health): string
+    {
+        if (!empty($health['lock_active'])) {
+            return 'A batch appears to be running now.';
+        }
+
+        if (!empty($health['last_skipped_locked'])) {
+            return 'Skipped because another indexing batch was already running. No overlap occurred.';
+        }
+
+        if (!empty($health['last_stopped_by_budget'])) {
+            return 'Stopped safely because a resource limit was reached; more content remains.';
+        }
+
+        if (!empty($health['has_more'])) {
+            return 'More content remains. WP-Cron will continue with small background batches.';
+        }
+
+        return is_scalar($health['last_run_at'] ?? null) && trim((string) $health['last_run_at']) !== ''
+            ? 'Completed without more content reported.'
+            : 'Waiting for the first batch.';
     }
 
     private static function render_settings_tab(): void
@@ -1533,6 +1892,28 @@ final class WP_FTS_Plugin
         }
 
         return wp_verify_nonce($nonce, self::ADMIN_NONCE_ACTION) !== false;
+    }
+
+    private static function health_post_action(): string
+    {
+        $action = self::sanitize_key(self::request_text_value($_POST, self::ADMIN_HEALTH_ACTION_FIELD, 40));
+
+        return $action === self::ADMIN_HEALTH_MANUAL_BATCH_ACTION ? $action : '';
+    }
+
+    private static function health_post_action_submitted(): bool
+    {
+        return self::request_text_value($_POST, self::ADMIN_HEALTH_ACTION_FIELD, 40) !== '';
+    }
+
+    private static function verify_health_nonce(): bool
+    {
+        $nonce = self::request_text_value($_POST, self::ADMIN_HEALTH_NONCE_FIELD, 200);
+        if ($nonce === '' || !function_exists('wp_verify_nonce')) {
+            return false;
+        }
+
+        return wp_verify_nonce($nonce, self::ADMIN_HEALTH_NONCE_ACTION) !== false;
     }
 
     /**
@@ -3101,11 +3482,18 @@ final class WP_FTS_Plugin
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
     }
 
-    private static function admin_page_url(string $tab = self::ADMIN_SETTINGS_TAB): string
+    private static function render_health_nonce_field(): void
+    {
+        $nonce = function_exists('wp_create_nonce') ? (string) wp_create_nonce(self::ADMIN_HEALTH_NONCE_ACTION) : '';
+
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
+    }
+
+    private static function admin_page_url(string $tab = self::ADMIN_HEALTH_TAB): string
     {
         $params = ['page' => self::ADMIN_PAGE_SLUG];
         $tab = self::sanitize_admin_tab($tab);
-        if ($tab !== self::ADMIN_SETTINGS_TAB) {
+        if ($tab !== self::ADMIN_HEALTH_TAB) {
             $params[self::ADMIN_TAB_FIELD] = $tab;
         }
 
@@ -4472,6 +4860,15 @@ final class WP_FTS_Plugin
         return function_exists('is_admin') && is_admin();
     }
 
+    private static function is_ajax_request(): bool
+    {
+        if (defined('DOING_AJAX') && DOING_AJAX) {
+            return true;
+        }
+
+        return function_exists('wp_doing_ajax') && wp_doing_ajax();
+    }
+
     private static function is_rest_request(): bool
     {
         if (defined('REST_REQUEST') && REST_REQUEST) {
@@ -4488,6 +4885,16 @@ final class WP_FTS_Plugin
         }
 
         return function_exists('wp_doing_cron') && wp_doing_cron();
+    }
+
+    private static function is_cli_request(): bool
+    {
+        return defined('WP_CLI') && WP_CLI;
+    }
+
+    private static function is_bulk_activation_request(): bool
+    {
+        return self::request_text_value($_GET, 'activate-multi', 20) !== '';
     }
 
     /**
@@ -4777,20 +5184,7 @@ final class WP_FTS_Plugin
             return [];
         }
 
-        $clauses = [];
-        $args = [];
-
-        $public_placeholders = implode(',', array_fill(0, count($post_types), '%s'));
-        $clauses[] = "(p.post_status = %s AND p.post_type IN ({$public_placeholders}))";
-        $args[] = 'publish';
-        array_push($args, ...$post_types);
-
-        if (in_array('post', $post_types, true)) {
-            $status_placeholders = implode(',', array_fill(0, count(self::ADMIN_POST_SEARCH_POST_STATUSES), '%s'));
-            $clauses[] = "(p.post_type = %s AND p.post_status IN ({$status_placeholders}))";
-            $args[] = 'post';
-            array_push($args, ...self::ADMIN_POST_SEARCH_POST_STATUSES);
-        }
+        [$clauses, $args] = self::eligible_content_clauses_and_args('p', $post_types);
 
         $posts_table = isset($wpdb->posts) && is_scalar($wpdb->posts)
             ? (string) $wpdb->posts
@@ -4816,6 +5210,105 @@ LIMIT %d",
         }
 
         return array_values(array_filter($rows, static fn(mixed $row): bool => is_object($row)));
+    }
+
+    /**
+     * @param string[]|null $post_types
+     * @return array{0:string[],1:array<int,mixed>}
+     */
+    private static function eligible_content_clauses_and_args(string $alias = 'p', ?array $post_types = null): array
+    {
+        $post_types ??= self::configured_backfill_post_types();
+        if ($post_types === []) {
+            return [[], []];
+        }
+
+        $alias = preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $alias) === 1 ? $alias : 'p';
+        $clauses = [];
+        $args = [];
+
+        $public_placeholders = implode(',', array_fill(0, count($post_types), '%s'));
+        $clauses[] = "({$alias}.post_status = %s AND {$alias}.post_type IN ({$public_placeholders}))";
+        $args[] = 'publish';
+        array_push($args, ...$post_types);
+
+        if (in_array('post', $post_types, true)) {
+            $status_placeholders = implode(',', array_fill(0, count(self::ADMIN_POST_SEARCH_POST_STATUSES), '%s'));
+            $clauses[] = "({$alias}.post_type = %s AND {$alias}.post_status IN ({$status_placeholders}))";
+            $args[] = 'post';
+            array_push($args, ...self::ADMIN_POST_SEARCH_POST_STATUSES);
+        }
+
+        return [$clauses, $args];
+    }
+
+    private static function count_eligible_content(): int
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'prepare') || !method_exists($wpdb, 'get_var')) {
+            return 0;
+        }
+
+        [$clauses, $args] = self::eligible_content_clauses_and_args('p');
+        if ($clauses === []) {
+            return 0;
+        }
+
+        $posts_table = isset($wpdb->posts) && is_scalar($wpdb->posts)
+            ? (string) $wpdb->posts
+            : (string) ($wpdb->prefix ?? '') . 'posts';
+
+        return self::prepared_count(
+            $wpdb->prepare(
+                "SELECT COUNT(DISTINCT p.ID)
+FROM {$posts_table} p
+WHERE p.post_password = ''
+  AND (" . implode(' OR ', $clauses) . ")",
+                ...$args
+            )
+        );
+    }
+
+    private static function count_indexed_eligible_content(): int
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'prepare') || !method_exists($wpdb, 'get_var')) {
+            return 0;
+        }
+
+        [$clauses, $args] = self::eligible_content_clauses_and_args('p');
+        if ($clauses === []) {
+            return 0;
+        }
+
+        $posts_table = isset($wpdb->posts) && is_scalar($wpdb->posts)
+            ? (string) $wpdb->posts
+            : (string) ($wpdb->prefix ?? '') . 'posts';
+        $docs_table = (string) ($wpdb->prefix ?? '') . 'fts_docs';
+
+        return self::prepared_count(
+            $wpdb->prepare(
+                "SELECT COUNT(DISTINCT p.ID)
+FROM {$posts_table} p
+INNER JOIN {$docs_table} d ON d.doc_id = p.ID AND d.is_deleted = 0
+WHERE p.post_password = ''
+  AND (" . implode(' OR ', $clauses) . ")",
+                ...$args
+            )
+        );
+    }
+
+    private static function prepared_count(mixed $statement): int
+    {
+        global $wpdb;
+
+        $value = isset($wpdb) && is_object($wpdb) && method_exists($wpdb, 'get_var')
+            ? $wpdb->get_var($statement)
+            : 0;
+
+        return is_numeric($value) ? max(0, (int) $value) : 0;
     }
 
     private static function has_eligible_unindexed_content(): bool
