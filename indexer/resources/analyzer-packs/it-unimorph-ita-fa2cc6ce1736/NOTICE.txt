@@ -1,0 +1,15 @@
+UniMorph ita Italian inflection table fa2cc6ce1736-unimorph-v1
+Source URL: https://github.com/unimorph/ita/blob/fa2cc6ce173643e748bd8f4162709365bdc98805/ita
+Source repository: https://github.com/unimorph/ita
+Source commit: fa2cc6ce173643e748bd8f4162709365bdc98805
+Source file path: ita
+Source artifact SHA-256: 6347bb15b3d2c3dafcbe4adc0e7beaa97a8bc61bcccc345079afb154c03f1321
+Source artifact byte count: 19801423
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 906c65c2a25b62ff77ed98f411ec07a4883999eb04ade6994726703aebb82283
+Attribution: UniMorph ita contributors; source repository https://github.com/unimorph/ita
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

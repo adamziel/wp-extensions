@@ -1,0 +1,119 @@
+{
+    "schema_version": 1,
+    "pack_id": "it-unimorph-ita-fa2cc6ce1736",
+    "language": "it",
+    "version": "fa2cc6ce1736-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer it with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 321279,
+        "total_sha256": "5b949489569d73f0b02320ed82ace872d6e0eb0f4ff4c7a9502badf826830b17",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "dfc1d2b1c551af47cc065194e65deab6e1115fb9dc7b437f99bc4004593271e9",
+                "rows": 100000,
+                "first_surface": "abaliena",
+                "last_surface": "divenissi",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0002.tsv.gz",
+                "sha256": "3750c3a4deb3d519e8eb20750de9ec7c00d0ce3322790b2552e71a5c87c8a9d5",
+                "rows": 100000,
+                "first_surface": "divenissimo",
+                "last_surface": "radiotelegrafante",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0003.tsv.gz",
+                "sha256": "9d53cdf2ef9a389dc6586bf3ef2cbc00487947d0e4d21335f1fbc6d5ffe59676",
+                "rows": 100000,
+                "first_surface": "radiotelegrafare",
+                "last_surface": "tallonano",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0004.tsv.gz",
+                "sha256": "2c6965df1e6e04ad17681ee898dd5edce42f117be765c10c048bdcb4b4c044e1",
+                "rows": 21279,
+                "first_surface": "tallonante",
+                "last_surface": "zuppo",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph ita Italian inflection table",
+        "version": "fa2cc6ce1736-unimorph-v1",
+        "file": "ita",
+        "url": "https://github.com/unimorph/ita/blob/fa2cc6ce173643e748bd8f4162709365bdc98805/ita",
+        "repository_url": "https://github.com/unimorph/ita",
+        "commit": "fa2cc6ce173643e748bd8f4162709365bdc98805",
+        "artifact_sha256": "6347bb15b3d2c3dafcbe4adc0e7beaa97a8bc61bcccc345079afb154c03f1321",
+        "byte_count": 19801423,
+        "files": [
+            {
+                "path": "ita",
+                "sha256": "6347bb15b3d2c3dafcbe4adc0e7beaa97a8bc61bcccc345079afb154c03f1321",
+                "byte_count": 19801423
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "ita",
+            "source_files": 1,
+            "files": [
+                "ita"
+            ],
+            "source_lines": 509575,
+            "blank_lines": 1,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 97250,
+            "rows_with_features": 412324,
+            "accepted_rows": 412324
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph ita contributors; source repository https://github.com/unimorph/ita"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=it --pack-id=it-unimorph-ita-fa2cc6ce1736 --version=fa2cc6ce1736-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/ita/blob/fa2cc6ce173643e748bd8f4162709365bdc98805/ita --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

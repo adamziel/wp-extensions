@@ -4289,7 +4289,11 @@ test_case('sandbox demo analyzer loads bundled UniMorph packs without changing r
     wp_fts_test_reset_wordpress_fakes();
 
     $manifests = bundled_unimorph_top_language_pack_manifests();
-    assert_same(['ar', 'bn', 'en', 'es', 'fr', 'hi', 'id', 'pt'], array_keys($manifests), 'bundled UniMorph discovery should find only committed top-language manifests');
+    assert_same(
+        ['ar', 'bn', 'de', 'en', 'es', 'fa', 'fr', 'hi', 'id', 'it', 'nl', 'pt', 'ru', 'te', 'tr', 'uk'],
+        array_keys($manifests),
+        'bundled UniMorph discovery should find committed top-language and next-language manifests'
+    );
 
     $runtimeOptions = WP_FTS_Plugin::runtime_analyzer_options();
     $runtimePacks = $runtimeOptions['lemmatizer_packs_by_lang'] ?? [];
@@ -6145,7 +6149,7 @@ test_case('language normalizer applies dialect and language-specific folding map
     assert_same('zh-Hant', $normalizer->canonicalize_language('zh_TW'), 'Chinese region should canonicalize to script key');
     assert_same('البحث', $normalizer->normalize_token("اَلْبَحْثُ", 'ar'), 'Arabic harakat should strip without changing letters');
     assert_same('تلاش', $normalizer->normalize_token("تَلاشـ", 'ur'), 'Urdu harakat and tatweel should strip without changing letters');
-    assert_same("تَلاشـ", $normalizer->normalize_token("تَلاشـ", 'fa'), 'unsupported Persian partition should not inherit Urdu mark normalization');
+    assert_same('تلاش', $normalizer->normalize_token("تَلاشـ", 'fa'), 'Persian partition should normalize Arabic-script marks before pack lookup');
 
     $pipeline = new WP_FTS_LanguagePipeline();
     assert_same(
@@ -6383,7 +6387,7 @@ test_case('generic lemma packs by language beat baseline and fall back safely', 
     $defaultSignature = $baseline->index_signature();
     $packSignature = $packPipeline->index_signature();
     assert_true($defaultSignature !== $packSignature, 'language pipeline signature should change when a generic pack is enabled');
-    assert_contains('wp-fts-language-pipeline-v16:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
+    assert_contains('wp-fts-language-pipeline-v17:', $packSignature, 'language pipeline signature should identify the generic-pack contract');
 
     $defaultAnalyzer = new WP_FTS_Analyzer();
     $packAnalyzer = new WP_FTS_Analyzer([
@@ -6751,7 +6755,7 @@ test_case('top-language pack audit fails required gate when manifests are missin
         assert_same('fail', $cli['json']['status'] ?? null, 'top-language audit JSON should expose the failed gate');
 
         $rows = top_language_audit_rows_by_language($cli['json']);
-        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id'] as $language) {
+        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ru', 'de', 'te', 'tr', 'it', 'fa', 'uk', 'nl'] as $language) {
             assert_same('missing_pack', $rows[$language]['status'] ?? null, "{$language} should report a missing pack");
             assert_same(true, $rows[$language]['pack_required'] ?? null, "{$language} should remain required in the audit registry");
             assert_same('lemma_pack', $rows[$language]['support_kind'] ?? null, "{$language} should remain a lemma-pack lane");
@@ -6759,6 +6763,11 @@ test_case('top-language pack audit fails required gate when manifests are missin
         assert_same('tokenizer_supported', $rows['zh']['status'] ?? null, 'Chinese should be reported as tokenizer-supported instead of missing a lemma pack');
         assert_same('tokenizer', $rows['zh']['support_kind'] ?? null, 'Chinese should expose the tokenizer support kind');
         assert_same(false, $rows['zh']['pack_required'] ?? null, 'Chinese should not be required by the lemma-pack gate');
+        foreach (['ja', 'ko'] as $language) {
+            assert_same('tokenizer_supported', $rows[$language]['status'] ?? null, "{$language} should be reported as tokenizer-supported instead of missing a lemma pack");
+            assert_same('tokenizer', $rows[$language]['support_kind'] ?? null, "{$language} should expose the tokenizer support kind");
+            assert_same(false, $rows[$language]['pack_required'] ?? null, "{$language} should not be required by the lemma-pack gate");
+        }
         assert_same('license_blocked', $rows['ur']['status'] ?? null, 'Urdu should report the UniMorph redistribution blocker');
         assert_same('license_blocked', $rows['ur']['support_kind'] ?? null, 'Urdu should expose the license-blocked support kind');
         assert_same(false, $rows['ur']['pack_required'] ?? null, 'Urdu should not fail the pack-backed gate while redistribution is blocked');
@@ -6774,7 +6783,7 @@ test_case('top-language pack audit strict gate passes with required lemma packs 
         if (!mkdir($root, 0777, true) && !is_dir($root)) {
             throw new WP_FTS_TestFailure("Could not create required audit root: {$root}");
         }
-        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id'] as $language) {
+        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ru', 'de', 'te', 'tr', 'it', 'fa', 'uk', 'nl'] as $language) {
             write_synthetic_audit_lemma_pack($language, $root . '/' . $language . '-pack', false);
         }
 
@@ -6787,10 +6796,12 @@ test_case('top-language pack audit strict gate passes with required lemma packs 
         assert_same('ok', $cli['json']['status'] ?? null, 'strict audit JSON should expose ok status');
 
         $rows = top_language_audit_rows_by_language($cli['json']);
-        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id'] as $language) {
+        foreach (['en', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ru', 'de', 'te', 'tr', 'it', 'fa', 'uk', 'nl'] as $language) {
             assert_same('pack_backed', $rows[$language]['status'] ?? null, "{$language} should be pack-backed");
         }
         assert_same('tokenizer_supported', $rows['zh']['status'] ?? null, 'Chinese tokenizer lane should not require a lemma pack');
+        assert_same('tokenizer_supported', $rows['ja']['status'] ?? null, 'Japanese tokenizer lane should not require a lemma pack');
+        assert_same('tokenizer_supported', $rows['ko']['status'] ?? null, 'Korean tokenizer lane should not require a lemma pack');
         assert_same('license_blocked', $rows['ur']['status'] ?? null, 'Urdu license blocker should not fail the strict gate');
     } finally {
         remove_directory_tree($root);
@@ -7745,7 +7756,8 @@ test_case('bundled UniMorph top-language packs validate and drive lemma-backed s
         assert_same(false, $validation['manifest']['fixture_only'], "{$language} bundled UniMorph pack should not be fixture-only");
         assert_same(false, $validation['manifest']['default_enabled'], "{$language} bundled UniMorph pack should remain default-disabled");
         assert_true(in_array('unimorph-source-import', $validation['manifest']['capabilities'], true), "{$language} bundled UniMorph pack should declare UniMorph provenance");
-        assert_same('CC-BY-SA-3.0', $validation['manifest']['license']['spdx_id'] ?? null, "{$language} bundled UniMorph pack should preserve source license");
+        $expectedLicense = $language === 'te' ? 'upstream-license-not-declared' : 'CC-BY-SA-3.0';
+        assert_same($expectedLicense, $validation['manifest']['license']['spdx_id'] ?? null, "{$language} bundled UniMorph pack should preserve recorded source license status");
         $publishedSourcePath = (string) ($validation['manifest']['source']['parse_stats']['source_path'] ?? '');
         assert_true($publishedSourcePath !== '' && !str_contains($publishedSourcePath, '/tmp/'), "{$language} bundled UniMorph parse stats should use upstream source path only");
 
@@ -8691,8 +8703,8 @@ test_case('language detector uses deterministic script and lexical evidence', fu
     assert_same('ar', $detector->detect_text('هذا نص عربي للبحث'), 'Arabic lexical evidence should route to ar');
     assert_same('ur', $detector->detect_text('یہ اردو تلاش اور فہرست ہے'), 'Urdu-specific evidence should route to ur');
     assert_same('ur', $detector->detect_text('اردو تلاش'), 'Urdu lexical evidence should beat shared Arabic script');
-    assert_same(null, $detector->detect_text('سلام دنیا'), 'unsupported Persian-like text should not route to Urdu or Arabic');
-    assert_same(null, $detector->detect_text('فارسی جستجو'), 'unsupported Persian lexical text should not route to Urdu');
+    assert_same('fa', $detector->detect_text('سلام دنیا'), 'Persian-specific Arabic-script evidence should route to fa');
+    assert_same('fa', $detector->detect_text('فارسی جستجو'), 'Persian lexical text should route to fa');
     assert_same(null, $detector->detect_text('und'), 'one weak lexical marker should not be enough to guess');
     assert_same(null, $detector->detect_text('shared alpha beta'), 'weak generic Latin evidence should not guess');
 });

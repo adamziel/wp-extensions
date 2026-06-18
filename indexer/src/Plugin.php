@@ -1691,6 +1691,14 @@ final class WP_FTS_Plugin
             'pl' => 'Polish',
             'de' => 'German',
             'ru' => 'Russian',
+            'ja' => 'Japanese',
+            'ko' => 'Korean',
+            'te' => 'Telugu',
+            'tr' => 'Turkish',
+            'it' => 'Italian',
+            'fa' => 'Persian',
+            'uk' => 'Ukrainian',
+            'nl' => 'Dutch',
         ];
     }
 

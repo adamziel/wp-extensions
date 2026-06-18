@@ -1,0 +1,69 @@
+{
+    "schema_version": "wp-fts-unimorph-lemma-pack-source-lock/v1",
+    "pack": {
+        "id": "nl-unimorph-nld-7654cbfbb815",
+        "language": "nl",
+        "kind": "lemmatizer",
+        "status": "production_candidate",
+        "runtime_pack_committed": true,
+        "default_enabled": false
+    },
+    "source": {
+        "name": "UniMorph nld Dutch inflection table",
+        "version": "7654cbfbb815-unimorph-v1",
+        "url": "https://github.com/unimorph/nld/blob/7654cbfbb81589d03f98231cec2e3ad21ee9e8aa/nld",
+        "repository_url": "https://github.com/unimorph/nld",
+        "commit": "7654cbfbb81589d03f98231cec2e3ad21ee9e8aa",
+        "file": "nld",
+        "files": [
+            {
+                "path": "nld",
+                "sha256": "86f3504cc426c9beffe8566406294f7f71505d46a2bba8773bdcf2e9c5a3d750",
+                "byte_count": 1874427
+            }
+        ],
+        "artifact_sha256": "86f3504cc426c9beffe8566406294f7f71505d46a2bba8773bdcf2e9c5a3d750",
+        "byte_count": 1874427,
+        "license": {
+            "spdx_id": "CC-BY-SA-3.0",
+            "license_url": "https://creativecommons.org/licenses/by-sa/3.0/",
+            "notice_path": "NOTICE.txt",
+            "evidence_path": "README.md",
+            "evidence_sha256": "821040a3ac57ba9568f43c822d5912b06ad5936598190624ce90649a17992dea"
+        }
+    },
+    "columns": {
+        "format": "unimorph-three-column-tsv-v1",
+        "lemma_column": 0,
+        "surface_column": 1,
+        "features_column": 2
+    },
+    "importer": {
+        "path": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php",
+        "commit": "recorded-in-task-result",
+        "command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=nl --pack-id=nl-unimorph-nld-7654cbfbb815 --version=7654cbfbb815-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/nld/blob/7654cbfbb81589d03f98231cec2e3ad21ee9e8aa/nld --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip"
+    },
+    "runtime": {
+        "manifest_sha256": "ce5b3fbc469390d7a50ef72adbb9ce2c4a8347e24ee391d816e07d9dcc2aa769",
+        "row_count": 26405,
+        "file_count": 1,
+        "byte_count": 87225,
+        "digest_sha256": "17ca2aa0026044cedd58ba3d61f812ef38d37626d47a7ffd596402a697db3815",
+        "contains_third_party_data": true,
+        "committed": true,
+        "compression": "gzip"
+    },
+    "behavior": {
+        "oov_policy": "return_original_normalized_term",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "unsupported_language_policy": "return_original_normalized_term"
+    },
+    "release": {
+        "default_enabled": false,
+        "claim_boundary": "Source-backed UniMorph lemmatizer evidence. Runtime pack is bundled for opt-in use and audit evidence, but remains default-disabled."
+    },
+    "attribution": {
+        "upstream": "UniMorph nld contributors; source repository https://github.com/unimorph/nld"
+    }
+}

@@ -4,3 +4,33 @@
 [submodule "indexer/resources/sources/jieba"]
 	path = indexer/resources/sources/jieba
 	url = https://github.com/fxsjy/jieba
+[submodule "indexer/resources/sources/unimorph/rus"]
+	path = indexer/resources/sources/unimorph/rus
+	url = https://github.com/unimorph/rus
+[submodule "indexer/resources/sources/unimorph/deu"]
+	path = indexer/resources/sources/unimorph/deu
+	url = https://github.com/unimorph/deu
+[submodule "indexer/resources/sources/unimorph/jpn"]
+	path = indexer/resources/sources/unimorph/jpn
+	url = https://github.com/unimorph/jpn
+[submodule "indexer/resources/sources/unimorph/kor"]
+	path = indexer/resources/sources/unimorph/kor
+	url = https://github.com/unimorph/kor
+[submodule "indexer/resources/sources/unimorph/tel"]
+	path = indexer/resources/sources/unimorph/tel
+	url = https://github.com/unimorph/tel
+[submodule "indexer/resources/sources/unimorph/tur"]
+	path = indexer/resources/sources/unimorph/tur
+	url = https://github.com/unimorph/tur
+[submodule "indexer/resources/sources/unimorph/ita"]
+	path = indexer/resources/sources/unimorph/ita
+	url = https://github.com/unimorph/ita
+[submodule "indexer/resources/sources/unimorph/fas"]
+	path = indexer/resources/sources/unimorph/fas
+	url = https://github.com/unimorph/fas
+[submodule "indexer/resources/sources/unimorph/ukr"]
+	path = indexer/resources/sources/unimorph/ukr
+	url = https://github.com/unimorph/ukr
+[submodule "indexer/resources/sources/unimorph/nld"]
+	path = indexer/resources/sources/unimorph/nld
+	url = https://github.com/unimorph/nld

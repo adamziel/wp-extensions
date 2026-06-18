@@ -1,0 +1,12 @@
+UniMorph tel Telugu inflection table 551f60f5f434-unimorph-v1
+Source URL: https://github.com/unimorph/tel/blob/551f60f5f43448e4503580e8dd6d338c7b5a7c6e/tel
+Source repository: https://github.com/unimorph/tel
+Source commit: 551f60f5f43448e4503580e8dd6d338c7b5a7c6e
+Source file path: tel
+Source artifact SHA-256: 369009d424e9d9ab81d85d20c71e36a8ebfb1323cc2b29b8bff2238f84cec78d
+Source artifact byte count: 95069
+License: upstream-license-not-declared
+Attribution: UniMorph tel contributors; source repository https://github.com/unimorph/tel
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

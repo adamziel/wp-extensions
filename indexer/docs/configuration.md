@@ -57,17 +57,18 @@ language resolvers remain authoritative.
 The built-in baseline detector and admin selectors cover English (`en`),
 Mandarin/Chinese (`zh`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French
 (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), and Urdu (`ur`).
-Polish (`pl`), German (`de`), Russian (`ru`), and other explicit partitions can
-be routed when callers provide language hints.
+The next selectable/detectable set adds Russian (`ru`), German (`de`), Japanese
+(`ja`), Korean (`ko`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian
+(`fa`), Ukrainian (`uk`), and Dutch (`nl`).
 
 | Language or partition | Routing support | Analyzer tier | Fallback and boundary |
 | --- | --- | --- | --- |
 | Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | Strongest path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice. | Default behavior remains conservative unless a valid pack or verified mode is enabled. Bundled packs stay opt-in/default-disabled outside the sandbox path. |
-| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Configure them through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`; built-in Snowball or baseline behavior remains the fallback when no pack is configured. |
-| Catalan (`ca`), Dutch Porter (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Configure them through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`; built-in Snowball, baseline, or no-op behavior remains the fallback when no pack is configured. |
+| Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
 | Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization plus optional Jieba dictionary segmentation from the pinned source submodule through `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Fallback n-grams remain enabled for unknown/subword recall. |
-| Urdu (`ur`) | Selectable/detectable partition. | Arabic-script combining mark/harakat and tatweel normalization plus deterministic light suffix baseline for common plural-oblique forms. | UniMorph Urdu is license-blocked, so no generated Urdu pack is bundled. Persian-like text is not merged into Urdu routing. |
-| German (`de`), Russian (`ru`), other explicit partitions | Language namespace/routing support when the caller or detector supplies the language. | Conservative analysis unless a documented analyzer exists. | Unsupported morphology returns the normalized token unchanged. |
+| Japanese (`ja`), Korean (`ko`) | Selectable/detectable CJK/Hangul partitions. | Deterministic fallback n-gram tokenization. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed word segmenter for those languages. Pinned UniMorph source submodules are retained for future external-pack work. |
+| Urdu (`ur`) | Selectable/detectable partition. | Arabic-script combining mark/harakat and tatweel normalization plus deterministic light suffix baseline for common plural-oblique forms. | UniMorph Urdu is license-blocked, so no generated Urdu pack is bundled. Persian (`fa`) is a separate partition and is not merged into Urdu routing. |
 | Generic packs | Available through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Local manifest-backed packs whose manifest `language` matches the configured key. | Invalid, missing, disabled, or language-mismatched packs are ignored and the built-in fallback path remains available. |
 
 Morphology support must come from verified algorithms, analyzers, or
@@ -94,6 +95,9 @@ The default analyzer:
 - applies bundled generated Snowball stemming for English (`en`), Arabic (`ar`),
   Spanish (`es`), French (`fr`), Hindi (`hi`), Portuguese (`pt`), and
   Indonesian (`id`) when no lemma pack is configured;
+- applies configured UniMorph-derived lemma packs for Russian (`ru`), German
+  (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`),
+  Ukrainian (`uk`), and Dutch (`nl`);
 - applies conservative Bengali (`bn`) classifier/plural/genitive/dative/case
   suffix stemming;
 - applies conservative Urdu (`ur`) feminine/masculine/Arabic-loan/plural-oblique

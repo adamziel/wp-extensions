@@ -176,9 +176,20 @@ php tools/audit-top-language-lemma-packs.php \
   --require-pack-backed
 ```
 
-Those packs are source-backed, opt-in, default-disabled, and CC BY-SA 3.0.
-Chinese is a tokenizer lane rather than a missing UniMorph lemma pack. Its
-optional Jieba source is pinned as a git submodule, not copied dictionary rows:
+Those packs are source-backed, opt-in, default-disabled, and carry their
+upstream license/provenance in each pack manifest and source lock. Run the
+next-language support harness when changing Russian, German, Japanese, Korean,
+Telugu, Turkish, Italian, Persian, Ukrainian, or Dutch routing and packs:
+
+```sh
+php tests/quality/next-10-language-support.php
+php -n tests/quality/next-10-language-support.php
+```
+
+Chinese, Japanese, and Korean are tokenizer lanes rather than missing UniMorph
+lemma packs. Chinese can optionally use Jieba; Japanese and Korean currently
+use deterministic fallback n-grams. Source repositories are pinned as git
+submodules, not copied dictionary rows:
 
 ```sh
 git submodule update --init --recursive indexer/resources/sources/jieba
@@ -191,6 +202,19 @@ The expected commit is `67fa2e36e72f69d9134b8a1037b83fbb070b9775`, SHA-256 is
 `7197c3211ddd98962b036cdf40324d1ea2bfaa12bd028e68faa70111a88e12a8`, and byte
 size is `5071852`. Urdu is audited as license-blocked until `unimorph/urd` has
 clear redistribution evidence, so no generated Urdu pack is bundled.
+
+Japanese and Korean pack experiments should stay external until a source-backed
+word segmenter is wired into the PHP pipeline. Initialize the pinned sources,
+build any trial runtime into an external directory, validate it there, and only
+promote it after `tests/quality/next-10-language-support.php` proves that
+document/query variants meet through the configured tokenizer or pack:
+
+```sh
+git submodule update --init --recursive \
+  indexer/resources/sources/unimorph/jpn \
+  indexer/resources/sources/unimorph/kor
+php tools/validate-analyzer-pack.php /srv/wp-fts-packs/example-ja-or-ko/manifest.json
+```
 
 Run the package-safe external pack workflow tests directly when changing the
 builder, importer options, validation boundary, or docs:

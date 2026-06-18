@@ -1,0 +1,15 @@
+UniMorph ukr Ukrainian inflection table d7d0284e926b-unimorph-v1
+Source URL: https://github.com/unimorph/ukr/blob/d7d0284e926b7d4947c52aaafd1d7f8a40a2dec0/ukr
+Source repository: https://github.com/unimorph/ukr
+Source commit: d7d0284e926b7d4947c52aaafd1d7f8a40a2dec0
+Source file path: ukr
+Source artifact SHA-256: c0ad5ba0348b829b2363a215f712b84c4d302535ebb97557d93082e4f32eab42
+Source artifact byte count: 870660
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: aabe2e1ec396715830e5723e51f4e95408ae0c86b9f05379c6442db5d72b76e2
+Attribution: UniMorph ukr contributors; source repository https://github.com/unimorph/ukr; imported ukr file only
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

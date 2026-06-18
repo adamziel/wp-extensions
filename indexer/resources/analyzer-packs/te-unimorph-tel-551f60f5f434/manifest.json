@@ -1,0 +1,94 @@
+{
+    "schema_version": 1,
+    "pack_id": "te-unimorph-tel-551f60f5f434",
+    "language": "te",
+    "version": "551f60f5f434-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer te with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 1049,
+        "total_sha256": "82cbe6b6535b9817daa0d7bc218438b2362400e9b666d07bee588e192204ae8b",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "78722b529a5cc95195b9b256a25f717e08647f6a81a79e30e9d489655ca8ebf8",
+                "rows": 1049,
+                "first_surface": "అంటించాడు",
+                "last_surface": "స్తుతించింది",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph tel Telugu inflection table",
+        "version": "551f60f5f434-unimorph-v1",
+        "file": "tel",
+        "url": "https://github.com/unimorph/tel/blob/551f60f5f43448e4503580e8dd6d338c7b5a7c6e/tel",
+        "repository_url": "https://github.com/unimorph/tel",
+        "commit": "551f60f5f43448e4503580e8dd6d338c7b5a7c6e",
+        "artifact_sha256": "369009d424e9d9ab81d85d20c71e36a8ebfb1323cc2b29b8bff2238f84cec78d",
+        "byte_count": 95069,
+        "files": [
+            {
+                "path": "tel",
+                "sha256": "369009d424e9d9ab81d85d20c71e36a8ebfb1323cc2b29b8bff2238f84cec78d",
+                "byte_count": 95069
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "tel",
+            "source_files": 1,
+            "files": [
+                "tel"
+            ],
+            "source_lines": 1699,
+            "blank_lines": 151,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 0,
+            "rows_with_features": 1548,
+            "accepted_rows": 1548
+        }
+    },
+    "license": {
+        "spdx_id": "upstream-license-not-declared",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph tel contributors; source repository https://github.com/unimorph/tel"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=te --pack-id=te-unimorph-tel-551f60f5f434 --version=551f60f5f434-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/tel/blob/551f60f5f43448e4503580e8dd6d338c7b5a7c6e/tel --license=upstream-license-not-declared --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}

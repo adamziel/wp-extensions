@@ -434,11 +434,11 @@ test_case('quality top spoken language relevance covers retrieval and bait isola
     record_check('top spoken language relevance scenarios', count($seen));
 });
 
-test_case('quality top spoken language relevance keeps Urdu routing clear of Persian-like bait', function (): void {
+test_case('quality top spoken language relevance keeps Urdu and Persian routing separate', function (): void {
     $detector = new WP_FTS_LanguageDetector();
 
     assert_same('ur', $detector->detect_text('یہ اردو تلاش اور فہرست ہے'), 'clear Urdu text should still route to Urdu');
-    assert_same(null, $detector->detect_text('فارسی جستجو'), 'Persian-like bait should not auto-route to Urdu');
+    assert_same('fa', $detector->detect_text('فارسی جستجو'), 'clear Persian text should route to Persian, not Urdu');
 });
 
 test_case('quality top spoken language relevance ranks longer Chinese n-gram evidence above bait', function (): void {

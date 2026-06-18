@@ -1,0 +1,15 @@
+UniMorph nld Dutch inflection table 7654cbfbb815-unimorph-v1
+Source URL: https://github.com/unimorph/nld/blob/7654cbfbb81589d03f98231cec2e3ad21ee9e8aa/nld
+Source repository: https://github.com/unimorph/nld
+Source commit: 7654cbfbb81589d03f98231cec2e3ad21ee9e8aa
+Source file path: nld
+Source artifact SHA-256: 86f3504cc426c9beffe8566406294f7f71505d46a2bba8773bdcf2e9c5a3d750
+Source artifact byte count: 1874427
+License: CC-BY-SA-3.0
+License URL: https://creativecommons.org/licenses/by-sa/3.0/
+License evidence path: README.md
+License evidence SHA-256: 821040a3ac57ba9568f43c822d5912b06ad5936598190624ce90649a17992dea
+Attribution: UniMorph nld contributors; source repository https://github.com/unimorph/nld
+
+Generated from source-approved UniMorph lemma/form/features rows.
+The runtime analyzer performs no network access.

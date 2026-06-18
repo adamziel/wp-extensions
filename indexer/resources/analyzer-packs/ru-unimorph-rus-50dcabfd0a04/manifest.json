@@ -1,0 +1,119 @@
+{
+    "schema_version": 1,
+    "pack_id": "ru-unimorph-rus-50dcabfd0a04",
+    "language": "ru",
+    "version": "50dcabfd0a04-unimorph-v1",
+    "fixture_only": false,
+    "default_enabled": false,
+    "capabilities": [
+        "dictionary-lemmatizer",
+        "ambiguous-form-noop",
+        "normalized-runtime-rows",
+        "sharded-runtime-files",
+        "source-backed-lemma-tsv-import",
+        "compressed-runtime-files",
+        "unimorph-source-import"
+    ],
+    "runtime": {
+        "format": "wp-fts-lemma-tsv-v1",
+        "normalization": "WP_FTS_Normalizer ru with fold_diacritics=true",
+        "ambiguity_policy": "ambiguous_surface_noop",
+        "total_rows": 318767,
+        "total_sha256": "ffe84689ceaaccee7b6db03054eeeb854f94febcb0d3548313f2dac75c0a7574",
+        "files": [
+            {
+                "path": "runtime/0001.tsv.gz",
+                "sha256": "264cecb092c75e2e28b3ad0d6ee4951b7f872b5f176e26af37a501aac3095679",
+                "rows": 100000,
+                "first_surface": "аак",
+                "last_surface": "кастетам",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0002.tsv.gz",
+                "sha256": "bd37e3181df10033dba44d0ee2690bc6bfc0deb9fb56b9700c415dc71ce2960a",
+                "rows": 100001,
+                "first_surface": "кастетами",
+                "last_surface": "полумесяцах",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0003.tsv.gz",
+                "sha256": "09d33f4b5a673af6673603f661f1511a597a93302a70fa5c02cdb753571c2a8e",
+                "rows": 100000,
+                "first_surface": "полумесяце",
+                "last_surface": "фиксировала",
+                "compression": "gzip"
+            },
+            {
+                "path": "runtime/0004.tsv.gz",
+                "sha256": "5bb68c0c9f8a1779da9318249456a3a844271d20d35c4466a712c201ee96fae4",
+                "rows": 18766,
+                "first_surface": "фиксировалась",
+                "last_surface": "ётуны",
+                "compression": "gzip"
+            }
+        ]
+    },
+    "source": {
+        "name": "UniMorph rus Russian inflection table",
+        "version": "50dcabfd0a04-unimorph-v1",
+        "file": "rus",
+        "url": "https://github.com/unimorph/rus/blob/50dcabfd0a04bd4d187ffb0d5cdd54af94863dec/rus",
+        "repository_url": "https://github.com/unimorph/rus",
+        "commit": "50dcabfd0a04bd4d187ffb0d5cdd54af94863dec",
+        "artifact_sha256": "6c13f849fc12844b23f46e70a02a45a2f537e60c62c8ffd8798bdff3991dc880",
+        "byte_count": 25151401,
+        "files": [
+            {
+                "path": "rus",
+                "sha256": "6c13f849fc12844b23f46e70a02a45a2f537e60c62c8ffd8798bdff3991dc880",
+                "byte_count": 25151401
+            }
+        ],
+        "column_model": {
+            "format": "unimorph-three-column-tsv-v1",
+            "lemma_column": 0,
+            "surface_column": 1,
+            "features_column": 2
+        },
+        "parse_stats": {
+            "source_path": "rus",
+            "source_files": 1,
+            "files": [
+                "rus"
+            ],
+            "source_lines": 473482,
+            "blank_lines": 1,
+            "comment_lines": 0,
+            "placeholder_rows": 0,
+            "invalid_runtime_token_rows": 39709,
+            "rows_with_features": 433772,
+            "accepted_rows": 433772
+        }
+    },
+    "license": {
+        "spdx_id": "CC-BY-SA-3.0",
+        "notice_path": "NOTICE.txt",
+        "notice_required": true,
+        "license_url": "https://creativecommons.org/licenses/by-sa/3.0/"
+    },
+    "attribution": {
+        "notice_path": "NOTICE.txt",
+        "upstream": "UniMorph rus contributors; source repository https://github.com/unimorph/rus"
+    },
+    "provenance": {
+        "importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "importer_commit": "recorded-in-task-result",
+        "importer_command": "php indexer/tools/import-unimorph-lemma-pack.php --source=<unimorph-source> --out=<pack-dir> --language=ru --pack-id=ru-unimorph-rus-50dcabfd0a04 --version=50dcabfd0a04-unimorph-v1 --source-name=<approved-unimorph-source-name> --source-url=https://github.com/unimorph/rus/blob/50dcabfd0a04bd4d187ffb0d5cdd54af94863dec/rus --license=CC-BY-SA-3.0 --attribution=<required-attribution> --runtime-compression=gzip",
+        "no_runtime_network_access": true,
+        "no_full_third_party_dictionary_dump": false,
+        "full_third_party_dictionary_dump_generated": true,
+        "generated_pack_default_enabled": false,
+        "rows_per_file": 100000,
+        "chunk_rows": 200000,
+        "runtime_compression": "gzip",
+        "source_importer": "indexer/tools/import-unimorph-lemma-pack.php",
+        "delegated_runtime_importer": "indexer/tools/import-lemma-tsv-pack.php"
+    }
+}
