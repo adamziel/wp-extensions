@@ -179,6 +179,62 @@ function assert_or_pending(bool $condition, string $message, string $pendingReas
     }
 }
 
+function wp_fts_run_registered_tests_and_exit(): void
+{
+    global $tests;
+
+    $failures = 0;
+    $pending = 0;
+    $start = microtime(true);
+    foreach ($tests as $test) {
+        try {
+            ($test['fn'])();
+            fwrite(STDOUT, "[PASS] {$test['name']}\n");
+        } catch (WP_FTS_TestPending $e) {
+            $pending++;
+            fwrite(STDOUT, "[PEND] {$test['name']}\n{$e->getMessage()}\n");
+        } catch (Throwable $e) {
+            $failures++;
+            fwrite(STDERR, "[FAIL] {$test['name']}\n{$e->getMessage()}\n{$e->getTraceAsString()}\n");
+        }
+    }
+
+    $duration = number_format(microtime(true) - $start, 3);
+    $count = count($tests);
+    $passed = $count - $failures - $pending;
+    $gateFailures = 0;
+    $minimumChecks = WP_FTS_DEFAULT_MIN_CHECKS;
+    try {
+        $minimumChecks = minimum_check_count();
+    } catch (WP_FTS_TestFailure $e) {
+        $gateFailures++;
+        fwrite(STDERR, "[FAIL] minimum check count configuration\n{$e->getMessage()}\n");
+    }
+
+    $checkCount = executed_check_count();
+    if ($checkCount < $minimumChecks) {
+        $gateFailures++;
+        fwrite(STDERR, "[FAIL] minimum check count\nExecuted {$checkCount} checks/scenarios; required {$minimumChecks}. Set WP_FTS_MIN_CHECKS to override the default quality gate. Final integration target is >= " . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . ".\n");
+    }
+
+    $totalFailures = $failures + $gateFailures;
+    $summary = "{$passed}/{$count} named tests passed; failures={$totalFailures}; pending={$pending}; checks/scenarios={$checkCount}; minimum checks={$minimumChecks}; final target>=" . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . "; duration={$duration}s\n";
+    if ($totalFailures > 0) {
+        fwrite(STDERR, $summary);
+        exit(1);
+    }
+
+    fwrite(STDOUT, $summary);
+    exit(0);
+}
+
+if (getenv('WP_FTS_HARNESS_GATE_CHILD') === '1') {
+    test_case('quality harness gate child sentinel', function (): void {
+        assert_true(true, 'harness gate child should execute the shared runner');
+    });
+    wp_fts_run_registered_tests_and_exit();
+}
+
 function discover_quality_tests(?string $directory = null): void
 {
     global $wp_fts_quality_test_files;
@@ -10804,45 +10860,4 @@ test_case('search auto fast mode constants override threshold and candidate cap'
     assert_true(($payload['results'][0]['doc_id'] ?? null) !== 3, 'constant-capped auto fast mode may miss a stronger late candidate');
 });
 
-$failures = 0;
-$pending = 0;
-$start = microtime(true);
-foreach ($tests as $test) {
-    try {
-        ($test['fn'])();
-        fwrite(STDOUT, "[PASS] {$test['name']}\n");
-    } catch (WP_FTS_TestPending $e) {
-        $pending++;
-        fwrite(STDOUT, "[PEND] {$test['name']}\n{$e->getMessage()}\n");
-    } catch (Throwable $e) {
-        $failures++;
-        fwrite(STDERR, "[FAIL] {$test['name']}\n{$e->getMessage()}\n{$e->getTraceAsString()}\n");
-    }
-}
-
-$duration = number_format(microtime(true) - $start, 3);
-$count = count($tests);
-$passed = $count - $failures - $pending;
-$gateFailures = 0;
-$minimumChecks = WP_FTS_DEFAULT_MIN_CHECKS;
-try {
-    $minimumChecks = minimum_check_count();
-} catch (WP_FTS_TestFailure $e) {
-    $gateFailures++;
-    fwrite(STDERR, "[FAIL] minimum check count configuration\n{$e->getMessage()}\n");
-}
-
-$checkCount = executed_check_count();
-if ($checkCount < $minimumChecks) {
-    $gateFailures++;
-    fwrite(STDERR, "[FAIL] minimum check count\nExecuted {$checkCount} checks/scenarios; required {$minimumChecks}. Set WP_FTS_MIN_CHECKS to override the default quality gate. Final integration target is >= " . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . ".\n");
-}
-
-$totalFailures = $failures + $gateFailures;
-$summary = "{$passed}/{$count} named tests passed; failures={$totalFailures}; pending={$pending}; checks/scenarios={$checkCount}; minimum checks={$minimumChecks}; final target>=" . WP_FTS_FINAL_INTEGRATION_TARGET_CHECKS . "; duration={$duration}s\n";
-if ($totalFailures > 0) {
-    fwrite(STDERR, $summary);
-    exit(1);
-}
-
-fwrite(STDOUT, $summary);
+wp_fts_run_registered_tests_and_exit();

@@ -14,7 +14,12 @@ final class WP_FTS_Html_Text_Stream
 {
     /** @var array<string,bool> */
     private const HIDDEN_TAGS = [
+        'ASIDE' => true,
+        'FOOTER' => true,
+        'FORM' => true,
+        'NAV' => true,
         'SCRIPT' => true,
+        'SVG' => true,
         'STYLE' => true,
         'NOSCRIPT' => true,
         'TEMPLATE' => true,
