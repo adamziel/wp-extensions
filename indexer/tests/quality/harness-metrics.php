@@ -1,6 +1,107 @@
 <?php
 declare(strict_types=1);
 
+$wp_fts_harness_metrics_direct = !function_exists('test_case');
+if ($wp_fts_harness_metrics_direct) {
+    final class WP_FTS_TestFailure extends RuntimeException
+    {
+    }
+
+    final class WP_FTS_TestPending extends RuntimeException
+    {
+    }
+
+    $GLOBALS['wp_fts_harness_metrics_tests'] = [];
+    $GLOBALS['wp_fts_harness_metrics_check_count'] = 0;
+
+    function test_case(string $name, callable $fn): void
+    {
+        $GLOBALS['wp_fts_harness_metrics_tests'][] = ['name' => $name, 'fn' => $fn];
+    }
+
+    function record_check(?string $label = null, int $count = 1): void
+    {
+        if ($count < 1) {
+            throw new WP_FTS_TestFailure('record_check() count must be at least 1.');
+        }
+
+        $GLOBALS['wp_fts_harness_metrics_check_count'] += $count;
+    }
+
+    function executed_check_count(): int
+    {
+        return (int) $GLOBALS['wp_fts_harness_metrics_check_count'];
+    }
+
+    function assert_true(bool $condition, string $message): void
+    {
+        record_check($message);
+        if (!$condition) {
+            throw new WP_FTS_TestFailure($message);
+        }
+    }
+
+    function assert_same(mixed $expected, mixed $actual, string $message): void
+    {
+        record_check($message);
+        if ($expected !== $actual) {
+            throw new WP_FTS_TestFailure($message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true));
+        }
+    }
+
+    function assert_contains(string $needle, string $haystack, string $message): void
+    {
+        record_check($message);
+        if (!str_contains($haystack, $needle)) {
+            throw new WP_FTS_TestFailure($message . "\nMissing: " . var_export($needle, true) . "\nIn: " . $haystack);
+        }
+    }
+
+    function mark_pending(string $message): never
+    {
+        throw new WP_FTS_TestPending($message);
+    }
+
+    /**
+     * @param array<string,string> $env
+     * @return array{exit:int,stdout:string,stderr:string}
+     */
+    function test_run_harness_with_environment(array $env): array
+    {
+        if (!function_exists('proc_open')) {
+            mark_pending('proc_open() is unavailable, so the harness subprocess test cannot run in this PHP build.');
+        }
+
+        $baseEnv = getenv();
+        if (!is_array($baseEnv)) {
+            $baseEnv = [];
+        }
+
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+        $process = proc_open([PHP_BINARY, dirname(__DIR__) . '/run.php'], $descriptors, $pipes, dirname(__DIR__, 2), array_merge($baseEnv, $env));
+        if (!is_resource($process)) {
+            mark_pending('Could not start a PHP subprocess for the harness metrics test.');
+        }
+
+        fclose($pipes[0]);
+        $stdout = (string) stream_get_contents($pipes[1]);
+        $stderr = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exit = proc_close($process);
+
+        return [
+            'exit' => is_int($exit) ? $exit : 1,
+            'stdout' => $stdout,
+            'stderr' => $stderr,
+        ];
+    }
+}
+
 test_case('quality harness counts assertions and generated checks', function (): void {
     $start = executed_check_count();
 
@@ -62,4 +163,34 @@ if (getenv('WP_FTS_HARNESS_GATE_CHILD') !== '1') {
         assert_contains('[FAIL] minimum check count configuration', $output, 'invalid minimum check config should report a configuration failure');
         assert_contains('WP_FTS_MIN_CHECKS must be a non-negative integer', $output, 'invalid minimum check config should include validation guidance');
     });
+}
+
+if ($wp_fts_harness_metrics_direct) {
+    $failures = 0;
+    $pending = 0;
+    $start = microtime(true);
+    foreach ($GLOBALS['wp_fts_harness_metrics_tests'] as $test) {
+        try {
+            ($test['fn'])();
+            fwrite(STDOUT, "[PASS] {$test['name']}\n");
+        } catch (WP_FTS_TestPending $e) {
+            $pending++;
+            fwrite(STDOUT, "[PEND] {$test['name']}\n{$e->getMessage()}\n");
+        } catch (Throwable $e) {
+            $failures++;
+            fwrite(STDERR, "[FAIL] {$test['name']}\n{$e->getMessage()}\n{$e->getTraceAsString()}\n");
+        }
+    }
+
+    $duration = number_format(microtime(true) - $start, 3);
+    $count = count($GLOBALS['wp_fts_harness_metrics_tests']);
+    $passed = $count - $failures - $pending;
+    $checks = (int) $GLOBALS['wp_fts_harness_metrics_check_count'];
+    $summary = "{$passed}/{$count} quality harness metrics tests passed; failures={$failures}; pending={$pending}; checks/scenarios={$checks}; duration={$duration}s\n";
+    if ($failures > 0) {
+        fwrite(STDERR, $summary);
+        exit(1);
+    }
+
+    fwrite(STDOUT, $summary);
 }
