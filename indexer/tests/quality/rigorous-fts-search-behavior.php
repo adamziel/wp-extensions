@@ -115,10 +115,18 @@ function qrs_require_gzip_packs_available(string $scenario): void
 
 function qrs_analyzer(bool $withPacks = true): WP_FTS_Analyzer
 {
+    return qrs_analyzer_with_manifests($withPacks ? qrs_pack_manifests() : []);
+}
+
+/**
+ * @param array<string,string> $manifests
+ */
+function qrs_analyzer_with_manifests(array $manifests, bool $autoDetectLanguage = false): WP_FTS_Analyzer
+{
     return new WP_FTS_Analyzer([
-        'auto_detect_language' => false,
         'default_lang' => 'en',
-        'lemmatizer_packs_by_lang' => $withPacks ? qrs_pack_manifests() : [],
+        'lemmatizer_packs_by_lang' => $manifests,
+        'auto_detect_language' => $autoDetectLanguage,
     ]);
 }
 
@@ -136,6 +144,99 @@ function qrs_fixture(bool $withPacks = true): array
         'searcher' => new WP_FTS_Searcher($storage, $analyzer),
         'analyzer' => $analyzer,
     ];
+}
+
+/**
+ * @param array<string,string> $manifests
+ * @return array{storage:WP_FTS_Storage_InMemory,indexer:WP_FTS_Indexer,searcher:WP_FTS_Searcher,analyzer:WP_FTS_Analyzer}
+ */
+function qrs_fixture_with_manifests(array $manifests, bool $autoDetectLanguage = false): array
+{
+    $analyzer = qrs_analyzer_with_manifests($manifests, $autoDetectLanguage);
+    $storage = new WP_FTS_Storage_InMemory();
+
+    return [
+        'storage' => $storage,
+        'indexer' => new WP_FTS_Indexer($storage, $analyzer),
+        'searcher' => new WP_FTS_Searcher($storage, $analyzer),
+        'analyzer' => $analyzer,
+    ];
+}
+
+function qrs_full_polimorf_manifest_from_env(): string
+{
+    $raw = getenv('WP_FTS_FULL_POLIMORF_MANIFEST');
+    if (!is_string($raw) || trim($raw) === '') {
+        mark_pending('Set WP_FTS_FULL_POLIMORF_MANIFEST to a generated full external Polish PoliMorf manifest to run this heavy behavior path.');
+    }
+
+    $path = trim($raw);
+    if (is_dir($path)) {
+        $path .= DIRECTORY_SEPARATOR . 'manifest.json';
+    }
+
+    assert_true(is_file($path), 'WP_FTS_FULL_POLIMORF_MANIFEST should point to an existing manifest.json file');
+
+    return $path;
+}
+
+/**
+ * @return array{pack_id:string,fixture_only:bool,files:int}
+ */
+function qrs_manifest_summary(string $manifestPath): array
+{
+    $manifest = json_decode((string) file_get_contents($manifestPath), true);
+    assert_true(is_array($manifest), 'manifest should decode as JSON object');
+    $runtimeFiles = $manifest['runtime']['files'] ?? [];
+
+    return [
+        'pack_id' => is_scalar($manifest['pack_id'] ?? null) ? (string) $manifest['pack_id'] : '',
+        'fixture_only' => (bool) ($manifest['fixture_only'] ?? true),
+        'files' => is_array($runtimeFiles) ? count($runtimeFiles) : 0,
+    ];
+}
+
+/**
+ * @return string[]
+ */
+function qrs_analyzed_terms(WP_FTS_Analyzer $analyzer, string $text, string $lang): array
+{
+    $terms = [];
+    foreach ($analyzer->analyze_query_occurrences($text, ['lang' => $lang]) as $occurrence) {
+        $term = (string) ($occurrence['term'] ?? '');
+        if ($term !== '') {
+            $terms[$term] = true;
+        }
+    }
+
+    return array_keys($terms);
+}
+
+function qrs_assert_query_surface_overlap(WP_FTS_Analyzer $analyzer, string $query, string $surface, string $lang, string $message): void
+{
+    $queryTerms = qrs_analyzed_terms($analyzer, $query, $lang);
+    $surfaceTerms = qrs_analyzed_terms($analyzer, $surface, $lang);
+
+    assert_true(
+        array_intersect($queryTerms, $surfaceTerms) !== [],
+        $message . ' through analyzer terms; query=' . implode(',', $queryTerms) . '; surface=' . implode(',', $surfaceTerms)
+    );
+}
+
+function qrs_assert_query_surface_disjoint(WP_FTS_Analyzer $analyzer, string $query, string $surface, string $lang, string $message): void
+{
+    $queryTerms = qrs_analyzed_terms($analyzer, $query, $lang);
+    $surfaceTerms = qrs_analyzed_terms($analyzer, $surface, $lang);
+
+    assert_same([], array_values(array_intersect($queryTerms, $surfaceTerms)), $message);
+}
+
+function qrs_plugin_static_property(string $name): ReflectionProperty
+{
+    $property = new ReflectionProperty(WP_FTS_Plugin::class, $name);
+    $property->setAccessible(true);
+
+    return $property;
 }
 
 /**
@@ -394,6 +495,48 @@ function qrs_small_search_cases(): array
     return $cases;
 }
 
+test_case('quality rigorous FTS full external PoliMorf manifest drives product search when configured', function (): void {
+    $manifest = qrs_full_polimorf_manifest_from_env();
+    $summary = qrs_manifest_summary($manifest);
+    assert_contains('polimorf', strtolower($summary['pack_id']), 'full external manifest should identify a PoliMorf pack');
+    assert_same(false, $summary['fixture_only'], 'full external manifest should not be marked fixture-only');
+    assert_true($summary['files'] > 1, 'full external manifest should expose multiple runtime shards');
+
+    $fixture = qrs_fixture_with_manifests(['pl' => $manifest]);
+    $indexer = $fixture['indexer'];
+    $searcher = $fixture['searcher'];
+    $analyzer = $fixture['analyzer'];
+    $cases = [
+        ['query' => 'zamek', 'surface' => 'zamkami', 'bait' => 'zamęt zamach zamiana zamaszysty'],
+        ['query' => 'stajnia', 'surface' => 'stajniach', 'bait' => 'stacja stado stawiania stojak'],
+        ['query' => 'chrząstka', 'surface' => 'chrząstkami', 'bait' => 'chrząszcz chrząkać chrzest chrzan'],
+        ['query' => 'drogi', 'surface' => 'drogami', 'bait' => 'drugi drugiego drobina drut'],
+        ['query' => 'książka', 'surface' => 'książkami', 'bait' => 'księga księgarnia księgowy kształt'],
+    ];
+
+    $docId = 9100;
+    foreach ($cases as $case) {
+        $docId++;
+        $targetId = $docId;
+        $baitId = $docId + 100;
+        qrs_assert_query_surface_overlap($analyzer, $case['query'], $case['surface'], 'pl', "full PoliMorf should map {$case['surface']} to {$case['query']}");
+        qrs_assert_query_surface_disjoint($analyzer, $case['query'], $case['bait'], 'pl', "full PoliMorf should keep bait text separate from {$case['query']}");
+
+        $targetHtml = '<article lang="pl"><p>Pełny PoliMorf ' . htmlspecialchars($case['surface'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' target-' . $targetId . '</p></article>';
+        $baitHtml = '<article lang="pl"><p>' . htmlspecialchars($case['bait'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' bait-' . $baitId . '</p></article>';
+        assert_true($indexer->index_document($targetId, $targetHtml, [
+            'lang' => 'pl',
+            'metadata' => qrs_metadata($targetId, 'post', 'publish', '2026-06-10 00:00:00', 'Full PoliMorf target', $targetHtml, ['language' => 'pl']),
+        ]), "full PoliMorf target {$targetId} should index");
+        assert_true($indexer->index_document($baitId, $baitHtml, [
+            'lang' => 'pl',
+            'metadata' => qrs_metadata($baitId, 'post', 'publish', '2026-06-11 00:00:00', 'Full PoliMorf bait', $baitHtml, ['language' => 'pl']),
+        ]), "full PoliMorf bait {$baitId} should index");
+
+        assert_same([$targetId], qrs_ids($searcher->search($case['query'], ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])), "full PoliMorf query {$case['query']} should retrieve only the valid morphology target");
+    }
+});
+
 test_case('quality rigorous FTS small corpus exercises pack-backed variants, partitions, filters, totals, and boolean modes', function (): void {
     qrs_require_gzip_packs_available('rigorous small corpus pack-backed search');
 
@@ -478,6 +621,39 @@ test_case('quality rigorous FTS small corpus exercises pack-backed variants, par
     record_check('small rigorous corpus language count', count(qrs_small_search_cases()));
 });
 
+test_case('quality rigorous FTS Polish false positives reject short stems homographs and normalized bait terms', function (): void {
+    qrs_require_gzip_packs_available('rigorous Polish false-positive pack-backed search');
+
+    $fixture = qrs_fixture(true);
+    $indexer = $fixture['indexer'];
+    $searcher = $fixture['searcher'];
+    $analyzer = $fixture['analyzer'];
+    $cases = [
+        ['query' => 'zamek', 'surface' => 'zamkami', 'bait' => 'zamęt zamach zamiana zamaszysty', 'label' => 'short near-neighbor stem'],
+        ['query' => 'drogi', 'surface' => 'drogami', 'bait' => 'drugi drugiego drobina drut', 'label' => 'homograph-like adjective/noun ambiguity'],
+        ['query' => 'chrząstka', 'surface' => 'chrząstki', 'bait' => 'chrząszcz chrząkać chrzest chrzan', 'label' => 'diacritic-rich near neighbor'],
+        ['query' => 'lodz', 'surface' => 'Łódź', 'bait' => 'lody lodowiec lodownia lodowisko', 'label' => 'accent folding without unrelated normalized bait'],
+        ['query' => 'zazolc', 'surface' => 'Zażółć', 'bait' => 'zazdrosc gesla jazda zazalenie', 'label' => 'ASCII folded query against accented command form'],
+    ];
+
+    $docId = 6200;
+    foreach ($cases as $case) {
+        $docId++;
+        $targetId = $docId;
+        $baitId = $docId + 200;
+        qrs_assert_query_surface_overlap($analyzer, $case['query'], $case['surface'], 'pl', "{$case['label']} should be accepted by analyzer-pack morphology");
+        qrs_assert_query_surface_disjoint($analyzer, $case['query'], $case['bait'], 'pl', "{$case['label']} bait should stay disjoint after analyzer normalization");
+
+        $targetHtml = '<article lang="pl"><p>' . htmlspecialchars($case['surface'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' poprawny wynik fp-' . $targetId . '</p></article>';
+        $baitHtml = '<article lang="pl"><p>' . htmlspecialchars($case['bait'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . ' podobny bait fp-' . $baitId . '</p></article>';
+        $indexer->index_document($targetId, $targetHtml, ['lang' => 'pl', 'metadata' => qrs_metadata($targetId, 'post', 'publish', '2026-06-12 00:00:00', 'False positive target', $targetHtml, ['language' => 'pl'])]);
+        $indexer->index_document($baitId, $baitHtml, ['lang' => 'pl', 'metadata' => qrs_metadata($baitId, 'post', 'publish', '2026-06-13 00:00:00', 'False positive bait', $baitHtml, ['language' => 'pl'])]);
+
+        $ids = qrs_ids($searcher->search($case['query'], ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10]));
+        assert_same([$targetId], $ids, "{$case['label']} query should match only the morphology-backed target");
+    }
+});
+
 test_case('quality rigorous FTS hostile HTML lexing and formatted snippets do not index hidden content', function (): void {
     qrs_require_gzip_packs_available('rigorous hostile HTML pack-backed snippet');
 
@@ -529,6 +705,76 @@ test_case('quality rigorous FTS hostile HTML lexing and formatted snippets do no
     assert_true(!str_contains($italianSnippet, '<script'), 'direct snippet helper should not return hidden script markup');
 });
 
+test_case('quality rigorous FTS frontend rendering filters expose safe highlighted morphology snippets', function (): void {
+    qrs_require_gzip_packs_available('rigorous frontend rendering pack-backed snippet');
+
+    $fixture = qrs_fixture(true);
+    $indexer = $fixture['indexer'];
+    $searcher = $fixture['searcher'];
+    $content = '<article lang="pl"><h1>Wynik chr<strong><em>ząs</em>tki</strong></h1><p>Bezpieczne sta<strong>jn<em>ia</em></strong>ch <span onclick="evil()">widoczne &amp; pewne</span><script>stajnia hidden</script></p></article>';
+    $metadata = qrs_metadata(6400, 'post', 'publish', '2026-06-19 00:00:00', 'Frontend snippet', $content, ['language' => 'pl']);
+    $indexer->index_document(6400, $content, ['lang' => 'pl', 'metadata' => $metadata]);
+
+    $stajniaRows = $searcher->search('stajnia', [
+        'lang' => 'pl',
+        'limit' => 1,
+        'include_metadata' => true,
+        'include_snippets' => true,
+        'highlight' => true,
+        'snippet_length' => 120,
+    ]);
+    $rawStajniaSnippet = (string) ($stajniaRows[0]['snippet'] ?? '');
+    assert_contains('<mark>', $rawStajniaSnippet, 'search result snippet should mark stajniach when queried by lemma');
+    assert_contains('stajniach', WP_FTS_Html_Text_Stream::visible_text($rawStajniaSnippet), 'raw frontend-bound snippet should preserve visible stajniach surface');
+
+    $sanitize = new ReflectionMethod(WP_FTS_Plugin::class, 'sanitize_frontend_snippet_html');
+    $sanitize->setAccessible(true);
+    $safeStajniaSnippet = (string) $sanitize->invoke(null, $rawStajniaSnippet);
+    assert_contains('<mark>', $safeStajniaSnippet, 'frontend sanitizer should preserve mark tags');
+    assert_contains('stajniach', WP_FTS_Html_Text_Stream::visible_text($safeStajniaSnippet), 'frontend sanitizer should preserve visible matched surface');
+    assert_true(!str_contains($safeStajniaSnippet, 'onclick') && !str_contains($safeStajniaSnippet, '<script') && !str_contains($safeStajniaSnippet, 'hidden'), 'frontend sanitizer should strip unsafe attributes and hidden bodies');
+
+    $titleSnippet = (string) $sanitize->invoke(null, $searcher->snippet_for_text(
+        'Wynik chr<strong><em>ząs</em>tki</strong>',
+        'chrząstka',
+        ['lang' => 'pl', 'highlight' => true, 'snippet_length' => 80]
+    ));
+    assert_contains('<mark>', $titleSnippet, 'frontend title snippet should mark chrząstki when queried by lemma');
+    assert_contains('chrząstki', WP_FTS_Html_Text_Stream::visible_text($titleSnippet), 'frontend title snippet should preserve visible chrząstki surface');
+
+    $stateProperty = qrs_plugin_static_property('front_end_search_query_state');
+    $activeProperty = qrs_plugin_static_property('front_end_search_active_query_key');
+    $stackProperty = qrs_plugin_static_property('front_end_search_loop_stack');
+    $oldState = $stateProperty->getValue();
+    $oldActive = $activeProperty->getValue();
+    $oldStack = $stackProperty->getValue();
+    $GLOBALS['post'] = (object) ['ID' => 6400, 'post_content' => $content, 'post_title' => 'Frontend snippet'];
+    try {
+        $stateProperty->setValue(null, [
+            77 => [
+                'total' => 1,
+                'max_pages' => 1,
+                'query_lang' => 'pl',
+                'snippets' => [6400 => $safeStajniaSnippet],
+                'titles' => [6400 => $titleSnippet],
+            ],
+        ]);
+        $activeProperty->setValue(null, 77);
+        $stackProperty->setValue(null, []);
+
+        assert_same($safeStajniaSnippet, WP_FTS_Plugin::frontend_search_excerpt('fallback excerpt', $GLOBALS['post']), 'frontend excerpt filter should serve the sanitized FTS snippet');
+        $contentPreview = WP_FTS_Plugin::frontend_search_content('fallback content');
+        assert_contains('<p>', $contentPreview, 'frontend content filter should wrap inline snippets as paragraph previews');
+        assert_contains($safeStajniaSnippet, $contentPreview, 'frontend content filter should preserve sanitized highlighted snippet');
+        assert_same($titleSnippet, WP_FTS_Plugin::frontend_search_title('fallback title', 6400), 'frontend title filter should serve the highlighted title snippet');
+    } finally {
+        $stateProperty->setValue(null, $oldState);
+        $activeProperty->setValue(null, $oldActive);
+        $stackProperty->setValue(null, $oldStack);
+        unset($GLOBALS['post']);
+    }
+});
+
 test_case('quality rigorous FTS lexical punctuation accents entities and script runs use product search semantics', function (): void {
     $fixture = qrs_fixture(false);
     $indexer = $fixture['indexer'];
@@ -553,6 +799,67 @@ test_case('quality rigorous FTS lexical punctuation accents entities and script 
     assert_same([4201], qrs_ids($searcher->search('検索', ['lang' => 'ja', 'mode' => 'AND'])), 'Japanese CJK n-grams should retrieve visible text');
     assert_same([4202], qrs_ids($searcher->search('검색', ['lang' => 'ko', 'mode' => 'AND'])), 'Hangul n-grams should retrieve visible text');
     assert_same([4203], qrs_ids($searcher->search('جستجو', ['lang' => 'fa', 'mode' => 'AND'])), 'Arabic-script Persian text should remain searchable without a pack');
+});
+
+test_case('quality rigorous FTS CJK non-space scripts handle mixed Latin punctuation numbers and short-ngram bait conservatively', function (): void {
+    $fixture = qrs_fixture(false);
+    $indexer = $fixture['indexer'];
+    $searcher = $fixture['searcher'];
+    $documents = [
+        6501 => ['lang' => 'ja', 'html' => '<article lang="ja"><p>SKU42東京検索品質改善2026、安定版。</p></article>'],
+        6502 => ['lang' => 'ja', 'html' => '<article lang="ja"><p>検索検索検索東京だけの短い餌。</p></article>'],
+        6503 => ['lang' => 'zh', 'html' => '<article lang="zh"><p>中文搜索质量提升2026Alpha。</p></article>'],
+        6504 => ['lang' => 'zh', 'html' => '<article lang="zh"><p>搜索搜索搜索数字2026Alpha bait。</p></article>'],
+        6505 => ['lang' => 'ko', 'html' => '<article lang="ko"><p>서울검색품질개선2026 릴리스.</p></article>'],
+        6506 => ['lang' => 'ko', 'html' => '<article lang="ko"><p>검색검색검색숫자2026 bait.</p></article>'],
+    ];
+
+    foreach ($documents as $docId => $document) {
+        $indexer->index_document($docId, $document['html'], [
+            'lang' => $document['lang'],
+            'metadata' => qrs_metadata($docId, 'post', 'publish', '2026-06-20 00:00:00', "CJK {$docId}", $document['html'], ['language' => $document['lang']]),
+        ]);
+    }
+
+    assert_same([6501], qrs_ids($searcher->search('検索品質', ['lang' => 'ja', 'mode' => 'AND', 'limit' => 10])), 'Japanese no-space quality query should exclude repeated short-ngram bait');
+    assert_same([6501], qrs_ids($searcher->search('SKU42 東京', ['lang' => 'ja', 'mode' => 'AND', 'limit' => 10])), 'mixed Latin digits and Japanese query should find the same document');
+    $tokyoIds = qrs_ids($searcher->search('東京検索', ['lang' => 'ja', 'limit' => 10]));
+    assert_same(6501, $tokyoIds[0] ?? null, 'Japanese full no-space target should outrank short repeated bait for a more specific query');
+    assert_true(in_array(6502, $tokyoIds, true), 'Japanese bait remains recallable for broad overlapping n-gram searches');
+    assert_same([6503], qrs_ids($searcher->search('搜索质量', ['lang' => 'zh', 'mode' => 'AND', 'limit' => 10])), 'Chinese no-space quality query should exclude repeated short-ngram bait');
+    assert_same([6505], qrs_ids($searcher->search('검색품질', ['lang' => 'ko', 'mode' => 'AND', 'limit' => 10])), 'Korean no-space quality query should exclude repeated short-ngram bait');
+    assert_same([], $searcher->search('검색품질', ['lang' => 'ja', 'mode' => 'AND', 'limit' => 10]), 'Korean Hangul query should not leak into Japanese partition');
+});
+
+test_case('quality rigorous FTS mixed-language documents route explicit spans automatic detection and unsupported fallback conservatively', function (): void {
+    qrs_require_gzip_packs_available('rigorous mixed-language pack-backed routing');
+
+    $fixture = qrs_fixture_with_manifests(qrs_pack_manifests(), true);
+    $indexer = $fixture['indexer'];
+    $searcher = $fixture['searcher'];
+    $polishPost = '<article lang="pl"><h1>Polski opis produktu</h1><p>W stajniach działa <span lang="en">OpenAI API SKU900</span> bez przecieków języka.</p></article>';
+    $englishPost = '<article lang="en"><h1>VectorNine release notes</h1><p>The customer quote says <q lang="pl">w stajniach jest ciszej</q> before the English summary.</p></article>';
+    $polishAcronymBait = '<article lang="pl"><p>OpenAI API SKU900 jako polski bait bez angielskiego zakresu.</p></article>';
+    $autoCjk = '<article><p>日本語検索品質</p></article>';
+    $unsupported = '<article lang="zz"><p>unsupportedalpha fallbacktoken remains exact in an unsupported language partition.</p></article>';
+
+    $indexer->index_document(6301, $polishPost, ['lang' => 'pl', 'metadata' => qrs_metadata(6301, 'post', 'publish', '2026-06-14 00:00:00', 'Polish mixed', $polishPost, ['language' => 'pl'])]);
+    $indexer->index_document(6302, $englishPost, ['lang' => 'en', 'metadata' => qrs_metadata(6302, 'post', 'publish', '2026-06-15 00:00:00', 'English quote', $englishPost, ['language' => 'en'])]);
+    $indexer->index_document(6303, $polishAcronymBait, ['lang' => 'pl', 'metadata' => qrs_metadata(6303, 'post', 'publish', '2026-06-16 00:00:00', 'Polish acronym bait', $polishAcronymBait, ['language' => 'pl'])]);
+    $indexer->index_document(6304, $autoCjk, ['metadata' => qrs_metadata(6304, 'post', 'publish', '2026-06-17 00:00:00', 'Auto CJK', $autoCjk, ['language' => 'auto'])]);
+    $indexer->index_document(6305, $unsupported, ['lang' => 'zz', 'metadata' => qrs_metadata(6305, 'post', 'publish', '2026-06-18 00:00:00', 'Unsupported fallback', $unsupported, ['language' => 'zz'])]);
+
+    assert_same([6301], qrs_ids($searcher->search('openai api', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10])), 'English acronym span inside Polish post should be searchable only in English partition');
+    assert_same([6303], qrs_ids($searcher->search('openai api', ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10])), 'Polish acronym bait should remain in the Polish partition');
+    $polishQuoteIds = qrs_ids($searcher->search('stajnia', ['lang' => 'pl', 'mode' => 'AND', 'limit' => 10]));
+    sort($polishQuoteIds, SORT_NUMERIC);
+    assert_same([6301, 6302], $polishQuoteIds, 'Polish query should find explicit Polish document text and quoted Polish span inside English post');
+    assert_same([], $searcher->search('stajnia', ['lang' => 'en', 'mode' => 'AND', 'limit' => 10]), 'Polish quote should not leak into the English partition');
+    assert_same([6304], qrs_ids($searcher->search('検索品質', ['lang' => 'zh', 'mode' => 'AND', 'limit' => 10])), 'automatic detection should route untagged CJK no-space text into the current CJK fallback partition');
+    assert_same([], $searcher->search('検索品質', ['lang' => 'en', 'mode' => 'AND', 'disable_language_fallback' => true]), 'automatic CJK content should not appear in an exact English partition');
+    assert_same([6305], qrs_ids($searcher->search('unsupportedalpha fallbacktoken', ['lang' => 'zz', 'mode' => 'AND', 'limit' => 10])), 'unsupported language partition should support conservative exact matching');
+    assert_same([], $searcher->search('unsupportedalpha fallbacktoken', ['lang' => 'en', 'mode' => 'AND', 'disable_language_fallback' => true]), 'unsupported partition should not leak into English exact search');
+    assert_same([6305], qrs_ids($searcher->search('unsupportedalpha fallbacktoken', ['lang' => 'en', 'mode' => 'AND', 'fallback_languages' => ['zz'], 'limit' => 10])), 'explicit fallback should recover unsupported-language exact terms');
 });
 
 test_case('quality rigorous FTS indexing lifecycle removes stale terms, language partitions, metadata, and tombstones', function (): void {
@@ -584,6 +891,72 @@ test_case('quality rigorous FTS indexing lifecycle removes stale terms, language
     $indexer->optimize();
     assert_same([], $searcher->search('lifecyclebeta', ['lang' => 'pl']), 'deleted document should remain excluded after optimize');
     assert_same([], WP_FTS_StorageCompat::get_doc_metadata($storage, [5100]), 'delete should clear product-facing document metadata');
+});
+
+test_case('quality rigorous FTS freshness handles restore pack-configuration changes and repeated update convergence', function (): void {
+    qrs_require_gzip_packs_available('rigorous freshness analyzer-pack reindex');
+
+    $restoreFixture = qrs_fixture(false);
+    $restoreIndexer = $restoreFixture['indexer'];
+    $restoreSearcher = $restoreFixture['searcher'];
+    $restoreInitial = '<article lang="en"><p>restorealpha old visible content</p></article>';
+    $restoreFinal = '<article lang="en"><p>restorebeta returned visible content</p></article>';
+    $restoreIndexer->index_document(6601, $restoreInitial, ['lang' => 'en', 'metadata' => qrs_metadata(6601, 'post', 'publish', '2026-06-21 00:00:00', 'Restore initial', $restoreInitial)]);
+    assert_same([6601], qrs_ids($restoreSearcher->search('restorealpha', ['lang' => 'en'])), 'restore fixture should index initial term');
+    assert_true($restoreIndexer->delete_document(6601), 'restore fixture should tombstone document before restore');
+    assert_same([], $restoreSearcher->search('restorealpha', ['lang' => 'en']), 'tombstoned document should stop matching immediately');
+    assert_true($restoreIndexer->index_document(6601, $restoreFinal, ['lang' => 'en', 'metadata' => qrs_metadata(6601, 'post', 'publish', '2026-06-22 00:00:00', 'Restore final', $restoreFinal)]), 'restore fixture should reindex the same id after tombstone');
+    assert_same([6601], qrs_ids($restoreSearcher->search('restorebeta', ['lang' => 'en'])), 'restored document should match new content');
+    assert_same([], $restoreSearcher->search('restorealpha', ['lang' => 'en']), 'restored document should not retain pre-trash terms');
+
+    $languageStorage = new WP_FTS_Storage_InMemory();
+    $languageAnalyzer = qrs_analyzer(true);
+    $languageIndexer = new WP_FTS_Indexer($languageStorage, $languageAnalyzer);
+    $languageSearcher = new WP_FTS_Searcher($languageStorage, $languageAnalyzer);
+    $languageEnglish = '<article lang="en"><p>languageflip visible English partition</p></article>';
+    $languagePolish = '<article lang="pl"><p>languageflip widoczne stajniach</p></article>';
+    $languageIndexer->index_document(6602, $languageEnglish, ['lang' => 'en', 'metadata' => qrs_metadata(6602, 'post', 'publish', '2026-06-23 00:00:00', 'Language English', $languageEnglish, ['language' => 'en'])]);
+    assert_same([6602], qrs_ids($languageSearcher->search('languageflip', ['lang' => 'en'])), 'language metadata fixture should start in English partition');
+    $languageIndexer->index_document(6602, $languagePolish, ['lang' => 'pl', 'metadata' => qrs_metadata(6602, 'post', 'publish', '2026-06-24 00:00:00', 'Language Polish', $languagePolish, ['language' => 'pl'])]);
+    assert_same([], $languageSearcher->search('languageflip', ['lang' => 'en']), 'language reindex should remove old English partition terms');
+    assert_same([6602], qrs_ids($languageSearcher->search('languageflip stajnia', ['lang' => 'pl', 'mode' => 'AND'])), 'language reindex should add new Polish partition terms');
+
+    $packStorage = new WP_FTS_Storage_InMemory();
+    $noPackAnalyzer = qrs_analyzer(false);
+    $packAnalyzer = qrs_analyzer(true);
+    $noPackIndexer = new WP_FTS_Indexer($packStorage, $noPackAnalyzer);
+    $noPackSearcher = new WP_FTS_Searcher($packStorage, $noPackAnalyzer);
+    $packIndexer = new WP_FTS_Indexer($packStorage, $packAnalyzer);
+    $packSearcher = new WP_FTS_Searcher($packStorage, $packAnalyzer);
+    $packHtml = '<article lang="pl"><p>packfresh stajniach po zmianie konfiguracji analizatora</p></article>';
+    assert_true($noPackIndexer->index_document(6603, $packHtml, ['lang' => 'pl', 'metadata' => qrs_metadata(6603, 'post', 'publish', '2026-06-25 00:00:00', 'No pack', $packHtml, ['language' => 'pl'])]), 'no-pack analyzer should index initial Polish document');
+    assert_same([], $noPackSearcher->search('stajnia', ['lang' => 'pl']), 'no-pack conservative Polish analyzer should not invent the stajnia/stajniach lemma relation');
+    assert_same([6603], qrs_ids($noPackSearcher->search('stajniach', ['lang' => 'pl'])), 'no-pack analyzer should still find the exact inflected surface');
+    assert_true($packIndexer->index_document(6603, $packHtml, ['lang' => 'pl', 'metadata' => qrs_metadata(6603, 'post', 'publish', '2026-06-25 00:00:00', 'Pack enabled', $packHtml, ['language' => 'pl'])]), 'pack analyzer signature change should force reindex of unchanged HTML');
+    assert_same([6603], qrs_ids($packSearcher->search('stajnia', ['lang' => 'pl'])), 'pack reindex should make the lemma query match');
+    assert_same([], $noPackSearcher->search('stajniach', ['lang' => 'pl']), 'pack reindex should remove stale no-pack postings from the shared storage');
+
+    $repeatAnalyzer = qrs_analyzer(false);
+    $repeatStorage = new WP_FTS_Storage_InMemory();
+    $repeatIndexer = new WP_FTS_Indexer($repeatStorage, $repeatAnalyzer);
+    $repeatSearcher = new WP_FTS_Searcher($repeatStorage, $repeatAnalyzer);
+    $cleanStorage = new WP_FTS_Storage_InMemory();
+    $cleanIndexer = new WP_FTS_Indexer($cleanStorage, $repeatAnalyzer);
+    $cleanSearcher = new WP_FTS_Searcher($cleanStorage, $repeatAnalyzer);
+    for ($doc = 0; $doc < 4; $doc++) {
+        $docId = 6700 + $doc;
+        for ($version = 0; $version < 4; $version++) {
+            $html = '<article lang="en"><p>bulkdoc' . $doc . ' staleversion' . $version . ' transient' . ($doc + $version) . '</p></article>';
+            $repeatIndexer->index_document($docId, $html, ['lang' => 'en', 'metadata' => qrs_metadata($docId, 'post', 'publish', '2026-06-26 00:00:00', "Bulk {$docId} stale", $html)]);
+        }
+        $finalHtml = '<article lang="en"><p>bulkfinal bulkdoc' . $doc . ' convergence' . ($doc % 2) . '</p></article>';
+        $repeatIndexer->index_document($docId, $finalHtml, ['lang' => 'en', 'metadata' => qrs_metadata($docId, 'post', 'publish', '2026-06-27 00:00:00', "Bulk {$docId} final", $finalHtml)]);
+        $cleanIndexer->index_document($docId, $finalHtml, ['lang' => 'en', 'metadata' => qrs_metadata($docId, 'post', 'publish', '2026-06-27 00:00:00', "Bulk {$docId} final", $finalHtml)]);
+    }
+
+    assert_same(qrs_ids($cleanSearcher->search('bulkfinal', ['lang' => 'en', 'limit' => 10])), qrs_ids($repeatSearcher->search('bulkfinal', ['lang' => 'en', 'limit' => 10])), 'repeated updates should converge to the same final recall as a clean rebuild');
+    assert_same(qrs_ids($cleanSearcher->search('convergence1', ['lang' => 'en', 'limit' => 10])), qrs_ids($repeatSearcher->search('convergence1', ['lang' => 'en', 'limit' => 10])), 'repeated updates should converge to the same final filtered topic as a clean rebuild');
+    assert_same([], $repeatSearcher->search('staleversion1', ['lang' => 'en', 'limit' => 10]), 'repeated updates should remove stale intermediate terms');
 });
 
 /**
