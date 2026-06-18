@@ -3604,6 +3604,45 @@ PHP;
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
     assert_same(['found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end and admin search replacement filters');
+
+    $searchActionPriorities = [];
+    foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
+        $callback = $action['callback'] ?? null;
+        $method = is_array($callback) ? ($callback[1] ?? null) : null;
+        if (($action['hook'] ?? null) === 'pre_get_posts' && is_string($method)) {
+            $searchActionPriorities[$method] = $action['priority'] ?? null;
+        }
+    }
+    ksort($searchActionPriorities, SORT_STRING);
+    assert_same([
+        'prepare_admin_post_search_query' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY,
+        'prepare_frontend_search_query' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY,
+    ], $searchActionPriorities, 'search pre_get_posts hooks should run late enough to mark owned search surfaces after normal integrations');
+
+    $searchFilterPriorities = [];
+    foreach ($GLOBALS['wp_fts_test_filter_registrations'] as $filter) {
+        $callback = $filter['callback'] ?? null;
+        $method = is_array($callback) ? ($callback[1] ?? null) : null;
+        if (is_string($method) && in_array($method, [
+            'filter_admin_post_search_found_posts',
+            'filter_frontend_search_found_posts',
+            'replace_admin_post_search_posts',
+            'replace_frontend_search_posts',
+        ], true)) {
+            $searchFilterPriorities[$method] = [
+                'hook' => $filter['hook'] ?? null,
+                'priority' => $filter['priority'] ?? null,
+                'accepted_args' => $filter['accepted_args'] ?? null,
+            ];
+        }
+    }
+    ksort($searchFilterPriorities, SORT_STRING);
+    assert_same([
+        'filter_admin_post_search_found_posts' => ['hook' => 'found_posts', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+        'filter_frontend_search_found_posts' => ['hook' => 'found_posts', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+        'replace_admin_post_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+        'replace_frontend_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+    ], $searchFilterPriorities, 'search replacement filters should run late enough to override normal posts_pre_query providers');
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
 });
 
@@ -5274,6 +5313,68 @@ test_case('front-end search replacement respects pagination and explicit offset'
     }
 });
 
+test_case('front-end search replacement overrides earlier posts_pre_query providers only when eligible', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $low = (object) [
+        'ID' => 821,
+        'post_title' => 'Lower front-end precedence rank',
+        'post_content' => '<p>precedenceneedle appears once.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $high = (object) [
+        'ID' => 822,
+        'post_title' => 'Higher front-end precedence rank',
+        'post_content' => '<p>precedenceneedle precedenceneedle precedenceneedle precedenceneedle.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][821] = $low;
+    $GLOBALS['wp_fts_test_posts'][822] = $high;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(821, $low, true);
+        WP_FTS_Plugin::handle_post_save(822, $high, true);
+
+        $incoming = [(object) ['ID' => 820, 'post_title' => 'Earlier provider result']];
+        $query = new WP_FTS_Test_Query([
+            's' => 'precedenceneedle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
+
+        assert_same([822, 821], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'eligible front-end replacement should override earlier posts_pre_query results with FTS-ranked posts');
+        assert_same(2, $query->found_posts, 'front-end precedence replacement should expose the FTS visible total');
+
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
+        $optOutQuery = new WP_FTS_Test_Query([
+            's' => 'precedenceneedle',
+            'posts_per_page' => 10,
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $optOutQuery), 'front-end opt-out filter should preserve an earlier non-null posts_pre_query result');
+        unset($GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER]);
+
+        $constrained = new WP_FTS_Test_Query([
+            's' => 'precedenceneedle',
+            'posts_per_page' => 10,
+            'cat' => 5,
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $constrained), 'constrained front-end searches should preserve earlier non-null posts_pre_query results');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('front-end search replacement avoids admin REST cron secondary and disabled queries', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $query = new WP_FTS_Test_Query(['s' => 'guardneedle', 'posts_per_page' => 10]);
@@ -5347,6 +5448,74 @@ test_case('admin Posts list search is replaced with FTS-ranked WP_Post results',
         assert_same(2, $query->found_posts, 'admin Posts list search should expose the FTS visible total on the query');
         assert_same(1, $query->max_num_pages, 'admin Posts list search should expose max pages from the FTS visible total');
         assert_same(2, WP_FTS_Plugin::filter_admin_post_search_found_posts(999, $query), 'admin found_posts filter should preserve the replacement total');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin Posts list search replacement overrides earlier posts_pre_query providers only when eligible', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_is_admin'] = true;
+    $GLOBALS['pagenow'] = 'edit.php';
+
+    $low = (object) [
+        'ID' => 831,
+        'post_title' => 'Lower admin precedence rank',
+        'post_content' => '<p>adminprecedenceneedle appears once.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $high = (object) [
+        'ID' => 832,
+        'post_title' => 'Higher admin precedence rank',
+        'post_content' => '<p>adminprecedenceneedle adminprecedenceneedle adminprecedenceneedle adminprecedenceneedle.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][831] = $low;
+    $GLOBALS['wp_fts_test_posts'][832] = $high;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(831, $low, true);
+        WP_FTS_Plugin::handle_post_save(832, $high, true);
+
+        $incoming = [(object) ['ID' => 830, 'post_title' => 'Earlier admin provider result']];
+        $query = new WP_FTS_Test_Query([
+            's' => 'adminprecedenceneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        $posts = WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $query);
+
+        assert_same([832, 831], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'eligible admin replacement should override earlier posts_pre_query results with FTS-ranked posts');
+        assert_same(2, $query->found_posts, 'admin precedence replacement should expose the FTS visible total');
+
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ADMIN_POST_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
+        $optOutQuery = new WP_FTS_Test_Query([
+            's' => 'adminprecedenceneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $optOutQuery), 'admin opt-out filter should preserve an earlier non-null posts_pre_query result');
+        unset($GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ADMIN_POST_SEARCH_REPLACEMENT_FILTER]);
+
+        $constrained = new WP_FTS_Test_Query([
+            's' => 'adminprecedenceneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'trash',
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $constrained), 'constrained admin searches should preserve earlier non-null posts_pre_query results');
     } finally {
         $wpdb = $oldWpdb;
     }

@@ -24,6 +24,7 @@ final class WP_FTS_Plugin
     public const ANALYZER_OPTIONS_FILTER = 'wp_fts_analyzer_options';
     public const FRONTEND_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_frontend_search';
     public const ADMIN_POST_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_admin_post_search';
+    public const SEARCH_REPLACEMENT_PRIORITY = 999;
     public const LANGUAGE_META_KEY = '_wp_fts_index_language';
     public const DEFAULT_BATCH_SIZE = 25;
     public const MAX_SEARCH_LIMIT = 50;
@@ -111,14 +112,14 @@ final class WP_FTS_Plugin
         add_action('admin_init', [self::class, 'register_settings'], 10, 0);
         add_action('add_meta_boxes', [self::class, 'register_language_meta_box'], 10, 0);
         add_action('save_post', [self::class, 'save_post_language_override'], 5, 3);
-        add_action('pre_get_posts', [self::class, 'prepare_frontend_search_query'], 10, 1);
-        add_action('pre_get_posts', [self::class, 'prepare_admin_post_search_query'], 10, 1);
+        add_action('pre_get_posts', [self::class, 'prepare_frontend_search_query'], self::SEARCH_REPLACEMENT_PRIORITY, 1);
+        add_action('pre_get_posts', [self::class, 'prepare_admin_post_search_query'], self::SEARCH_REPLACEMENT_PRIORITY, 1);
 
         if (function_exists('add_filter')) {
-            add_filter('posts_pre_query', [self::class, 'replace_frontend_search_posts'], 10, 2);
-            add_filter('posts_pre_query', [self::class, 'replace_admin_post_search_posts'], 10, 2);
-            add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], 10, 2);
-            add_filter('found_posts', [self::class, 'filter_admin_post_search_found_posts'], 10, 2);
+            add_filter('posts_pre_query', [self::class, 'replace_frontend_search_posts'], self::SEARCH_REPLACEMENT_PRIORITY, 2);
+            add_filter('posts_pre_query', [self::class, 'replace_admin_post_search_posts'], self::SEARCH_REPLACEMENT_PRIORITY, 2);
+            add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], self::SEARCH_REPLACEMENT_PRIORITY, 2);
+            add_filter('found_posts', [self::class, 'filter_admin_post_search_found_posts'], self::SEARCH_REPLACEMENT_PRIORITY, 2);
             add_filter('get_the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 2);
             add_filter('the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 1);
             add_filter('the_content', [self::class, 'frontend_search_content'], 20, 1);
@@ -3340,13 +3341,13 @@ final class WP_FTS_Plugin
     /**
      * Short-circuit the main front-end search query with FTS-ranked posts.
      *
-     * @param mixed $posts Null when WordPress has not already short-circuited the query.
+     * @param mixed $posts Incoming posts from WordPress or an earlier short-circuit provider.
      * @param mixed $query WordPress WP_Query-like object.
      * @return mixed Null to leave WordPress alone, or an array of post objects.
      */
     public static function replace_frontend_search_posts(mixed $posts, mixed $query): mixed
     {
-        if ($posts !== null || !self::should_replace_frontend_search($query)) {
+        if (!self::should_replace_frontend_search($query)) {
             return $posts;
         }
 
@@ -3401,13 +3402,13 @@ final class WP_FTS_Plugin
     /**
      * Short-circuit the main wp-admin Posts list search with FTS-ranked posts.
      *
-     * @param mixed $posts Null when WordPress has not already short-circuited the query.
+     * @param mixed $posts Incoming posts from WordPress or an earlier short-circuit provider.
      * @param mixed $query WordPress WP_Query-like object.
      * @return mixed Null to leave WordPress alone, or an array of post objects.
      */
     public static function replace_admin_post_search_posts(mixed $posts, mixed $query): mixed
     {
-        if ($posts !== null || !self::should_replace_admin_post_search($query)) {
+        if (!self::should_replace_admin_post_search($query)) {
             return $posts;
         }
 

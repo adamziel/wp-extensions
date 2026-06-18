@@ -746,6 +746,45 @@ namespace {
         sort($expectedHooks, SORT_STRING);
         assert_same($expectedHooks, $hooks, 'plugin runtime hooks should be registered through WordPress add_action');
 
+        $searchActionPriorities = [];
+        foreach ($GLOBALS['wp_fts_quality_add_action_calls'] as $action) {
+            $callback = $action['callback'] ?? null;
+            $method = is_array($callback) ? ($callback[1] ?? null) : null;
+            if (($action['hook'] ?? null) === 'pre_get_posts' && is_string($method)) {
+                $searchActionPriorities[$method] = $action['priority'] ?? null;
+            }
+        }
+        ksort($searchActionPriorities, SORT_STRING);
+        assert_same([
+            'prepare_admin_post_search_query' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY,
+            'prepare_frontend_search_query' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY,
+        ], $searchActionPriorities, 'search pre_get_posts hooks should use the late replacement priority');
+
+        $searchFilterPriorities = [];
+        foreach ($GLOBALS['wp_fts_test_filter_registrations'] ?? [] as $filter) {
+            $callback = $filter['callback'] ?? null;
+            $method = is_array($callback) ? ($callback[1] ?? null) : null;
+            if (is_string($method) && in_array($method, [
+                'filter_admin_post_search_found_posts',
+                'filter_frontend_search_found_posts',
+                'replace_admin_post_search_posts',
+                'replace_frontend_search_posts',
+            ], true)) {
+                $searchFilterPriorities[$method] = [
+                    'hook' => $filter['hook'] ?? null,
+                    'priority' => $filter['priority'] ?? null,
+                    'accepted_args' => $filter['accepted_args'] ?? null,
+                ];
+            }
+        }
+        ksort($searchFilterPriorities, SORT_STRING);
+        assert_same([
+            'filter_admin_post_search_found_posts' => ['hook' => 'found_posts', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+            'filter_frontend_search_found_posts' => ['hook' => 'found_posts', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+            'replace_admin_post_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+            'replace_frontend_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+        ], $searchFilterPriorities, 'search replacement filters should use the late replacement priority');
+
         WP_FTS_WPCLI_Command::register();
         assert_same(['fts' => WP_FTS_WPCLI_Command::class], WP_CLI::$commands, 'explicit WP-CLI registration should keep the command control plane');
         $afterCliHooks = array_column($GLOBALS['wp_fts_quality_add_action_calls'], 'hook');

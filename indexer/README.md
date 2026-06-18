@@ -283,11 +283,14 @@ environment before using it for production search.
 
 Current caveats:
 
-- front-end search replacement is enabled by default and can be disabled with
-  the `wp_fts_replace_frontend_search` filter;
+- front-end search replacement is enabled by default and runs late in the
+  WordPress search hooks so configured front-end searches are owned by FTS; use
+  the `wp_fts_replace_frontend_search` filter when another search provider
+  should own that surface;
 - wp-admin Posts list search replacement is enabled for safe main-list searches
-  over indexed supported admin post statuses and can be disabled with the
-  `wp_fts_replace_admin_post_search` filter;
+  over indexed supported admin post statuses and runs late for the same reason;
+  use the `wp_fts_replace_admin_post_search` filter when another admin search
+  provider should own that surface;
 - no settings screen;
 - custom field indexing must be configured;
 - shortcode rendering is opt-in;
