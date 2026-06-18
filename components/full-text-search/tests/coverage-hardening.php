@@ -52,9 +52,9 @@ $htmlCases = [
     ],
     [
         '<p lang="fr">Cafe&nbsp;ecole</p><nav>ignored navword</nav>',
-        'Cafe ecole ignored navword',
+        'Cafe ecole',
         ['cafe', 'ecole'],
-        ['navword'],
+        ['ignored', 'navword'],
     ],
     [
         '<p>broken <span>markup <b>still</p> visible</span>',
