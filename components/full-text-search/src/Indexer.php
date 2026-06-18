@@ -660,6 +660,10 @@ final class WP_FTS_Indexer
                 continue;
             }
 
+            if (!WP_FTS_TermNamespace::term_key_fits($term, $lang)) {
+                continue;
+            }
+
             $namespacedTerm = WP_FTS_TermNamespace::namespace_term($lang, $term);
             $weights[$namespacedTerm] = ($weights[$namespacedTerm] ?? 0.0) + $weight;
         }

@@ -347,6 +347,13 @@ function test_split_namespaced_term(string $term): array
     return ['term' => $term, 'lang' => null];
 }
 
+function test_term_for_namespaced_key_bytes(string $lang, int $keyBytes): string
+{
+    $prefixBytes = strlen(WP_FTS_TermNamespace::namespace_term($lang, ''));
+
+    return str_repeat('x', max(0, $keyBytes - $prefixBytes));
+}
+
 /**
  * @param array<int,array<string,mixed>|string> $tokens
  * @return array<int,array{term:string,lang:?string,weight:?float}>
@@ -2656,6 +2663,89 @@ final class WP_FTS_Test_Query_Fallback_Analyzer
         }
 
         return ['zamek'];
+    }
+}
+
+final class WP_FTS_Test_Oversized_Term_Analyzer
+{
+    public function __construct(
+        private string $normalTerm,
+        private string $oversizedTerm,
+        private string $exactLimitTerm,
+    ) {
+    }
+
+    public function index_signature(): string
+    {
+        return 'wp-fts-test-oversized-term-analyzer-v1';
+    }
+
+    /**
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    public function analyze_content(string $html, array $options = []): array
+    {
+        return $this->occurrences_for_text($html, $options);
+    }
+
+    /**
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    public function analyze_plain_content(string $text, array $options = []): array
+    {
+        return $this->occurrences_for_text($text, $options);
+    }
+
+    /**
+     * @return array<int,array{term:string,lang:string}>
+     */
+    public function analyze_query_occurrences(string $query, array $options = []): array
+    {
+        return array_map(
+            static fn(array $occurrence): array => [
+                'term' => $occurrence['term'],
+                'lang' => $occurrence['lang'],
+            ],
+            $this->occurrences_for_text($query, $options)
+        );
+    }
+
+    /**
+     * @return string[]|array<int,array{term:string,lang:string}>
+     */
+    public function analyze_query(string $query, array $options = []): array
+    {
+        $occurrences = $this->analyze_query_occurrences($query, $options);
+        if (($options['return'] ?? null) === 'occurrences') {
+            return $occurrences;
+        }
+
+        return array_map(static fn(array $occurrence): string => $occurrence['term'], $occurrences);
+    }
+
+    /**
+     * @return array<int,array{term:string,weight:float,lang:string}>
+     */
+    private function occurrences_for_text(string $text, array $options): array
+    {
+        $lang = WP_FTS_TermNamespace::language_from_options(
+            $options,
+            'en',
+            ['query_lang', 'document_lang', 'lang', 'language', 'default_lang']
+        ) ?? 'en';
+
+        $occurrences = [];
+        if (str_contains($text, 'normal-token')) {
+            $occurrences[] = ['term' => $this->normalTerm, 'weight' => 1.0, 'lang' => $lang];
+        }
+        if (str_contains($text, 'oversized-token')) {
+            $occurrences[] = ['term' => $this->oversizedTerm, 'weight' => 1.0, 'lang' => $lang];
+        }
+        if (str_contains($text, 'exact-limit-token')) {
+            $occurrences[] = ['term' => $this->exactLimitTerm, 'weight' => 1.0, 'lang' => $lang];
+        }
+
+        return $occurrences;
     }
 }
 
@@ -9846,6 +9936,48 @@ test_case('indexer consumes analyzer occurrences with language tags', function (
     assert_same(['de' => 1, 'en-US' => 1, 'pl' => 3], $langLengths, 'doc lengths should be partitioned by occurrence language');
 });
 
+test_case('indexer skips oversized namespaced terms without losing normal terms', function (): void {
+    $lang = 'en';
+    $normalTerm = 'normalneedle';
+    $oversizedTerm = test_term_for_namespaced_key_bytes($lang, WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1);
+    $exactLimitTerm = test_term_for_namespaced_key_bytes($lang, WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES);
+    $normalKey = WP_FTS_TermNamespace::namespace_term($lang, $normalTerm);
+    $oversizedKey = WP_FTS_TermNamespace::namespace_term($lang, $oversizedTerm);
+    $analyzer = new WP_FTS_Test_Oversized_Term_Analyzer($normalTerm, $oversizedTerm, $exactLimitTerm);
+    $storage = new WP_FTS_Storage_InMemory();
+
+    assert_same(WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1, strlen($oversizedKey), 'oversized fixture key should exceed the storage byte limit by one');
+    assert_true((new WP_FTS_Indexer($storage, $analyzer))->index_document(501, 'normal-token oversized-token', ['lang' => $lang]), 'indexing should not throw when one analyzer term is too large for storage');
+
+    assert_same([$normalKey], $storage->all_terms(), 'only the valid normal term should be stored');
+    assert_same([501 => 1], $storage->get_postings([$normalKey])[$normalKey] ?? [], 'normal term postings should still be indexed');
+    assert_same([], $storage->get_postings([$oversizedKey]), 'oversized term should not have postings');
+    assert_same(['primary_lang' => $lang, 'lang_lengths' => [$lang => 1], 'doc_len' => 1, 'content_hash' => $storage->get_doc(501)['content_hash'], 'deleted' => false], $storage->get_doc(501), 'oversized term should not contribute to document language length');
+    assert_same(['doc_count' => 1, 'len_sum' => 1], $storage->get_meta($lang), 'oversized term should not contribute to collection length totals');
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([501], array_column($searcher->search('normal-token', ['lang' => $lang]), 'doc_id'), 'normal query should still find the document');
+    assert_same([], $searcher->search('oversized-token', ['lang' => $lang]), 'oversized query candidate should be filtered as a clean no-match');
+});
+
+test_case('indexer preserves a namespaced term exactly at the storage byte limit', function (): void {
+    $lang = 'en';
+    $normalTerm = 'normalneedle';
+    $oversizedTerm = test_term_for_namespaced_key_bytes($lang, WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1);
+    $exactLimitTerm = test_term_for_namespaced_key_bytes($lang, WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES);
+    $exactLimitKey = WP_FTS_TermNamespace::namespace_term($lang, $exactLimitTerm);
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Test_Oversized_Term_Analyzer($normalTerm, $oversizedTerm, $exactLimitTerm);
+
+    assert_same(WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES, strlen($exactLimitKey), 'boundary fixture key should be exactly the MySQL term-key limit');
+    assert_true((new WP_FTS_Indexer($storage, $analyzer))->index_document(502, 'exact-limit-token', ['lang' => $lang]), 'exact-limit key should remain indexable');
+
+    assert_same([$exactLimitKey], $storage->all_terms(), 'exact-limit term should be stored');
+    assert_same([502 => 1], $storage->get_postings([$exactLimitKey])[$exactLimitKey] ?? [], 'exact-limit term postings should round trip');
+    assert_same(['doc_count' => 1, 'len_sum' => 1], $storage->get_meta($lang), 'exact-limit term should contribute to document length totals');
+    assert_same([502], array_column((new WP_FTS_Searcher($storage, $analyzer))->search('exact-limit-token', ['lang' => $lang]), 'doc_id'), 'exact-limit query should still match');
+});
+
 test_case('language options namespace terms and isolate search partitions', function (): void {
     $analyzer = new WP_FTS_Analyzer();
     $storage = new WP_FTS_Test_LanguageAwareStorage();
@@ -11264,6 +11396,35 @@ test_case('mysql storage emits language-aware binary schema and stores per-langu
     $storage->add_meta('en', 1, 2);
     assert_same(['doc_count' => 1, 'len_sum' => 4], $storage->get_meta('pl-PL'), 'language meta should be partitioned');
     assert_same(['doc_count' => 2, 'len_sum' => 6], $storage->get_meta(), 'global meta should aggregate partitions');
+});
+
+test_case('mysql row-posting indexing skips oversized namespaced terms before storage validation', function (): void {
+    $lang = 'en';
+    $normalTerm = 'normalneedle';
+    $oversizedTerm = test_term_for_namespaced_key_bytes($lang, WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1);
+    $exactLimitTerm = test_term_for_namespaced_key_bytes($lang, WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES);
+    $normalKey = WP_FTS_TermNamespace::namespace_term($lang, $normalTerm);
+    $oversizedKey = WP_FTS_TermNamespace::namespace_term($lang, $oversizedTerm);
+    $wpdb = new WP_FTS_Test_WPDB();
+    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    $analyzer = new WP_FTS_Test_Oversized_Term_Analyzer($normalTerm, $oversizedTerm, $exactLimitTerm);
+
+    assert_same(WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES + 1, strlen($oversizedKey), 'MySQL oversized fixture key should exceed the varbinary key limit by one');
+    assert_true((new WP_FTS_Indexer($storage, $analyzer))->index_document(901, 'normal-token oversized-token', ['lang' => $lang]), 'MySQL-backed indexing should skip the oversized term instead of throwing');
+
+    assert_same([$normalKey], $storage->all_terms(), 'MySQL storage should only receive the valid normal term');
+    assert_same([901 => 1], $wpdb->postings[$normalKey] ?? [], 'MySQL row postings should store the valid normal term');
+    assert_true(!array_key_exists($oversizedKey, $wpdb->postings), 'MySQL row postings should not store the oversized term');
+    assert_same([$lang => 1], $wpdb->docLengths[901] ?? [], 'MySQL document length should exclude skipped oversized terms');
+    assert_true(in_array('DELETE FROM wp_fts_postings WHERE doc_id = %d', $wpdb->queries, true), 'indexing regression should exercise replace_doc_postings row replacement');
+
+    $thrown = false;
+    try {
+        $storage->put_term($oversizedKey, 1, WP_FTS_PostingsCodec::encode([901 => 1]));
+    } catch (InvalidArgumentException $e) {
+        $thrown = str_contains($e->getMessage(), 'byte limit');
+    }
+    assert_true($thrown, 'direct low-level MySQL put_term should still reject oversized caller input');
 });
 
 test_case('wp cli reindex accepts language source filters and limit', function (): void {

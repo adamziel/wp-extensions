@@ -1161,6 +1161,10 @@ final class WP_FTS_Searcher
             return null;
         }
 
+        if (!WP_FTS_TermNamespace::term_key_fits($term, $lang)) {
+            return null;
+        }
+
         $occurrenceRank = is_array($occurrence) && isset($occurrence['rank']) && is_numeric($occurrence['rank'])
             ? max(0, (int) $occurrence['rank'])
             : 0;
