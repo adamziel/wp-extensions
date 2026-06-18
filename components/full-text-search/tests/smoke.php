@@ -24,4 +24,6 @@ if (($results[0]['doc_id'] ?? null) !== 1) {
     exit(1);
 }
 
-echo "Full-text search component smoke passed.\n";
+$hardeningChecks = require __DIR__ . '/coverage-hardening.php';
+
+echo "Full-text search component smoke passed ({$hardeningChecks} hardening checks).\n";

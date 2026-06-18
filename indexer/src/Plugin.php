@@ -4926,11 +4926,7 @@ final class WP_FTS_Plugin
 
         $value = self::unslash_scalar($source[$key]);
         $value = self::sanitize_text($value);
-        if (strlen($value) > $max_length) {
-            return substr($value, 0, $max_length);
-        }
-
-        return $value;
+        return self::truncate_request_text($value, $max_length);
     }
 
     private static function request_bool_value(array $source, string $key, bool $default, bool $submitted): bool
@@ -5015,6 +5011,15 @@ final class WP_FTS_Plugin
         }
 
         return trim(strip_tags($value));
+    }
+
+    private static function truncate_request_text(string $value, int $max_length): string
+    {
+        if ($max_length <= 0 || strlen($value) <= $max_length) {
+            return WP_FTS_Utf8::repair($value);
+        }
+
+        return WP_FTS_Utf8::truncate_bytes($value, $max_length);
     }
 
     private static function sanitize_key(string $value): string
@@ -5239,7 +5244,7 @@ final class WP_FTS_Plugin
         foreach (['q', 'query'] as $key) {
             $value = self::request_param($request, $key, null);
             if (is_scalar($value)) {
-                $query = trim((string) $value);
+                $query = self::truncate_request_text(self::sanitize_text(self::unslash_scalar($value)), 200);
                 if ($query !== '') {
                     return $query;
                 }
