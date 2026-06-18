@@ -287,13 +287,13 @@ to `pl` when no explicit Polish entry is present. Explicit `false`, `null`,
 Invalid, missing, and language-mismatched manifests are reported as ignored in
 the admin sandbox and fall back to the built-in analyzer path for that language.
 
-The Playground/admin sandbox auto-loads the bundled local Polish pack and the
-committed UniMorph packs for `en`, `es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`
-when compressed shards can be read. It also tries the pinned Jieba Chinese
-segmenter source when the submodule is initialized and hash-valid. Outside the
-sandbox, those UniMorph packs and the Jieba segmenter remain
-opt-in/default-disabled. The synthetic Bengali pack remains a default-disabled
-test fixture and is not product data.
+The Playground/admin sandbox auto-loads the bundled local Polish pack and all
+bundled source-backed UniMorph packs when compressed shards can be read. It also
+tries the pinned Jieba Chinese segmenter source when the submodule is initialized
+and hash-valid. Outside the sandbox, those UniMorph packs and the Jieba segmenter
+remain opt-in/default-disabled. `zh` is tokenizer/segmentation-only, `ja` and
+`ko` use fallback tokenizer lanes with no committed runtime lemma packs, and the
+synthetic Bengali pack remains a default-disabled test fixture, not product data.
 
 ### Optional Chinese Jieba Segmenter
 
@@ -373,12 +373,14 @@ importer. The repository does not vendor raw upstream source artifacts, and
 generated packs stay opt-in and default-disabled.
 
 The repository also includes bundled source-backed UniMorph packs for `en`,
-`es`, `fr`, `hi`, `ar`, `bn`, `pt`, and `id`; they remain opt-in and
-default-disabled. The tiny synthetic `bn` fixture remains only a
-project-owned runtime contract test, not product Bengali morphology. `zh`
-remains tokenizer/segmentation-only, backed by optional pinned Jieba source
-instead of copied dictionary rows, and `ur` remains license-blocked with no
-committed generated pack.
+`es`, `fr`, `hi`, `ar`, `bn`, `pt`, `id`, `ru`, `de`, `te`, `tr`, `it`,
+`fa`, `uk`, and `nl`; they remain opt-in and default-disabled. The tiny
+synthetic `bn` fixture remains only a project-owned runtime contract test, not
+product Bengali morphology. `zh` remains tokenizer/segmentation-only, backed by
+optional pinned Jieba source instead of copied dictionary rows; `ja` and `ko`
+remain fallback tokenizer lanes with source submodules retained for future
+external-pack work; and `ur` remains license-blocked with no committed generated
+pack.
 
 ### Importing CoNLL-U Lemma Packs
 
