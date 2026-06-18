@@ -4268,8 +4268,12 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('Health First Indexed (ID 701)', $html, 'health dashboard should show last indexed title and ID');
     assert_contains('<th scope="row">Last batch</th><td>Manual at ', $html, 'health dashboard should show last batch time and mode');
     assert_contains('<th scope="row">Last batch processed</th><td>1 total (0 waiting updates, 1 remaining content)</td>', $html, 'health dashboard should show last batch processed counts');
+    assert_contains('Run one safe indexing pass now. You can use it again until Remaining to index reaches 0.', $html, 'health dashboard should explain the manual batch action in user-facing terms');
     assert_contains('Index the next batch now', $html, 'health dashboard should expose one primary manual indexing action');
     assert_contains('wp_fts_health_nonce', $html, 'health manual action should use a dedicated nonce field');
+    assert_true(!str_contains($html, 'bounded ' . 'batch'), 'health dashboard should not expose implementation-oriented batch wording');
+    assert_true(!str_contains($html, 'demo ' . 'posts'), 'health dashboard manual batch copy should not mention sandbox sample content');
+    assert_true(!str_contains($html, 'whole site in ' . 'one request'), 'health dashboard should not expose internal request-size constraints');
     assert_true(!str_contains($html, 'wp_fts_sandbox_action'), 'health dashboard should not render sandbox demo action controls');
     assert_true(!str_contains($html, 'Create or refresh demo posts'), 'health dashboard should not reintroduce demo post creation controls');
     assert_true(!str_contains($html, 'Build demo index'), 'health dashboard should not reintroduce demo indexing controls');

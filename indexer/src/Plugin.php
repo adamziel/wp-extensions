@@ -1102,7 +1102,7 @@ final class WP_FTS_Plugin
         echo '</tbody></table>';
 
         echo '<h3>Indexing controls</h3>';
-        echo '<p class="wp-fts-health-copy">This indexes the next bounded batch now. It does not create demo posts, and it does not try to index the whole site in one request.</p>';
+        echo '<p class="wp-fts-health-copy">Run one safe indexing pass now. You can use it again until Remaining to index reaches 0.</p>';
         echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">';
         self::render_health_nonce_field();
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_HEALTH_MANUAL_BATCH_ACTION) . '">';
