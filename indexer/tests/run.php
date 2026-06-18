@@ -4856,6 +4856,34 @@ test_case('scheduled indexing cron backfills only the default batch and reschedu
     }
 });
 
+test_case('scheduled indexing cron reschedules when queued work fills the batch but backfill remains', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 25);
+    for ($post_id = 1; $post_id <= 20; $post_id++) {
+        $GLOBALS['wp_fts_test_posts'][$post_id] = wp_fts_test_backfill_post($post_id);
+    }
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = range(1, 20);
+
+    try {
+        $result = WP_FTS_Plugin::process_scheduled_indexing();
+        assert_same(20, $result['processed'], 'cron should spend the default batch on queued work first');
+        assert_same(20, $result['queue_processed'], 'cron should drain the queued work that filled the batch');
+        assert_same(0, $result['backfill_processed'], 'cron should not exceed the batch size by backfilling in the same run');
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'queue should be drained after the batch');
+        assert_same(20, count($fake->docs), 'queued indexing should consume the full batch before backfill');
+        assert_true(!isset($fake->docs[21]), 'remaining backfill should be left for a follow-up run');
+        assert_true((bool) $result['has_more'], 'cron should detect remaining backfill after a queue-filled batch');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'cron should reschedule when backfill remains after queued work drains');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('manual indexing API backfills up to the default 100-item batch', function (): void {
     global $wpdb;
 
@@ -4899,6 +4927,35 @@ test_case('shared indexing lock prevents overlapping manual and cron batches', f
         assert_same([], $fake->docs, 'lock skip should not index content');
         assert_same(true, WP_FTS_Plugin::search_health()['last_skipped_locked'], 'health state should record the lock skip');
         assert_same('already-running', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'lock skip should leave the active lock untouched');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('scheduled indexing cron reschedules after skipping a manual-held lock', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 3);
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'manual-running',
+        'mode' => 'manual',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+
+    try {
+        $result = WP_FTS_Plugin::process_scheduled_indexing();
+        assert_same(0, $result['processed'], 'cron batch should skip while a manual batch lock is active');
+        assert_same(true, $result['skipped_locked'], 'cron batch should report a lock skip');
+        assert_same(true, $result['has_more'], 'cron lock skip should retain a has-more signal for deferred work');
+        assert_same([], $fake->docs, 'cron lock skip should not index content');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'cron lock skip should schedule a follow-up run');
+        assert_same(true, WP_FTS_Plugin::search_health()['last_skipped_locked'], 'health state should record the cron lock skip');
+        assert_same('manual-running', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'cron lock skip should leave the manual lock untouched');
     } finally {
         $wpdb = $oldWpdb;
     }

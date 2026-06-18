@@ -4609,6 +4609,9 @@ final class WP_FTS_Plugin
             $summary['skipped_locked'] = true;
             $summary['has_more'] = true;
             self::update_index_health_state($summary);
+            if ($mode === 'cron') {
+                self::schedule_queue_processor();
+            }
 
             return $summary;
         }
@@ -4623,6 +4626,16 @@ final class WP_FTS_Plugin
                 self::process_backfill_for_index_batch($remaining_capacity, $budget, $summary, $analyzer);
             } elseif ($remaining_capacity > 0) {
                 $summary['stopped_by_budget'] = true;
+                $summary['has_more'] = true;
+            }
+
+            if (
+                $mode === 'cron'
+                && $remaining_capacity === 0
+                && empty($summary['has_more'])
+                && !self::index_resource_budget_exhausted($budget, (int) $summary['processed'])
+                && self::has_eligible_unindexed_content()
+            ) {
                 $summary['has_more'] = true;
             }
 
