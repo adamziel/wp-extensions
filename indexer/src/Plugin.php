@@ -31,6 +31,8 @@ final class WP_FTS_Plugin
     private const ADMIN_NONCE_ACTION = 'wp_fts_sandbox_admin_action';
     private const ADMIN_NONCE_FIELD = 'wp_fts_sandbox_nonce';
     private const ADMIN_ACTION_FIELD = 'wp_fts_sandbox_action';
+    private const ADMIN_CLEANUP_LEGACY_DEMO_ACTION = 'cleanup_legacy_demo_posts';
+    private const LEGACY_DEMO_CREATION_ACTIONS = ['refresh_demo', 'index_demo'];
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
@@ -223,10 +225,6 @@ final class WP_FTS_Plugin
             return;
         }
 
-        if ($post !== null && self::index_sandbox_demo_post_if_known($post_id, $post)) {
-            return;
-        }
-
         if ($post !== null) {
             self::index_post($post, [], self::runtime_analyzer());
             self::remove_from_queue([$post_id]);
@@ -251,10 +249,6 @@ final class WP_FTS_Plugin
 
         if (self::is_indexable_post($post)) {
             if (!self::settings()['auto_index']) {
-                return;
-            }
-
-            if (self::index_sandbox_demo_post_if_known($post_id, $post)) {
                 return;
             }
 
@@ -471,6 +465,10 @@ final class WP_FTS_Plugin
         self::render_admin_orientation();
         self::render_admin_tabs($tab);
         self::render_site_language_status_notice();
+        foreach (self::handle_admin_sandbox_post_action() as $message) {
+            self::render_sandbox_notice($message[0], $message[1]);
+        }
+        self::render_legacy_sandbox_demo_cleanup_affordance($tab);
 
         if ($tab === self::ADMIN_SANDBOX_TAB) {
             self::render_admin_sandbox_tab();
@@ -543,6 +541,225 @@ final class WP_FTS_Plugin
         echo '</nav>';
     }
 
+    /**
+     * @return array<int,array{0:string,1:string}>
+     */
+    private static function handle_admin_sandbox_post_action(): array
+    {
+        if (!self::sandbox_post_action_submitted()) {
+            return [];
+        }
+
+        $action = self::sandbox_post_action();
+        if (!self::verify_sandbox_nonce()) {
+            return [['error', 'The sandbox action could not be verified. Reload the page and try again.']];
+        }
+
+        if (in_array($action, self::LEGACY_DEMO_CREATION_ACTIONS, true)) {
+            return [['error', 'Sandbox demo post creation is disabled. The sandbox searches existing indexed content and does not create demo posts.']];
+        }
+
+        if ($action !== self::ADMIN_CLEANUP_LEGACY_DEMO_ACTION) {
+            return [['error', 'Unsupported sandbox action. No changes were made.']];
+        }
+
+        try {
+            $cleanup = self::move_legacy_sandbox_demo_posts_to_trash();
+        } catch (Throwable $e) {
+            return [['error', 'Could not clean up legacy sandbox demo posts: ' . $e->getMessage()]];
+        }
+
+        if ($cleanup['failed'] > 0) {
+            return [[
+                'error',
+                sprintf(
+                    'Moved %d legacy sandbox demo post(s) to Trash, but %d post(s) could not be moved.',
+                    $cleanup['moved'],
+                    $cleanup['failed']
+                ),
+            ]];
+        }
+
+        if ($cleanup['moved'] > 0) {
+            return [['success', sprintf('Moved %d legacy sandbox demo post(s) to Trash.', $cleanup['moved'])]];
+        }
+
+        return [['info', 'No legacy sandbox demo posts were found. The stored sandbox demo marker was cleared.']];
+    }
+
+    private static function render_legacy_sandbox_demo_cleanup_affordance(string $tab): void
+    {
+        $candidates = self::legacy_sandbox_demo_cleanup_candidates();
+        if ($candidates === []) {
+            return;
+        }
+
+        echo '<div class="notice notice-warning wp-fts-legacy-sandbox-cleanup">';
+        echo '<p><strong>Legacy sandbox demo posts detected.</strong> This version no longer creates demo posts. You can move the old exact FTS Sandbox demo posts to Trash.</p>';
+        echo '<form method="post" action="' . self::esc_url(self::admin_page_url($tab)) . '">';
+        self::render_sandbox_nonce_field();
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_CLEANUP_LEGACY_DEMO_ACTION) . '">';
+        echo '<p><button type="submit" class="button">Move legacy sandbox demo posts to Trash</button> ';
+        echo '<span class="description">' . self::esc_html(sprintf('%d exact legacy post(s) found.', count($candidates))) . '</span></p>';
+        echo '</form>';
+        echo '</div>';
+    }
+
+    /**
+     * @return array<int,object>
+     */
+    private static function legacy_sandbox_demo_cleanup_candidates(): array
+    {
+        $candidates = [];
+        foreach (self::sandbox_demo_post_ids() as $post_id) {
+            self::maybe_add_legacy_sandbox_demo_candidate($candidates, $post_id);
+        }
+
+        foreach (self::legacy_sandbox_demo_post_signatures() as $signature) {
+            foreach (self::legacy_sandbox_demo_query_post_ids($signature) as $post_id) {
+                self::maybe_add_legacy_sandbox_demo_candidate($candidates, $post_id);
+            }
+        }
+
+        ksort($candidates, SORT_NUMERIC);
+
+        return $candidates;
+    }
+
+    /**
+     * @param array<int,object> $candidates
+     */
+    private static function maybe_add_legacy_sandbox_demo_candidate(array &$candidates, int $post_id): void
+    {
+        if ($post_id <= 0 || isset($candidates[$post_id])) {
+            return;
+        }
+
+        $post = self::post_object($post_id);
+        if ($post === null || !self::is_legacy_sandbox_demo_cleanup_target($post)) {
+            return;
+        }
+
+        $candidates[$post_id] = $post;
+    }
+
+    /**
+     * @param array{title:string,slug:string} $signature
+     * @return int[]
+     */
+    private static function legacy_sandbox_demo_query_post_ids(array $signature): array
+    {
+        if (!function_exists('get_posts')) {
+            return [];
+        }
+
+        $base_args = [
+            'post_type' => 'any',
+            'post_status' => ['publish', 'draft', 'pending', 'future', 'private'],
+            'numberposts' => -1,
+            'fields' => 'ids',
+            'orderby' => 'ID',
+            'order' => 'ASC',
+            'no_found_rows' => true,
+            'suppress_filters' => true,
+        ];
+        $ids = [];
+        foreach ([
+            ['title' => $signature['title']],
+            ['name' => $signature['slug']],
+            ['post_name__in' => [$signature['slug']]],
+        ] as $query_args) {
+            $posts = get_posts($query_args + $base_args);
+            if (!is_array($posts)) {
+                continue;
+            }
+            foreach ($posts as $post) {
+                $post_id = is_object($post) && isset($post->ID) ? (int) $post->ID : (int) $post;
+                if ($post_id > 0) {
+                    $ids[$post_id] = true;
+                }
+            }
+        }
+
+        return array_keys($ids);
+    }
+
+    private static function is_legacy_sandbox_demo_cleanup_target(object $post): bool
+    {
+        if (self::post_status_from_object($post) === 'trash') {
+            return false;
+        }
+
+        $title = isset($post->post_title) && is_scalar($post->post_title) ? trim((string) $post->post_title) : '';
+        return in_array($title, self::legacy_sandbox_demo_titles(), true);
+    }
+
+    /**
+     * @return array{moved:int,failed:int}
+     */
+    private static function move_legacy_sandbox_demo_posts_to_trash(): array
+    {
+        $moved = 0;
+        $failed = 0;
+        foreach (self::legacy_sandbox_demo_cleanup_candidates() as $post_id => $post) {
+            if (!self::is_legacy_sandbox_demo_cleanup_target($post) || !function_exists('wp_trash_post')) {
+                $failed++;
+                continue;
+            }
+
+            $trashed = wp_trash_post((int) $post_id);
+            if ($trashed === false || $trashed === null || self::is_wordpress_error($trashed)) {
+                $failed++;
+                continue;
+            }
+
+            try {
+                self::tombstone_post((int) $post_id);
+            } catch (Throwable) {
+                // WordPress trash hooks also tombstone indexed rows; cleanup should
+                // still succeed if storage is unavailable during the admin request.
+            }
+            $moved++;
+        }
+
+        if ($failed === 0) {
+            self::delete_option(self::SANDBOX_DEMO_POSTS_OPTION);
+        }
+
+        return [
+            'moved' => $moved,
+            'failed' => $failed,
+        ];
+    }
+
+    /**
+     * @return array<int,array{title:string,slug:string}>
+     */
+    private static function legacy_sandbox_demo_post_signatures(): array
+    {
+        return [
+            ['title' => 'FTS Sandbox: English Mice', 'slug' => 'wp-fts-sandbox-english-mice'],
+            ['title' => 'FTS Sandbox: Polish Lemmatizer Demo', 'slug' => 'wp-fts-sandbox-polish-lemmatizer-demo'],
+            ['title' => 'FTS Sandbox: Chinese Search N-grams', 'slug' => 'wp-fts-sandbox-chinese-search-ngrams'],
+            ['title' => 'FTS Sandbox: Hindi Lemmatizer', 'slug' => 'wp-fts-sandbox-hindi-lemmatizer'],
+            ['title' => 'FTS Sandbox: Spanish Buscar', 'slug' => 'wp-fts-sandbox-spanish-buscar'],
+            ['title' => 'FTS Sandbox: Arabic Search', 'slug' => 'wp-fts-sandbox-arabic-search'],
+            ['title' => 'FTS Sandbox: French Chercher', 'slug' => 'wp-fts-sandbox-french-chercher'],
+            ['title' => 'FTS Sandbox: Bengali Lemmatizer', 'slug' => 'wp-fts-sandbox-bengali-lemmatizer'],
+            ['title' => 'FTS Sandbox: Portuguese Pesquisar', 'slug' => 'wp-fts-sandbox-portuguese-pesquisar'],
+            ['title' => 'FTS Sandbox: Indonesian Abadi', 'slug' => 'wp-fts-sandbox-indonesian-abadi'],
+            ['title' => 'FTS Sandbox: Urdu Suffix Baseline', 'slug' => 'wp-fts-sandbox-urdu-suffix-baseline'],
+        ];
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function legacy_sandbox_demo_titles(): array
+    {
+        return array_map(static fn(array $signature): string => $signature['title'], self::legacy_sandbox_demo_post_signatures());
+    }
+
     private static function render_admin_compact_styles(): void
     {
         echo '<style>';
@@ -611,7 +828,7 @@ final class WP_FTS_Plugin
         self::render_settings_replacement_scope_row($settings);
         echo '</tbody></table>';
 
-        self::render_settings_section_heading('Customer-facing search behavior', 'These defaults shape public site search result output and seed the Sandbox controls. The wp-admin Posts search box can use the index to find posts, but it keeps the admin list-table display and pagination controls.');
+        self::render_settings_section_heading('Customer-facing search behavior', 'These defaults shape public site search result output and provide the initial Sandbox controls. The wp-admin Posts search box can use the index to find posts, but it keeps the admin list-table display and pagination controls.');
         echo '<table class="form-table" role="presentation"><tbody>';
 
         echo '<tr><th scope="row"><label for="wp-fts-settings-snippet-length">Search result excerpt length</label></th><td>';
@@ -818,44 +1035,6 @@ final class WP_FTS_Plugin
     private static function admin_sandbox_state(bool $include_indexed_posts): array
     {
         $messages = [];
-        $demo_post_ids = self::sandbox_demo_post_ids();
-        $post_action_submitted = self::sandbox_post_action_submitted();
-        $action = self::sandbox_post_action();
-
-        if ($action !== '') {
-            if (!self::verify_sandbox_nonce()) {
-                $messages[] = ['error', 'The sandbox action could not be verified. Reload the page and try again.'];
-            } elseif ($action === 'refresh_demo') {
-                try {
-                    $demo_post_ids = self::create_or_refresh_sandbox_demo_posts();
-                    $messages[] = ['success', sprintf('Demo posts are ready: %s.', implode(', ', $demo_post_ids))];
-                } catch (Throwable $e) {
-                    $messages[] = ['error', 'Could not refresh demo posts: ' . $e->getMessage()];
-                }
-            } elseif ($action === 'index_demo') {
-                try {
-                    $indexed = self::index_sandbox_demo_posts();
-                    $demo_post_ids = $indexed['post_ids'];
-                    $messages[] = [
-                        'success',
-                        sprintf('Processed %d demo post(s) into the full-text index.', $indexed['processed']),
-                    ];
-                } catch (Throwable $e) {
-                    $messages[] = ['error', 'Could not build the demo index: ' . $e->getMessage()];
-                }
-            }
-        }
-        if ($action === '' && !$post_action_submitted) {
-            try {
-                $auto_seeded = self::maybe_auto_seed_sandbox_demo($demo_post_ids);
-                $demo_post_ids = $auto_seeded['post_ids'];
-                if ($auto_seeded['created'] || $auto_seeded['indexed']) {
-                    $messages[] = ['success', self::sandbox_auto_seed_message($auto_seeded)];
-                }
-            } catch (Throwable $e) {
-                $messages[] = ['error', 'Could not prepare the demo sandbox automatically: ' . $e->getMessage()];
-            }
-        }
 
         $search_submitted = self::sandbox_search_submitted();
         $query = self::sandbox_search_query();
@@ -1270,7 +1449,11 @@ final class WP_FTS_Plugin
     {
         $action = self::sanitize_key(self::request_text_value($_POST, self::ADMIN_ACTION_FIELD, 40));
 
-        return in_array($action, ['refresh_demo', 'index_demo'], true) ? $action : '';
+        if ($action === self::ADMIN_CLEANUP_LEGACY_DEMO_ACTION || in_array($action, self::LEGACY_DEMO_CREATION_ACTIONS, true)) {
+            return $action;
+        }
+
+        return '';
     }
 
     /**
@@ -1318,301 +1501,6 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Create or update the small demo corpus used by Playground.
-     *
-     * @return int[]
-     */
-    private static function create_or_refresh_sandbox_demo_posts(): array
-    {
-        if (!function_exists('wp_insert_post')) {
-            throw new RuntimeException('WordPress post APIs are unavailable.');
-        }
-
-        $existing_ids = self::sandbox_demo_post_ids();
-        $post_ids = [];
-        foreach (self::sandbox_demo_posts() as $offset => $post_data) {
-            $existing_id = $existing_ids[$offset] ?? 0;
-            if ($existing_id > 0 && self::post_object($existing_id) !== null) {
-                $post_data['ID'] = $existing_id;
-            }
-            unset($post_data['lang']);
-
-            $result = wp_insert_post($post_data, true);
-            if (self::is_wordpress_error($result)) {
-                throw new RuntimeException(self::wordpress_error_message($result));
-            }
-
-            $post_id = (int) $result;
-            if ($post_id <= 0) {
-                throw new RuntimeException('WordPress did not return a valid post ID.');
-            }
-            $post_ids[] = $post_id;
-        }
-
-        self::set_option(self::SANDBOX_DEMO_POSTS_OPTION, $post_ids);
-
-        return $post_ids;
-    }
-
-    /**
-     * @return array<int,array<string,mixed>>
-     */
-    private static function sandbox_demo_posts(): array
-    {
-        return [
-            [
-                'post_title' => 'FTS Sandbox: English Mice',
-                'post_name' => 'wp-fts-sandbox-english-mice',
-                'lang' => 'en',
-                'post_content' => '<p>Mice study indexed pages while building the search index.</p>',
-                'post_excerpt' => 'English UniMorph demo for mice and mouse.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Polish Lemmatizer Demo',
-                'post_name' => 'wp-fts-sandbox-polish-lemmatizer-demo',
-                'lang' => 'pl',
-                'post_content' => '<p>W książkach i zamkach wyszukujemy wpisy oraz kierujemy katalog.</p>',
-                'post_excerpt' => 'Polish lemmatizer demo for pack-backed book, castle, entry, and routing forms.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Chinese Search N-grams',
-                'post_name' => 'wp-fts-sandbox-chinese-search-ngrams',
-                'lang' => 'zh',
-                'post_content' => '<p>搜索系统质量指标支持语言搜索。</p>',
-                'post_excerpt' => 'Chinese CJK n-gram demo for search-system text.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Hindi Lemmatizer',
-                'post_name' => 'wp-fts-sandbox-hindi-lemmatizer',
-                'lang' => 'hi',
-                'post_content' => '<p>संपादक नया तरीका अपनाता है और स्पष्ट पाठ सूचक के लिए उदाहरण रखता है।</p>',
-                'post_excerpt' => 'Hindi UniMorph demo for अपनाता and अपनाना.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Spanish Buscar',
-                'post_name' => 'wp-fts-sandbox-spanish-buscar',
-                'lang' => 'es',
-                'post_content' => '<p>Estamos buscando datos claros para el indice.</p>',
-                'post_excerpt' => 'Spanish stemming demo for buscar and buscando.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Arabic Search',
-                'post_name' => 'wp-fts-sandbox-arabic-search',
-                'lang' => 'ar',
-                'post_content' => '<p>آبارا مفيدة في الفهرس ومثال البحث.</p>',
-                'post_excerpt' => 'Arabic UniMorph demo for آبارا and بئر.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: French Chercher',
-                'post_name' => 'wp-fts-sandbox-french-chercher',
-                'lang' => 'fr',
-                'post_content' => '<p>Les equipes cherchent rapidement dans le guide.</p>',
-                'post_excerpt' => 'French UniMorph demo for cherchent and chercher.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Bengali Lemmatizer',
-                'post_name' => 'wp-fts-sandbox-bengali-lemmatizer',
-                'lang' => 'bn',
-                'post_content' => '<p>অনুরোধগুলা সূচিতে রাখা আছে।</p>',
-                'post_excerpt' => 'Bengali UniMorph demo for অনুরোধগুলা and অনুরোধ.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Portuguese Pesquisar',
-                'post_name' => 'wp-fts-sandbox-portuguese-pesquisar',
-                'lang' => 'pt',
-                'post_content' => '<p>Estamos pesquisando dados claros para a pesquisa.</p>',
-                'post_excerpt' => 'Portuguese stemming demo for pesquisar and pesquisando.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Indonesian Abadi',
-                'post_name' => 'wp-fts-sandbox-indonesian-abadi',
-                'lang' => 'id',
-                'post_content' => '<p>Kami abadikan catatan pencarian dengan data jelas.</p>',
-                'post_excerpt' => 'Indonesian UniMorph demo for abadikan and abadi.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-            [
-                'post_title' => 'FTS Sandbox: Urdu Suffix Baseline',
-                'post_name' => 'wp-fts-sandbox-urdu-suffix-baseline',
-                'lang' => 'ur',
-                'post_content' => '<p>کتابیں فہرستوں میں موجود ہیں۔</p>',
-                'post_excerpt' => 'Urdu deterministic suffix-baseline demo.',
-                'post_status' => 'publish',
-                'post_type' => 'post',
-            ],
-        ];
-    }
-
-    /**
-     * Return the language configured for a demo corpus row.
-     */
-    private static function sandbox_demo_language(int $offset): string
-    {
-        $post = self::sandbox_demo_posts()[$offset] ?? null;
-        $language = is_array($post) && is_scalar($post['lang'] ?? null) ? (string) $post['lang'] : 'en';
-
-        return array_key_exists($language, self::sandbox_language_labels()) && $language !== 'auto' ? $language : 'en';
-    }
-
-    /**
-     * Build the FTS index for the current demo corpus without WP-CLI.
-     *
-     * @return array{processed:int,post_ids:int[]}
-     */
-    private static function index_sandbox_demo_posts(): array
-    {
-        $post_ids = self::sandbox_demo_post_ids();
-        if ($post_ids === []) {
-            $post_ids = self::create_or_refresh_sandbox_demo_posts();
-        }
-
-        $processed = 0;
-        foreach ($post_ids as $offset => $post_id) {
-            $post = self::post_object($post_id);
-            if ($post !== null && self::is_indexable_post($post)) {
-                $language = self::sandbox_demo_language((int) $offset);
-                self::index_post($post, [
-                    'lang' => $language,
-                    'document_lang' => $language,
-                    'metadata' => ['language' => $language],
-                ], self::sandbox_analyzer());
-                self::remove_from_queue([$post_id]);
-                $processed++;
-                continue;
-            }
-
-            self::tombstone_post($post_id);
-            self::remove_from_queue([$post_id]);
-        }
-
-        return [
-            'processed' => $processed,
-            'post_ids' => $post_ids,
-        ];
-    }
-
-    /**
-     * Ensure the authorized sandbox starts with a usable demo corpus and index.
-     *
-     * @param int[] $demo_post_ids
-     * @return array{post_ids:int[],created:bool,indexed:bool,processed:int}
-     */
-    private static function maybe_auto_seed_sandbox_demo(array $demo_post_ids): array
-    {
-        $created = false;
-        $indexed = false;
-        $processed = 0;
-
-        if (!self::sandbox_demo_posts_are_available($demo_post_ids)) {
-            $demo_post_ids = self::create_or_refresh_sandbox_demo_posts();
-            $created = true;
-        }
-
-        if (!self::sandbox_demo_index_is_current($demo_post_ids)) {
-            $index_result = self::index_sandbox_demo_posts();
-            $demo_post_ids = $index_result['post_ids'];
-            $processed = $index_result['processed'];
-            $indexed = true;
-        }
-
-        return [
-            'post_ids' => $demo_post_ids,
-            'created' => $created,
-            'indexed' => $indexed,
-            'processed' => $processed,
-        ];
-    }
-
-    /**
-     * @param array{post_ids:int[],created:bool,indexed:bool,processed:int} $auto_seeded
-     */
-    private static function sandbox_auto_seed_message(array $auto_seeded): string
-    {
-        if ($auto_seeded['created'] && $auto_seeded['indexed']) {
-            return sprintf('Demo posts and the full-text index are ready (%d post(s) indexed).', $auto_seeded['processed']);
-        }
-
-        if ($auto_seeded['created']) {
-            return 'Demo posts are ready.';
-        }
-
-        return sprintf('Demo full-text index is ready (%d post(s) indexed).', $auto_seeded['processed']);
-    }
-
-    /**
-     * @param int[] $post_ids
-     */
-    private static function sandbox_demo_posts_are_available(array $post_ids): bool
-    {
-        if (count($post_ids) !== count(self::sandbox_demo_posts())) {
-            return false;
-        }
-
-        foreach ($post_ids as $post_id) {
-            if ((int) $post_id <= 0 || self::post_object((int) $post_id) === null) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * @param int[] $post_ids
-     */
-    private static function sandbox_demo_index_is_current(array $post_ids): bool
-    {
-        if (!self::sandbox_demo_posts_are_available($post_ids)) {
-            return false;
-        }
-
-        try {
-            $storage = self::storage(false);
-            $metadata = WP_FTS_StorageCompat::get_doc_metadata($storage, $post_ids);
-            foreach ($post_ids as $offset => $post_id) {
-                $post_id = (int) $post_id;
-                $expected_language = self::sandbox_demo_language((int) $offset);
-                $doc = $storage->get_doc($post_id);
-                if ($doc === null || (bool) ($doc['deleted'] ?? false)) {
-                    return false;
-                }
-
-                $lengths = WP_FTS_StorageCompat::doc_lang_lengths($doc, $expected_language);
-                if (($lengths[$expected_language] ?? 0) <= 0) {
-                    return false;
-                }
-
-                if (!isset($metadata[$post_id]) || self::sandbox_indexed_language($metadata[$post_id], $doc, $expected_language) !== $expected_language) {
-                    return false;
-                }
-            }
-        } catch (Throwable) {
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
      * @param array<string,mixed> $metadata
      * @param array<string,mixed> $doc
      */
@@ -1625,25 +1513,6 @@ final class WP_FTS_Plugin
         }
 
         return WP_FTS_TermNamespace::canonicalize_lang($fallback);
-    }
-
-    private static function index_sandbox_demo_post_if_known(int $post_id, object $post): bool
-    {
-        $demo_post_ids = self::sandbox_demo_post_ids();
-        $offset = array_search($post_id, $demo_post_ids, true);
-        if ($offset === false) {
-            return false;
-        }
-
-        $language = self::sandbox_demo_language((int) $offset);
-        self::index_post($post, [
-            'lang' => $language,
-            'document_lang' => $language,
-            'metadata' => ['language' => $language],
-        ], self::sandbox_analyzer());
-        self::remove_from_queue([$post_id]);
-
-        return true;
     }
 
     /**
@@ -3013,12 +2882,12 @@ final class WP_FTS_Plugin
         if ($page_support['full'] && ($page_support['matched_language'] ?? '') !== '') {
             $message = self::base_language($language) === 'en' && $page_support['matched_language'] === 'en'
                 ? sprintf(
-                    'Current site language %s uses conservative fallback for runtime site searches because no runtime analyzer pack covers it. Sandbox and indexed demo content can use English morphology through the active base-language analyzer pack %s for English dialects/locales.',
+                    'Current site language %s uses conservative fallback for runtime site searches because no runtime analyzer pack covers it. Sandbox searches can use English morphology through the active base-language analyzer pack %s for English dialects/locales.',
                     self::sandbox_language_display($language),
                     self::sandbox_language_display($page_support['matched_language'])
                 )
                 : sprintf(
-                    'Current site language %s uses conservative fallback for runtime site searches because no runtime analyzer pack covers it. Sandbox and indexed demo content can use full morphology through the active base-language analyzer pack %s.',
+                    'Current site language %s uses conservative fallback for runtime site searches because no runtime analyzer pack covers it. Sandbox searches can use full morphology through the active base-language analyzer pack %s.',
                     self::sandbox_language_display($language),
                     self::sandbox_language_display($page_support['matched_language'])
                 );

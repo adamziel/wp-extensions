@@ -2799,6 +2799,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_registered_settings'] = [];
     $GLOBALS['wp_fts_test_meta_boxes'] = [];
     $GLOBALS['wp_fts_test_posts'] = [];
+    $GLOBALS['wp_fts_test_trashed_posts'] = [];
     $GLOBALS['wp_fts_test_post_meta'] = [];
     $GLOBALS['wp_fts_test_next_post_id'] = 1000;
     $GLOBALS['wp_fts_test_get_post_callbacks'] = [];
@@ -3172,6 +3173,69 @@ if (!function_exists('get_the_title')) {
     }
 }
 
+if (!function_exists('get_posts')) {
+    function get_posts(array $args = []): array
+    {
+        $ids = [];
+        $postStatus = $args['post_status'] ?? 'publish';
+        $statusFilter = $postStatus === 'any' ? null : array_map('strval', is_array($postStatus) ? $postStatus : [$postStatus]);
+        $postType = $args['post_type'] ?? 'post';
+        $typeFilter = $postType === 'any' ? null : array_map('strval', is_array($postType) ? $postType : [$postType]);
+        $title = isset($args['title']) && is_scalar($args['title']) ? (string) $args['title'] : null;
+        $name = isset($args['name']) && is_scalar($args['name']) ? (string) $args['name'] : null;
+        $postNameIn = isset($args['post_name__in']) && is_array($args['post_name__in'])
+            ? array_map('strval', $args['post_name__in'])
+            : null;
+
+        foreach ($GLOBALS['wp_fts_test_posts'] as $postId => $post) {
+            if (!is_object($post)) {
+                continue;
+            }
+
+            $status = isset($post->post_status) ? (string) $post->post_status : 'draft';
+            if ($statusFilter !== null && !in_array($status, $statusFilter, true)) {
+                continue;
+            }
+
+            $type = isset($post->post_type) ? (string) $post->post_type : 'post';
+            if ($typeFilter !== null && !in_array($type, $typeFilter, true)) {
+                continue;
+            }
+
+            $postTitle = isset($post->post_title) ? (string) $post->post_title : '';
+            if ($title !== null && $postTitle !== $title) {
+                continue;
+            }
+
+            $slug = isset($post->post_name) ? (string) $post->post_name : '';
+            if ($name !== null && $slug !== $name) {
+                continue;
+            }
+            if ($postNameIn !== null && !in_array($slug, $postNameIn, true)) {
+                continue;
+            }
+
+            $ids[] = (int) $postId;
+        }
+
+        sort($ids, SORT_NUMERIC);
+        if (isset($args['order']) && strtoupper((string) $args['order']) === 'DESC') {
+            $ids = array_reverse($ids);
+        }
+
+        $limit = isset($args['numberposts']) ? (int) $args['numberposts'] : -1;
+        if ($limit >= 0) {
+            $ids = array_slice($ids, 0, $limit);
+        }
+
+        if (($args['fields'] ?? null) === 'ids') {
+            return $ids;
+        }
+
+        return array_values(array_filter(array_map('get_post', $ids)));
+    }
+}
+
 if (!function_exists('wp_insert_post')) {
     function wp_insert_post(array $postarr, bool $wp_error = false): int|WP_Error
     {
@@ -3197,6 +3261,22 @@ if (!function_exists('wp_insert_post')) {
         ksort($GLOBALS['wp_fts_test_posts'], SORT_NUMERIC);
 
         return $post_id;
+    }
+}
+
+if (!function_exists('wp_trash_post')) {
+    function wp_trash_post(int $post_id): object|false|null
+    {
+        $post = get_post($post_id);
+        if (!is_object($post)) {
+            return null;
+        }
+
+        $post->post_status = 'trash';
+        $GLOBALS['wp_fts_test_posts'][$post_id] = $post;
+        $GLOBALS['wp_fts_test_trashed_posts'][] = $post_id;
+
+        return $post;
     }
 }
 
@@ -3468,77 +3548,22 @@ function wp_fts_test_capture_registered_admin_route(string $url, callable $callb
 }
 
 /**
- * @return array<int,array{lang:string,title:string,query:string,preview:string}>
+ * @return array<int,array{title:string,slug:string}>
  */
-function wp_fts_test_sandbox_demo_expectations(): array
+function wp_fts_test_legacy_sandbox_demo_signatures(): array
 {
     return [
-        [
-            'lang' => 'en',
-            'title' => 'FTS Sandbox: English Mice',
-            'query' => 'mouse',
-            'preview' => 'Mice study indexed pages',
-        ],
-        [
-            'lang' => 'pl',
-            'title' => 'FTS Sandbox: Polish Lemmatizer Demo',
-            'query' => 'kierować zamek',
-            'preview' => 'W książkach i zamkach wyszukujemy wpisy oraz kierujemy katalog.',
-        ],
-        [
-            'lang' => 'zh',
-            'title' => 'FTS Sandbox: Chinese Search N-grams',
-            'query' => '搜索系统',
-            'preview' => '搜索系统质量指标支持语言搜索。',
-        ],
-        [
-            'lang' => 'hi',
-            'title' => 'FTS Sandbox: Hindi Lemmatizer',
-            'query' => 'अपनाना',
-            'preview' => 'संपादक नया तरीका अपनाता है',
-        ],
-        [
-            'lang' => 'es',
-            'title' => 'FTS Sandbox: Spanish Buscar',
-            'query' => 'buscar',
-            'preview' => 'Estamos buscando datos claros',
-        ],
-        [
-            'lang' => 'ar',
-            'title' => 'FTS Sandbox: Arabic Search',
-            'query' => 'بئر',
-            'preview' => 'آبارا مفيدة في الفهرس',
-        ],
-        [
-            'lang' => 'fr',
-            'title' => 'FTS Sandbox: French Chercher',
-            'query' => 'chercher',
-            'preview' => 'Les equipes cherchent rapidement',
-        ],
-        [
-            'lang' => 'bn',
-            'title' => 'FTS Sandbox: Bengali Lemmatizer',
-            'query' => 'অনুরোধ',
-            'preview' => 'অনুরোধগুলা সূচিতে রাখা আছে',
-        ],
-        [
-            'lang' => 'pt',
-            'title' => 'FTS Sandbox: Portuguese Pesquisar',
-            'query' => 'pesquisar',
-            'preview' => 'Estamos pesquisando dados claros',
-        ],
-        [
-            'lang' => 'id',
-            'title' => 'FTS Sandbox: Indonesian Abadi',
-            'query' => 'abadi',
-            'preview' => 'Kami abadikan catatan pencarian',
-        ],
-        [
-            'lang' => 'ur',
-            'title' => 'FTS Sandbox: Urdu Suffix Baseline',
-            'query' => 'کتاب فہرست',
-            'preview' => 'کتابیں فہرستوں میں موجود ہیں',
-        ],
+        ['title' => 'FTS Sandbox: English Mice', 'slug' => 'wp-fts-sandbox-english-mice'],
+        ['title' => 'FTS Sandbox: Polish Lemmatizer Demo', 'slug' => 'wp-fts-sandbox-polish-lemmatizer-demo'],
+        ['title' => 'FTS Sandbox: Chinese Search N-grams', 'slug' => 'wp-fts-sandbox-chinese-search-ngrams'],
+        ['title' => 'FTS Sandbox: Hindi Lemmatizer', 'slug' => 'wp-fts-sandbox-hindi-lemmatizer'],
+        ['title' => 'FTS Sandbox: Spanish Buscar', 'slug' => 'wp-fts-sandbox-spanish-buscar'],
+        ['title' => 'FTS Sandbox: Arabic Search', 'slug' => 'wp-fts-sandbox-arabic-search'],
+        ['title' => 'FTS Sandbox: French Chercher', 'slug' => 'wp-fts-sandbox-french-chercher'],
+        ['title' => 'FTS Sandbox: Bengali Lemmatizer', 'slug' => 'wp-fts-sandbox-bengali-lemmatizer'],
+        ['title' => 'FTS Sandbox: Portuguese Pesquisar', 'slug' => 'wp-fts-sandbox-portuguese-pesquisar'],
+        ['title' => 'FTS Sandbox: Indonesian Abadi', 'slug' => 'wp-fts-sandbox-indonesian-abadi'],
+        ['title' => 'FTS Sandbox: Urdu Suffix Baseline', 'slug' => 'wp-fts-sandbox-urdu-suffix-baseline'],
     ];
 }
 
@@ -3760,7 +3785,7 @@ test_case('post language meta box defaults to automatic detection and stores ove
     }
 });
 
-test_case('authorized admin sandbox render includes search form and indexed posts without manual actions', function (): void {
+test_case('authorized admin sandbox render includes search form and creates no posts', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -3794,10 +3819,11 @@ test_case('authorized admin sandbox render includes search form and indexed post
     assert_true(!str_contains($html, '<div class="notice notice-info"><p><strong>What this does:</strong>'), 'admin orientation should not render as a large notice');
     assert_contains('wp-fts-language-status', $html, 'site-language status should use compact help text');
     assert_true(!str_contains($html, '<div class="notice notice-info"><p>Current site language'), 'site-language status should not render as a large notice');
-    assert_contains('Demo posts and the full-text index are ready', $html, 'authorized first render should auto-seed the demo corpus and index');
-    $demo = wp_fts_test_sandbox_demo_expectations();
-    assert_same(count($demo), count($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? []), 'authorized first render should create the top-language demo posts');
-    assert_true($fake->terms !== [], 'authorized first render should build FTS terms for the demo corpus');
+    assert_true(!str_contains($html, 'Demo posts and the full-text index are ready'), 'authorized first render should not report demo corpus auto-seeding');
+    assert_same([], $GLOBALS['wp_fts_test_posts'], 'authorized first sandbox render should not create posts');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'authorized first sandbox render should not write the legacy demo post option');
+    assert_same([], $fake->terms, 'authorized first sandbox render should not build FTS terms for generated content');
+    assert_true(!str_contains($html, 'Legacy sandbox demo posts detected'), 'clean sandbox render should not show the cleanup affordance');
     foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Customer-facing search behavior', 'Language handling'] as $groupLabel) {
         assert_contains($groupLabel, $settingsHtml, "settings tab should group controls by {$groupLabel}");
     }
@@ -3876,25 +3902,14 @@ test_case('authorized admin sandbox render includes search form and indexed post
     $oldPresetHeading = 'Suggested ' . 'queries';
     assert_true(!str_contains($html, $oldPresetHeading), 'sandbox page should not render the removed query-preset heading');
     assert_true(!str_contains($html, '<th scope="col">Query</th>'), 'sandbox page should not render a query-preset table column');
-    foreach ($demo as $case) {
-        assert_true(!str_contains($html, '<td><code>' . esc_html($case['query']) . '</code></td>'), "sandbox page should not render the {$case['lang']} preset query");
+    foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
+        assert_true(!str_contains($html, $signature['title']), "sandbox page should not render the legacy {$signature['title']} title");
     }
-    assert_contains('<th scope="col">Language</th>', $indexedHtml, 'indexed-post table should include a language column');
-    assert_contains('<th scope="col">Indexed length</th>', $indexedHtml, 'indexed-post table should include indexed token length');
-    assert_contains('<th scope="col">Indexed terms</th>', $indexedHtml, 'indexed-post table should include stored FTS terms');
-    assert_contains('<th scope="col">Content preview</th>', $indexedHtml, 'indexed-post table should include a content preview column');
-    assert_contains('Showing 1-10 of 11 indexed post(s).', $indexedHtml, 'indexed-post table should paginate the top-language demo corpus');
-    if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
-        assert_contains('Full morphology', $indexedHtml, 'indexed-content view should identify full morphology partitions');
-        assert_contains('English (en) - Full morphology', $indexedHtml, 'indexed-content view should align English indexed labels with the active base English pack');
-    } else {
-        assert_contains('Fixture morphology', $indexedHtml, 'indexed-content view should identify fixture morphology partitions when gzip is unavailable');
+    assert_contains('No indexed posts are available yet.', $indexedHtml, 'indexed-content tab should render an empty state instead of creating sample posts');
+    assert_true(!str_contains($indexedHtml, '<th scope="col">Language</th>'), 'empty indexed-content tab should not render a demo table');
+    foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
+        assert_true(!str_contains($indexedHtml, $signature['title']), "indexed-content tab should not list the legacy {$signature['title']} title");
     }
-    foreach (array_slice($demo, 0, 10) as $case) {
-        assert_contains($case['title'], $indexedHtml, "indexed-post table should list the {$case['lang']} demo title from index metadata");
-        assert_contains($case['preview'], $indexedHtml, "indexed-post table should preview the {$case['lang']} indexed content");
-    }
-    assert_true(!str_contains($indexedHtml, 'FTS Sandbox: Urdu Suffix Baseline'), 'first indexed-post page should keep the eleventh demo row on page two');
 });
 
 test_case('admin settings tabs honor sanitized tab URLs and render selected tab', function (): void {
@@ -4066,7 +4081,7 @@ test_case('settings page distinguishes en-US runtime fallback from sandbox Engli
     $analyzerHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
 
     assert_contains('Current site language English (en-US) uses conservative fallback for runtime site searches because no runtime analyzer pack covers it', $settingsHtml, 'site-language status should keep runtime fallback scope explicit for en-US when only sandbox has English');
-    assert_contains('Sandbox and indexed demo content can use English morphology through the active base-language analyzer pack English (en) for English dialects/locales', $settingsHtml, 'site-language status should explain sandbox English dialect coverage through the base en pack');
+    assert_contains('Sandbox searches can use English morphology through the active base-language analyzer pack English (en) for English dialects/locales', $settingsHtml, 'site-language status should explain sandbox English dialect coverage through the base en pack');
     assert_true(!str_contains($settingsHtml, 'full morphology is unavailable'), 'sandbox English coverage should not be described as unavailable for en-US');
     assert_true(!str_contains($settingsHtml, 'enable an analyzer pack'), 'sandbox English coverage should not mention a nonexistent enable control');
     assert_contains('English (en)', $analyzerHtml, 'analyzer packs table should list the sandbox base English pack');
@@ -4337,7 +4352,7 @@ test_case('unauthorized admin sandbox render is blocked safely', function (): vo
     assert_same([], $fake->terms, 'unauthorized sandbox render should not build FTS terms');
 });
 
-test_case('authorized admin sandbox POST actions require nonce before demo mutation', function (): void {
+test_case('authorized legacy sandbox POST actions fail closed without creating posts', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -4360,13 +4375,91 @@ test_case('authorized admin sandbox POST actions require nonce before demo mutat
         assert_same([], $GLOBALS['wp_fts_test_options'], 'bad nonce POST should not write demo options');
         assert_same([], $fake->terms, 'bad nonce POST should not build FTS terms');
 
+        foreach (['refresh_demo', 'index_demo'] as $legacyAction) {
+            $_POST = [
+                'wp_fts_sandbox_action' => $legacyAction,
+                'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
+            ];
+            $legacyHtml = wp_fts_test_capture_admin_sandbox();
+            assert_contains('Sandbox demo post creation is disabled.', $legacyHtml, "{$legacyAction} should report that demo post creation is disabled");
+            assert_same([], $GLOBALS['wp_fts_test_posts'], "{$legacyAction} should not create demo posts");
+            assert_same([], $GLOBALS['wp_fts_test_options'], "{$legacyAction} should not write demo options");
+            assert_same([], $fake->terms, "{$legacyAction} should not build FTS terms");
+        }
+
         $_POST = [
             'wp_fts_sandbox_action' => 'unsupported_demo_action',
+            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
         ];
-        wp_fts_test_capture_admin_sandbox();
+        $unsupportedHtml = wp_fts_test_capture_admin_sandbox();
+        assert_contains('Unsupported sandbox action. No changes were made.', $unsupportedHtml, 'unsupported POST action should report a fail-closed message');
         assert_same([], $GLOBALS['wp_fts_test_posts'], 'unsupported POST action should not fall through to auto-seed');
         assert_same([], $GLOBALS['wp_fts_test_options'], 'unsupported POST action should not write demo options');
         assert_same([], $fake->terms, 'unsupported POST action should not build FTS terms');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('legacy sandbox cleanup trashes only exact demo posts and clears option', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $makePost = static function (int $id, string $title, string $slug, string $status = 'publish'): object {
+        return (object) [
+            'ID' => $id,
+            'post_title' => $title,
+            'post_name' => $slug,
+            'post_content' => '<p>legacy cleanup fixture</p>',
+            'post_excerpt' => '',
+            'post_status' => $status,
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-12 00:00:00',
+        ];
+    };
+
+    try {
+        $signatures = wp_fts_test_legacy_sandbox_demo_signatures();
+        $GLOBALS['wp_fts_test_posts'][1001] = $makePost(1001, $signatures[0]['title'], $signatures[0]['slug']);
+        $GLOBALS['wp_fts_test_posts'][1002] = $makePost(1002, $signatures[1]['title'], $signatures[1]['slug']);
+        $GLOBALS['wp_fts_test_posts'][1003] = $makePost(1003, 'Customer Content Stored In Old Option', 'customer-content-stored-in-old-option');
+        $GLOBALS['wp_fts_test_posts'][1004] = $makePost(1004, 'FTS Sandbox: Customer Notes', 'customer-notes');
+        $GLOBALS['wp_fts_test_posts'][1005] = $makePost(1005, $signatures[2]['title'], $signatures[2]['slug'], 'trash');
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] = [1001, 1003, 1005];
+
+        $_POST = [];
+        $_GET = [];
+        $detectedHtml = wp_fts_test_capture_admin_settings_tab('settings');
+        assert_contains('Legacy sandbox demo posts detected.', $detectedHtml, 'settings page should detect exact legacy sandbox demo posts');
+        assert_contains('Move legacy sandbox demo posts to Trash', $detectedHtml, 'settings page should offer the cleanup action');
+        assert_contains('2 exact legacy post(s) found.', $detectedHtml, 'cleanup affordance should count only live exact legacy demo posts');
+        assert_contains('name="wp_fts_sandbox_action" value="cleanup_legacy_demo_posts"', $detectedHtml, 'cleanup action should use the sandbox POST action field');
+        assert_contains('name="wp_fts_sandbox_nonce"', $detectedHtml, 'cleanup action should include a nonce');
+
+        $_POST = [
+            'wp_fts_sandbox_action' => 'cleanup_legacy_demo_posts',
+            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
+        ];
+        $cleanupHtml = wp_fts_test_capture_admin_settings_tab('settings');
+
+        assert_contains('Moved 2 legacy sandbox demo post(s) to Trash.', $cleanupHtml, 'cleanup should report moved exact legacy posts');
+        assert_same([1001, 1002], $GLOBALS['wp_fts_test_trashed_posts'], 'cleanup should trash only exact live legacy demo posts');
+        assert_same('trash', $GLOBALS['wp_fts_test_posts'][1001]->post_status, 'stored exact legacy demo post should move to Trash');
+        assert_same('trash', $GLOBALS['wp_fts_test_posts'][1002]->post_status, 'title-detected exact legacy demo post should move to Trash');
+        assert_same('publish', $GLOBALS['wp_fts_test_posts'][1003]->post_status, 'unrelated post in the stored option should remain untouched');
+        assert_same('publish', $GLOBALS['wp_fts_test_posts'][1004]->post_status, 'same-prefix unrelated post should remain untouched');
+        assert_same('trash', $GLOBALS['wp_fts_test_posts'][1005]->post_status, 'already-trashed legacy post should remain trash without being processed');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'cleanup should clear the legacy sandbox demo post option');
+        assert_true(!str_contains($cleanupHtml, 'Move legacy sandbox demo posts to Trash'), 'cleanup affordance should disappear after cleanup clears live candidates');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -4443,83 +4536,7 @@ test_case('sandbox demo analyzer loads bundled UniMorph packs without changing r
     }
 });
 
-test_case('initial authorized sandbox page load auto-seeds and automatic demo searches use supported partitions', function (): void {
-    global $wpdb;
-
-    assert_or_pending(
-        WP_FTS_AnalyzerPackValidator::gzip_available(),
-        'gzip support should be available for bundled UniMorph sandbox demo searches',
-        'PHP zlib gzip support is unavailable, so bundled UniMorph sandbox demo searches are skipped.'
-    );
-
-    $oldWpdb = $wpdb ?? null;
-    $oldGet = $_GET;
-    $oldPost = $_POST;
-    $fake = new WP_FTS_Test_WPDB();
-    $wpdb = $fake;
-    wp_fts_test_reset_wordpress_fakes();
-    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
-
-    $render = static function (array $get = []): string {
-        $_POST = [];
-        $_GET = array_merge(['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG], $get);
-
-        return wp_fts_test_capture_admin_sandbox();
-    };
-    $search = static function (string $query, string $language = 'auto') use ($render): string {
-        return $render([
-            'wp_fts_sandbox_query' => $query,
-            'wp_fts_sandbox_lang' => $language,
-            'wp_fts_sandbox_search' => '1',
-        ]);
-    };
-
-    try {
-        $initialHtml = $render();
-        $demoPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
-        $demo = wp_fts_test_sandbox_demo_expectations();
-        assert_same(count($demo), count($demoPostIds), 'initial authorized page load should create the top-language demo posts without POST');
-        assert_contains('Demo posts and the full-text index are ready', $initialHtml, 'initial authorized page load should report the one-time auto-seed');
-        assert_true($fake->terms !== [], 'initial authorized page load should build the demo index without POST');
-        $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($demoPostIds);
-        foreach ($demo as $offset => $case) {
-            assert_same($case['lang'], $metadata[$demoPostIds[$offset]]['language'] ?? null, "auto-seeded {$case['lang']} demo metadata should be indexed");
-        }
-
-        $secondHtml = $render();
-        assert_true(!str_contains($secondHtml, 'Demo posts and the full-text index are ready'), 'ready sandbox should not repeat the first-load auto-seed notice');
-
-        foreach ($demo as $case) {
-            $html = $search($case['query']);
-            assert_contains('Requested query language: <code>auto</code>', $html, "automatic {$case['lang']} search should report auto request");
-            assert_contains('Resolved query language: <code>' . $case['lang'] . '</code>', $html, "automatic {$case['lang']} search should resolve from matching results");
-            assert_contains($case['title'], $html, "automatic {$case['lang']} search should find the seeded demo post");
-        }
-
-        $wpisHtml = $search('wpis');
-        assert_contains('Requested query language: <code>auto</code>', $wpisHtml, 'automatic wpis search should report auto request');
-        assert_contains('Resolved query language: <code>pl</code>', $wpisHtml, 'automatic wpis search should resolve from Polish results');
-        assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $wpisHtml, 'automatic wpis search should find the Polish demo post');
-        assert_contains('<mark>wpisy</mark>', $wpisHtml, 'automatic wpis search should highlight the pack-backed Polish document form');
-
-        $routeHtml = $search('kierować');
-        assert_contains('Resolved query language: <code>pl</code>', $routeHtml, 'automatic kierować search should resolve from Polish results');
-        assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $routeHtml, 'automatic kierować search should find the Polish demo post');
-        assert_contains('<mark>kierujemy</mark>', $routeHtml, 'automatic kierować search should highlight the pack-backed Polish document form');
-
-        $explicitEnglishWpisHtml = $search('wpis', 'en');
-        assert_contains('Requested query language: <code>en</code>', $explicitEnglishWpisHtml, 'explicit English wpis search should report the requested language');
-        assert_contains('Resolved query language: <code>en</code>', $explicitEnglishWpisHtml, 'explicit English wpis search should keep the requested partition authoritative');
-        assert_contains('No results matched the current index.', $explicitEnglishWpisHtml, 'explicit English wpis search should not leak into the Polish partition');
-        assert_true(!str_contains($explicitEnglishWpisHtml, '<td><code>pl</code></td>'), 'explicit English wpis search should not render a Polish result row');
-    } finally {
-        $_GET = $oldGet;
-        $_POST = $oldPost;
-        $wpdb = $oldWpdb;
-    }
-});
-
-test_case('sandbox demo post save immediately refreshes index with sandbox analyzer', function (): void {
+test_case('sandbox searches existing indexed content without creating demo posts', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -4530,61 +4547,35 @@ test_case('sandbox demo post save immediately refreshes index with sandbox analy
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
 
-    $render = static function (array $get = []): string {
-        $_POST = [];
-        $_GET = array_merge(['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG], $get);
-
-        return wp_fts_test_capture_admin_sandbox();
-    };
-
     try {
-        $render();
-        $demoPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
-        assert_same(count(wp_fts_test_sandbox_demo_expectations()), count($demoPostIds), 'sandbox save-hook regression should start from the seeded top-language demo posts');
-
-        $polishPostId = (int) $demoPostIds[1];
-        $polishPost = $GLOBALS['wp_fts_test_posts'][$polishPostId] ?? null;
-        assert_true(is_object($polishPost), 'sandbox save-hook regression should locate the Polish demo post');
-        $polishPost->post_content .= ' <p>Dopisane miastach powinno być widoczne od razu.</p>';
-        $GLOBALS['wp_fts_test_posts'][$polishPostId] = $polishPost;
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [$polishPostId];
-
-        WP_FTS_Plugin::handle_post_save($polishPostId, $polishPost, true);
-
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'sandbox demo post save should remove its stale background queue entry');
-        assert_true(isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'miasto')]), 'sandbox demo post save should index the edited Polish form through the lemmatizer pack');
-
-        $html = $render([
-            'wp_fts_sandbox_query' => 'miasto',
-            'wp_fts_sandbox_lang' => 'pl',
-            'wp_fts_sandbox_search' => '1',
-        ]);
-        assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $html, 'edited Polish demo content should be searchable immediately after the post-save hook');
-        assert_contains('<mark>miastach</mark>', $html, 'edited Polish demo content should highlight the matched inflected surface immediately');
-
-        $newPost = (object) [
+        $post = (object) [
             'ID' => 904,
-            'post_title' => 'Custom Polish Ocean',
-            'post_content' => '<p>Łódź oraz Wrocław opisują życie w oceanach.</p>',
+            'post_title' => 'Existing Indexed Sandbox Content',
+            'post_content' => '<p>existingneedle content is already on the site.</p>',
             'post_excerpt' => '',
             'post_status' => 'publish',
             'post_type' => 'post',
             'post_date_gmt' => '2026-06-12 00:00:00',
         ];
-        $GLOBALS['wp_fts_test_posts'][904] = $newPost;
+        $GLOBALS['wp_fts_test_posts'][904] = $post;
+        update_post_meta(904, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
+        WP_FTS_Plugin::handle_post_save(904, $post, true);
 
-        WP_FTS_Plugin::handle_post_save(904, $newPost, true);
-
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'new published posts should not wait for the background queue in the sandbox preview');
-        assert_true(isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'ocean')]), 'new published Polish posts should be indexed through the lemmatizer pack');
-
-        $newPostHtml = $render([
-            'wp_fts_sandbox_query' => 'ocean',
-            'wp_fts_sandbox_lang' => 'pl',
+        $_POST = [];
+        $_GET = [
+            'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
+            'wp_fts_sandbox_query' => 'existingneedle',
+            'wp_fts_sandbox_lang' => 'en',
             'wp_fts_sandbox_search' => '1',
-        ]);
-        assert_contains('Custom Polish Ocean', $newPostHtml, 'new published posts should be searchable immediately in the sandbox');
-        assert_contains('<mark>oceanach</mark>', $newPostHtml, 'new published posts should highlight matched inflected Polish surfaces immediately');
+        ];
+        $html = wp_fts_test_capture_admin_sandbox();
+        assert_contains('Search returned 1 result(s).', $html, 'sandbox should search the existing full-text index');
+        assert_contains('Existing Indexed Sandbox Content', $html, 'sandbox search should return existing indexed site content');
+        assert_same([904], array_keys($GLOBALS['wp_fts_test_posts']), 'sandbox search should not add demo posts alongside existing content');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'sandbox search should not write the legacy demo post option');
+        foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
+            assert_true(!str_contains($html, $signature['title']), "sandbox search should not render the legacy {$signature['title']} title");
+        }
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -4592,14 +4583,8 @@ test_case('sandbox demo post save immediately refreshes index with sandbox analy
     }
 });
 
-test_case('admin sandbox demo indexing supports requested and detected languages', function (): void {
+test_case('legacy sandbox demo cleanup moves exact posts to trash and leaves unrelated content', function (): void {
     global $wpdb;
-
-    assert_or_pending(
-        WP_FTS_AnalyzerPackValidator::gzip_available(),
-        'gzip support should be available for bundled UniMorph sandbox demo indexing',
-        'PHP zlib gzip support is unavailable, so bundled UniMorph sandbox demo indexing coverage is skipped.'
-    );
 
     $oldWpdb = $wpdb ?? null;
     $oldGet = $_GET;
@@ -4610,92 +4595,53 @@ test_case('admin sandbox demo indexing supports requested and detected languages
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
 
     try {
-        $_GET = [];
-        $_POST = [
-            'wp_fts_sandbox_action' => 'refresh_demo',
-            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
-        ];
-        $refreshHtml = wp_fts_test_capture_admin_sandbox();
-        $demoPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
-        $demo = wp_fts_test_sandbox_demo_expectations();
-        assert_same(count($demo), count($demoPostIds), 'refresh action should create the top-language demo posts');
-        assert_contains('Demo posts are ready', $refreshHtml, 'refresh action should report created demo posts');
-
-        $_POST = [
-            'wp_fts_sandbox_action' => 'index_demo',
-            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
-        ];
-        $indexHtml = wp_fts_test_capture_admin_sandbox();
-        assert_contains('Processed 11 demo post(s) into the full-text index.', $indexHtml, 'index action should report the processed demo corpus');
-        assert_true($fake->terms !== [], 'index action should write FTS terms for the demo corpus');
-        $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($demoPostIds);
-        foreach ($demo as $offset => $case) {
-            assert_same($case['lang'], $metadata[$demoPostIds[$offset]]['language'] ?? null, "index action should forward {$case['lang']} demo language metadata");
-        }
-        $polishSearchLemma = WP_FTS_TermNamespace::namespace_term('pl', 'wyszukiwac');
-        $polishEntryLemma = WP_FTS_TermNamespace::namespace_term('pl', 'wpis');
-        $polishRouteLemma = WP_FTS_TermNamespace::namespace_term('pl', 'kierowac');
-        $polishCastleLemma = WP_FTS_TermNamespace::namespace_term('pl', 'zamek');
-        assert_true(isset($fake->terms[$polishSearchLemma]), 'sandbox indexing should store the Polish lemmatizer-pack search lemma');
-        assert_true(isset($fake->terms[$polishEntryLemma]), 'sandbox indexing should store the Polish lemmatizer-pack entry lemma');
-        assert_true(isset($fake->terms[$polishRouteLemma]), 'sandbox indexing should store the Polish lemmatizer-pack routing lemma');
-        assert_true(isset($fake->terms[$polishCastleLemma]), 'sandbox indexing should store the Polish lemmatizer-pack castle lemma');
-        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'wyszukujemy')]), 'sandbox indexing should not store the exact Polish document search surface');
-        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'wyszukiwanie')]), 'sandbox indexing should not store the exact Polish query search surface');
-        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'wpisy')]), 'sandbox indexing should not store the exact Polish document entry surface');
-        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'wpisach')]), 'sandbox indexing should not store the exact Polish query entry surface');
-        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'kierujemy')]), 'sandbox indexing should not store the exact Polish document routing surface');
-        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'zamkach')]), 'sandbox indexing should not store the exact Polish document castle surface');
-        assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'wyszuk')]), 'sandbox indexing should not depend on the removed verified-stemmer search family');
-
-        $search = static function (string $query, string $language): string {
-            $_POST = [];
-            $_GET = [
-                'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
-                'wp_fts_sandbox_query' => $query,
-                'wp_fts_sandbox_lang' => $language,
-                'wp_fts_sandbox_search' => '1',
-            ];
-
-            return wp_fts_test_capture_admin_sandbox();
-        };
-
-        foreach ($demo as $case) {
-            $html = $search($case['query'], $case['lang']);
-            assert_contains('Search returned', $html, "explicit {$case['lang']} search action should report result count");
-            assert_contains('Requested query language: <code>' . $case['lang'] . '</code>', $html, "explicit {$case['lang']} search should report the requested language");
-            assert_contains('Resolved query language: <code>' . $case['lang'] . '</code>', $html, "explicit {$case['lang']} search should report the resolved language");
-            assert_contains($case['title'], $html, "explicit {$case['lang']} search should find the seeded demo post");
-        }
-
-        $polishHtml = $search('zamek', 'pl');
-        assert_contains('Requested query language: <code>pl</code>', $polishHtml, 'explicit Polish search should report the requested language');
-        assert_contains('Resolved query language: <code>pl</code>', $polishHtml, 'explicit Polish search should report the resolved language');
-        assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $polishHtml, 'explicit Polish search should find the Polish demo post through a castle lemma query');
-
         foreach ([
-            'wyszukiwanie' => 'pack-backed Polish lemmatizer should match wyszukiwanie to the wyszukujemy demo post',
-            'wpis' => 'pack-backed Polish lemmatizer should match the wpis lemma to the wpisy demo post',
-            'wpisach' => 'pack-backed Polish lemmatizer should match an entry form absent from the demo text',
-            'kierować' => 'pack-backed Polish lemmatizer should match a routing infinitive to kierujemy',
-        ] as $query => $message) {
-            $polishMorphologyHtml = $search($query, 'pl');
-            assert_contains('Requested query language: <code>pl</code>', $polishMorphologyHtml, 'explicit Polish morphology search should report the requested language for ' . $query);
-            assert_contains('Resolved query language: <code>pl</code>', $polishMorphologyHtml, 'explicit Polish morphology search should report the resolved language for ' . $query);
-            assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $polishMorphologyHtml, $message);
-            if ($query === 'wyszukiwanie') {
-                assert_contains('<mark>wyszukujemy</mark>', $polishMorphologyHtml, 'sandbox results should mark the finite document search form for wyszukiwanie');
-            } elseif ($query === 'wpis') {
-                assert_contains('<mark>wpisy</mark>', $polishMorphologyHtml, 'sandbox results should mark the plural document entry form for wpis');
-                assert_true(!str_contains($polishMorphologyHtml, '<mark>wpis</mark>y'), 'sandbox results should not split the Polish entry document form');
-            }
+            100 => ['FTS Sandbox: English Mice', 'wp-fts-sandbox-english-mice', 'publish'],
+            101 => ['FTS Sandbox: Polish Lemmatizer Demo', 'wp-fts-sandbox-polish-lemmatizer-demo', 'draft'],
+            102 => ['FTS Sandbox: Personal Research', 'wp-fts-sandbox-english-mice', 'publish'],
+            103 => ['Unrelated Stored Option Post', 'unrelated-stored-option-post', 'publish'],
+            104 => ['FTS Sandbox: French Chercher', 'wp-fts-sandbox-french-chercher', 'publish'],
+        ] as $post_id => $post_data) {
+            [$title, $slug, $status] = $post_data;
+            $post = (object) [
+                'ID' => $post_id,
+                'post_title' => $title,
+                'post_name' => $slug,
+                'post_content' => '<p>legacy cleanup safety fixture ' . $post_id . '</p>',
+                'post_excerpt' => '',
+                'post_status' => $status,
+                'post_type' => 'post',
+                'post_date_gmt' => '2026-06-12 00:00:00',
+            ];
+            $GLOBALS['wp_fts_test_posts'][$post_id] = $post;
+            WP_FTS_Plugin::handle_post_save($post_id, $post, true);
         }
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] = [100, 101, 102, 103];
 
-        $autoHtml = $search('książkach zamkach', 'auto');
-        assert_contains('Requested query language: <code>auto</code>', $autoHtml, 'automatic search should report the requested language');
-        assert_contains('Resolved query language: <code>pl</code>', $autoHtml, 'automatic non-English search should report the detected language');
-        assert_contains('FTS Sandbox: Polish Lemmatizer Demo', $autoHtml, 'automatic Polish search should find the Polish demo post');
-        assert_true(!str_contains($autoHtml, 'Resolved query language: <code>en</code>'), 'automatic non-English search should not hard-code English as the resolved language');
+        $_POST = [];
+        $_GET = [];
+        $promptHtml = wp_fts_test_capture_admin_settings_tab('settings');
+        assert_contains('Legacy sandbox demo posts detected.', $promptHtml, 'settings page should show cleanup affordance when exact legacy demo posts are detectable');
+        assert_contains('3 exact legacy post(s) found.', $promptHtml, 'cleanup affordance should count exact legacy posts from stored IDs and exact-title discovery');
+        assert_contains('Move legacy sandbox demo posts to Trash', $promptHtml, 'cleanup affordance should expose the trash action');
+
+        $_POST = [
+            'wp_fts_sandbox_action' => 'cleanup_legacy_demo_posts',
+            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
+        ];
+        $_GET = [];
+        $cleanupHtml = wp_fts_test_capture_admin_settings_tab('settings');
+        assert_contains('Moved 3 legacy sandbox demo post(s) to Trash.', $cleanupHtml, 'cleanup action should report moved exact legacy posts');
+        assert_true(!str_contains($cleanupHtml, 'Legacy sandbox demo posts detected.'), 'cleanup affordance should disappear after cleanup');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'cleanup action should clear the legacy demo post option');
+
+        sort($GLOBALS['wp_fts_test_trashed_posts'], SORT_NUMERIC);
+        assert_same([100, 101, 104], $GLOBALS['wp_fts_test_trashed_posts'], 'cleanup should trash exact legacy posts from stored IDs and exact-title discovery');
+        assert_same('trash', $GLOBALS['wp_fts_test_posts'][100]->post_status ?? null, 'stored exact English legacy post should be moved to trash');
+        assert_same('trash', $GLOBALS['wp_fts_test_posts'][101]->post_status ?? null, 'stored exact Polish legacy post should be moved to trash');
+        assert_same('trash', $GLOBALS['wp_fts_test_posts'][104]->post_status ?? null, 'exact French legacy post should be found without the stored option');
+        assert_same('publish', $GLOBALS['wp_fts_test_posts'][102]->post_status ?? null, 'same-prefix custom post should be left untouched');
+        assert_same('publish', $GLOBALS['wp_fts_test_posts'][103]->post_status ?? null, 'unrelated option-listed post should be left untouched');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -4720,24 +4666,6 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
 
         return wp_fts_test_capture_admin_settings_tab('indexed-content');
     };
-    $refreshDemo = static function (): string {
-        $_GET = [];
-        $_POST = [
-            'wp_fts_sandbox_action' => 'refresh_demo',
-            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
-        ];
-
-        return wp_fts_test_capture_admin_sandbox();
-    };
-    $indexDemo = static function (): string {
-        $_GET = [];
-        $_POST = [
-            'wp_fts_sandbox_action' => 'index_demo',
-            'wp_fts_sandbox_nonce' => wp_create_nonce('wp_fts_sandbox_admin_action'),
-        ];
-
-        return wp_fts_test_capture_admin_sandbox();
-    };
 
     try {
         for ($i = 1; $i <= 12; $i++) {
@@ -4758,42 +4686,23 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
         wp_fts_test_capture_admin_sandbox();
 
         $pageTwoHtml = $renderIndexed(['wp_fts_sandbox_posts_page' => '2']);
-        assert_contains('Showing 11-20 of 23 indexed post(s).', $pageTwoHtml, 'sandbox indexed-post table should paginate storage-derived rows');
-        assert_contains('Page 2 of 3', $pageTwoHtml, 'sandbox indexed-post table should render page count');
+        assert_contains('Showing 11-12 of 12 indexed post(s).', $pageTwoHtml, 'sandbox indexed-post table should paginate storage-derived rows');
+        assert_contains('Page 2 of 2', $pageTwoHtml, 'sandbox indexed-post table should render page count');
         assert_contains('Previous', $pageTwoHtml, 'sandbox indexed-post table should link back to the first page');
-        assert_contains('Next', $pageTwoHtml, 'sandbox indexed-post table should link forward when more storage rows remain');
-        assert_contains('FTS Sandbox: Urdu Suffix Baseline', $pageTwoHtml, 'second indexed-post page should include the eleventh demo row');
-        assert_contains('Custom Indexed 1', $pageTwoHtml, 'second indexed-post page should include the first non-demo storage row');
-        assert_contains('Custom Indexed 9', $pageTwoHtml, 'second indexed-post page should include non-demo storage rows up to the page limit');
-        assert_true(!str_contains($pageTwoHtml, 'Custom Indexed 10'), 'second indexed-post page should not leak third-page rows');
-        assert_true(!str_contains($pageTwoHtml, 'FTS Sandbox: English Mice'), 'second indexed-post page should prove pagination is active');
+        assert_true(!str_contains($pageTwoHtml, 'Next'), 'last indexed-post page should not link beyond the available storage rows');
+        assert_contains('Custom Indexed 11', $pageTwoHtml, 'second indexed-post page should include the eleventh custom storage row');
+        assert_contains('Custom Indexed 12', $pageTwoHtml, 'second indexed-post page should include the twelfth custom storage row');
+        assert_true(!str_contains($pageTwoHtml, '<td>Custom Indexed 1</td>'), 'second indexed-post page should not leak first-page rows');
         assert_true(!str_contains($pageTwoHtml, 'Create or refresh demo posts'), 'paginated sandbox page should still hide manual demo refresh controls');
         assert_true(!str_contains($pageTwoHtml, 'Build demo index'), 'paginated sandbox page should still hide manual demo index controls');
+        assert_true(!str_contains($pageTwoHtml, 'Move legacy sandbox demo posts to Trash'), 'paginated sandbox page should not show cleanup when no legacy demo posts exist');
 
         $pageOneHtml = $renderIndexed(['wp_fts_sandbox_posts_page' => '1']);
-        assert_contains('FTS Sandbox: English Mice', $pageOneHtml, 'first indexed-post page should list the auto-seeded demo index row');
-        assert_contains('FTS Sandbox: Indonesian Abadi', $pageOneHtml, 'first indexed-post page should include demo rows up to the page limit');
-        assert_true(!str_contains($pageOneHtml, 'FTS Sandbox: Urdu Suffix Baseline'), 'first indexed-post page should not leak the second demo page row');
-        assert_true(!str_contains($pageOneHtml, 'Custom Indexed 1'), 'first indexed-post page should not leak second-page custom rows');
-
-        $initialPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
-        $demo = wp_fts_test_sandbox_demo_expectations();
-        assert_same(count($demo), count($initialPostIds), 'sandbox render should create the top-language demo posts automatically');
-        unset($GLOBALS['wp_fts_test_posts'][$initialPostIds[0]]);
-
-        $secondRefreshHtml = $refreshDemo();
-        $refreshedPostIds = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] ?? [];
-        assert_same(count($demo), count($refreshedPostIds), 'manual-compatible refresh action should still track the top-language demo posts');
-        assert_contains('Demo posts are ready', $secondRefreshHtml, 'manual-compatible refresh action should report recreated demo posts');
-        assert_true($refreshedPostIds[0] !== $initialPostIds[0], 'missing English demo post should be recreated with a new ID');
-
-        $indexHtml = $indexDemo();
-        assert_contains('Processed 11 demo post(s) into the full-text index.', $indexHtml, 'manual-compatible index action should process the refreshed demo corpus');
-        assert_true(!str_contains($indexHtml, 'name="wp_fts_sandbox_action"'), 'manual-compatible action responses should still not render action controls');
-        $metadata = WP_FTS_Plugin::storage(false)->get_doc_metadata($refreshedPostIds);
-        foreach ($demo as $offset => $case) {
-            assert_same($case['lang'], $metadata[$refreshedPostIds[$offset]]['language'] ?? null, "index action should align {$case['lang']} demo metadata");
-            assert_same($case['lang'], $fake->docs[$refreshedPostIds[$offset]]['lang'] ?? null, "index action should use {$case['lang']} options for the demo document");
+        assert_contains('<td>Custom Indexed 1</td>', $pageOneHtml, 'first indexed-post page should list the first custom row');
+        assert_contains('<td>Custom Indexed 10</td>', $pageOneHtml, 'first indexed-post page should include custom rows up to the page limit');
+        assert_true(!str_contains($pageOneHtml, 'Custom Indexed 11'), 'first indexed-post page should not leak second-page custom rows');
+        foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
+            assert_true(!str_contains($pageOneHtml, $signature['title']), "first indexed-post page should not include the legacy {$signature['title']} title");
         }
     } finally {
         $_GET = $oldGet;

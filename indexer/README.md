@@ -14,11 +14,12 @@ engine; this plugin owns WordPress hooks, post extraction, MySQL storage, admin
 UI, WP-CLI, REST/search integration, and Playground packaging.
 
 The Playground preview opens the admin-only Settings > Full-Text Search
-Sandbox tab. The sandbox prepares demo posts and indexes them automatically,
-shows indexed posts with pagination, lets you run language-aware searches, and
-indexes new or updated published posts when they are saved. Playground is useful
-for trying the workflow quickly; production validation still needs a real
-WordPress/MySQL environment.
+Sandbox tab. The sandbox searches content already present in the full-text
+index and never creates demo posts or hidden sample content. It shows indexed
+posts with pagination, lets you run language-aware searches, and indexes new or
+updated published posts when they are saved. Playground is useful for trying
+the workflow quickly; production validation still needs a real WordPress/MySQL
+environment.
 
 The plugin does not use MySQL `FULLTEXT`, replaces normal front-end main-query
 search and eligible wp-admin Posts list searches with ranked FTS results by
