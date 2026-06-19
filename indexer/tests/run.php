@@ -3744,6 +3744,44 @@ function wp_fts_test_capture_admin_settings_tab(?string $tab = null): string
     }
 }
 
+/**
+ * @param array<string,mixed> $post
+ * @param array<string,mixed> $get
+ * @return array{raw:string,payload:array<string,mixed>}
+ */
+function wp_fts_test_capture_sandbox_details_ajax(array $post, array $get = []): array
+{
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $oldAjax = $GLOBALS['wp_fts_test_is_ajax'] ?? false;
+    $_GET = $get;
+    $_POST = $post;
+    $GLOBALS['wp_fts_test_is_ajax'] = true;
+
+    ob_start();
+    try {
+        WP_FTS_Plugin::handle_sandbox_result_details_ajax();
+        $raw = (string) ob_get_clean();
+    } catch (Throwable $e) {
+        ob_end_clean();
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $GLOBALS['wp_fts_test_is_ajax'] = $oldAjax;
+        throw $e;
+    }
+
+    $_GET = $oldGet;
+    $_POST = $oldPost;
+    $GLOBALS['wp_fts_test_is_ajax'] = $oldAjax;
+
+    $payload = json_decode($raw, true);
+    if (!is_array($payload)) {
+        throw new WP_FTS_TestFailure('Sandbox detail AJAX did not return JSON: ' . $raw);
+    }
+
+    return ['raw' => $raw, 'payload' => $payload];
+}
+
 function wp_fts_test_prepared_sql_count(WP_FTS_Test_WPDB $wpdb, string $prefix): int
 {
     $count = 0;
@@ -3913,6 +3951,7 @@ PHP;
         'transition_post_status',
         'trashed_post',
         'wp_after_insert_post',
+        'wp_ajax_wp_fts_sandbox_result_details',
     ];
     sort($expectedHooks, SORT_STRING);
     assert_same($expectedHooks, $hooks, 'bootstrap should register bounded runtime hooks in WordPress context');
@@ -4719,7 +4758,15 @@ test_case('sandbox passes search knobs to Searcher options', function (): void {
         assert_true(!str_contains($html, 'Alpha Beta Draft'), 'sandbox post status filter should exclude drafts');
         assert_true(!str_contains($html, 'Older Alpha Beta Post'), 'sandbox date filters should exclude old content');
         assert_true(!str_contains($html, 'Alpha Only Post'), 'sandbox AND mode should require all query terms');
-        assert_true(!str_contains($html, '<mark>'), 'sandbox highlight toggle should reach snippet generation');
+        assert_contains('Loading excerpt...', $html, 'sandbox should defer snippet rendering to the detail request');
+
+        $detailRequest = $_GET;
+        $detailRequest['wp_fts_sandbox_details_nonce'] = wp_create_nonce('wp_fts_sandbox_result_details');
+        $detailRequest['wp_fts_sandbox_post_ids'] = '621';
+        $detail = wp_fts_test_capture_sandbox_details_ajax($detailRequest);
+        $snippet = (string) ($detail['payload']['data']['rows']['621']['snippet_html'] ?? '');
+        assert_true($snippet !== '', 'sandbox detail request should return a snippet for the visible row');
+        assert_true(!str_contains($snippet, '<mark>'), 'sandbox highlight toggle should reach async snippet generation');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -4846,12 +4893,19 @@ test_case('admin sandbox indexed terms expose stored Polish lemmas for split inl
         assert_contains('<span class="description">Hidden</span>', $defaultIndexedHtml, 'indexed-post diagnostics should avoid hydrating stored terms by default');
         assert_true(!str_contains($defaultIndexedHtml, '<code>pl:chrzastka</code>'), 'default indexed-post diagnostics should not load stored Polish terms');
         assert_contains('Custom Polish Split Surface', $html, 'sandbox search should find the post with split inline Polish text');
+        assert_contains('Loading excerpt...', $html, 'sandbox search should defer the split inline highlight to async details');
         assert_contains('Hide indexed terms', $indexedHtml, 'explicit indexed-term debug mode should expose a way back to the fast default view');
         assert_contains('<code>pl:chrzastka</code>', $indexedHtml, 'indexed terms should show the stored Polish lemma for chrząstki');
         assert_contains('<code>pl:chrzastek</code>', $indexedHtml, 'indexed terms should show the alternate stored Polish lemma for chrząstki');
         assert_contains('Full morphology', $indexedHtml, 'indexed content should flag the Polish partition as full morphology when the pack is active');
-        assert_contains('<mark>chr', $html, 'sandbox search should highlight the matched split surface');
-        assert_contains('ząs', $html, 'sandbox search highlight should include the formatted middle of the split surface');
+        assert_true(!str_contains($html, '<mark>chr'), 'initial sandbox search should not block on split inline highlighting');
+        $detailRequest = $_GET;
+        $detailRequest['wp_fts_sandbox_details_nonce'] = wp_create_nonce('wp_fts_sandbox_result_details');
+        $detailRequest['wp_fts_sandbox_post_ids'] = '901';
+        $detail = wp_fts_test_capture_sandbox_details_ajax($detailRequest);
+        $snippet = (string) ($detail['payload']['data']['rows']['901']['snippet_html'] ?? '');
+        assert_contains('<mark>chr', $snippet, 'sandbox detail AJAX should highlight the matched split surface');
+        assert_contains('ząs', $snippet, 'sandbox detail AJAX highlight should include the formatted middle of the split surface');
         assert_true(!isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'chrząstki')]), 'sandbox diagnostics should reflect stored lemmas rather than hard-coded Polish surface forms');
     } finally {
         $_GET = $oldGet;
@@ -5111,6 +5165,163 @@ test_case('sandbox searches existing indexed content without creating demo posts
         foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
             assert_true(!str_contains($html, $signature['title']), "sandbox search should not render the legacy {$signature['title']} title");
         }
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin sandbox progressive render defers snippets and debug terms', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    try {
+        $post = (object) [
+            'ID' => 914,
+            'post_title' => 'Progressive Sandbox Content',
+            'post_content' => '<p>progressiveneedle content has visible detail text.</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-12 00:00:00',
+        ];
+        $GLOBALS['wp_fts_test_posts'][914] = $post;
+        update_post_meta(914, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
+        WP_FTS_Plugin::handle_post_save(914, $post, true);
+
+        $fake->prepared = [];
+        $_POST = [];
+        $_GET = [
+            'page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG,
+            'wp_fts_sandbox_query' => 'progressiveneedle',
+            'wp_fts_sandbox_lang' => 'en',
+            'wp_fts_sandbox_search' => '1',
+            'wp_fts_sandbox_show_indexed_terms' => '1',
+        ];
+        $html = wp_fts_test_capture_admin_sandbox();
+
+        assert_contains('Progressive Sandbox Content', $html, 'initial sandbox render should keep the result row visible');
+        assert_contains('data-wp-fts-detail="snippet"', $html, 'initial sandbox render should mark snippet cells for async loading');
+        assert_contains('Loading excerpt...', $html, 'initial sandbox render should show an excerpt placeholder');
+        assert_contains('<th scope="col">Indexed terms</th>', $html, 'explicit debug mode should add an indexed terms column');
+        assert_contains('Loading indexed terms...', $html, 'explicit debug mode should defer indexed terms behind a placeholder');
+        assert_contains('wp_fts_sandbox_details_nonce', $html, 'initial sandbox render should expose a nonce for async detail loading');
+        assert_true(!str_contains($html, '<mark>progressiveneedle</mark>'), 'initial sandbox render should not compute highlighted snippets');
+        assert_same(0, wp_fts_test_prepared_sql_count($fake, 'SELECT doc_id, lang, doc_len, content_hash, is_deleted FROM wp_fts_docs'), 'initial sandbox render should not hydrate documents for snippet generation');
+        assert_same(0, wp_fts_test_prepared_sql_count($fake, 'SELECT term FROM wp_fts_postings WHERE doc_id = %d'), 'initial sandbox render should not hydrate stored terms even in explicit debug mode');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin sandbox detail ajax requires capability and nonce', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $basePost = [
+        'wp_fts_sandbox_details_nonce' => wp_create_nonce('wp_fts_sandbox_result_details'),
+        'wp_fts_sandbox_post_ids' => '914',
+        'wp_fts_sandbox_query' => 'progressiveneedle',
+        'wp_fts_sandbox_lang' => 'en',
+        'wp_fts_sandbox_search' => '1',
+    ];
+
+    try {
+        $unauthorized = wp_fts_test_capture_sandbox_details_ajax($basePost);
+        assert_same(false, $unauthorized['payload']['success'] ?? null, 'detail AJAX should reject users without manage_options');
+        assert_same(403, $unauthorized['payload']['data']['status'] ?? null, 'detail AJAX unauthorized response should use HTTP-forbidden status metadata');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $badNonce = $basePost;
+        $badNonce['wp_fts_sandbox_details_nonce'] = 'bad';
+        $forged = wp_fts_test_capture_sandbox_details_ajax($badNonce);
+        assert_same(false, $forged['payload']['success'] ?? null, 'detail AJAX should reject a bad nonce');
+        assert_same(403, $forged['payload']['data']['status'] ?? null, 'detail AJAX bad nonce response should use HTTP-forbidden status metadata');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin sandbox detail ajax returns sanitized snippets and explicit debug terms', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    try {
+        $post = (object) [
+            'ID' => 915,
+            'post_title' => 'Async Detail Sandbox Content',
+            'post_content' => '<p>progressiveneedle <strong>safe detail</strong><script>alert(1)</script></p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-12 00:00:00',
+        ];
+        $GLOBALS['wp_fts_test_posts'][915] = $post;
+        update_post_meta(915, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
+        WP_FTS_Plugin::handle_post_save(915, $post, true);
+
+        $request = [
+            'wp_fts_sandbox_details_nonce' => wp_create_nonce('wp_fts_sandbox_result_details'),
+            'wp_fts_sandbox_post_ids' => '915,999999',
+            'wp_fts_sandbox_query' => 'progressiveneedle',
+            'wp_fts_sandbox_lang' => 'en',
+            'wp_fts_sandbox_search' => '1',
+            'wp_fts_sandbox_mode' => 'OR',
+            'wp_fts_sandbox_limit' => '10',
+            'wp_fts_sandbox_snippet_length' => '180',
+            'wp_fts_sandbox_highlight' => '1',
+            'wp_fts_sandbox_prefix_matching' => '1',
+            'wp_fts_sandbox_language_fallback' => '1',
+            'wp_fts_sandbox_post_type' => ['post'],
+            'wp_fts_sandbox_post_status' => ['publish'],
+        ];
+
+        $fake->prepared = [];
+        $withoutTerms = wp_fts_test_capture_sandbox_details_ajax($request);
+        assert_same(true, $withoutTerms['payload']['success'] ?? null, 'detail AJAX should return a success payload for an authorized nonce-protected request');
+        $rows = $withoutTerms['payload']['data']['rows'] ?? [];
+        assert_true(is_array($rows), 'detail AJAX should return rows keyed by post id');
+        assert_true(isset($rows['915']), 'detail AJAX should return the requested visible row');
+        assert_true(!isset($rows['999999']), 'detail AJAX should not return unrequested or non-result details');
+        $snippet = (string) ($rows['915']['snippet_html'] ?? '');
+        assert_contains('<mark>progressiveneedle</mark>', $snippet, 'detail AJAX should return a highlighted snippet');
+        assert_contains('safe detail', $snippet, 'detail AJAX should preserve safe visible snippet text');
+        assert_true(!str_contains($snippet, '<script'), 'detail AJAX should strip unsafe snippet markup');
+        assert_true(!array_key_exists('indexed_terms', $rows['915']), 'detail AJAX should omit stored terms unless debug mode is explicit');
+        assert_true(wp_fts_test_prepared_sql_count($fake, 'SELECT doc_id, lang, doc_len, content_hash, is_deleted FROM wp_fts_docs') > 0, 'detail AJAX should do snippet document hydration after initial render');
+
+        $withTermsRequest = $request;
+        $withTermsRequest['wp_fts_sandbox_show_indexed_terms'] = '1';
+        $withTerms = wp_fts_test_capture_sandbox_details_ajax($withTermsRequest);
+        $termRows = $withTerms['payload']['data']['rows'] ?? [];
+        assert_true(is_array($termRows['915']['indexed_terms'] ?? null), 'explicit debug detail AJAX should return indexed terms');
+        $matchingTerms = array_filter(
+            $termRows['915']['indexed_terms'],
+            static fn(mixed $term): bool => is_string($term) && str_starts_with($term, 'en:progressiveneed')
+        );
+        assert_true($matchingTerms !== [], 'explicit debug detail AJAX should return stored English terms for the visible row');
+        assert_same(false, $termRows['915']['indexed_terms_more'] ?? null, 'short explicit debug term list should not report overflow');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;

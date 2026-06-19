@@ -71,6 +71,10 @@ final class WP_FTS_Plugin
     private const ADMIN_POST_STATUS_FIELD = 'wp_fts_sandbox_post_status';
     private const ADMIN_DATE_AFTER_FIELD = 'wp_fts_sandbox_date_after';
     private const ADMIN_DATE_BEFORE_FIELD = 'wp_fts_sandbox_date_before';
+    private const ADMIN_DETAILS_NONCE_ACTION = 'wp_fts_sandbox_result_details';
+    private const ADMIN_DETAILS_NONCE_FIELD = 'wp_fts_sandbox_details_nonce';
+    private const ADMIN_DETAILS_POST_IDS_FIELD = 'wp_fts_sandbox_post_ids';
+    private const ADMIN_AJAX_SANDBOX_DETAILS_ACTION = 'wp_fts_sandbox_result_details';
     private const SETTINGS_GROUP = 'wp_fts_settings';
     private const POST_LANGUAGE_FIELD = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_ACTION = 'wp_fts_post_language';
@@ -159,6 +163,7 @@ final class WP_FTS_Plugin
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
         add_action('admin_init', [self::class, 'maybe_redirect_after_activation'], 1, 0);
         add_action('admin_init', [self::class, 'register_settings'], 10, 0);
+        add_action('wp_ajax_' . self::ADMIN_AJAX_SANDBOX_DETAILS_ACTION, [self::class, 'handle_sandbox_result_details_ajax'], 10, 0);
         add_action('add_meta_boxes', [self::class, 'register_language_meta_box'], 10, 0);
         add_action('save_post', [self::class, 'save_post_language_override'], 5, 3);
         add_action('pre_get_posts', [self::class, 'prepare_frontend_search_query'], self::SEARCH_REPLACEMENT_PRIORITY, 1);
@@ -715,6 +720,45 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Load slow Sandbox result details after the fast result rows are visible.
+     */
+    public static function handle_sandbox_result_details_ajax(): void
+    {
+        $source = array_replace($_GET, $_POST);
+        if (!self::can_manage_admin_sandbox()) {
+            self::send_admin_json_error('You do not have permission to load Sandbox result details.', 403);
+            return;
+        }
+
+        if (!self::verify_sandbox_details_nonce($source)) {
+            self::send_admin_json_error('The Sandbox detail request could not be verified. Reload the page and try again.', 403);
+            return;
+        }
+
+        $query = self::sandbox_search_query_from_source($source);
+        $post_ids = self::request_id_list_value($source, self::ADMIN_DETAILS_POST_IDS_FIELD, self::MAX_SEARCH_LIMIT);
+        if ($query === '' || $post_ids === []) {
+            self::send_admin_json_error('The Sandbox detail request is missing a query or result row.', 400);
+            return;
+        }
+
+        try {
+            $rows = self::sandbox_result_details(
+                $query,
+                self::sandbox_selected_language_from_source($source),
+                self::sandbox_search_controls_from_source($source, true),
+                $post_ids,
+                self::sandbox_indexed_terms_debug_enabled_from_source($source)
+            );
+        } catch (Throwable $e) {
+            self::send_admin_json_error('Could not load Sandbox result details.', 500);
+            return;
+        }
+
+        self::send_admin_json_success(['rows' => $rows]);
+    }
+
+    /**
      * Current admin user gate for all sandbox rendering and actions.
      */
     private static function can_manage_admin_sandbox(): bool
@@ -1087,6 +1131,9 @@ final class WP_FTS_Plugin
         echo '.wp-fts-sandbox-advanced-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 18px;margin-top:10px;}';
         echo '.wp-fts-sandbox-advanced-grid fieldset{border:0;margin:0;padding:0;}';
         echo '.wp-fts-sandbox-advanced-grid p{margin:.35em 0;}';
+        echo '.wp-fts-sandbox-detail-pending .spinner{float:none;margin:0 4px 0 0;vertical-align:middle;}';
+        echo '.wp-fts-sandbox-detail-error{color:#8c2e0b;}';
+        echo '.wp-fts-sandbox-indexed-terms code{margin-right:4px;}';
         echo '@media (max-width:600px){.wp-fts-health-table th{width:auto}.wp-fts-sandbox-compact-controls{display:block}.wp-fts-sandbox-field{margin:0 0 10px}.wp-fts-sandbox-field input[type=search]{min-width:0;width:100%;}}';
         echo '</style>';
     }
@@ -1433,11 +1480,18 @@ final class WP_FTS_Plugin
             $state['query'],
             $state['selected_language'],
             $state['controls'],
-            $state['search_submitted']
+            $state['search_submitted'],
+            $state['show_indexed_terms']
         );
 
         if ($state['search_submitted']) {
-            self::render_sandbox_results($state['results']);
+            self::render_sandbox_results(
+                $state['results'],
+                $state['query'],
+                $state['selected_language'],
+                $state['controls'],
+                $state['show_indexed_terms']
+            );
         }
     }
 
@@ -1483,6 +1537,7 @@ final class WP_FTS_Plugin
      *   selected_language:string,
      *   search_submitted:bool,
      *   controls:array<string,mixed>,
+     *   show_indexed_terms:bool,
      *   results:array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
      * }
      */
@@ -1494,6 +1549,7 @@ final class WP_FTS_Plugin
         $query = self::sandbox_search_query();
         $selected_language = self::sandbox_selected_language();
         $controls = self::sandbox_search_controls($search_submitted);
+        $show_indexed_terms = self::sandbox_indexed_terms_debug_enabled();
 
         $results = self::empty_sandbox_search_results($selected_language);
         if ($search_submitted) {
@@ -1515,6 +1571,7 @@ final class WP_FTS_Plugin
             'selected_language' => $selected_language,
             'search_submitted' => $search_submitted,
             'controls' => $controls,
+            'show_indexed_terms' => $show_indexed_terms,
             'results' => $results,
         ];
     }
@@ -1535,23 +1592,43 @@ final class WP_FTS_Plugin
      */
     private static function sandbox_search_controls(bool $search_submitted): array
     {
+        return self::sandbox_search_controls_from_source($_GET, $search_submitted);
+    }
+
+    /**
+     * @param array<string,mixed> $source
+     * @return array{
+     *   mode:string,
+     *   limit:int,
+     *   snippet_length:int,
+     *   highlight:bool,
+     *   prefix_matching:bool,
+     *   language_fallback:bool,
+     *   post_types:string[],
+     *   post_statuses:string[],
+     *   date_after:string,
+     *   date_before:string
+     * }
+     */
+    private static function sandbox_search_controls_from_source(array $source, bool $search_submitted): array
+    {
         $settings = self::settings();
-        $mode = strtoupper(self::request_text_value($_GET, self::ADMIN_MODE_FIELD, 10));
+        $mode = strtoupper(self::request_text_value($source, self::ADMIN_MODE_FIELD, 10));
         if (!in_array($mode, ['OR', 'AND'], true)) {
             $mode = $settings['match_mode'];
         }
 
         return [
             'mode' => $mode,
-            'limit' => self::clamp_int(self::request_text_value($_GET, self::ADMIN_LIMIT_FIELD, 8) ?: $settings['result_limit'], 1, self::MAX_SEARCH_LIMIT),
-            'snippet_length' => self::clamp_int(self::request_text_value($_GET, self::ADMIN_SNIPPET_LENGTH_FIELD, 8) ?: $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
-            'highlight' => self::request_bool_value($_GET, self::ADMIN_HIGHLIGHT_FIELD, $settings['highlight'], $search_submitted),
-            'prefix_matching' => self::request_bool_value($_GET, self::ADMIN_PREFIX_MATCHING_FIELD, $settings['prefix_matching'], $search_submitted),
-            'language_fallback' => self::request_bool_value($_GET, self::ADMIN_LANGUAGE_FALLBACK_FIELD, $settings['language_fallback'], $search_submitted),
-            'post_types' => self::request_list_value($_GET, self::ADMIN_POST_TYPE_FIELD, self::settings_post_type_choices(), $settings['index_post_types']),
-            'post_statuses' => self::request_list_value($_GET, self::ADMIN_POST_STATUS_FIELD, self::sandbox_post_status_choices(), self::sandbox_post_status_choices()),
-            'date_after' => self::sanitize_date_filter(self::request_text_value($_GET, self::ADMIN_DATE_AFTER_FIELD, 20)),
-            'date_before' => self::sanitize_date_filter(self::request_text_value($_GET, self::ADMIN_DATE_BEFORE_FIELD, 20)),
+            'limit' => self::clamp_int(self::request_text_value($source, self::ADMIN_LIMIT_FIELD, 8) ?: $settings['result_limit'], 1, self::MAX_SEARCH_LIMIT),
+            'snippet_length' => self::clamp_int(self::request_text_value($source, self::ADMIN_SNIPPET_LENGTH_FIELD, 8) ?: $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
+            'highlight' => self::request_bool_value($source, self::ADMIN_HIGHLIGHT_FIELD, $settings['highlight'], $search_submitted),
+            'prefix_matching' => self::request_bool_value($source, self::ADMIN_PREFIX_MATCHING_FIELD, $settings['prefix_matching'], $search_submitted),
+            'language_fallback' => self::request_bool_value($source, self::ADMIN_LANGUAGE_FALLBACK_FIELD, $settings['language_fallback'], $search_submitted),
+            'post_types' => self::request_list_value($source, self::ADMIN_POST_TYPE_FIELD, self::settings_post_type_choices(), $settings['index_post_types']),
+            'post_statuses' => self::request_list_value($source, self::ADMIN_POST_STATUS_FIELD, self::sandbox_post_status_choices(), self::sandbox_post_status_choices()),
+            'date_after' => self::sanitize_date_filter(self::request_text_value($source, self::ADMIN_DATE_AFTER_FIELD, 20)),
+            'date_before' => self::sanitize_date_filter(self::request_text_value($source, self::ADMIN_DATE_BEFORE_FIELD, 20)),
         ];
     }
 
@@ -1935,6 +2012,19 @@ final class WP_FTS_Plugin
         return wp_verify_nonce($nonce, self::ADMIN_NONCE_ACTION) !== false;
     }
 
+    /**
+     * @param array<string,mixed> $source
+     */
+    private static function verify_sandbox_details_nonce(array $source): bool
+    {
+        $nonce = self::request_text_value($source, self::ADMIN_DETAILS_NONCE_FIELD, 200);
+        if ($nonce === '' || !function_exists('wp_verify_nonce')) {
+            return false;
+        }
+
+        return wp_verify_nonce($nonce, self::ADMIN_DETAILS_NONCE_ACTION) !== false;
+    }
+
     private static function health_post_action(): string
     {
         $action = self::sanitize_key(self::request_text_value($_POST, self::ADMIN_HEALTH_ACTION_FIELD, 40));
@@ -2009,7 +2099,15 @@ final class WP_FTS_Plugin
      */
     private static function sandbox_search_query(): string
     {
-        return self::request_text_value($_GET, self::ADMIN_QUERY_FIELD, 200);
+        return self::sandbox_search_query_from_source($_GET);
+    }
+
+    /**
+     * @param array<string,mixed> $source
+     */
+    private static function sandbox_search_query_from_source(array $source): string
+    {
+        return self::request_text_value($source, self::ADMIN_QUERY_FIELD, 200);
     }
 
     /**
@@ -2017,7 +2115,15 @@ final class WP_FTS_Plugin
      */
     private static function sandbox_selected_language(): string
     {
-        $language = self::sanitize_key(self::request_text_value($_GET, self::ADMIN_LANG_FIELD, 20));
+        return self::sandbox_selected_language_from_source($_GET);
+    }
+
+    /**
+     * @param array<string,mixed> $source
+     */
+    private static function sandbox_selected_language_from_source(array $source): string
+    {
+        $language = self::sanitize_key(self::request_text_value($source, self::ADMIN_LANG_FIELD, 20));
 
         return array_key_exists($language, self::sandbox_query_language_labels()) ? $language : 'auto';
     }
@@ -2116,7 +2222,7 @@ final class WP_FTS_Plugin
      * @param array<string,mixed> $controls
      * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
      */
-    private static function sandbox_search_results(string $query, string $selected_language, array $controls = []): array
+    private static function sandbox_search_results(string $query, string $selected_language, array $controls = [], bool $include_snippets = false): array
     {
         $settings = self::settings();
         $limit = self::clamp_int($controls['limit'] ?? $settings['result_limit'], 1, self::MAX_SEARCH_LIMIT);
@@ -2131,7 +2237,7 @@ final class WP_FTS_Plugin
             'limit' => $limit,
             'include_total' => true,
             'include_metadata' => true,
-            'include_snippets' => true,
+            'include_snippets' => $include_snippets,
             'highlight' => (bool) ($controls['highlight'] ?? $settings['highlight']),
             'prefix_matching' => (bool) ($controls['prefix_matching'] ?? $settings['prefix_matching']),
             'snippet_length' => self::clamp_int($controls['snippet_length'] ?? $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
@@ -2855,7 +2961,7 @@ final class WP_FTS_Plugin
      *   date_before:string
      * } $controls
      */
-    private static function render_sandbox_search_form(string $query, string $selected_language, array $controls, bool $search_submitted): void
+    private static function render_sandbox_search_form(string $query, string $selected_language, array $controls, bool $search_submitted, bool $show_indexed_terms): void
     {
         echo '<h2>Sandbox</h2>';
         echo '<p>Try a query against the same index and saved settings this plugin uses elsewhere. Changes here affect only this test search.</p>';
@@ -2904,6 +3010,12 @@ final class WP_FTS_Plugin
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HIGHLIGHT_FIELD) . '" value="0">';
         echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_HIGHLIGHT_FIELD) . '" value="1"' . ($controls['highlight'] ? ' checked="checked"' : '') . '> On</label>';
         echo '<p class="description">Highlights matching words inside generated excerpts.</p>';
+        echo '</fieldset>';
+
+        echo '<fieldset><legend class="wp-fts-sandbox-option-label">Indexed terms</legend>';
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_SHOW_INDEXED_TERMS_FIELD) . '" value="0">';
+        echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_SHOW_INDEXED_TERMS_FIELD) . '" value="1"' . ($show_indexed_terms ? ' checked="checked"' : '') . '> Show stored indexed terms</label>';
+        echo '<p class="description">Loads stored term diagnostics after result rows render.</p>';
         echo '</fieldset>';
 
         echo '<fieldset><legend class="wp-fts-sandbox-option-label">Word beginnings</legend>';
@@ -3032,7 +3144,7 @@ final class WP_FTS_Plugin
     /**
      * @param array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>} $results
      */
-    private static function render_sandbox_results(array $results): void
+    private static function render_sandbox_results(array $results, string $query, string $selected_language, array $controls, bool $show_indexed_terms): void
     {
         echo '<h2>Results</h2>';
         echo '<p>Requested query language: <code>' . self::esc_html($results['requested_lang']) . '</code>. ';
@@ -3042,19 +3154,186 @@ final class WP_FTS_Plugin
             return;
         }
 
-        echo '<table class="widefat striped">';
-        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Score</th><th scope="col">Language</th><th scope="col">Search result excerpt</th></tr></thead>';
+        echo '<table class="widefat striped wp-fts-sandbox-results" data-wp-fts-sandbox-details="1"';
+        echo ' data-ajax-url="' . self::esc_attr(self::admin_ajax_url()) . '"';
+        echo ' data-action="' . self::esc_attr(self::ADMIN_AJAX_SANDBOX_DETAILS_ACTION) . '"';
+        echo ' data-nonce="' . self::esc_attr(self::create_admin_nonce(self::ADMIN_DETAILS_NONCE_ACTION)) . '"';
+        echo ' data-query="' . self::esc_attr($query) . '"';
+        echo ' data-lang="' . self::esc_attr($selected_language) . '"';
+        echo ' data-mode="' . self::esc_attr((string) $controls['mode']) . '"';
+        echo ' data-limit="' . self::esc_attr((string) $controls['limit']) . '"';
+        echo ' data-snippet-length="' . self::esc_attr((string) $controls['snippet_length']) . '"';
+        echo ' data-highlight="' . self::esc_attr(!empty($controls['highlight']) ? '1' : '0') . '"';
+        echo ' data-prefix-matching="' . self::esc_attr(!empty($controls['prefix_matching']) ? '1' : '0') . '"';
+        echo ' data-language-fallback="' . self::esc_attr(!empty($controls['language_fallback']) ? '1' : '0') . '"';
+        echo ' data-post-types="' . self::esc_attr(implode(',', array_map('strval', $controls['post_types'] ?? []))) . '"';
+        echo ' data-post-statuses="' . self::esc_attr(implode(',', array_map('strval', $controls['post_statuses'] ?? []))) . '"';
+        echo ' data-date-after="' . self::esc_attr((string) ($controls['date_after'] ?? '')) . '"';
+        echo ' data-date-before="' . self::esc_attr((string) ($controls['date_before'] ?? '')) . '"';
+        echo ' data-show-indexed-terms="' . self::esc_attr($show_indexed_terms ? '1' : '0') . '">';
+        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Score</th><th scope="col">Language</th><th scope="col">Search result excerpt</th>';
+        if ($show_indexed_terms) {
+            echo '<th scope="col">Indexed terms</th>';
+        }
+        echo '</tr></thead>';
         echo '<tbody>';
         foreach ($results['results'] as $row) {
+            $post_id = max(0, (int) $row['post_id']);
             echo '<tr>';
-            echo '<td>' . self::esc_html((string) $row['post_id']) . '</td>';
+            echo '<td>' . self::esc_html((string) $post_id) . '</td>';
             echo '<td>' . self::esc_html($row['title']) . '</td>';
             echo '<td>' . self::esc_html(number_format($row['score'], 6, '.', '')) . '</td>';
             echo '<td><code>' . self::esc_html($row['language']) . '</code></td>';
-            echo '<td>' . self::esc_html_preserving_marks($row['snippet']) . '</td>';
+            echo '<td class="wp-fts-sandbox-detail-cell wp-fts-sandbox-snippet-cell wp-fts-sandbox-detail-pending" data-wp-fts-detail="snippet" data-post-id="' . self::esc_attr((string) $post_id) . '">';
+            echo '<span class="spinner is-active" aria-hidden="true"></span> <span class="description">Loading excerpt...</span>';
+            echo '</td>';
+            if ($show_indexed_terms) {
+                echo '<td class="wp-fts-sandbox-detail-cell wp-fts-sandbox-terms-cell wp-fts-sandbox-detail-pending" data-wp-fts-detail="terms" data-post-id="' . self::esc_attr((string) $post_id) . '">';
+                echo '<span class="spinner is-active" aria-hidden="true"></span> <span class="description">Loading indexed terms...</span>';
+                echo '</td>';
+            }
             echo '</tr>';
         }
         echo '</tbody></table>';
+        self::render_sandbox_result_details_script();
+    }
+
+    private static function render_sandbox_result_details_script(): void
+    {
+        echo <<<'JS'
+<script>
+(function() {
+    'use strict';
+
+    var table = document.querySelector('.wp-fts-sandbox-results[data-wp-fts-sandbox-details="1"]');
+    if (!table || !window.fetch || !window.FormData) {
+        return;
+    }
+
+    var snippetCells = Array.prototype.slice.call(table.querySelectorAll('[data-wp-fts-detail="snippet"]'));
+    var termCells = Array.prototype.slice.call(table.querySelectorAll('[data-wp-fts-detail="terms"]'));
+    var detailCells = snippetCells.concat(termCells);
+    if (detailCells.length === 0) {
+        return;
+    }
+
+    var postIds = [];
+    detailCells.forEach(function(cell) {
+        var postId = cell.getAttribute('data-post-id') || '';
+        if (postId !== '' && postIds.indexOf(postId) === -1) {
+            postIds.push(postId);
+        }
+    });
+    if (postIds.length === 0) {
+        return;
+    }
+
+    function splitData(name) {
+        return (table.getAttribute('data-' + name) || '').split(',').filter(function(value) {
+            return value !== '';
+        });
+    }
+
+    function appendValue(formData, field, attr) {
+        formData.append(field, table.getAttribute(attr) || '');
+    }
+
+    function setCellMessage(cell, message, className) {
+        cell.classList.remove('wp-fts-sandbox-detail-pending');
+        if (className) {
+            cell.classList.add(className);
+        }
+        cell.textContent = message;
+    }
+
+    function fail(message) {
+        detailCells.forEach(function(cell) {
+            setCellMessage(cell, message, 'wp-fts-sandbox-detail-error');
+        });
+    }
+
+    var formData = new FormData();
+    appendValue(formData, 'action', 'data-action');
+    appendValue(formData, 'wp_fts_sandbox_details_nonce', 'data-nonce');
+    appendValue(formData, 'wp_fts_sandbox_query', 'data-query');
+    appendValue(formData, 'wp_fts_sandbox_lang', 'data-lang');
+    appendValue(formData, 'wp_fts_sandbox_mode', 'data-mode');
+    appendValue(formData, 'wp_fts_sandbox_limit', 'data-limit');
+    appendValue(formData, 'wp_fts_sandbox_snippet_length', 'data-snippet-length');
+    appendValue(formData, 'wp_fts_sandbox_highlight', 'data-highlight');
+    appendValue(formData, 'wp_fts_sandbox_prefix_matching', 'data-prefix-matching');
+    appendValue(formData, 'wp_fts_sandbox_language_fallback', 'data-language-fallback');
+    appendValue(formData, 'wp_fts_sandbox_date_after', 'data-date-after');
+    appendValue(formData, 'wp_fts_sandbox_date_before', 'data-date-before');
+    appendValue(formData, 'wp_fts_sandbox_show_indexed_terms', 'data-show-indexed-terms');
+    formData.append('wp_fts_sandbox_search', '1');
+    formData.append('wp_fts_sandbox_post_ids', postIds.join(','));
+    splitData('post-types').forEach(function(postType) {
+        formData.append('wp_fts_sandbox_post_type[]', postType);
+    });
+    splitData('post-statuses').forEach(function(postStatus) {
+        formData.append('wp_fts_sandbox_post_status[]', postStatus);
+    });
+
+    fetch(table.getAttribute('data-ajax-url') || '', {
+        method: 'POST',
+        credentials: 'same-origin',
+        body: formData
+    }).then(function(response) {
+        return response.json();
+    }).then(function(payload) {
+        if (!payload || payload.success !== true || !payload.data || !payload.data.rows) {
+            throw new Error('bad_response');
+        }
+
+        var rows = payload.data.rows;
+        snippetCells.forEach(function(cell) {
+            var postId = cell.getAttribute('data-post-id') || '';
+            var row = rows[postId] || null;
+            cell.classList.remove('wp-fts-sandbox-detail-pending');
+            if (!row) {
+                setCellMessage(cell, 'Could not load excerpt.', 'wp-fts-sandbox-detail-error');
+                return;
+            }
+            cell.innerHTML = row.snippet_html || '<span class="description">No excerpt available.</span>';
+        });
+
+        termCells.forEach(function(cell) {
+            var postId = cell.getAttribute('data-post-id') || '';
+            var row = rows[postId] || null;
+            cell.classList.remove('wp-fts-sandbox-detail-pending');
+            cell.classList.add('wp-fts-sandbox-indexed-terms');
+            if (!row || !Array.isArray(row.indexed_terms)) {
+                setCellMessage(cell, 'Could not load indexed terms.', 'wp-fts-sandbox-detail-error');
+                return;
+            }
+            cell.textContent = '';
+            if (row.indexed_terms.length === 0) {
+                var empty = document.createElement('span');
+                empty.setAttribute('aria-hidden', 'true');
+                empty.textContent = '-';
+                cell.appendChild(empty);
+                return;
+            }
+            row.indexed_terms.forEach(function(term) {
+                var code = document.createElement('code');
+                code.textContent = term;
+                cell.appendChild(code);
+                cell.appendChild(document.createTextNode(' '));
+            });
+            if (row.indexed_terms_more) {
+                var more = document.createElement('span');
+                more.className = 'description';
+                more.textContent = '...';
+                cell.appendChild(more);
+            }
+        });
+    }).catch(function() {
+        fail('Could not load details.');
+    });
+})();
+</script>
+JS;
     }
 
     private static function render_sandbox_notice(string $type, string $message): void
@@ -3081,7 +3360,15 @@ final class WP_FTS_Plugin
 
     private static function sandbox_indexed_terms_debug_enabled(): bool
     {
-        return self::request_bool_value($_GET, self::ADMIN_SHOW_INDEXED_TERMS_FIELD, false, true);
+        return self::sandbox_indexed_terms_debug_enabled_from_source($_GET);
+    }
+
+    /**
+     * @param array<string,mixed> $source
+     */
+    private static function sandbox_indexed_terms_debug_enabled_from_source(array $source): bool
+    {
+        return self::request_bool_value($source, self::ADMIN_SHOW_INDEXED_TERMS_FIELD, false, true);
     }
 
     /**
@@ -3519,6 +3806,40 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * @param array<string,mixed> $controls
+     * @param int[] $post_ids
+     * @return array<string,array<string,mixed>>
+     */
+    private static function sandbox_result_details(string $query, string $selected_language, array $controls, array $post_ids, bool $include_indexed_terms): array
+    {
+        $requested = array_fill_keys($post_ids, true);
+        $storage = self::storage(false);
+        $details = [];
+        $results = self::sandbox_search_results($query, $selected_language, $controls, true);
+
+        foreach ($results['results'] as $row) {
+            $post_id = max(0, (int) ($row['post_id'] ?? 0));
+            if ($post_id <= 0 || !isset($requested[$post_id])) {
+                continue;
+            }
+
+            $detail = [
+                'snippet_html' => self::sanitize_frontend_snippet_html((string) ($row['snippet'] ?? '')),
+            ];
+
+            if ($include_indexed_terms) {
+                $terms = WP_FTS_StorageCompat::terms_for_doc($storage, $post_id, self::SANDBOX_INDEXED_TERMS_LIMIT + 1);
+                $detail['indexed_terms'] = self::sandbox_indexed_terms_for_display(array_slice($terms, 0, self::SANDBOX_INDEXED_TERMS_LIMIT));
+                $detail['indexed_terms_more'] = count($terms) > self::SANDBOX_INDEXED_TERMS_LIMIT;
+            }
+
+            $details[(string) $post_id] = $detail;
+        }
+
+        return $details;
+    }
+
+    /**
      * Normalize a raw searcher row for sandbox display.
      *
      * @param array<string,mixed> $row
@@ -3528,13 +3849,11 @@ final class WP_FTS_Plugin
     {
         $metadata = WP_FTS_StorageCompat::get_doc_metadata($storage, [$post_id]);
         $meta = $metadata[$post_id] ?? [];
-        $doc = $storage->get_doc($post_id);
         $language = '';
         foreach ([
             $row['language'] ?? null,
             $meta['language'] ?? null,
             $meta['lang'] ?? null,
-            $doc['primary_lang'] ?? null,
         ] as $candidate) {
             if (is_scalar($candidate) && trim((string) $candidate) !== '') {
                 $language = (string) $candidate;
@@ -3547,7 +3866,7 @@ final class WP_FTS_Plugin
             : self::post_title($post_id);
         $snippet = is_scalar($row['snippet'] ?? null) && trim((string) $row['snippet']) !== ''
             ? (string) $row['snippet']
-            : (string) ($meta['search_text'] ?? $meta['excerpt'] ?? '');
+            : '';
 
         return [
             'post_id' => $post_id,
@@ -3560,16 +3879,21 @@ final class WP_FTS_Plugin
 
     private static function render_sandbox_nonce_field(): void
     {
-        $nonce = function_exists('wp_create_nonce') ? (string) wp_create_nonce(self::ADMIN_NONCE_ACTION) : '';
+        $nonce = self::create_admin_nonce(self::ADMIN_NONCE_ACTION);
 
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
     }
 
     private static function render_health_nonce_field(): void
     {
-        $nonce = function_exists('wp_create_nonce') ? (string) wp_create_nonce(self::ADMIN_HEALTH_NONCE_ACTION) : '';
+        $nonce = self::create_admin_nonce(self::ADMIN_HEALTH_NONCE_ACTION);
 
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
+    }
+
+    private static function create_admin_nonce(string $action): string
+    {
+        return function_exists('wp_create_nonce') ? (string) wp_create_nonce($action) : '';
     }
 
     private static function admin_page_url(string $tab = self::ADMIN_HEALTH_TAB): string
@@ -3586,6 +3910,11 @@ final class WP_FTS_Plugin
     private static function admin_options_url(): string
     {
         return function_exists('admin_url') ? (string) admin_url('options.php') : 'options.php';
+    }
+
+    private static function admin_ajax_url(): string
+    {
+        return function_exists('admin_url') ? (string) admin_url('admin-ajax.php') : 'admin-ajax.php';
     }
 
     private static function admin_options_general_url(): string
@@ -6039,6 +6368,40 @@ WHERE p.post_password = ''
         return $selected;
     }
 
+    /**
+     * @param array<string,mixed> $source
+     * @return int[]
+     */
+    private static function request_id_list_value(array $source, string $key, int $max): array
+    {
+        if (!array_key_exists($key, $source)) {
+            return [];
+        }
+
+        $value = $source[$key];
+        if (function_exists('wp_unslash')) {
+            $value = wp_unslash($value);
+        }
+
+        $raw_items = is_array($value) ? $value : preg_split('/[,\s]+/', (string) $value);
+        $items = [];
+        foreach (is_array($raw_items) ? $raw_items : [] as $item) {
+            if (!is_scalar($item)) {
+                continue;
+            }
+            $item = trim((string) $item);
+            if (preg_match('/^[1-9][0-9]*$/', $item) !== 1) {
+                continue;
+            }
+            $items[(int) $item] = true;
+            if (count($items) >= $max) {
+                break;
+            }
+        }
+
+        return array_keys($items);
+    }
+
     private static function sanitize_date_filter(string $date): string
     {
         $date = trim($date);
@@ -6349,6 +6712,56 @@ WHERE p.post_password = ''
             'message' => $message,
             'data' => ['status' => $status],
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     */
+    private static function send_admin_json_success(array $data, int $status = 200): void
+    {
+        if (function_exists('wp_send_json_success')) {
+            wp_send_json_success($data, $status);
+            return;
+        }
+
+        self::send_admin_json(['success' => true, 'data' => $data], $status);
+    }
+
+    private static function send_admin_json_error(string $message, int $status): void
+    {
+        if (function_exists('wp_send_json_error')) {
+            wp_send_json_error(['message' => $message, 'status' => $status], $status);
+            return;
+        }
+
+        self::send_admin_json([
+            'success' => false,
+            'data' => [
+                'message' => self::sanitize_text($message),
+                'status' => $status,
+            ],
+        ], $status);
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     */
+    private static function send_admin_json(array $payload, int $status): void
+    {
+        if (function_exists('status_header')) {
+            status_header($status);
+        }
+        if (function_exists('nocache_headers')) {
+            nocache_headers();
+        }
+        if (!headers_sent()) {
+            header('Content-Type: application/json; charset=UTF-8', true, $status);
+        }
+
+        $json = function_exists('wp_json_encode')
+            ? wp_json_encode($payload)
+            : json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        echo is_string($json) ? $json : '{"success":false,"data":{"message":"Could not encode JSON response.","status":500}}';
     }
 
     /**
