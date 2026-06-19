@@ -103,6 +103,30 @@ final class WP_FTS_StorageCompat
     }
 
     /**
+     * Return stored term keys that start with a namespaced prefix.
+     *
+     * Backends with native prefix support can use indexed range reads. Legacy
+     * blob-backed stores fall back to their sorted term list, which is
+     * acceptable for in-process/file indexes and keeps the extension optional.
+     *
+     * @return string[] Sorted stored term keys, capped to `$limit`.
+     */
+    public static function terms_with_prefix(WP_FTS_Storage $storage, string $prefix, int $limit): array
+    {
+        $prefix = (string) $prefix;
+        $limit = max(1, (int) $limit);
+        if ($prefix === '') {
+            return [];
+        }
+
+        if ($storage instanceof WP_FTS_Prefix_Term_Storage) {
+            return self::normalize_prefix_terms($storage->terms_with_prefix($prefix, $limit), $prefix, $limit);
+        }
+
+        return self::normalize_prefix_terms($storage->all_terms(), $prefix, $limit);
+    }
+
+    /**
      * Detect whether a backend accepts language-aware document payloads.
      *
      * @return bool True when `put_doc()` has the new four-argument shape and
@@ -344,6 +368,24 @@ final class WP_FTS_StorageCompat
         }
 
         return true;
+    }
+
+    /**
+     * @param string[] $terms
+     * @return string[]
+     */
+    private static function normalize_prefix_terms(array $terms, string $prefix, int $limit): array
+    {
+        $limit = max(1, (int) $limit);
+        $matched = [];
+        foreach (array_unique(array_map('strval', $terms)) as $term) {
+            if (str_starts_with($term, $prefix)) {
+                $matched[] = $term;
+            }
+        }
+        sort($matched, SORT_STRING);
+
+        return array_slice($matched, 0, $limit);
     }
 
     /**

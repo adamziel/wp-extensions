@@ -7,7 +7,7 @@ declare(strict_types=1);
  * The backend stores binary postings as base64 in a versioned JSON payload,
  * supports snapshot rollback, and persists immediately outside transactions.
  */
-final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage
+final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Prefix_Term_Storage
 {
     private string $path;
 
@@ -287,6 +287,31 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetada
     {
         $terms = array_keys($this->terms);
         sort($terms, SORT_STRING);
+
+        return $terms;
+    }
+
+    /**
+     * Return stored term keys that start with a namespaced prefix.
+     *
+     * @return string[]
+     */
+    public function terms_with_prefix(string $prefix, int $limit): array
+    {
+        $limit = max(1, (int) $limit);
+        if ($prefix === '') {
+            return [];
+        }
+
+        $terms = [];
+        foreach ($this->all_terms() as $term) {
+            if (str_starts_with($term, $prefix)) {
+                $terms[] = $term;
+                if (count($terms) >= $limit) {
+                    break;
+                }
+            }
+        }
 
         return $terms;
     }
