@@ -54,6 +54,7 @@ final class WP_FTS_Plugin
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
     private const ADMIN_POSTS_PAGE_FIELD = 'wp_fts_sandbox_posts_page';
+    private const ADMIN_SHOW_INDEXED_TERMS_FIELD = 'wp_fts_sandbox_show_indexed_terms';
     private const ADMIN_TAB_FIELD = 'tab';
     private const ADMIN_HEALTH_TAB = 'health';
     private const ADMIN_SETTINGS_TAB = 'settings';
@@ -113,6 +114,31 @@ final class WP_FTS_Plugin
     private static array $front_end_search_loop_stack = [];
 
     private static int $front_end_search_active_query_key = 0;
+
+    /**
+     * @var array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>|null
+     */
+    private static ?array $runtime_analyzer_pack_statuses_cache = null;
+
+    /**
+     * @var array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>|null
+     */
+    private static ?array $sandbox_demo_analyzer_pack_statuses_cache = null;
+
+    /**
+     * @var array<string,array{label:string,full:bool,reason:string,matched_language:string}>
+     */
+    private static array $language_support_details_cache = [];
+
+    /**
+     * Clear request-scoped caches for test harnesses and same-request option changes.
+     */
+    public static function reset_request_caches(): void
+    {
+        self::$runtime_analyzer_pack_statuses_cache = null;
+        self::$sandbox_demo_analyzer_pack_statuses_cache = null;
+        self::$language_support_details_cache = [];
+    }
 
     /**
      * Register runtime hooks when WordPress hook APIs are available.
@@ -1418,8 +1444,9 @@ final class WP_FTS_Plugin
     private static function render_indexed_content_tab(): void
     {
         $messages = [];
+        $show_indexed_terms = self::sandbox_indexed_terms_debug_enabled();
         try {
-            $indexed_posts = self::sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
+            $indexed_posts = self::sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number(), $show_indexed_terms);
         } catch (Throwable $e) {
             $messages[] = ['error', 'Could not read indexed posts: ' . $e->getMessage()];
             $indexed_posts = self::empty_sandbox_indexed_posts_page(self::sandbox_indexed_posts_page_number());
@@ -1434,7 +1461,8 @@ final class WP_FTS_Plugin
             $indexed_posts,
             self::sandbox_search_query(),
             self::sandbox_selected_language(),
-            self::sandbox_search_submitted()
+            self::sandbox_search_submitted(),
+            $show_indexed_terms
         );
     }
 
@@ -2317,7 +2345,11 @@ final class WP_FTS_Plugin
      */
     public static function runtime_analyzer_pack_statuses(): array
     {
-        return self::analyzer_pack_statuses(self::raw_runtime_analyzer_options());
+        if (self::$runtime_analyzer_pack_statuses_cache === null) {
+            self::$runtime_analyzer_pack_statuses_cache = self::analyzer_pack_statuses(self::raw_runtime_analyzer_options());
+        }
+
+        return self::$runtime_analyzer_pack_statuses_cache;
     }
 
     /**
@@ -2327,7 +2359,11 @@ final class WP_FTS_Plugin
      */
     public static function sandbox_demo_analyzer_pack_statuses(): array
     {
-        return self::analyzer_pack_statuses(self::raw_sandbox_demo_analyzer_options());
+        if (self::$sandbox_demo_analyzer_pack_statuses_cache === null) {
+            self::$sandbox_demo_analyzer_pack_statuses_cache = self::analyzer_pack_statuses(self::raw_sandbox_demo_analyzer_options());
+        }
+
+        return self::$sandbox_demo_analyzer_pack_statuses_cache;
     }
 
     /**
@@ -2943,7 +2979,7 @@ final class WP_FTS_Plugin
     /**
      * @param array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,indexed_terms:string[],indexed_terms_more:bool,preview:string}>} $page
      */
-    private static function render_sandbox_indexed_posts_table(array $page, string $query, string $selected_language, bool $search_submitted): void
+    private static function render_sandbox_indexed_posts_table(array $page, string $query, string $selected_language, bool $search_submitted, bool $show_indexed_terms): void
     {
         if ($page['total'] <= 0) {
             echo '<p>No indexed posts are available yet.</p>';
@@ -2953,6 +2989,11 @@ final class WP_FTS_Plugin
         $start = (($page['page'] - 1) * $page['per_page']) + 1;
         $end = min($page['total'], $start + count($page['rows']) - 1);
         echo '<p>Showing ' . self::esc_html((string) $start) . '-' . self::esc_html((string) $end) . ' of ' . self::esc_html((string) $page['total']) . ' indexed post(s).</p>';
+        if ($show_indexed_terms) {
+            echo '<p><a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'], $query, $selected_language, $search_submitted, false)) . '">Hide indexed terms</a></p>';
+        } else {
+            echo '<p><a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'], $query, $selected_language, $search_submitted, true)) . '">Show indexed terms</a> <span class="description">Loads stored terms for the visible rows.</span></p>';
+        }
 
         echo '<table class="widefat striped">';
         echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Language</th><th scope="col">Indexed length</th><th scope="col">Indexed terms</th><th scope="col">Content preview</th></tr></thead>';
@@ -2966,7 +3007,7 @@ final class WP_FTS_Plugin
             echo '<td>' . self::esc_html($row['language']) . '</td>';
             echo '<td>' . self::esc_html((string) $row['length']) . '</td>';
             echo '<td>';
-            self::render_sandbox_indexed_terms($row['indexed_terms'], $row['indexed_terms_more']);
+            self::render_sandbox_indexed_terms($row['indexed_terms'], $row['indexed_terms_more'], $show_indexed_terms);
             echo '</td>';
             echo '<td>' . self::esc_html($row['preview']) . '</td>';
             echo '</tr>';
@@ -2980,10 +3021,10 @@ final class WP_FTS_Plugin
         echo '<p class="tablenav-pages">';
         echo '<span class="displaying-num">Page ' . self::esc_html((string) $page['page']) . ' of ' . self::esc_html((string) $page['total_pages']) . '</span> ';
         if ($page['page'] > 1) {
-            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] - 1, $query, $selected_language, $search_submitted)) . '">Previous</a> ';
+            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] - 1, $query, $selected_language, $search_submitted, $show_indexed_terms)) . '">Previous</a> ';
         }
         if ($page['page'] < $page['total_pages']) {
-            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] + 1, $query, $selected_language, $search_submitted)) . '">Next</a>';
+            echo '<a class="button" href="' . self::esc_url(self::sandbox_indexed_posts_page_url($page['page'] + 1, $query, $selected_language, $search_submitted, $show_indexed_terms)) . '">Next</a>';
         }
         echo '</p>';
     }
@@ -3038,6 +3079,11 @@ final class WP_FTS_Plugin
         return max(1, (int) $raw);
     }
 
+    private static function sandbox_indexed_terms_debug_enabled(): bool
+    {
+        return self::request_bool_value($_GET, self::ADMIN_SHOW_INDEXED_TERMS_FIELD, false, true);
+    }
+
     /**
      * @return array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,indexed_terms:string[],indexed_terms_more:bool,preview:string}>}
      */
@@ -3057,7 +3103,7 @@ final class WP_FTS_Plugin
      *
      * @return array{page:int,per_page:int,total:int,total_pages:int,rows:array<int,array{post_id:int,title:string,post_type:string,post_status:string,language:string,length:int,indexed_terms:string[],indexed_terms_more:bool,preview:string}>}
      */
-    private static function sandbox_indexed_posts_page(int $page): array
+    private static function sandbox_indexed_posts_page(int $page, bool $show_indexed_terms = false): array
     {
         $storage = self::storage(false);
         $post_ids = array_values(array_unique(array_filter(
@@ -3079,7 +3125,9 @@ final class WP_FTS_Plugin
             if ($doc === null || (bool) ($doc['deleted'] ?? false)) {
                 continue;
             }
-            $indexed_terms = WP_FTS_StorageCompat::terms_for_doc($storage, $post_id, self::SANDBOX_INDEXED_TERMS_LIMIT + 1);
+            $indexed_terms = $show_indexed_terms
+                ? WP_FTS_StorageCompat::terms_for_doc($storage, $post_id, self::SANDBOX_INDEXED_TERMS_LIMIT + 1)
+                : [];
             $rows[] = self::sandbox_indexed_post_row($post_id, $metadata[$post_id] ?? [], $doc, $indexed_terms);
         }
 
@@ -3146,8 +3194,13 @@ final class WP_FTS_Plugin
     /**
      * @param string[] $terms
      */
-    private static function render_sandbox_indexed_terms(array $terms, bool $has_more): void
+    private static function render_sandbox_indexed_terms(array $terms, bool $has_more, bool $loaded): void
     {
+        if (!$loaded) {
+            echo '<span class="description">Hidden</span>';
+            return;
+        }
+
         if ($terms === []) {
             echo '<span aria-hidden="true">-</span>';
             return;
@@ -3240,6 +3293,11 @@ final class WP_FTS_Plugin
     private static function language_support_details(string $language, bool $include_sandbox): array
     {
         $language = WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG);
+        $cache_key = $language . '|' . ($include_sandbox ? 'sandbox' : 'runtime');
+        if (isset(self::$language_support_details_cache[$cache_key])) {
+            return self::$language_support_details_cache[$cache_key];
+        }
+
         $base = self::base_language($language);
         $statuses = self::runtime_analyzer_pack_statuses();
         if ($include_sandbox) {
@@ -3258,7 +3316,7 @@ final class WP_FTS_Plugin
             }
             if (($status['kind'] ?? '') === 'lemmatizer') {
                 if (empty($status['fixture_only'])) {
-                    return [
+                    return self::$language_support_details_cache[$cache_key] = [
                         'label' => 'Full morphology',
                         'full' => true,
                         'reason' => self::language_support_reason($language, $status_language, 'full'),
@@ -3272,7 +3330,7 @@ final class WP_FTS_Plugin
         }
 
         if ($fixture) {
-            return [
+            return self::$language_support_details_cache[$cache_key] = [
                 'label' => 'Fixture morphology',
                 'full' => false,
                 'reason' => 'Only a fixture-sized analyzer pack is active for this language, so coverage is limited to reviewed test forms.',
@@ -3280,7 +3338,7 @@ final class WP_FTS_Plugin
             ];
         }
         if ($tokenizer) {
-            return [
+            return self::$language_support_details_cache[$cache_key] = [
                 'label' => 'Tokenizer pack',
                 'full' => false,
                 'reason' => 'A tokenizer pack is active, but full morphology is unavailable.',
@@ -3288,7 +3346,7 @@ final class WP_FTS_Plugin
             ];
         }
 
-        return [
+        return self::$language_support_details_cache[$cache_key] = [
             'label' => 'Conservative fallback',
             'full' => false,
             'reason' => 'No active analyzer pack covers this language. Exact-word search and conservative fallback will be used until an analyzer pack is installed or generated with the pack tooling and configured for this language.',
@@ -3437,13 +3495,17 @@ final class WP_FTS_Plugin
         return strtolower((string) ($parts[0] ?? $language));
     }
 
-    private static function sandbox_indexed_posts_page_url(int $page, string $query, string $selected_language, bool $search_submitted): string
+    private static function sandbox_indexed_posts_page_url(int $page, string $query, string $selected_language, bool $search_submitted, bool $show_indexed_terms = false): string
     {
         $params = [
             'page' => self::ADMIN_PAGE_SLUG,
             self::ADMIN_TAB_FIELD => self::ADMIN_INDEXED_TAB,
             self::ADMIN_POSTS_PAGE_FIELD => (string) max(1, $page),
         ];
+
+        if ($show_indexed_terms) {
+            $params[self::ADMIN_SHOW_INDEXED_TERMS_FIELD] = '1';
+        }
 
         if ($search_submitted) {
             if ($query !== '') {
@@ -5893,6 +5955,10 @@ WHERE p.post_password = ''
         $updated = update_option($name, $value);
         if (!$updated && self::get_option($name, null) != $value) {
             throw new RuntimeException("Could not update {$name}.");
+        }
+
+        if ($name === self::ANALYZER_OPTIONS_OPTION) {
+            self::reset_request_caches();
         }
     }
 

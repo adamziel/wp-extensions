@@ -3035,6 +3035,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_autosaves'] = [];
     WP_CLI::$commands = [];
     WP_CLI::$successMessages = [];
+    WP_FTS_Plugin::reset_request_caches();
 }
 
 if (!function_exists('add_action')) {
@@ -3741,6 +3742,18 @@ function wp_fts_test_capture_admin_settings_tab(?string $tab = null): string
         ob_end_clean();
         throw $e;
     }
+}
+
+function wp_fts_test_prepared_sql_count(WP_FTS_Test_WPDB $wpdb, string $prefix): int
+{
+    $count = 0;
+    foreach ($wpdb->prepared as $entry) {
+        if (str_starts_with($entry['sql'], $prefix)) {
+            $count++;
+        }
+    }
+
+    return $count;
 }
 
 /**
@@ -4756,6 +4769,33 @@ test_case('indexed content flags unsupported conservative language partitions', 
     }
 });
 
+test_case('admin language support details cache analyzer pack statuses per request', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $filterCalls = 0;
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (array $options) use (&$filterCalls): array {
+        $filterCalls++;
+
+        return $options;
+    };
+
+    WP_FTS_Plugin::reset_request_caches();
+    $supportDetails = new ReflectionMethod(WP_FTS_Plugin::class, 'language_support_details');
+    $supportDetails->setAccessible(true);
+
+    for ($i = 0; $i < 6; $i++) {
+        $support = $supportDetails->invoke(null, 'en-US', true);
+        assert_true(is_array($support), 'language support details should return a support payload');
+    }
+    assert_same(2, $filterCalls, 'sandbox language support details should reuse runtime and sandbox analyzer pack statuses within one request');
+
+    $supportDetails->invoke(null, 'en-US', false);
+    assert_same(2, $filterCalls, 'runtime-only language support details should reuse cached runtime analyzer pack statuses');
+
+    WP_FTS_Plugin::reset_request_caches();
+    $supportDetails->invoke(null, 'en-US', false);
+    assert_same(3, $filterCalls, 'reset request caches should allow analyzer status inspection to run again for a new request');
+});
+
 test_case('admin sandbox indexed terms expose stored Polish lemmas for split inline HTML', function (): void {
     global $wpdb;
 
@@ -4797,10 +4837,16 @@ test_case('admin sandbox indexed terms expose stored Polish lemmas for split inl
         ];
 
         $html = wp_fts_test_capture_admin_sandbox();
+        $defaultIndexedHtml = wp_fts_test_capture_admin_settings_tab('indexed-content');
+        $_GET['wp_fts_sandbox_show_indexed_terms'] = '1';
         $indexedHtml = wp_fts_test_capture_admin_settings_tab('indexed-content');
 
-        assert_contains('<th scope="col">Indexed terms</th>', $indexedHtml, 'indexed-post diagnostics should include the indexed terms column');
+        assert_contains('<th scope="col">Indexed terms</th>', $defaultIndexedHtml, 'indexed-post diagnostics should include the indexed terms column');
+        assert_contains('Show indexed terms', $defaultIndexedHtml, 'indexed-post diagnostics should keep stored terms behind an explicit debug control by default');
+        assert_contains('<span class="description">Hidden</span>', $defaultIndexedHtml, 'indexed-post diagnostics should avoid hydrating stored terms by default');
+        assert_true(!str_contains($defaultIndexedHtml, '<code>pl:chrzastka</code>'), 'default indexed-post diagnostics should not load stored Polish terms');
         assert_contains('Custom Polish Split Surface', $html, 'sandbox search should find the post with split inline Polish text');
+        assert_contains('Hide indexed terms', $indexedHtml, 'explicit indexed-term debug mode should expose a way back to the fast default view');
         assert_contains('<code>pl:chrzastka</code>', $indexedHtml, 'indexed terms should show the stored Polish lemma for chrząstki');
         assert_contains('<code>pl:chrzastek</code>', $indexedHtml, 'indexed terms should show the alternate stored Polish lemma for chrząstki');
         assert_contains('Full morphology', $indexedHtml, 'indexed content should flag the Polish partition as full morphology when the pack is active');
@@ -5174,7 +5220,9 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
 
         wp_fts_test_capture_admin_sandbox();
 
+        $fake->prepared = [];
         $pageTwoHtml = $renderIndexed(['wp_fts_sandbox_posts_page' => '2']);
+        assert_same(0, wp_fts_test_prepared_sql_count($fake, 'SELECT term FROM wp_fts_postings WHERE doc_id = %d'), 'default indexed-post page should not hydrate stored terms for visible rows');
         assert_contains('Showing 11-12 of 12 indexed post(s).', $pageTwoHtml, 'sandbox indexed-post table should paginate storage-derived rows');
         assert_contains('Page 2 of 2', $pageTwoHtml, 'sandbox indexed-post table should render page count');
         assert_contains('Previous', $pageTwoHtml, 'sandbox indexed-post table should link back to the first page');
@@ -5185,6 +5233,11 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
         assert_true(!str_contains($pageTwoHtml, 'Create or refresh demo posts'), 'paginated sandbox page should still hide manual demo refresh controls');
         assert_true(!str_contains($pageTwoHtml, 'Build demo index'), 'paginated sandbox page should still hide manual demo index controls');
         assert_true(!str_contains($pageTwoHtml, 'Move legacy sandbox demo posts to Trash'), 'paginated sandbox page should not show cleanup when no legacy demo posts exist');
+
+        $fake->prepared = [];
+        $pageOneDebugHtml = $renderIndexed(['wp_fts_sandbox_posts_page' => '1', 'wp_fts_sandbox_show_indexed_terms' => '1']);
+        assert_same(10, wp_fts_test_prepared_sql_count($fake, 'SELECT term FROM wp_fts_postings WHERE doc_id = %d'), 'explicit indexed-term debug mode should hydrate stored terms only for the visible page rows');
+        assert_contains('Hide indexed terms', $pageOneDebugHtml, 'explicit indexed-term debug mode should render the hide control');
 
         $pageOneHtml = $renderIndexed(['wp_fts_sandbox_posts_page' => '1']);
         assert_contains('<td>Custom Indexed 1</td>', $pageOneHtml, 'first indexed-post page should list the first custom row');
