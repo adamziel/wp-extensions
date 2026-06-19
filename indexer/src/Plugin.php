@@ -103,7 +103,7 @@ final class WP_FTS_Plugin
     private const ADMIN_POST_SEARCH_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
 
     /**
-     * @var array<int,array{total:int,max_pages:int,query_lang:string,snippets:array<int,string>,titles:array<int,string>}>
+     * @var array<int,array{total:int,max_pages:int,query_lang:string,query_text:string,snippets:array<int,string>,titles:array<int,string>}>
      */
     private static array $front_end_search_query_state = [];
 
@@ -178,6 +178,7 @@ final class WP_FTS_Plugin
             add_filter('the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 1);
             add_filter('the_content', [self::class, 'frontend_search_content'], 20, 1);
             add_filter('the_title', [self::class, 'frontend_search_title'], 10, 2);
+            add_filter('render_block', [self::class, 'frontend_search_render_block'], 10, 3);
         }
 
         add_action('loop_start', [self::class, 'begin_frontend_search_loop'], 10, 1);
@@ -4213,9 +4214,12 @@ JS;
         self::$front_end_search_loop_stack[] = self::$front_end_search_active_query_key;
 
         $query_key = self::query_object_key($query);
-        self::$front_end_search_active_query_key = $query_key > 0 && isset(self::$front_end_search_query_state[$query_key])
-            ? $query_key
-            : 0;
+        if ($query_key > 0 && isset(self::$front_end_search_query_state[$query_key])) {
+            self::$front_end_search_active_query_key = $query_key;
+            return;
+        }
+
+        self::$front_end_search_active_query_key = self::frontend_search_query_state_key_for_query($query);
     }
 
     /**
@@ -4293,9 +4297,57 @@ JS;
     }
 
     /**
+     * Serve stored FTS previews through core post field blocks in block themes.
+     *
+     * @param mixed $block_content Existing rendered block HTML.
+     * @param mixed $block Parsed block array when provided by WordPress.
+     * @param mixed $instance WP_Block-like instance when provided by WordPress.
+     */
+    public static function frontend_search_render_block(mixed $block_content, mixed $block = null, mixed $instance = null): string
+    {
+        $content = is_scalar($block_content) ? (string) $block_content : '';
+        $block_name = self::rendered_block_name($block, $instance);
+        if (!in_array($block_name, ['core/post-content', 'core/post-excerpt', 'core/post-title'], true)) {
+            return $content;
+        }
+
+        if (str_contains($content, '<mark') || self::is_admin_request() || self::is_rest_request() || self::is_cron_request()) {
+            return $content;
+        }
+
+        $post_id = self::post_id_from_rendered_block($block, $instance);
+        if ($post_id <= 0 && isset($GLOBALS['post'])) {
+            $post_id = self::post_id_from_value($GLOBALS['post']);
+        }
+
+        $state = self::frontend_search_query_state_for_post($post_id);
+        if ($state === null) {
+            return $content;
+        }
+
+        if ($block_name === 'core/post-title') {
+            if (!array_key_exists($post_id, $state['titles'])) {
+                return $content;
+            }
+
+            return self::frontend_rendered_title_block_markup(
+                $content,
+                self::raw_post_title($post_id),
+                $state['titles'][$post_id]
+            );
+        }
+
+        if (!array_key_exists($post_id, $state['snippets'])) {
+            return $content;
+        }
+
+        return self::frontend_content_preview_markup($state['snippets'][$post_id]);
+    }
+
+    /**
      * Resolve the FTS state that owns a frontend-rendered post.
      *
-     * @return array{total:int,max_pages:int,query_lang:string,snippets:array<int,string>,titles:array<int,string>}|null
+     * @return array{total:int,max_pages:int,query_lang:string,query_text:string,snippets:array<int,string>,titles:array<int,string>}|null
      */
     private static function frontend_search_query_state_for_post(int $post_id): ?array
     {
@@ -4318,11 +4370,21 @@ JS;
         }
 
         $query_key = self::query_object_key($query);
-        if (!self::frontend_search_query_state_contains_post($query_key, $post_id)) {
-            return null;
+        if (self::frontend_search_query_state_contains_post($query_key, $post_id)) {
+            return self::$front_end_search_query_state[$query_key];
         }
 
-        return self::$front_end_search_query_state[$query_key];
+        $query_text = self::frontend_search_query_text($query);
+        foreach (self::$front_end_search_query_state as $state) {
+            if (
+                self::query_texts_match((string) ($state['query_text'] ?? ''), $query_text)
+                && self::frontend_search_query_state_array_contains_post($state, $post_id)
+            ) {
+                return $state;
+            }
+        }
+
+        return null;
     }
 
     private static function frontend_search_query_state_contains_post(int $query_key, int $post_id): bool
@@ -4333,8 +4395,172 @@ JS;
 
         $state = self::$front_end_search_query_state[$query_key];
 
+        return self::frontend_search_query_state_array_contains_post($state, $post_id);
+    }
+
+    /**
+     * @param array{snippets:array<int,string>,titles:array<int,string>} $state
+     */
+    private static function frontend_search_query_state_array_contains_post(array $state, int $post_id): bool
+    {
         return array_key_exists($post_id, $state['snippets'])
             || array_key_exists($post_id, $state['titles']);
+    }
+
+    private static function frontend_search_query_state_key_for_query(mixed $query): int
+    {
+        if (!self::is_frontend_search_query($query)) {
+            return 0;
+        }
+
+        $query_text = self::frontend_search_query_text($query);
+        foreach (self::$front_end_search_query_state as $query_key => $state) {
+            if (self::query_texts_match((string) ($state['query_text'] ?? ''), $query_text)) {
+                return (int) $query_key;
+            }
+        }
+
+        return 0;
+    }
+
+    private static function query_texts_match(string $left, string $right): bool
+    {
+        $left = strtolower(trim($left));
+        $right = strtolower(trim($right));
+
+        return $left !== '' && $left === $right;
+    }
+
+    private static function rendered_block_name(mixed $block, mixed $instance = null): string
+    {
+        foreach ([$block, $instance] as $candidate) {
+            if (is_array($candidate)) {
+                foreach (['blockName', 'name'] as $key) {
+                    if (isset($candidate[$key]) && is_scalar($candidate[$key])) {
+                        return (string) $candidate[$key];
+                    }
+                }
+            }
+
+            if (is_object($candidate)) {
+                foreach (['name', 'blockName'] as $property) {
+                    if (isset($candidate->{$property}) && is_scalar($candidate->{$property})) {
+                        return (string) $candidate->{$property};
+                    }
+                }
+
+                if (isset($candidate->parsed_block) && is_array($candidate->parsed_block)) {
+                    foreach (['blockName', 'name'] as $key) {
+                        if (isset($candidate->parsed_block[$key]) && is_scalar($candidate->parsed_block[$key])) {
+                            return (string) $candidate->parsed_block[$key];
+                        }
+                    }
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private static function post_id_from_rendered_block(mixed $block, mixed $instance = null): int
+    {
+        foreach ([$block, $instance] as $candidate) {
+            $context = self::rendered_block_context($candidate);
+            if ($context === []) {
+                continue;
+            }
+
+            foreach (['postId', 'post_id'] as $key) {
+                if (array_key_exists($key, $context)) {
+                    $post_id = self::post_id_from_value($context[$key]);
+                    if ($post_id > 0) {
+                        return $post_id;
+                    }
+                }
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function rendered_block_context(mixed $candidate): array
+    {
+        if (is_array($candidate) && isset($candidate['context']) && is_array($candidate['context'])) {
+            return $candidate['context'];
+        }
+
+        if (is_object($candidate) && isset($candidate->context) && is_array($candidate->context)) {
+            return $candidate->context;
+        }
+
+        return [];
+    }
+
+    private static function frontend_rendered_title_block_markup(string $block_content, string $original_title, string $highlighted_title): string
+    {
+        $highlighted_title = trim($highlighted_title);
+        if ($highlighted_title === '') {
+            return $block_content;
+        }
+
+        if (trim($block_content) === '') {
+            return $highlighted_title;
+        }
+
+        $needles = [];
+        if ($original_title !== '') {
+            $needles[] = self::esc_html($original_title);
+            $needles[] = $original_title;
+        }
+
+        foreach (array_unique($needles) as $needle) {
+            if ($needle === '') {
+                continue;
+            }
+
+            $replaced = self::replace_first_rendered_text($block_content, $needle, $highlighted_title);
+            if ($replaced !== $block_content) {
+                return $replaced;
+            }
+        }
+
+        return $highlighted_title;
+    }
+
+    private static function replace_first_rendered_text(string $html, string $needle, string $replacement): string
+    {
+        $offset = 0;
+        $needle_length = strlen($needle);
+        while ($needle_length > 0) {
+            $position = strpos($html, $needle, $offset);
+            if ($position === false) {
+                return $html;
+            }
+
+            $prefix = substr($html, 0, $position);
+            $last_open = strrpos($prefix, '<');
+            $last_close = strrpos($prefix, '>');
+            if ($last_close !== false && ($last_open === false || $last_close > $last_open)) {
+                return substr($html, 0, $position) . $replacement . substr($html, $position + $needle_length);
+            }
+
+            $offset = $position + $needle_length;
+        }
+
+        return $html;
+    }
+
+    private static function raw_post_title(int $post_id): string
+    {
+        $post = self::post_object($post_id);
+        if ($post !== null && isset($post->post_title) && is_scalar($post->post_title)) {
+            return (string) $post->post_title;
+        }
+
+        return '';
     }
 
     private static function frontend_content_preview_markup(string $snippet): string
@@ -4976,6 +5202,7 @@ JS;
                     'total' => $total,
                     'max_pages' => $max_pages,
                     'query_lang' => $query_lang,
+                    'query_text' => self::frontend_search_query_text($query),
                     'snippets' => $snippets,
                     'titles' => $titles,
                 ],

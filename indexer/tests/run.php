@@ -3958,7 +3958,7 @@ PHP;
 
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
-    assert_same(['found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end and admin search replacement filters');
+    assert_same(['found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'render_block', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end and admin search replacement filters');
 
     $searchActionPriorities = [];
     foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
@@ -6974,6 +6974,150 @@ test_case('front-end search highlights from global main query outside loop scope
             }
             $GLOBALS['wp_query'] = $oldGlobalQuery;
         }
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search highlights core post blocks from block query context', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    add_filter('render_block', [WP_FTS_Plugin::class, 'frontend_search_render_block'], 10, 3);
+
+    $post = (object) [
+        'ID' => 804,
+        'post_title' => 'University block signal',
+        'post_content' => '<p>University block body signal for block rendering.</p>',
+        'post_excerpt' => 'Theme raw excerpt should not be the highlighted source.',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][804] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(804, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'university',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        assert_same([804], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end university search should store highlighted state for the result');
+
+        $oldGlobalPost = $GLOBALS['post'] ?? null;
+        $oldGlobalQuery = $GLOBALS['wp_query'] ?? null;
+        $renderQuery = new WP_FTS_Test_Query([
+            's' => 'university',
+            'posts_per_page' => 10,
+        ]);
+
+        wp_fts_test_begin_frontend_search_loop($renderQuery);
+        try {
+            unset($GLOBALS['post']);
+            $GLOBALS['wp_query'] = null;
+
+            $block = ['blockName' => 'core/post-excerpt', 'context' => ['postId' => 804]];
+            $instance = (object) ['context' => ['postId' => 804]];
+            $renderedExcerpt = apply_filters(
+                'render_block',
+                '<div class="wp-block-post-excerpt"><p class="wp-block-post-excerpt__excerpt">Theme raw university excerpt.</p></div>',
+                $block,
+                $instance
+            );
+            $renderedContent = apply_filters(
+                'render_block',
+                '<div class="wp-block-post-content">Theme raw university content.</div>',
+                ['blockName' => 'core/post-content', 'context' => ['postId' => 804]],
+                $instance
+            );
+            $renderedTitle = apply_filters(
+                'render_block',
+                '<h2 class="wp-block-post-title"><a href="/university">University block signal</a></h2>',
+                ['blockName' => 'core/post-title', 'context' => ['postId' => 804]],
+                $instance
+            );
+        } finally {
+            wp_fts_test_end_frontend_search_loop($renderQuery);
+            if ($oldGlobalPost === null) {
+                unset($GLOBALS['post']);
+            } else {
+                $GLOBALS['post'] = $oldGlobalPost;
+            }
+            $GLOBALS['wp_query'] = $oldGlobalQuery;
+        }
+
+        assert_contains('<mark>University</mark> block body signal', $renderedExcerpt, 'core/post-excerpt block output should use the stored highlighted FTS snippet');
+        assert_contains('<p>', $renderedContent, 'core/post-content block output should keep paragraph preview markup');
+        assert_contains('<mark>University</mark> block body signal', $renderedContent, 'core/post-content block output should use the stored highlighted FTS snippet');
+        assert_contains('<h2 class="wp-block-post-title"><a href="/university"><mark>University</mark> block signal</a></h2>', $renderedTitle, 'core/post-title block output should preserve the title block wrapper while highlighting the stored title');
+        assert_true(!str_contains($renderedExcerpt, 'Theme raw university excerpt'), 'block excerpt rendering should not fall back to raw theme output when an FTS snippet exists');
+
+        $alreadyHighlightedTitle = apply_filters(
+            'render_block',
+            '<h2 class="wp-block-post-title"><a href="/university"><mark>University</mark> block signal</a></h2>',
+            ['blockName' => 'core/post-title', 'context' => ['postId' => 804]],
+            (object) ['context' => ['postId' => 804]]
+        );
+        assert_same('<h2 class="wp-block-post-title"><a href="/university"><mark>University</mark> block signal</a></h2>', $alreadyHighlightedTitle, 'render_block fallback should not double-wrap post title blocks already highlighted by the_title');
+
+        $afterLoop = apply_filters(
+            'render_block',
+            '<div class="wp-block-post-content">Theme raw university content.</div>',
+            ['blockName' => 'core/post-content', 'context' => ['postId' => 804]],
+            (object) ['context' => ['postId' => 804]]
+        );
+        assert_same('<div class="wp-block-post-content">Theme raw university content.</div>', $afterLoop, 'stored block snippets should not leak after the replaced main loop ends');
+
+        $secondary = new WP_FTS_Test_Query([
+            's' => 'university',
+            'posts_per_page' => 1,
+        ], true, false);
+        wp_fts_test_begin_frontend_search_loop($secondary);
+        try {
+            $secondaryBlock = apply_filters(
+                'render_block',
+                '<div class="wp-block-post-content">Secondary raw university content.</div>',
+                ['blockName' => 'core/post-content', 'context' => ['postId' => 804]],
+                (object) ['context' => ['postId' => 804]]
+            );
+        } finally {
+            wp_fts_test_end_frontend_search_loop($secondary);
+        }
+        assert_same('<div class="wp-block-post-content">Secondary raw university content.</div>', $secondaryBlock, 'secondary block queries should not receive main-loop FTS snippets');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['highlight' => false]
+        );
+        $noHighlightQuery = new WP_FTS_Test_Query([
+            's' => 'university',
+            'posts_per_page' => 10,
+        ]);
+        $noHighlightPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $noHighlightQuery);
+        assert_same([804], array_map(static fn(object $post): int => (int) $post->ID, $noHighlightPosts), 'front-end university search should still return results when highlighting is disabled');
+
+        $noHighlightRenderQuery = new WP_FTS_Test_Query([
+            's' => 'university',
+            'posts_per_page' => 10,
+        ]);
+        wp_fts_test_begin_frontend_search_loop($noHighlightRenderQuery);
+        try {
+            $noHighlightContent = apply_filters(
+                'render_block',
+                '<div class="wp-block-post-content">Theme raw university content.</div>',
+                ['blockName' => 'core/post-content', 'context' => ['postId' => 804]],
+                (object) ['context' => ['postId' => 804]]
+            );
+        } finally {
+            wp_fts_test_end_frontend_search_loop($noHighlightRenderQuery);
+        }
+        assert_contains('University block body signal', $noHighlightContent, 'disabled block highlighting should still render the FTS preview text');
+        assert_true(!str_contains($noHighlightContent, '<mark>'), 'disabled block highlighting should not output mark tags');
     } finally {
         $wpdb = $oldWpdb;
     }
