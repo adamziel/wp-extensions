@@ -330,16 +330,7 @@ final class WP_FTS_ArabicSnowballStemmer extends WP_FTS_SnowballGeneratedStemmer
 
     private function utf8_length(string $value): int
     {
-        if (function_exists('mb_strlen')) {
-            return mb_strlen($value, 'UTF-8');
-        }
-
-        $chars = [];
-        if (preg_match_all('/./us', $value, $chars) !== false) {
-            return count($chars[0]);
-        }
-
-        return strlen($value);
+        return WP_FTS_Utf8::length($value);
     }
 
 

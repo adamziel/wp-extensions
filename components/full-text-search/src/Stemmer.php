@@ -180,20 +180,11 @@ final class WP_FTS_BaselineLanguageStemmer implements WP_FTS_Stemmer
     }
 
     /**
-     * Count UTF-8 characters with mbstring or PCRE before falling back to bytes.
+     * Count UTF-8 characters without treating multibyte scripts as bytes.
      */
     private function char_length(string $term): int
     {
-        if (function_exists('mb_strlen')) {
-            return mb_strlen($term, 'UTF-8');
-        }
-
-        $chars = [];
-        if (preg_match_all('/./us', $term, $chars) !== false) {
-            return count($chars[0]);
-        }
-
-        return strlen($term);
+        return WP_FTS_Utf8::length($term);
     }
 
     /**
@@ -626,11 +617,11 @@ final class WP_FTS_PolishStemmer implements WP_FTS_Stemmer
     }
 
     /**
-     * Count characters with mbstring when present and bytes otherwise.
+     * Count UTF-8 characters without treating multibyte scripts as bytes.
      */
     private function char_length(string $term): int
     {
-        return function_exists('mb_strlen') ? mb_strlen($term, 'UTF-8') : strlen($term);
+        return WP_FTS_Utf8::length($term);
     }
 
     /**

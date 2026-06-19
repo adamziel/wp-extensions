@@ -7,6 +7,27 @@ declare(strict_types=1);
 final class WP_FTS_Utf8
 {
     /**
+     * Count Unicode code points without depending on optional extensions.
+     */
+    public static function length(string $text): int
+    {
+        if ($text === '') {
+            return 0;
+        }
+
+        if (function_exists('mb_strlen')) {
+            return mb_strlen($text, 'UTF-8');
+        }
+
+        $matched = @preg_match_all('/./us', $text, $matches);
+        if (is_int($matched)) {
+            return $matched;
+        }
+
+        return self::count_codepoints($text);
+    }
+
+    /**
      * Remove malformed UTF-8 byte sequences while preserving valid text.
      */
     public static function repair(string $text): string
@@ -52,6 +73,60 @@ final class WP_FTS_Utf8
     private static function is_valid(string $text): bool
     {
         return preg_match('//u', $text) === 1;
+    }
+
+    /**
+     * Byte-wise UTF-8 code point counter used when PCRE UTF-8 matching is not available.
+     */
+    private static function count_codepoints(string $text): int
+    {
+        $count = 0;
+        $length = strlen($text);
+
+        for ($i = 0; $i < $length; $i++) {
+            $count++;
+            $byte = ord($text[$i]);
+            if ($byte <= 0x7F) {
+                continue;
+            }
+
+            $needed = 0;
+            $codepoint = 0;
+            if ($byte >= 0xC2 && $byte <= 0xDF) {
+                $needed = 1;
+                $codepoint = $byte & 0x1F;
+            } elseif ($byte >= 0xE0 && $byte <= 0xEF) {
+                $needed = 2;
+                $codepoint = $byte & 0x0F;
+            } elseif ($byte >= 0xF0 && $byte <= 0xF4) {
+                $needed = 3;
+                $codepoint = $byte & 0x07;
+            } else {
+                continue;
+            }
+
+            if ($i + $needed >= $length) {
+                continue;
+            }
+
+            $valid = true;
+            for ($j = 1; $j <= $needed; $j++) {
+                $next = ord($text[$i + $j]);
+                if (($next & 0xC0) !== 0x80) {
+                    $valid = false;
+                    break;
+                }
+                $codepoint = ($codepoint << 6) | ($next & 0x3F);
+            }
+
+            if (!$valid || !self::is_valid_codepoint($codepoint, $needed)) {
+                continue;
+            }
+
+            $i += $needed;
+        }
+
+        return $count;
     }
 
     /**

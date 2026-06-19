@@ -307,9 +307,7 @@ final class WP_FTS_LanguagePipeline
      */
     private function term_meets_min_length(string $term, bool $isCjk): bool
     {
-        $length = function_exists('mb_strlen') ? mb_strlen($term, 'UTF-8') : strlen($term);
-
-        return $isCjk || $length >= $this->minTermLen;
+        return $isCjk || WP_FTS_Utf8::length($term) >= $this->minTermLen;
     }
 
     /**
