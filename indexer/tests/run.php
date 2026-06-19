@@ -6949,6 +6949,73 @@ PHP);
     );
 });
 
+test_case('Arabic and Urdu stem length guards are Unicode-aware without mbstring', function (): void {
+    $pipeline = new WP_FTS_LanguagePipeline();
+    $snowball = new WP_FTS_SnowballStemmer();
+    $baseline = new WP_FTS_BaselineLanguageStemmer();
+    $expected = [
+        'len:الات' => '4',
+        'len:الكم' => '4',
+        'len:دلوں' => '4',
+        'pipe:الات' => 'الات',
+        'pipe:الكم' => 'الكم',
+        'pipe:دلوں' => 'دلوں',
+        'snowball:الات' => 'الات',
+        'snowball:الكم' => 'الكم',
+        'baseline:دلوں' => 'دلوں',
+        'baseline:حالات' => 'حال',
+        'baseline:معلومات' => 'معلوم',
+    ];
+    $normal = [
+        'len:الات' => (string) WP_FTS_Utf8::length('الات'),
+        'len:الكم' => (string) WP_FTS_Utf8::length('الكم'),
+        'len:دلوں' => (string) WP_FTS_Utf8::length('دلوں'),
+        'pipe:الات' => implode('|', $pipeline->analyze('الات', 'ar')),
+        'pipe:الكم' => implode('|', $pipeline->analyze('الكم', 'ar')),
+        'pipe:دلوں' => implode('|', $pipeline->analyze('دلوں', 'ur')),
+        'snowball:الات' => $snowball->stem('الات', 'ar'),
+        'snowball:الكم' => $snowball->stem('الكم', 'ar'),
+        'baseline:دلوں' => $baseline->stem('دلوں', 'ur'),
+        'baseline:حالات' => $baseline->stem('حالات', 'ur'),
+        'baseline:معلومات' => $baseline->stem('معلومات', 'ur'),
+    ];
+
+    $bootstrap = (string) realpath(__DIR__ . '/../src/bootstrap.php');
+    $code = str_replace('__BOOTSTRAP__', var_export($bootstrap, true), <<<'PHP'
+require __BOOTSTRAP__;
+$pipeline = new WP_FTS_LanguagePipeline();
+$snowball = new WP_FTS_SnowballStemmer();
+$baseline = new WP_FTS_BaselineLanguageStemmer();
+$checks = [
+    'len:الات' => WP_FTS_Utf8::length('الات'),
+    'len:الكم' => WP_FTS_Utf8::length('الكم'),
+    'len:دلوں' => WP_FTS_Utf8::length('دلوں'),
+    'pipe:الات' => implode('|', $pipeline->analyze('الات', 'ar')),
+    'pipe:الكم' => implode('|', $pipeline->analyze('الكم', 'ar')),
+    'pipe:دلوں' => implode('|', $pipeline->analyze('دلوں', 'ur')),
+    'snowball:الات' => $snowball->stem('الات', 'ar'),
+    'snowball:الكم' => $snowball->stem('الكم', 'ar'),
+    'baseline:دلوں' => $baseline->stem('دلوں', 'ur'),
+    'baseline:حالات' => $baseline->stem('حالات', 'ur'),
+    'baseline:معلومات' => $baseline->stem('معلومات', 'ur'),
+];
+foreach ($checks as $label => $value) {
+    echo $label, '=', $value, "\n";
+}
+PHP);
+
+    $withoutExtensions = test_run_php_without_extensions($code);
+    $stderr = trim($withoutExtensions['stderr']);
+    $detail = $stderr === '' ? '' : "\nSubprocess stderr: " . substr($stderr, 0, 500);
+
+    foreach ($expected as $label => $value) {
+        assert_same($value, $normal[$label], "normal PHP should report {$label}={$value}");
+        assert_contains("{$label}={$value}", $withoutExtensions['stdout'], "php -n should report {$label}={$value}");
+    }
+
+    assert_same(0, $withoutExtensions['exit'], 'php -n Arabic/Urdu stem length subprocess should exit cleanly' . $detail);
+});
+
 test_case('language normalizer applies dialect and language-specific folding maps', function (): void {
     $normalizer = new WP_FTS_Normalizer();
 

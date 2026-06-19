@@ -446,8 +446,9 @@ test_case('quality corpus exposes query occurrence output while preserving plain
         ['pl-PL', 'Łódź Wrocław', ['lodz', 'wroclaw']],
         ['de-DE', 'Straße Öl', ['strasse', 'oel']],
         ['tr-TR', 'İstanbul Iğdır', ['istanbul', 'ıgdır']],
+        ['ar', 'الات الكم مفيدة للبحث', ['الات', 'الكم', 'مفيد', 'بحث']],
         ['bn', 'বইটিকে শিক্ষকদেরকে বিদ্যালয়ের সূচিতে', ['বই', 'শিক্ষক', 'বিদ্যালয়', 'সূচি']],
-        ['ur', 'لڑکیوں لڑکیاں لڑکے حالات معلومات', ['لڑکی', 'لڑکی', 'لڑک', 'حال', 'معلوم']],
+        ['ur', 'دلوں لڑکیوں لڑکیاں لڑکے حالات معلومات', ['دلوں', 'لڑکی', 'لڑکی', 'لڑک', 'حال', 'معلوم']],
         ['zh-Hans', '中文搜索', ['中', '文', '搜', '索', '中文', '文搜', '搜索', '中文搜', '文搜索', '中文搜索']],
         ['zh-Hant', '繁體搜索', ['繁', '體', '搜', '索', '繁體', '體搜', '搜索', '繁體搜', '體搜索', '繁體搜索']],
     ];
@@ -465,6 +466,24 @@ test_case('quality corpus exposes query occurrence output while preserving plain
             assert_same($normalLang = (new WP_FTS_Normalizer())->canonicalize_language($lang), $occurrence['lang'], "occurrence language {$normalLang}");
         }
     }
+});
+
+test_case('quality corpus preserves short Arabic-script length guard terms', function (): void {
+    $pipeline = new WP_FTS_LanguagePipeline();
+    $snowball = new WP_FTS_SnowballStemmer();
+    $baseline = new WP_FTS_BaselineLanguageStemmer();
+
+    assert_same(4, WP_FTS_Utf8::length('الات'), 'Arabic short guard fixture should count Unicode characters');
+    assert_same(4, WP_FTS_Utf8::length('الكم'), 'Arabic short guard fixture with pronoun-like ending should count Unicode characters');
+    assert_same(4, WP_FTS_Utf8::length('دلوں'), 'Urdu short guard fixture should count Unicode characters');
+    assert_same(['الات'], $pipeline->analyze('الات', 'ar'), 'Arabic pipeline should preserve الات');
+    assert_same(['الكم'], $pipeline->analyze('الكم', 'ar'), 'Arabic pipeline should preserve الكم');
+    assert_same(['دلوں'], $pipeline->analyze('دلوں', 'ur'), 'Urdu pipeline should preserve دلوں');
+    assert_same('الات', $snowball->stem('الات', 'ar'), 'Arabic Snowball adapter should preserve الات');
+    assert_same('الكم', $snowball->stem('الكم', 'ar'), 'Arabic Snowball adapter should preserve الكم');
+    assert_same('دلوں', $baseline->stem('دلوں', 'ur'), 'Urdu baseline should preserve دلوں');
+    assert_same('حال', $baseline->stem('حالات', 'ur'), 'Urdu baseline should still stem longer Arabic-loan plurals');
+    assert_same('معلوم', $baseline->stem('معلومات', 'ur'), 'Urdu baseline should still stem longer -at plurals');
 });
 
 test_case('quality corpus exposes Bengali Urdu baseline signature changes', function (): void {
