@@ -52,9 +52,9 @@ final class WP_FTS_Searcher
      * recall, ranking, and total-count accuracy for latency. Broad searches also
      * auto-enable that mode when the estimated candidate count exceeds the
      * configured threshold. Pass `exact_top_k`, `exact`, or an explicit false fast
-     * option to force exact scoring. Prefix/phrase search is intentionally not
-     * emulated on whole-term postings; pass `search_extension` to provide a backend
-     * that can do it honestly.
+     * option to force exact scoring. Word-beginning prefix expansion can be
+     * controlled with `prefix_matching`; phrase search requires a
+     * `search_extension` callback for storage-specific matching.
      *
      * @param array<string,mixed> $opts
      * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>}
@@ -1475,11 +1475,11 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * Call a real prefix/phrase extension when requested.
+     * Call a real phrase or legacy prefix extension when requested.
      *
-     * The built-in posting lists are whole-term only. Returning an empty or fuzzy
-     * approximation for prefix/phrase would be misleading, so these modes require
-     * an explicit extension callback that owns the storage contract.
+     * Phrase matching needs a storage-specific callback. Legacy `prefix` requests
+     * may use that callback too; without one, prefix matching falls through to the
+     * built-in word-beginning expansion path.
      *
      * @return array<string,mixed>|array<int,array<string,mixed>>|null
      */
