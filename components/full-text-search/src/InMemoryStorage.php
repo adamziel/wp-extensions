@@ -7,7 +7,7 @@ declare(strict_types=1);
  * State lives in PHP arrays, supports rollback logs, and mirrors the
  * language-aware storage contract without any persistence layer.
  */
-final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Document_Terms_Storage
+final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage
 {
     /** @var array<string,array{df:int,postings:string}> Encoded row cache for blob-shaped compatibility reads. */
     private array $terms = [];
@@ -484,6 +484,31 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
     {
         $terms = array_keys($this->postingsByTerm);
         sort($terms, SORT_STRING);
+
+        return $terms;
+    }
+
+    /**
+     * Return stored term keys that start with a namespaced prefix.
+     *
+     * @return string[]
+     */
+    public function terms_with_prefix(string $prefix, int $limit): array
+    {
+        $limit = max(1, (int) $limit);
+        if ($prefix === '') {
+            return [];
+        }
+
+        $terms = [];
+        foreach ($this->all_terms() as $term) {
+            if (str_starts_with($term, $prefix)) {
+                $terms[] = $term;
+                if (count($terms) >= $limit) {
+                    break;
+                }
+            }
+        }
 
         return $terms;
     }

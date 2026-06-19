@@ -64,6 +64,7 @@ final class WP_FTS_Plugin
     private const ADMIN_LIMIT_FIELD = 'wp_fts_sandbox_limit';
     private const ADMIN_SNIPPET_LENGTH_FIELD = 'wp_fts_sandbox_snippet_length';
     private const ADMIN_HIGHLIGHT_FIELD = 'wp_fts_sandbox_highlight';
+    private const ADMIN_PREFIX_MATCHING_FIELD = 'wp_fts_sandbox_prefix_matching';
     private const ADMIN_LANGUAGE_FALLBACK_FIELD = 'wp_fts_sandbox_language_fallback';
     private const ADMIN_POST_TYPE_FIELD = 'wp_fts_sandbox_post_type';
     private const ADMIN_POST_STATUS_FIELD = 'wp_fts_sandbox_post_status';
@@ -85,6 +86,7 @@ final class WP_FTS_Plugin
         'highlight' => true,
         'snippet_length' => 180,
         'match_mode' => 'OR',
+        'prefix_matching' => true,
         'result_limit' => 10,
         'language_fallback' => true,
     ];
@@ -1261,6 +1263,13 @@ final class WP_FTS_Plugin
         echo '<p class="description">Match any word returns broader results. Require every word narrows results to content that matches all searched words.</p>';
         echo '</td></tr>';
 
+        self::render_settings_checkbox_row(
+            'prefix_matching',
+            'Word beginnings',
+            $settings['prefix_matching'],
+            'Also match indexed terms that start with the searched word. Exact and lemmatizer matches still rank first. Turn this off if broad matches are too noisy.'
+        );
+
         echo '<tr><th scope="row"><label for="wp-fts-settings-result-limit">Results per page</label></th><td>';
         echo '<input id="wp-fts-settings-result-limit" type="number" min="1" max="' . self::esc_attr((string) self::MAX_SEARCH_LIMIT) . '" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[result_limit]" value="' . self::esc_attr((string) $settings['result_limit']) . '">';
         echo '<p class="description">Controls how many results are shown on one page or search view when this default is used.</p>';
@@ -1488,6 +1497,7 @@ final class WP_FTS_Plugin
      *   limit:int,
      *   snippet_length:int,
      *   highlight:bool,
+     *   prefix_matching:bool,
      *   language_fallback:bool,
      *   post_types:string[],
      *   post_statuses:string[],
@@ -1508,6 +1518,7 @@ final class WP_FTS_Plugin
             'limit' => self::clamp_int(self::request_text_value($_GET, self::ADMIN_LIMIT_FIELD, 8) ?: $settings['result_limit'], 1, self::MAX_SEARCH_LIMIT),
             'snippet_length' => self::clamp_int(self::request_text_value($_GET, self::ADMIN_SNIPPET_LENGTH_FIELD, 8) ?: $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
             'highlight' => self::request_bool_value($_GET, self::ADMIN_HIGHLIGHT_FIELD, $settings['highlight'], $search_submitted),
+            'prefix_matching' => self::request_bool_value($_GET, self::ADMIN_PREFIX_MATCHING_FIELD, $settings['prefix_matching'], $search_submitted),
             'language_fallback' => self::request_bool_value($_GET, self::ADMIN_LANGUAGE_FALLBACK_FIELD, $settings['language_fallback'], $search_submitted),
             'post_types' => self::request_list_value($_GET, self::ADMIN_POST_TYPE_FIELD, self::settings_post_type_choices(), $settings['index_post_types']),
             'post_statuses' => self::request_list_value($_GET, self::ADMIN_POST_STATUS_FIELD, self::sandbox_post_status_choices(), self::sandbox_post_status_choices()),
@@ -1548,6 +1559,7 @@ final class WP_FTS_Plugin
             'highlight' => array_key_exists('highlight', $value) ? self::truthy_admin_value($value['highlight']) : $defaults['highlight'],
             'snippet_length' => self::clamp_int($value['snippet_length'] ?? $defaults['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
             'match_mode' => $mode,
+            'prefix_matching' => array_key_exists('prefix_matching', $value) ? self::truthy_admin_value($value['prefix_matching']) : $defaults['prefix_matching'],
             'result_limit' => self::clamp_int($value['result_limit'] ?? $defaults['result_limit'], 1, self::MAX_SEARCH_LIMIT),
             'language_fallback' => array_key_exists('language_fallback', $value) ? self::truthy_admin_value($value['language_fallback']) : $defaults['language_fallback'],
         ];
@@ -1607,6 +1619,7 @@ final class WP_FTS_Plugin
      *   highlight:bool,
      *   snippet_length:int,
      *   match_mode:string,
+     *   prefix_matching:bool,
      *   result_limit:int,
      *   language_fallback:bool
      * }
@@ -2092,6 +2105,7 @@ final class WP_FTS_Plugin
             'include_metadata' => true,
             'include_snippets' => true,
             'highlight' => (bool) ($controls['highlight'] ?? $settings['highlight']),
+            'prefix_matching' => (bool) ($controls['prefix_matching'] ?? $settings['prefix_matching']),
             'snippet_length' => self::clamp_int($controls['snippet_length'] ?? $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
         ];
         foreach (['post_types' => 'post_type', 'post_statuses' => 'post_status'] as $control_key => $search_key) {
@@ -2797,6 +2811,7 @@ final class WP_FTS_Plugin
      *   limit:int,
      *   snippet_length:int,
      *   highlight:bool,
+     *   prefix_matching:bool,
      *   language_fallback:bool,
      *   post_types:string[],
      *   post_statuses:string[],
@@ -2853,6 +2868,12 @@ final class WP_FTS_Plugin
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HIGHLIGHT_FIELD) . '" value="0">';
         echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_HIGHLIGHT_FIELD) . '" value="1"' . ($controls['highlight'] ? ' checked="checked"' : '') . '> On</label>';
         echo '<p class="description">Highlights matching words inside generated excerpts.</p>';
+        echo '</fieldset>';
+
+        echo '<fieldset><legend class="wp-fts-sandbox-option-label">Word beginnings</legend>';
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_PREFIX_MATCHING_FIELD) . '" value="0">';
+        echo '<label><input type="checkbox" name="' . self::esc_attr(self::ADMIN_PREFIX_MATCHING_FIELD) . '" value="1"' . ($controls['prefix_matching'] ? ' checked="checked"' : '') . '> On</label>';
+        echo '<p class="description">Also matches indexed terms that start with the searched word.</p>';
         echo '</fieldset>';
 
         echo '<fieldset><legend class="wp-fts-sandbox-option-label">Language fallback</legend>';
@@ -3567,12 +3588,18 @@ final class WP_FTS_Plugin
             );
         }
 
+        $search_args = [
+            'lang' => self::request_param($request, 'lang', null),
+            'mode' => $mode,
+            'limit' => self::request_param($request, 'limit', 10),
+        ];
+        $prefix_matching = self::request_param($request, 'prefix_matching', null);
+        if ($prefix_matching !== null) {
+            $search_args['prefix_matching'] = $prefix_matching;
+        }
+
         return [
-            'results' => self::search($query, [
-                'lang' => self::request_param($request, 'lang', null),
-                'mode' => $mode,
-                'limit' => self::request_param($request, 'limit', 10),
-            ]),
+            'results' => self::search($query, $search_args),
         ];
     }
 
@@ -3590,12 +3617,19 @@ final class WP_FTS_Plugin
 
         $limit = self::clamp_int($opts['limit'] ?? 10, 1, self::MAX_SEARCH_LIMIT);
         $mode = strtoupper((string) ($opts['mode'] ?? 'OR'));
+        $settings = self::settings();
         $search_options = [
             'mode' => $mode,
             'limit' => $limit,
+            'prefix_matching' => self::search_prefix_matching_value($opts, $settings),
         ];
         if (isset($opts['lang']) && is_scalar($opts['lang']) && trim((string) $opts['lang']) !== '') {
             $search_options['lang'] = (string) $opts['lang'];
+        }
+        foreach (['prefix_min_length', 'prefix_max_terms'] as $prefix_option) {
+            if (array_key_exists($prefix_option, $opts)) {
+                $search_options[$prefix_option] = $opts[$prefix_option];
+            }
         }
 
         $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
@@ -3637,6 +3671,25 @@ final class WP_FTS_Plugin
         }
 
         return $visible;
+    }
+
+    /**
+     * Resolve saved prefix behavior with per-search overrides.
+     *
+     * @param array<string,mixed> $opts
+     * @param array<string,mixed> $settings
+     */
+    private static function search_prefix_matching_value(array $opts, array $settings): bool
+    {
+        if (array_key_exists('prefix_matching', $opts)) {
+            return self::truthy_admin_value($opts['prefix_matching']);
+        }
+
+        if (array_key_exists('prefix', $opts)) {
+            return self::truthy_admin_value($opts['prefix']);
+        }
+
+        return (bool) ($settings['prefix_matching'] ?? true);
     }
 
     /**
@@ -4257,6 +4310,7 @@ final class WP_FTS_Plugin
             'include_snippets' => true,
             'highlight' => $settings['highlight'],
             'snippet_length' => $settings['snippet_length'],
+            'prefix_matching' => $settings['prefix_matching'],
             'post_type' => $post_types,
             'post_status' => $post_statuses,
         ];
@@ -4410,6 +4464,7 @@ final class WP_FTS_Plugin
         $options = [
             'highlight' => self::settings()['highlight'],
             'snippet_length' => $length,
+            'prefix_matching' => self::settings()['prefix_matching'],
         ];
         if (self::settings()['language_fallback']) {
             $options['language_fallback'] = true;

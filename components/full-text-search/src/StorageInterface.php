@@ -210,3 +210,21 @@ interface WP_FTS_Document_Terms_Storage extends WP_FTS_Storage
      */
     public function terms_for_doc(int $doc_id): array;
 }
+
+/**
+ * Optional storage extension for prefix expansion over stored term keys.
+ *
+ * Implementations must return stored term keys in deterministic ascending order
+ * and cap the result count. Row-backed stores should answer this with an indexed
+ * range lookup over the term key; blob-backed stores may derive it from their
+ * in-memory key map.
+ */
+interface WP_FTS_Prefix_Term_Storage extends WP_FTS_Storage
+{
+    /**
+     * Return stored term keys that start with `$prefix`.
+     *
+     * @return string[] Sorted stored term keys, capped to `$limit`.
+     */
+    public function terms_with_prefix(string $prefix, int $limit): array;
+}

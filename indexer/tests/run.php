@@ -2244,6 +2244,30 @@ final class WP_FTS_Test_WPDB
             return $rows;
         }
 
+        if (str_starts_with($sql, 'SELECT term FROM wp_fts_terms') && str_contains($sql, 'WHERE term >= %s')) {
+            $lower = (string) ($args[0] ?? '');
+            $hasUpper = str_contains($sql, 'term < %s');
+            $upper = $hasUpper ? (string) ($args[1] ?? '') : null;
+            $limitArg = $hasUpper ? ($args[2] ?? 0) : ($args[1] ?? 0);
+            $limit = max(0, (int) $limitArg);
+            $terms = array_keys($this->terms);
+            sort($terms, SORT_STRING);
+
+            $rows = [];
+            foreach ($terms as $term) {
+                if (strcmp($term, $lower) < 0 || ($upper !== null && strcmp($term, $upper) >= 0)) {
+                    continue;
+                }
+
+                $rows[] = (object) ['term' => $term];
+                if (count($rows) >= $limit) {
+                    break;
+                }
+            }
+
+            return $rows;
+        }
+
         if (
             str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
             && str_contains($sql, 'WHERE term = %s')
@@ -3943,6 +3967,7 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
     assert_same(WP_FTS_Plugin::SETTINGS_OPTION, $setting['option_name'] ?? null, 'settings should register the wp_fts_settings option');
     assert_same(['post', 'page'], WP_FTS_Plugin::default_settings()['index_post_types'], 'default settings should index both posts and pages');
     assert_same(true, WP_FTS_Plugin::default_settings()['language_fallback'], 'default settings should enable language fallback');
+    assert_same(true, WP_FTS_Plugin::default_settings()['prefix_matching'], 'default settings should enable word-beginning prefix matching');
 });
 
 test_case('settings sanitization maps replacement checkboxes and legacy scope to existing booleans', function (): void {
@@ -3950,15 +3975,19 @@ test_case('settings sanitization maps replacement checkboxes and legacy scope to
         'replace_frontend_search' => '1',
         'replace_admin_post_search' => '0',
         'auto_index' => '0',
+        'prefix_matching' => '0',
     ]);
     assert_same(true, $checkboxes['replace_frontend_search'], 'frontend replacement checkbox should enable the public-site replacement boolean');
     assert_same(false, $checkboxes['replace_admin_post_search'], 'admin replacement checkbox should disable the wp-admin replacement boolean');
     assert_same(false, $checkboxes['auto_index'], 'auto-index checkbox should disable automatic indexing when unchecked');
+    assert_same(false, $checkboxes['prefix_matching'], 'prefix matching checkbox should disable word-beginning matching when unchecked');
 
     $autoIndex = WP_FTS_Plugin::sanitize_settings([
         'auto_index' => '1',
+        'prefix_matching' => '1',
     ]);
     assert_same(true, $autoIndex['auto_index'], 'auto-index checkbox should enable automatic indexing when checked');
+    assert_same(true, $autoIndex['prefix_matching'], 'prefix matching checkbox should enable word-beginning matching when checked');
 
     $adminOnly = WP_FTS_Plugin::sanitize_settings([
         'replace_search_scope' => 'admin',
@@ -4102,6 +4131,10 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('Match any word (broader)', $settingsHtml, 'settings should describe the broad matching option without making OR the primary label');
     assert_contains('Require every word (stricter)', $settingsHtml, 'settings should describe the strict matching option without making AND the primary label');
     assert_true(!str_contains($settingsHtml, '>Match mode<'), 'settings UI should not expose the old Match mode label');
+    assert_contains('Word beginnings', $settingsHtml, 'settings should expose the prefix matching setting near term matching');
+    assert_contains('type="hidden" name="wp_fts_settings[prefix_matching]" value="0"', $settingsHtml, 'prefix matching checkbox should post an unchecked value');
+    assert_contains('type="checkbox" name="wp_fts_settings[prefix_matching]" value="1" checked="checked"', $settingsHtml, 'prefix matching should be checked by default');
+    assert_contains('Exact and lemmatizer matches still rank first', $settingsHtml, 'prefix matching copy should explain rank precedence');
     assert_contains('Results per page', $settingsHtml, 'settings should rename result limit to results per page');
     assert_contains('shown on one page or search view', $settingsHtml, 'settings results-per-page help should explain the page/search-view behavior');
     assert_contains('name="wp_fts_settings[language_fallback]" value="1" checked="checked"', $settingsHtml, 'settings defaults should enable language fallback');
@@ -4112,6 +4145,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('Try a query against the same index and saved settings', $html, 'sandbox tab should explain that it searches the same index');
     assert_contains('name="tab" value="sandbox"', $html, 'sandbox form should preserve the selected tab on search submission');
     assert_contains('id="wp-fts-sandbox-query" type="search" class="regular-text" name="wp_fts_sandbox_query" value=""', $html, 'sandbox page should leave the query field blank by default');
+    assert_contains('name="wp_fts_sandbox_prefix_matching"', $html, 'sandbox page should expose a per-search word beginnings override');
     assert_contains('wp-fts-sandbox-compact-controls', $html, 'sandbox search controls should use a compact primary row');
     assert_contains('<details class="wp-fts-sandbox-advanced">', $html, 'secondary sandbox controls should be collapsed behind details');
     assert_contains('Filters and display options', $html, 'sandbox advanced controls should have a clear summary label');
@@ -11327,7 +11361,143 @@ test_case('field boosts are tunable for extracted fields', function (): void {
     assert_same([2, 1], array_column((new WP_FTS_Searcher($contentBoosted, $analyzer))->search('needle', ['lang' => 'en', 'limit' => 2]), 'doc_id'), 'field boost tuning should be reversible');
 });
 
-test_case('prefix and phrase search require explicit extension point', function (): void {
+test_case('prefix matching expands query terms to stored terms and can be disabled', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, 'aktorskiego', ['lang' => 'pl']);
+    $indexer->index_document(2, 'aktorstwa', ['lang' => 'pl']);
+    $indexer->index_document(3, 'aktorstwo', ['lang' => 'pl']);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([1, 2, 3], array_column($searcher->search('aktor', [
+        'lang' => 'pl',
+        'prefix_matching' => true,
+        'limit' => 10,
+    ]), 'doc_id'), 'prefix query should find indexed terms that start with the searched word');
+    assert_same([1], array_column($searcher->search('aktorski', [
+        'lang' => 'pl',
+        'prefix_matching' => true,
+        'limit' => 10,
+    ]), 'doc_id'), 'longer prefix should match aktorskiego without pulling unrelated aktorstwo');
+    assert_same([], $searcher->search('aktor', [
+        'lang' => 'pl',
+        'prefix_matching' => false,
+    ]), 'per-search prefix_matching false should preserve exact-only search');
+});
+
+test_case('prefix-expanded alternatives rank behind exact analyzer matches', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, 'aktor', ['lang' => 'pl']);
+    $indexer->index_document(2, 'aktorskiego', ['lang' => 'pl']);
+
+    $results = (new WP_FTS_Searcher($storage, $analyzer))->search('aktor', [
+        'lang' => 'pl',
+        'prefix_matching' => true,
+        'limit' => 10,
+    ]);
+    assert_same([1, 2], array_column($results, 'doc_id'), 'exact term result should sort before a prefix-only result');
+});
+
+test_case('prefix matching is language namespace aware', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, 'aktorstwo', ['lang' => 'pl']);
+    $indexer->index_document(2, 'aktorstwo', ['lang' => 'en']);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([1], array_column($searcher->search('aktor', [
+        'lang' => 'pl',
+        'prefix_matching' => true,
+        'limit' => 10,
+    ]), 'doc_id'), 'Polish prefix expansion should stay in the Polish namespace');
+    assert_same([2], array_column($searcher->search('aktor', [
+        'lang' => 'en',
+        'prefix_matching' => true,
+        'limit' => 10,
+    ]), 'doc_id'), 'English prefix expansion should stay in the English namespace');
+});
+
+test_case('AND mode keeps original query groups while allowing prefix alternatives', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, 'aktorstwo scena', ['lang' => 'pl']);
+    $indexer->index_document(2, 'aktorstwo', ['lang' => 'pl']);
+    $indexer->index_document(3, 'sceniczny', ['lang' => 'pl']);
+
+    assert_same([1], array_column((new WP_FTS_Searcher($storage, $analyzer))->search('aktor scen', [
+        'lang' => 'pl',
+        'mode' => 'AND',
+        'prefix_matching' => true,
+        'limit' => 10,
+    ]), 'doc_id'), 'AND mode should require every original query word even when each word has prefix alternatives');
+});
+
+test_case('storage prefix lookups are capped', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $prefix = WP_FTS_TermNamespace::namespace_term('pl', 'aktor');
+    foreach (['aktora', 'aktorce', 'aktorem', 'zapas'] as $index => $term) {
+        $storage->replace_doc_postings($index + 1, [
+            WP_FTS_TermNamespace::namespace_term('pl', $term) => 1,
+        ]);
+    }
+
+    assert_same([
+        WP_FTS_TermNamespace::namespace_term('pl', 'aktora'),
+        WP_FTS_TermNamespace::namespace_term('pl', 'aktorce'),
+    ], WP_FTS_StorageCompat::terms_with_prefix($storage, $prefix, 2), 'prefix term lookup should return a deterministic capped term list');
+});
+
+test_case('mysql prefix lookup uses a bounded term range query', function (): void {
+    $wpdb = new WP_FTS_Test_WPDB();
+    $storage = new WP_FTS_Storage_Mysql($wpdb);
+    foreach (['aktora', 'aktorce', 'aktorem', 'zapas'] as $index => $term) {
+        $storage->put_term(
+            WP_FTS_TermNamespace::namespace_term('pl', $term),
+            1,
+            WP_FTS_PostingsCodec::encode([$index + 1 => 1])
+        );
+    }
+
+    $prefix = WP_FTS_TermNamespace::namespace_term('pl', 'aktor');
+    assert_same([
+        WP_FTS_TermNamespace::namespace_term('pl', 'aktora'),
+        WP_FTS_TermNamespace::namespace_term('pl', 'aktorce'),
+    ], $storage->terms_with_prefix($prefix, 2), 'MySQL prefix lookup should return capped sorted prefix terms');
+
+    $prefixSelect = null;
+    foreach ($wpdb->prepared as $prepared) {
+        if (str_starts_with($prepared['sql'], 'SELECT term FROM wp_fts_terms')) {
+            $prefixSelect = $prepared;
+            break;
+        }
+    }
+    assert_true($prefixSelect !== null, 'MySQL prefix lookup should prepare a term range query');
+    assert_contains('WHERE term >= %s AND term < %s', $prefixSelect['sql'], 'MySQL prefix lookup should use a bounded lower and upper term range');
+    assert_contains('ORDER BY term ASC', $prefixSelect['sql'], 'MySQL prefix lookup should keep deterministic term ordering');
+    assert_contains('LIMIT %d', $prefixSelect['sql'], 'MySQL prefix lookup should cap SQL rows');
+    assert_true(!str_contains(strtolower($prefixSelect['sql']), ' like '), 'MySQL prefix lookup must not use LIKE scans');
+    assert_same($prefix, $prefixSelect['args'][0] ?? null, 'MySQL prefix lookup should bind the lower prefix bound');
+    assert_same(2, $prefixSelect['args'][2] ?? null, 'MySQL prefix lookup should bind the requested cap');
+});
+
+test_case('phrase search still requires explicit extension point', function (): void {
     $searcher = new WP_FTS_Searcher(new WP_FTS_Storage_InMemory(), new WP_FTS_Analyzer());
     $extended = $searcher->search('pre', [
         'prefix' => true,

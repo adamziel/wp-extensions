@@ -12,6 +12,8 @@ final class WP_FTS_Searcher
 {
     private const DEFAULT_AUTO_FAST_MODE_THRESHOLD = 2000;
     private const DEFAULT_FAST_MODE_CANDIDATE_CAP = 1000;
+    private const DEFAULT_PREFIX_MIN_LENGTH = 4;
+    private const DEFAULT_PREFIX_MAX_TERMS = 64;
 
     /**
      * @param WP_FTS_Storage $storage Storage backend containing postings and
@@ -990,7 +992,7 @@ final class WP_FTS_Searcher
                 $this->merge_language_groups($groups, $query, $opts, $fallbackLang, 1);
             }
 
-            return $this->dedupe_query_groups($groups);
+            return $this->expand_prefix_query_groups($this->dedupe_query_groups($groups), $opts);
         }
 
         $explicitQueryLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']);
@@ -1005,7 +1007,126 @@ final class WP_FTS_Searcher
             $this->merge_fallback_language_groups($groups, $query, $opts, $fallbackLang);
         }
 
-        return $this->dedupe_query_groups($groups);
+        return $this->expand_prefix_query_groups($this->dedupe_query_groups($groups), $opts);
+    }
+
+    /**
+     * Add indexed prefix alternatives inside each logical query group.
+     *
+     * Exact/analyzer candidates keep their original ranks. Prefix-expanded
+     * stored terms receive a worse rank in the same group, so ranking and AND
+     * semantics still prefer exact matches while allowing broader recall.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
+     */
+    private function expand_prefix_query_groups(array $groups, array $opts): array
+    {
+        if (!$this->prefix_matching_enabled($opts) || $groups === []) {
+            return $groups;
+        }
+
+        $minLength = $this->prefix_min_length($opts);
+        $maxTerms = $this->prefix_max_terms($opts);
+        $expanded = [];
+        foreach ($groups as $group) {
+            $byKey = [];
+            $maxRank = 0;
+            foreach ($group as $candidate) {
+                $byKey[$candidate['key']] = $candidate;
+                $maxRank = max($maxRank, (int) $candidate['rank']);
+            }
+
+            $prefixRank = $maxRank + 1;
+            foreach ($group as $candidate) {
+                if (strlen($candidate['term']) < $minLength) {
+                    continue;
+                }
+
+                $prefix = WP_FTS_TermNamespace::namespace_term($candidate['lang'], $candidate['term']);
+                foreach (WP_FTS_StorageCompat::terms_with_prefix($this->storage, $prefix, $maxTerms) as $termKey) {
+                    if (isset($byKey[$termKey])) {
+                        continue;
+                    }
+
+                    $split = WP_FTS_TermNamespace::split_term($termKey);
+                    if ($split === null || $split['lang'] !== $candidate['lang'] || $split['term'] === '') {
+                        continue;
+                    }
+
+                    $byKey[$termKey] = [
+                        'key' => $termKey,
+                        'lang' => $split['lang'],
+                        'term' => $split['term'],
+                        'rank' => $prefixRank,
+                    ];
+                }
+            }
+
+            $expanded[] = array_values($byKey);
+        }
+
+        return $this->dedupe_query_groups($expanded);
+    }
+
+    /**
+     * Native prefix matching is opt-in for direct searcher callers.
+     */
+    private function prefix_matching_enabled(array $opts): bool
+    {
+        if (array_key_exists('prefix_matching', $opts)) {
+            return $this->truthy_option($opts['prefix_matching']);
+        }
+
+        if (array_key_exists('prefix', $opts)) {
+            return $this->truthy_option($opts['prefix']);
+        }
+
+        if (defined('WP_FTS_PREFIX_MATCHING')) {
+            return $this->truthy_option(constant('WP_FTS_PREFIX_MATCHING'));
+        }
+
+        return false;
+    }
+
+    /**
+     * Minimum analyzed term length before prefix expansion is attempted.
+     */
+    private function prefix_min_length(array $opts): int
+    {
+        $value = $this->non_negative_int_option($opts['prefix_min_length'] ?? null);
+        if ($value !== null) {
+            return $value;
+        }
+
+        if (defined('WP_FTS_PREFIX_MIN_LENGTH')) {
+            $value = $this->non_negative_int_option(constant('WP_FTS_PREFIX_MIN_LENGTH'));
+            if ($value !== null) {
+                return $value;
+            }
+        }
+
+        return self::DEFAULT_PREFIX_MIN_LENGTH;
+    }
+
+    /**
+     * Maximum stored terms added per analyzed query candidate.
+     */
+    private function prefix_max_terms(array $opts): int
+    {
+        $value = $this->positive_int_option($opts['prefix_max_terms'] ?? null);
+        if ($value !== null) {
+            return $value;
+        }
+
+        if (defined('WP_FTS_PREFIX_MAX_TERMS')) {
+            $value = $this->positive_int_option(constant('WP_FTS_PREFIX_MAX_TERMS'));
+            if ($value !== null) {
+                return $value;
+            }
+        }
+
+        return self::DEFAULT_PREFIX_MAX_TERMS;
     }
 
     /**
@@ -1364,8 +1485,9 @@ final class WP_FTS_Searcher
      */
     private function extension_results(string $query, array $opts): ?array
     {
-        $requested = !empty($opts['prefix']) || !empty($opts['phrase']);
-        if (!$requested) {
+        $phraseRequested = !empty($opts['phrase']);
+        $prefixRequested = !empty($opts['prefix']);
+        if (!$phraseRequested && !$prefixRequested) {
             return null;
         }
 
@@ -1374,7 +1496,11 @@ final class WP_FTS_Searcher
             return is_array($results) ? $results : [];
         }
 
-        throw new InvalidArgumentException('Prefix and phrase search require a search_extension callback for the active storage backend.');
+        if ($phraseRequested) {
+            throw new InvalidArgumentException('Phrase search requires a search_extension callback for the active storage backend.');
+        }
+
+        return null;
     }
 
     /**

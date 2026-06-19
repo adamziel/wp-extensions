@@ -10,7 +10,7 @@ declare(strict_types=1);
  * flag, and per-language lengths live in a separate table so BM25 can score
  * inside one language partition without mixing collection statistics.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage
 {
     private object $wpdb;
     private string $termsTable;
@@ -233,6 +233,49 @@ LIMIT %d",
         ksort($postingsByTerm, SORT_STRING);
 
         return $postingsByTerm;
+    }
+
+    /**
+     * Return stored term keys with the supplied namespaced prefix.
+     *
+     * The normal path uses an indexed binary range over the term primary key.
+     * Prefixes with no byte successor use a bounded lower-bound query followed
+     * by PHP prefix filtering, still avoiding an unbounded term-table scan.
+     *
+     * @return string[]
+     */
+    public function terms_with_prefix(string $prefix, int $limit): array
+    {
+        $limit = max(1, (int) $limit);
+        if ($prefix === '' || strlen($prefix) > WP_FTS_TermNamespace::MAX_TERM_KEY_BYTES) {
+            return [];
+        }
+
+        $upperBound = $this->binary_successor($prefix);
+        if ($upperBound !== null) {
+            $rows = $this->get_results($this->wpdb->prepare(
+                "SELECT term FROM {$this->termsTable}
+WHERE term >= %s AND term < %s
+ORDER BY term ASC
+LIMIT %d",
+                $prefix,
+                $upperBound,
+                $limit
+            ), 'read FTS prefix terms');
+
+            return $this->prefix_terms_from_rows($rows ?: [], $prefix, $limit);
+        }
+
+        $rows = $this->get_results($this->wpdb->prepare(
+            "SELECT term FROM {$this->termsTable}
+WHERE term >= %s
+ORDER BY term ASC
+LIMIT %d",
+            $prefix,
+            $limit
+        ), 'read FTS lower-bound prefix terms');
+
+        return $this->prefix_terms_from_rows($rows ?: [], $prefix, $limit);
     }
 
     /**
@@ -986,6 +1029,46 @@ GROUP BY term",
         ksort($docFreqs, SORT_STRING);
 
         return $docFreqs;
+    }
+
+    /**
+     * @param object[] $rows
+     * @return string[]
+     */
+    private function prefix_terms_from_rows(array $rows, string $prefix, int $limit): array
+    {
+        $limit = max(1, (int) $limit);
+        $terms = [];
+        foreach ($rows as $row) {
+            $term = (string) ($row->term ?? '');
+            if ($term === '' || !str_starts_with($term, $prefix)) {
+                continue;
+            }
+
+            $terms[] = $term;
+            if (count($terms) >= $limit) {
+                break;
+            }
+        }
+        $terms = array_values(array_unique($terms));
+        sort($terms, SORT_STRING);
+
+        return array_slice($terms, 0, $limit);
+    }
+
+    /**
+     * Return the exclusive upper bound for all strings with a binary prefix.
+     */
+    private function binary_successor(string $value): ?string
+    {
+        for ($i = strlen($value) - 1; $i >= 0; $i--) {
+            $byte = ord($value[$i]);
+            if ($byte < 0xFF) {
+                return substr($value, 0, $i) . chr($byte + 1);
+            }
+        }
+
+        return null;
     }
 
     /**
