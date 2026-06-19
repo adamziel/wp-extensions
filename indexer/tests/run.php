@@ -6910,6 +6910,75 @@ test_case('front-end search highlights title-only matches while keeping previews
     }
 });
 
+test_case('front-end search highlights from global main query outside loop scope', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $post = (object) [
+        'ID' => 803,
+        'post_title' => 'Globalneedle title result',
+        'post_content' => '<p>Globalneedle body preview outside loop scope.</p>',
+        'post_excerpt' => 'Normal global query excerpt',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][803] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(803, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'globalneedle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        assert_same([803], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'front-end global fallback search should return the matching post');
+
+        $oldGlobalPost = $GLOBALS['post'] ?? null;
+        $oldGlobalQuery = $GLOBALS['wp_query'] ?? null;
+        try {
+            $GLOBALS['post'] = $posts[0];
+            $GLOBALS['wp_query'] = $query;
+
+            $excerpt = WP_FTS_Plugin::frontend_search_excerpt('Theme fallback excerpt', $posts[0]);
+            $content = WP_FTS_Plugin::frontend_search_content('<p>Theme fallback content.</p>');
+            $title = WP_FTS_Plugin::frontend_search_title($post->post_title, 803);
+
+            assert_contains('<mark>Globalneedle</mark> body preview outside loop scope.', $excerpt, 'front-end excerpt fallback should use highlighted snippets from the global main query');
+            assert_contains('<p>', $content, 'front-end content fallback should return paragraph preview markup');
+            assert_contains('<mark>Globalneedle</mark> body preview outside loop scope.', $content, 'front-end content fallback should use highlighted snippets from the global main query');
+            assert_contains('<mark>Globalneedle</mark> title result', $title, 'front-end title fallback should use highlighted titles from the global main query');
+
+            $GLOBALS['wp_query'] = new WP_FTS_Test_Query([
+                's' => 'globalneedle',
+                'posts_per_page' => 10,
+            ], false, true);
+            assert_same('Theme fallback excerpt', WP_FTS_Plugin::frontend_search_excerpt('Theme fallback excerpt', $posts[0]), 'non-search global queries should not receive stored FTS snippets');
+            assert_same('<p>Theme fallback content.</p>', WP_FTS_Plugin::frontend_search_content('<p>Theme fallback content.</p>'), 'non-search global queries should not receive stored FTS content previews');
+            assert_same($post->post_title, WP_FTS_Plugin::frontend_search_title($post->post_title, 803), 'non-search global queries should not receive stored FTS title highlights');
+
+            $GLOBALS['wp_query'] = $query;
+            $GLOBALS['wp_fts_test_is_rest'] = true;
+            assert_same('REST fallback excerpt', WP_FTS_Plugin::frontend_search_excerpt('REST fallback excerpt', $posts[0]), 'REST-like contexts should not receive stored FTS snippets');
+        } finally {
+            $GLOBALS['wp_fts_test_is_rest'] = false;
+            if ($oldGlobalPost === null) {
+                unset($GLOBALS['post']);
+            } else {
+                $GLOBALS['post'] = $oldGlobalPost;
+            }
+            $GLOBALS['wp_query'] = $oldGlobalQuery;
+        }
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('front-end search snippets preserve split inline HTML safely', function (): void {
     global $wpdb;
 
@@ -7028,6 +7097,8 @@ test_case('front-end search excerpts are scoped to the active replaced main loop
 
         wp_fts_test_begin_frontend_search_loop($query);
         try {
+            $oldGlobalQuery = $GLOBALS['wp_query'] ?? null;
+            $GLOBALS['wp_query'] = $query;
             $mainExcerpt = WP_FTS_Plugin::frontend_search_excerpt('Main normal excerpt', $posts[0] ?? null);
             assert_contains('<mark>scopeneedle</mark>', $mainExcerpt, 'active replaced main loop should receive the highlighted FTS snippet');
 
@@ -7044,6 +7115,7 @@ test_case('front-end search excerpts are scoped to the active replaced main loop
 
             assert_contains('<mark>scopeneedle</mark>', WP_FTS_Plugin::frontend_search_excerpt('Main normal excerpt', $posts[0] ?? null), 'main-loop FTS snippet should resume after a nested secondary loop ends');
         } finally {
+            $GLOBALS['wp_query'] = $oldGlobalQuery;
             wp_fts_test_end_frontend_search_loop($query);
         }
 

@@ -4242,13 +4242,9 @@ JS;
             $post_id = self::post_id_from_value($GLOBALS['post']);
         }
 
-        $query_key = self::$front_end_search_active_query_key;
-        if (
-            $post_id > 0
-            && $query_key > 0
-            && isset(self::$front_end_search_query_state[$query_key]['snippets'][$post_id])
-        ) {
-            return self::$front_end_search_query_state[$query_key]['snippets'][$post_id];
+        $state = self::frontend_search_query_state_for_post($post_id);
+        if ($state !== null && array_key_exists($post_id, $state['snippets'])) {
+            return $state['snippets'][$post_id];
         }
 
         return is_scalar($excerpt) ? (string) $excerpt : '';
@@ -4267,13 +4263,9 @@ JS;
     public static function frontend_search_content(mixed $content): string
     {
         $post_id = isset($GLOBALS['post']) ? self::post_id_from_value($GLOBALS['post']) : 0;
-        $query_key = self::$front_end_search_active_query_key;
-        if (
-            $post_id > 0
-            && $query_key > 0
-            && isset(self::$front_end_search_query_state[$query_key]['snippets'][$post_id])
-        ) {
-            return self::frontend_content_preview_markup(self::$front_end_search_query_state[$query_key]['snippets'][$post_id]);
+        $state = self::frontend_search_query_state_for_post($post_id);
+        if ($state !== null && array_key_exists($post_id, $state['snippets'])) {
+            return self::frontend_content_preview_markup($state['snippets'][$post_id]);
         }
 
         return is_scalar($content) ? (string) $content : '';
@@ -4292,16 +4284,57 @@ JS;
             $id = self::post_id_from_value($GLOBALS['post']);
         }
 
-        $query_key = self::$front_end_search_active_query_key;
-        if (
-            $id > 0
-            && $query_key > 0
-            && isset(self::$front_end_search_query_state[$query_key]['titles'][$id])
-        ) {
-            return self::$front_end_search_query_state[$query_key]['titles'][$id];
+        $state = self::frontend_search_query_state_for_post($id);
+        if ($state !== null && array_key_exists($id, $state['titles'])) {
+            return $state['titles'][$id];
         }
 
         return is_scalar($title) ? (string) $title : '';
+    }
+
+    /**
+     * Resolve the FTS state that owns a frontend-rendered post.
+     *
+     * @return array{total:int,max_pages:int,query_lang:string,snippets:array<int,string>,titles:array<int,string>}|null
+     */
+    private static function frontend_search_query_state_for_post(int $post_id): ?array
+    {
+        if ($post_id <= 0) {
+            return null;
+        }
+
+        $active_key = self::$front_end_search_active_query_key;
+        if (self::frontend_search_query_state_contains_post($active_key, $post_id)) {
+            return self::$front_end_search_query_state[$active_key];
+        }
+
+        if ($active_key > 0 || self::$front_end_search_loop_stack !== []) {
+            return null;
+        }
+
+        $query = $GLOBALS['wp_query'] ?? null;
+        if (!is_object($query) || !self::is_frontend_search_query($query)) {
+            return null;
+        }
+
+        $query_key = self::query_object_key($query);
+        if (!self::frontend_search_query_state_contains_post($query_key, $post_id)) {
+            return null;
+        }
+
+        return self::$front_end_search_query_state[$query_key];
+    }
+
+    private static function frontend_search_query_state_contains_post(int $query_key, int $post_id): bool
+    {
+        if ($query_key <= 0 || !isset(self::$front_end_search_query_state[$query_key])) {
+            return false;
+        }
+
+        $state = self::$front_end_search_query_state[$query_key];
+
+        return array_key_exists($post_id, $state['snippets'])
+            || array_key_exists($post_id, $state['titles']);
     }
 
     private static function frontend_content_preview_markup(string $snippet): string
