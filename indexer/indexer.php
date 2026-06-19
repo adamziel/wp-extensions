@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Pure PHP FTS Indexer
  * Description: HTML-aware pure-PHP full-text search engine for WordPress.
- * Version: 0.1.5
+ * Version: 0.1.6
  * Requires PHP: 8.1
  */
 
