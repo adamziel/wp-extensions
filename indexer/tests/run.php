@@ -10567,6 +10567,57 @@ test_case('default index and query analyzers normalize plain text identically', 
     assert_true($comparisons >= 1000, 'T3 plain-string parity should cover at least 1000 deterministic random strings');
 });
 
+test_case('default analyzer parity covers explicit language stemmer pipelines', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
+    mt_srand(4321);
+    $termsByLang = [
+        'en' => ['running', 'runs', 'runner', 'indexed', 'documents', 'search'],
+        'pl' => ['Wrocławiu', 'Łódź', 'kotami', 'samochody', 'zamek', 'zażółć'],
+        'zh-Hans' => ['中文搜索', '搜索引擎', '科学院', '数据'],
+        'hi' => ['नमस्ते', 'विद्यालय', 'खोज', 'अनुच्छेद'],
+        'es' => ['búsqueda', 'corriendo', 'documentos', 'acción'],
+        'ar' => ['العربية', 'اختبار', 'معلومات', 'المدرسة'],
+        'fr' => ['recherche', 'élève', 'français', 'documents'],
+        'bn' => ['বাংলা', 'বিদ্যালয়ের', 'সূচিতে', 'শিক্ষকদেরকে'],
+        'pt' => ['pesquisa', 'corações', 'documentos', 'ação'],
+        'id' => ['pencarian', 'dokumen', 'berjalan', 'indeks'],
+        'ur' => ['اردو', 'پاکستان', 'لڑکیاں', 'معلومات'],
+        'de' => ['Führung', 'Straße', 'Ärger', 'suchen'],
+        'ru' => ['русский', 'поиск', 'документы', 'индекс'],
+        'ja' => ['東京検索', '京都', '検索できます', '漢字かな'],
+        'ko' => ['한글검색', '검색합니다', '한국어', '자료'],
+        'te' => ['తెలుగు', 'శోధన', 'సూచిక', 'పత్రాలు'],
+        'tr' => ['İstanbul', 'arama', 'dizini', 'belgeler'],
+        'it' => ['ricerca', 'documenti', 'correndo', 'città'],
+        'fa' => ['فارسی', 'جستجو', 'فهرست', 'گزارش'],
+        'uk' => ['українська', 'пошук', 'індекс', 'документи'],
+        'nl' => ['zoeken', 'documenten', 'aanbaden', 'kleur'],
+        'ca' => ['català', 'cerca', 'documents', 'acció'],
+    ];
+    $separators = [' ', '  ', "\n", "\t", '.', ',', '!', '?', ';', ':', "'", '"', '-', ' / ', '،', '।', '。'];
+    $languages = array_keys($termsByLang);
+
+    $comparisons = 0;
+    for ($i = 0; $i < 1024; $i++) {
+        $lang = $languages[$i % count($languages)];
+        $terms = $termsByLang[$lang];
+        $parts = [$terms[mt_rand(0, count($terms) - 1)]];
+        for ($j = 0, $n = mt_rand(4, 14); $j < $n; $j++) {
+            $parts[] = $separators[mt_rand(0, count($separators) - 1)];
+            $parts[] = $terms[mt_rand(0, count($terms) - 1)];
+        }
+        $text = implode('', $parts);
+        $options = ['lang' => $lang];
+        assert_same(
+            $analyzer->analyze_query($text, $options),
+            test_terms($analyzer->analyze_content(strip_tags($text), $options)),
+            "default analyzer explicit {$lang} content and query parity must match for deterministic random string {$i}"
+        );
+        $comparisons++;
+    }
+    assert_true($comparisons >= 1000, 'T3 default-analyzer parity with stemming should cover at least 1000 deterministic random strings');
+});
+
 test_case('postings varint round trips doc-id deltas and weighted tf', function (): void {
     $postings = [1 => 3, 2 => 1, 10 => 255, 1000 => 2, 1000000 => 4096];
     $encoded = WP_FTS_PostingsCodec::encode($postings);
