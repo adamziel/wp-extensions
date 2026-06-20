@@ -29,9 +29,9 @@ content.
 Settings > Full-Text Search provides Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs. It manages the indexed post types, automatic indexing,
 search replacement surfaces, search-provider compatibility, highlighting,
-snippets, prefix matching, result limits, field ranking weights, and language
-fallback defaults; analyzer-pack paths and custom field selection still use the
-documented options and filters.
+snippets, prefix matching, result limits, field ranking weights, an optional
+recency ranking boost, and language fallback defaults; analyzer-pack paths and
+custom field selection still use the documented options and filters.
 
 ## Quickstart
 
@@ -82,6 +82,14 @@ The defaults match the extractor defaults: title `5.0`, content `1.0`, excerpt
 content `1.0`. These are index-time weights stored with indexed content, so
 changed weights fully affect existing content only after it is reindexed.
 
+The same Ranking weights section also includes an optional recent post boost.
+It is off by default (`0`). When enabled, query-time ranking gives newer posts a
+small bounded lift using indexed `post_date_gmt` metadata. Changing the strength
+or half-life does not require reindexing when the date metadata is already in
+the index. Missing, empty, or invalid dates are ignored safely, and search
+explain diagnostics report whether the boost was enabled and how many candidate
+documents received it.
+
 ## Architecture
 
 - `wp-php-toolkit/full-text-search` provides the analyzer, term generation,
@@ -118,7 +126,7 @@ restored with WordPress content.
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
-| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, per-result match details, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, recency boost status, per-result match details, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
 
 ## Search Accuracy And Automatic Fast Mode
 
@@ -283,6 +291,9 @@ wp fts search "fast durable search" --mode=AND --lang=en --limit=10
 
 # Filter by stored WordPress metadata and include snippets.
 wp fts search "fast durable search" --post_type=post,page --post_status=publish --snippet
+
+# Give recent posts a bounded query-time lift using indexed post_date_gmt metadata.
+wp fts search "fast durable search" --recency_boost=0.3 --recency_boost_half_life_days=30
 
 # Tombstone one document and compact tombstones later.
 wp fts delete 123

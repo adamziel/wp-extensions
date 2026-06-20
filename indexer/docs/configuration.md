@@ -4,14 +4,15 @@ Settings > Full-Text Search provides the operator-facing Health, Settings,
 Sandbox, Indexed content, and Analyzer packs tabs. The Settings tab controls
 indexed post types, automatic indexing, front-end and wp-admin Posts search
 replacement, search-provider compatibility, result limits, snippets,
-highlighting, prefix matching, field ranking weights, and language fallback
-defaults. WordPress runtime indexing, REST/admin search, the PHP plugin search
-helper, and WP-CLI use `WP_FTS_Plugin::runtime_analyzer()`. Analyzer-pack paths
-are still configured through the `wp_fts_analyzer_options` option or filter,
-operational internals such as schema version and pending queue state are managed
-by the plugin, and selected custom fields can be supplied through an option or
-filters. More advanced configuration is available to PHP callers that
-instantiate `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
+highlighting, prefix matching, field ranking weights, optional recency ranking
+boosts, and language fallback defaults. WordPress runtime indexing, REST/admin
+search, the PHP plugin search helper, and WP-CLI use
+`WP_FTS_Plugin::runtime_analyzer()`. Analyzer-pack paths are still configured
+through the `wp_fts_analyzer_options` option or filter, operational internals
+such as schema version and pending queue state are managed by the plugin, and
+selected custom fields can be supplied through an option or filters. More
+advanced configuration is available to PHP callers that instantiate
+`WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
 `WP_FTS_Storage_Mysql` directly.
 
 ## Search Replacement Compatibility
@@ -53,6 +54,19 @@ These weights are written into the index, not applied as live query-time
 overrides. After changing them, reindex content to make the new ranking weights
 fully apply to existing posts. Programmatic indexing can still pass explicit
 `field_boosts` options to override the saved plugin settings for that call.
+
+## Recency Ranking Boost
+
+The Settings tab can give recent posts a small query-time ranking lift. The
+saved `recency_boost_strength` default is `0`, which disables the boost and
+preserves existing search behavior. `recency_boost_half_life_days` controls how
+quickly the lift fades as a post gets older; the default is `30` days.
+
+The boost uses indexed `post_date_gmt` metadata. Changing strength or half-life
+does not require reindexing if that date metadata is already present. Missing,
+empty, invalid, or unavailable metadata is a no-op for that document or backend.
+Search explain diagnostics include the normalized boost settings, reference
+time, candidate counts, applied counts, and whether metadata was unavailable.
 
 ## Languages
 
@@ -649,10 +663,13 @@ WP-CLI exposes the supported search options:
 ```sh
 wp fts search "query text" --mode=OR --limit=10 --lang=en
 wp fts search "query text" --mode=AND --limit=10 --lang=en
+wp fts search "query text" --recency_boost=0.3 --recency_boost_half_life_days=30
 ```
 
 `OR` is the default and returns documents matching any query term. `AND` requires
-every query term to be present. `limit` is clamped to at least 1.
+every query term to be present. `limit` is clamped to at least 1. The optional
+recency boost flags apply only to that CLI query and use stored
+`post_date_gmt` metadata.
 
 Broad searches automatically switch to approximate fast top-K mode when the
 analyzed query's estimated active candidate count exceeds 2000 documents. Fast

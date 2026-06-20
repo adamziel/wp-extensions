@@ -4133,6 +4133,8 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
         'custom_fields' => 1.0,
         'rendered' => 1.0,
     ], WP_FTS_Plugin::default_settings()['field_boosts'], 'default settings should expose the extractor field boost defaults');
+    assert_same(0.0, WP_FTS_Plugin::default_settings()['recency_boost_strength'], 'default recency ranking boost should be disabled');
+    assert_same(30.0, WP_FTS_Plugin::default_settings()['recency_boost_half_life_days'], 'default recency ranking half-life should be conservative');
     assert_same(true, WP_FTS_Plugin::default_settings()['language_fallback'], 'default settings should enable language fallback');
     assert_same(true, WP_FTS_Plugin::default_settings()['prefix_matching'], 'default settings should enable word-beginning prefix matching');
     assert_same('prefer_fts', WP_FTS_Plugin::default_settings()['search_provider_compatibility'], 'default search provider compatibility should prefer FTS precedence');
@@ -4226,6 +4228,34 @@ test_case('settings sanitization accepts bounded field boosts and rejects invali
         'custom_fields' => 1.0,
         'rendered' => 1.0,
     ], $invalid['field_boosts'], 'invalid or missing field boosts should fall back to defaults');
+});
+
+test_case('settings sanitization clamps recency ranking boost controls', function (): void {
+    $valid = WP_FTS_Plugin::sanitize_settings([
+        'recency_boost_strength' => '1.25',
+        'recency_boost_half_life_days' => '45.5',
+    ]);
+    assert_same(1.25, $valid['recency_boost_strength'], 'valid recency boost strength should persist as a float');
+    assert_same(45.5, $valid['recency_boost_half_life_days'], 'valid recency half-life should persist as a float');
+
+    $clamped = WP_FTS_Plugin::sanitize_settings([
+        'recency_boost_strength' => '99',
+        'recency_boost_half_life_days' => '99999',
+    ]);
+    assert_same(2.0, $clamped['recency_boost_strength'], 'recency boost strength should clamp to a conservative maximum');
+    assert_same(3650.0, $clamped['recency_boost_half_life_days'], 'recency half-life should clamp to a bounded maximum');
+
+    $invalid = WP_FTS_Plugin::sanitize_settings([
+        'recency_boost_strength' => '-1',
+        'recency_boost_half_life_days' => '-7',
+    ]);
+    assert_same(0.0, $invalid['recency_boost_strength'], 'negative recency strength should disable the boost');
+    assert_same(30.0, $invalid['recency_boost_half_life_days'], 'invalid recency half-life should fall back to the default');
+
+    $legacyToggle = WP_FTS_Plugin::sanitize_settings([
+        'recency_boost' => true,
+    ]);
+    assert_same(0.25, $legacyToggle['recency_boost_strength'], 'boolean recency boost setting should normalize to the small default strength');
 });
 
 test_case('prepare post index options uses saved field boosts unless caller overrides them', function (): void {
@@ -4413,6 +4443,10 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('Matches in the main saved post content', $settingsHtml, 'settings ranking controls should explain main content');
     assert_contains('Matches in categories, tags, and other taxonomy term names', $settingsHtml, 'settings ranking controls should explain taxonomy terms');
     assert_contains('Matches in block-rendered output that is not already in the saved content', $settingsHtml, 'settings ranking controls should explain rendered-only content');
+    assert_contains('name="wp_fts_settings[recency_boost_strength]" value="0"', $settingsHtml, 'settings ranking controls should default recency boost strength to disabled');
+    assert_contains('name="wp_fts_settings[recency_boost_half_life_days]" value="30"', $settingsHtml, 'settings ranking controls should render the default recency half-life');
+    assert_contains('using indexed GMT post dates', $settingsHtml, 'settings ranking controls should explain the recency boost date metadata source');
+    assert_contains('without rebuilding the index', $settingsHtml, 'settings ranking controls should explain recency boost changes are query-time');
     assert_contains('name="wp_fts_settings[language_fallback]" value="1" checked="checked"', $settingsHtml, 'settings defaults should enable language fallback');
     assert_contains('If the query language is unsupported or produces no matches', $settingsHtml, 'settings language fallback copy should explain unsupported languages and no-match fallback');
     assert_contains('not copied into this plugin setting', $settingsHtml, 'settings language fallback copy should explain that site language is read dynamically');
@@ -4662,6 +4696,7 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<th scope="row">wp-admin Posts search</th><td>Disabled</td>', $html, 'health dashboard should show admin search replacement state');
     assert_contains('<th scope="row">Search provider compatibility</th><td>Prefer Language FTS</td>', $html, 'health dashboard should show effective provider compatibility mode');
     assert_contains('<th scope="row">Field ranking weights</th><td>title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1</td>', $html, 'health dashboard should summarize effective field boost settings');
+    assert_contains('<th scope="row">Recency ranking boost</th><td>Disabled</td>', $html, 'health dashboard should summarize the default-off recency boost');
     assert_contains('<th scope="row">Indexed post types</th><td>page, post</td>', $html, 'health dashboard should show configured indexed post types');
     assert_contains('<th scope="row">Eligible content</th><td>3</td>', $html, 'health dashboard should show total eligible content');
     assert_contains('<th scope="row">Indexed</th><td>1</td>', $html, 'health dashboard should show indexed count');
@@ -5226,6 +5261,14 @@ test_case('sandbox passes search knobs to Searcher options', function (): void {
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => $context === 'sandbox search';
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        [
+            'recency_boost_strength' => 0.3,
+            'recency_boost_half_life_days' => 10.0,
+        ]
+    );
 
     $posts = [
         621 => ['title' => 'Alpha Beta Post', 'type' => 'post', 'status' => 'publish', 'date' => '2026-06-10 00:00:00', 'content' => '<p>alpha beta gamma content.</p>'],
@@ -5277,6 +5320,13 @@ test_case('sandbox passes search knobs to Searcher options', function (): void {
         assert_true(!str_contains($html, 'Older Alpha Beta Post'), 'sandbox date filters should exclude old content');
         assert_true(!str_contains($html, 'Alpha Only Post'), 'sandbox AND mode should require all query terms');
         assert_contains('Loading excerpt...', $html, 'sandbox should defer snippet rendering to the detail request');
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'sandbox diagnostics should record one initial search trace');
+        $explain = is_array($traces[0]['search_explain'] ?? null) ? $traces[0]['search_explain'] : [];
+        $recency = is_array($explain['recency_boost'] ?? null) ? $explain['recency_boost'] : [];
+        assert_same(true, $recency['enabled'] ?? null, 'sandbox search should pass saved recency boost into the searcher');
+        assert_float_near(0.3, (float) ($recency['strength'] ?? -1), 'sandbox diagnostics should record saved recency strength');
+        assert_float_near(10.0, (float) ($recency['half_life_days'] ?? -1), 'sandbox diagnostics should record saved recency half-life');
 
         $detailRequest = $_GET;
         $detailRequest['wp_fts_sandbox_details_nonce'] = wp_create_nonce('wp_fts_sandbox_result_details');
@@ -7168,6 +7218,13 @@ test_case('enabled diagnostics record frontend search timings counts language se
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        [
+            'recency_boost_strength' => 0.4,
+            'recency_boost_half_life_days' => 14.0,
+        ]
+    );
 
     $low = (object) [
         'ID' => 505,
@@ -7224,6 +7281,7 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_same('OR', $settings['match_mode'] ?? null, 'frontend diagnostics should record match mode setting');
         assert_same('enabled', $settings['prefix_matching'] ?? null, 'frontend diagnostics should record prefix matching setting');
         assert_same('title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1', $settings['field_boosts'] ?? null, 'frontend diagnostics should summarize effective field boosts');
+        assert_same('Enabled, strength 0.4, half-life 14 days', $settings['recency_boost'] ?? null, 'frontend diagnostics should summarize saved recency boost settings');
 
         $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
         assert_true((int) ($counts['candidate_rows'] ?? 0) >= 2, 'frontend diagnostics should count candidate rows');
@@ -7264,6 +7322,12 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_true((int) ($scoring['candidate_rows_fetched'] ?? 0) >= 2, 'frontend diagnostics should include fetched candidate row shape');
         assert_true((int) ($scoring['candidate_docs_scored'] ?? 0) >= 2, 'frontend diagnostics should include scored document shape');
         assert_same('exact', $scoring['total_accuracy'] ?? null, 'frontend diagnostics should record exact result totals');
+
+        $recency = is_array($explain['recency_boost'] ?? null) ? $explain['recency_boost'] : [];
+        assert_same(true, $recency['enabled'] ?? null, 'frontend diagnostics should pass saved recency boost into the searcher');
+        assert_float_near(0.4, (float) ($recency['strength'] ?? -1), 'frontend diagnostics should record saved recency strength');
+        assert_float_near(14.0, (float) ($recency['half_life_days'] ?? -1), 'frontend diagnostics should record saved recency half-life');
+        assert_true((int) ($recency['documents_applied'] ?? 0) >= 2, 'frontend diagnostics should report recency applied to dated search results');
 
         $resultMatches = is_array($explain['results'] ?? null) ? $explain['results'] : [];
         assert_same(506, (int) ($resultMatches[0]['doc_id'] ?? 0), 'frontend diagnostics should include per-result match data for returned page order');
@@ -7574,6 +7638,14 @@ test_case('admin Posts list search is replaced with FTS-ranked WP_Post results',
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_is_admin'] = true;
     $GLOBALS['pagenow'] = 'edit.php';
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => $context === 'admin post search';
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        [
+            'recency_boost_strength' => 0.35,
+            'recency_boost_half_life_days' => 21.0,
+        ]
+    );
 
     $low = (object) [
         'ID' => 551,
@@ -7615,6 +7687,15 @@ test_case('admin Posts list search is replaced with FTS-ranked WP_Post results',
         assert_same(2, $query->found_posts, 'admin Posts list search should expose the FTS visible total on the query');
         assert_same(1, $query->max_num_pages, 'admin Posts list search should expose max pages from the FTS visible total');
         assert_same(2, WP_FTS_Plugin::filter_admin_post_search_found_posts(999, $query), 'admin found_posts filter should preserve the replacement total');
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'admin Posts diagnostics should record one run trace');
+        $trace = $traces[0];
+        assert_same('admin post search', $trace['context'] ?? null, 'admin diagnostics should record the admin search context');
+        $explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
+        $recency = is_array($explain['recency_boost'] ?? null) ? $explain['recency_boost'] : [];
+        assert_same(true, $recency['enabled'] ?? null, 'admin Posts search should pass saved recency boost into the searcher');
+        assert_float_near(0.35, (float) ($recency['strength'] ?? -1), 'admin Posts diagnostics should record saved recency strength');
+        assert_float_near(21.0, (float) ($recency['half_life_days'] ?? -1), 'admin Posts diagnostics should record saved recency half-life');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -13025,6 +13106,160 @@ test_case('search fast top-k candidate cap is explicit approximate opt-in', func
     assert_true(($fast['results'][0]['doc_id'] ?? null) !== 6, 'fast top-k may miss a stronger candidate outside the cap');
 });
 
+test_case('recency boost is default-off and can reorder equally relevant documents', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document_fields(1, [['name' => 'content', 'text' => 'needle shared']], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 1,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2024-06-20 00:00:00',
+            'title' => 'Old needle',
+            'search_text' => 'needle shared',
+        ],
+    ]);
+    $indexer->index_document_fields(2, [['name' => 'content', 'text' => 'needle shared']], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 2,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-06-20 00:00:00',
+            'title' => 'New needle',
+            'search_text' => 'needle shared',
+        ],
+    ]);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([1, 2], array_column($searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 2,
+    ]), 'doc_id'), 'disabled recency boost should preserve default score and doc-id ordering');
+
+    $boosted = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 2,
+        'recency_boost_strength' => 1.0,
+        'recency_boost_half_life_days' => 7,
+        'now_gmt' => '2026-06-20 00:00:00',
+    ]);
+    assert_same([2, 1], array_column($boosted, 'doc_id'), 'enabled recency boost should let a newer equally relevant document rank first');
+
+    $fast = $searcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 2,
+        'include_total' => true,
+        'fast_top_k' => true,
+        'candidate_cap' => 2,
+        'recency_boost_strength' => 1.0,
+        'recency_boost_half_life_days' => 7,
+        'now_gmt' => '2026-06-20 00:00:00',
+    ]);
+    assert_same([2, 1], array_column($fast['results'], 'doc_id'), 'fast-mode recency boost should apply inside the scored candidate set before sorting');
+});
+
+test_case('recency boost stays bounded and ignores missing or invalid dates safely', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    $indexer->index_document_fields(1, [['name' => 'content', 'text' => str_repeat('needle ', 12)]], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 1,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2024-06-20 00:00:00',
+            'title' => 'Strong old needle',
+            'search_text' => str_repeat('needle ', 12),
+        ],
+    ]);
+    $indexer->index_document_fields(2, [['name' => 'content', 'text' => 'needle']], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 2,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-06-20 00:00:00',
+            'title' => 'Weak new needle',
+            'search_text' => 'needle',
+        ],
+    ]);
+    $indexer->index_document_fields(3, [['name' => 'content', 'text' => 'needle']], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 3,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => 'not-a-date',
+            'title' => 'Invalid date needle',
+            'search_text' => 'needle',
+        ],
+    ]);
+    $indexer->index_document_fields(4, [['name' => 'content', 'text' => 'needle']], ['lang' => 'en']);
+
+    $warnings = [];
+    set_error_handler(static function (int $severity, string $message) use (&$warnings): bool {
+        $warnings[] = $severity . ':' . $message;
+        return true;
+    });
+    try {
+        $payload = (new WP_FTS_Searcher($storage, $analyzer))->search('needle', [
+            'lang' => 'en',
+            'limit' => 4,
+            'include_total' => true,
+            'explain' => true,
+            'recency_boost_strength' => 0.005,
+            'recency_boost_half_life_days' => 7,
+            'now_gmt' => '2026-06-20 00:00:00',
+        ]);
+    } finally {
+        restore_error_handler();
+    }
+
+    assert_same([], $warnings, 'missing and invalid recency dates should not emit PHP warnings');
+    assert_same(1, $payload['results'][0]['doc_id'] ?? null, 'a strongly more relevant old document should still win when recency boost is small');
+    $recency = is_array($payload['explain']['recency_boost'] ?? null) ? $payload['explain']['recency_boost'] : [];
+    assert_same(true, $recency['enabled'] ?? null, 'explain should record enabled recency boost');
+    assert_float_near(0.005, (float) ($recency['strength'] ?? -1), 'explain should record clamped recency strength');
+    assert_float_near(7.0, (float) ($recency['half_life_days'] ?? -1), 'explain should record recency half-life');
+    assert_same('2026-06-20 00:00:00', $recency['now_gmt'] ?? null, 'explain should record deterministic recency reference time');
+    assert_same(4, (int) ($recency['documents_considered'] ?? 0), 'explain should count recency candidate documents');
+    assert_same(2, (int) ($recency['documents_applied'] ?? 0), 'explain should count documents with valid dates that received a boost');
+    assert_same(2, (int) ($recency['missing_or_invalid_dates'] ?? 0), 'explain should count missing and invalid recency dates');
+    assert_same(false, $recency['metadata_unavailable'] ?? null, 'metadata-backed storage should not report recency metadata unavailable');
+});
+
+test_case('recency boost is a no-op when metadata support is unavailable', function (): void {
+    $storage = new WP_FTS_Test_LanguagePartitionStorage();
+    $payload = (new WP_FTS_Searcher($storage, new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ])))->search('needle', [
+        'lang' => 'en',
+        'include_total' => true,
+        'explain' => true,
+        'recency_boost_strength' => 1.0,
+        'now_gmt' => '2026-06-20 00:00:00',
+    ]);
+
+    assert_same(101, $payload['results'][0]['doc_id'] ?? null, 'metadata-unavailable recency boost should leave normal search results available');
+    $recency = is_array($payload['explain']['recency_boost'] ?? null) ? $payload['explain']['recency_boost'] : [];
+    assert_same(true, $recency['enabled'] ?? null, 'explain should still show that recency was requested');
+    assert_same(true, $recency['metadata_unavailable'] ?? null, 'explain should report unavailable metadata as a safe no-op');
+    assert_same(0, (int) ($recency['documents_applied'] ?? -1), 'metadata-unavailable recency boost should apply to no documents');
+});
+
 test_case('in-memory capped postings avoid full sort on append-ordered rows', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $term = WP_FTS_TermNamespace::namespace_term('en', 'needle');
@@ -13610,6 +13845,56 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     }
     assert_true($postSelect !== null, 'CLI reindex should prepare a batched posts query');
     assert_same(['publish', 'draft', 'post', 'page', 0, 1], $postSelect['args'], 'CLI source filters and remaining limit should be prepared');
+});
+
+test_case('wp cli search accepts recency boost ranking options', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $storage = WP_FTS_Plugin::storage(true);
+        $analyzer = WP_FTS_Plugin::runtime_analyzer();
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $indexer->index_document_fields(1, [['name' => 'content', 'text' => 'needle cli']], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 1,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '1970-01-01 00:00:00',
+                'title' => 'Old CLI needle',
+                'search_text' => 'needle cli',
+            ],
+        ]);
+        $indexer->index_document_fields(2, [['name' => 'content', 'text' => 'needle cli']], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 2,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2999-01-01 00:00:00',
+                'title' => 'New CLI needle',
+                'search_text' => 'needle cli',
+            ],
+        ]);
+
+        $GLOBALS['wp_fts_quality_cli_format_items'] = [];
+        (new WP_FTS_WPCLI_Command())->search(['needle'], [
+            'lang' => 'en',
+            'limit' => '2',
+            'recency_boost' => '1',
+            'recency_boost_half_life_days' => '7',
+        ]);
+        $formats = $GLOBALS['wp_fts_quality_cli_format_items'] ?? [];
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same([2, 1], array_column($formats[0]['items'] ?? [], 'doc_id'), 'CLI recency boost options should let the newer equal-score document rank first');
 });
 
 test_case('wp cli reindex defaults cover admin-searchable post statuses while explicit publish stays narrow', function (): void {

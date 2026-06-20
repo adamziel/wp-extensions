@@ -149,6 +149,17 @@ bounded extracted text:
 wp fts search "release notes" --post_type=post,page --post_status=publish --after=2026-01-01 --snippet
 ```
 
+Use a recency boost only when operators want newer posts to receive a small
+query-time ranking lift from indexed `post_date_gmt` metadata:
+
+```sh
+wp fts search "release notes" --recency_boost=0.3 --recency_boost_half_life_days=30
+```
+
+The boost is disabled by default. Changing the strength or half-life does not
+require a reindex when post dates are already indexed, and explain/debug
+diagnostics report whether the boost applied.
+
 The plugin registers a `wp-fts/v1/search` REST helper and a PHP
 `WP_FTS_Plugin::search()` helper. Both rely on WordPress post visibility checks
 so public results are returned only for readable posts; private results require

@@ -88,6 +88,12 @@ final class WP_FTS_Plugin
     private const SETTINGS_SNIPPET_MAX = 500;
     private const FIELD_BOOST_MIN = 0.01;
     private const FIELD_BOOST_MAX = 100.0;
+    private const RECENCY_BOOST_STRENGTH_MIN = 0.0;
+    private const RECENCY_BOOST_STRENGTH_DEFAULT = 0.25;
+    private const RECENCY_BOOST_STRENGTH_MAX = 2.0;
+    private const RECENCY_BOOST_HALF_LIFE_MIN = 1.0;
+    private const RECENCY_BOOST_HALF_LIFE_MAX = 3650.0;
+    private const RECENCY_BOOST_HALF_LIFE_DEFAULT = 30.0;
     private const FIELD_BOOST_DEFAULTS = [
         'title' => 5.0,
         'content' => 1.0,
@@ -137,6 +143,8 @@ final class WP_FTS_Plugin
         'result_limit' => 10,
         'language_fallback' => true,
         'field_boosts' => self::FIELD_BOOST_DEFAULTS,
+        'recency_boost_strength' => 0.0,
+        'recency_boost_half_life_days' => self::RECENCY_BOOST_HALF_LIFE_DEFAULT,
     ];
     private const VISIBILITY_REFILL_MIN_BATCH = 10;
     private const VISIBILITY_REFILL_MULTIPLIER = 4;
@@ -1351,6 +1359,7 @@ final class WP_FTS_Plugin
             'result_limit' => (int) ($settings['result_limit'] ?? 10),
             'language_fallback' => !empty($settings['language_fallback']) ? 'enabled' : 'disabled',
             'field_boosts' => self::field_boost_summary($settings['field_boosts'] ?? []),
+            'recency_boost' => self::recency_boost_summary($settings),
         ];
 
         foreach ($overrides as $key => $value) {
@@ -1582,6 +1591,7 @@ final class WP_FTS_Plugin
             self::render_debug_row('Query plan', self::debug_query_plan_summary($search_explain['query_plan'] ?? []));
             self::render_debug_row('Fast mode', self::debug_assoc_summary($search_explain['fast_mode'] ?? []));
             self::render_debug_row('Scoring', self::debug_assoc_summary($search_explain['scoring'] ?? []));
+            self::render_debug_row('Recency boost', self::debug_assoc_summary($search_explain['recency_boost'] ?? []));
             self::render_debug_row('Result matches', self::debug_result_matches_summary($search_explain['results'] ?? []));
             self::render_debug_row('Counts', self::debug_assoc_summary($trace['counts'] ?? []));
             self::render_debug_row('Timings', self::debug_timing_summary($trace['timings_ms'] ?? []));
@@ -2474,6 +2484,7 @@ final class WP_FTS_Plugin
         self::render_health_status_row('wp-admin Posts search', !empty($settings['replace_admin_post_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('Search provider compatibility', self::search_provider_compatibility_label((string) $settings['search_provider_compatibility']));
         self::render_health_status_row('Field ranking weights', self::field_boost_summary($settings['field_boosts'] ?? []));
+        self::render_health_status_row('Recency ranking boost', self::recency_boost_summary($settings));
         self::render_health_status_row('Indexed post types', self::health_post_type_summary($settings['index_post_types']));
         self::render_health_status_row('Eligible content', (string) $counts['total_eligible']);
         self::render_health_status_row('Indexed', (string) $counts['indexed']);
@@ -2546,6 +2557,24 @@ final class WP_FTS_Plugin
         $formatted = rtrim(rtrim(number_format($boost, 2, '.', ''), '0'), '.');
 
         return $formatted !== '' ? $formatted : '0';
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     */
+    private static function recency_boost_summary(array $settings): string
+    {
+        $strength = self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0);
+        $half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT);
+        if ($strength <= 0.0) {
+            return 'Disabled';
+        }
+
+        return sprintf(
+            'Enabled, strength %s, half-life %s days',
+            self::format_field_boost($strength),
+            self::format_field_boost($half_life)
+        );
     }
 
     /**
@@ -2730,6 +2759,7 @@ final class WP_FTS_Plugin
         self::render_settings_section_heading('Ranking weights', 'Higher numbers make matches in that field count more strongly. Changed weights affect content when it is reindexed, because weights are stored in the index.');
         echo '<table class="form-table" role="presentation"><tbody>';
         self::render_settings_field_boost_rows($settings);
+        self::render_settings_recency_boost_rows($settings);
         echo '</tbody></table>';
 
         self::render_settings_section_heading('Language handling', 'Language-aware matching depends on the query language, content language, and the analyzer packs available for this site.');
@@ -2764,6 +2794,25 @@ final class WP_FTS_Plugin
             echo '<p class="description">' . self::esc_html($copy['description']) . '</p>';
             echo '</td></tr>';
         }
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     */
+    private static function render_settings_recency_boost_rows(array $settings): void
+    {
+        $strength = self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0);
+        $half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT);
+
+        echo '<tr><th scope="row"><label for="wp-fts-settings-recency-boost-strength">Recent post boost</label></th><td>';
+        echo '<input id="wp-fts-settings-recency-boost-strength" type="number" min="' . self::esc_attr((string) self::RECENCY_BOOST_STRENGTH_MIN) . '" max="' . self::esc_attr((string) self::RECENCY_BOOST_STRENGTH_MAX) . '" step="0.01" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[recency_boost_strength]" value="' . self::esc_attr(self::format_field_boost($strength)) . '">';
+        echo '<p class="description">Set to 0 to disable. Values above 0 give newer posts a small ranking lift using indexed GMT post dates, without rebuilding the index.</p>';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-settings-recency-boost-half-life">Recent post half-life</label></th><td>';
+        echo '<input id="wp-fts-settings-recency-boost-half-life" type="number" min="' . self::esc_attr((string) self::RECENCY_BOOST_HALF_LIFE_MIN) . '" max="' . self::esc_attr((string) self::RECENCY_BOOST_HALF_LIFE_MAX) . '" step="1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[recency_boost_half_life_days]" value="' . self::esc_attr(self::format_field_boost($half_life)) . '">';
+        echo '<p class="description">Controls how quickly the lift fades as indexed post dates get older. Changing this only affects query-time ranking.</p>';
+        echo '</td></tr>';
     }
 
     private static function render_settings_referer_field(string $tab): void
@@ -3005,7 +3054,9 @@ final class WP_FTS_Plugin
      *   post_types:string[],
      *   post_statuses:string[],
      *   date_after:string,
-     *   date_before:string
+     *   date_before:string,
+     *   recency_boost_strength:float,
+     *   recency_boost_half_life_days:float
      * }
      */
     private static function sandbox_search_controls(bool $search_submitted): array
@@ -3025,7 +3076,9 @@ final class WP_FTS_Plugin
      *   post_types:string[],
      *   post_statuses:string[],
      *   date_after:string,
-     *   date_before:string
+     *   date_before:string,
+     *   recency_boost_strength:float,
+     *   recency_boost_half_life_days:float
      * }
      */
     private static function sandbox_search_controls_from_source(array $source, bool $search_submitted): array
@@ -3047,6 +3100,8 @@ final class WP_FTS_Plugin
             'post_statuses' => self::request_list_value($source, self::ADMIN_POST_STATUS_FIELD, self::sandbox_post_status_choices(), self::sandbox_post_status_choices()),
             'date_after' => self::sanitize_date_filter(self::request_text_value($source, self::ADMIN_DATE_AFTER_FIELD, 20)),
             'date_before' => self::sanitize_date_filter(self::request_text_value($source, self::ADMIN_DATE_BEFORE_FIELD, 20)),
+            'recency_boost_strength' => self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0),
+            'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT),
         ];
     }
 
@@ -3091,6 +3146,8 @@ final class WP_FTS_Plugin
             'result_limit' => self::clamp_int($value['result_limit'] ?? $defaults['result_limit'], 1, self::MAX_SEARCH_LIMIT),
             'language_fallback' => array_key_exists('language_fallback', $value) ? self::truthy_admin_value($value['language_fallback']) : $defaults['language_fallback'],
             'field_boosts' => self::sanitize_field_boosts($value['field_boosts'] ?? []),
+            'recency_boost_strength' => self::sanitize_recency_boost_strength($value['recency_boost_strength'] ?? ($value['recency_boost'] ?? $defaults['recency_boost_strength'])),
+            'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life($value['recency_boost_half_life_days'] ?? $defaults['recency_boost_half_life_days']),
         ];
     }
 
@@ -3121,6 +3178,37 @@ final class WP_FTS_Plugin
         }
 
         return self::clamp_float($boost, self::FIELD_BOOST_MIN, self::FIELD_BOOST_MAX);
+    }
+
+    private static function sanitize_recency_boost_strength(mixed $value): float
+    {
+        if (is_bool($value)) {
+            return $value ? self::RECENCY_BOOST_STRENGTH_DEFAULT : 0.0;
+        }
+        if (!is_scalar($value) || !is_numeric($value)) {
+            return 0.0;
+        }
+
+        $strength = (float) $value;
+        if (!is_finite($strength) || $strength <= 0.0) {
+            return 0.0;
+        }
+
+        return self::clamp_float($strength, self::RECENCY_BOOST_STRENGTH_MIN, self::RECENCY_BOOST_STRENGTH_MAX);
+    }
+
+    private static function sanitize_recency_boost_half_life(mixed $value): float
+    {
+        if (!is_scalar($value) || !is_numeric($value)) {
+            return self::RECENCY_BOOST_HALF_LIFE_DEFAULT;
+        }
+
+        $days = (float) $value;
+        if (!is_finite($days) || $days <= 0.0) {
+            return self::RECENCY_BOOST_HALF_LIFE_DEFAULT;
+        }
+
+        return self::clamp_float($days, self::RECENCY_BOOST_HALF_LIFE_MIN, self::RECENCY_BOOST_HALF_LIFE_MAX);
     }
 
     private static function sanitize_search_provider_compatibility(mixed $value, string $default): string
@@ -3217,7 +3305,9 @@ final class WP_FTS_Plugin
      *   prefix_matching:bool,
      *   result_limit:int,
      *   language_fallback:bool,
-     *   field_boosts:array<string,float>
+     *   field_boosts:array<string,float>,
+     *   recency_boost_strength:float,
+     *   recency_boost_half_life_days:float
      * }
      */
     private static function settings(): array
@@ -3744,7 +3834,7 @@ final class WP_FTS_Plugin
             'snippet_length' => self::clamp_int($controls['snippet_length'] ?? $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
             'explain' => $trace_id > 0,
             'explain_result_matches' => $include_snippets,
-        ];
+        ] + self::searcher_recency_boost_options($controls + $settings);
         foreach (['post_types' => 'post_type', 'post_statuses' => 'post_status'] as $control_key => $search_key) {
             if (isset($controls[$control_key]) && is_array($controls[$control_key]) && $controls[$control_key] !== []) {
                 $search_options[$search_key] = array_values(array_filter(
@@ -5546,7 +5636,7 @@ JS;
             'mode' => $mode,
             'limit' => $limit,
             'prefix_matching' => self::search_prefix_matching_value($opts, $settings),
-        ];
+        ] + self::searcher_recency_boost_options($settings);
         if (isset($opts['lang']) && is_scalar($opts['lang']) && trim((string) $opts['lang']) !== '') {
             $search_options['lang'] = (string) $opts['lang'];
         }
@@ -5614,6 +5704,23 @@ JS;
         }
 
         return (bool) ($settings['prefix_matching'] ?? true);
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     * @return array<string,float>
+     */
+    private static function searcher_recency_boost_options(array $settings): array
+    {
+        $strength = self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0);
+        if ($strength <= 0.0) {
+            return [];
+        }
+
+        return [
+            'recency_boost_strength' => $strength,
+            'recency_boost_half_life_days' => self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT),
+        ];
     }
 
     /**
@@ -6725,7 +6832,7 @@ JS;
             'post_type' => $post_types,
             'post_status' => $post_statuses,
             'explain' => $trace_id > 0,
-        ];
+        ] + self::searcher_recency_boost_options($settings);
         $fallback_languages = [];
         if ($settings['language_fallback']) {
             $search_options['language_fallback'] = true;

@@ -18,6 +18,11 @@ final class WP_FTS_Searcher
     private const EXPLAIN_MAX_RESULT_ROWS = 20;
     private const EXPLAIN_MAX_MATCHES_PER_RESULT = 8;
     private const EXPLAIN_MAX_TEXT_BYTES = 96;
+    private const DEFAULT_RECENCY_BOOST_STRENGTH = 0.25;
+    private const MAX_RECENCY_BOOST_STRENGTH = 2.0;
+    private const DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS = 30.0;
+    private const MIN_RECENCY_BOOST_HALF_LIFE_DAYS = 1.0;
+    private const MAX_RECENCY_BOOST_HALF_LIFE_DAYS = 3650.0;
 
     /**
      * @param WP_FTS_Storage $storage Storage backend containing postings and
@@ -87,6 +92,7 @@ final class WP_FTS_Searcher
         $limit = max(1, (int) ($opts['limit'] ?? 10));
         $offset = max(0, (int) ($opts['offset'] ?? 0));
 
+        $recencyBoost = $this->recency_boost_config($opts);
         $queryPlan = $this->build_query_plan($query, $opts);
         $queryPlan['match_mode'] = $mode;
         $groups = $queryPlan['groups'];
@@ -99,17 +105,18 @@ final class WP_FTS_Searcher
                     'estimated_candidates' => null,
                     'threshold' => null,
                     'candidate_cap' => null,
-                ], $this->empty_score_stats(), [], 0, true)
+                ], $this->empty_score_stats(), $this->empty_recency_boost_stats($recencyBoost), [], 0, true)
                 : null;
 
             return $this->format_response([], 0, $opts, $responseLang, $explain);
         }
 
         $metadataFilter = $this->has_metadata_filters($opts) ? $this->metadata_filter_values($opts) : null;
-        $useBoundedTopK = $this->can_use_bounded_top_k($opts, $offset);
+        $useBoundedTopK = !$recencyBoost['enabled'] && $this->can_use_bounded_top_k($opts, $offset);
         $fastMode = $this->resolve_fast_mode($opts, $limit + $offset, $groups, $mode, $metadataFilter);
         $scoreStats = $this->empty_score_stats();
         $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $fastMode['candidate_cap'], $scoreStats);
+        $recencyStats = $this->apply_recency_boost($results, $recencyBoost);
         if (!$useBoundedTopK) {
             usort($results, [self::class, 'compare_ranked_results']);
         }
@@ -128,7 +135,7 @@ final class WP_FTS_Searcher
         $this->strip_internal_rank($page);
 
         $explain = $this->explain_requested($opts)
-            ? $this->build_explain_payload($queryPlan, $fastMode, $scoreStats, $resultExplain, $total, $fastMode['candidate_cap'] === null)
+            ? $this->build_explain_payload($queryPlan, $fastMode, $scoreStats, $recencyStats, $resultExplain, $total, $fastMode['candidate_cap'] === null)
             : null;
 
         return $this->format_response($page, $total, $opts, $responseLang, $explain);
@@ -417,6 +424,173 @@ final class WP_FTS_Searcher
             'candidate_docs_scored' => 0,
             'scoring_terms' => 0,
             'scored_results' => 0,
+        ];
+    }
+
+    /**
+     * Normalize query-time recency boost controls.
+     *
+     * `recency_boost`/`freshness_boost` may be a boolean toggle or a numeric
+     * strength. `recency_boost_strength` wins when supplied explicitly. A false
+     * boost toggle or non-positive strength disables the feature.
+     *
+     * @param array<string,mixed> $opts
+     * @return array{enabled:bool,strength:float,half_life_days:float,now_timestamp:int,now_gmt:string}
+     */
+    private function recency_boost_config(array $opts): array
+    {
+        $boostOptionPresent = array_key_exists('recency_boost', $opts) || array_key_exists('freshness_boost', $opts);
+        $boostOption = $opts['recency_boost'] ?? ($opts['freshness_boost'] ?? null);
+        $strengthOption = $opts['recency_boost_strength'] ?? ($opts['freshness_boost_strength'] ?? null);
+
+        $strength = null;
+        if (is_numeric($boostOption)) {
+            $strength = (float) $boostOption;
+        }
+        if (is_numeric($strengthOption)) {
+            $strength = (float) $strengthOption;
+        }
+        if ($strength === null && $boostOptionPresent && $this->truthy_option($boostOption)) {
+            $strength = self::DEFAULT_RECENCY_BOOST_STRENGTH;
+        }
+        if ($boostOptionPresent && !$this->truthy_option($boostOption)) {
+            $strength = 0.0;
+        }
+
+        $strength = $strength === null ? 0.0 : $this->clamp_recency_float($strength, 0.0, self::MAX_RECENCY_BOOST_STRENGTH);
+        if ($strength <= 0.0) {
+            $strength = 0.0;
+        }
+
+        $halfLife = self::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS;
+        $halfLifeOption = $opts['recency_boost_half_life_days']
+            ?? ($opts['freshness_boost_half_life_days'] ?? ($opts['recency_boost_window_days'] ?? null));
+        if (is_numeric($halfLifeOption)) {
+            $halfLife = $this->clamp_recency_float(
+                (float) $halfLifeOption,
+                self::MIN_RECENCY_BOOST_HALF_LIFE_DAYS,
+                self::MAX_RECENCY_BOOST_HALF_LIFE_DAYS
+            );
+        }
+
+        $now = $this->recency_now_timestamp($opts['now_gmt'] ?? ($opts['recency_now'] ?? null));
+
+        return [
+            'enabled' => $strength > 0.0,
+            'strength' => $strength,
+            'half_life_days' => $halfLife,
+            'now_timestamp' => $now,
+            'now_gmt' => gmdate('Y-m-d H:i:s', $now),
+        ];
+    }
+
+    private function clamp_recency_float(float $value, float $min, float $max): float
+    {
+        if (!is_finite($value)) {
+            return $min;
+        }
+
+        return min($max, max($min, $value));
+    }
+
+    private function recency_now_timestamp(mixed $value): int
+    {
+        $timestamp = $this->parse_gmt_timestamp($value);
+
+        return $timestamp ?? time();
+    }
+
+    private function parse_gmt_timestamp(mixed $value): ?int
+    {
+        if (!is_scalar($value)) {
+            return null;
+        }
+
+        $text = trim((string) $value);
+        if ($text === '') {
+            return null;
+        }
+
+        $timezone = new DateTimeZone('UTC');
+        foreach (['!Y-m-d H:i:s', '!Y-m-d\TH:i:s', '!Y-m-d'] as $format) {
+            $date = DateTimeImmutable::createFromFormat($format, $text, $timezone);
+            $errors = DateTimeImmutable::getLastErrors();
+            $warnings = is_array($errors) ? (int) ($errors['warning_count'] ?? 0) : 0;
+            $errorCount = is_array($errors) ? (int) ($errors['error_count'] ?? 0) : 0;
+            if ($date instanceof DateTimeImmutable && $warnings === 0 && $errorCount === 0) {
+                return $date->getTimestamp();
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Apply a bounded additive recency boost to already-scored candidates.
+     *
+     * @param array<int,array{doc_id:int,score:float,_rank:int}> $results
+     * @param array{enabled:bool,strength:float,half_life_days:float,now_timestamp:int,now_gmt:string} $config
+     * @return array{enabled:bool,strength:float,half_life_days:float,now_gmt:string,documents_considered:int,documents_applied:int,metadata_unavailable:bool,missing_or_invalid_dates:int}
+     */
+    private function apply_recency_boost(array &$results, array $config): array
+    {
+        $stats = $this->empty_recency_boost_stats($config);
+        if (!$config['enabled'] || $results === []) {
+            return $stats;
+        }
+
+        if (!WP_FTS_StorageCompat::supports_doc_metadata($this->storage)) {
+            $stats['metadata_unavailable'] = true;
+            return $stats;
+        }
+
+        $docIds = array_values(array_unique(array_map('intval', array_column($results, 'doc_id'))));
+        $metadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, $docIds);
+        $stats['documents_considered'] = count($docIds);
+        if ($metadata === []) {
+            $stats['missing_or_invalid_dates'] = count($docIds);
+            return $stats;
+        }
+
+        $secondsPerDay = 86400.0;
+        $halfLifeDays = max(self::MIN_RECENCY_BOOST_HALF_LIFE_DAYS, (float) $config['half_life_days']);
+        foreach ($results as &$row) {
+            $docId = (int) $row['doc_id'];
+            $timestamp = $this->parse_gmt_timestamp($metadata[$docId]['post_date_gmt'] ?? null);
+            if ($timestamp === null) {
+                $stats['missing_or_invalid_dates']++;
+                continue;
+            }
+
+            $ageDays = max(0.0, ((float) $config['now_timestamp'] - (float) $timestamp) / $secondsPerDay);
+            $boost = (float) $config['strength'] * exp(-$ageDays / $halfLifeDays);
+            if ($boost <= 0.0) {
+                continue;
+            }
+
+            $row['score'] = (float) $row['score'] + $boost;
+            $stats['documents_applied']++;
+        }
+        unset($row);
+
+        return $stats;
+    }
+
+    /**
+     * @param array{enabled:bool,strength:float,half_life_days:float,now_timestamp:int,now_gmt:string} $config
+     * @return array{enabled:bool,strength:float,half_life_days:float,now_gmt:string,documents_considered:int,documents_applied:int,metadata_unavailable:bool,missing_or_invalid_dates:int}
+     */
+    private function empty_recency_boost_stats(array $config): array
+    {
+        return [
+            'enabled' => (bool) $config['enabled'],
+            'strength' => (float) $config['strength'],
+            'half_life_days' => (float) $config['half_life_days'],
+            'now_gmt' => (string) $config['now_gmt'],
+            'documents_considered' => 0,
+            'documents_applied' => 0,
+            'metadata_unavailable' => false,
+            'missing_or_invalid_dates' => 0,
         ];
     }
 
@@ -1701,10 +1875,11 @@ final class WP_FTS_Searcher
      * @param array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int} $queryPlan
      * @param array{mode:string,source:string,estimated_candidates:?int,threshold:?int,candidate_cap:?int} $fastMode
      * @param array<string,int> $scoreStats
+     * @param array{enabled:bool,strength:float,half_life_days:float,now_gmt:string,documents_considered:int,documents_applied:int,metadata_unavailable:bool,missing_or_invalid_dates:int} $recencyStats
      * @param array<int,array<string,mixed>> $resultExplain
      * @return array<string,mixed>
      */
-    private function build_explain_payload(array $queryPlan, array $fastMode, array $scoreStats, array $resultExplain, int $total, bool $exactTotal): array
+    private function build_explain_payload(array $queryPlan, array $fastMode, array $scoreStats, array $recencyStats, array $resultExplain, int $total, bool $exactTotal): array
     {
         return [
             'storage' => [
@@ -1737,6 +1912,19 @@ final class WP_FTS_Searcher
                 'scoring_terms' => max(0, (int) ($scoreStats['scoring_terms'] ?? 0)),
                 'total' => max(0, $total),
                 'total_accuracy' => $exactTotal ? 'exact' : 'approximate',
+            ],
+            'recency_boost' => [
+                'enabled' => !empty($recencyStats['enabled']),
+                'strength' => max(0.0, min(self::MAX_RECENCY_BOOST_STRENGTH, (float) ($recencyStats['strength'] ?? 0.0))),
+                'half_life_days' => max(
+                    self::MIN_RECENCY_BOOST_HALF_LIFE_DAYS,
+                    min(self::MAX_RECENCY_BOOST_HALF_LIFE_DAYS, (float) ($recencyStats['half_life_days'] ?? self::DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS))
+                ),
+                'now_gmt' => $this->bounded_explain_text((string) ($recencyStats['now_gmt'] ?? ''), 32),
+                'documents_considered' => max(0, (int) ($recencyStats['documents_considered'] ?? 0)),
+                'documents_applied' => max(0, (int) ($recencyStats['documents_applied'] ?? 0)),
+                'metadata_unavailable' => !empty($recencyStats['metadata_unavailable']),
+                'missing_or_invalid_dates' => max(0, (int) ($recencyStats['missing_or_invalid_dates'] ?? 0)),
             ],
             'results' => $resultExplain,
         ];

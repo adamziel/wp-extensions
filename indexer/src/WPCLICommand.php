@@ -98,6 +98,12 @@ final class WP_FTS_WPCLI_Command
      * [--before=<date>]
      * : Include posts on or before a GMT date or datetime.
      *
+     * [--recency_boost=<strength>]
+     * : Add a bounded query-time ranking lift for newer indexed post dates. Use 0 to disable.
+     *
+     * [--recency_boost_half_life_days=<days>]
+     * : Positive half-life in days for the recency lift. Default: searcher default.
+     *
      * [--offset=<n>]
      * : Offset into filtered results for pagination. Default: 0.
      *
@@ -141,6 +147,18 @@ final class WP_FTS_WPCLI_Command
         $before = $this->assoc_arg($assoc_args, ['before', 'date_before', 'date-before'], null);
         if ($before !== null) {
             $searchOptions['date_before'] = (string) $before;
+        }
+        $recencyBoost = $this->assoc_arg($assoc_args, ['recency_boost', 'recency-boost', 'freshness_boost', 'freshness-boost'], null);
+        if ($recencyBoost !== null) {
+            $searchOptions['recency_boost'] = $recencyBoost;
+        }
+        $recencyStrength = $this->assoc_arg($assoc_args, ['recency_boost_strength', 'recency-boost-strength', 'freshness_boost_strength', 'freshness-boost-strength'], null);
+        if ($recencyStrength !== null) {
+            $searchOptions['recency_boost_strength'] = $recencyStrength;
+        }
+        $recencyHalfLife = $this->assoc_arg($assoc_args, ['recency_boost_half_life_days', 'recency-boost-half-life-days', 'freshness_boost_half_life_days', 'freshness-boost-half-life-days'], null);
+        if ($recencyHalfLife !== null) {
+            $searchOptions['recency_boost_half_life_days'] = $recencyHalfLife;
         }
 
         /** @var array{total:int,results:array<int,array<string,mixed>>} $payload */
