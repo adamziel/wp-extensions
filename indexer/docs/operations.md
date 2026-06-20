@@ -179,6 +179,14 @@ page. Bailout traces still keep their readable reason so operators can
 distinguish unsupported query shapes, disabled replacement settings, and
 successful FTS ownership without creating diagnostic content.
 
+The same trace includes bounded, redacted SQL query summaries only when the
+environment already collects query data in `$wpdb->queries`, such as a site with
+`SAVEQUERIES` enabled or a compatible debug/test database object. The plugin
+does not enable `SAVEQUERIES` automatically, does not require Query Monitor or
+Debug Bar, and does not write persistent SQL logs. When `$wpdb->queries` is not
+available, diagnostics report SQL capture as unavailable instead of reporting a
+false zero-query trace.
+
 ## Optimize And Repair
 
 Deletes are tombstones until compaction. Run optimize after bulk deletes or after

@@ -1957,8 +1957,9 @@ final class WP_FTS_Test_WPDB
     public ?string $failQueryPrefix = null;
     public ?object $dbh = null;
     public bool $missPreparedTermLookups = false;
+    public bool $recordReadQueries = false;
 
-    /** @var array<int,string> */
+    /** @var array<int,string|array{0:string,1:float,2:string}> */
     public array $queries = [];
 
     /** @var array<int,array{sql:string,args:array<int,mixed>}> */
@@ -2000,6 +2001,7 @@ final class WP_FTS_Test_WPDB
     public function get_var(mixed $statement, int $x = 0, int $y = 0): mixed
     {
         [$sql, $args] = $this->statement_parts($statement);
+        $this->record_read_query($sql);
         if (str_starts_with($sql, 'SELECT COUNT(DISTINCT p.ID)')) {
             $offset = 0;
             $publicStatus = str_contains($sql, 'p.post_status = %s') ? (string) ($args[$offset++] ?? '') : '';
@@ -2229,6 +2231,7 @@ final class WP_FTS_Test_WPDB
     public function get_results(mixed $statement): array
     {
         [$sql, $args] = $this->statement_parts($statement);
+        $this->record_read_query($sql);
         if ($this->missPreparedTermLookups && $args !== [] && (
             str_starts_with($sql, 'SELECT term, doc_freq FROM wp_fts_terms')
             || str_starts_with($sql, 'SELECT term, doc_id, tf FROM wp_fts_postings')
@@ -2501,6 +2504,7 @@ final class WP_FTS_Test_WPDB
     public function get_row(mixed $statement): ?object
     {
         [$sql, $args] = $this->statement_parts($statement);
+        $this->record_read_query($sql);
         if (str_starts_with($sql, 'SELECT doc_id, lang, doc_len, content_hash, is_deleted FROM wp_fts_docs')) {
             $docId = (int) $args[0];
             if (!isset($this->docs[$docId])) {
@@ -2518,6 +2522,7 @@ final class WP_FTS_Test_WPDB
      */
     public function get_col(string $sql): array
     {
+        $this->record_read_query($sql);
         if (str_starts_with($sql, 'SELECT term FROM wp_fts_terms')) {
             return array_keys($this->terms);
         }
@@ -2550,6 +2555,15 @@ final class WP_FTS_Test_WPDB
         }
 
         return [(string) $statement, []];
+    }
+
+    private function record_read_query(string $sql): void
+    {
+        if (!$this->recordReadQueries) {
+            return;
+        }
+
+        $this->queries[] = [$sql, 0.0005, 'WP_FTS_Test_WPDB'];
     }
 
     /**
@@ -4801,6 +4815,101 @@ test_case('bounded request diagnostics preserve trace ids after eviction', funct
     }
 });
 
+test_case('SQL diagnostics are bounded redacted and rendered', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $plugin = new ReflectionClass(WP_FTS_Plugin::class);
+    $maxSqlConstant = $plugin->getReflectionConstant('DEBUG_MAX_SQL_QUERIES');
+    assert_true($maxSqlConstant !== false, 'SQL diagnostics cap should be reflectable for bounded coverage');
+    $maxSql = (int) $maxSqlConstant->getValue();
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+    $finishTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_finish_trace');
+    $finishTrace->setAccessible(true);
+
+    try {
+        $traceId = (int) $startTrace->invoke(null, 'frontend search', 'top secret needle');
+        $fake->queries[] = ["UPDATE wp_fts_docmeta SET search_text = 'private phrase' WHERE doc_id = 987", 0.002, 'caller'];
+        for ($index = 0; $index < $maxSql + 3; $index++) {
+            $fake->queries[] = [
+                "SELECT term, doc_id, tf FROM wp_fts_postings WHERE term = 'secretneedle{$index}' AND doc_id = " . (100 + $index) . ' AND tf >= 7',
+                0.001,
+                'caller',
+            ];
+        }
+        $finishTrace->invoke(null, $traceId, 'ran');
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        $trace = $traces[0] ?? [];
+        $sqlDiagnostics = is_array($trace['sql_queries'] ?? null) ? $trace['sql_queries'] : [];
+        assert_same(true, $sqlDiagnostics['available'] ?? null, 'SQL diagnostics should mark compatible query capture as available');
+        assert_same($maxSql + 4, (int) ($sqlDiagnostics['captured_count'] ?? 0), 'SQL diagnostics should record the full delta count');
+        assert_same($maxSql, (int) ($sqlDiagnostics['shown_count'] ?? 0), 'SQL diagnostics should bound listed SQL entries');
+        assert_same(true, $sqlDiagnostics['more'] ?? null, 'SQL diagnostics should mark overflow when entries exceed the cap');
+        assert_true((float) ($sqlDiagnostics['total_time_ms'] ?? 0.0) > 0.0, 'SQL diagnostics should total compatible query timings');
+
+        $summaryText = '';
+        foreach (is_array($sqlDiagnostics['entries'] ?? null) ? $sqlDiagnostics['entries'] : [] as $entry) {
+            if (is_array($entry) && is_scalar($entry['summary'] ?? null)) {
+                $summaryText .= ' ' . (string) $entry['summary'];
+            }
+        }
+        assert_contains('wp_fts_docmeta', $summaryText, 'SQL diagnostics should preserve FTS docmeta table names');
+        assert_contains('wp_fts_postings', $summaryText, 'SQL diagnostics should preserve FTS postings table names');
+        assert_contains('?', $summaryText, 'SQL diagnostics should retain query shape placeholders');
+        assert_true(!str_contains($summaryText, 'private phrase'), 'SQL diagnostics should redact string literals');
+        assert_true(!str_contains($summaryText, 'secretneedle'), 'SQL diagnostics should redact search terms from string literals');
+        assert_true(!str_contains($summaryText, '987'), 'SQL diagnostics should redact numeric literals');
+
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [];
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+        assert_contains('SQL queries', $html, 'rendered diagnostics should include the SQL queries row');
+        assert_contains('captured=' . ($maxSql + 4), $html, 'rendered diagnostics should show the captured SQL count');
+        assert_contains('wp_fts_postings', $html, 'rendered diagnostics should include FTS table shape');
+        assert_true(!str_contains($html, 'secretneedle'), 'rendered SQL diagnostics should not leak literal search terms');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('SQL diagnostics report unavailable query capture when wpdb queries are absent', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $wpdb = new stdClass();
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+    $finishTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_finish_trace');
+    $finishTrace->setAccessible(true);
+
+    try {
+        $traceId = (int) $startTrace->invoke(null, 'frontend search', 'unavailable capture');
+        $finishTrace->invoke(null, $traceId, 'bailed', 'test bailout');
+        $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $sqlDiagnostics = is_array($trace['sql_queries'] ?? null) ? $trace['sql_queries'] : [];
+        assert_same(false, $sqlDiagnostics['available'] ?? null, 'SQL diagnostics should mark absent wpdb queries as unavailable');
+        assert_contains('$wpdb->queries is unavailable', (string) ($sqlDiagnostics['reason'] ?? ''), 'SQL diagnostics should explain unavailable query capture');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('WP_FTS_DEBUG constant enables diagnostics when defined before plugin load', function (): void {
     $plugin = (string) realpath(__DIR__ . '/../indexer.php');
     $code = str_replace('__PLUGIN__', var_export($plugin, true), <<<'PHP'
@@ -6878,6 +6987,7 @@ test_case('enabled diagnostics record frontend search timings counts language se
 
     $oldWpdb = $wpdb ?? null;
     $fake = new WP_FTS_Test_WPDB();
+    $fake->recordReadQueries = true;
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
@@ -6985,6 +7095,19 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_same('diagnosticneedl', $firstMatches[0]['term'] ?? null, 'frontend diagnostics should identify why the top result matched');
         assert_same(WP_FTS_TermNamespace::namespace_term('en', 'diagnosticneedl'), $firstMatches[0]['key'] ?? null, 'frontend diagnostics should keep the analyzed storage key on result match reasons');
         assert_same('en', $firstMatches[0]['lang'] ?? null, 'frontend diagnostics should identify matched result language');
+        $sqlDiagnostics = is_array($trace['sql_queries'] ?? null) ? $trace['sql_queries'] : [];
+        assert_same(true, $sqlDiagnostics['available'] ?? null, 'frontend diagnostics should report SQL capture as available for compatible wpdb query arrays');
+        assert_true((int) ($sqlDiagnostics['captured_count'] ?? 0) > 0, 'frontend diagnostics should count SQL queries executed during the trace');
+        assert_true((int) ($sqlDiagnostics['shown_count'] ?? 0) > 0, 'frontend diagnostics should list bounded SQL summaries for a successful FTS trace');
+        assert_true((float) ($sqlDiagnostics['total_time_ms'] ?? 0.0) > 0.0, 'frontend diagnostics should total SQL query timing when entries include elapsed seconds');
+        $sqlSummaryText = '';
+        foreach (is_array($sqlDiagnostics['entries'] ?? null) ? $sqlDiagnostics['entries'] : [] as $entry) {
+            if (is_array($entry) && is_scalar($entry['summary'] ?? null)) {
+                $sqlSummaryText .= ' ' . (string) $entry['summary'];
+            }
+        }
+        assert_contains('wp_fts_', $sqlSummaryText, 'frontend diagnostics should preserve FTS table names in SQL summaries');
+        assert_true(!str_contains($sqlSummaryText, 'diagnosticneedle'), 'frontend SQL diagnostics should not expose literal search text');
         assert_true(in_array('FTS replacement ran for frontend search.', is_array($trace['notes'] ?? null) ? $trace['notes'] : [], true), 'frontend diagnostics should explicitly note successful frontend replacement');
     } finally {
         $wpdb = $oldWpdb;
