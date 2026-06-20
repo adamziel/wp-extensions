@@ -6570,7 +6570,9 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_true(in_array('en', is_array($plan['analyzed_languages'] ?? null) ? $plan['analyzed_languages'] : [], true), 'frontend diagnostics should record analyzed query language');
         $terms = is_array($plan['terms'] ?? null) ? $plan['terms'] : [];
         assert_true($terms !== [], 'frontend diagnostics should include bounded analyzed query terms');
+        assert_same('diagnosticneedle', $terms[0]['surface'] ?? null, 'frontend diagnostics should expose the user query surface separately from analysis');
         assert_same('diagnosticneedl', $terms[0]['term'] ?? null, 'frontend diagnostics should expose the analyzed query term');
+        assert_same(WP_FTS_TermNamespace::namespace_term('en', 'diagnosticneedl'), $terms[0]['key'] ?? null, 'frontend diagnostics should expose the analyzed storage key');
         assert_same('exact', $terms[0]['rank_class'] ?? null, 'frontend diagnostics should classify exact query candidates');
 
         $fastMode = is_array($explain['fast_mode'] ?? null) ? $explain['fast_mode'] : [];
@@ -6587,7 +6589,9 @@ test_case('enabled diagnostics record frontend search timings counts language se
         $resultMatches = is_array($explain['results'] ?? null) ? $explain['results'] : [];
         assert_same(506, (int) ($resultMatches[0]['doc_id'] ?? 0), 'frontend diagnostics should include per-result match data for returned page order');
         $firstMatches = is_array($resultMatches[0]['matches'] ?? null) ? $resultMatches[0]['matches'] : [];
+        assert_same('diagnosticneedle', $firstMatches[0]['surface'] ?? null, 'frontend diagnostics should keep the query surface on result match reasons');
         assert_same('diagnosticneedl', $firstMatches[0]['term'] ?? null, 'frontend diagnostics should identify why the top result matched');
+        assert_same(WP_FTS_TermNamespace::namespace_term('en', 'diagnosticneedl'), $firstMatches[0]['key'] ?? null, 'frontend diagnostics should keep the analyzed storage key on result match reasons');
         assert_same('en', $firstMatches[0]['lang'] ?? null, 'frontend diagnostics should identify matched result language');
         assert_true(in_array('FTS replacement ran for frontend search.', is_array($trace['notes'] ?? null) ? $trace['notes'] : [], true), 'frontend diagnostics should explicitly note successful frontend replacement');
     } finally {

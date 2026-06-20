@@ -311,10 +311,10 @@ final class WP_FTS_Analyzer
      * for legacy callers. Pass `return => occurrences`, `format => occurrences`,
      * `return => tokens`, or `return => objects` to receive `term/lang` rows.
      *
-     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,return?:string,format?:string,_force_query_lang?:bool}|string|null $options
+     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,return?:string,format?:string,_force_query_lang?:bool,_include_query_surface?:bool,include_query_surface?:bool,include_surface?:bool}|string|null $options
      *        Query language hints and optional output format. A legacy string is
      *        treated as `query_lang`.
-     * @return string[]|array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
+     * @return string[]|array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
      *         Term strings or occurrence rows, depending on requested format.
      */
     public function analyze_query(string $query, array|string|null $options = []): array
@@ -338,7 +338,7 @@ final class WP_FTS_Analyzer
      * defaults to strings.
      *
      * @param array<string,mixed>|string|null $language
-     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
      */
     public function analyze_query_terms(string $query, array|string|null $language = null): array
     {
@@ -351,19 +351,22 @@ final class WP_FTS_Analyzer
      * Searcher uses this to decide the language partition before namespacing
      * query terms.
      *
-     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,_force_query_lang?:bool}|string|null $options
-     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
+     * @param array{lang?:string,language?:string,query_lang?:string,locale?:string,_force_query_lang?:bool,_include_query_surface?:bool,include_query_surface?:bool,include_surface?:bool}|string|null $options
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
      */
     public function analyze_query_occurrences(string $query, array|string|null $options = []): array
     {
         $options = $this->normalizeLanguageOptions($options, 'query');
         $lang = $this->resolveQueryLanguage($options);
+        $includeSurface = $this->truthyOption($options['_include_query_surface'] ?? false)
+            || $this->truthyOption($options['include_query_surface'] ?? false)
+            || $this->truthyOption($options['include_surface'] ?? false);
         $terms = [];
         $nextPosition = 0;
 
         foreach ($this->queryTextSegments($query, $lang, $options) as $segment) {
             $segmentTerms = $this->renumberAnalyzedPositions(
-                $this->analyzeText($segment['text'], $segment['lang']),
+                $this->analyzeText($segment['text'], $segment['lang'], $includeSurface),
                 $nextPosition
             );
             foreach ($segmentTerms as $term) {
@@ -442,13 +445,13 @@ final class WP_FTS_Analyzer
      * @param string $text Visible text from a document segment or query.
      * @param string $lang Segment language, canonicalized with analyzer
      *        fallbacks.
-     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
      */
-    private function analyzeText(string $text, string $lang): array
+    private function analyzeText(string $text, string $lang, bool $includeSurface = false): array
     {
         $lang = $this->canonicalLanguage($lang) ?? $this->defaultLanguage;
 
-        return $this->languagePipeline->analyze_detailed($text, $lang);
+        return $this->languagePipeline->analyze_detailed($text, $lang, $includeSurface);
     }
 
     /**
@@ -2085,6 +2088,26 @@ final class WP_FTS_Analyzer
         } catch (Throwable) {
             return serialize($payload);
         }
+    }
+
+    /**
+     * Interpret optional analyzer feature flags without treating "false" as on.
+     */
+    private function truthyOption(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return $value !== 0;
+        }
+
+        if (is_string($value)) {
+            return !in_array(strtolower(trim($value)), ['', '0', 'false', 'no', 'off'], true);
+        }
+
+        return false;
     }
 
     /**

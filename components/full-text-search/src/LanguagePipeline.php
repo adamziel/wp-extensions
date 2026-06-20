@@ -128,9 +128,9 @@ final class WP_FTS_LanguagePipeline
      *
      * @param string $text Plain visible text to tokenize.
      * @param string $language Document or query language hint.
-     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string}>
+     * @return array<int,array{term:string,lang:string,position?:int,rank?:int,source?:string,surface?:string}>
      */
-    public function analyze_detailed(string $text, string $language): array
+    public function analyze_detailed(string $text, string $language, bool $includeSurface = false): array
     {
         $language = $this->canonicalize_language($language);
         $terms = [];
@@ -149,6 +149,9 @@ final class WP_FTS_LanguagePipeline
                     'term' => $this->namespaceTerms ? $this->namespace_term($language, $term) : $term,
                     'lang' => $language,
                 ];
+                if ($includeSurface) {
+                    $row['surface'] = $rawToken['text'];
+                }
                 if ($isMultiAnalysis) {
                     $row['position'] = $position;
                     $row['rank'] = (int) ($analysis['rank'] ?? 0);

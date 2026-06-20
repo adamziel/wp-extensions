@@ -44,9 +44,10 @@ $payload = $searcher->search('portable search', [
 ]);
 ```
 
-The `explain` payload reports the storage backend, analyzed query plan, prefix
-expansion count, fast-mode decision, candidate/scoring shape, total accuracy,
-and bounded per-result match reasons for the returned page. Set
+The `explain` payload reports the storage backend, query surfaces with their
+analyzed storage terms/keys, prefix expansion count, fast-mode decision,
+candidate/scoring shape, total accuracy, and bounded per-result match reasons
+for the returned page. Set
 `explain_result_matches` to `false` when a caller needs plan/scoring diagnostics
 but must defer document-term lookups.
 

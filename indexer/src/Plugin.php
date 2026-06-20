@@ -1283,10 +1283,7 @@ final class WP_FTS_Plugin
                 if (!is_array($term)) {
                     continue;
                 }
-                $lang = self::debug_scalar_summary($term['lang'] ?? '');
-                $text = self::debug_scalar_summary($term['term'] ?? '');
-                $rank = self::debug_scalar_summary($term['rank_class'] ?? '');
-                $termParts[] = trim($lang . ':' . $text . ($rank !== '' ? ' ' . $rank : ''));
+                $termParts[] = self::debug_explain_term_summary($term);
                 if (count($termParts) >= self::DEBUG_MAX_LIST_ITEMS) {
                     break;
                 }
@@ -1317,10 +1314,7 @@ final class WP_FTS_Plugin
                     if (!is_array($match)) {
                         continue;
                     }
-                    $lang = self::debug_scalar_summary($match['lang'] ?? '');
-                    $term = self::debug_scalar_summary($match['term'] ?? '');
-                    $rank = self::debug_scalar_summary($match['rank_class'] ?? '');
-                    $matches[] = trim($lang . ':' . $term . ($rank !== '' ? ' ' . $rank : ''));
+                    $matches[] = self::debug_explain_term_summary($match);
                     if (count($matches) >= self::DEBUG_MAX_LIST_ITEMS) {
                         break;
                     }
@@ -1333,6 +1327,28 @@ final class WP_FTS_Plugin
         }
 
         return self::debug_truncate_text(implode('; ', $rows), 800);
+    }
+
+    /**
+     * Summarize one explain term as surface->stored-term when analysis changes it.
+     *
+     * @param array<string,mixed> $term
+     */
+    private static function debug_explain_term_summary(array $term): string
+    {
+        $lang = self::debug_scalar_summary($term['lang'] ?? '');
+        $surface = self::debug_scalar_summary($term['surface'] ?? '');
+        $analyzed = self::debug_scalar_summary($term['term'] ?? '');
+        $rank = self::debug_scalar_summary($term['rank_class'] ?? '');
+
+        $text = $analyzed;
+        if ($surface !== '' && $analyzed !== '' && $surface !== $analyzed) {
+            $text = $surface . '->' . $analyzed;
+        } elseif ($surface !== '') {
+            $text = $surface;
+        }
+
+        return trim($lang . ':' . $text . ($rank !== '' ? ' ' . $rank : ''));
     }
 
     /**

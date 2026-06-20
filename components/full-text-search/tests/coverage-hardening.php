@@ -162,6 +162,29 @@ $resultExplain = $explainPayload['explain']['results'][0] ?? [];
 wp_fts_component_hardening_check((int) ($resultExplain['doc_id'] ?? 0) > 0, 'explain should include per-result diagnostics for the returned page');
 wp_fts_component_hardening_check(($resultExplain['matches'] ?? []) !== [], 'explain per-result diagnostics should include matched terms');
 
+$stemAnalyzer = new WP_FTS_Analyzer([
+    'auto_detect_language' => false,
+    'default_lang' => 'en',
+]);
+$stemStorage = new WP_FTS_Storage_InMemory();
+wp_fts_component_hardening_check(
+    (new WP_FTS_Indexer($stemStorage, $stemAnalyzer))->index_document(90, '<p>running</p>', ['lang' => 'en']),
+    'stemmed explain fixture should index'
+);
+$stemExplain = (new WP_FTS_Searcher($stemStorage, $stemAnalyzer))->search('running', [
+    'lang' => 'en',
+    'limit' => 1,
+    'include_total' => true,
+    'explain' => true,
+]);
+$stemPlanTerm = $stemExplain['explain']['query_plan']['terms'][0] ?? [];
+wp_fts_component_hardening_same('running', $stemPlanTerm['surface'] ?? null, 'explain query plan should expose the query surface separately from the analyzed term');
+wp_fts_component_hardening_same('run', $stemPlanTerm['term'] ?? null, 'explain query plan should expose the analyzed stored term');
+wp_fts_component_hardening_same(WP_FTS_TermNamespace::namespace_term('en', 'run'), $stemPlanTerm['key'] ?? null, 'explain query plan should expose the analyzed stored key');
+$stemMatch = $stemExplain['explain']['results'][0]['matches'][0] ?? [];
+wp_fts_component_hardening_same('running', $stemMatch['surface'] ?? null, 'explain result matches should preserve the query surface');
+wp_fts_component_hardening_same('run', $stemMatch['term'] ?? null, 'explain result matches should expose the analyzed stored term');
+
 $prefixExplain = $searcher->search('mark', [
     'lang' => 'en',
     'limit' => 2,

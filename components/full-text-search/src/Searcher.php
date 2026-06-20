@@ -60,8 +60,10 @@ final class WP_FTS_Searcher
      * controlled with `prefix_matching`; phrase search requires a
      * `search_extension` callback for storage-specific matching. `explain` or
      * `debug` adds a bounded diagnostics payload only to `include_total`
-     * responses. `explain_result_matches` can disable the per-result document
-     * term lookup when a caller must defer that work.
+     * responses. Query-plan explain rows include the user/query surface when the
+     * analyzer exposes it, plus the analyzed storage term and key used for
+     * scoring. `explain_result_matches` can disable the per-result document term
+     * lookup when a caller must defer that work.
      *
      * @param array<string,mixed> $opts
      * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
@@ -139,7 +141,7 @@ final class WP_FTS_Searcher
      * language alternatives, for example exact `fr` plus fallback `en`, or the
      * same untagged query term expanded across explicit `langs`.
      *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
      * @param int|null $topLimit Keep only the best K ranked rows when callers do
      *        not need totals or offsets.
      * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
@@ -1068,7 +1070,7 @@ final class WP_FTS_Searcher
      * the same query under each requested language, adding those language terms
      * as alternatives for each logical query term.
      *
-     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>
      */
     private function build_query_groups(string $query, array $opts): array
     {
@@ -1078,7 +1080,7 @@ final class WP_FTS_Searcher
     /**
      * Build the executable query groups plus a compact diagnostics summary.
      *
-     * @return array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int}
+     * @return array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int}
      */
     private function build_query_plan(string $query, array $opts): array
     {
@@ -1112,8 +1114,8 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
-     * @return array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int}
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
+     * @return array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int}
      */
     private function query_plan_from_base_groups(array $groups, array $opts): array
     {
@@ -1131,7 +1133,7 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
      */
     private function query_group_term_count(array $groups): int
     {
@@ -1150,8 +1152,8 @@ final class WP_FTS_Searcher
      * stored terms receive a worse rank in the same group, so ranking and AND
      * semantics still prefer exact matches while allowing broader recall.
      *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
-     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>
      */
     private function expand_prefix_query_groups(array $groups, array $opts): array
     {
@@ -1194,6 +1196,9 @@ final class WP_FTS_Searcher
                         'rank' => $prefixRank,
                         'source' => 'prefix_expansion',
                     ];
+                    if (isset($candidate['surface']) && is_scalar($candidate['surface']) && (string) $candidate['surface'] !== '') {
+                        $byKey[$termKey]['surface'] = (string) $candidate['surface'];
+                    }
                 }
             }
 
@@ -1266,7 +1271,7 @@ final class WP_FTS_Searcher
     /**
      * Analyze a query under one language and merge it by term position.
      *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
      */
     private function merge_language_groups(array &$groups, string $query, array $opts, string $lang, int $rank): void
     {
@@ -1339,7 +1344,7 @@ final class WP_FTS_Searcher
      * @param array<int,array<string,mixed>|string> $occurrences
      * @param string|null $authoritativeLang Language partition that overrides
      *        inline or analyzer-selected languages for explicit/fallback passes.
-     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>
      */
     private function groups_from_occurrences(array $occurrences, string $defaultLang, int $rank, ?string $authoritativeLang = null): array
     {
@@ -1387,7 +1392,7 @@ final class WP_FTS_Searcher
      * @param array<string,mixed>|string $occurrence
      * @param string|null $authoritativeLang Language partition that must own the
      *        candidate, regardless of inline tags or namespaced legacy terms.
-     * @return array{key:string,lang:string,term:string,rank:int,source:string}|null
+     * @return array{key:string,lang:string,term:string,rank:int,source:string,surface?:string}|null
      */
     private function candidate_from_occurrence(array|string $occurrence, string $defaultLang, int $rank, ?string $authoritativeLang = null): ?array
     {
@@ -1428,13 +1433,21 @@ final class WP_FTS_Searcher
             ? 'fallback_language'
             : ($occurrenceRank > 0 ? 'secondary_lemma' : 'exact');
 
-        return [
+        $candidate = [
             'key' => WP_FTS_TermNamespace::namespace_term($lang, $term),
             'lang' => $lang,
             'term' => $term,
             'rank' => $rank + $occurrenceRank,
             'source' => $source,
         ];
+        if (is_array($occurrence) && isset($occurrence['surface']) && is_scalar($occurrence['surface'])) {
+            $surface = trim((string) $occurrence['surface']);
+            if ($surface !== '') {
+                $candidate['surface'] = $surface;
+            }
+        }
+
+        return $candidate;
     }
 
     /**
@@ -1685,7 +1698,7 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @param array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int} $queryPlan
+     * @param array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int} $queryPlan
      * @param array{mode:string,source:string,estimated_candidates:?int,threshold:?int,candidate_cap:?int} $fastMode
      * @param array<string,int> $scoreStats
      * @param array<int,array<string,mixed>> $resultExplain
@@ -1730,7 +1743,7 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
      * @return string[]
      */
     private function explain_languages(array $groups): array
@@ -1749,21 +1762,26 @@ final class WP_FTS_Searcher
     }
 
     /**
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
-     * @return array<int,array{key:string,term:string,lang:string,rank:int,rank_class:string}>
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
+     * @return array<int,array{key:string,term:string,lang:string,rank:int,rank_class:string,surface?:string}>
      */
     private function explain_query_terms(array $groups): array
     {
         $terms = [];
         foreach ($groups as $group) {
             foreach ($group as $candidate) {
-                $terms[] = [
+                $row = [
                     'key' => $this->bounded_explain_text((string) $candidate['key']),
                     'term' => $this->bounded_explain_text((string) $candidate['term']),
                     'lang' => WP_FTS_TermNamespace::canonicalize_lang((string) $candidate['lang']),
                     'rank' => max(0, (int) $candidate['rank']),
                     'rank_class' => $this->candidate_rank_class($candidate),
                 ];
+                if (isset($candidate['surface']) && is_scalar($candidate['surface']) && trim((string) $candidate['surface']) !== '') {
+                    $row['surface'] = $this->bounded_explain_text((string) $candidate['surface']);
+                }
+
+                $terms[] = $row;
                 if (count($terms) >= self::EXPLAIN_MAX_TERMS) {
                     return $terms;
                 }
@@ -1775,8 +1793,8 @@ final class WP_FTS_Searcher
 
     /**
      * @param array<int,array<string,mixed>> $page
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
-     * @return array<int,array{doc_id:int,matches:array<int,array{key:string,term:string,lang:string,rank_class:string}>,matched_languages:array<int,string>,matches_more:bool}>
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
+     * @return array<int,array{doc_id:int,matches:array<int,array{key:string,term:string,lang:string,rank_class:string,surface?:string}>,matched_languages:array<int,string>,matches_more:bool}>
      */
     private function explain_result_matches(array $page, array $groups): array
     {
@@ -1819,12 +1837,16 @@ final class WP_FTS_Searcher
                     $languages[$lang] = true;
                 }
                 if (count($matches) < self::EXPLAIN_MAX_MATCHES_PER_RESULT) {
-                    $matches[] = [
+                    $match = [
                         'key' => $this->bounded_explain_text($termKey),
                         'term' => $this->bounded_explain_text((string) $candidate['term']),
                         'lang' => $lang,
                         'rank_class' => $this->candidate_rank_class($candidate),
                     ];
+                    if (isset($candidate['surface']) && is_scalar($candidate['surface']) && trim((string) $candidate['surface']) !== '') {
+                        $match['surface'] = $this->bounded_explain_text((string) $candidate['surface']);
+                    }
+                    $matches[] = $match;
                 }
             }
 
@@ -2498,6 +2520,9 @@ final class WP_FTS_Searcher
             $analysisOpts['query_lang'] = $explicitLang;
             $analysisOpts['lang'] = $explicitLang;
             $analysisOpts['language'] = $explicitLang;
+        }
+        if ($this->explain_requested($opts)) {
+            $analysisOpts['_include_query_surface'] = true;
         }
 
         return $analysisOpts;
