@@ -64,6 +64,47 @@ scores against a local Lucene-style BM25 oracle. This proves the native scoring
 boundary for a small auditable case; it does not replace the broader native
 relevance fixture or the optional external Python/library reference.
 
+## Cranfield Relevance Quality Gate
+
+The main harness includes source-shaped Cranfield parser and metric tests using
+project-owned synthetic fixtures. The full Cranfield relevance-quality gate is
+explicitly pending unless an operator supplies a local corpus path:
+
+```sh
+php tests/cranfield-relevance-gate.php
+WP_FTS_CRANFIELD_DIR=/path/to/cranfield php tests/cranfield-relevance-gate.php
+WP_FTS_CRANFIELD_DIR=/path/to/cranfield php tests/cranfield-relevance-gate.php --json
+```
+
+The gate expects local documents, queries, and relevance judgments. In a
+directory, the accepted classic names are `cran.all.1400` or `cran.all`,
+`cran.qry`, and `qrels.text`, `cranqrel`, `qrels.txt`, or `cran.qrel`.
+It does not download data and this repository does not bundle the full
+Cranfield corpus until redistribution license and provenance are reviewed.
+Without local data the command exits with pending/NO-GO status `2`, and the
+main harness reports the full-data check as `[PEND]` rather than silently
+passing it.
+
+Build a reusable native relevance suite JSON from local source files when a CI
+or review lane wants to separate import from scoring:
+
+```sh
+php tools/build-cranfield-relevance-suite.php \
+  --cranfield-dir=/path/to/cranfield \
+  --out=/tmp/wp-fts-cranfield-suite.json
+php tests/cranfield-relevance-gate.php \
+  --suite=/tmp/wp-fts-cranfield-suite.json \
+  --json
+```
+
+The gate indexes the parsed corpus through the production analyzer, indexer,
+storage, and searcher path, then compares native rankings with a local
+Lucene-style BM25 reference over the same analyzer terms. It reports nDCG@10,
+MAP, and P@5 for both native and reference results plus absolute deltas.
+Allowed deltas default to `0.05` and can be overridden with
+`WP_FTS_CRANFIELD_MAX_NDCG_DELTA`, `WP_FTS_CRANFIELD_MAX_MAP_DELTA`, and
+`WP_FTS_CRANFIELD_MAX_PRECISION_AT_5_DELTA`, or the matching CLI flags.
+
 ## Native Relevance Gold Benchmark
 
 The main harness includes the committed native relevance fixture automatically.

@@ -43,6 +43,22 @@ compares a field-boosted four-document fixture against a local Lucene-style BM25
 oracle, including weighted postings, OR rankings, AND narrowing, and score
 deltas.
 
+Run the Cranfield relevance-quality gate against an operator-provided local
+corpus:
+
+```sh
+WP_FTS_CRANFIELD_DIR=/path/to/cranfield php tests/cranfield-relevance-gate.php
+php tools/build-cranfield-relevance-suite.php \
+  --cranfield-dir=/path/to/cranfield \
+  --out=/tmp/wp-fts-cranfield-suite.json
+php tests/cranfield-relevance-gate.php --suite=/tmp/wp-fts-cranfield-suite.json --json
+```
+
+No full Cranfield data is committed or downloaded by the tests. Without
+`WP_FTS_CRANFIELD_DIR`, the full-data lane is reported as pending/NO-GO while
+the synthetic parser, importer, metric, and mini-gate checks still hard-fail on
+regression.
+
 The analyzer source-lock quality test validates the synthetic no-op manifest in
 `tests/fixtures/analyzer-source-locks/` and proves unsafe no-op metadata is
 rejected. Run the verifier directly when changing manifests:
