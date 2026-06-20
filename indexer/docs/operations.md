@@ -11,12 +11,14 @@ version, and schedules the bounded runtime queue processor. Runtime storage
 access also checks the stored schema version and repairs stale or missing schema
 state before indexing or tombstoning posts.
 
-On multisite, activation and `wp fts repair` operate on the current site's table
-prefix. When WordPress initializes a new site, the plugin switches into that
-site, creates or repairs the six FTS tables, schedules bounded queue work, and
-does not index content or set the activation redirect flag.
+On multisite, activation, the Health-tab repair action, and `wp fts repair`
+operate on the current site's table prefix. When WordPress initializes a new
+site, the plugin switches into that site, creates or repairs the six FTS tables,
+schedules bounded queue work, and does not index content or set the activation
+redirect flag.
 
-To explicitly repair the schema without indexing content, run:
+To explicitly repair the schema without indexing content, use Settings >
+Full-Text Search > Health > Repair schema tables or run:
 
 ```sh
 wp fts repair
@@ -174,6 +176,11 @@ replacement, highlighting, snippets, prefix matching, result limits, language
 fallback, and indexed post types. Use the documented options and filters for
 analyzer pack paths and custom field selection.
 
+The Health tab shows schema status, stored and expected schema versions, safe
+indexing lock state, indexing counts, and the latest batch summary. Its repair
+button runs schema/table repair only; it does not index content, create sample
+posts, or drain the queue.
+
 Request-level diagnostics are collected only for authorized or debug-enabled
 contexts: a `manage_options` user, `WP_FTS_DEBUG`, or the
 `wp_fts_debug_enabled` filter. When Debug Bar is active, the plugin registers an
@@ -211,8 +218,8 @@ Optimize removes tombstoned document IDs from posting rows, deletes empty term
 rows, purges tombstoned document rows, and rebuilds per-language metadata from
 active document lengths.
 
-Use the repair command when schema state is missing or stale and you do not want
-to index content:
+Use the Health-tab repair action or repair command when schema state is missing
+or stale and you do not want to index content:
 
 ```sh
 wp fts repair

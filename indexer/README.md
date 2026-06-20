@@ -30,8 +30,9 @@ Settings > Full-Text Search provides Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs. It manages the indexed post types, automatic indexing,
 search replacement surfaces, search-provider compatibility, highlighting,
 snippets, prefix matching, result limits, field ranking weights, an optional
-recency ranking boost, and language fallback defaults; analyzer-pack paths and
-custom field selection still use the documented options and filters.
+recency ranking boost, language fallback defaults, schema status, and a Health
+tab schema repair action; analyzer-pack paths and custom field selection still
+use the documented options and filters.
 
 ## Quickstart
 
@@ -131,6 +132,11 @@ searcher callers can still use the existing `WP_FTS_PREFIX_MIN_LENGTH` and
 The index is derived state. Rebuild it after content imports, analyzer changes,
 language-routing changes, or environment moves where the FTS tables were not
 restored with WordPress content.
+
+The Health tab shows whether the stored schema version is current, missing, or
+stale. Its repair button runs the same table/schema repair path as
+`wp fts repair`; it touches schema and table definitions only and does not index
+content or create sample posts.
 
 ## Feature Summary
 

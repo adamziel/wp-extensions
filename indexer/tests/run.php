@@ -4711,10 +4711,19 @@ test_case('health dashboard displays search state counts and last indexed conten
         wp_fts_test_backfill_post(702, 'post', 'publish', 'Health Waiting Post'),
         wp_fts_test_backfill_post(703, 'page', 'publish', 'Health Remaining Page'),
     ];
+    $lockStarted = time() - 10;
+    $lockExpires = time() + 290;
 
     try {
         WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [702];
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = 0;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+            'token' => 'health-lock-token-must-not-render',
+            'mode' => 'manual',
+            'started_at' => $lockStarted,
+            'expires_at' => $lockExpires,
+        ];
         $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
         $_POST = [];
         $html = wp_fts_test_capture_admin_settings_tab(null);
@@ -4725,6 +4734,14 @@ test_case('health dashboard displays search state counts and last indexed conten
     }
 
     assert_contains('<h2>Search health</h2>', $html, 'default admin page should render the Health dashboard');
+    assert_contains('<th scope="row">Schema status</th><td>Stale</td>', $html, 'health dashboard should show stale schema status');
+    assert_contains('<th scope="row">Stored schema version</th><td>0</td>', $html, 'health dashboard should show stored schema version');
+    assert_contains('<th scope="row">Expected schema version</th><td>' . WP_FTS_Plugin::SCHEMA_VERSION . '</td>', $html, 'health dashboard should show expected schema version');
+    assert_contains('<th scope="row">Indexing lock</th><td>Active</td>', $html, 'health dashboard should show active lock state');
+    assert_contains('<th scope="row">Lock mode</th><td>Manual</td>', $html, 'health dashboard should show safe lock mode');
+    assert_contains('<th scope="row">Lock started</th><td>' . gmdate('Y-m-d H:i:s', $lockStarted) . ' UTC</td>', $html, 'health dashboard should show safe lock start time');
+    assert_contains('<th scope="row">Lock expires</th><td>' . gmdate('Y-m-d H:i:s', $lockExpires) . ' UTC</td>', $html, 'health dashboard should show safe lock expiry time');
+    assert_true(!str_contains($html, 'health-lock-token-must-not-render'), 'health dashboard should not expose lock tokens');
     assert_contains('<th scope="row">Public site search</th><td>Enabled</td>', $html, 'health dashboard should show public search replacement state');
     assert_contains('<th scope="row">wp-admin Posts search</th><td>Disabled</td>', $html, 'health dashboard should show admin search replacement state');
     assert_contains('<th scope="row">Search provider compatibility</th><td>Prefer Language FTS</td>', $html, 'health dashboard should show effective provider compatibility mode');
@@ -4739,6 +4756,8 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<th scope="row">Last batch</th><td>Manual at ', $html, 'health dashboard should show last batch time and mode');
     assert_contains('<th scope="row">Last batch processed</th><td>1 total (0 waiting updates, 1 remaining content, 0 failed)</td>', $html, 'health dashboard should show last batch processed counts');
     assert_contains('<th scope="row">Last indexing failure</th><td>No indexing failures recorded.</td>', $html, 'health dashboard should show the latest failure state');
+    assert_contains('Repair FTS tables and the stored schema version without indexing content.', $html, 'health dashboard should explain schema repair scope');
+    assert_contains('Repair schema tables', $html, 'health dashboard should expose schema repair action');
     assert_contains('Run one safe indexing pass now. You can use it again until Remaining to index reaches 0.', $html, 'health dashboard should explain the manual batch action in user-facing terms');
     assert_contains('Index the next batch now', $html, 'health dashboard should expose one primary manual indexing action');
     assert_contains('wp_fts_health_nonce', $html, 'health manual action should use a dedicated nonce field');
@@ -4748,6 +4767,124 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_true(!str_contains($html, 'wp_fts_sandbox_action'), 'health dashboard should not render sandbox demo action controls');
     assert_true(!str_contains($html, 'Create or refresh demo posts'), 'health dashboard should not reintroduce demo post creation controls');
     assert_true(!str_contains($html, 'Build demo index'), 'health dashboard should not reintroduce demo indexing controls');
+});
+
+test_case('health schema repair POST requires capability and nonce before repairing', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $fake->postRows = [
+        wp_fts_test_backfill_post(741, 'post', 'publish', 'Repair Requires Auth'),
+    ];
+    $validPost = [
+        'wp_fts_health_action' => 'repair_schema',
+        'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = $validPost;
+        $unauthorizedHtml = wp_fts_test_capture_admin_settings_tab(null);
+        assert_contains('You do not have permission to manage Full-Text Search settings.', $unauthorizedHtml, 'unauthorized repair should stop at the settings-page capability gate');
+        assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'unauthorized repair should not create or repair schema tables');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'unauthorized repair should not persist schema version');
+        assert_same([], $fake->docs, 'unauthorized repair should not index content');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $_POST = [
+            'wp_fts_health_action' => 'repair_schema',
+            'wp_fts_health_nonce' => 'not-a-valid-nonce',
+        ];
+        $invalidHtml = wp_fts_test_capture_admin_settings_tab(null);
+        assert_contains('The schema repair action could not be verified', $invalidHtml, 'invalid repair nonce should show an error');
+        assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'invalid repair nonce should not create or repair schema tables');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'invalid repair nonce should not persist schema version');
+        assert_same([], $fake->docs, 'invalid repair nonce should not index content');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('health schema repair POST repairs schema without indexing or creating demo posts', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [751];
+    $fake->postRows = [
+        wp_fts_test_backfill_post(751, 'post', 'publish', 'Repair Only Post'),
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [
+            'wp_fts_health_action' => 'repair_schema',
+            'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+        ];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('Schema tables repaired. Current schema version: ' . WP_FTS_Plugin::SCHEMA_VERSION . '.', $html, 'valid repair should report success and current schema version');
+    assert_contains('<th scope="row">Schema status</th><td>Current</td>', $html, 'health dashboard should show current schema status after repair');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'valid repair should persist current schema version');
+    assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'valid repair should call the schema creation/repair path');
+    assert_same([], $fake->docs, 'valid repair should not index existing content');
+    assert_same([], $fake->terms, 'valid repair should not write FTS terms');
+    assert_same([], $GLOBALS['wp_fts_test_posts'], 'valid repair should not create demo posts');
+    assert_same([751], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'valid repair should not drain the indexing queue');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]), 'valid repair should not record a manual indexing batch');
+});
+
+test_case('health schema repair failure reports bounded escaped error without indexing', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $fake->failQueryPrefix = 'CREATE TABLE';
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $fake->postRows = [
+        wp_fts_test_backfill_post(761, 'post', 'publish', 'Repair Failure Post'),
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [
+            'wp_fts_health_action' => 'repair_schema',
+            'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+        ];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('notice-error', $html, 'repair failure should render an error notice');
+    assert_contains('Could not repair schema tables: Failed to create FTS tables: simulated failure for CREATE statement', $html, 'repair failure should report a bounded redacted error');
+    assert_true(!str_contains($html, 'CREATE TABLE wp_fts_terms'), 'repair failure notice should not expose raw SQL');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'failed repair should not persist schema version');
+    assert_same([], $fake->docs, 'failed repair should not index content');
+    assert_same([], $fake->terms, 'failed repair should not write FTS terms');
 });
 
 test_case('health manual batch POST requires capability and nonce before indexing', function (): void {

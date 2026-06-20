@@ -53,6 +53,7 @@ final class WP_FTS_Plugin
     private const ADMIN_HEALTH_NONCE_FIELD = 'wp_fts_health_nonce';
     private const ADMIN_HEALTH_ACTION_FIELD = 'wp_fts_health_action';
     private const ADMIN_HEALTH_MANUAL_BATCH_ACTION = 'index_next_batch';
+    private const ADMIN_HEALTH_REPAIR_SCHEMA_ACTION = 'repair_schema';
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
@@ -2131,23 +2132,57 @@ final class WP_FTS_Plugin
             return [];
         }
 
+        $action = self::health_post_action();
         if (!self::can_manage_admin_sandbox()) {
-            return [['error', 'You do not have permission to index content.']];
+            return [['error', $action === self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION ? 'You do not have permission to repair schema tables.' : 'You do not have permission to index content.']];
         }
 
         if (!self::verify_health_nonce()) {
-            return [['error', 'The indexing action could not be verified. Reload the page and try again.']];
+            return [['error', $action === self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION ? 'The schema repair action could not be verified. Reload the page and try again.' : 'The indexing action could not be verified. Reload the page and try again.']];
         }
 
-        if (self::health_post_action() !== self::ADMIN_HEALTH_MANUAL_BATCH_ACTION) {
-            return [['error', 'Unsupported indexing action. No changes were made.']];
+        if ($action === self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION) {
+            try {
+                return [self::schema_repair_notice(self::repair_schema())];
+            } catch (Throwable $e) {
+                return [['error', 'Could not repair schema tables: ' . self::bounded_admin_error_message($e)]];
+            }
         }
 
-        try {
-            return [self::manual_index_batch_notice(self::process_manual_index_batch())];
-        } catch (Throwable $e) {
-            return [['error', 'Could not index the next batch: ' . $e->getMessage()]];
+        if ($action === self::ADMIN_HEALTH_MANUAL_BATCH_ACTION) {
+            try {
+                return [self::manual_index_batch_notice(self::process_manual_index_batch())];
+            } catch (Throwable $e) {
+                return [['error', 'Could not index the next batch: ' . self::bounded_admin_error_message($e)]];
+            }
         }
+
+        return [['error', 'Unsupported Health action. No changes were made.']];
+    }
+
+    /**
+     * @param array{status:string,stored_version:int,expected_version:int} $schema
+     * @return array{0:string,1:string}
+     */
+    private static function schema_repair_notice(array $schema): array
+    {
+        return [
+            'success',
+            sprintf(
+                'Schema tables repaired. Current schema version: %d.',
+                max(0, (int) ($schema['stored_version'] ?? 0))
+            ),
+        ];
+    }
+
+    private static function bounded_admin_error_message(Throwable $e): string
+    {
+        $message = $e->getMessage();
+        $message = preg_replace('/#\d+\s+.*$/s', '', $message) ?? $message;
+        $message = preg_replace('/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE)\b.*$/s', '$1 statement', $message) ?? $message;
+        $message = self::debug_truncate_text(self::sanitize_text($message), self::MAX_INDEX_FAILURE_ERROR_BYTES);
+
+        return $message !== '' ? $message : 'Unknown error.';
     }
 
     /**
@@ -2480,6 +2515,8 @@ final class WP_FTS_Plugin
     {
         $settings = self::settings();
         $health = self::search_health();
+        $schema = self::schema_status();
+        $lock = self::index_lock_status();
         try {
             $counts = self::search_health_counts();
         } catch (Throwable $e) {
@@ -2492,6 +2529,13 @@ final class WP_FTS_Plugin
 
         echo '<h3>Status summary</h3>';
         echo '<table class="widefat striped wp-fts-health-table"><tbody>';
+        self::render_health_status_row('Schema status', self::schema_status_label((string) $schema['status']));
+        self::render_health_status_row('Stored schema version', (string) max(0, (int) $schema['stored_version']));
+        self::render_health_status_row('Expected schema version', (string) max(0, (int) $schema['expected_version']));
+        self::render_health_status_row('Indexing lock', !empty($lock['active']) ? 'Active' : 'Inactive');
+        self::render_health_status_row('Lock mode', self::lock_mode_summary($lock));
+        self::render_health_status_row('Lock started', self::lock_time_summary($lock['started_at'] ?? ''));
+        self::render_health_status_row('Lock expires', self::lock_time_summary($lock['expires_at'] ?? ''));
         self::render_health_status_row('Public site search', !empty($settings['replace_frontend_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('wp-admin Posts search', !empty($settings['replace_admin_post_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('Search provider compatibility', self::search_provider_compatibility_label((string) $settings['search_provider_compatibility']));
@@ -2517,6 +2561,14 @@ final class WP_FTS_Plugin
             self::render_debug_diagnostics_panel('Request diagnostics');
         }
 
+        echo '<h3>Schema controls</h3>';
+        echo '<p class="wp-fts-health-copy">Repair FTS tables and the stored schema version without indexing content.</p>';
+        echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">';
+        self::render_health_nonce_field();
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION) . '">';
+        echo '<p><button type="submit" class="button">Repair schema tables</button></p>';
+        echo '</form>';
+
         echo '<h3>Indexing controls</h3>';
         echo '<p class="wp-fts-health-copy">Run one safe indexing pass now. You can use it again until Remaining to index reaches 0.</p>';
         echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">';
@@ -2529,6 +2581,40 @@ final class WP_FTS_Plugin
     private static function render_health_status_row(string $label, string $value): void
     {
         echo '<tr><th scope="row">' . self::esc_html($label) . '</th><td>' . self::esc_html($value) . '</td></tr>';
+    }
+
+    private static function schema_status_label(string $status): string
+    {
+        return match ($status) {
+            'current' => 'Current',
+            'missing' => 'Missing',
+            'stale' => 'Stale',
+            default => 'Unknown',
+        };
+    }
+
+    /**
+     * @param array{state:string,active:bool,mode:string,started_at:string,expires_at:string} $lock
+     */
+    private static function lock_mode_summary(array $lock): string
+    {
+        $mode = is_scalar($lock['mode'] ?? null) ? (string) $lock['mode'] : '';
+        if ($mode === '') {
+            return 'None';
+        }
+
+        return match ($mode) {
+            'cron' => 'WP-Cron',
+            'manual' => 'Manual',
+            default => self::debug_truncate_text($mode, 40),
+        };
+    }
+
+    private static function lock_time_summary(mixed $value): string
+    {
+        $value = is_scalar($value) ? trim((string) $value) : '';
+
+        return $value !== '' ? self::debug_truncate_text($value, 32) . ' UTC' : 'Not recorded';
     }
 
     /**
@@ -3678,7 +3764,7 @@ final class WP_FTS_Plugin
     {
         $action = self::sanitize_key(self::request_text_value($_POST, self::ADMIN_HEALTH_ACTION_FIELD, 40));
 
-        return $action === self::ADMIN_HEALTH_MANUAL_BATCH_ACTION ? $action : '';
+        return in_array($action, [self::ADMIN_HEALTH_MANUAL_BATCH_ACTION, self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION], true) ? $action : '';
     }
 
     private static function health_post_action_submitted(): bool
