@@ -4582,6 +4582,74 @@ test_case('request diagnostics stay disabled for normal visitors and render esca
     }
 });
 
+test_case('bounded request diagnostics preserve trace ids after eviction', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $plugin = new ReflectionClass(WP_FTS_Plugin::class);
+    $maxTracesConstant = $plugin->getReflectionConstant('DEBUG_MAX_TRACES');
+    assert_true($maxTracesConstant !== false, 'debug trace cap should be reflectable for the eviction regression');
+    $maxTraces = (int) $maxTracesConstant->getValue();
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+    $addCount = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_add_count');
+    $addCount->setAccessible(true);
+
+    $traceIds = [];
+    for ($index = 0; $index <= $maxTraces; $index++) {
+        $traceIds[] = (int) $startTrace->invoke(null, 'eviction ' . $index);
+    }
+
+    $survivingTraceId = $traceIds[1];
+    $addCount->invoke(null, $survivingTraceId, 'candidate_rows', 7);
+
+    $tracesById = [];
+    foreach (WP_FTS_Plugin::debug_traces() as $trace) {
+        $tracesById[(int) ($trace['id'] ?? 0)] = $trace;
+    }
+
+    assert_true(!array_key_exists($traceIds[0], $tracesById), 'oldest debug trace should be evicted after the trace cap is exceeded');
+    assert_true(array_key_exists($survivingTraceId, $tracesById), 'second debug trace should survive the first bounded eviction');
+    $survivingCounts = is_array($tracesById[$survivingTraceId]['counts'] ?? null) ? $tracesById[$survivingTraceId]['counts'] : [];
+    assert_same(7, (int) ($survivingCounts['candidate_rows'] ?? 0), 'count updates should apply to the surviving trace id after eviction');
+
+    foreach ($tracesById as $id => $trace) {
+        if ($id === $survivingTraceId) {
+            continue;
+        }
+        $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
+        assert_same(0, (int) ($counts['candidate_rows'] ?? 0), 'count updates should not move to another trace after eviction');
+    }
+});
+
+test_case('WP_FTS_DEBUG constant enables diagnostics when defined before plugin load', function (): void {
+    $plugin = (string) realpath(__DIR__ . '/../indexer.php');
+    $code = str_replace('__PLUGIN__', var_export($plugin, true), <<<'PHP'
+define('WP_FTS_DEBUG', true);
+require __PLUGIN__;
+$startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+$startTrace->setAccessible(true);
+$traceId = (int) $startTrace->invoke(null, 'constant debug path', 'constantneedle');
+$traces = WP_FTS_Plugin::debug_traces();
+$trace = $traces[0] ?? [];
+echo 'id=', $traceId, "\n";
+echo 'count=', count($traces), "\n";
+echo 'context=', (string) ($trace['context'] ?? ''), "\n";
+echo 'status=', (string) ($trace['status'] ?? ''), "\n";
+PHP);
+
+    $result = test_run_php_without_extensions($code);
+    $stderr = trim($result['stderr']);
+    $detail = $stderr === '' ? '' : "\nSubprocess stderr: " . substr($stderr, 0, 500);
+
+    assert_same(0, $result['exit'], 'WP_FTS_DEBUG subprocess should exit cleanly' . $detail);
+    assert_contains("id=1\n", $result['stdout'], 'WP_FTS_DEBUG subprocess should create a trace id');
+    assert_contains("count=1\n", $result['stdout'], 'WP_FTS_DEBUG subprocess should collect one diagnostic trace');
+    assert_contains("context=constant debug path\n", $result['stdout'], 'WP_FTS_DEBUG subprocess should record the trace context');
+    assert_contains("status=started\n", $result['stdout'], 'WP_FTS_DEBUG subprocess should record a started trace');
+});
+
 test_case('Debug Bar diagnostics panel registration is conditional and safe', function (): void {
     wp_fts_test_reset_wordpress_fakes();
 

@@ -642,7 +642,7 @@ final class WP_FTS_Plugin
         }
 
         while (count(self::$debug_traces) >= self::DEBUG_MAX_TRACES) {
-            array_shift(self::$debug_traces);
+            unset(self::$debug_traces[array_key_first(self::$debug_traces)]);
         }
 
         $id = self::$debug_next_trace_id++;
