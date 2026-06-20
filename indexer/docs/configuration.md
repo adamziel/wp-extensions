@@ -4,8 +4,8 @@ Settings > Full-Text Search provides the operator-facing Health, Settings,
 Sandbox, Indexed content, and Analyzer packs tabs. The Settings tab controls
 indexed post types, automatic indexing, front-end and wp-admin Posts search
 replacement, search-provider compatibility, result limits, snippets,
-highlighting, prefix matching, field ranking weights, optional recency ranking
-boosts, and language fallback defaults. WordPress runtime indexing, REST/admin
+highlighting, prefix matching and thresholds, field ranking weights, optional
+recency ranking boosts, and language fallback defaults. WordPress runtime indexing, REST/admin
 search, the PHP plugin search helper, and WP-CLI use
 `WP_FTS_Plugin::runtime_analyzer()`. Analyzer-pack paths are still configured
 through the `wp_fts_analyzer_options` option or filter, operational internals
@@ -34,6 +34,28 @@ enabled surface; use the `wp_fts_replace_frontend_search` or
 entirely. Request diagnostics include the effective provider compatibility mode
 and record a bailout reason when coexistence mode keeps another provider's
 result.
+
+## Word Beginning Prefix Tuning
+
+The Word beginnings setting is the top-level on/off control for prefix matching.
+When enabled, exact analyzer and lemma matches still rank before prefix-only
+alternatives. The related threshold settings keep broad prefixes bounded:
+
+| Setting | Default | Bounds | Effect |
+| --- | ---: | ---: | --- |
+| `prefix_min_length` | `4` | `2`-`12` | Shorter values allow shorter searched words to expand, broadening matches and potentially adding slower or noisier alternatives. |
+| `prefix_max_terms` | `64` | `1`-`256` | Caps how many stored terms each analyzed query term can add, bounding broad-prefix cost. |
+
+The saved thresholds apply to front-end search replacement, wp-admin Posts
+search replacement, Sandbox searches, and `WP_FTS_Plugin::search()`. Explicit
+`prefix_min_length` or `prefix_max_terms` options passed to the helper override
+the saved values for that call after the same bounds are applied.
+
+`wp fts search` accepts `--prefix_matching` to enable word-beginning expansion
+for that CLI search, plus `--prefix_min_length` / `--prefix-min-length` and
+`--prefix_max_terms` / `--prefix-max-terms` for bounded threshold overrides.
+The lower-level searcher constants `WP_FTS_PREFIX_MIN_LENGTH` and
+`WP_FTS_PREFIX_MAX_TERMS` still exist for code-level direct-searcher callers.
 
 ## Ranking Field Weights
 

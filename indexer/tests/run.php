@@ -4137,6 +4137,8 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
     assert_same(30.0, WP_FTS_Plugin::default_settings()['recency_boost_half_life_days'], 'default recency ranking half-life should be conservative');
     assert_same(true, WP_FTS_Plugin::default_settings()['language_fallback'], 'default settings should enable language fallback');
     assert_same(true, WP_FTS_Plugin::default_settings()['prefix_matching'], 'default settings should enable word-beginning prefix matching');
+    assert_same(4, WP_FTS_Plugin::default_settings()['prefix_min_length'], 'default prefix minimum length should preserve existing searcher behavior');
+    assert_same(64, WP_FTS_Plugin::default_settings()['prefix_max_terms'], 'default prefix expansion cap should preserve existing searcher behavior');
     assert_same('prefer_fts', WP_FTS_Plugin::default_settings()['search_provider_compatibility'], 'default search provider compatibility should prefer FTS precedence');
 });
 
@@ -4188,6 +4190,29 @@ test_case('settings sanitization maps replacement checkboxes and legacy scope to
     ]);
     assert_same(false, $legacy['replace_frontend_search'], 'legacy frontend replacement boolean should still sanitize');
     assert_same(true, $legacy['replace_admin_post_search'], 'legacy admin replacement boolean should still sanitize');
+});
+
+test_case('settings sanitization accepts and clamps prefix threshold controls', function (): void {
+    $valid = WP_FTS_Plugin::sanitize_settings([
+        'prefix_min_length' => '3',
+        'prefix_max_terms' => '128',
+    ]);
+    assert_same(3, $valid['prefix_min_length'], 'valid prefix minimum length should persist');
+    assert_same(128, $valid['prefix_max_terms'], 'valid prefix max terms should persist');
+
+    $clamped = WP_FTS_Plugin::sanitize_settings([
+        'prefix_min_length' => '1',
+        'prefix_max_terms' => '9999',
+    ]);
+    assert_same(2, $clamped['prefix_min_length'], 'too-short prefix minimum length should clamp to the product lower bound');
+    assert_same(256, $clamped['prefix_max_terms'], 'too-large prefix max terms should clamp to the product upper bound');
+
+    $invalid = WP_FTS_Plugin::sanitize_settings([
+        'prefix_min_length' => [],
+        'prefix_max_terms' => 'not-a-number',
+    ]);
+    assert_same(4, $invalid['prefix_min_length'], 'non-scalar prefix minimum length should fall back to the default');
+    assert_same(64, $invalid['prefix_max_terms'], 'non-numeric prefix max terms should fall back to the default');
 });
 
 test_case('settings sanitization accepts bounded field boosts and rejects invalid values', function (): void {
@@ -4423,6 +4448,14 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('type="hidden" name="wp_fts_settings[prefix_matching]" value="0"', $settingsHtml, 'prefix matching checkbox should post an unchecked value');
     assert_contains('type="checkbox" name="wp_fts_settings[prefix_matching]" value="1" checked="checked"', $settingsHtml, 'prefix matching should be checked by default');
     assert_contains('Exact and lemmatizer matches still rank first', $settingsHtml, 'prefix matching copy should explain rank precedence');
+    assert_contains('Shortest word beginning', $settingsHtml, 'settings should expose prefix minimum length near word beginnings');
+    assert_contains('name="wp_fts_settings[prefix_min_length]" value="4"', $settingsHtml, 'settings should render the default prefix minimum length');
+    assert_contains('Shorter values make word-beginning matches broader', $settingsHtml, 'prefix minimum length copy should explain broader matching');
+    assert_contains('can be slower and add noisier alternatives', $settingsHtml, 'prefix minimum length copy should explain cost and noise');
+    assert_contains('Word-beginning alternatives', $settingsHtml, 'settings should expose prefix max terms near word beginnings');
+    assert_contains('name="wp_fts_settings[prefix_max_terms]" value="64"', $settingsHtml, 'settings should render the default prefix max terms');
+    assert_contains('Limits how many stored terms a broad word beginning can add', $settingsHtml, 'prefix max terms copy should explain bounded expansion');
+    assert_contains('exact and lemma matches still rank first', $settingsHtml, 'prefix max terms copy should explain ranking precedence');
     assert_contains('Results per page', $settingsHtml, 'settings should rename result limit to results per page');
     assert_contains('shown on one page or search view', $settingsHtml, 'settings results-per-page help should explain the page/search-view behavior');
     assert_contains('Higher numbers make matches in that field count more strongly', $settingsHtml, 'settings ranking copy should explain the effect of larger weights');
@@ -5703,6 +5736,13 @@ test_case('sandbox searches existing indexed content without creating demo posts
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        [
+            'prefix_min_length' => 3,
+            'prefix_max_terms' => 5,
+        ]
+    );
 
     try {
         $post = (object) [
@@ -5740,6 +5780,10 @@ test_case('sandbox searches existing indexed content without creating demo posts
         assert_same('ran', $sandboxTrace['status'] ?? null, 'sandbox diagnostics should mark successful searches as ran');
         assert_same('existingneedle', $sandboxTrace['search_text'] ?? null, 'sandbox diagnostics should record bounded search text');
         assert_same('en', $sandboxTrace['query_lang'] ?? null, 'sandbox diagnostics should record selected query language');
+        $sandboxExplain = is_array($sandboxTrace['search_explain'] ?? null) ? $sandboxTrace['search_explain'] : [];
+        $sandboxPlan = is_array($sandboxExplain['query_plan'] ?? null) ? $sandboxExplain['query_plan'] : [];
+        assert_same(3, (int) ($sandboxPlan['prefix_min_length'] ?? 0), 'sandbox search should pass saved prefix minimum length into the searcher');
+        assert_same(5, (int) ($sandboxPlan['prefix_max_terms'] ?? 0), 'sandbox search should pass saved prefix max terms into the searcher');
         $sandboxCounts = is_array($sandboxTrace['counts'] ?? null) ? $sandboxTrace['counts'] : [];
         assert_same(1, (int) ($sandboxCounts['visible_results'] ?? 0), 'sandbox diagnostics should count visible results');
         $sandboxTimings = is_array($sandboxTrace['timings_ms'] ?? null) ? $sandboxTrace['timings_ms'] : [];
@@ -6839,6 +6883,45 @@ test_case('runtime post hooks index visible posts immediately and tombstone invi
     }
 });
 
+test_case('search helper uses saved prefix thresholds and preserves explicit overrides', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $post = (object) [
+        'ID' => 1181,
+        'post_title' => 'Prefix threshold helper',
+        'post_content' => '<p>quasarbridge content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-18 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][1181] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(1181, $post, true);
+        assert_same([], WP_FTS_Plugin::search('qua', ['limit' => 10]), 'default prefix minimum length should not expand a three-letter query');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            [
+                'prefix_min_length' => 3,
+                'prefix_max_terms' => 8,
+            ]
+        );
+        assert_same([1181], array_column(WP_FTS_Plugin::search('qua', ['limit' => 10]), 'doc_id'), 'saved shorter prefix minimum length should enable the shorter prefix match');
+        assert_same([], WP_FTS_Plugin::search('qua', [
+            'limit' => 10,
+            'prefix_min_length' => 4,
+        ]), 'explicit per-search prefix minimum length should override the saved setting');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('saved field boost settings change runtime ranking after reindex', function (): void {
     global $wpdb;
 
@@ -7223,6 +7306,8 @@ test_case('enabled diagnostics record frontend search timings counts language se
         [
             'recency_boost_strength' => 0.4,
             'recency_boost_half_life_days' => 14.0,
+            'prefix_min_length' => 3,
+            'prefix_max_terms' => 9,
         ]
     );
 
@@ -7280,6 +7365,8 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_same('enabled', $settings['public_site_search'] ?? null, 'frontend diagnostics should record public search replacement setting');
         assert_same('OR', $settings['match_mode'] ?? null, 'frontend diagnostics should record match mode setting');
         assert_same('enabled', $settings['prefix_matching'] ?? null, 'frontend diagnostics should record prefix matching setting');
+        assert_same(3, (int) ($settings['prefix_min_length'] ?? 0), 'frontend diagnostics should record saved prefix minimum length setting');
+        assert_same(9, (int) ($settings['prefix_max_terms'] ?? 0), 'frontend diagnostics should record saved prefix max terms setting');
         assert_same('title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1', $settings['field_boosts'] ?? null, 'frontend diagnostics should summarize effective field boosts');
         assert_same('Enabled, strength 0.4, half-life 14 days', $settings['recency_boost'] ?? null, 'frontend diagnostics should summarize saved recency boost settings');
 
@@ -7303,6 +7390,8 @@ test_case('enabled diagnostics record frontend search timings counts language se
 
         $plan = is_array($explain['query_plan'] ?? null) ? $explain['query_plan'] : [];
         assert_same('OR', $plan['match_mode'] ?? null, 'frontend diagnostics should record searcher match mode');
+        assert_same(3, (int) ($plan['prefix_min_length'] ?? 0), 'frontend diagnostics should pass saved prefix minimum length into the searcher');
+        assert_same(9, (int) ($plan['prefix_max_terms'] ?? 0), 'frontend diagnostics should pass saved prefix max terms into the searcher');
         assert_true((int) ($plan['logical_group_count'] ?? 0) >= 1, 'frontend diagnostics should record logical query group count');
         assert_true(in_array('en', is_array($plan['analyzed_languages'] ?? null) ? $plan['analyzed_languages'] : [], true), 'frontend diagnostics should record analyzed query language');
         $terms = is_array($plan['terms'] ?? null) ? $plan['terms'] : [];
@@ -7644,6 +7733,8 @@ test_case('admin Posts list search is replaced with FTS-ranked WP_Post results',
         [
             'recency_boost_strength' => 0.35,
             'recency_boost_half_life_days' => 21.0,
+            'prefix_min_length' => 3,
+            'prefix_max_terms' => 8,
         ]
     );
 
@@ -7692,6 +7783,9 @@ test_case('admin Posts list search is replaced with FTS-ranked WP_Post results',
         $trace = $traces[0];
         assert_same('admin post search', $trace['context'] ?? null, 'admin diagnostics should record the admin search context');
         $explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
+        $plan = is_array($explain['query_plan'] ?? null) ? $explain['query_plan'] : [];
+        assert_same(3, (int) ($plan['prefix_min_length'] ?? 0), 'admin Posts search should pass saved prefix minimum length into the searcher');
+        assert_same(8, (int) ($plan['prefix_max_terms'] ?? 0), 'admin Posts search should pass saved prefix max terms into the searcher');
         $recency = is_array($explain['recency_boost'] ?? null) ? $explain['recency_boost'] : [];
         assert_same(true, $recency['enabled'] ?? null, 'admin Posts search should pass saved recency boost into the searcher');
         assert_float_near(0.35, (float) ($recency['strength'] ?? -1), 'admin Posts diagnostics should record saved recency strength');
@@ -13574,6 +13668,41 @@ test_case('prefix matching expands query terms to stored terms and can be disabl
     ]), 'per-search prefix_matching false should preserve exact-only search');
 });
 
+test_case('prefix threshold options enable shorter prefixes and cap expanded terms', function (): void {
+    $storage = new WP_FTS_Storage_InMemory();
+    $analyzer = new WP_FTS_Analyzer([
+        'enable_stemming' => false,
+        'auto_detect_language' => false,
+    ]);
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+    $indexer->index_document(1, 'prealpha', ['lang' => 'en']);
+    $indexer->index_document(2, 'prebeta', ['lang' => 'en']);
+    $indexer->index_document(3, 'pregamma', ['lang' => 'en']);
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    assert_same([], $searcher->search('pre', [
+        'lang' => 'en',
+        'prefix_matching' => true,
+        'limit' => 10,
+    ]), 'default prefix minimum length should not expand a three-letter query');
+
+    $payload = $searcher->search('pre', [
+        'lang' => 'en',
+        'prefix_matching' => true,
+        'prefix_min_length' => 3,
+        'prefix_max_terms' => 2,
+        'limit' => 10,
+        'include_total' => true,
+        'explain' => true,
+    ]);
+    assert_same([1, 2], array_column($payload['results'], 'doc_id'), 'prefix max terms should bound expansion to deterministic stored terms');
+    $plan = is_array($payload['explain']['query_plan'] ?? null) ? $payload['explain']['query_plan'] : [];
+    assert_same('enabled', $plan['prefix_matching'] ?? null, 'explain should record enabled prefix matching');
+    assert_same(3, (int) ($plan['prefix_min_length'] ?? 0), 'explain should record effective prefix minimum length');
+    assert_same(2, (int) ($plan['prefix_max_terms'] ?? 0), 'explain should record effective prefix max terms');
+    assert_same(2, (int) ($plan['prefix_added_terms'] ?? 0), 'explain should record the bounded number of prefix-added terms');
+});
+
 test_case('prefix-expanded alternatives rank behind exact analyzer matches', function (): void {
     $storage = new WP_FTS_Storage_InMemory();
     $analyzer = new WP_FTS_Analyzer([
@@ -13895,6 +14024,71 @@ test_case('wp cli search accepts recency boost ranking options', function (): vo
     }
 
     assert_same([2, 1], array_column($formats[0]['items'] ?? [], 'doc_id'), 'CLI recency boost options should let the newer equal-score document rank first');
+});
+
+test_case('wp cli search accepts prefix threshold aliases and bounds expansion', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $storage = WP_FTS_Plugin::storage(true);
+        $analyzer = new WP_FTS_Analyzer([
+            'enable_stemming' => false,
+            'auto_detect_language' => false,
+        ]);
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $indexer->index_document_fields(1, [['name' => 'content', 'text' => 'prealpha']], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 1,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-06-18 00:00:00',
+                'title' => 'CLI prefix alpha',
+                'search_text' => 'prealpha',
+            ],
+        ]);
+        $indexer->index_document_fields(2, [['name' => 'content', 'text' => 'prebeta']], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 2,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-06-18 00:00:00',
+                'title' => 'CLI prefix beta',
+                'search_text' => 'prebeta',
+            ],
+        ]);
+
+        $GLOBALS['wp_fts_quality_cli_format_items'] = [];
+        (new WP_FTS_WPCLI_Command())->search(['pre'], [
+            'lang' => 'en',
+            'limit' => '10',
+            'prefix_matching' => '1',
+            'prefix_min_length' => '3',
+            'prefix_max_terms' => '1',
+        ]);
+        $bounded = $GLOBALS['wp_fts_quality_cli_format_items'] ?? [];
+
+        $GLOBALS['wp_fts_quality_cli_format_items'] = [];
+        (new WP_FTS_WPCLI_Command())->search(['pre'], [
+            'lang' => 'en',
+            'limit' => '10',
+            'prefix-matching' => '1',
+            'prefix-min-length' => '3',
+            'prefix-max-terms' => '2',
+        ]);
+        $expanded = $GLOBALS['wp_fts_quality_cli_format_items'] ?? [];
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same([1], array_column($bounded[0]['items'] ?? [], 'doc_id'), 'CLI underscored prefix threshold options should cap expansion before search');
+    assert_same([1, 2], array_column($expanded[0]['items'] ?? [], 'doc_id'), 'CLI dashed prefix threshold aliases should allow a broader bounded expansion');
 });
 
 test_case('wp cli reindex defaults cover admin-searchable post statuses while explicit publish stays narrow', function (): void {

@@ -90,6 +90,22 @@ the index. Missing, empty, or invalid dates are ignored safely, and search
 explain diagnostics report whether the boost was enabled and how many candidate
 documents received it.
 
+## Word Beginnings
+
+Word beginnings can be enabled or disabled from Settings > Full-Text Search.
+When enabled, exact analyzer and lemma matches still rank before prefix-only
+alternatives. The saved `prefix_min_length` default is `4`; lowering it broadens
+matches for shorter searched words, which can be slower or noisier. The saved
+`prefix_max_terms` default is `64`; lowering it caps broad-prefix cost more
+aggressively, while raising it can include more alternatives.
+
+The saved thresholds apply to front-end replacement, wp-admin Posts search
+replacement, the Sandbox, and `WP_FTS_Plugin::search()`. `wp fts search`
+accepts `--prefix_matching`, `--prefix_min_length` / `--prefix-min-length`, and
+`--prefix_max_terms` / `--prefix-max-terms` for explicit CLI searches. Direct
+searcher callers can still use the existing `WP_FTS_PREFIX_MIN_LENGTH` and
+`WP_FTS_PREFIX_MAX_TERMS` constants for code-level overrides.
+
 ## Architecture
 
 - `wp-php-toolkit/full-text-search` provides the analyzer, term generation,
@@ -356,4 +372,4 @@ Current caveats:
 - no Thai dictionary segmentation;
 - Chinese Jieba dictionary segmentation is optional and requires the pinned
   submodule source to be initialized and hash-valid;
-- no honest prefix or phrase search unless an extension supplies that backend.
+- no phrase search unless an extension supplies that backend.

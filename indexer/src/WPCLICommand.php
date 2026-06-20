@@ -104,6 +104,15 @@ final class WP_FTS_WPCLI_Command
      * [--recency_boost_half_life_days=<days>]
      * : Positive half-life in days for the recency lift. Default: searcher default.
      *
+     * [--prefix_matching]
+     * : Enable word-beginning matching for this CLI search.
+     *
+     * [--prefix_min_length=<n>]
+     * : Minimum analyzed term length before word-beginning expansion. Alias: --prefix-min-length.
+     *
+     * [--prefix_max_terms=<n>]
+     * : Maximum stored terms added per analyzed query candidate. Alias: --prefix-max-terms.
+     *
      * [--offset=<n>]
      * : Offset into filtered results for pagination. Default: 0.
      *
@@ -159,6 +168,18 @@ final class WP_FTS_WPCLI_Command
         $recencyHalfLife = $this->assoc_arg($assoc_args, ['recency_boost_half_life_days', 'recency-boost-half-life-days', 'freshness_boost_half_life_days', 'freshness-boost-half-life-days'], null);
         if ($recencyHalfLife !== null) {
             $searchOptions['recency_boost_half_life_days'] = $recencyHalfLife;
+        }
+        $prefixMatching = $this->assoc_arg($assoc_args, ['prefix_matching', 'prefix-matching'], null);
+        if ($prefixMatching !== null) {
+            $searchOptions['prefix_matching'] = $this->truthy_cli_value($prefixMatching);
+        }
+        $prefixMinLength = $this->assoc_arg($assoc_args, ['prefix_min_length', 'prefix-min-length'], null);
+        if ($prefixMinLength !== null) {
+            $searchOptions['prefix_min_length'] = WP_FTS_Plugin::sanitize_prefix_min_length($prefixMinLength);
+        }
+        $prefixMaxTerms = $this->assoc_arg($assoc_args, ['prefix_max_terms', 'prefix-max-terms'], null);
+        if ($prefixMaxTerms !== null) {
+            $searchOptions['prefix_max_terms'] = WP_FTS_Plugin::sanitize_prefix_max_terms($prefixMaxTerms);
         }
 
         /** @var array{total:int,results:array<int,array<string,mixed>>} $payload */
@@ -891,10 +912,22 @@ LIMIT %d",
             return $value;
         }
         if (is_scalar($value)) {
-            return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
+            return $this->truthy_cli_value($value);
         }
 
         return $default;
+    }
+
+    private function truthy_cli_value(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (!is_scalar($value)) {
+            return false;
+        }
+
+        return in_array(strtolower(trim((string) $value)), ['1', 'true', 'yes', 'on'], true);
     }
 
     private function default_lemma_pack_output_dir(string $packId): string

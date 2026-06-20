@@ -86,6 +86,12 @@ final class WP_FTS_Plugin
     private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
     private const SETTINGS_SNIPPET_MIN = 40;
     private const SETTINGS_SNIPPET_MAX = 500;
+    private const PREFIX_MIN_LENGTH_MIN = 2;
+    private const PREFIX_MIN_LENGTH_MAX = 12;
+    private const PREFIX_MIN_LENGTH_DEFAULT = 4;
+    private const PREFIX_MAX_TERMS_MIN = 1;
+    private const PREFIX_MAX_TERMS_MAX = 256;
+    private const PREFIX_MAX_TERMS_DEFAULT = 64;
     private const FIELD_BOOST_MIN = 0.01;
     private const FIELD_BOOST_MAX = 100.0;
     private const RECENCY_BOOST_STRENGTH_MIN = 0.0;
@@ -140,6 +146,8 @@ final class WP_FTS_Plugin
         'snippet_length' => 180,
         'match_mode' => 'OR',
         'prefix_matching' => true,
+        'prefix_min_length' => self::PREFIX_MIN_LENGTH_DEFAULT,
+        'prefix_max_terms' => self::PREFIX_MAX_TERMS_DEFAULT,
         'result_limit' => 10,
         'language_fallback' => true,
         'field_boosts' => self::FIELD_BOOST_DEFAULTS,
@@ -1354,6 +1362,8 @@ final class WP_FTS_Plugin
             'provider_compatibility' => self::search_provider_compatibility_debug_value((string) ($settings['search_provider_compatibility'] ?? self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS)),
             'match_mode' => (string) ($settings['match_mode'] ?? 'OR'),
             'prefix_matching' => !empty($settings['prefix_matching']) ? 'enabled' : 'disabled',
+            'prefix_min_length' => self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT),
+            'prefix_max_terms' => self::sanitize_prefix_max_terms($settings['prefix_max_terms'] ?? self::PREFIX_MAX_TERMS_DEFAULT),
             'highlight' => !empty($settings['highlight']) ? 'enabled' : 'disabled',
             'snippet_length' => (int) ($settings['snippet_length'] ?? self::FRONTEND_SNIPPET_LENGTH),
             'result_limit' => (int) ($settings['result_limit'] ?? 10),
@@ -1751,7 +1761,7 @@ final class WP_FTS_Plugin
         }
 
         $parts = [];
-        foreach (['match_mode', 'logical_group_count', 'prefix_matching', 'prefix_added_terms'] as $key) {
+        foreach (['match_mode', 'logical_group_count', 'prefix_matching', 'prefix_min_length', 'prefix_max_terms', 'prefix_added_terms'] as $key) {
             if (array_key_exists($key, $value)) {
                 $parts[] = $key . '=' . self::debug_scalar_summary($value[$key]);
             }
@@ -2747,6 +2757,7 @@ final class WP_FTS_Plugin
             $settings['prefix_matching'],
             'Also match indexed terms that start with the searched word. Exact and lemmatizer matches still rank first. Turn this off if broad matches are too noisy.'
         );
+        self::render_settings_prefix_threshold_rows($settings);
 
         echo '<tr><th scope="row"><label for="wp-fts-settings-result-limit">Results per page</label></th><td>';
         echo '<input id="wp-fts-settings-result-limit" type="number" min="1" max="' . self::esc_attr((string) self::MAX_SEARCH_LIMIT) . '" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[result_limit]" value="' . self::esc_attr((string) $settings['result_limit']) . '">';
@@ -2794,6 +2805,25 @@ final class WP_FTS_Plugin
             echo '<p class="description">' . self::esc_html($copy['description']) . '</p>';
             echo '</td></tr>';
         }
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     */
+    private static function render_settings_prefix_threshold_rows(array $settings): void
+    {
+        $min_length = self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT);
+        $max_terms = self::sanitize_prefix_max_terms($settings['prefix_max_terms'] ?? self::PREFIX_MAX_TERMS_DEFAULT);
+
+        echo '<tr><th scope="row"><label for="wp-fts-settings-prefix-min-length">Shortest word beginning</label></th><td>';
+        echo '<input id="wp-fts-settings-prefix-min-length" type="number" min="' . self::esc_attr((string) self::PREFIX_MIN_LENGTH_MIN) . '" max="' . self::esc_attr((string) self::PREFIX_MIN_LENGTH_MAX) . '" step="1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[prefix_min_length]" value="' . self::esc_attr((string) $min_length) . '">';
+        echo '<p class="description">Shorter values make word-beginning matches broader, but they can be slower and add noisier alternatives.</p>';
+        echo '</td></tr>';
+
+        echo '<tr><th scope="row"><label for="wp-fts-settings-prefix-max-terms">Word-beginning alternatives</label></th><td>';
+        echo '<input id="wp-fts-settings-prefix-max-terms" type="number" min="' . self::esc_attr((string) self::PREFIX_MAX_TERMS_MIN) . '" max="' . self::esc_attr((string) self::PREFIX_MAX_TERMS_MAX) . '" step="1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[prefix_max_terms]" value="' . self::esc_attr((string) $max_terms) . '">';
+        echo '<p class="description">Limits how many stored terms a broad word beginning can add, bounding search cost while exact and lemma matches still rank first.</p>';
+        echo '</td></tr>';
     }
 
     /**
@@ -3143,6 +3173,8 @@ final class WP_FTS_Plugin
             'snippet_length' => self::clamp_int($value['snippet_length'] ?? $defaults['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
             'match_mode' => $mode,
             'prefix_matching' => array_key_exists('prefix_matching', $value) ? self::truthy_admin_value($value['prefix_matching']) : $defaults['prefix_matching'],
+            'prefix_min_length' => self::sanitize_prefix_min_length($value['prefix_min_length'] ?? $defaults['prefix_min_length']),
+            'prefix_max_terms' => self::sanitize_prefix_max_terms($value['prefix_max_terms'] ?? $defaults['prefix_max_terms']),
             'result_limit' => self::clamp_int($value['result_limit'] ?? $defaults['result_limit'], 1, self::MAX_SEARCH_LIMIT),
             'language_fallback' => array_key_exists('language_fallback', $value) ? self::truthy_admin_value($value['language_fallback']) : $defaults['language_fallback'],
             'field_boosts' => self::sanitize_field_boosts($value['field_boosts'] ?? []),
@@ -3178,6 +3210,35 @@ final class WP_FTS_Plugin
         }
 
         return self::clamp_float($boost, self::FIELD_BOOST_MIN, self::FIELD_BOOST_MAX);
+    }
+
+    public static function sanitize_prefix_min_length(mixed $value): int
+    {
+        return self::sanitize_prefix_threshold(
+            $value,
+            self::PREFIX_MIN_LENGTH_DEFAULT,
+            self::PREFIX_MIN_LENGTH_MIN,
+            self::PREFIX_MIN_LENGTH_MAX
+        );
+    }
+
+    public static function sanitize_prefix_max_terms(mixed $value): int
+    {
+        return self::sanitize_prefix_threshold(
+            $value,
+            self::PREFIX_MAX_TERMS_DEFAULT,
+            self::PREFIX_MAX_TERMS_MIN,
+            self::PREFIX_MAX_TERMS_MAX
+        );
+    }
+
+    private static function sanitize_prefix_threshold(mixed $value, int $default, int $min, int $max): int
+    {
+        if (!is_scalar($value) || !is_numeric($value)) {
+            return $default;
+        }
+
+        return self::clamp_int($value, $min, $max);
     }
 
     private static function sanitize_recency_boost_strength(mixed $value): float
@@ -3303,6 +3364,8 @@ final class WP_FTS_Plugin
      *   snippet_length:int,
      *   match_mode:string,
      *   prefix_matching:bool,
+     *   prefix_min_length:int,
+     *   prefix_max_terms:int,
      *   result_limit:int,
      *   language_fallback:bool,
      *   field_boosts:array<string,float>,
@@ -3834,7 +3897,7 @@ final class WP_FTS_Plugin
             'snippet_length' => self::clamp_int($controls['snippet_length'] ?? $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
             'explain' => $trace_id > 0,
             'explain_result_matches' => $include_snippets,
-        ] + self::searcher_recency_boost_options($controls + $settings);
+        ] + self::searcher_prefix_threshold_options($settings, $controls) + self::searcher_recency_boost_options($controls + $settings);
         foreach (['post_types' => 'post_type', 'post_statuses' => 'post_status'] as $control_key => $search_key) {
             if (isset($controls[$control_key]) && is_array($controls[$control_key]) && $controls[$control_key] !== []) {
                 $search_options[$search_key] = array_values(array_filter(
@@ -5636,14 +5699,9 @@ JS;
             'mode' => $mode,
             'limit' => $limit,
             'prefix_matching' => self::search_prefix_matching_value($opts, $settings),
-        ] + self::searcher_recency_boost_options($settings);
+        ] + self::searcher_prefix_threshold_options($settings, $opts) + self::searcher_recency_boost_options($settings);
         if (isset($opts['lang']) && is_scalar($opts['lang']) && trim((string) $opts['lang']) !== '') {
             $search_options['lang'] = (string) $opts['lang'];
-        }
-        foreach (['prefix_min_length', 'prefix_max_terms'] as $prefix_option) {
-            if (array_key_exists($prefix_option, $opts)) {
-                $search_options[$prefix_option] = $opts[$prefix_option];
-            }
         }
 
         $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
@@ -5704,6 +5762,27 @@ JS;
         }
 
         return (bool) ($settings['prefix_matching'] ?? true);
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     * @param array<string,mixed> $overrides
+     * @return array{prefix_min_length:int,prefix_max_terms:int}
+     */
+    private static function searcher_prefix_threshold_options(array $settings, array $overrides = []): array
+    {
+        return [
+            'prefix_min_length' => self::sanitize_prefix_min_length(
+                array_key_exists('prefix_min_length', $overrides)
+                    ? $overrides['prefix_min_length']
+                    : ($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT)
+            ),
+            'prefix_max_terms' => self::sanitize_prefix_max_terms(
+                array_key_exists('prefix_max_terms', $overrides)
+                    ? $overrides['prefix_max_terms']
+                    : ($settings['prefix_max_terms'] ?? self::PREFIX_MAX_TERMS_DEFAULT)
+            ),
+        ];
     }
 
     /**
@@ -6832,7 +6911,7 @@ JS;
             'post_type' => $post_types,
             'post_status' => $post_statuses,
             'explain' => $trace_id > 0,
-        ] + self::searcher_recency_boost_options($settings);
+        ] + self::searcher_prefix_threshold_options($settings) + self::searcher_recency_boost_options($settings);
         $fallback_languages = [];
         if ($settings['language_fallback']) {
             $search_options['language_fallback'] = true;
@@ -7009,12 +7088,13 @@ JS;
      */
     private static function frontend_snippet_options(string $query_lang, string $result_lang, int $length, array $languages = []): array
     {
+        $settings = self::settings();
         $options = [
-            'highlight' => self::settings()['highlight'],
+            'highlight' => $settings['highlight'],
             'snippet_length' => $length,
-            'prefix_matching' => self::settings()['prefix_matching'],
-        ];
-        if (self::settings()['language_fallback']) {
+            'prefix_matching' => $settings['prefix_matching'],
+        ] + self::searcher_prefix_threshold_options($settings);
+        if ($settings['language_fallback']) {
             $options['language_fallback'] = true;
             $options['fallback_languages'] = self::site_fallback_languages();
         }
