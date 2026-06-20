@@ -1,14 +1,18 @@
 # Configuration
 
-This branch has no settings screen for analyzer, search, or extractor
-configuration. WordPress runtime indexing, REST/admin search, the PHP plugin
-search helper, and WP-CLI use `WP_FTS_Plugin::runtime_analyzer()`.
-Per-language lemma packs can be supplied through the `wp_fts_analyzer_options`
-option or filter. Operational options such as schema version and pending queue
-state are managed internally, and selected custom fields can be supplied
-through an option or filters. More advanced configuration is available to PHP
-callers that instantiate `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`,
-`WP_FTS_Searcher`, or `WP_FTS_Storage_Mysql` directly.
+Settings > Full-Text Search provides the operator-facing Health, Settings,
+Sandbox, Indexed content, and Analyzer packs tabs. The Settings tab controls
+indexed post types, automatic indexing, front-end and wp-admin Posts search
+replacement, result limits, snippets, highlighting, prefix matching, and
+language fallback defaults. WordPress runtime indexing, REST/admin search, the
+PHP plugin search helper, and WP-CLI use `WP_FTS_Plugin::runtime_analyzer()`.
+Analyzer-pack paths are still configured through the
+`wp_fts_analyzer_options` option or filter, operational internals such as schema
+version and pending queue state are managed by the plugin, and selected custom
+fields can be supplied through an option or filters. More advanced
+configuration is available to PHP callers that instantiate `WP_FTS_Analyzer`,
+`WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or `WP_FTS_Storage_Mysql`
+directly.
 
 ## Languages
 
@@ -63,7 +67,7 @@ The next selectable/detectable set adds Russian (`ru`), German (`de`), Japanese
 
 | Language or partition | Routing support | Analyzer tier | Fallback and boundary |
 | --- | --- | --- | --- |
-| Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | Strongest path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice. | Default behavior remains conservative unless a valid pack or verified mode is enabled. Bundled packs stay opt-in/default-disabled outside the sandbox path. |
+| Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | The WordPress runtime starts with the bundled Polish lemmatizer behavior: the compressed full Polish runtime pack when gzip support is available, otherwise the fixture pack. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime and can replace or disable that default; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Configure them through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`; built-in Snowball, baseline, or no-op behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
 | Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization plus optional Jieba dictionary segmentation from the pinned source submodule through `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Fallback n-grams remain enabled for unknown/subword recall. |
@@ -141,8 +145,9 @@ $analyzer = new WP_FTS_Analyzer([
 WordPress runtime indexing, REST/admin search, the PHP plugin search helper, and
 WP-CLI use the same plugin runtime analyzer. Reindex after changing analyzer
 options so stored terms and document signatures are rebuilt with the new
-behavior. The admin/Playground sandbox adds a demo-only analyzer layer for the
-bundled local packs described below.
+behavior. The runtime keeps the bundled Polish lemmatizer default described
+above, while the admin/Playground sandbox adds a demo-only analyzer layer for
+the non-Polish bundled packs described below.
 
 Analyzer behavior participates in stale-document detection. A reindex skips
 unchanged content only when the source content, primary language, and
@@ -287,13 +292,14 @@ to `pl` when no explicit Polish entry is present. Explicit `false`, `null`,
 Invalid, missing, and language-mismatched manifests are reported as ignored in
 the admin sandbox and fall back to the built-in analyzer path for that language.
 
-The Playground/admin sandbox auto-loads the bundled local Polish pack and all
-bundled source-backed UniMorph packs when compressed shards can be read. It also
-tries the pinned Jieba Chinese segmenter source when the submodule is initialized
-and hash-valid. Outside the sandbox, those UniMorph packs and the Jieba segmenter
-remain opt-in/default-disabled. `zh` is tokenizer/segmentation-only, `ja` and
-`ko` use fallback tokenizer lanes with no committed runtime lemma packs, and the
-synthetic Bengali pack remains a default-disabled test fixture, not product data.
+The Playground/admin sandbox preserves the bundled Polish runtime default and
+also auto-loads all bundled source-backed UniMorph packs when compressed shards
+can be read. It also tries the pinned Jieba Chinese segmenter source when the
+submodule is initialized and hash-valid. Outside the sandbox, those non-Polish
+UniMorph packs and the Jieba segmenter remain opt-in/default-disabled. `zh` is
+tokenizer/segmentation-only, `ja` and `ko` use fallback tokenizer lanes with no
+committed runtime lemma packs, and the synthetic Bengali pack remains a
+default-disabled test fixture, not product data.
 
 ### Optional Chinese Jieba Segmenter
 
@@ -479,11 +485,11 @@ read stable-sorted `.txt`, `.tsv`, and `.unimorph` files. `--enable` stores the
 generated manifest in the runtime analyzer options; reindex existing content
 after enabling a new pack so stored index terms use the new lemmatizer.
 
-Full generated packs stay opt-in and default-disabled. The full CLARIN-PL
-source archive, extracted TSV, and generated runtime shards are not bundled in
-this repository or plugin package. Users or build systems must generate and
-install the external pack before enabling either `polish_lemma_pack` or
-`polish_lemmatizer_pack`.
+Externally generated packs stay opt-in and default-disabled. The full CLARIN-PL
+source archive and extracted TSV are not bundled in this repository or plugin
+package. Users or build systems that need their own external pack must generate
+and install it before pointing `polish_lemma_pack` or
+`polish_lemmatizer_pack` at that external manifest.
 
 Enable the verified Polish stemmer slice when fixture-backed stemming is more
 important than preserving the exact default suffix-only behavior:

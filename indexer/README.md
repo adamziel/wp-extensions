@@ -26,6 +26,12 @@ search and eligible wp-admin Posts list searches with ranked FTS results by
 default, and treats the index as rebuildable data derived from WordPress
 content.
 
+Settings > Full-Text Search provides Health, Settings, Sandbox, Indexed content,
+and Analyzer packs tabs. It manages the indexed post types, automatic indexing,
+search replacement surfaces, highlighting, snippets, prefix matching, result
+limits, and language fallback defaults; analyzer-pack paths and custom field
+selection still use the documented options and filters.
+
 ## Quickstart
 
 Install the `indexer` directory as the plugin root. Do not install the whole
@@ -99,6 +105,7 @@ restored with WordPress content.
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They are bounded request-local diagnostics, not persistent logs. |
 
 ## Search Accuracy And Automatic Fast Mode
 
@@ -175,7 +182,7 @@ morphology lane.
 
 | Language or partition | Current analyzer tier | Boundary |
 | --- | --- | --- |
-| Polish (`pl`) | Strongest path when an opt-in analyzer/lemma pack is valid. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases; the default fallback is conservative unless a valid pack or verified mode is enabled. | The committed Polish full pack and fixtures remain opt-in/default-disabled outside the sandbox path. |
+| Polish (`pl`) | The WordPress runtime keeps the bundled Polish lemmatizer behavior by default: it uses the compressed full Polish runtime pack when gzip support is available and falls back to the bundled fixture pack otherwise. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases to replace or disable that default. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Bundled source-backed UniMorph analyzer packs are available as opt-in gzip-sharded lemma packs through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`. | Packs are CC BY-SA-family or upstream-declared data, default-disabled for production runtime, and not synonym, phrase, or cross-language expansion. Built-in Snowball/baseline/no-op behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball support when Composer dependencies are installed and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages are treated as no-ops unless they become verified. |
 | Chinese (`zh`) | Deterministic CJK fallback plus optional Jieba dictionary segmentation from the pinned `indexer/resources/sources/jieba` submodule via `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Fallback n-grams remain enabled for unknown/subword recall. |
@@ -292,7 +299,8 @@ Current caveats:
   over indexed supported admin post statuses and runs late for the same reason;
   use the `wp_fts_replace_admin_post_search` filter when another admin search
   provider should own that surface;
-- no settings screen;
+- Settings > Full-Text Search covers operational search/index defaults, but
+  analyzer pack paths and custom field indexing still use options and filters;
 - custom field indexing must be configured;
 - shortcode rendering is opt-in;
 - no Thai dictionary segmentation;

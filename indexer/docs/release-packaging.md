@@ -12,7 +12,14 @@ indexer/
   composer.lock
   README.md
   docs/
+  playground/
+    blueprint.json
+    sqlite-smoke-blueprint.json
+    sqlite-smoke.php
+  resources/
+    analyzer-packs/
   src/
+  tools/
   vendor/
     wp-php-toolkit/full-text-search/
 ```
@@ -32,6 +39,10 @@ Ship:
 - `composer.lock`;
 - `README.md`;
 - `docs/*.md`;
+- `playground/*.json` and `playground/sqlite-smoke.php`;
+- `resources/analyzer-packs/` runtime manifests, notices, provenance, and
+  runtime shards that the plugin can validate locally;
+- `tools/` importer, validator, audit, and external-pack helper scripts;
 - runtime Composer dependencies under `vendor/`, including
   `wp-php-toolkit/full-text-search`, for release archives.
 
@@ -39,8 +50,12 @@ Do not ship:
 
 - `.git`, `.gitignore`, or `.distignore`;
 - `.cao/` task and review artifacts;
+- `review-artifacts/`;
 - `tests/`;
 - `goal.md`;
+- `resources/sources/` raw upstream source submodules such as Jieba and
+  UniMorph checkouts;
+- generated preview/archive files such as `playground/indexer-preview.zip`;
 - `vendor/bin`;
 - local caches, logs, and temporary files.
 
@@ -61,11 +76,11 @@ Current runtime dependencies:
   one of the optional Wamania-backed allowlist entries: Catalan (`ca`) or Dutch
   Porter (`nl`).
 
-The plugin bootstrap loads `vendor/autoload.php` when it exists. If Composer
-vendor files are absent, it falls back to `../components/full-text-search` for
-monorepo development and Playground source previews. A standalone plugin ZIP
-must include vendor files because the adjacent monorepo component will not exist
-inside `wp-content/plugins/indexer`.
+The plugin bootstrap prefers the adjacent `../components/full-text-search`
+source when it exists in a monorepo checkout, then loads `vendor/autoload.php`
+when Composer vendor files are present. A standalone plugin ZIP must include
+vendor files because the adjacent monorepo component will not exist inside
+`wp-content/plugins/indexer`.
 
 ## Build A ZIP
 
@@ -95,6 +110,11 @@ Inspect the archive contents:
 ```sh
 unzip -l "$BUILD/wp-fts-indexer.zip" | sed -n '1,120p'
 ```
+
+The listing should include `indexer/resources/analyzer-packs/`,
+`indexer/tools/`, and production `indexer/vendor/` dependencies. It should not
+include `.cao`, `tests`, `review-artifacts`, `resources/sources`, or the nested
+`playground/indexer-preview.zip` preview archive.
 
 Install the archive into a disposable WordPress site:
 

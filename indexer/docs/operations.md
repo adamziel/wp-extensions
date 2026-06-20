@@ -136,6 +136,22 @@ The plugin registers a `wp-fts/v1/search` REST helper and a PHP
 so public results are returned only for readable posts; private results require
 the current user to pass `read_post`.
 
+## Admin Settings And Diagnostics
+
+Settings > Full-Text Search exposes Health, Settings, Sandbox, Indexed content,
+and Analyzer packs tabs to users who can `manage_options`. The Settings tab can
+toggle automatic indexing, public search replacement, wp-admin Posts search
+replacement, highlighting, snippets, prefix matching, result limits, language
+fallback, and indexed post types. Use the documented options and filters for
+analyzer pack paths and custom field selection.
+
+Request-level diagnostics are collected only for authorized or debug-enabled
+contexts: a `manage_options` user, `WP_FTS_DEBUG`, or the
+`wp_fts_debug_enabled` filter. When Debug Bar is active, the plugin registers an
+FTS panel. Without Debug Bar, authorized users can see the same bounded request
+diagnostics on the Health tab. These traces live in memory for the current PHP
+request and are capped; they are not persistent logs or historical telemetry.
+
 ## Optimize And Repair
 
 Deletes are tombstones until compaction. Run optimize after bulk deletes or after

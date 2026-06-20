@@ -11,9 +11,11 @@ caveats operators need to account for.
   replacement hooks when WordPress hook APIs are available.
 - Front-end main-query search replacement is enabled by default and can be
   disabled with the `wp_fts_replace_frontend_search` filter.
-- There is no settings screen for analyzer, search, or extractor configuration;
-  operational options such as schema version and pending queue state are managed
-  internally.
+- Settings > Full-Text Search controls indexed post types, automatic indexing,
+  front-end and wp-admin Posts search replacement, result output defaults, and
+  language fallback. Analyzer pack paths and custom field indexing remain
+  option/filter configuration, and operational state such as schema version and
+  pending queue state is managed internally.
 - Runtime saves are processed through a bounded option-backed queue. This keeps
   hook work small, but it is not a durable external job queue.
 - Uninstall currently clears operational options and pending queue state but
@@ -51,7 +53,7 @@ Current language support is best read by tier:
 
 | Language or partition | What works today | What it does not claim |
 | --- | --- | --- |
-| Polish (`pl`) | Explicit routing plus the strongest morphology path when a valid opt-in analyzer/lemma pack is configured. `polish_lemma_pack` and `polish_lemmatizer_pack` remain supported aliases, and `polish_stemming => 'verified'` enables a compact fixture-backed stemmer slice. | Default fallback remains conservative when no valid pack or verified mode is enabled; bundled packs remain opt-in/default-disabled outside the sandbox path. |
+| Polish (`pl`) | Explicit routing plus the bundled Polish lemmatizer runtime default: the compressed full Polish runtime pack when gzip support is available, falling back to the bundled fixture pack otherwise. `polish_lemma_pack` and `polish_lemmatizer_pack` can replace or disable that default, and `polish_stemming => 'verified'` enables a compact fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
 | English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Not synonym expansion, phrase search, cross-language merging, or a default-enabled production analyzer path. Built-in stemmers/baselines/no-op behavior remain fallback behavior when packs are not configured. |
 | Japanese (`ja`), Korean (`ko`) | Selectable/detectable partitions using deterministic CJK/Hangul fallback tokenization. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline lacks a source-backed word segmenter for those languages. |
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Optional Wamania-backed Snowball stemming when Composer dependencies are present and the compliance harness accepts them. | Dutch now has a source-backed UniMorph pack when configured; no broad Wamania language claim is made beyond the allowlist. |
@@ -113,9 +115,10 @@ Stemming is enabled by default and can be disabled with
 - A full CLARIN-PL PoliMorf external pack builder exists for local/offline
   generation. It verifies the approved source artifact, writes the generated
   runtime pack outside the plugin package, and validates the resulting manifest.
-  The source archive, extracted TSV, and generated third-party runtime shards
-  are not committed or bundled. The pack remains opt-in and default-disabled,
-  and operators must install it externally before enabling
+  The source archive and extracted TSV are not committed or bundled. Separately
+  generated external pack copies remain outside the release package,
+  opt-in/default-disabled, and operators must install them externally before
+  enabling
   `polish_lemma_pack` or `polish_lemmatizer_pack`.
 - Unsupported languages return the original normalized term.
 - Chinese (`zh`) continues to use deterministic CJK fallback n-grams up to 4
@@ -138,12 +141,12 @@ resource-backed analyzers with fixture gates before they are enabled by default:
 
 - add Snowball-compatible analyzer packs only where the implementation matches
   official input/output fixtures;
-- port source-approved lemmatizer/analyzer packs through the opt-in
-  `lemma_packs_by_lang` runtime and require dictionary fixture parity; the
-  bundled Polish fixture pack is only the committed contract slice, while the
-  full PoliMorf pack remains an unbundled external generated artifact;
-- keep per-language analyzer resources opt-in until compliance fixtures and
-  regression corpora pass in CI;
+- port source-approved non-Polish lemmatizer/analyzer packs through the opt-in
+  `lemma_packs_by_lang` runtime and require dictionary fixture parity; Polish
+  already has a bundled runtime default, while separately generated external
+  PoliMorf packs remain unbundled artifacts;
+- keep new non-Polish per-language analyzer resources opt-in until compliance
+  fixtures and regression corpora pass in CI;
 - keep optional Chinese dictionary tokenization on the source-backed
   `segmenter_packs_by_lang` path instead of presenting fallback n-grams as word
   segmentation.

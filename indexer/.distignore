@@ -2,6 +2,7 @@
 .gitignore
 .distignore
 .cao
+review-artifacts
 .phpunit.result.cache
 .DS_Store
 *.tmp
@@ -9,4 +10,6 @@
 __pycache__
 tests
 goal.md
+resources/sources
+playground/indexer-preview.zip
 vendor/bin

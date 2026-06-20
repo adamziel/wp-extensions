@@ -72,9 +72,11 @@ also rejects accidental committed dictionary/runtime keys in the pilot fixture.
 ## Claim Boundary
 
 Documentation and release notes must continue to distinguish bundled Polish
-support from externally generated packs. The bundled default remains the current
-conservative suffix fallback, plus the tiny opt-in fixture pack that proves the
-Morfologik/PoliMorf-compatible runtime contract. A full PoliMorf pack can be
-generated with the external builder after verifying the approved source
-artifact, but the source archive, extracted TSV, and generated runtime shards
-are not committed or bundled, and the pack remains opt-in and default-disabled.
+runtime support from externally generated packs. Current runtime behavior keeps
+the bundled compressed full Polish pack when gzip support is available, falling
+back to the bundled fixture pack and then conservative stemming when no valid
+pack is active. A separate full PoliMorf pack can still be generated with the
+external builder after verifying the approved source artifact, but the source
+archive and extracted TSV are not committed or bundled, and externally generated
+pack copies remain opt-in/default-disabled until an operator installs and
+configures them.

@@ -1,10 +1,16 @@
 # Polish Morfologik/PoliMorf Packs
 
-The bundled Polish analyzer pack is an opt-in fixture pack. It proves the
-runtime contract for a Morfologik/PoliMorf-compatible dictionary lemmatizer, but
-it is not a full Polish morphological dictionary and is not enabled by default.
+The plugin bundles two Polish analyzer-pack resources:
 
-Enable the fixture in programmatic analyzer construction:
+- `pl-polimorf-20180722-full-playground`, a compressed full Polish runtime pack
+  used by the WordPress runtime when gzip support is available and by the
+  admin/Playground sandbox;
+- `pl-morfologik-polimorf-fixture`, a tiny fixture pack that proves the
+  Morfologik/PoliMorf-compatible runtime contract and is used as the Polish
+  fallback when the compressed pack cannot be read.
+
+Use the fixture explicitly in programmatic analyzer construction when you want
+the small contract pack instead of the bundled full runtime pack:
 
 ```php
 $analyzer = new WP_FTS_Analyzer([
@@ -54,7 +60,8 @@ The builder writes a full-pack manifest, notice, source-lock evidence, and
 sharded runtime TSV files. The summary includes the generated manifest path,
 source-lock path, runtime row/file/byte counts, runtime digest, and
 configuration examples for `polish_lemma_pack` and `polish_lemmatizer_pack`.
-Generated full packs remain opt-in and `default_enabled: false`.
+Externally generated full packs remain opt-in and `default_enabled: false` until
+an operator installs and configures them.
 
 Configure an externally generated pack by path:
 
@@ -65,12 +72,13 @@ $analyzer = new WP_FTS_Analyzer([
 ]);
 ```
 
-The full source archive, extracted TSV, and generated third-party runtime pack
-are not committed or bundled in this repository. Users or build systems must
-generate and install the pack externally before enabling it.
+The full source archive and extracted TSV are not committed or bundled in this
+repository. The separately generated external pack workflow remains outside the
+release package; users or build systems that need their own generated pack must
+generate and install it externally before enabling it.
 
-Before a real Morfologik/PoliMorf import can be distributed or default-enabled,
-the project still needs:
+Before a broader public distribution or default policy change for external
+Morfologik/PoliMorf packs, the project still needs:
 
 - final redistribution review for the generated notice and attribution text;
 - larger reviewed gold fixtures for ambiguous and inflected forms;
