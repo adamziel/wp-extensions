@@ -10527,11 +10527,8 @@ test_case('analyzer tolerates invalid UTF-8 without optional extensions', functi
     assert_true($terms !== [], 'invalid UTF-8 recovery should not fatal or drop all ASCII text');
 });
 
-test_case('index and query analyzers normalize plain text identically', function (): void {
-    $analyzer = new WP_FTS_Analyzer([
-        'auto_detect_language' => false,
-        'enable_stemming' => false,
-    ]);
+test_case('default index and query analyzers normalize plain text identically', function (): void {
+    $analyzer = new WP_FTS_Analyzer();
     mt_srand(1234);
     $termsByCategory = [
         'latin_diacritics' => ['Alpha', 'BETA', 'Wrocław', 'Łódź', 'café', 'naïve', 'Straße', 'İstanbul', 'São', 'façade'],
