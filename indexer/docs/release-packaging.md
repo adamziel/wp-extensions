@@ -57,6 +57,8 @@ Do not ship:
   UniMorph checkouts;
 - generated preview/archive files such as `playground/indexer-preview.zip`;
 - `vendor/bin`;
+- dependency-internal test and coverage fixtures under `vendor/`, including
+  `vendor/wp-php-toolkit/full-text-search/tests/`;
 - local caches, logs, and temporary files.
 
 The `.distignore` file in this directory encodes that packaging boundary.
@@ -102,7 +104,17 @@ rsync -a --delete \
 
 composer install --no-dev --optimize-autoloader --working-dir="$BUILD/indexer"
 
-( cd "$BUILD" && zip -r wp-fts-indexer.zip indexer -x 'indexer/vendor/bin/*' )
+find "$BUILD/indexer/vendor" \
+  \( -path '*/test' -o -path '*/tests' -o -path '*/Tests' -o -path '*/coverage' \) \
+  -prune -exec rm -rf {} +
+
+( cd "$BUILD" && zip -r wp-fts-indexer.zip indexer \
+  -x 'indexer/vendor/bin/*' \
+  -x 'indexer/vendor/*/*/test/*' \
+  -x 'indexer/vendor/*/*/tests/*' \
+  -x 'indexer/vendor/*/*/Tests/*' \
+  -x 'indexer/vendor/*/*/coverage/*' \
+  -x 'indexer/vendor/wp-php-toolkit/full-text-search/tests/*' )
 ```
 
 Inspect the archive contents:
@@ -113,7 +125,9 @@ unzip -l "$BUILD/wp-fts-indexer.zip" | sed -n '1,120p'
 
 The listing should include `indexer/resources/analyzer-packs/`,
 `indexer/tools/`, and production `indexer/vendor/` dependencies. It should not
-include `.cao`, `tests`, `review-artifacts`, `resources/sources`, or the nested
+include `.cao`, root `indexer/tests/`, dependency-internal vendor tests such as
+`indexer/vendor/wp-php-toolkit/full-text-search/tests/*`, `indexer/vendor/bin/`,
+`review-artifacts`, `resources/sources`, or the nested
 `playground/indexer-preview.zip` preview archive.
 
 Install the archive into a disposable WordPress site:
@@ -130,7 +144,8 @@ The schema probe should succeed even before any content is indexed.
 1. Start from a clean worktree.
 2. Run the normal PHP harness and any required hardening acceptance commands.
 3. Build the release ZIP with production Composer dependencies.
-4. Inspect the ZIP for unexpected `.cao`, `tests`, or local cache files.
+4. Inspect the ZIP for unexpected `.cao`, root `tests/`,
+   dependency-internal vendor tests or coverage fixtures, or local cache files.
 5. Install the ZIP in a disposable WordPress site.
 6. Activate the plugin, run the schema probe, run a small reindex, and run one
    search.

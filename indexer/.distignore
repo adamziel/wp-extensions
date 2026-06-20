@@ -13,3 +13,12 @@ goal.md
 resources/sources
 playground/indexer-preview.zip
 vendor/bin
+vendor/bin/**
+vendor/*/*/test
+vendor/*/*/test/**
+vendor/*/*/tests
+vendor/*/*/tests/**
+vendor/*/*/Tests
+vendor/*/*/Tests/**
+vendor/*/*/coverage
+vendor/*/*/coverage/**
