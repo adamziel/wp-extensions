@@ -215,8 +215,16 @@ wp fts process-batch --batch_size=100 --time_budget=20
 ```
 
 Repeat `wp fts process-batch` until `wp fts status` reports `has_more` as false
-if you intentionally want to catch up through bounded operator steps. If
-collection metadata or snippet metadata looks wrong, run:
+if you intentionally want to catch up through bounded operator steps.
+
+If `wp fts status` reports `last_batch_failures` greater than zero, inspect the
+bounded failure fields (`last_failed_post_id`, `last_failed_post_title`,
+`last_failed_at`, and `last_error`). Fix the underlying post or environment
+problem, then run `wp fts process-batch` again or use a scoped `wp fts reindex`
+for the affected post type/status. Failure messages are intentionally concise
+and do not include stack traces or raw SQL.
+
+If collection metadata or snippet metadata looks wrong, run:
 
 ```sh
 wp fts optimize

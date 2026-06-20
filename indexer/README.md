@@ -269,6 +269,9 @@ wp fts reindex --limit=100 --batch_size=25
 wp fts status
 wp fts status --format=json
 
+# If status reports last_batch_failures, fix the affected post or environment
+# issue and rerun a bounded batch or scoped reindex.
+
 # Repair schema without indexing content.
 wp fts repair
 

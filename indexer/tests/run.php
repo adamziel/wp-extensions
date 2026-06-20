@@ -1955,6 +1955,10 @@ final class WP_FTS_Test_WPDB
     public string $posts = 'wp_posts';
     public string $last_error = '';
     public ?string $failQueryPrefix = null;
+    /** @var array<int,string> */
+    public array $failDocWriteErrors = [];
+    /** @var array<int,int> */
+    public array $failedDocWriteAttempts = [];
     public ?object $dbh = null;
     public bool $missPreparedTermLookups = false;
     public bool $recordReadQueries = false;
@@ -2048,6 +2052,13 @@ final class WP_FTS_Test_WPDB
     {
         [$sql, $args] = $this->statement_parts($statement);
         $this->queries[] = $sql;
+        $docWriteFailure = $this->doc_write_failure($sql, $args);
+        if ($docWriteFailure !== null) {
+            [$docId, $message] = $docWriteFailure;
+            $this->failedDocWriteAttempts[$docId] = ($this->failedDocWriteAttempts[$docId] ?? 0) + 1;
+            $this->last_error = $message;
+            return false;
+        }
         if ($this->failQueryPrefix !== null && str_starts_with($sql, $this->failQueryPrefix)) {
             $this->last_error = "simulated failure for {$this->failQueryPrefix}";
             return false;
@@ -2223,6 +2234,29 @@ final class WP_FTS_Test_WPDB
         }
 
         return true;
+    }
+
+    /**
+     * @param array<int,mixed> $args
+     * @return array{0:int,1:string}|null
+     */
+    private function doc_write_failure(string $sql, array $args): ?array
+    {
+        if (!str_starts_with($sql, 'INSERT INTO wp_fts_docs')) {
+            return null;
+        }
+
+        $docId = (int) ($args[0] ?? 0);
+        if ($docId <= 0 || !array_key_exists($docId, $this->failDocWriteErrors)) {
+            return null;
+        }
+
+        $message = $this->failDocWriteErrors[$docId];
+
+        return [
+            $docId,
+            $message !== '' ? $message : "simulated failure for doc {$docId}",
+        ];
     }
 
     /**
@@ -4635,7 +4669,8 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<th scope="row">Remaining to index</th><td>2</td>', $html, 'health dashboard should show remaining unindexed count');
     assert_contains('Health First Indexed (ID 701)', $html, 'health dashboard should show last indexed title and ID');
     assert_contains('<th scope="row">Last batch</th><td>Manual at ', $html, 'health dashboard should show last batch time and mode');
-    assert_contains('<th scope="row">Last batch processed</th><td>1 total (0 waiting updates, 1 remaining content)</td>', $html, 'health dashboard should show last batch processed counts');
+    assert_contains('<th scope="row">Last batch processed</th><td>1 total (0 waiting updates, 1 remaining content, 0 failed)</td>', $html, 'health dashboard should show last batch processed counts');
+    assert_contains('<th scope="row">Last indexing failure</th><td>No indexing failures recorded.</td>', $html, 'health dashboard should show the latest failure state');
     assert_contains('Run one safe indexing pass now. You can use it again until Remaining to index reaches 0.', $html, 'health dashboard should explain the manual batch action in user-facing terms');
     assert_contains('Index the next batch now', $html, 'health dashboard should expose one primary manual indexing action');
     assert_contains('wp_fts_health_nonce', $html, 'health manual action should use a dedicated nonce field');
@@ -4727,6 +4762,47 @@ test_case('health manual batch lock skip displays no-overlap notice', function (
     assert_contains('Another indexing batch is already running. No overlapping batch was started; try again shortly.', $html, 'manual health lock skip should explain that no overlap occurred');
     assert_same([], $fake->docs, 'manual health lock skip should not index content');
     assert_same(true, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['last_skipped_locked'] ?? null, 'manual health lock skip should update health state');
+});
+
+test_case('health manual batch records failures without exposing raw details', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $fake->postRows = [
+        wp_fts_test_backfill_post(731, 'post', 'publish', 'Health Failure'),
+        wp_fts_test_backfill_post(732, 'post', 'publish', 'Health Continued'),
+    ];
+    $fake->failDocWriteErrors[731] = "simulated failure for INSERT INTO wp_fts_docs\n#0 stack SELECT * FROM wp_users";
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [
+            'wp_fts_health_action' => 'index_next_batch',
+            'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+        ];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('notice-warning', $html, 'manual health failure should render a warning notice');
+    assert_contains('Indexed 1 item. 1 item failed and was recorded; indexing continued where possible.', $html, 'manual health failure notice should explain partial progress');
+    assert_contains('<th scope="row">Last indexing failure</th><td>1 item failed in the latest batch; Health Failure (ID 731)', $html, 'health dashboard should render a concise failure row');
+    assert_contains('INSERT statement', $html, 'health dashboard should show redacted error context');
+    assert_true(!str_contains($html, 'INSERT INTO wp_fts_docs'), 'health dashboard should not expose raw SQL in failure output');
+    assert_true(!str_contains($html, 'SELECT * FROM'), 'health dashboard should not expose stack SQL in failure output');
+    assert_true(!str_contains($html, '#0'), 'health dashboard should not expose stack traces in failure output');
+    assert_true(!isset($fake->docs[731]), 'failed health batch item should not be marked indexed');
+    assert_true(isset($fake->docs[732]), 'health batch should continue after a failed item');
+    assert_same(1, $fake->failedDocWriteAttempts[731] ?? 0, 'failed health batch item should be attempted once');
 });
 
 test_case('request diagnostics stay disabled for normal visitors and render escaped bounded admin output', function (): void {
@@ -6170,6 +6246,11 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
         'last_stopped_by_budget' => false,
         'last_mode' => 'manual',
         'last_run_at' => '2026-06-19 10:01:00',
+        'last_batch_failures' => 2,
+        'last_failed_post_id' => 703,
+        'last_failed_post_title' => 'CLI <b>Status</b> Failed',
+        'last_failed_at' => '2026-06-19 10:02:00',
+        'last_error' => "RuntimeException: Failed to put FTS document: SELECT * FROM wp_users\n#0 stack trace",
     ];
 
     try {
@@ -6187,6 +6268,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
 
     assert_contains("field\tvalue", $human, 'default status output should be a human-readable field list');
     assert_contains("pending_queue_count\t1", $human, 'default status output should include queue count');
+    assert_contains("last_batch_failures\t2", $human, 'default status output should include failure count');
     assert_same('current', $payload['schema_status'] ?? null, 'status JSON should report current schema status');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'status JSON should report stored schema version');
     assert_same(1, $payload['pending_queue_count'] ?? null, 'status JSON should report pending queue count');
@@ -6199,6 +6281,14 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same(4, $payload['last_batch_processed'] ?? null, 'status JSON should report last batch total');
     assert_same(1, $payload['last_batch_queue_processed'] ?? null, 'status JSON should report last batch queue count');
     assert_same(3, $payload['last_batch_backfill_processed'] ?? null, 'status JSON should report last batch backfill count');
+    assert_same(2, $payload['last_batch_failures'] ?? null, 'status JSON should report bounded failure count');
+    assert_same('CLI Status Failed (ID 703)', $payload['last_failed_post'] ?? null, 'status JSON should report the last failed post label');
+    assert_same(703, $payload['last_failed_post_id'] ?? null, 'status JSON should report the last failed post id');
+    assert_same('CLI Status Failed', $payload['last_failed_post_title'] ?? null, 'status JSON should sanitize the last failed post title');
+    assert_same('2026-06-19 10:02:00', $payload['last_failed_at'] ?? null, 'status JSON should report the last failure time');
+    assert_contains('SELECT statement', (string) ($payload['last_error'] ?? ''), 'status JSON should retain a concise redacted failure error');
+    assert_true(!str_contains((string) ($payload['last_error'] ?? ''), 'SELECT * FROM'), 'status JSON should not expose raw SQL in failure errors');
+    assert_true(!str_contains((string) ($payload['last_error'] ?? ''), '#0'), 'status JSON should not expose stack traces in failure errors');
     assert_same('CLI Status Indexed (ID 701)', $payload['last_indexed_post'] ?? null, 'status JSON should report last indexed post label');
     assert_same(2, $payload['eligible_count'] ?? null, 'status JSON should report eligible count');
     assert_same(1, $payload['indexed_count'] ?? null, 'status JSON should report indexed eligible count');
@@ -6337,6 +6427,93 @@ test_case('wp-cli process-batch reports budget stop without draining content', f
     assert_same(true, $payload['stopped_by_budget'] ?? null, 'budget-stopped process-batch should report budget stop');
     assert_same(true, $payload['has_more'] ?? null, 'budget-stopped process-batch should report remaining work');
     assert_same([], $fake->docs, 'budget-stopped process-batch should not drain content');
+});
+
+test_case('manual queue batch records one failed post and continues without retrying it', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    foreach ([81 => 'Queue Good Before', 82 => 'Queue Bad', 83 => 'Queue Good After'] as $postId => $title) {
+        $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', $title);
+    }
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [81, 82, 83];
+    $fake->failDocWriteErrors[82] = "simulated failure for INSERT INTO wp_fts_docs\n#0 stack SELECT * FROM wp_users";
+
+    try {
+        $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 3]);
+        $health = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(2, $result['processed'], 'queue failure batch should count successful posts only');
+    assert_same(2, $result['queue_processed'], 'queue failure batch should continue after a failed queued item');
+    assert_same(1, $result['last_batch_failures'], 'queue failure batch should report one failed item');
+    assert_same(82, $result['last_failed_post_id'], 'queue failure summary should record the failed queued post id');
+    assert_same('Queue Bad', $result['last_failed_post_title'], 'queue failure summary should record the failed queued post title');
+    assert_contains('INSERT statement', (string) $result['last_error'], 'queue failure summary should redact SQL text');
+    assert_true(!str_contains((string) $result['last_error'], 'INSERT INTO wp_fts_docs'), 'queue failure summary should not expose raw SQL');
+    assert_true(!str_contains((string) $result['last_error'], '#0'), 'queue failure summary should not expose stack traces');
+    assert_same(1, $fake->failedDocWriteAttempts[82] ?? 0, 'failed queued post should be attempted once in the batch');
+    assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'failed queued post should be removed from the immediate queue after being recorded');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]), 'queue failure batch should release the index lock');
+    assert_true(isset($fake->docs[81]), 'queue failure batch should index the item before the failure');
+    assert_true(!isset($fake->docs[82]), 'queue failure batch should not mark the failed post indexed');
+    assert_true(isset($fake->docs[83]), 'queue failure batch should continue to the item after the failure');
+    assert_same(1, $health['last_batch_failures'], 'queue failure should persist bounded health failure state');
+    assert_same(82, $health['last_failed_post_id'], 'queue failure health should record failed post id');
+});
+
+test_case('manual backfill failure records error, continues, and later clean batch clears it', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $fake->postRows = [
+        wp_fts_test_backfill_post(101, 'post', 'publish', 'Backfill Bad'),
+        wp_fts_test_backfill_post(102, 'post', 'publish', 'Backfill Good One'),
+        wp_fts_test_backfill_post(103, 'post', 'publish', 'Backfill Good Two'),
+    ];
+    $fake->failDocWriteErrors[101] = "simulated failure for UPDATE wp_fts_docs\n#0 stack DELETE FROM wp_users";
+
+    try {
+        $failed = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 3]);
+        $failedHealth = WP_FTS_Plugin::search_health();
+        $docsAfterFailure = $fake->docs;
+        $lockAfterFailure = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] ?? null;
+        unset($fake->failDocWriteErrors[101]);
+        $clean = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        $cleanHealth = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(2, $failed['processed'], 'backfill failure batch should count successful posts only');
+    assert_same(2, $failed['backfill_processed'], 'backfill failure batch should continue after a failed row');
+    assert_same(1, $failed['last_batch_failures'], 'backfill failure batch should report one failed row');
+    assert_same(true, $failed['has_more'], 'backfill failure batch should report more work because the failed post remains unindexed');
+    assert_same(101, $failed['last_failed_post_id'], 'backfill failure summary should record failed post id');
+    assert_same('Backfill Bad', $failed['last_failed_post_title'], 'backfill failure summary should record failed post title');
+    assert_contains('UPDATE statement', (string) $failed['last_error'], 'backfill failure summary should redact SQL text');
+    assert_true(isset($docsAfterFailure[102]), 'backfill failure batch should index the next eligible row');
+    assert_true(isset($docsAfterFailure[103]), 'backfill failure batch should continue through later eligible rows');
+    assert_true(!isset($docsAfterFailure[101]), 'backfill failure batch should leave the failed row unindexed for recovery');
+    assert_same(null, $lockAfterFailure, 'backfill failure batch should release the index lock');
+    assert_same(1, $fake->failedDocWriteAttempts[101] ?? 0, 'failed backfill row should be attempted once in the failed batch');
+    assert_same(1, $failedHealth['last_batch_failures'], 'backfill failure should persist bounded health failure state');
+
+    assert_same(1, $clean['processed'], 'later clean batch should index the previously failed row');
+    assert_true(isset($fake->docs[101]), 'later clean batch should recover the previously failed row');
+    assert_same(0, $cleanHealth['last_batch_failures'], 'later clean batch should clear stale failure count');
+    assert_same(0, $cleanHealth['last_failed_post_id'], 'later clean batch should clear stale failed post id');
+    assert_same('', $cleanHealth['last_error'], 'later clean batch should clear stale error details');
 });
 
 test_case('scheduled indexing cron backfills only the default batch and reschedules remaining work', function (): void {

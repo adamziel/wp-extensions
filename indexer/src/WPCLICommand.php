@@ -247,6 +247,11 @@ final class WP_FTS_WPCLI_Command
             'last_indexed_post_id' => max(0, (int) ($summary['last_indexed_post_id'] ?? 0)),
             'last_indexed_post_title' => is_scalar($summary['last_indexed_post_title'] ?? null) ? (string) $summary['last_indexed_post_title'] : '',
             'last_indexed_at' => is_scalar($summary['last_indexed_at'] ?? null) ? (string) $summary['last_indexed_at'] : '',
+            'last_batch_failures' => max(0, (int) ($summary['last_batch_failures'] ?? 0)),
+            'last_failed_post_id' => max(0, (int) ($summary['last_failed_post_id'] ?? 0)),
+            'last_failed_post_title' => is_scalar($summary['last_failed_post_title'] ?? null) ? (string) $summary['last_failed_post_title'] : '',
+            'last_failed_at' => is_scalar($summary['last_failed_at'] ?? null) ? (string) $summary['last_failed_at'] : '',
+            'last_error' => is_scalar($summary['last_error'] ?? null) ? (string) $summary['last_error'] : '',
         ], $assoc_args);
     }
 

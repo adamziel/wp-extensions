@@ -42,6 +42,8 @@ final class WP_FTS_Plugin
     private const MAX_MANUAL_INDEX_BATCH_SIZE = 1000;
     private const MAX_INDEX_TIME_BUDGET = 300.0;
     private const MAX_INDEX_MEMORY_MARGIN_BYTES = 536870912;
+    private const MAX_INDEX_FAILURE_TITLE_BYTES = 120;
+    private const MAX_INDEX_FAILURE_ERROR_BYTES = 240;
     private const ADMIN_NONCE_ACTION = 'wp_fts_sandbox_admin_action';
     private const ADMIN_NONCE_FIELD = 'wp_fts_sandbox_nonce';
     private const ADMIN_ACTION_FIELD = 'wp_fts_sandbox_action';
@@ -659,6 +661,12 @@ final class WP_FTS_Plugin
             'last_batch_backfill_processed' => max(0, (int) ($health['last_batch_backfill_processed'] ?? 0)),
             'last_skipped_locked' => (bool) ($health['last_skipped_locked'] ?? false),
             'last_stopped_by_budget' => (bool) ($health['last_stopped_by_budget'] ?? false),
+            'last_batch_failures' => max(0, (int) ($health['last_batch_failures'] ?? 0)),
+            'last_failed_post' => self::failed_post_label($health),
+            'last_failed_post_id' => max(0, (int) ($health['last_failed_post_id'] ?? 0)),
+            'last_failed_post_title' => is_scalar($health['last_failed_post_title'] ?? null) ? (string) $health['last_failed_post_title'] : '',
+            'last_failed_at' => is_scalar($health['last_failed_at'] ?? null) ? (string) $health['last_failed_at'] : '',
+            'last_error' => is_scalar($health['last_error'] ?? null) ? (string) $health['last_error'] : '',
             'last_indexed_post' => $last_indexed_post_id > 0
                 ? trim($last_indexed_title . ' (ID ' . $last_indexed_post_id . ')')
                 : '',
@@ -2127,9 +2135,24 @@ final class WP_FTS_Plugin
     private static function manual_index_batch_notice(array $summary): array
     {
         $processed = max(0, (int) ($summary['processed'] ?? 0));
+        $failures = max(0, (int) ($summary['last_batch_failures'] ?? 0));
 
         if (!empty($summary['skipped_locked'])) {
             return ['info', 'Another indexing batch is already running. No overlapping batch was started; try again shortly.'];
+        }
+
+        if ($failures > 0) {
+            return [
+                'warning',
+                sprintf(
+                    'Indexed %d %s. %d %s failed and %s recorded; indexing continued where possible. Fix the issue, then run another batch or a scoped reindex.',
+                    $processed,
+                    self::item_count_label($processed),
+                    $failures,
+                    self::item_count_label($failures),
+                    $failures === 1 ? 'was' : 'were'
+                ),
+            ];
         }
 
         if (!empty($summary['stopped_by_budget'])) {
@@ -2464,6 +2487,7 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Last batch', self::last_batch_summary($health));
         self::render_health_status_row('Last batch processed', self::last_batch_processed_summary($health));
         self::render_health_status_row('Batch status', self::last_batch_status_summary($health));
+        self::render_health_status_row('Last indexing failure', self::last_indexing_failure_summary($health));
         echo '</tbody></table>';
 
         if (!class_exists('Debug_Bar_Panel') && self::can_view_debug_diagnostics()) {
@@ -2563,11 +2587,43 @@ final class WP_FTS_Plugin
     private static function last_batch_processed_summary(array $health): string
     {
         return sprintf(
-            '%d total (%d waiting updates, %d remaining content)',
+            '%d total (%d waiting updates, %d remaining content, %d failed)',
             max(0, (int) ($health['last_batch_processed'] ?? 0)),
             max(0, (int) ($health['last_batch_queue_processed'] ?? 0)),
-            max(0, (int) ($health['last_batch_backfill_processed'] ?? 0))
+            max(0, (int) ($health['last_batch_backfill_processed'] ?? 0)),
+            max(0, (int) ($health['last_batch_failures'] ?? 0))
         );
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function last_indexing_failure_summary(array $health): string
+    {
+        $post_label = self::failed_post_label($health);
+        $error = is_scalar($health['last_error'] ?? null) ? trim((string) $health['last_error']) : '';
+        $failed_at = is_scalar($health['last_failed_at'] ?? null) ? trim((string) $health['last_failed_at']) : '';
+        $failures = max(0, (int) ($health['last_batch_failures'] ?? 0));
+
+        if ($post_label === '' && $error === '' && $failed_at === '') {
+            return 'No indexing failures recorded.';
+        }
+
+        $parts = [];
+        $parts[] = $failures > 0
+            ? sprintf('%d %s failed in the latest batch', $failures, self::item_count_label($failures))
+            : 'Most recent failure';
+        if ($post_label !== '') {
+            $parts[] = $post_label;
+        }
+        if ($failed_at !== '') {
+            $parts[] = $failed_at . ' UTC';
+        }
+        if ($error !== '') {
+            $parts[] = $error;
+        }
+
+        return implode('; ', $parts);
     }
 
     /**
@@ -4817,6 +4873,7 @@ JS;
         $classes = [
             'error' => 'notice-error',
             'success' => 'notice-success',
+            'warning' => 'notice-warning',
             'info' => 'notice-info',
         ];
         $class = $classes[$type] ?? 'notice-info';
@@ -7464,13 +7521,13 @@ JS;
     }
 
     /**
-     * Remove processed IDs from the latest queue state without losing later saves.
+     * Remove finished IDs from the latest queue state without losing later saves.
      *
      * The queue is stored in an option, so processing cannot claim rows
      * atomically. Re-reading here preserves IDs enqueued after the initial
      * snapshot while still dropping the batch this worker finished.
      *
-     * @param int[] $processed
+     * @param int[] $processed Successfully processed or recorded-failed IDs.
      * @param int[] $snapshot_remaining
      * @return int[]
      */
@@ -7550,11 +7607,11 @@ JS;
         try {
             $budget = self::index_resource_budget($mode, $opts);
             $analyzer = self::runtime_analyzer();
-            self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer);
+            $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer);
 
-            $remaining_capacity = max(0, $batch_size - (int) $summary['processed']);
+            $remaining_capacity = max(0, $batch_size - (int) $summary['processed'] - (int) $summary['last_batch_failures']);
             if ($remaining_capacity > 0 && !self::index_resource_budget_exhausted($budget, (int) $summary['processed'])) {
-                self::process_backfill_for_index_batch($remaining_capacity, $budget, $summary, $analyzer);
+                self::process_backfill_for_index_batch($remaining_capacity, $budget, $summary, $analyzer, $failed_queue_ids);
             } elseif ($remaining_capacity > 0) {
                 $summary['stopped_by_budget'] = true;
                 $summary['has_more'] = true;
@@ -7603,23 +7660,30 @@ JS;
             'last_indexed_post_id' => 0,
             'last_indexed_post_title' => '',
             'last_indexed_at' => '',
+            'last_batch_failures' => 0,
+            'last_failed_post_id' => 0,
+            'last_failed_post_title' => '',
+            'last_failed_at' => '',
+            'last_error' => '',
         ];
     }
 
     /**
      * @param array<string,mixed> $budget
      * @param array<string,mixed> $summary
+     * @return int[] Failed queue IDs recorded and intentionally skipped for the rest of this batch.
      */
-    private static function process_queue_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): void
+    private static function process_queue_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): array
     {
         $queue = self::pending_queue();
         if ($queue === [] || $limit <= 0) {
-            return;
+            return [];
         }
 
         $claimed = array_slice($queue, 0, $limit);
         $remaining = array_slice($queue, count($claimed));
         $processed_ids = [];
+        $failed_ids = [];
         $index = 0;
 
         for ($index = 0, $count = count($claimed); $index < $count; $index++) {
@@ -7631,36 +7695,58 @@ JS;
 
             $post_id = (int) $claimed[$index];
             $post = self::post_object($post_id);
-            if ($post !== null && self::is_indexable_post($post)) {
-                self::index_post($post, [], $analyzer);
-                self::remember_indexed_post_in_summary($summary, $post);
-            } else {
-                self::tombstone_post($post_id);
-            }
+            try {
+                if ($post !== null && self::is_indexable_post($post)) {
+                    self::index_post($post, [], $analyzer);
+                    self::remember_indexed_post_in_summary($summary, $post);
+                } else {
+                    self::tombstone_post($post_id);
+                }
 
-            $processed_ids[] = $post_id;
-            $summary['processed'] = (int) $summary['processed'] + 1;
-            $summary['queue_processed'] = (int) $summary['queue_processed'] + 1;
+                $processed_ids[] = $post_id;
+                $summary['processed'] = (int) $summary['processed'] + 1;
+                $summary['queue_processed'] = (int) $summary['queue_processed'] + 1;
+            } catch (Throwable $e) {
+                $failed_ids[] = $post_id;
+                self::remember_index_failure_in_summary($summary, $post_id, $post, $e);
+            }
         }
 
         $unprocessed_claimed = array_slice($claimed, $index);
-        $queue = self::finish_queue_batch($processed_ids, array_merge($unprocessed_claimed, $remaining));
+        $queue = self::finish_queue_batch(array_merge($processed_ids, $failed_ids), array_merge($unprocessed_claimed, $remaining));
         if ($queue !== []) {
             $summary['has_more'] = true;
         }
+
+        return $failed_ids;
     }
 
     /**
      * @param array<string,mixed> $budget
      * @param array<string,mixed> $summary
+     * @param int[] $skip_post_ids
      */
-    private static function process_backfill_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): void
+    private static function process_backfill_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer, array $skip_post_ids = []): void
     {
         if ($limit <= 0) {
             return;
         }
 
-        $rows = self::select_eligible_unindexed_posts($limit + 1);
+        $skip = [];
+        foreach ($skip_post_ids as $post_id) {
+            $post_id = (int) $post_id;
+            if ($post_id > 0) {
+                $skip[$post_id] = true;
+            }
+        }
+
+        $rows = self::select_eligible_unindexed_posts($limit + count($skip) + 1);
+        if ($skip !== []) {
+            $rows = array_values(array_filter(
+                $rows,
+                static fn(object $post): bool => !isset($skip[(int) ($post->ID ?? 0)])
+            ));
+        }
         if ($rows === []) {
             return;
         }
@@ -7674,16 +7760,21 @@ JS;
                 break;
             }
 
-            if (self::is_indexable_post($post)) {
-                self::index_post($post, [], $analyzer);
-                self::remember_indexed_post_in_summary($summary, $post);
-            } elseif (isset($post->ID)) {
-                self::tombstone_post((int) $post->ID);
-            }
+            $post_id = isset($post->ID) ? (int) $post->ID : 0;
+            try {
+                if (self::is_indexable_post($post)) {
+                    self::index_post($post, [], $analyzer);
+                    self::remember_indexed_post_in_summary($summary, $post);
+                } elseif ($post_id > 0) {
+                    self::tombstone_post($post_id);
+                }
 
-            $processed_rows++;
-            $summary['processed'] = (int) $summary['processed'] + 1;
-            $summary['backfill_processed'] = (int) $summary['backfill_processed'] + 1;
+                $processed_rows++;
+                $summary['processed'] = (int) $summary['processed'] + 1;
+                $summary['backfill_processed'] = (int) $summary['backfill_processed'] + 1;
+            } catch (Throwable $e) {
+                self::remember_index_failure_in_summary($summary, $post_id, $post, $e);
+            }
         }
 
         if (count($rows) > $processed_rows) {
@@ -7872,6 +7963,61 @@ WHERE p.post_password = ''
         $summary['last_indexed_post_id'] = $post_id;
         $summary['last_indexed_post_title'] = isset($post->post_title) && is_scalar($post->post_title) ? (string) $post->post_title : '';
         $summary['last_indexed_at'] = self::current_gmt_datetime();
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function remember_index_failure_in_summary(array &$summary, int $post_id, ?object $post, Throwable $error): void
+    {
+        $summary['last_batch_failures'] = max(0, (int) ($summary['last_batch_failures'] ?? 0)) + 1;
+        $summary['last_failed_post_id'] = max(0, $post_id);
+        $summary['last_failed_post_title'] = self::failure_post_title($post_id, $post);
+        $summary['last_failed_at'] = self::current_gmt_datetime();
+        $summary['last_error'] = self::index_failure_error_summary($error);
+    }
+
+    private static function failure_post_title(int $post_id, ?object $post): string
+    {
+        $title = $post !== null && isset($post->post_title) && is_scalar($post->post_title)
+            ? (string) $post->post_title
+            : '';
+
+        if ($title === '' && $post_id > 0) {
+            try {
+                $title = self::post_title($post_id);
+            } catch (Throwable $e) {
+                $title = '';
+            }
+        }
+
+        return self::sanitize_index_failure_text($title, self::MAX_INDEX_FAILURE_TITLE_BYTES, false);
+    }
+
+    private static function index_failure_error_summary(Throwable $error): string
+    {
+        $message = self::sanitize_index_failure_text(
+            get_class($error) . ': ' . $error->getMessage(),
+            self::MAX_INDEX_FAILURE_ERROR_BYTES
+        );
+
+        return $message !== '' ? $message : 'Indexing failed for this post.';
+    }
+
+    private static function sanitize_index_failure_text(mixed $value, int $max_bytes, bool $redact_sql = true): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $text = (string) $value;
+        $text = preg_replace('/#\d+\s+.*$/s', '', $text);
+        if ($redact_sql) {
+            $text = preg_replace('/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE)\b.*$/is', '$1 statement', (string) $text);
+        }
+        $text = preg_replace('/\s+/', ' ', self::sanitize_text((string) $text));
+
+        return WP_FTS_Utf8::truncate_bytes(trim((string) $text), max(0, $max_bytes));
     }
 
     /**
@@ -8065,6 +8211,11 @@ WHERE p.post_password = ''
         $state['last_indexed_post_id'] = max(0, (int) $state['last_indexed_post_id']);
         $state['last_indexed_post_title'] = is_scalar($state['last_indexed_post_title']) ? (string) $state['last_indexed_post_title'] : '';
         $state['last_indexed_at'] = is_scalar($state['last_indexed_at']) ? (string) $state['last_indexed_at'] : '';
+        $state['last_batch_failures'] = max(0, (int) $state['last_batch_failures']);
+        $state['last_failed_post_id'] = max(0, (int) $state['last_failed_post_id']);
+        $state['last_failed_post_title'] = self::sanitize_index_failure_text($state['last_failed_post_title'], self::MAX_INDEX_FAILURE_TITLE_BYTES, false);
+        $state['last_failed_at'] = self::sanitize_index_failure_text($state['last_failed_at'], 32, false);
+        $state['last_error'] = self::sanitize_index_failure_text($state['last_error'], self::MAX_INDEX_FAILURE_ERROR_BYTES);
         $state['last_run_at'] = is_scalar($state['last_run_at']) ? (string) $state['last_run_at'] : '';
         $state['last_mode'] = is_scalar($state['last_mode']) ? (string) $state['last_mode'] : '';
         $state['has_more'] = (bool) $state['has_more'];
@@ -8087,6 +8238,11 @@ WHERE p.post_password = ''
             'last_indexed_post_id' => 0,
             'last_indexed_post_title' => '',
             'last_indexed_at' => '',
+            'last_batch_failures' => 0,
+            'last_failed_post_id' => 0,
+            'last_failed_post_title' => '',
+            'last_failed_at' => '',
+            'last_error' => '',
             'last_skipped_locked' => false,
             'last_stopped_by_budget' => false,
             'last_mode' => '',
@@ -8109,6 +8265,23 @@ WHERE p.post_password = ''
         $state['last_mode'] = is_scalar($summary['mode'] ?? null) ? (string) $summary['mode'] : '';
         $state['last_run_at'] = self::current_gmt_datetime();
 
+        $failures = max(0, (int) ($summary['last_batch_failures'] ?? 0));
+        if ($failures > 0) {
+            $state['last_batch_failures'] = $failures;
+            $state['last_failed_post_id'] = max(0, (int) ($summary['last_failed_post_id'] ?? 0));
+            $state['last_failed_post_title'] = self::sanitize_index_failure_text($summary['last_failed_post_title'] ?? '', self::MAX_INDEX_FAILURE_TITLE_BYTES, false);
+            $state['last_failed_at'] = self::sanitize_index_failure_text($summary['last_failed_at'] ?? '', 32, false);
+            $state['last_error'] = self::sanitize_index_failure_text($summary['last_error'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES);
+        } elseif (empty($summary['skipped_locked'])) {
+            $state['last_batch_failures'] = 0;
+            if (empty($summary['stopped_by_budget'])) {
+                $state['last_failed_post_id'] = 0;
+                $state['last_failed_post_title'] = '';
+                $state['last_failed_at'] = '';
+                $state['last_error'] = '';
+            }
+        }
+
         if ((int) ($summary['last_indexed_post_id'] ?? 0) > 0) {
             $state['last_indexed_post_id'] = (int) $summary['last_indexed_post_id'];
             $state['last_indexed_post_title'] = is_scalar($summary['last_indexed_post_title'] ?? null) ? (string) $summary['last_indexed_post_title'] : '';
@@ -8116,6 +8289,21 @@ WHERE p.post_password = ''
         }
 
         self::set_option(self::INDEX_HEALTH_OPTION, $state);
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function failed_post_label(array $health): string
+    {
+        $post_id = max(0, (int) ($health['last_failed_post_id'] ?? 0));
+        if ($post_id <= 0) {
+            return '';
+        }
+
+        $title = is_scalar($health['last_failed_post_title'] ?? null) ? trim((string) $health['last_failed_post_title']) : '';
+
+        return trim(($title !== '' ? $title : '(untitled)') . ' (ID ' . $post_id . ')');
     }
 
     private static function configured_int_constant(string $name, int $default, int $min, int $max): int
