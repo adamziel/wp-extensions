@@ -3,6 +3,7 @@ set -euo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 REPO_ROOT="$(cd "${PLUGIN_DIR}/.." && pwd -P)"
+COMPONENT_DIR="${REPO_ROOT}/components/full-text-search"
 SOURCE_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 PORT="${WP_FTS_HTTP_PORT:-8088}"
 PROOF_ROOT="$(mktemp -d /tmp/wp-fts-mysql-proof.XXXXXX)"
@@ -33,6 +34,27 @@ mkdir -p "${PROOF_ROOT}/plugin"
         -cf - .
 ) | (
     cd "${PROOF_ROOT}/plugin"
+    tar -xf -
+)
+
+if [[ ! -d "${COMPONENT_DIR}" ]]; then
+    echo "BLOCKED: Missing Composer path repository at ${COMPONENT_DIR}." >&2
+    exit 1
+fi
+
+mkdir -p "${PROOF_ROOT}/components/full-text-search"
+(
+    cd "${COMPONENT_DIR}"
+    tar \
+        --exclude='./vendor' \
+        --exclude='./node_modules' \
+        --exclude='./dist' \
+        --exclude='.git' \
+        --exclude='.env' \
+        --exclude='*.pem' \
+        -cf - .
+) | (
+    cd "${PROOF_ROOT}/components/full-text-search"
     tar -xf -
 )
 

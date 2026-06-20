@@ -118,6 +118,19 @@ test_case('quality real integration commands are documented and composer-address
     assert_contains('WP_FTS_CONCURRENT_WORKERS=4', $readme, 'README should document the concurrent indexing command');
 });
 
+test_case('quality real mysql proof helper packages the component path repository before composer install', function (): void {
+    $script = (string) file_get_contents(dirname(__DIR__, 2) . '/tools/run-real-mysql-production-proof.sh');
+
+    assert_contains('COMPONENT_DIR="${REPO_ROOT}/components/full-text-search"', $script, 'proof helper should locate the split FTS component from the monorepo root');
+    assert_contains('mkdir -p "${PROOF_ROOT}/components/full-text-search"', $script, 'proof helper should create the copied component path repository next to the temp plugin');
+    assert_contains('cd "${COMPONENT_DIR}"', $script, 'proof helper should copy from the monorepo component source');
+    assert_contains('cd "${PROOF_ROOT}/components/full-text-search"', $script, 'proof helper should copy the component into the path Composer expects');
+
+    $componentCopy = strpos($script, 'cd "${PROOF_ROOT}/components/full-text-search"');
+    $composerInstall = strpos($script, 'composer install --no-interaction --no-dev --optimize-autoloader');
+    assert_true(is_int($componentCopy) && is_int($composerInstall) && $componentCopy < $composerInstall, 'proof helper should copy the component path repository before composer install');
+});
+
 test_case('quality real mysql harness source tracks current six-table row-postings schema', function (): void {
     $script = (string) file_get_contents(dirname(__DIR__) . '/integration/real-wordpress-mysql.php');
     $proof = (string) file_get_contents(dirname(__DIR__) . '/integration/real-mysql-production-proof.php');
