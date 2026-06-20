@@ -118,7 +118,7 @@ restored with WordPress content.
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
-| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, and per-result match details, and are request-local diagnostics rather than persistent logs. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, per-result match details, and redacted SQL query summaries when the environment already collects query data. They are request-local diagnostics rather than persistent logs. |
 
 ## Search Accuracy And Automatic Fast Mode
 
@@ -159,7 +159,10 @@ When diagnostics are active, the Debug Bar panel or Health-tab fallback shows
 which path was used for the current request: exact, explicit approximate, auto
 threshold, forced exact, disabled by constant, or no threshold crossing. The
 same trace reports the candidate estimate, threshold, candidate cap, and whether
-the result total is exact or approximate.
+the result total is exact or approximate. SQL query summaries appear only when
+the current environment already populates `$wpdb->queries`, such as with
+`SAVEQUERIES` or a compatible test/debug database object. The plugin does not
+enable `SAVEQUERIES` automatically.
 
 ## Language And Morphology
 

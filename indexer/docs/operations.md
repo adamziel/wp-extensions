@@ -175,9 +175,13 @@ when diagnostics are active. The trace identifies the storage backend, analyzed
 query languages, query surfaces with analyzed storage terms/keys, prefix
 expansion count, fast-mode source and cap, candidate rows/docs scored, exact
 versus approximate totals, and bounded per-result match reasons for the returned
-page. Bailout traces still keep their readable reason so operators can
-distinguish unsupported query shapes, disabled replacement settings, and
-successful FTS ownership without creating diagnostic content.
+page. When the environment already populates `$wpdb->queries`, typically through
+`SAVEQUERIES` or a compatible test/debug database object, the same trace includes
+bounded, redacted SQL query summaries and total captured query count. The plugin
+does not enable `SAVEQUERIES` automatically. Bailout traces still keep their
+readable reason so operators can distinguish unsupported query shapes, disabled
+replacement settings, and successful FTS ownership without creating diagnostic
+content.
 
 ## Optimize And Repair
 

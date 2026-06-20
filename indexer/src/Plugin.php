@@ -147,6 +147,7 @@ final class WP_FTS_Plugin
     private const DEBUG_MAX_LIST_ITEMS = 8;
     private const DEBUG_MAX_ASSOC_ITEMS = 16;
     private const DEBUG_MAX_TIMING_PHASES = 16;
+    private const DEBUG_MAX_SQL_QUERIES = 8;
     private const FTS_TABLE_SUFFIXES = [
         'fts_terms',
         'fts_postings',
@@ -840,6 +841,7 @@ final class WP_FTS_Plugin
             'counts' => self::debug_default_counts(),
             'analyzer_pack_status' => [],
             'search_explain' => [],
+            'sql_queries' => self::debug_sql_capture_start(),
             'notes' => [],
         ], self::debug_normalize_trace_extra($extra));
 
@@ -866,10 +868,221 @@ final class WP_FTS_Plugin
             return;
         }
 
+        self::debug_finalize_sql_queries($trace_id);
         self::$debug_traces[$trace_id]['status'] = self::debug_truncate_text($status, 40);
         if ($reason !== '') {
             self::$debug_traces[$trace_id]['bailout_reason'] = self::debug_truncate_text($reason);
         }
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function debug_sql_capture_start(): array
+    {
+        $wpdb = $GLOBALS['wpdb'] ?? null;
+        if (!is_object($wpdb)) {
+            return self::debug_sql_unavailable('SQL query capture unavailable: $wpdb is not available.');
+        }
+
+        if (!property_exists($wpdb, 'queries') && !isset($wpdb->queries)) {
+            return self::debug_sql_unavailable('SQL query capture unavailable: $wpdb->queries is not exposed.');
+        }
+
+        $queries = $wpdb->queries;
+        if (!is_array($queries)) {
+            return self::debug_sql_unavailable('SQL query capture unavailable: $wpdb->queries is not an array.');
+        }
+
+        return [
+            'available' => true,
+            'captured' => 0,
+            'shown' => 0,
+            'max_shown' => self::DEBUG_MAX_SQL_QUERIES,
+            'total_time_ms' => null,
+            'entries' => [],
+            'message' => '',
+            'start_index' => count($queries),
+            'start_num_queries' => self::debug_wpdb_num_queries($wpdb),
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function debug_sql_unavailable(string $message): array
+    {
+        return [
+            'available' => false,
+            'captured' => 0,
+            'shown' => 0,
+            'max_shown' => self::DEBUG_MAX_SQL_QUERIES,
+            'total_time_ms' => null,
+            'entries' => [],
+            'message' => self::debug_truncate_text($message),
+        ];
+    }
+
+    private static function debug_wpdb_num_queries(object $wpdb): ?int
+    {
+        if (!property_exists($wpdb, 'num_queries') && !isset($wpdb->num_queries)) {
+            return null;
+        }
+
+        return is_numeric($wpdb->num_queries) ? max(0, (int) $wpdb->num_queries) : null;
+    }
+
+    private static function debug_finalize_sql_queries(int $trace_id): void
+    {
+        if (!isset(self::$debug_traces[$trace_id])) {
+            return;
+        }
+
+        $started = is_array(self::$debug_traces[$trace_id]['sql_queries'] ?? null)
+            ? self::$debug_traces[$trace_id]['sql_queries']
+            : self::debug_sql_unavailable('SQL query capture unavailable: trace SQL state was not initialized.');
+        if (empty($started['available'])) {
+            self::$debug_traces[$trace_id]['sql_queries'] = $started;
+            return;
+        }
+        if (!array_key_exists('start_index', $started)) {
+            return;
+        }
+
+        $wpdb = $GLOBALS['wpdb'] ?? null;
+        if (!is_object($wpdb) || (!property_exists($wpdb, 'queries') && !isset($wpdb->queries)) || !is_array($wpdb->queries)) {
+            self::$debug_traces[$trace_id]['sql_queries'] = self::debug_sql_unavailable('SQL query capture unavailable: $wpdb->queries was not available when the trace finished.');
+            return;
+        }
+
+        $start_index = max(0, (int) $started['start_index']);
+        $queries = $wpdb->queries;
+        $delta = array_slice($queries, min($start_index, count($queries)));
+        $start_num_queries = is_numeric($started['start_num_queries'] ?? null) ? (int) $started['start_num_queries'] : null;
+        $finish_num_queries = self::debug_wpdb_num_queries($wpdb);
+        if ($delta === [] && $start_num_queries !== null && $finish_num_queries !== null && $finish_num_queries > $start_num_queries) {
+            self::$debug_traces[$trace_id]['sql_queries'] = self::debug_sql_unavailable('SQL query capture unavailable: queries ran, but no query entries were collected. Enable SAVEQUERIES or a compatible debug database object.');
+            return;
+        }
+
+        self::$debug_traces[$trace_id]['sql_queries'] = self::debug_sql_query_summary($delta);
+    }
+
+    /**
+     * @param array<int,mixed> $queries
+     * @return array<string,mixed>
+     */
+    private static function debug_sql_query_summary(array $queries): array
+    {
+        $entries = [];
+        $total_time_ms = 0.0;
+        $has_timing = false;
+
+        foreach ($queries as $entry) {
+            $time_ms = self::debug_sql_entry_time_ms($entry);
+            if ($time_ms !== null) {
+                $has_timing = true;
+                $total_time_ms += $time_ms;
+            }
+
+            if (count($entries) >= self::DEBUG_MAX_SQL_QUERIES) {
+                continue;
+            }
+
+            $summary = self::debug_redact_sql(self::debug_sql_entry_sql($entry));
+            $row = ['sql' => $summary !== '' ? $summary : 'unreadable query entry'];
+            if ($time_ms !== null) {
+                $row['time_ms'] = round($time_ms, 3);
+            }
+            $entries[] = $row;
+        }
+
+        $captured = count($queries);
+
+        return [
+            'available' => true,
+            'captured' => $captured,
+            'shown' => count($entries),
+            'max_shown' => self::DEBUG_MAX_SQL_QUERIES,
+            'total_time_ms' => $has_timing ? round($total_time_ms, 3) : null,
+            'entries' => $entries,
+            'message' => $captured === 0 ? 'No SQL queries were captured during this trace.' : '',
+        ];
+    }
+
+    private static function debug_sql_entry_sql(mixed $entry): string
+    {
+        if (is_scalar($entry)) {
+            return (string) $entry;
+        }
+
+        if (is_array($entry)) {
+            foreach ([0, 'sql', 'query'] as $key) {
+                if (isset($entry[$key]) && is_scalar($entry[$key])) {
+                    return (string) $entry[$key];
+                }
+            }
+            return '';
+        }
+
+        if (is_object($entry)) {
+            foreach (['sql', 'query'] as $property) {
+                if ((property_exists($entry, $property) || isset($entry->{$property})) && is_scalar($entry->{$property})) {
+                    return (string) $entry->{$property};
+                }
+            }
+            if (method_exists($entry, '__toString')) {
+                return (string) $entry;
+            }
+        }
+
+        return '';
+    }
+
+    private static function debug_sql_entry_time_ms(mixed $entry): ?float
+    {
+        $value = null;
+        $milliseconds = false;
+        if (is_array($entry)) {
+            if (isset($entry['time_ms']) && is_numeric($entry['time_ms'])) {
+                $value = (float) $entry['time_ms'];
+                $milliseconds = true;
+            } elseif (isset($entry[1]) && is_numeric($entry[1])) {
+                $value = (float) $entry[1];
+            } elseif (isset($entry['time']) && is_numeric($entry['time'])) {
+                $value = (float) $entry['time'];
+            }
+        } elseif (is_object($entry)) {
+            if ((property_exists($entry, 'time_ms') || isset($entry->time_ms)) && is_numeric($entry->time_ms)) {
+                $value = (float) $entry->time_ms;
+                $milliseconds = true;
+            } elseif ((property_exists($entry, 'time') || isset($entry->time)) && is_numeric($entry->time)) {
+                $value = (float) $entry->time;
+            }
+        }
+
+        if ($value === null) {
+            return null;
+        }
+
+        return max(0.0, $milliseconds ? $value : $value * 1000.0);
+    }
+
+    private static function debug_redact_sql(string $sql): string
+    {
+        if ($sql === '') {
+            return '';
+        }
+
+        $sql = WP_FTS_Utf8::repair($sql);
+        $sql = preg_replace('/\/\*.*?\*\//s', '/* ... */', $sql) ?? $sql;
+        $sql = preg_replace('/(?:--|#)[^\r\n]*/', '-- ...', $sql) ?? $sql;
+        $sql = preg_replace("/'(?:''|\\\\.|[^'\\\\])*'/s", "'?'", $sql) ?? $sql;
+        $sql = preg_replace('/"(?:\"\"|\\\\.|[^"\\\\])*"/s', '"?"', $sql) ?? $sql;
+        $sql = preg_replace('/\b0x[0-9a-fA-F]+\b/', '?', $sql) ?? $sql;
+        $sql = preg_replace('/(?<![A-Za-z0-9_])[-+]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![A-Za-z0-9_])/', '?', $sql) ?? $sql;
+
+        return self::debug_truncate_text($sql, 320);
     }
 
     private static function debug_add_timing(int $trace_id, string $phase, float $started): void
@@ -1267,6 +1480,7 @@ final class WP_FTS_Plugin
             self::render_debug_row('Result matches', self::debug_result_matches_summary($search_explain['results'] ?? []));
             self::render_debug_row('Counts', self::debug_assoc_summary($trace['counts'] ?? []));
             self::render_debug_row('Timings', self::debug_timing_summary($trace['timings_ms'] ?? []));
+            self::render_debug_row('SQL queries', self::debug_sql_queries_summary($trace['sql_queries'] ?? []));
             self::render_debug_row('Analyzer packs', self::debug_pack_status_summary($trace['analyzer_pack_status'] ?? []));
             self::render_debug_row('Notes', self::debug_list_summary($trace['notes'] ?? []));
             echo '</tbody></table>';
@@ -1312,6 +1526,54 @@ final class WP_FTS_Plugin
             if (count($parts) >= self::DEBUG_MAX_ASSOC_ITEMS) {
                 break;
             }
+        }
+
+        return self::debug_truncate_text(implode(', ', $parts), 800);
+    }
+
+    private static function debug_sql_queries_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        if (empty($value['available'])) {
+            return self::debug_scalar_summary($value['message'] ?? 'SQL query capture unavailable.');
+        }
+
+        $captured = max(0, (int) ($value['captured'] ?? 0));
+        $shown = max(0, (int) ($value['shown'] ?? 0));
+        $parts = ['captured=' . $captured];
+        if (isset($value['total_time_ms']) && is_numeric($value['total_time_ms'])) {
+            $parts[] = 'total_time=' . number_format((float) $value['total_time_ms'], 3, '.', '') . 'ms';
+        }
+        if ($captured > 0) {
+            $parts[] = 'shown=' . $shown;
+        }
+
+        $entries = [];
+        if (isset($value['entries']) && is_array($value['entries'])) {
+            foreach ($value['entries'] as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $sql = self::debug_scalar_summary($entry['sql'] ?? '');
+                if ($sql === '') {
+                    continue;
+                }
+                if (isset($entry['time_ms']) && is_numeric($entry['time_ms'])) {
+                    $sql .= ' (' . number_format((float) $entry['time_ms'], 3, '.', '') . 'ms)';
+                }
+                $entries[] = $sql;
+                if (count($entries) >= self::DEBUG_MAX_SQL_QUERIES) {
+                    break;
+                }
+            }
+        }
+        if ($entries !== []) {
+            $parts[] = 'entries=' . implode(' | ', $entries) . ($captured > count($entries) ? ' | ...' : '');
+        } elseif (is_scalar($value['message'] ?? null) && (string) $value['message'] !== '') {
+            $parts[] = (string) $value['message'];
         }
 
         return self::debug_truncate_text(implode(', ', $parts), 800);
