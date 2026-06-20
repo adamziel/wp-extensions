@@ -10528,22 +10528,46 @@ test_case('analyzer tolerates invalid UTF-8 without optional extensions', functi
 });
 
 test_case('index and query analyzers normalize plain text identically', function (): void {
-    $analyzer = new WP_FTS_Analyzer();
+    $analyzer = new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'enable_stemming' => false,
+    ]);
     mt_srand(1234);
-    $words = ['Alpha', 'BETA', 'Wrocław', 'café', 'delta_2', 'x', 'superlong'];
-    for ($i = 0; $i < 100; $i++) {
-        $parts = [];
-        for ($j = 0; $j < 12; $j++) {
-            $parts[] = $words[mt_rand(0, count($words) - 1)];
-            $parts[] = [' ', '.', ',', "\n", "\t"][mt_rand(0, 4)];
+    $termsByCategory = [
+        'latin_diacritics' => ['Alpha', 'BETA', 'Wrocław', 'Łódź', 'café', 'naïve', 'Straße', 'İstanbul', 'São', 'façade'],
+        'cjk' => ['中文搜索', '東京検索', '漢字かな', '한글검색', '搜索引擎', '京都'],
+        'arabic_script' => ['العربية', 'اختبار', 'فارسی', 'معلومات'],
+        'bengali' => ['বাংলা', 'বিদ্যালয়ের', 'সূচিতে', 'শিক্ষকদেরকে'],
+        'urdu' => ['اردو', 'پاکستان', 'لڑکیاں', 'معلومات'],
+        'hindi' => ['नमस्ते', 'विद्यालय', 'खोज', 'अनुच्छेद'],
+        'numbers_underscores' => ['delta_2', 'v2_0', 'release42', '__init__', 'x99_y'],
+        'short_terms' => ['x', 'a', 'I', 'go', 'pi', '東', '日'],
+        'long_terms' => ['superlong', 'supercalifragilisticexpialidocious', 'extraordinarilylongtoken123', 'pneumonoultramicroscopicsilicovolcanoconiosis'],
+    ];
+    $separators = [' ', '  ', "\n", "\t", "\r\n", '.', ',', '!', '?', ';', "'", '"', '-', ' -- ', '/', '(', ')', '،', '।', '。'];
+    $categories = array_keys($termsByCategory);
+    $randomTerm = static function (string $category) use ($termsByCategory): string {
+        $terms = $termsByCategory[$category];
+
+        return $terms[mt_rand(0, count($terms) - 1)];
+    };
+
+    $comparisons = 0;
+    for ($i = 0; $i < 1024; $i++) {
+        $parts = [$randomTerm($categories[$i % count($categories)])];
+        for ($j = 0, $n = mt_rand(4, 18); $j < $n; $j++) {
+            $parts[] = $separators[mt_rand(0, count($separators) - 1)];
+            $parts[] = $randomTerm($categories[mt_rand(0, count($categories) - 1)]);
         }
         $text = implode('', $parts);
         assert_same(
             $analyzer->analyze_query($text),
-            test_terms($analyzer->analyze_content($text)),
-            'plain content and query normalization must match'
+            test_terms($analyzer->analyze_content(strip_tags($text))),
+            "plain content and query normalization must match for deterministic random string {$i}"
         );
+        $comparisons++;
     }
+    assert_true($comparisons >= 1000, 'T3 plain-string parity should cover at least 1000 deterministic random strings');
 });
 
 test_case('postings varint round trips doc-id deltas and weighted tf', function (): void {
