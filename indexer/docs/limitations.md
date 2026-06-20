@@ -8,7 +8,9 @@ caveats operators need to account for.
 - The plugin exposes WP-CLI commands when `WP_CLI` is active.
 - It registers activation, deactivation, uninstall, post-save, status
   transition, trash/delete, WP-Cron queue, REST search, and front-end search
-  replacement hooks when WordPress hook APIs are available.
+  replacement hooks when WordPress hook APIs are available. In multisite, it
+  also registers new-site schema provisioning and site-deletion table discovery
+  hooks.
 - Front-end main-query search replacement is enabled by default and can be
   disabled with the `wp_fts_replace_frontend_search` filter.
 - Settings > Full-Text Search controls indexed post types, automatic indexing,
@@ -18,6 +20,10 @@ caveats operators need to account for.
   pending queue state is managed internally.
 - Runtime saves are processed through a bounded option-backed queue. This keeps
   hook work small, but it is not a durable external job queue.
+- Multisite support is limited to lifecycle schema and cleanup paths: activation
+  or repair affects the current site, new sites get empty FTS tables, and
+  WordPress site deletion can discover those tables. This is not a complete
+  enterprise multisite certification.
 - Uninstall currently clears operational options and pending queue state but
   intentionally retains index tables and data.
 

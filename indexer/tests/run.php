@@ -1951,6 +1951,7 @@ final class WP_FTS_Test_Prepared_SQL
 final class WP_FTS_Test_WPDB
 {
     public string $prefix = 'wp_';
+    public string $base_prefix = 'wp_';
     public string $posts = 'wp_posts';
     public string $last_error = '';
     public ?string $failQueryPrefix = null;
@@ -1989,6 +1990,11 @@ final class WP_FTS_Test_WPDB
         $this->prepared[] = ['sql' => $sql, 'args' => $args];
 
         return new WP_FTS_Test_Prepared_SQL($sql, $args);
+    }
+
+    public function get_blog_prefix(int $blog_id = 0): string
+    {
+        return $blog_id <= 1 ? $this->base_prefix : $this->base_prefix . $blog_id . '_';
     }
 
     public function get_var(mixed $statement, int $x = 0, int $y = 0): mixed
@@ -3020,6 +3026,11 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_is_cron'] = false;
     $GLOBALS['wp_fts_test_is_rest'] = false;
     $GLOBALS['wp_fts_test_is_network_admin'] = false;
+    $GLOBALS['wp_fts_test_current_blog_id'] = 1;
+    $GLOBALS['wp_fts_test_blog_stack'] = [];
+    $GLOBALS['wp_fts_test_switch_log'] = [];
+    $GLOBALS['wp_fts_test_restore_log'] = [];
+    $GLOBALS['wp_fts_test_switch_to_blog_returns_false'] = false;
     unset($GLOBALS['pagenow']);
     $GLOBALS['wp_fts_test_current_screen'] = null;
     $GLOBALS['wp_query'] = null;
@@ -3977,6 +3988,7 @@ PHP;
         'save_post',
         'transition_post_status',
         'trashed_post',
+        'wp_initialize_site',
         'wp_after_insert_post',
         'wp_ajax_wp_fts_sandbox_result_details',
     ];
@@ -3985,7 +3997,27 @@ PHP;
 
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
-    assert_same(['debug_bar_panels', 'found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'render_block', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end, admin, and diagnostics filters');
+    assert_same(['debug_bar_panels', 'found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'render_block', 'the_content', 'the_excerpt', 'the_title', 'wpmu_drop_tables'], $filterHooks, 'bootstrap should register front-end, admin, diagnostics, and multisite cleanup filters');
+
+    $siteLifecycleAction = null;
+    foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
+        if (($action['hook'] ?? null) === 'wp_initialize_site') {
+            $siteLifecycleAction = $action;
+            break;
+        }
+    }
+    assert_same([WP_FTS_Plugin::class, 'handle_site_initialization'], $siteLifecycleAction['callback'] ?? null, 'bootstrap should register current multisite site-initialization hook');
+    assert_same(2, $siteLifecycleAction['accepted_args'] ?? null, 'site-initialization hook should accept the WP_Site and args payloads');
+
+    $siteDeletionFilter = null;
+    foreach ($GLOBALS['wp_fts_test_filter_registrations'] as $filter) {
+        if (($filter['hook'] ?? null) === 'wpmu_drop_tables') {
+            $siteDeletionFilter = $filter;
+            break;
+        }
+    }
+    assert_same([WP_FTS_Plugin::class, 'filter_site_deletion_tables'], $siteDeletionFilter['callback'] ?? null, 'bootstrap should register multisite site-deletion table discovery filter');
+    assert_same(2, $siteDeletionFilter['accepted_args'] ?? null, 'site-deletion table filter should accept existing tables and site id');
 
     $searchActionPriorities = [];
     foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
@@ -5821,6 +5853,174 @@ test_case('activation repairs schema stores version and surfaces database failur
         $wpdb = $oldWpdb;
     }
     assert_true($thrown, 'activation should throw on schema write failure');
+});
+
+test_case('multisite new-site provisioning is a no-op without a resolvable site id or switch APIs', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 3);
+
+    try {
+        WP_FTS_Plugin::handle_site_initialization((object) ['domain' => 'missing-id.example']);
+        WP_FTS_Plugin::handle_site_initialization(0);
+        WP_FTS_Plugin::handle_site_initialization(37);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same([], $fake->queries, 'new-site provisioning should not touch storage without switch/restore APIs');
+    assert_same([], $fake->docs, 'new-site no-op should not index content');
+    assert_same([], $fake->terms, 'new-site no-op should not write terms');
+    assert_true(!isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'new-site no-op should not schedule queue work');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION]), 'new-site no-op should not set activation redirect state');
+});
+
+test_case('multisite new-site provisioning switches creates schema schedules and restores without indexing', function (): void {
+    global $wpdb;
+
+    if (!function_exists('switch_to_blog')) {
+        function switch_to_blog(int $blog_id): bool
+        {
+            global $wpdb;
+
+            if (!empty($GLOBALS['wp_fts_test_switch_to_blog_returns_false'])) {
+                return false;
+            }
+
+            $current = (int) ($GLOBALS['wp_fts_test_current_blog_id'] ?? 1);
+            $GLOBALS['wp_fts_test_switch_log'][] = $blog_id;
+            $GLOBALS['wp_fts_test_blog_stack'][] = $current;
+            $GLOBALS['wp_fts_test_current_blog_id'] = $blog_id;
+
+            if (isset($wpdb) && is_object($wpdb) && method_exists($wpdb, 'get_blog_prefix')) {
+                $wpdb->prefix = $wpdb->get_blog_prefix($blog_id);
+                $wpdb->posts = $wpdb->prefix . 'posts';
+            }
+
+            return true;
+        }
+    }
+
+    if (!function_exists('restore_current_blog')) {
+        function restore_current_blog(): bool
+        {
+            global $wpdb;
+
+            $previous = array_pop($GLOBALS['wp_fts_test_blog_stack']);
+            if (!is_int($previous)) {
+                $previous = 1;
+            }
+
+            $GLOBALS['wp_fts_test_restore_log'][] = $previous;
+            $GLOBALS['wp_fts_test_current_blog_id'] = $previous;
+
+            if (isset($wpdb) && is_object($wpdb) && method_exists($wpdb, 'get_blog_prefix')) {
+                $wpdb->prefix = $wpdb->get_blog_prefix($previous);
+                $wpdb->posts = $wpdb->prefix . 'posts';
+            }
+
+            return true;
+        }
+    }
+
+    if (!function_exists('get_current_blog_id')) {
+        function get_current_blog_id(): int
+        {
+            return (int) ($GLOBALS['wp_fts_test_current_blog_id'] ?? 1);
+        }
+    }
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 4);
+
+    try {
+        WP_FTS_Plugin::handle_site_initialization((object) ['blog_id' => 37], ['source' => 'test']);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $createQueries = array_values(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE')));
+    assert_same([37], $GLOBALS['wp_fts_test_switch_log'], 'new-site provisioning should switch to the requested site id');
+    assert_same([1], $GLOBALS['wp_fts_test_restore_log'], 'new-site provisioning should restore the previous site context');
+    assert_same(1, get_current_blog_id(), 'new-site provisioning should leave the previous blog active');
+    assert_same(6, count($createQueries), 'new-site provisioning should create or repair exactly six FTS tables');
+    assert_contains('CREATE TABLE wp_37_fts_terms', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for terms');
+    assert_contains('CREATE TABLE wp_37_fts_postings', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for postings');
+    assert_contains('CREATE TABLE wp_37_fts_docs', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for docs');
+    assert_contains('CREATE TABLE wp_37_fts_doc_lengths', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for doc lengths');
+    assert_contains('CREATE TABLE wp_37_fts_docmeta', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for document metadata');
+    assert_contains('CREATE TABLE wp_37_fts_meta', implode("\n", $createQueries), 'new-site provisioning should use the new site table prefix for collection metadata');
+    assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'new-site provisioning should schedule bounded queue work');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'new-site provisioning should store schema version in the switched site context');
+    assert_same([], $fake->docs, 'new-site provisioning should not index or backfill content');
+    assert_same([], $fake->terms, 'new-site provisioning should not write FTS terms');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION]), 'new-site provisioning should not set the activation redirect flag');
+
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_switch_to_blog_returns_false'] = true;
+
+    try {
+        WP_FTS_Plugin::handle_site_initialization((object) ['id' => 38]);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same([], $fake->queries, 'new-site provisioning should fail safe when switch_to_blog declines the switch');
+    assert_same([], $GLOBALS['wp_fts_test_restore_log'], 'failed new-site switch should not restore an unmade switch');
+    assert_true(!isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'failed new-site switch should not schedule queue work');
+});
+
+test_case('multisite site deletion table discovery appends per-site FTS tables and de-dupes', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $tables = WP_FTS_Plugin::filter_site_deletion_tables([
+            'wp_7_posts',
+            'wp_7_fts_terms',
+            'custom_audit_table',
+            'wp_7_fts_terms',
+        ], 7);
+
+        $objectTables = WP_FTS_Plugin::filter_site_deletion_tables(['wp_8_posts'], (object) ['id' => 8]);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same([
+        'wp_7_posts',
+        'wp_7_fts_terms',
+        'custom_audit_table',
+        'wp_7_fts_postings',
+        'wp_7_fts_docs',
+        'wp_7_fts_doc_lengths',
+        'wp_7_fts_docmeta',
+        'wp_7_fts_meta',
+    ], $tables, 'site deletion table filter should preserve existing tables, append the six target-prefix FTS tables, and de-dupe');
+    assert_same([
+        'wp_8_posts',
+        'wp_8_fts_terms',
+        'wp_8_fts_postings',
+        'wp_8_fts_docs',
+        'wp_8_fts_doc_lengths',
+        'wp_8_fts_docmeta',
+        'wp_8_fts_meta',
+    ], $objectTables, 'site deletion table filter should accept WP_Site-like objects with id');
+    assert_same(['wp_posts'], WP_FTS_Plugin::filter_site_deletion_tables(['wp_posts', 'wp_posts'], 0), 'site deletion table filter should de-dupe and fail safe when site id is invalid');
+    assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'site deletion table discovery should not execute destructive SQL');
 });
 
 test_case('wp-cli status reports lifecycle state without mutating index data', function (): void {

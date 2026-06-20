@@ -742,6 +742,7 @@ namespace {
             'save_post',
             'transition_post_status',
             'trashed_post',
+            'wp_initialize_site',
             'wp_after_insert_post',
             'wp_ajax_wp_fts_sandbox_result_details',
         ];

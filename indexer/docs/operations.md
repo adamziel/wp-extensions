@@ -11,6 +11,11 @@ version, and schedules the bounded runtime queue processor. Runtime storage
 access also checks the stored schema version and repairs stale or missing schema
 state before indexing or tombstoning posts.
 
+On multisite, activation and `wp fts repair` operate on the current site's table
+prefix. When WordPress initializes a new site, the plugin switches into that
+site, creates or repairs the six FTS tables, schedules bounded queue work, and
+does not index content or set the activation redirect flag.
+
 To explicitly repair the schema without indexing content, run:
 
 ```sh
@@ -47,6 +52,11 @@ tables can evolve in place. Outside that path, raw `CREATE TABLE` statements
 are executed. Database write failures are surfaced with the failed operation
 name so activation, repair, and runtime indexing do not silently continue after
 a schema or storage error.
+
+During multisite site deletion, the plugin contributes the target site's six
+`fts_*` table names to WordPress table discovery so core can clean them up with
+the deleted site. Plugin uninstall remains intentionally conservative: it clears
+operational options and pending queue state, but does not drop index tables.
 
 ## Reindex Strategy
 

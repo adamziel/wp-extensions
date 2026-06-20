@@ -147,6 +147,14 @@ final class WP_FTS_Plugin
     private const DEBUG_MAX_LIST_ITEMS = 8;
     private const DEBUG_MAX_ASSOC_ITEMS = 16;
     private const DEBUG_MAX_TIMING_PHASES = 16;
+    private const FTS_TABLE_SUFFIXES = [
+        'fts_terms',
+        'fts_postings',
+        'fts_docs',
+        'fts_doc_lengths',
+        'fts_docmeta',
+        'fts_meta',
+    ];
 
     /**
      * @var array<int,array{total:int,max_pages:int,query_lang:string,query_text:string,snippets:array<int,string>,titles:array<int,string>,trace_id:int}>
@@ -213,6 +221,7 @@ final class WP_FTS_Plugin
         add_action('transition_post_status', [self::class, 'handle_status_transition'], 10, 3);
         add_action('trashed_post', [self::class, 'handle_post_delete'], 10, 1);
         add_action('before_delete_post', [self::class, 'handle_post_delete'], 10, 1);
+        add_action('wp_initialize_site', [self::class, 'handle_site_initialization'], 10, 2);
         add_action(self::CRON_HOOK, [self::class, 'process_scheduled_indexing'], 10, 0);
         add_action('rest_api_init', [self::class, 'register_rest_routes'], 10, 0);
         add_action('admin_menu', [self::class, 'register_admin_menu'], 10, 0);
@@ -235,6 +244,7 @@ final class WP_FTS_Plugin
             add_filter('the_title', [self::class, 'frontend_search_title'], 10, 2);
             add_filter('render_block', [self::class, 'frontend_search_render_block'], 10, 3);
             add_filter('debug_bar_panels', [self::class, 'register_debug_bar_panel'], 10, 1);
+            add_filter('wpmu_drop_tables', [self::class, 'filter_site_deletion_tables'], 10, 2);
         }
 
         add_action('loop_start', [self::class, 'begin_frontend_search_loop'], 10, 1);
@@ -249,6 +259,55 @@ final class WP_FTS_Plugin
         self::upgrade_schema();
         self::schedule_queue_processor();
         self::maybe_set_activation_redirect_flag($network_wide);
+    }
+
+    /**
+     * Provision FTS schema for a newly initialized multisite blog without indexing content.
+     *
+     * @param mixed $site WordPress passes a WP_Site object; tests or older
+     *        integration layers may pass a scalar blog id.
+     */
+    public static function handle_site_initialization(mixed $site, mixed $args = []): void
+    {
+        $site_id = self::site_id_from_value($site);
+        if ($site_id <= 0 || !function_exists('switch_to_blog') || !function_exists('restore_current_blog')) {
+            return;
+        }
+
+        if (!switch_to_blog($site_id)) {
+            return;
+        }
+
+        try {
+            self::upgrade_schema();
+            self::schedule_queue_processor();
+        } finally {
+            restore_current_blog();
+        }
+    }
+
+    /**
+     * Tell WordPress site deletion which per-site FTS tables belong to a blog.
+     *
+     * WordPress owns the actual deletion; this filter only contributes table
+     * names for the target prefix and preserves/de-duplicates existing entries.
+     *
+     * @param string[] $tables
+     * @return string[]
+     */
+    public static function filter_site_deletion_tables(array $tables, mixed $site): array
+    {
+        $site_id = self::site_id_from_value($site);
+        if ($site_id <= 0) {
+            return self::unique_table_names($tables);
+        }
+
+        $prefix = self::site_table_prefix($site_id);
+        if ($prefix === '') {
+            return self::unique_table_names($tables);
+        }
+
+        return self::unique_table_names(array_merge($tables, self::fts_table_names($prefix)));
     }
 
     /**
@@ -6872,6 +6931,88 @@ JS;
         }
 
         return 0;
+    }
+
+    private static function site_id_from_value(mixed $site): int
+    {
+        if (is_object($site)) {
+            if (isset($site->blog_id) && is_numeric($site->blog_id)) {
+                return max(0, (int) $site->blog_id);
+            }
+
+            if (isset($site->id) && is_numeric($site->id)) {
+                return max(0, (int) $site->id);
+            }
+        }
+
+        if (is_numeric($site)) {
+            return max(0, (int) $site);
+        }
+
+        return 0;
+    }
+
+    private static function site_table_prefix(int $site_id): string
+    {
+        global $wpdb;
+
+        if (!isset($wpdb) || !is_object($wpdb)) {
+            return '';
+        }
+
+        if (method_exists($wpdb, 'get_blog_prefix')) {
+            $prefix = $wpdb->get_blog_prefix($site_id);
+            if (is_scalar($prefix) && (string) $prefix !== '') {
+                return (string) $prefix;
+            }
+        }
+
+        $base_prefix = isset($wpdb->base_prefix) && is_scalar($wpdb->base_prefix)
+            ? (string) $wpdb->base_prefix
+            : (isset($wpdb->prefix) && is_scalar($wpdb->prefix) ? (string) $wpdb->prefix : '');
+        if ($base_prefix === '') {
+            return '';
+        }
+
+        return $site_id <= 1 ? $base_prefix : $base_prefix . $site_id . '_';
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function fts_table_names(string $prefix): array
+    {
+        $tables = [];
+        foreach (self::FTS_TABLE_SUFFIXES as $suffix) {
+            $tables[] = $prefix . $suffix;
+        }
+
+        return $tables;
+    }
+
+    /**
+     * @param array<int,mixed> $tables
+     * @return string[]
+     */
+    private static function unique_table_names(array $tables): array
+    {
+        $unique = [];
+        $seen = [];
+        foreach ($tables as $table) {
+            if (!is_scalar($table)) {
+                continue;
+            }
+
+            $table = (string) $table;
+            if ($table === '' || isset($seen[$table])) {
+                continue;
+            }
+
+            $seen[$table] = true;
+            $unique[] = $table;
+        }
+
+        return $unique;
     }
 
     private static function is_admin_request(): bool
