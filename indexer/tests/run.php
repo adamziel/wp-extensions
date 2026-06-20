@@ -4045,6 +4045,14 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
     assert_same('wp_fts_settings', $setting['option_group'] ?? null, 'settings should use the wp_fts_settings group');
     assert_same(WP_FTS_Plugin::SETTINGS_OPTION, $setting['option_name'] ?? null, 'settings should register the wp_fts_settings option');
     assert_same(['post', 'page'], WP_FTS_Plugin::default_settings()['index_post_types'], 'default settings should index both posts and pages');
+    assert_same([
+        'title' => 5.0,
+        'content' => 1.0,
+        'excerpt' => 2.0,
+        'terms' => 1.5,
+        'custom_fields' => 1.0,
+        'rendered' => 1.0,
+    ], WP_FTS_Plugin::default_settings()['field_boosts'], 'default settings should expose the extractor field boost defaults');
     assert_same(true, WP_FTS_Plugin::default_settings()['language_fallback'], 'default settings should enable language fallback');
     assert_same(true, WP_FTS_Plugin::default_settings()['prefix_matching'], 'default settings should enable word-beginning prefix matching');
     assert_same('prefer_fts', WP_FTS_Plugin::default_settings()['search_provider_compatibility'], 'default search provider compatibility should prefer FTS precedence');
@@ -4098,6 +4106,81 @@ test_case('settings sanitization maps replacement checkboxes and legacy scope to
     ]);
     assert_same(false, $legacy['replace_frontend_search'], 'legacy frontend replacement boolean should still sanitize');
     assert_same(true, $legacy['replace_admin_post_search'], 'legacy admin replacement boolean should still sanitize');
+});
+
+test_case('settings sanitization accepts bounded field boosts and rejects invalid values', function (): void {
+    $valid = WP_FTS_Plugin::sanitize_settings([
+        'field_boosts' => [
+            'title' => '7.25',
+            'content' => '0.25',
+            'excerpt' => 3,
+            'terms' => 2.5,
+            'custom_fields' => '1000',
+            'rendered' => '0.001',
+            'unknown' => 9,
+        ],
+    ]);
+    assert_same([
+        'title' => 7.25,
+        'content' => 0.25,
+        'excerpt' => 3.0,
+        'terms' => 2.5,
+        'custom_fields' => 100.0,
+        'rendered' => 0.01,
+    ], $valid['field_boosts'], 'valid field boosts should sanitize into the bounded extractor/indexer range');
+
+    $invalid = WP_FTS_Plugin::sanitize_settings([
+        'field_boosts' => [
+            'title' => '0',
+            'content' => -2,
+            'excerpt' => [],
+            'terms' => 'NaN',
+            'custom_fields' => '1e309',
+        ],
+    ]);
+    assert_same([
+        'title' => 5.0,
+        'content' => 1.0,
+        'excerpt' => 2.0,
+        'terms' => 1.5,
+        'custom_fields' => 1.0,
+        'rendered' => 1.0,
+    ], $invalid['field_boosts'], 'invalid or missing field boosts should fall back to defaults');
+});
+
+test_case('prepare post index options uses saved field boosts unless caller overrides them', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $savedBoosts = [
+        'title' => 1.25,
+        'content' => 8.0,
+        'excerpt' => 1.75,
+        'terms' => 2.25,
+        'custom_fields' => 3.5,
+        'rendered' => 4.0,
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['field_boosts' => $savedBoosts]
+    );
+    $post = (object) [
+        'ID' => 1247,
+        'post_title' => 'Boost settings',
+        'post_content' => '<p>boost settings</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-20 00:00:00',
+    ];
+
+    $settingsOptions = WP_FTS_Plugin::prepare_post_index_options($post, ['lang' => 'en']);
+    assert_same($savedBoosts, $settingsOptions['field_boosts'] ?? null, 'prepare_post_index_options should pass saved field boosts to runtime indexing');
+
+    $override = ['title' => 9.0, 'content' => 0.5];
+    $callerOptions = WP_FTS_Plugin::prepare_post_index_options($post, [
+        'lang' => 'en',
+        'field_boosts' => $override,
+    ]);
+    assert_same($override, $callerOptions['field_boosts'] ?? null, 'explicit caller field_boosts should override saved plugin settings');
 });
 
 test_case('post language meta box defaults to automatic detection and stores overrides', function (): void {
@@ -4198,7 +4281,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'authorized first sandbox render should not write the legacy demo post option');
     assert_same([], $fake->terms, 'authorized first sandbox render should not build FTS terms for generated content');
     assert_true(!str_contains($html, 'Legacy sandbox demo posts detected'), 'clean sandbox render should not show the cleanup affordance');
-    foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Customer-facing search behavior', 'Language handling'] as $groupLabel) {
+    foreach (['What gets indexed', 'When the index updates', 'Where full-text search replaces WordPress search', 'Customer-facing search behavior', 'Ranking weights', 'Language handling'] as $groupLabel) {
         assert_contains($groupLabel, $settingsHtml, "settings tab should group controls by {$groupLabel}");
     }
     assert_contains('Content types in the index', $settingsHtml, 'settings tab should render post-type configuration');
@@ -4232,6 +4315,23 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('Exact and lemmatizer matches still rank first', $settingsHtml, 'prefix matching copy should explain rank precedence');
     assert_contains('Results per page', $settingsHtml, 'settings should rename result limit to results per page');
     assert_contains('shown on one page or search view', $settingsHtml, 'settings results-per-page help should explain the page/search-view behavior');
+    assert_contains('Higher numbers make matches in that field count more strongly', $settingsHtml, 'settings ranking copy should explain the effect of larger weights');
+    assert_contains('Changed weights affect content when it is reindexed', $settingsHtml, 'settings ranking copy should explain index-time weight storage');
+    foreach ([
+        'title' => ['Title', '5'],
+        'content' => ['Main content', '1'],
+        'excerpt' => ['Excerpt', '2'],
+        'terms' => ['Taxonomy terms', '1.5'],
+        'custom_fields' => ['Selected custom fields', '1'],
+        'rendered' => ['Rendered-only content', '1'],
+    ] as $field => $expected) {
+        [$label, $value] = $expected;
+        assert_contains($label, $settingsHtml, "settings ranking controls should label {$field} plainly");
+        assert_contains('name="wp_fts_settings[field_boosts][' . $field . ']" value="' . $value . '"', $settingsHtml, "settings ranking controls should render the default {$field} boost");
+    }
+    assert_contains('Matches in the main saved post content', $settingsHtml, 'settings ranking controls should explain main content');
+    assert_contains('Matches in categories, tags, and other taxonomy term names', $settingsHtml, 'settings ranking controls should explain taxonomy terms');
+    assert_contains('Matches in block-rendered output that is not already in the saved content', $settingsHtml, 'settings ranking controls should explain rendered-only content');
     assert_contains('name="wp_fts_settings[language_fallback]" value="1" checked="checked"', $settingsHtml, 'settings defaults should enable language fallback');
     assert_contains('If the query language is unsupported or produces no matches', $settingsHtml, 'settings language fallback copy should explain unsupported languages and no-match fallback');
     assert_contains('not copied into this plugin setting', $settingsHtml, 'settings language fallback copy should explain that site language is read dynamically');
@@ -4480,6 +4580,7 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<th scope="row">Public site search</th><td>Enabled</td>', $html, 'health dashboard should show public search replacement state');
     assert_contains('<th scope="row">wp-admin Posts search</th><td>Disabled</td>', $html, 'health dashboard should show admin search replacement state');
     assert_contains('<th scope="row">Search provider compatibility</th><td>Prefer Language FTS</td>', $html, 'health dashboard should show effective provider compatibility mode');
+    assert_contains('<th scope="row">Field ranking weights</th><td>title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1</td>', $html, 'health dashboard should summarize effective field boost settings');
     assert_contains('<th scope="row">Indexed post types</th><td>page, post</td>', $html, 'health dashboard should show configured indexed post types');
     assert_contains('<th scope="row">Eligible content</th><td>3</td>', $html, 'health dashboard should show total eligible content');
     assert_contains('<th scope="row">Indexed</th><td>1</td>', $html, 'health dashboard should show indexed count');
@@ -6201,6 +6302,78 @@ test_case('runtime post hooks index visible posts immediately and tombstone invi
     }
 });
 
+test_case('saved field boost settings change runtime ranking after reindex', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $titleMatch = (object) [
+        'ID' => 124701,
+        'post_title' => 'rankboostneedle',
+        'post_content' => '',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-20 00:00:00',
+    ];
+    $contentMatch = (object) [
+        'ID' => 124702,
+        'post_title' => 'Body match fixture',
+        'post_content' => '<p>rankboostneedle</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-20 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][124701] = $titleMatch;
+    $GLOBALS['wp_fts_test_posts'][124702] = $contentMatch;
+    update_post_meta(124701, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
+    update_post_meta(124702, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
+
+    $withBoosts = static function (float $titleBoost, float $contentBoost): array {
+        return array_replace(
+            WP_FTS_Plugin::default_settings(),
+            [
+                'field_boosts' => array_replace(
+                    WP_FTS_Plugin::default_settings()['field_boosts'],
+                    [
+                        'title' => $titleBoost,
+                        'content' => $contentBoost,
+                    ]
+                ),
+            ]
+        );
+    };
+
+    try {
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $withBoosts(1.0, 8.0);
+        WP_FTS_Plugin::handle_post_save(124701, $titleMatch, true);
+        WP_FTS_Plugin::handle_post_save(124702, $contentMatch, true);
+        $contentFirst = (new WP_FTS_Searcher(WP_FTS_Plugin::storage(false), WP_FTS_Plugin::runtime_analyzer()))->search('rankboostneedle', [
+            'lang' => 'en',
+            'limit' => 2,
+        ]);
+        assert_same([124702, 124701], array_column($contentFirst, 'doc_id'), 'higher saved content boost should rank the content match first after indexing');
+        $contentMetadata = WP_FTS_Plugin::storage(false)->get_doc_metadata([124702])[124702] ?? [];
+        assert_same(8.0, $contentMetadata['field_boosts']['content'] ?? null, 'runtime indexing should store the effective content boost in metadata');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $withBoosts(8.0, 1.0);
+        WP_FTS_Plugin::handle_post_save(124701, $titleMatch, true);
+        WP_FTS_Plugin::handle_post_save(124702, $contentMatch, true);
+        $titleFirst = (new WP_FTS_Searcher(WP_FTS_Plugin::storage(false), WP_FTS_Plugin::runtime_analyzer()))->search('rankboostneedle', [
+            'lang' => 'en',
+            'limit' => 2,
+        ]);
+        assert_same([124701, 124702], array_column($titleFirst, 'doc_id'), 'higher saved title boost should rank the title match first after reindexing');
+        $titleMetadata = WP_FTS_Plugin::storage(false)->get_doc_metadata([124701])[124701] ?? [];
+        assert_same(8.0, $titleMetadata['field_boosts']['title'] ?? null, 'runtime reindexing should store the changed title boost in metadata');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('disabled auto-index blocks status transition indexing but still tombstones departures', function (): void {
     global $wpdb;
 
@@ -6562,6 +6735,7 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_same('enabled', $settings['public_site_search'] ?? null, 'frontend diagnostics should record public search replacement setting');
         assert_same('OR', $settings['match_mode'] ?? null, 'frontend diagnostics should record match mode setting');
         assert_same('enabled', $settings['prefix_matching'] ?? null, 'frontend diagnostics should record prefix matching setting');
+        assert_same('title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1', $settings['field_boosts'] ?? null, 'frontend diagnostics should summarize effective field boosts');
 
         $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
         assert_true((int) ($counts['candidate_rows'] ?? 0) >= 2, 'frontend diagnostics should count candidate rows');

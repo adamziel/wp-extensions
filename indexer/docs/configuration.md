@@ -4,15 +4,15 @@ Settings > Full-Text Search provides the operator-facing Health, Settings,
 Sandbox, Indexed content, and Analyzer packs tabs. The Settings tab controls
 indexed post types, automatic indexing, front-end and wp-admin Posts search
 replacement, search-provider compatibility, result limits, snippets,
-highlighting, prefix matching, and language fallback defaults. WordPress runtime
-indexing, REST/admin search, the PHP plugin search helper, and WP-CLI use
-`WP_FTS_Plugin::runtime_analyzer()`. Analyzer-pack paths are still configured
-through the `wp_fts_analyzer_options` option or filter, operational internals
-such as schema version and pending queue state are managed by the plugin, and
-selected custom fields can be supplied through an option or filters. More advanced
-configuration is available to PHP callers that instantiate `WP_FTS_Analyzer`,
-`WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or `WP_FTS_Storage_Mysql`
-directly.
+highlighting, prefix matching, field ranking weights, and language fallback
+defaults. WordPress runtime indexing, REST/admin search, the PHP plugin search
+helper, and WP-CLI use `WP_FTS_Plugin::runtime_analyzer()`. Analyzer-pack paths
+are still configured through the `wp_fts_analyzer_options` option or filter,
+operational internals such as schema version and pending queue state are managed
+by the plugin, and selected custom fields can be supplied through an option or
+filters. More advanced configuration is available to PHP callers that
+instantiate `WP_FTS_Analyzer`, `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or
+`WP_FTS_Storage_Mysql` directly.
 
 ## Search Replacement Compatibility
 
@@ -33,6 +33,26 @@ enabled surface; use the `wp_fts_replace_frontend_search` or
 entirely. Request diagnostics include the effective provider compatibility mode
 and record a bailout reason when coexistence mode keeps another provider's
 result.
+
+## Ranking Field Weights
+
+The Settings tab exposes the index-time boosts used for extracted WordPress post
+fields. Higher numbers make matches in that field count more strongly during
+ranking:
+
+| Field | Default | What it covers |
+| --- | ---: | --- |
+| Title | `5.0` | The post title. |
+| Main content | `1.0` | The saved post content. |
+| Excerpt | `2.0` | The saved post excerpt. |
+| Taxonomy terms | `1.5` | Category, tag, and other taxonomy term names. |
+| Selected custom fields | `1.0` | Custom fields selected for indexing. |
+| Rendered-only content | `1.0` | Block-rendered output not already present in saved content. |
+
+These weights are written into the index, not applied as live query-time
+overrides. After changing them, reindex content to make the new ranking weights
+fully apply to existing posts. Programmatic indexing can still pass explicit
+`field_boosts` options to override the saved plugin settings for that call.
 
 ## Languages
 

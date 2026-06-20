@@ -29,9 +29,9 @@ content.
 Settings > Full-Text Search provides Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs. It manages the indexed post types, automatic indexing,
 search replacement surfaces, search-provider compatibility, highlighting,
-snippets, prefix matching, result limits, and language fallback defaults;
-analyzer-pack paths and custom field selection still use the documented options
-and filters.
+snippets, prefix matching, result limits, field ranking weights, and language
+fallback defaults; analyzer-pack paths and custom field selection still use the
+documented options and filters.
 
 ## Quickstart
 
@@ -69,6 +69,18 @@ The output includes WordPress post IDs, BM25 scores, totals, stored metadata,
 and optional snippets. `score` is relative to the current query and language
 partition; it is not a percentage and should not be compared across unrelated
 queries.
+
+## Ranking Field Weights
+
+Settings > Full-Text Search > Settings includes ranking weights for the
+WordPress post fields extracted into the index: title, main content, excerpt,
+taxonomy terms, selected custom fields, and rendered-only content. Higher
+numbers make matches in that field count more strongly during ranking.
+
+The defaults match the extractor defaults: title `5.0`, content `1.0`, excerpt
+`2.0`, taxonomy terms `1.5`, selected custom fields `1.0`, and rendered-only
+content `1.0`. These are index-time weights stored with indexed content, so
+changed weights fully affect existing content only after it is reindexed.
 
 ## Architecture
 

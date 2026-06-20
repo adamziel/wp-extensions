@@ -84,6 +84,42 @@ final class WP_FTS_Plugin
     private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
     private const SETTINGS_SNIPPET_MIN = 40;
     private const SETTINGS_SNIPPET_MAX = 500;
+    private const FIELD_BOOST_MIN = 0.01;
+    private const FIELD_BOOST_MAX = 100.0;
+    private const FIELD_BOOST_DEFAULTS = [
+        'title' => 5.0,
+        'content' => 1.0,
+        'excerpt' => 2.0,
+        'terms' => 1.5,
+        'custom_fields' => 1.0,
+        'rendered' => 1.0,
+    ];
+    private const FIELD_BOOST_LABELS = [
+        'title' => [
+            'label' => 'Title',
+            'description' => 'Matches in the post title.',
+        ],
+        'content' => [
+            'label' => 'Main content',
+            'description' => 'Matches in the main saved post content.',
+        ],
+        'excerpt' => [
+            'label' => 'Excerpt',
+            'description' => 'Matches in the saved post excerpt.',
+        ],
+        'terms' => [
+            'label' => 'Taxonomy terms',
+            'description' => 'Matches in categories, tags, and other taxonomy term names.',
+        ],
+        'custom_fields' => [
+            'label' => 'Selected custom fields',
+            'description' => 'Matches in custom fields selected for indexing.',
+        ],
+        'rendered' => [
+            'label' => 'Rendered-only content',
+            'description' => 'Matches in block-rendered output that is not already in the saved content.',
+        ],
+    ];
     private const SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS = 'prefer_fts';
     private const SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING = 'respect_existing';
     private const DEFAULT_SETTINGS = [
@@ -98,6 +134,7 @@ final class WP_FTS_Plugin
         'prefix_matching' => true,
         'result_limit' => 10,
         'language_fallback' => true,
+        'field_boosts' => self::FIELD_BOOST_DEFAULTS,
     ];
     private const VISIBILITY_REFILL_MIN_BATCH = 10;
     private const VISIBILITY_REFILL_MULTIPLIER = 4;
@@ -936,6 +973,7 @@ final class WP_FTS_Plugin
             'snippet_length' => (int) ($settings['snippet_length'] ?? self::FRONTEND_SNIPPET_LENGTH),
             'result_limit' => (int) ($settings['result_limit'] ?? 10),
             'language_fallback' => !empty($settings['language_fallback']) ? 'enabled' : 'disabled',
+            'field_boosts' => self::field_boost_summary($settings['field_boosts'] ?? []),
         ];
 
         foreach ($overrides as $key => $value) {
@@ -1989,6 +2027,7 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Public site search', !empty($settings['replace_frontend_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('wp-admin Posts search', !empty($settings['replace_admin_post_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('Search provider compatibility', self::search_provider_compatibility_label((string) $settings['search_provider_compatibility']));
+        self::render_health_status_row('Field ranking weights', self::field_boost_summary($settings['field_boosts'] ?? []));
         self::render_health_status_row('Indexed post types', self::health_post_type_summary($settings['index_post_types']));
         self::render_health_status_row('Eligible content', (string) $counts['total_eligible']);
         self::render_health_status_row('Indexed', (string) $counts['indexed']);
@@ -2034,6 +2073,32 @@ final class WP_FTS_Plugin
         sort($post_types, SORT_STRING);
 
         return $post_types === [] ? 'No post types selected' : implode(', ', $post_types);
+    }
+
+    /**
+     * @param mixed $boosts
+     * @return array<string,float>
+     */
+    private static function settings_field_boosts(mixed $boosts): array
+    {
+        return self::sanitize_field_boosts($boosts);
+    }
+
+    private static function field_boost_summary(mixed $boosts): string
+    {
+        $parts = [];
+        foreach (self::settings_field_boosts($boosts) as $field => $boost) {
+            $parts[] = $field . '=' . self::format_field_boost($boost);
+        }
+
+        return implode(', ', $parts);
+    }
+
+    private static function format_field_boost(float $boost): string
+    {
+        $formatted = rtrim(rtrim(number_format($boost, 2, '.', ''), '0'), '.');
+
+        return $formatted !== '' ? $formatted : '0';
     }
 
     /**
@@ -2183,6 +2248,11 @@ final class WP_FTS_Plugin
         self::render_settings_checkbox_row('highlight', 'Highlight matches in search result excerpts', $settings['highlight'], 'Highlights matching words in generated excerpts so readers can see why each result matched.');
         echo '</tbody></table>';
 
+        self::render_settings_section_heading('Ranking weights', 'Higher numbers make matches in that field count more strongly. Changed weights affect content when it is reindexed, because weights are stored in the index.');
+        echo '<table class="form-table" role="presentation"><tbody>';
+        self::render_settings_field_boost_rows($settings);
+        echo '</tbody></table>';
+
         self::render_settings_section_heading('Language handling', 'Language-aware matching depends on the query language, content language, and the analyzer packs available for this site.');
         echo '<table class="form-table" role="presentation"><tbody>';
         self::render_settings_language_fallback_row($settings);
@@ -2200,6 +2270,21 @@ final class WP_FTS_Plugin
     {
         echo '<h3>' . self::esc_html($title) . '</h3>';
         echo '<p>' . self::esc_html($description) . '</p>';
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     */
+    private static function render_settings_field_boost_rows(array $settings): void
+    {
+        $boosts = self::settings_field_boosts($settings['field_boosts'] ?? []);
+        foreach (self::FIELD_BOOST_LABELS as $field => $copy) {
+            $id = 'wp-fts-settings-field-boost-' . self::sanitize_key($field);
+            echo '<tr><th scope="row"><label for="' . self::esc_attr($id) . '">' . self::esc_html($copy['label']) . '</label></th><td>';
+            echo '<input id="' . self::esc_attr($id) . '" type="number" min="' . self::esc_attr((string) self::FIELD_BOOST_MIN) . '" max="' . self::esc_attr((string) self::FIELD_BOOST_MAX) . '" step="0.1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[field_boosts][' . self::esc_attr($field) . ']" value="' . self::esc_attr(self::format_field_boost((float) ($boosts[$field] ?? self::FIELD_BOOST_DEFAULTS[$field]))) . '">';
+            echo '<p class="description">' . self::esc_html($copy['description']) . '</p>';
+            echo '</td></tr>';
+        }
     }
 
     private static function render_settings_referer_field(string $tab): void
@@ -2526,7 +2611,37 @@ final class WP_FTS_Plugin
             'prefix_matching' => array_key_exists('prefix_matching', $value) ? self::truthy_admin_value($value['prefix_matching']) : $defaults['prefix_matching'],
             'result_limit' => self::clamp_int($value['result_limit'] ?? $defaults['result_limit'], 1, self::MAX_SEARCH_LIMIT),
             'language_fallback' => array_key_exists('language_fallback', $value) ? self::truthy_admin_value($value['language_fallback']) : $defaults['language_fallback'],
+            'field_boosts' => self::sanitize_field_boosts($value['field_boosts'] ?? []),
         ];
+    }
+
+    /**
+     * @param mixed $value
+     * @return array<string,float>
+     */
+    private static function sanitize_field_boosts(mixed $value): array
+    {
+        $value = is_array($value) ? $value : [];
+        $boosts = [];
+        foreach (self::FIELD_BOOST_DEFAULTS as $field => $default) {
+            $boosts[$field] = self::sanitize_field_boost_value($value[$field] ?? null, $default);
+        }
+
+        return $boosts;
+    }
+
+    private static function sanitize_field_boost_value(mixed $value, float $default): float
+    {
+        if (!is_scalar($value) || !is_numeric($value)) {
+            return $default;
+        }
+
+        $boost = (float) $value;
+        if (!is_finite($boost) || $boost <= 0.0) {
+            return $default;
+        }
+
+        return self::clamp_float($boost, self::FIELD_BOOST_MIN, self::FIELD_BOOST_MAX);
     }
 
     private static function sanitize_search_provider_compatibility(mixed $value, string $default): string
@@ -2622,7 +2737,8 @@ final class WP_FTS_Plugin
      *   match_mode:string,
      *   prefix_matching:bool,
      *   result_limit:int,
-     *   language_fallback:bool
+     *   language_fallback:bool,
+     *   field_boosts:array<string,float>
      * }
      */
     private static function settings(): array
@@ -2790,6 +2906,9 @@ final class WP_FTS_Plugin
         $options = $opts;
         $site_language = self::site_language();
         $options['default_lang'] ??= $site_language;
+        if (!array_key_exists('field_boosts', $options)) {
+            $options['field_boosts'] = self::settings_field_boosts(self::settings()['field_boosts'] ?? []);
+        }
 
         if (WP_FTS_TermNamespace::language_from_options($options, null, ['lang', 'language', 'primary_lang', 'document_lang']) === null) {
             $metadata_language = self::wordpress_post_language($post);
