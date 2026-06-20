@@ -162,7 +162,92 @@ final class WP_FTS_WPCLI_Command
             $fields[] = 'snippet';
         }
 
-        WP_CLI\Utils\format_items('table', $results, $fields);
+        $this->format_items('table', $results, $fields);
+    }
+
+    /**
+     * Show read-only indexing lifecycle status.
+     *
+     * ## OPTIONS
+     *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function status(array $args, array $assoc_args): void
+    {
+        $this->output_assoc(WP_FTS_Plugin::operator_status(), $assoc_args);
+    }
+
+    /**
+     * Repair the FTS schema without indexing content.
+     *
+     * ## OPTIONS
+     *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function repair(array $args, array $assoc_args): void
+    {
+        $schema = WP_FTS_Plugin::repair_schema();
+        $this->output_assoc([
+            'schema_status' => $schema['status'],
+            'schema_version' => $schema['stored_version'],
+            'expected_schema_version' => $schema['expected_version'],
+        ], $assoc_args);
+    }
+
+    /**
+     * Run one bounded manual indexing batch.
+     *
+     * ## OPTIONS
+     *
+     * [--batch_size=<n>]
+     * : Maximum posts to process in this command. Default: plugin manual batch setting.
+     *
+     * [--time_budget=<seconds>]
+     * : Time budget for this batch. Default: plugin manual time-budget setting.
+     *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function process_batch(array $args, array $assoc_args): void
+    {
+        $options = [];
+        $batchSize = $this->assoc_arg($assoc_args, ['batch_size', 'batch-size'], null);
+        if ($batchSize !== null) {
+            $options['batch_size'] = $this->positive_int_arg($batchSize, WP_FTS_Plugin::DEFAULT_MANUAL_INDEX_BATCH_SIZE);
+        }
+
+        $timeBudget = $this->assoc_arg($assoc_args, ['time_budget', 'time-budget'], null);
+        if ($timeBudget !== null) {
+            $options['time_budget'] = $this->non_negative_float_arg($timeBudget, 0.0);
+        }
+
+        $summary = WP_FTS_Plugin::process_manual_index_batch($options);
+        $health = WP_FTS_Plugin::search_health();
+        $this->output_assoc([
+            'mode' => is_scalar($summary['mode'] ?? null) ? (string) $summary['mode'] : 'manual',
+            'batch_size' => max(0, (int) ($summary['batch_size'] ?? 0)),
+            'processed' => max(0, (int) ($summary['processed'] ?? 0)),
+            'queue_processed' => max(0, (int) ($summary['queue_processed'] ?? 0)),
+            'backfill_processed' => max(0, (int) ($summary['backfill_processed'] ?? 0)),
+            'skipped_locked' => (bool) ($summary['skipped_locked'] ?? false),
+            'stopped_by_budget' => (bool) ($summary['stopped_by_budget'] ?? false),
+            'has_more' => (bool) ($health['has_more'] ?? $summary['has_more'] ?? false),
+            'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
+            'last_indexed_post_id' => max(0, (int) ($summary['last_indexed_post_id'] ?? 0)),
+            'last_indexed_post_title' => is_scalar($summary['last_indexed_post_title'] ?? null) ? (string) $summary['last_indexed_post_title'] : '',
+            'last_indexed_at' => is_scalar($summary['last_indexed_at'] ?? null) ? (string) $summary['last_indexed_at'] : '',
+        ], $assoc_args);
     }
 
     /**
@@ -450,6 +535,102 @@ final class WP_FTS_WPCLI_Command
         }
 
         WP_CLI::success("Imported UniMorph lemma pack {$packId} for {$language}: {$manifestPath}. Runtime analyzer options were not changed.");
+    }
+
+    /**
+     * Emit an associative summary as JSON or as a human-readable field list.
+     *
+     * @param array<string,mixed> $data
+     * @param array<string,mixed> $assoc_args
+     */
+    private function output_assoc(array $data, array $assoc_args): void
+    {
+        $format = (string) $this->assoc_arg($assoc_args, ['format'], 'table');
+        if ($format === 'json') {
+            $this->line($this->json_payload($data));
+            return;
+        }
+
+        $rows = [];
+        foreach ($data as $field => $value) {
+            $rows[] = [
+                'field' => (string) $field,
+                'value' => $this->format_cli_value($value),
+            ];
+        }
+
+        $this->format_items($format, $rows, ['field', 'value'], false);
+    }
+
+    /**
+     * Format rows through WP-CLI when available, with a small harness fallback.
+     *
+     * @param array<int,array<string,mixed>> $items
+     * @param string[] $fields
+     */
+    private function format_items(string $format, array $items, array $fields, bool $allow_harness_formatter = true): void
+    {
+        if (
+            function_exists('WP_CLI\\Utils\\format_items')
+            && ($allow_harness_formatter || is_callable(['WP_CLI', 'line']))
+        ) {
+            WP_CLI\Utils\format_items($format, $items, $fields);
+            return;
+        }
+
+        if ($format === 'json') {
+            $this->line($this->json_payload($items));
+            return;
+        }
+
+        $this->line(implode("\t", $fields));
+        foreach ($items as $item) {
+            $values = [];
+            foreach ($fields as $field) {
+                $values[] = $this->format_cli_value($item[$field] ?? '');
+            }
+            $this->line(implode("\t", $values));
+        }
+    }
+
+    private function line(string $message): void
+    {
+        if (class_exists('WP_CLI') && is_callable(['WP_CLI', 'line'])) {
+            WP_CLI::line($message);
+            return;
+        }
+
+        echo $message . PHP_EOL;
+    }
+
+    /**
+     * @param array<mixed> $payload
+     */
+    private function json_payload(array $payload): string
+    {
+        $json = function_exists('wp_json_encode')
+            ? wp_json_encode($payload, JSON_UNESCAPED_SLASHES)
+            : json_encode($payload, JSON_UNESCAPED_SLASHES);
+
+        return is_string($json) ? $json : '{}';
+    }
+
+    private function format_cli_value(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? 'yes' : 'no';
+        }
+        if ($value === null) {
+            return '';
+        }
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+        if (is_array($value)) {
+            return $this->json_payload($value);
+        }
+
+        return '';
     }
 
     /**
@@ -774,5 +955,14 @@ LIMIT %d",
     {
         $number = is_numeric($value) ? (int) $value : $fallback;
         return max(0, $number);
+    }
+
+    /**
+     * Parse a floating-point option and clamp it to zero or greater.
+     */
+    private function non_negative_float_arg(mixed $value, float $fallback): float
+    {
+        $number = is_numeric($value) ? (float) $value : $fallback;
+        return max(0.0, $number);
     }
 }

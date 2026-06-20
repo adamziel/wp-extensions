@@ -241,6 +241,16 @@ wp fts reindex --post_type=post,page --post_status=publish --lang=pl-PL
 # Limit a smoke or catch-up run.
 wp fts reindex --limit=100 --batch_size=25
 
+# Inspect lifecycle status without indexing or mutating state.
+wp fts status
+wp fts status --format=json
+
+# Repair schema without indexing content.
+wp fts repair
+
+# Advance one bounded queue/backfill batch under operator control.
+wp fts process-batch --batch_size=100 --time_budget=20
+
 # Require every analyzed query term to match.
 wp fts search "fast durable search" --mode=AND --lang=en --limit=10
 

@@ -519,6 +519,88 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Return read-only lifecycle state for operator surfaces.
+     *
+     * @return array<string,mixed>
+     */
+    public static function operator_status(): array
+    {
+        $schema = self::schema_status();
+        $health = self::search_health();
+        $lock = self::index_lock_status();
+        $eligible_count = self::count_eligible_content();
+        $indexed_count = self::count_indexed_eligible_content();
+        $last_indexed_post_id = max(0, (int) ($health['last_indexed_post_id'] ?? 0));
+        $last_indexed_title = is_scalar($health['last_indexed_post_title'] ?? null)
+            ? (string) $health['last_indexed_post_title']
+            : '';
+
+        return [
+            'schema_status' => $schema['status'],
+            'schema_version' => $schema['stored_version'],
+            'expected_schema_version' => $schema['expected_version'],
+            'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
+            'lock_state' => $lock['state'],
+            'lock_active' => (bool) $lock['active'],
+            'lock_mode' => $lock['mode'],
+            'lock_started_at' => $lock['started_at'],
+            'lock_expires_at' => $lock['expires_at'],
+            'has_more' => (bool) ($health['has_more'] ?? false),
+            'last_mode' => is_scalar($health['last_mode'] ?? null) ? (string) $health['last_mode'] : '',
+            'last_run_at' => is_scalar($health['last_run_at'] ?? null) ? (string) $health['last_run_at'] : '',
+            'last_batch_processed' => max(0, (int) ($health['last_batch_processed'] ?? 0)),
+            'last_batch_queue_processed' => max(0, (int) ($health['last_batch_queue_processed'] ?? 0)),
+            'last_batch_backfill_processed' => max(0, (int) ($health['last_batch_backfill_processed'] ?? 0)),
+            'last_skipped_locked' => (bool) ($health['last_skipped_locked'] ?? false),
+            'last_stopped_by_budget' => (bool) ($health['last_stopped_by_budget'] ?? false),
+            'last_indexed_post' => $last_indexed_post_id > 0
+                ? trim($last_indexed_title . ' (ID ' . $last_indexed_post_id . ')')
+                : '',
+            'last_indexed_post_id' => $last_indexed_post_id,
+            'last_indexed_post_title' => $last_indexed_title,
+            'last_indexed_at' => is_scalar($health['last_indexed_at'] ?? null) ? (string) $health['last_indexed_at'] : '',
+            'eligible_count' => $eligible_count,
+            'indexed_count' => $indexed_count,
+            'remaining_count' => max(0, $eligible_count - $indexed_count),
+        ];
+    }
+
+    /**
+     * Idempotently repair schema and return the resulting schema state.
+     *
+     * @return array{status:string,stored_version:int,expected_version:int}
+     */
+    public static function repair_schema(): array
+    {
+        self::upgrade_schema();
+
+        return self::schema_status();
+    }
+
+    /**
+     * Return schema status without repairing or indexing.
+     *
+     * @return array{status:string,stored_version:int,expected_version:int}
+     */
+    public static function schema_status(): array
+    {
+        $raw = self::get_option(self::SCHEMA_VERSION_OPTION, null);
+        $stored_version = self::schema_version_from_option($raw);
+        $status = 'stale';
+        if (self::option_matches_schema_version($raw)) {
+            $status = 'current';
+        } elseif ($raw === null || $raw === false || $raw === '') {
+            $status = 'missing';
+        }
+
+        return [
+            'status' => $status,
+            'stored_version' => $stored_version,
+            'expected_version' => self::SCHEMA_VERSION,
+        ];
+    }
+
+    /**
      * Return bounded aggregate counts for the admin Health tab.
      *
      * @return array{total_eligible:int,indexed:int,pending:int,remaining:int}
@@ -7014,12 +7096,56 @@ WHERE p.post_password = ''
         return self::lock_payload_active(self::get_option(self::INDEX_LOCK_OPTION, null), time());
     }
 
+    /**
+     * Return lock state without exposing the lock token.
+     *
+     * @return array{state:string,active:bool,mode:string,started_at:string,expires_at:string}
+     */
+    private static function index_lock_status(): array
+    {
+        $payload = self::get_option(self::INDEX_LOCK_OPTION, null);
+        if (!is_array($payload)) {
+            return [
+                'state' => 'none',
+                'active' => false,
+                'mode' => '',
+                'started_at' => '',
+                'expires_at' => '',
+            ];
+        }
+
+        $now = time();
+        $active = self::lock_payload_active($payload, $now);
+
+        return [
+            'state' => $active ? 'active' : 'expired',
+            'active' => $active,
+            'mode' => is_scalar($payload['mode'] ?? null) ? (string) $payload['mode'] : '',
+            'started_at' => self::lock_timestamp_display($payload['started_at'] ?? null),
+            'expires_at' => self::lock_timestamp_display($payload['expires_at'] ?? null),
+        ];
+    }
+
     private static function lock_payload_active(mixed $payload, int $now): bool
     {
         return is_array($payload)
             && isset($payload['expires_at'])
             && is_scalar($payload['expires_at'])
             && (int) $payload['expires_at'] > $now;
+    }
+
+    private static function lock_timestamp_display(mixed $value): string
+    {
+        if (!is_scalar($value) || !is_numeric($value)) {
+            return '';
+        }
+
+        $timestamp = (int) $value;
+        if ($timestamp <= 0) {
+            return '';
+        }
+
+        return gmdate('Y-m-d H:i:s', $timestamp);
     }
 
     /**
@@ -7393,6 +7519,11 @@ WHERE p.post_password = ''
     private static function option_matches_schema_version(mixed $value): bool
     {
         return is_scalar($value) && (int) $value === self::SCHEMA_VERSION;
+    }
+
+    private static function schema_version_from_option(mixed $value): int
+    {
+        return is_scalar($value) && is_numeric($value) ? max(0, (int) $value) : 0;
     }
 
     /**

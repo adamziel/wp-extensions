@@ -3744,6 +3744,33 @@ function wp_fts_test_capture_admin_settings_tab(?string $tab = null): string
     }
 }
 
+function wp_fts_test_capture_cli(callable $callback): string
+{
+    ob_start();
+    try {
+        $callback();
+        $output = ob_get_clean();
+
+        return is_string($output) ? $output : '';
+    } catch (Throwable $e) {
+        ob_end_clean();
+        throw $e;
+    }
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function wp_fts_test_decode_cli_json_object(string $raw): array
+{
+    $payload = json_decode(trim($raw), true, 512, JSON_THROW_ON_ERROR);
+    if (!is_array($payload)) {
+        throw new WP_FTS_TestFailure('CLI JSON did not decode to an object: ' . $raw);
+    }
+
+    return $payload;
+}
+
 /**
  * @param array<string,mixed> $post
  * @param array<string,mixed> $get
@@ -5675,6 +5702,213 @@ test_case('activation repairs schema stores version and surfaces database failur
         $wpdb = $oldWpdb;
     }
     assert_true($thrown, 'activation should throw on schema write failure');
+});
+
+test_case('wp-cli status reports lifecycle state without mutating index data', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $now = time();
+    $fake->postRows = [
+        wp_fts_test_backfill_post(701, 'post', 'publish', 'CLI Status Indexed'),
+        wp_fts_test_backfill_post(702, 'post', 'publish', 'CLI Status Queued'),
+    ];
+    $fake->docs[701] = [
+        'lang' => 'en',
+        'doc_len' => 3,
+        'content_hash' => 'status-hash',
+        'is_deleted' => 0,
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [702];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'do-not-expose',
+        'mode' => 'manual',
+        'started_at' => $now - 10,
+        'expires_at' => $now + 290,
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
+        'last_batch_processed' => 4,
+        'last_batch_queue_processed' => 1,
+        'last_batch_backfill_processed' => 3,
+        'has_more' => false,
+        'last_indexed_post_id' => 701,
+        'last_indexed_post_title' => 'CLI Status Indexed',
+        'last_indexed_at' => '2026-06-19 10:00:00',
+        'last_skipped_locked' => false,
+        'last_stopped_by_budget' => false,
+        'last_mode' => 'manual',
+        'last_run_at' => '2026-06-19 10:01:00',
+    ];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $human = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->status([], []);
+        });
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->status([], ['format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains("field\tvalue", $human, 'default status output should be a human-readable field list');
+    assert_contains("pending_queue_count\t1", $human, 'default status output should include queue count');
+    assert_same('current', $payload['schema_status'] ?? null, 'status JSON should report current schema status');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'status JSON should report stored schema version');
+    assert_same(1, $payload['pending_queue_count'] ?? null, 'status JSON should report pending queue count');
+    assert_same('active', $payload['lock_state'] ?? null, 'status JSON should report lock state without exposing the token');
+    assert_same(true, $payload['lock_active'] ?? null, 'status JSON should report active lock boolean');
+    assert_true(!array_key_exists('token', $payload), 'status JSON should not expose lock token');
+    assert_same(true, $payload['has_more'] ?? null, 'status JSON should include has-more state from queued work');
+    assert_same('manual', $payload['last_mode'] ?? null, 'status JSON should report last run mode');
+    assert_same('2026-06-19 10:01:00', $payload['last_run_at'] ?? null, 'status JSON should report last run time');
+    assert_same(4, $payload['last_batch_processed'] ?? null, 'status JSON should report last batch total');
+    assert_same(1, $payload['last_batch_queue_processed'] ?? null, 'status JSON should report last batch queue count');
+    assert_same(3, $payload['last_batch_backfill_processed'] ?? null, 'status JSON should report last batch backfill count');
+    assert_same('CLI Status Indexed (ID 701)', $payload['last_indexed_post'] ?? null, 'status JSON should report last indexed post label');
+    assert_same(2, $payload['eligible_count'] ?? null, 'status JSON should report eligible count');
+    assert_same(1, $payload['indexed_count'] ?? null, 'status JSON should report indexed eligible count');
+    assert_same(1, $payload['remaining_count'] ?? null, 'status JSON should report remaining eligible count');
+    assert_same([], $fake->queries, 'status should not run schema repair or storage writes');
+    assert_same([702], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'status should leave queue state unchanged');
+    assert_same('do-not-expose', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'status should leave lock state unchanged');
+    assert_same(1, count($fake->docs), 'status should not index additional content');
+});
+
+test_case('wp-cli repair runs schema upgrade without indexing content', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    wp_fts_test_seed_backfill_posts($fake, 3);
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->repair([], ['format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('current', $payload['schema_status'] ?? null, 'repair should report current schema status after upgrade');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'repair should report stored schema version after upgrade');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'repair should persist schema version');
+    assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'repair should call the schema creation/repair path');
+    assert_same([], $fake->docs, 'repair should not index existing content');
+    assert_same([], $fake->terms, 'repair should not write FTS terms');
+});
+
+test_case('wp-cli process-batch runs one bounded manual batch with queue and backfill counts', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_posts'][81] = wp_fts_test_backfill_post(81, 'post', 'publish', 'CLI Queued Post');
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [81];
+    wp_fts_test_seed_backfill_posts($fake, 4, 101);
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->process_batch([], [
+                'batch_size' => 2,
+                'format' => 'json',
+            ]);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('manual', $payload['mode'] ?? null, 'process-batch should use the manual batch path');
+    assert_same(2, $payload['batch_size'] ?? null, 'process-batch should report the requested bounded batch size');
+    assert_same(2, $payload['processed'] ?? null, 'process-batch should process only one bounded batch');
+    assert_same(1, $payload['queue_processed'] ?? null, 'process-batch should report queued work processed');
+    assert_same(1, $payload['backfill_processed'] ?? null, 'process-batch should report backfill work processed');
+    assert_same(false, $payload['skipped_locked'] ?? null, 'process-batch should report no lock skip when it runs');
+    assert_same(false, $payload['stopped_by_budget'] ?? null, 'process-batch should report no budget stop when budget remains');
+    assert_same(true, $payload['has_more'] ?? null, 'process-batch should report remaining work after a partial batch');
+    assert_same(0, $payload['pending_queue_count'] ?? null, 'process-batch should report queue drained after processing the queued item');
+    assert_same(2, count($fake->docs), 'process-batch should not drain all available content');
+    assert_true(isset($fake->docs[81]), 'process-batch should index the queued post first');
+    assert_true(isset($fake->docs[101]), 'process-batch should use remaining capacity for one backfill post');
+    assert_true(!isset($fake->docs[102]), 'process-batch should leave later backfill posts for another invocation');
+});
+
+test_case('wp-cli process-batch respects active indexing lock', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'active-worker',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    wp_fts_test_seed_backfill_posts($fake, 2, 201);
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->process_batch([], ['format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(0, $payload['processed'] ?? null, 'locked process-batch should not process content');
+    assert_same(true, $payload['skipped_locked'] ?? null, 'locked process-batch should report lock skip');
+    assert_same(true, $payload['has_more'] ?? null, 'locked process-batch should preserve has-more state');
+    assert_same([], $fake->docs, 'locked process-batch should not index content');
+    assert_same('active-worker', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'locked process-batch should leave the active lock untouched');
+});
+
+test_case('wp-cli process-batch reports budget stop without draining content', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    wp_fts_test_seed_backfill_posts($fake, 2, 301);
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->process_batch([], [
+                'batch_size' => 2,
+                'time_budget' => 0,
+                'format' => 'json',
+            ]);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(0, $payload['processed'] ?? null, 'budget-stopped process-batch should not process content after an exhausted budget');
+    assert_same(true, $payload['stopped_by_budget'] ?? null, 'budget-stopped process-batch should report budget stop');
+    assert_same(true, $payload['has_more'] ?? null, 'budget-stopped process-batch should report remaining work');
+    assert_same([], $fake->docs, 'budget-stopped process-batch should not drain content');
 });
 
 test_case('scheduled indexing cron backfills only the default batch and reschedules remaining work', function (): void {

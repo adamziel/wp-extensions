@@ -14,7 +14,15 @@ state before indexing or tombstoning posts.
 To explicitly repair the schema without indexing content, run:
 
 ```sh
-wp eval 'WP_FTS_Plugin::upgrade_schema();'
+wp fts repair
+```
+
+To inspect schema, queue, lock, last-batch, and remaining-work state without
+mutating the index, run:
+
+```sh
+wp fts status
+wp fts status --format=json
 ```
 
 To create or repair the schema and index content, run:
@@ -165,10 +173,23 @@ Optimize removes tombstoned document IDs from posting rows, deletes empty term
 rows, purges tombstoned document rows, and rebuilds per-language metadata from
 active document lengths.
 
-There is no dedicated WP-CLI `repair` subcommand. Activation and runtime storage
-access run schema repair through the stored version path, and operators can call
-`WP_FTS_Plugin::upgrade_schema()` explicitly. If collection metadata or snippet
-metadata looks wrong, run:
+Use the repair command when schema state is missing or stale and you do not want
+to index content:
+
+```sh
+wp fts repair
+```
+
+Use one manual lifecycle batch when queue or backfill work should advance under
+operator control without draining the whole site in one command:
+
+```sh
+wp fts process-batch --batch_size=100 --time_budget=20
+```
+
+Repeat `wp fts process-batch` until `wp fts status` reports `has_more` as false
+if you intentionally want to catch up through bounded operator steps. If
+collection metadata or snippet metadata looks wrong, run:
 
 ```sh
 wp fts optimize
