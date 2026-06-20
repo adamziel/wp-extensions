@@ -14,6 +14,10 @@ final class WP_FTS_Searcher
     private const DEFAULT_FAST_MODE_CANDIDATE_CAP = 1000;
     private const DEFAULT_PREFIX_MIN_LENGTH = 4;
     private const DEFAULT_PREFIX_MAX_TERMS = 64;
+    private const EXPLAIN_MAX_TERMS = 12;
+    private const EXPLAIN_MAX_RESULT_ROWS = 20;
+    private const EXPLAIN_MAX_MATCHES_PER_RESULT = 8;
+    private const EXPLAIN_MAX_TEXT_BYTES = 96;
 
     /**
      * @param WP_FTS_Storage $storage Storage backend containing postings and
@@ -54,10 +58,13 @@ final class WP_FTS_Searcher
      * configured threshold. Pass `exact_top_k`, `exact`, or an explicit false fast
      * option to force exact scoring. Word-beginning prefix expansion can be
      * controlled with `prefix_matching`; phrase search requires a
-     * `search_extension` callback for storage-specific matching.
+     * `search_extension` callback for storage-specific matching. `explain` or
+     * `debug` adds a bounded diagnostics payload only to `include_total`
+     * responses. `explain_result_matches` can disable the per-result document
+     * term lookup when a caller must defer that work.
      *
      * @param array<string,mixed> $opts
-     * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>}
+     * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
      *         Results sorted by exact/fallback rank, descending score, and
      *         ascending doc id for ties, or a pagination payload when
      *         `include_total` is true.
@@ -78,22 +85,38 @@ final class WP_FTS_Searcher
         $limit = max(1, (int) ($opts['limit'] ?? 10));
         $offset = max(0, (int) ($opts['offset'] ?? 0));
 
-        $groups = $this->build_query_groups($query, $opts);
+        $queryPlan = $this->build_query_plan($query, $opts);
+        $queryPlan['match_mode'] = $mode;
+        $groups = $queryPlan['groups'];
         $responseLang = $this->response_query_language($opts, $groups);
         if ($groups === []) {
-            return $this->format_response([], 0, $opts, $responseLang);
+            $explain = $this->explain_requested($opts)
+                ? $this->build_explain_payload($queryPlan, [
+                    'mode' => 'exact',
+                    'source' => 'empty_query',
+                    'estimated_candidates' => null,
+                    'threshold' => null,
+                    'candidate_cap' => null,
+                ], $this->empty_score_stats(), [], 0, true)
+                : null;
+
+            return $this->format_response([], 0, $opts, $responseLang, $explain);
         }
 
         $metadataFilter = $this->has_metadata_filters($opts) ? $this->metadata_filter_values($opts) : null;
         $useBoundedTopK = $this->can_use_bounded_top_k($opts, $offset);
-        $candidateCap = $this->fast_candidate_cap($opts, $limit + $offset, $groups, $mode, $metadataFilter);
-        $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $candidateCap);
+        $fastMode = $this->resolve_fast_mode($opts, $limit + $offset, $groups, $mode, $metadataFilter);
+        $scoreStats = $this->empty_score_stats();
+        $results = $this->score_query_groups($groups, $mode, $useBoundedTopK ? $limit : null, $metadataFilter, $fastMode['candidate_cap'], $scoreStats);
         if (!$useBoundedTopK) {
             usort($results, [self::class, 'compare_ranked_results']);
         }
 
         $total = count($results);
         $page = $useBoundedTopK ? $results : array_slice($results, $offset, $limit);
+        $resultExplain = $this->explain_requested($opts) && $this->explain_result_matches_requested($opts)
+            ? $this->explain_result_matches($page, $groups)
+            : [];
         if ($this->should_enrich_results($opts) && $page !== []) {
             $pageIds = array_column($page, 'doc_id');
             $pageMetadata = WP_FTS_StorageCompat::get_doc_metadata($this->storage, $pageIds);
@@ -102,7 +125,11 @@ final class WP_FTS_Searcher
 
         $this->strip_internal_rank($page);
 
-        return $this->format_response($page, $total, $opts, $responseLang);
+        $explain = $this->explain_requested($opts)
+            ? $this->build_explain_payload($queryPlan, $fastMode, $scoreStats, $resultExplain, $total, $fastMode['candidate_cap'] === null)
+            : null;
+
+        return $this->format_response($page, $total, $opts, $responseLang, $explain);
     }
 
     /**
@@ -126,16 +153,21 @@ final class WP_FTS_Searcher
         string $mode,
         ?int $topLimit = null,
         ?array $metadataFilter = null,
-        ?int $candidateCap = null
+        ?int $candidateCap = null,
+        ?array &$stats = null
     ): array
     {
+        $stats = $this->empty_score_stats();
         $termsByKey = $this->terms_by_key($groups);
+        $stats['query_terms'] = count($termsByKey);
 
         if ($termsByKey === []) {
             return [];
         }
 
         $postingsByTerm = WP_FTS_StorageCompat::get_postings($this->storage, array_keys($termsByKey), $candidateCap);
+        $stats['posting_terms_fetched'] = count($postingsByTerm);
+        $stats['candidate_rows_fetched'] = $this->posting_row_count($postingsByTerm, $termsByKey);
         if ($postingsByTerm === []) {
             return [];
         }
@@ -150,6 +182,7 @@ final class WP_FTS_Searcher
                     }
                 }
                 if (!$hasAvailableTerm) {
+                    $stats['candidate_rows_considered'] = $stats['candidate_rows_fetched'];
                     return [];
                 }
             }
@@ -186,6 +219,8 @@ final class WP_FTS_Searcher
                 break;
             }
         }
+        $stats['candidate_rows_considered'] = $this->posting_row_count($decodedByTerm, $termsByKey);
+        $stats['candidate_docs_considered'] = count($allCandidateDocIds);
 
         if ($allCandidateDocIds === []) {
             return [];
@@ -200,6 +235,7 @@ final class WP_FTS_Searcher
         if ($candidateCap !== null) {
             $scoringDocIds = $this->cap_doc_id_set($scoringDocIds, $candidateCap);
         }
+        $stats['candidate_docs_scored'] = count($scoringDocIds);
 
         // Default IDF stays based on the full active posting lists, not on the
         // later AND/metadata-restricted scoring set. Fast mode uses an approximate
@@ -250,8 +286,10 @@ final class WP_FTS_Searcher
             );
             $scoringDocIds = array_fill_keys($matchingDocIds, true);
             if ($scoringDocIds === []) {
+                $stats['candidate_docs_scored'] = 0;
                 return [];
             }
+            $stats['candidate_docs_scored'] = count($scoringDocIds);
         }
 
         /** @var array<string,array{lang:string,doc_count:int,avg_doc_len:float,idf:float,groups:array<int,int>,min_rank:int,max_rank:int,multiplier:float}> $scoringTerms */
@@ -298,8 +336,10 @@ final class WP_FTS_Searcher
             ];
         }
         if ($scoringTerms === []) {
+            $stats['scoring_terms'] = 0;
             return [];
         }
+        $stats['scoring_terms'] = count($scoringTerms);
 
         /** @var array<int,float> $scores */
         $scores = [];
@@ -356,7 +396,26 @@ final class WP_FTS_Searcher
             }
         }
 
+        $stats['scored_results'] = count($results);
+
         return $results;
+    }
+
+    /**
+     * @return array{query_terms:int,posting_terms_fetched:int,candidate_rows_fetched:int,candidate_rows_considered:int,candidate_docs_considered:int,candidate_docs_scored:int,scoring_terms:int,scored_results:int}
+     */
+    private function empty_score_stats(): array
+    {
+        return [
+            'query_terms' => 0,
+            'posting_terms_fetched' => 0,
+            'candidate_rows_fetched' => 0,
+            'candidate_rows_considered' => 0,
+            'candidate_docs_considered' => 0,
+            'candidate_docs_scored' => 0,
+            'scoring_terms' => 0,
+            'scored_results' => 0,
+        ];
     }
 
     /**
@@ -601,34 +660,66 @@ final class WP_FTS_Searcher
      * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
      * @param array{post_types:string[],post_statuses:string[],date_after:?string,date_before:?string}|null $metadataFilter
      */
-    private function fast_candidate_cap(
+    private function resolve_fast_mode(
         array $opts,
         int $minimumCandidates,
         array $groups,
         string $mode,
         ?array $metadataFilter
-    ): ?int
+    ): array
     {
+        $threshold = null;
+        $estimatedCandidates = null;
         if ($this->explicit_exact_top_k_requested($opts)) {
-            return null;
+            return [
+                'mode' => 'exact',
+                'source' => 'forced_exact',
+                'estimated_candidates' => null,
+                'threshold' => null,
+                'candidate_cap' => null,
+            ];
         }
 
         $fastTopK = $this->explicit_fast_top_k_value($opts);
         if ($fastTopK !== null) {
-            return $this->resolved_fast_candidate_cap($opts, $minimumCandidates, $fastTopK);
+            return [
+                'mode' => 'approximate',
+                'source' => 'explicit_option',
+                'estimated_candidates' => null,
+                'threshold' => null,
+                'candidate_cap' => $this->resolved_fast_candidate_cap($opts, $minimumCandidates, $fastTopK),
+            ];
         }
 
         if (!$this->auto_fast_mode_enabled()) {
-            return null;
+            return [
+                'mode' => 'exact',
+                'source' => 'disabled_constant',
+                'estimated_candidates' => null,
+                'threshold' => null,
+                'candidate_cap' => null,
+            ];
         }
 
         $threshold = $this->auto_fast_mode_threshold();
         $estimatedCandidates = $this->estimate_candidate_count($groups, $mode, $metadataFilter, $threshold);
         if ($estimatedCandidates <= $threshold) {
-            return null;
+            return [
+                'mode' => 'exact',
+                'source' => 'no_threshold_crossing',
+                'estimated_candidates' => $estimatedCandidates,
+                'threshold' => $threshold,
+                'candidate_cap' => null,
+            ];
         }
 
-        return $this->resolved_fast_candidate_cap($opts, $minimumCandidates, null);
+        return [
+            'mode' => 'approximate',
+            'source' => 'auto_threshold',
+            'estimated_candidates' => $estimatedCandidates,
+            'threshold' => $threshold,
+            'candidate_cap' => $this->resolved_fast_candidate_cap($opts, $minimumCandidates, null),
+        ];
     }
 
     /**
@@ -981,6 +1072,16 @@ final class WP_FTS_Searcher
      */
     private function build_query_groups(string $query, array $opts): array
     {
+        return $this->build_query_plan($query, $opts)['groups'];
+    }
+
+    /**
+     * Build the executable query groups plus a compact diagnostics summary.
+     *
+     * @return array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int}
+     */
+    private function build_query_plan(string $query, array $opts): array
+    {
         $requestedLangs = $this->languages_from_options($opts, ['langs', 'languages']);
         if ($requestedLangs !== []) {
             $groups = [];
@@ -992,7 +1093,7 @@ final class WP_FTS_Searcher
                 $this->merge_language_groups($groups, $query, $opts, $fallbackLang, 1);
             }
 
-            return $this->expand_prefix_query_groups($this->dedupe_query_groups($groups), $opts);
+            return $this->query_plan_from_base_groups($groups, $opts);
         }
 
         $explicitQueryLang = WP_FTS_TermNamespace::language_from_options($opts, null, ['query_lang', 'lang', 'language']);
@@ -1007,7 +1108,39 @@ final class WP_FTS_Searcher
             $this->merge_fallback_language_groups($groups, $query, $opts, $fallbackLang);
         }
 
-        return $this->expand_prefix_query_groups($this->dedupe_query_groups($groups), $opts);
+        return $this->query_plan_from_base_groups($groups, $opts);
+    }
+
+    /**
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     * @return array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int}
+     */
+    private function query_plan_from_base_groups(array $groups, array $opts): array
+    {
+        $prePrefixGroups = $this->dedupe_query_groups($groups);
+        $expandedGroups = $this->expand_prefix_query_groups($prePrefixGroups, $opts);
+
+        return [
+            'groups' => $expandedGroups,
+            'pre_prefix_groups' => $prePrefixGroups,
+            'prefix_matching' => $this->prefix_matching_enabled($opts),
+            'prefix_added_terms' => max(0, $this->query_group_term_count($expandedGroups) - $this->query_group_term_count($prePrefixGroups)),
+            'prefix_min_length' => $this->prefix_min_length($opts),
+            'prefix_max_terms' => $this->prefix_max_terms($opts),
+        ];
+    }
+
+    /**
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     */
+    private function query_group_term_count(array $groups): int
+    {
+        $count = 0;
+        foreach ($groups as $group) {
+            $count += count($group);
+        }
+
+        return $count;
     }
 
     /**
@@ -1017,8 +1150,8 @@ final class WP_FTS_Searcher
      * stored terms receive a worse rank in the same group, so ranking and AND
      * semantics still prefer exact matches while allowing broader recall.
      *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
-     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>
      */
     private function expand_prefix_query_groups(array $groups, array $opts): array
     {
@@ -1059,6 +1192,7 @@ final class WP_FTS_Searcher
                         'lang' => $split['lang'],
                         'term' => $split['term'],
                         'rank' => $prefixRank,
+                        'source' => 'prefix_expansion',
                     ];
                 }
             }
@@ -1132,7 +1266,7 @@ final class WP_FTS_Searcher
     /**
      * Analyze a query under one language and merge it by term position.
      *
-     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $groups
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
      */
     private function merge_language_groups(array &$groups, string $query, array $opts, string $lang, int $rank): void
     {
@@ -1205,7 +1339,7 @@ final class WP_FTS_Searcher
      * @param array<int,array<string,mixed>|string> $occurrences
      * @param string|null $authoritativeLang Language partition that overrides
      *        inline or analyzer-selected languages for explicit/fallback passes.
-     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>
      */
     private function groups_from_occurrences(array $occurrences, string $defaultLang, int $rank, ?string $authoritativeLang = null): array
     {
@@ -1253,7 +1387,7 @@ final class WP_FTS_Searcher
      * @param array<string,mixed>|string $occurrence
      * @param string|null $authoritativeLang Language partition that must own the
      *        candidate, regardless of inline tags or namespaced legacy terms.
-     * @return array{key:string,lang:string,term:string,rank:int}|null
+     * @return array{key:string,lang:string,term:string,rank:int,source:string}|null
      */
     private function candidate_from_occurrence(array|string $occurrence, string $defaultLang, int $rank, ?string $authoritativeLang = null): ?array
     {
@@ -1290,11 +1424,16 @@ final class WP_FTS_Searcher
             ? max(0, (int) $occurrence['rank'])
             : 0;
 
+        $source = $rank > 0
+            ? 'fallback_language'
+            : ($occurrenceRank > 0 ? 'secondary_lemma' : 'exact');
+
         return [
             'key' => WP_FTS_TermNamespace::namespace_term($lang, $term),
             'lang' => $lang,
             'term' => $term,
             'rank' => $rank + $occurrenceRank,
+            'source' => $source,
         ];
     }
 
@@ -1507,21 +1646,232 @@ final class WP_FTS_Searcher
      * Preserve legacy list results unless callers request pagination metadata.
      *
      * @param array<int,array<string,mixed>> $results
-     * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>}
+     * @return array<int,array<string,mixed>>|array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
      */
-    private function format_response(array $results, int $total, array $opts, string $queryLang): array
+    private function format_response(array $results, int $total, array $opts, string $queryLang, ?array $explain = null): array
     {
         if (empty($opts['include_total'])) {
             return $results;
         }
 
-        return [
+        $payload = [
             'total' => $total,
             'limit' => max(1, (int) ($opts['limit'] ?? 10)),
             'offset' => max(0, (int) ($opts['offset'] ?? 0)),
             'query_lang' => WP_FTS_TermNamespace::canonicalize_lang($queryLang),
             'results' => $results,
         ];
+
+        if ($explain !== null && $this->explain_requested($opts)) {
+            $payload['explain'] = $explain;
+        }
+
+        return $payload;
+    }
+
+    private function explain_requested(array $opts): bool
+    {
+        return $this->truthy_option($opts['explain'] ?? false)
+            || $this->truthy_option($opts['debug'] ?? false);
+    }
+
+    private function explain_result_matches_requested(array $opts): bool
+    {
+        if (!array_key_exists('explain_result_matches', $opts)) {
+            return true;
+        }
+
+        return $this->truthy_option($opts['explain_result_matches']);
+    }
+
+    /**
+     * @param array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int} $queryPlan
+     * @param array{mode:string,source:string,estimated_candidates:?int,threshold:?int,candidate_cap:?int} $fastMode
+     * @param array<string,int> $scoreStats
+     * @param array<int,array<string,mixed>> $resultExplain
+     * @return array<string,mixed>
+     */
+    private function build_explain_payload(array $queryPlan, array $fastMode, array $scoreStats, array $resultExplain, int $total, bool $exactTotal): array
+    {
+        return [
+            'storage' => [
+                'backend' => $this->bounded_explain_text(get_debug_type($this->storage)),
+                'metadata' => WP_FTS_StorageCompat::supports_doc_metadata($this->storage) ? 'available' : 'unavailable',
+            ],
+            'query_plan' => [
+                'match_mode' => $this->bounded_explain_text((string) ($queryPlan['match_mode'] ?? ''), 40),
+                'logical_group_count' => count($queryPlan['groups']),
+                'analyzed_languages' => $this->explain_languages($queryPlan['groups']),
+                'terms' => $this->explain_query_terms($queryPlan['groups']),
+                'terms_more' => $this->query_group_term_count($queryPlan['groups']) > self::EXPLAIN_MAX_TERMS,
+                'prefix_matching' => !empty($queryPlan['prefix_matching']) ? 'enabled' : 'disabled',
+                'prefix_added_terms' => max(0, (int) $queryPlan['prefix_added_terms']),
+                'prefix_min_length' => max(0, (int) $queryPlan['prefix_min_length']),
+                'prefix_max_terms' => max(1, (int) $queryPlan['prefix_max_terms']),
+            ],
+            'fast_mode' => [
+                'mode' => $this->bounded_explain_text((string) $fastMode['mode'], 40),
+                'source' => $this->bounded_explain_text((string) $fastMode['source'], 80),
+                'estimated_candidates' => $fastMode['estimated_candidates'],
+                'threshold' => $fastMode['threshold'],
+                'candidate_cap' => $fastMode['candidate_cap'],
+            ],
+            'scoring' => [
+                'candidate_rows_fetched' => max(0, (int) ($scoreStats['candidate_rows_fetched'] ?? 0)),
+                'candidate_rows_considered' => max(0, (int) ($scoreStats['candidate_rows_considered'] ?? 0)),
+                'candidate_docs_considered' => max(0, (int) ($scoreStats['candidate_docs_considered'] ?? 0)),
+                'candidate_docs_scored' => max(0, (int) ($scoreStats['candidate_docs_scored'] ?? 0)),
+                'scoring_terms' => max(0, (int) ($scoreStats['scoring_terms'] ?? 0)),
+                'total' => max(0, $total),
+                'total_accuracy' => $exactTotal ? 'exact' : 'approximate',
+            ],
+            'results' => $resultExplain,
+        ];
+    }
+
+    /**
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     * @return string[]
+     */
+    private function explain_languages(array $groups): array
+    {
+        $languages = [];
+        foreach ($groups as $group) {
+            foreach ($group as $candidate) {
+                $lang = WP_FTS_TermNamespace::canonicalize_lang((string) $candidate['lang']);
+                if ($lang !== '') {
+                    $languages[$lang] = true;
+                }
+            }
+        }
+
+        return array_slice(array_keys($languages), 0, self::EXPLAIN_MAX_TERMS);
+    }
+
+    /**
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     * @return array<int,array{key:string,term:string,lang:string,rank:int,rank_class:string}>
+     */
+    private function explain_query_terms(array $groups): array
+    {
+        $terms = [];
+        foreach ($groups as $group) {
+            foreach ($group as $candidate) {
+                $terms[] = [
+                    'key' => $this->bounded_explain_text((string) $candidate['key']),
+                    'term' => $this->bounded_explain_text((string) $candidate['term']),
+                    'lang' => WP_FTS_TermNamespace::canonicalize_lang((string) $candidate['lang']),
+                    'rank' => max(0, (int) $candidate['rank']),
+                    'rank_class' => $this->candidate_rank_class($candidate),
+                ];
+                if (count($terms) >= self::EXPLAIN_MAX_TERMS) {
+                    return $terms;
+                }
+            }
+        }
+
+        return $terms;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $page
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string}>> $groups
+     * @return array<int,array{doc_id:int,matches:array<int,array{key:string,term:string,lang:string,rank_class:string}>,matched_languages:array<int,string>,matches_more:bool}>
+     */
+    private function explain_result_matches(array $page, array $groups): array
+    {
+        if ($page === []) {
+            return [];
+        }
+
+        $candidateByKey = [];
+        foreach ($groups as $group) {
+            foreach ($group as $candidate) {
+                $key = (string) $candidate['key'];
+                if (!isset($candidateByKey[$key]) || (int) $candidate['rank'] < (int) $candidateByKey[$key]['rank']) {
+                    $candidateByKey[$key] = $candidate;
+                }
+            }
+        }
+        if ($candidateByKey === []) {
+            return [];
+        }
+
+        $rows = [];
+        foreach ($page as $row) {
+            $docId = max(0, (int) ($row['doc_id'] ?? 0));
+            if ($docId <= 0) {
+                continue;
+            }
+
+            $matches = [];
+            $matchCount = 0;
+            $languages = [];
+            foreach (WP_FTS_StorageCompat::terms_for_doc($this->storage, $docId, 0) as $termKey) {
+                if (!isset($candidateByKey[$termKey])) {
+                    continue;
+                }
+
+                $candidate = $candidateByKey[$termKey];
+                $matchCount++;
+                $lang = WP_FTS_TermNamespace::canonicalize_lang((string) $candidate['lang']);
+                if ($lang !== '') {
+                    $languages[$lang] = true;
+                }
+                if (count($matches) < self::EXPLAIN_MAX_MATCHES_PER_RESULT) {
+                    $matches[] = [
+                        'key' => $this->bounded_explain_text($termKey),
+                        'term' => $this->bounded_explain_text((string) $candidate['term']),
+                        'lang' => $lang,
+                        'rank_class' => $this->candidate_rank_class($candidate),
+                    ];
+                }
+            }
+
+            $rows[] = [
+                'doc_id' => $docId,
+                'matches' => $matches,
+                'matched_languages' => array_slice(array_keys($languages), 0, self::EXPLAIN_MAX_MATCHES_PER_RESULT),
+                'matches_more' => $matchCount > count($matches),
+            ];
+            if (count($rows) >= self::EXPLAIN_MAX_RESULT_ROWS) {
+                break;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array{rank:int,source?:string} $candidate
+     */
+    private function candidate_rank_class(array $candidate): string
+    {
+        $source = isset($candidate['source']) ? (string) $candidate['source'] : '';
+        if (in_array($source, ['exact', 'secondary_lemma', 'fallback_language', 'prefix_expansion'], true)) {
+            return $source;
+        }
+
+        $rank = max(0, (int) $candidate['rank']);
+        if ($rank === 0) {
+            return 'exact';
+        }
+        if ($rank === 1) {
+            return 'fallback_language';
+        }
+
+        return 'secondary_lemma';
+    }
+
+    private function bounded_explain_text(string $value, int $maxBytes = self::EXPLAIN_MAX_TEXT_BYTES): string
+    {
+        $value = trim(str_replace(["\r", "\n", "\t"], ' ', WP_FTS_Utf8::repair($value)));
+        $value = preg_replace('/\s+/', ' ', $value) ?? $value;
+        if ($maxBytes <= 0 || strlen($value) <= $maxBytes) {
+            return $value;
+        }
+
+        return rtrim(WP_FTS_Utf8::truncate_bytes($value, max(0, $maxBytes - 3))) . '...';
     }
 
     /**

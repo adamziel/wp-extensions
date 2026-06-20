@@ -6558,6 +6558,103 @@ test_case('enabled diagnostics record frontend search timings counts language se
             assert_true(array_key_exists($phase, $timings), "frontend diagnostics should record {$phase} timing");
             assert_true((float) $timings[$phase] >= 0.0, "{$phase} timing should be non-negative");
         }
+
+        $explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
+        assert_true($explain !== [], 'frontend diagnostics should capture search explain payload when tracing is active');
+        $storage = is_array($explain['storage'] ?? null) ? $explain['storage'] : [];
+        assert_contains('Mysql', (string) ($storage['backend'] ?? ''), 'frontend diagnostics should identify the storage backend');
+
+        $plan = is_array($explain['query_plan'] ?? null) ? $explain['query_plan'] : [];
+        assert_same('OR', $plan['match_mode'] ?? null, 'frontend diagnostics should record searcher match mode');
+        assert_true((int) ($plan['logical_group_count'] ?? 0) >= 1, 'frontend diagnostics should record logical query group count');
+        assert_true(in_array('en', is_array($plan['analyzed_languages'] ?? null) ? $plan['analyzed_languages'] : [], true), 'frontend diagnostics should record analyzed query language');
+        $terms = is_array($plan['terms'] ?? null) ? $plan['terms'] : [];
+        assert_true($terms !== [], 'frontend diagnostics should include bounded analyzed query terms');
+        assert_same('diagnosticneedl', $terms[0]['term'] ?? null, 'frontend diagnostics should expose the analyzed query term');
+        assert_same('exact', $terms[0]['rank_class'] ?? null, 'frontend diagnostics should classify exact query candidates');
+
+        $fastMode = is_array($explain['fast_mode'] ?? null) ? $explain['fast_mode'] : [];
+        assert_same('exact', $fastMode['mode'] ?? null, 'frontend diagnostics should record exact fast-mode outcome for compact searches');
+        assert_same('no_threshold_crossing', $fastMode['source'] ?? null, 'frontend diagnostics should record the fast-mode decision source');
+        assert_true((int) ($fastMode['estimated_candidates'] ?? 0) >= 2, 'frontend diagnostics should include estimated candidate count when auto fast mode probes');
+        assert_true((int) ($fastMode['threshold'] ?? 0) > 0, 'frontend diagnostics should include the auto fast-mode threshold');
+
+        $scoring = is_array($explain['scoring'] ?? null) ? $explain['scoring'] : [];
+        assert_true((int) ($scoring['candidate_rows_fetched'] ?? 0) >= 2, 'frontend diagnostics should include fetched candidate row shape');
+        assert_true((int) ($scoring['candidate_docs_scored'] ?? 0) >= 2, 'frontend diagnostics should include scored document shape');
+        assert_same('exact', $scoring['total_accuracy'] ?? null, 'frontend diagnostics should record exact result totals');
+
+        $resultMatches = is_array($explain['results'] ?? null) ? $explain['results'] : [];
+        assert_same(506, (int) ($resultMatches[0]['doc_id'] ?? 0), 'frontend diagnostics should include per-result match data for returned page order');
+        $firstMatches = is_array($resultMatches[0]['matches'] ?? null) ? $resultMatches[0]['matches'] : [];
+        assert_same('diagnosticneedl', $firstMatches[0]['term'] ?? null, 'frontend diagnostics should identify why the top result matched');
+        assert_same('en', $firstMatches[0]['lang'] ?? null, 'frontend diagnostics should identify matched result language');
+        assert_true(in_array('FTS replacement ran for frontend search.', is_array($trace['notes'] ?? null) ? $trace['notes'] : [], true), 'frontend diagnostics should explicitly note successful frontend replacement');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('enabled diagnostics record auto fast mode threshold and cap decisions', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    try {
+        $term = WP_FTS_TermNamespace::namespace_term('en', 'autofastneedle');
+        $docCount = 2001;
+        $fake->terms[$term] = ['doc_freq' => $docCount];
+        for ($index = 0; $index < $docCount; $index++) {
+            $docId = 30000 + $index;
+            $fake->postings[$term][$docId] = 1;
+            $fake->docs[$docId] = [
+                'lang' => 'en',
+                'doc_len' => 1,
+                'content_hash' => 'autofast-' . $docId,
+                'is_deleted' => 0,
+            ];
+            $fake->docLengths[$docId] = ['en' => 1];
+            $fake->docMeta[$docId] = [
+                'doc_id' => $docId,
+                'post_id' => $docId,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-06-16 00:00:00',
+                'title' => 'Auto fast fixture ' . $docId,
+                'excerpt' => '',
+                'search_text' => 'autofastneedle',
+                'data' => '{}',
+            ];
+        }
+        $fake->meta['en'] = ['doc_count' => $docCount, 'len_sum' => $docCount];
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'autofastneedle',
+            'posts_per_page' => 10,
+            'paged' => 1,
+            'post_type' => 'post',
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        assert_same([], $posts, 'auto fast diagnostics fixture should not create or require visible WordPress posts');
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'auto fast diagnostics should record one frontend trace');
+        $trace = $traces[0];
+        assert_same('ran', $trace['status'] ?? null, 'auto fast diagnostics should finish as a successful FTS run');
+        $explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
+        $fastMode = is_array($explain['fast_mode'] ?? null) ? $explain['fast_mode'] : [];
+        assert_same('approximate', $fastMode['mode'] ?? null, 'auto fast diagnostics should record approximate mode after threshold crossing');
+        assert_same('auto_threshold', $fastMode['source'] ?? null, 'auto fast diagnostics should record threshold source');
+        assert_same(2001, (int) ($fastMode['estimated_candidates'] ?? 0), 'auto fast diagnostics should expose the capped threshold-crossing estimate');
+        assert_same(2000, (int) ($fastMode['threshold'] ?? 0), 'auto fast diagnostics should expose the active threshold');
+        assert_same(1000, (int) ($fastMode['candidate_cap'] ?? 0), 'auto fast diagnostics should expose the active candidate cap');
+        $scoring = is_array($explain['scoring'] ?? null) ? $explain['scoring'] : [];
+        assert_same('approximate', $scoring['total_accuracy'] ?? null, 'auto fast diagnostics should mark totals approximate');
+        assert_same(1000, (int) ($scoring['candidate_docs_scored'] ?? 0), 'auto fast diagnostics should expose capped scored documents');
     } finally {
         $wpdb = $oldWpdb;
     }

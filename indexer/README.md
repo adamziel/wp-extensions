@@ -105,7 +105,7 @@ restored with WordPress content.
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
-| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They are bounded request-local diagnostics, not persistent logs. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query plan, fast-mode, scoring, and per-result match details, and are request-local diagnostics rather than persistent logs. |
 
 ## Search Accuracy And Automatic Fast Mode
 
@@ -141,6 +141,12 @@ Explicit search options still win over the automatic policy. Programmatic
 callers can force exact scoring with `exact_top_k`, `exact`, or an explicit
 false `fast_top_k`; explicit `fast_top_k` or `approximate_top_k` opts into
 approximate top-K mode for that search.
+
+When diagnostics are active, the Debug Bar panel or Health-tab fallback shows
+which path was used for the current request: exact, explicit approximate, auto
+threshold, forced exact, disabled by constant, or no threshold crossing. The
+same trace reports the candidate estimate, threshold, candidate cap, and whether
+the result total is exact or approximate.
 
 ## Language And Morphology
 

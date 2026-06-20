@@ -160,6 +160,15 @@ FTS panel. Without Debug Bar, authorized users can see the same bounded request
 diagnostics on the Health tab. These traces live in memory for the current PHP
 request and are capped; they are not persistent logs or historical telemetry.
 
+Successful front-end and wp-admin Posts replacements include an explain summary
+when diagnostics are active. The trace identifies the storage backend, analyzed
+query languages and terms, prefix expansion count, fast-mode source and cap,
+candidate rows/docs scored, exact versus approximate totals, and bounded
+per-result match reasons for the returned page. Bailout traces still keep their
+readable reason so operators can distinguish unsupported query shapes, disabled
+replacement settings, and successful FTS ownership without creating diagnostic
+content.
+
 ## Optimize And Repair
 
 Deletes are tombstones until compaction. Run optimize after bulk deletes or after

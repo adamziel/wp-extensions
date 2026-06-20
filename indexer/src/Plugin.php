@@ -740,6 +740,7 @@ final class WP_FTS_Plugin
             'timings_ms' => [],
             'counts' => self::debug_default_counts(),
             'analyzer_pack_status' => [],
+            'search_explain' => [],
             'notes' => [],
         ], self::debug_normalize_trace_extra($extra));
 
@@ -904,9 +905,11 @@ final class WP_FTS_Plugin
     private static function debug_normalize_trace_extra(array $extra): array
     {
         $allowed = [];
-        foreach (['query_lang', 'fallback_languages', 'settings', 'counts', 'timings_ms', 'analyzer_pack_status', 'notes'] as $key) {
+        foreach (['query_lang', 'fallback_languages', 'settings', 'counts', 'timings_ms', 'analyzer_pack_status', 'search_explain', 'notes'] as $key) {
             if (array_key_exists($key, $extra)) {
-                $allowed[$key] = is_array($extra[$key]) ? self::debug_normalize_assoc($extra[$key]) : self::debug_truncate_text((string) $extra[$key]);
+                $allowed[$key] = is_array($extra[$key]) && $key === 'search_explain'
+                    ? self::debug_normalize_structured_value($extra[$key])
+                    : (is_array($extra[$key]) ? self::debug_normalize_assoc($extra[$key]) : self::debug_truncate_text((string) $extra[$key]));
             }
         }
 
@@ -1002,6 +1005,75 @@ final class WP_FTS_Plugin
         return array_keys($normalized);
     }
 
+    private static function debug_set_search_explain(int $trace_id, mixed $explain): void
+    {
+        if (!isset(self::$debug_traces[$trace_id]) || !is_array($explain) || $explain === []) {
+            return;
+        }
+
+        $existing = is_array(self::$debug_traces[$trace_id]['search_explain'] ?? null)
+            ? self::$debug_traces[$trace_id]['search_explain']
+            : [];
+        if ($existing !== []) {
+            return;
+        }
+
+        self::$debug_traces[$trace_id]['search_explain'] = self::debug_normalize_structured_value($explain);
+    }
+
+    private static function debug_normalize_structured_value(mixed $value, int $depth = 0): mixed
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (is_bool($value) || is_int($value) || is_float($value)) {
+            return $value;
+        }
+        if (is_scalar($value)) {
+            return self::debug_truncate_text((string) $value);
+        }
+        if (!is_array($value)) {
+            return self::debug_truncate_text(get_debug_type($value), 80);
+        }
+        if ($depth >= 5) {
+            return self::debug_list_summary($value);
+        }
+
+        $normalized = [];
+        $limit = self::debug_is_list($value) ? self::DEBUG_MAX_LIST_ITEMS : self::DEBUG_MAX_ASSOC_ITEMS;
+        foreach ($value as $key => $item) {
+            if (count($normalized) >= $limit) {
+                break;
+            }
+            if (self::debug_is_list($value)) {
+                $normalized[] = self::debug_normalize_structured_value($item, $depth + 1);
+                continue;
+            }
+            if (!is_scalar($key)) {
+                continue;
+            }
+            $normalized[self::debug_truncate_text((string) $key, 80)] = self::debug_normalize_structured_value($item, $depth + 1);
+        }
+
+        return $normalized;
+    }
+
+    private static function debug_is_list(array $value): bool
+    {
+        if (function_exists('array_is_list')) {
+            return array_is_list($value);
+        }
+
+        $index = 0;
+        foreach (array_keys($value) as $key) {
+            if ($key !== $index++) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static function debug_truncate_text(string $value, int $max_bytes = self::DEBUG_MAX_TEXT_BYTES): string
     {
         $value = trim(str_replace(["\r", "\n", "\t"], ' ', WP_FTS_Utf8::repair($value)));
@@ -1086,6 +1158,12 @@ final class WP_FTS_Plugin
                 self::render_debug_row('Bailout reason', (string) $trace['bailout_reason']);
             }
             self::render_debug_row('Settings', self::debug_assoc_summary($trace['settings'] ?? []));
+            $search_explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
+            self::render_debug_row('Storage backend', self::debug_assoc_summary($search_explain['storage'] ?? []));
+            self::render_debug_row('Query plan', self::debug_query_plan_summary($search_explain['query_plan'] ?? []));
+            self::render_debug_row('Fast mode', self::debug_assoc_summary($search_explain['fast_mode'] ?? []));
+            self::render_debug_row('Scoring', self::debug_assoc_summary($search_explain['scoring'] ?? []));
+            self::render_debug_row('Result matches', self::debug_result_matches_summary($search_explain['results'] ?? []));
             self::render_debug_row('Counts', self::debug_assoc_summary($trace['counts'] ?? []));
             self::render_debug_row('Timings', self::debug_timing_summary($trace['timings_ms'] ?? []));
             self::render_debug_row('Analyzer packs', self::debug_pack_status_summary($trace['analyzer_pack_status'] ?? []));
@@ -1181,6 +1259,80 @@ final class WP_FTS_Plugin
         }
 
         return self::debug_truncate_text(implode('; ', $parts), 800);
+    }
+
+    private static function debug_query_plan_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $parts = [];
+        foreach (['match_mode', 'logical_group_count', 'prefix_matching', 'prefix_added_terms'] as $key) {
+            if (array_key_exists($key, $value)) {
+                $parts[] = $key . '=' . self::debug_scalar_summary($value[$key]);
+            }
+        }
+        if (isset($value['analyzed_languages']) && is_array($value['analyzed_languages'])) {
+            $parts[] = 'languages=' . self::debug_list_summary($value['analyzed_languages']);
+        }
+
+        $termParts = [];
+        if (isset($value['terms']) && is_array($value['terms'])) {
+            foreach ($value['terms'] as $term) {
+                if (!is_array($term)) {
+                    continue;
+                }
+                $lang = self::debug_scalar_summary($term['lang'] ?? '');
+                $text = self::debug_scalar_summary($term['term'] ?? '');
+                $rank = self::debug_scalar_summary($term['rank_class'] ?? '');
+                $termParts[] = trim($lang . ':' . $text . ($rank !== '' ? ' ' . $rank : ''));
+                if (count($termParts) >= self::DEBUG_MAX_LIST_ITEMS) {
+                    break;
+                }
+            }
+        }
+        if ($termParts !== []) {
+            $parts[] = 'terms=' . implode(' | ', $termParts) . (!empty($value['terms_more']) ? ' ...' : '');
+        }
+
+        return self::debug_truncate_text(implode(', ', array_filter($parts, static fn(string $part): bool => $part !== '')), 800);
+    }
+
+    private static function debug_result_matches_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $rows = [];
+        foreach ($value as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $doc = self::debug_scalar_summary($row['doc_id'] ?? '');
+            $matches = [];
+            if (isset($row['matches']) && is_array($row['matches'])) {
+                foreach ($row['matches'] as $match) {
+                    if (!is_array($match)) {
+                        continue;
+                    }
+                    $lang = self::debug_scalar_summary($match['lang'] ?? '');
+                    $term = self::debug_scalar_summary($match['term'] ?? '');
+                    $rank = self::debug_scalar_summary($match['rank_class'] ?? '');
+                    $matches[] = trim($lang . ':' . $term . ($rank !== '' ? ' ' . $rank : ''));
+                    if (count($matches) >= self::DEBUG_MAX_LIST_ITEMS) {
+                        break;
+                    }
+                }
+            }
+            $rows[] = 'doc ' . ($doc !== '' ? $doc : '?') . '=' . ($matches !== [] ? implode(' | ', $matches) : '-');
+            if (count($rows) >= self::DEBUG_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return self::debug_truncate_text(implode('; ', $rows), 800);
     }
 
     /**
@@ -2913,6 +3065,8 @@ final class WP_FTS_Plugin
             'highlight' => (bool) ($controls['highlight'] ?? $settings['highlight']),
             'prefix_matching' => (bool) ($controls['prefix_matching'] ?? $settings['prefix_matching']),
             'snippet_length' => self::clamp_int($controls['snippet_length'] ?? $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
+            'explain' => $trace_id > 0,
+            'explain_result_matches' => $include_snippets,
         ];
         foreach (['post_types' => 'post_type', 'post_statuses' => 'post_status'] as $control_key => $search_key) {
             if (isset($controls[$control_key]) && is_array($controls[$control_key]) && $controls[$control_key] !== []) {
@@ -2962,6 +3116,7 @@ final class WP_FTS_Plugin
                 $search_started = microtime(true);
                 $payload = $searcher->search($query, $search_options);
                 self::debug_add_timing($trace_id, 'storage/search', $search_started);
+                self::debug_set_search_explain($trace_id, $payload['explain'] ?? null);
                 $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
                 self::debug_add_count($trace_id, 'search_batches');
                 self::debug_add_count($trace_id, 'candidate_rows', count($rows));
@@ -3015,6 +3170,7 @@ final class WP_FTS_Plugin
             is_array($search_options['fallback_languages'] ?? null) ? $search_options['fallback_languages'] : [],
             true
         );
+        self::debug_add_notes($trace_id, ['FTS sandbox search ran.']);
         self::debug_add_timing($trace_id, 'total', $trace_started);
         self::debug_finish_trace($trace_id, 'ran');
 
@@ -5856,6 +6012,7 @@ JS;
             'prefix_matching' => $settings['prefix_matching'],
             'post_type' => $post_types,
             'post_status' => $post_statuses,
+            'explain' => $trace_id > 0,
         ];
         $fallback_languages = [];
         if ($settings['language_fallback']) {
@@ -5895,6 +6052,7 @@ JS;
             $search_started = microtime(true);
             $payload = $searcher->search($search_query, $search_options);
             self::debug_add_timing($trace_id, 'storage/search', $search_started);
+            self::debug_set_search_explain($trace_id, $payload['explain'] ?? null);
             $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
             self::debug_add_count($trace_id, 'search_batches');
             self::debug_add_count($trace_id, 'candidate_rows', count($rows));
@@ -5970,6 +6128,11 @@ JS;
             'visible_results' => $visible_total,
         ]);
         self::debug_set_query_language($trace_id, $query_lang, $fallback_languages);
+        self::debug_add_notes($trace_id, [
+            $visibility_context === 'admin'
+                ? 'FTS replacement ran for wp-admin post search.'
+                : 'FTS replacement ran for frontend search.',
+        ]);
         self::debug_add_timing($trace_id, 'total', $trace_started);
         self::debug_finish_trace($trace_id, 'ran');
 
