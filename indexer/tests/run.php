@@ -7648,6 +7648,13 @@ test_case('front-end search replacement overrides earlier posts_pre_query provid
         ]);
         assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $respectQuery), 'front-end coexistence mode should preserve an earlier non-null posts_pre_query result');
         assert_same(0, $respectQuery->found_posts, 'front-end coexistence mode should not write FTS totals when it stands down');
+        $respectNullQuery = new WP_FTS_Test_Query([
+            's' => 'precedenceneedle',
+            'posts_per_page' => 10,
+        ]);
+        $respectNullPosts = WP_FTS_Plugin::replace_frontend_search_posts(null, $respectNullQuery);
+        assert_same([822, 821], array_map(static fn(object $post): int => (int) $post->ID, $respectNullPosts), 'front-end coexistence mode should still run FTS when no earlier provider answered');
+        assert_same(2, $respectNullQuery->found_posts, 'front-end coexistence mode should write FTS totals when it runs after a null provider result');
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = WP_FTS_Plugin::default_settings();
 
         $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
@@ -7693,6 +7700,101 @@ test_case('enabled diagnostics record search provider compatibility stand-down',
     assert_contains('Another search provider already returned', (string) ($trace['bailout_reason'] ?? ''), 'provider compatibility trace should explain the stand-down reason');
     $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
     assert_same('respect_existing_provider', $settings['provider_compatibility'] ?? null, 'provider compatibility trace should expose the effective mode');
+
+    WP_FTS_Plugin::reset_request_caches();
+    $GLOBALS['wp_fts_test_is_admin'] = true;
+    $GLOBALS['pagenow'] = 'edit.php';
+    $adminIncoming = [(object) ['ID' => 841, 'post_title' => 'Earlier admin provider diagnostic result']];
+    $adminQuery = new WP_FTS_Test_Query([
+        's' => 'diagnosticproviderneedle',
+        'posts_per_page' => 10,
+        'post_type' => 'post',
+        'post_status' => 'publish',
+    ]);
+    assert_same($adminIncoming, WP_FTS_Plugin::replace_admin_post_search_posts($adminIncoming, $adminQuery), 'admin coexistence mode should return the earlier provider result unchanged');
+    $adminTraces = WP_FTS_Plugin::debug_traces();
+    assert_same(1, count($adminTraces), 'admin provider compatibility stand-down should record one debug trace');
+    $adminTrace = $adminTraces[0];
+    assert_same('admin post search', $adminTrace['context'] ?? null, 'admin provider compatibility trace should record the admin context');
+    assert_same('bailed', $adminTrace['status'] ?? null, 'admin provider compatibility trace should be marked as bailed');
+    assert_contains('Another search provider already returned', (string) ($adminTrace['bailout_reason'] ?? ''), 'admin provider compatibility trace should explain the stand-down reason');
+    $adminSettings = is_array($adminTrace['settings'] ?? null) ? $adminTrace['settings'] : [];
+    assert_same('respect_existing_provider', $adminSettings['provider_compatibility'] ?? null, 'admin provider compatibility trace should expose the effective mode');
+});
+
+test_case('enabled diagnostics record search provider compatibility overrides', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $post = (object) [
+        'ID' => 842,
+        'post_title' => 'Provider override rank',
+        'post_content' => '<p>provideroverrideneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-14 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][842] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(842, $post, true);
+
+        $incoming = [
+            (object) ['ID' => 840, 'post_title' => 'Earlier provider result A'],
+            (object) ['ID' => 841, 'post_title' => 'Earlier provider result B'],
+        ];
+        $query = new WP_FTS_Test_Query([
+            's' => 'provideroverrideneedle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
+
+        assert_same([842], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'frontend FTS-wins mode should replace earlier provider posts with FTS posts');
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'frontend provider override should record one debug trace');
+        $trace = $traces[0];
+        assert_same('ran', $trace['status'] ?? null, 'frontend provider override trace should be marked as ran');
+        $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
+        assert_same(2, (int) ($counts['incoming_provider_results'] ?? 0), 'frontend provider override diagnostics should count incoming provider results without logging payloads');
+        assert_same(1, (int) ($counts['prior_provider_responses_replaced'] ?? 0), 'frontend provider override diagnostics should count the replaced provider response');
+        $notes = is_array($trace['notes'] ?? null) ? $trace['notes'] : [];
+        assert_true(in_array('FTS replaced an earlier non-null posts_pre_query result from another search provider.', $notes, true), 'frontend provider override diagnostics should explain that FTS replaced an earlier provider response');
+        assert_true(in_array('Incoming provider result count: 2.', $notes, true), 'frontend provider override diagnostics should expose only a bounded incoming result count');
+        $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
+        assert_same('prefer_language_fts', $settings['provider_compatibility'] ?? null, 'frontend provider override trace should expose the FTS-wins mode');
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $adminIncoming = [(object) ['ID' => 843, 'post_title' => 'Earlier admin provider result']];
+        $adminQuery = new WP_FTS_Test_Query([
+            's' => 'provideroverrideneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        $adminPosts = WP_FTS_Plugin::replace_admin_post_search_posts($adminIncoming, $adminQuery);
+
+        assert_same([842], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $adminPosts), 'admin FTS-wins mode should replace earlier provider posts with FTS posts');
+        $adminTraces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($adminTraces), 'admin provider override should record one debug trace');
+        $adminTrace = $adminTraces[0];
+        assert_same('admin post search', $adminTrace['context'] ?? null, 'admin provider override trace should record the admin context');
+        assert_same('ran', $adminTrace['status'] ?? null, 'admin provider override trace should be marked as ran');
+        $adminCounts = is_array($adminTrace['counts'] ?? null) ? $adminTrace['counts'] : [];
+        assert_same(1, (int) ($adminCounts['incoming_provider_results'] ?? 0), 'admin provider override diagnostics should count incoming provider results without logging payloads');
+        assert_same(1, (int) ($adminCounts['prior_provider_responses_replaced'] ?? 0), 'admin provider override diagnostics should count the replaced provider response');
+        $adminNotes = is_array($adminTrace['notes'] ?? null) ? $adminTrace['notes'] : [];
+        assert_true(in_array('FTS replaced an earlier non-null posts_pre_query result from another search provider.', $adminNotes, true), 'admin provider override diagnostics should explain that FTS replaced an earlier provider response');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('front-end search replacement avoids admin REST cron secondary and disabled queries', function (): void {
@@ -7854,6 +7956,15 @@ test_case('admin Posts list search replacement overrides earlier posts_pre_query
         ]);
         assert_same($incoming, WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $respectQuery), 'admin coexistence mode should preserve an earlier non-null posts_pre_query result');
         assert_same(0, $respectQuery->found_posts, 'admin coexistence mode should not write FTS totals when it stands down');
+        $respectNullQuery = new WP_FTS_Test_Query([
+            's' => 'adminprecedenceneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        $respectNullPosts = WP_FTS_Plugin::replace_admin_post_search_posts(null, $respectNullQuery);
+        assert_same([832, 831], array_map(static fn(object $post): int => (int) $post->ID, $respectNullPosts), 'admin coexistence mode should still run FTS when no earlier provider answered');
+        assert_same(2, $respectNullQuery->found_posts, 'admin coexistence mode should write FTS totals when it runs after a null provider result');
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = WP_FTS_Plugin::default_settings();
 
         $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ADMIN_POST_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;

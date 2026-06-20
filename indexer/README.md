@@ -359,7 +359,8 @@ Current caveats:
   WordPress search hooks so configured front-end searches are owned by FTS. The
   provider compatibility setting defaults to Prefer Language FTS; switch it to
   keep another search provider's results when Jetpack Search, SearchWP,
-  Relevanssi, or a site-specific provider should answer first;
+  Relevanssi, a theme filter, or custom search code appears to win or lose and
+  should answer first;
 - wp-admin Posts list search replacement is enabled for safe main-list searches
   over indexed supported admin post statuses and uses the same provider
   compatibility setting. The `wp_fts_replace_frontend_search` and

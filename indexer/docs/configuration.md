@@ -32,8 +32,10 @@ checkboxes. Use the compatibility mode to coexist with another provider on an
 enabled surface; use the `wp_fts_replace_frontend_search` or
 `wp_fts_replace_admin_post_search` filters to disable a replacement surface
 entirely. Request diagnostics include the effective provider compatibility mode
-and record a bailout reason when coexistence mode keeps another provider's
-result.
+and record whether Language FTS replaced an earlier provider response or bailed
+out because coexistence mode kept another provider's result. Check this setting
+first when another search plugin, theme filter, or custom search code appears to
+win or lose on an enabled replacement surface.
 
 ## Word Beginning Prefix Tuning
 

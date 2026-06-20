@@ -1323,6 +1323,8 @@ final class WP_FTS_Plugin
             'result_ids_considered' => 0,
             'result_ids_returned' => 0,
             'visible_results' => 0,
+            'incoming_provider_results' => 0,
+            'prior_provider_responses_replaced' => 0,
             'snippets_generated' => 0,
             'title_snippets_generated' => 0,
             'highlight_replacements' => 0,
@@ -2902,7 +2904,7 @@ final class WP_FTS_Plugin
                 ],
                 self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING => [
                     'label' => 'Keep another search provider\'s results when it has already answered',
-                    'description' => 'Use this to coexist with Jetpack Search, SearchWP, Relevanssi, or a site-specific search integration on the same search surfaces.',
+                    'description' => 'Useful when another search plugin or theme filter should stay in charge on the same search surfaces.',
                 ],
             ]
         );
@@ -5868,6 +5870,7 @@ JS;
         }
 
         $trace_id = self::debug_start_trace('frontend search', $search_query, self::debug_effective_settings($settings));
+        self::debug_record_prior_search_provider_replacement($trace_id, $posts);
         $result = self::frontend_search_result_page($query, $search_query, $trace_id, $settings);
         self::store_frontend_search_query_state(
             $query,
@@ -5964,6 +5967,7 @@ JS;
         }
 
         $trace_id = self::debug_start_trace('admin post search', $search_query, self::debug_effective_settings($settings));
+        self::debug_record_prior_search_provider_replacement($trace_id, $posts);
         $result = self::admin_post_search_result_page($query, $search_query, $trace_id, $settings);
         self::store_admin_post_search_query_state(
             $query,
@@ -6421,6 +6425,30 @@ JS;
     private static function prior_search_provider_result_bailout_reason(): string
     {
         return 'Another search provider already returned a non-null posts_pre_query result; compatibility mode kept that result.';
+    }
+
+    private static function debug_record_prior_search_provider_replacement(int $trace_id, mixed $posts): void
+    {
+        if ($trace_id <= 0 || $posts === null) {
+            return;
+        }
+
+        $incoming_count = self::prior_search_provider_result_count($posts);
+        self::debug_add_count($trace_id, 'incoming_provider_results', $incoming_count);
+        self::debug_add_count($trace_id, 'prior_provider_responses_replaced');
+        self::debug_add_notes($trace_id, [
+            'FTS replaced an earlier non-null posts_pre_query result from another search provider.',
+            'Incoming provider result count: ' . $incoming_count . '.',
+        ]);
+    }
+
+    private static function prior_search_provider_result_count(mixed $posts): int
+    {
+        if (is_countable($posts)) {
+            return max(0, count($posts));
+        }
+
+        return 1;
     }
 
     private static function should_replace_admin_post_search(mixed $query): bool
