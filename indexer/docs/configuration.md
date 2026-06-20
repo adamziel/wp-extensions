@@ -3,16 +3,36 @@
 Settings > Full-Text Search provides the operator-facing Health, Settings,
 Sandbox, Indexed content, and Analyzer packs tabs. The Settings tab controls
 indexed post types, automatic indexing, front-end and wp-admin Posts search
-replacement, result limits, snippets, highlighting, prefix matching, and
-language fallback defaults. WordPress runtime indexing, REST/admin search, the
-PHP plugin search helper, and WP-CLI use `WP_FTS_Plugin::runtime_analyzer()`.
-Analyzer-pack paths are still configured through the
-`wp_fts_analyzer_options` option or filter, operational internals such as schema
-version and pending queue state are managed by the plugin, and selected custom
-fields can be supplied through an option or filters. More advanced
+replacement, search-provider compatibility, result limits, snippets,
+highlighting, prefix matching, and language fallback defaults. WordPress runtime
+indexing, REST/admin search, the PHP plugin search helper, and WP-CLI use
+`WP_FTS_Plugin::runtime_analyzer()`. Analyzer-pack paths are still configured
+through the `wp_fts_analyzer_options` option or filter, operational internals
+such as schema version and pending queue state are managed by the plugin, and
+selected custom fields can be supplied through an option or filters. More advanced
 configuration is available to PHP callers that instantiate `WP_FTS_Analyzer`,
 `WP_FTS_LanguagePipeline`, `WP_FTS_Searcher`, or `WP_FTS_Storage_Mysql`
 directly.
+
+## Search Replacement Compatibility
+
+The Settings tab includes a Search provider compatibility choice for the
+front-end and wp-admin Posts search replacement surfaces.
+
+- **Prefer Language FTS** is the default. Eligible searches use Language FTS
+  even when an earlier `posts_pre_query` provider returned a non-null result.
+- **Keep another search provider's results when it has already answered**
+  preserves a non-null incoming `posts_pre_query` value and returns it
+  unchanged. If no earlier provider answered, eligible Language FTS replacement
+  can still run.
+
+This mode is independent from the public-site and wp-admin replacement
+checkboxes. Use the compatibility mode to coexist with another provider on an
+enabled surface; use the `wp_fts_replace_frontend_search` or
+`wp_fts_replace_admin_post_search` filters to disable a replacement surface
+entirely. Request diagnostics include the effective provider compatibility mode
+and record a bailout reason when coexistence mode keeps another provider's
+result.
 
 ## Languages
 

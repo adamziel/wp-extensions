@@ -28,9 +28,10 @@ content.
 
 Settings > Full-Text Search provides Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs. It manages the indexed post types, automatic indexing,
-search replacement surfaces, highlighting, snippets, prefix matching, result
-limits, and language fallback defaults; analyzer-pack paths and custom field
-selection still use the documented options and filters.
+search replacement surfaces, search-provider compatibility, highlighting,
+snippets, prefix matching, result limits, and language fallback defaults;
+analyzer-pack paths and custom field selection still use the documented options
+and filters.
 
 ## Quickstart
 
@@ -308,13 +309,15 @@ environment before using it for production search.
 Current caveats:
 
 - front-end search replacement is enabled by default and runs late in the
-  WordPress search hooks so configured front-end searches are owned by FTS; use
-  the `wp_fts_replace_frontend_search` filter when another search provider
-  should own that surface;
+  WordPress search hooks so configured front-end searches are owned by FTS. The
+  provider compatibility setting defaults to Prefer Language FTS; switch it to
+  keep another search provider's results when Jetpack Search, SearchWP,
+  Relevanssi, or a site-specific provider should answer first;
 - wp-admin Posts list search replacement is enabled for safe main-list searches
-  over indexed supported admin post statuses and runs late for the same reason;
-  use the `wp_fts_replace_admin_post_search` filter when another admin search
-  provider should own that surface;
+  over indexed supported admin post statuses and uses the same provider
+  compatibility setting. The `wp_fts_replace_frontend_search` and
+  `wp_fts_replace_admin_post_search` filters can still disable a whole
+  replacement surface;
 - Settings > Full-Text Search covers operational search/index defaults, but
   analyzer pack paths and custom field indexing still use options and filters;
 - custom field indexing must be configured;

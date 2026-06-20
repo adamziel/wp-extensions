@@ -84,11 +84,14 @@ final class WP_FTS_Plugin
     private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
     private const SETTINGS_SNIPPET_MIN = 40;
     private const SETTINGS_SNIPPET_MAX = 500;
+    private const SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS = 'prefer_fts';
+    private const SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING = 'respect_existing';
     private const DEFAULT_SETTINGS = [
         'index_post_types' => ['post', 'page'],
         'auto_index' => true,
         'replace_frontend_search' => true,
         'replace_admin_post_search' => true,
+        'search_provider_compatibility' => 'prefer_fts',
         'highlight' => true,
         'snippet_length' => 180,
         'match_mode' => 'OR',
@@ -926,6 +929,7 @@ final class WP_FTS_Plugin
         $summary = [
             'public_site_search' => !empty($settings['replace_frontend_search']) ? 'enabled' : 'disabled',
             'admin_posts_search' => !empty($settings['replace_admin_post_search']) ? 'enabled' : 'disabled',
+            'provider_compatibility' => self::search_provider_compatibility_debug_value((string) ($settings['search_provider_compatibility'] ?? self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS)),
             'match_mode' => (string) ($settings['match_mode'] ?? 'OR'),
             'prefix_matching' => !empty($settings['prefix_matching']) ? 'enabled' : 'disabled',
             'highlight' => !empty($settings['highlight']) ? 'enabled' : 'disabled',
@@ -1984,6 +1988,7 @@ final class WP_FTS_Plugin
         echo '<table class="widefat striped wp-fts-health-table"><tbody>';
         self::render_health_status_row('Public site search', !empty($settings['replace_frontend_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('wp-admin Posts search', !empty($settings['replace_admin_post_search']) ? 'Enabled' : 'Disabled');
+        self::render_health_status_row('Search provider compatibility', self::search_provider_compatibility_label((string) $settings['search_provider_compatibility']));
         self::render_health_status_row('Indexed post types', self::health_post_type_summary($settings['index_post_types']));
         self::render_health_status_row('Eligible content', (string) $counts['total_eligible']);
         self::render_health_status_row('Indexed', (string) $counts['indexed']);
@@ -2242,6 +2247,22 @@ final class WP_FTS_Plugin
 
         echo '<p class="description">These choices only decide where WordPress search is replaced. The public site is what visitors see; wp-admin post search is the Posts list used by editors and administrators.</p>';
         echo '</fieldset></td></tr>';
+
+        self::render_settings_radio_row(
+            'search_provider_compatibility',
+            'Search provider compatibility',
+            (string) $settings['search_provider_compatibility'],
+            [
+                self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS => [
+                    'label' => 'Prefer Language FTS',
+                    'description' => 'Eligible searches use Language FTS even when another search provider has already answered.',
+                ],
+                self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING => [
+                    'label' => 'Keep another search provider\'s results when it has already answered',
+                    'description' => 'Use this to coexist with Jetpack Search, SearchWP, Relevanssi, or a site-specific search integration on the same search surfaces.',
+                ],
+            ]
+        );
     }
 
     /**
@@ -2488,12 +2509,17 @@ final class WP_FTS_Plugin
         }
 
         [$replace_frontend_search, $replace_admin_post_search] = self::sanitize_replacement_scope_settings($value, $defaults);
+        $search_provider_compatibility = self::sanitize_search_provider_compatibility(
+            $value['search_provider_compatibility'] ?? null,
+            (string) $defaults['search_provider_compatibility']
+        );
 
         return [
             'index_post_types' => $post_types,
             'auto_index' => array_key_exists('auto_index', $value) ? self::truthy_admin_value($value['auto_index']) : $defaults['auto_index'],
             'replace_frontend_search' => $replace_frontend_search,
             'replace_admin_post_search' => $replace_admin_post_search,
+            'search_provider_compatibility' => $search_provider_compatibility,
             'highlight' => array_key_exists('highlight', $value) ? self::truthy_admin_value($value['highlight']) : $defaults['highlight'],
             'snippet_length' => self::clamp_int($value['snippet_length'] ?? $defaults['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
             'match_mode' => $mode,
@@ -2501,6 +2527,42 @@ final class WP_FTS_Plugin
             'result_limit' => self::clamp_int($value['result_limit'] ?? $defaults['result_limit'], 1, self::MAX_SEARCH_LIMIT),
             'language_fallback' => array_key_exists('language_fallback', $value) ? self::truthy_admin_value($value['language_fallback']) : $defaults['language_fallback'],
         ];
+    }
+
+    private static function sanitize_search_provider_compatibility(mixed $value, string $default): string
+    {
+        $mode = is_scalar($value) ? self::sanitize_key((string) $value) : '';
+
+        return in_array($mode, self::search_provider_compatibility_modes(), true) ? $mode : $default;
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function search_provider_compatibility_modes(): array
+    {
+        return [
+            self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS,
+            self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING,
+        ];
+    }
+
+    private static function search_provider_compatibility_label(string $mode): string
+    {
+        if ($mode === self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING) {
+            return 'Keep another search provider\'s results';
+        }
+
+        return 'Prefer Language FTS';
+    }
+
+    private static function search_provider_compatibility_debug_value(string $mode): string
+    {
+        if ($mode === self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING) {
+            return 'respect_existing_provider';
+        }
+
+        return 'prefer_language_fts';
     }
 
     /**
@@ -2554,6 +2616,7 @@ final class WP_FTS_Plugin
      *   auto_index:bool,
      *   replace_frontend_search:bool,
      *   replace_admin_post_search:bool,
+     *   search_provider_compatibility:string,
      *   highlight:bool,
      *   snippet_length:int,
      *   match_mode:string,
@@ -5009,6 +5072,16 @@ JS;
         }
 
         $settings = self::settings();
+        if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
+            self::debug_record_bailout(
+                'frontend search',
+                $search_query,
+                self::prior_search_provider_result_bailout_reason(),
+                self::debug_effective_settings($settings)
+            );
+            return $posts;
+        }
+
         $trace_id = self::debug_start_trace('frontend search', $search_query, self::debug_effective_settings($settings));
         $result = self::frontend_search_result_page($query, $search_query, $trace_id, $settings);
         self::store_frontend_search_query_state(
@@ -5095,6 +5168,16 @@ JS;
         }
 
         $settings = self::settings();
+        if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
+            self::debug_record_bailout(
+                'admin post search',
+                $search_query,
+                self::prior_search_provider_result_bailout_reason(),
+                self::debug_effective_settings($settings)
+            );
+            return $posts;
+        }
+
         $trace_id = self::debug_start_trace('admin post search', $search_query, self::debug_effective_settings($settings));
         $result = self::admin_post_search_result_page($query, $search_query, $trace_id, $settings);
         self::store_admin_post_search_query_state(
@@ -5539,6 +5622,20 @@ JS;
         }
 
         return (bool) $replace;
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     */
+    private static function should_preserve_prior_search_provider_result(mixed $posts, array $settings): bool
+    {
+        return $posts !== null
+            && (string) ($settings['search_provider_compatibility'] ?? self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS) === self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING;
+    }
+
+    private static function prior_search_provider_result_bailout_reason(): string
+    {
+        return 'Another search provider already returned a non-null posts_pre_query result; compatibility mode kept that result.';
     }
 
     private static function should_replace_admin_post_search(mixed $query): bool

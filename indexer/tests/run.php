@@ -4047,6 +4047,7 @@ test_case('admin menu registration exposes Settings Full-Text Search page and op
     assert_same(['post', 'page'], WP_FTS_Plugin::default_settings()['index_post_types'], 'default settings should index both posts and pages');
     assert_same(true, WP_FTS_Plugin::default_settings()['language_fallback'], 'default settings should enable language fallback');
     assert_same(true, WP_FTS_Plugin::default_settings()['prefix_matching'], 'default settings should enable word-beginning prefix matching');
+    assert_same('prefer_fts', WP_FTS_Plugin::default_settings()['search_provider_compatibility'], 'default search provider compatibility should prefer FTS precedence');
 });
 
 test_case('settings sanitization maps replacement checkboxes and legacy scope to existing booleans', function (): void {
@@ -4060,6 +4061,17 @@ test_case('settings sanitization maps replacement checkboxes and legacy scope to
     assert_same(false, $checkboxes['replace_admin_post_search'], 'admin replacement checkbox should disable the wp-admin replacement boolean');
     assert_same(false, $checkboxes['auto_index'], 'auto-index checkbox should disable automatic indexing when unchecked');
     assert_same(false, $checkboxes['prefix_matching'], 'prefix matching checkbox should disable word-beginning matching when unchecked');
+    assert_same('prefer_fts', $checkboxes['search_provider_compatibility'], 'missing provider compatibility setting should sanitize to the default precedence mode');
+
+    $respectProvider = WP_FTS_Plugin::sanitize_settings([
+        'search_provider_compatibility' => 'respect_existing',
+    ]);
+    assert_same('respect_existing', $respectProvider['search_provider_compatibility'], 'coexistence provider compatibility mode should sanitize when selected');
+
+    $invalidProvider = WP_FTS_Plugin::sanitize_settings([
+        'search_provider_compatibility' => 'replace-everything',
+    ]);
+    assert_same('prefer_fts', $invalidProvider['search_provider_compatibility'], 'invalid provider compatibility mode should sanitize back to the default');
 
     $autoIndex = WP_FTS_Plugin::sanitize_settings([
         'auto_index' => '1',
@@ -4204,6 +4216,10 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('type="hidden" name="wp_fts_settings[replace_admin_post_search]" value="0"', $settingsHtml, 'wp-admin replacement checkbox should post an unchecked value');
     assert_contains('type="checkbox" name="wp_fts_settings[replace_admin_post_search]" value="1" checked="checked"', $settingsHtml, 'wp-admin replacement checkbox should be checked by default');
     assert_true(!str_contains($settingsHtml, 'name="wp_fts_settings[replace_search_scope]"'), 'settings replacement behavior should no longer render the legacy scope radio group');
+    assert_contains('Search provider compatibility', $settingsHtml, 'settings replacement behavior should expose provider compatibility');
+    assert_contains('Prefer Language FTS', $settingsHtml, 'settings provider compatibility should expose the default precedence mode');
+    assert_contains('Keep another search provider', $settingsHtml, 'settings provider compatibility should expose the coexistence mode');
+    assert_contains('value="prefer_fts" checked="checked"', $settingsHtml, 'settings provider compatibility should default to preferring FTS');
     assert_contains('Search result excerpt length', $settingsHtml, 'settings should use clearer excerpt length copy');
     assert_contains('short piece of post text shown around a matching word', $settingsHtml, 'settings should explain search result excerpts in plain language');
     assert_contains('Search term matching', $settingsHtml, 'settings should use product-style search matching language');
@@ -4463,6 +4479,7 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<h2>Search health</h2>', $html, 'default admin page should render the Health dashboard');
     assert_contains('<th scope="row">Public site search</th><td>Enabled</td>', $html, 'health dashboard should show public search replacement state');
     assert_contains('<th scope="row">wp-admin Posts search</th><td>Disabled</td>', $html, 'health dashboard should show admin search replacement state');
+    assert_contains('<th scope="row">Search provider compatibility</th><td>Prefer Language FTS</td>', $html, 'health dashboard should show effective provider compatibility mode');
     assert_contains('<th scope="row">Indexed post types</th><td>page, post</td>', $html, 'health dashboard should show configured indexed post types');
     assert_contains('<th scope="row">Eligible content</th><td>3</td>', $html, 'health dashboard should show total eligible content');
     assert_contains('<th scope="row">Indexed</th><td>1</td>', $html, 'health dashboard should show indexed count');
@@ -6793,6 +6810,18 @@ test_case('front-end search replacement overrides earlier posts_pre_query provid
         assert_same([822, 821], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'eligible front-end replacement should override earlier posts_pre_query results with FTS-ranked posts');
         assert_same(2, $query->found_posts, 'front-end precedence replacement should expose the FTS visible total');
 
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['search_provider_compatibility' => 'respect_existing']
+        );
+        $respectQuery = new WP_FTS_Test_Query([
+            's' => 'precedenceneedle',
+            'posts_per_page' => 10,
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $respectQuery), 'front-end coexistence mode should preserve an earlier non-null posts_pre_query result');
+        assert_same(0, $respectQuery->found_posts, 'front-end coexistence mode should not write FTS totals when it stands down');
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = WP_FTS_Plugin::default_settings();
+
         $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::FRONTEND_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
         $optOutQuery = new WP_FTS_Test_Query([
             's' => 'precedenceneedle',
@@ -6810,6 +6839,32 @@ test_case('front-end search replacement overrides earlier posts_pre_query provid
     } finally {
         $wpdb = $oldWpdb;
     }
+});
+
+test_case('enabled diagnostics record search provider compatibility stand-down', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['search_provider_compatibility' => 'respect_existing']
+    );
+
+    $incoming = [(object) ['ID' => 840, 'post_title' => 'Earlier provider diagnostic result']];
+    $query = new WP_FTS_Test_Query([
+        's' => 'diagnosticproviderneedle',
+        'posts_per_page' => 10,
+    ]);
+    $posts = WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
+
+    assert_same($incoming, $posts, 'coexistence mode should return the earlier provider result unchanged');
+    $traces = WP_FTS_Plugin::debug_traces();
+    assert_same(1, count($traces), 'provider compatibility stand-down should record one debug trace');
+    $trace = $traces[0];
+    assert_same('frontend search', $trace['context'] ?? null, 'provider compatibility trace should record the frontend context');
+    assert_same('bailed', $trace['status'] ?? null, 'provider compatibility trace should be marked as bailed');
+    assert_contains('Another search provider already returned', (string) ($trace['bailout_reason'] ?? ''), 'provider compatibility trace should explain the stand-down reason');
+    $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
+    assert_same('respect_existing_provider', $settings['provider_compatibility'] ?? null, 'provider compatibility trace should expose the effective mode');
 });
 
 test_case('front-end search replacement avoids admin REST cron secondary and disabled queries', function (): void {
@@ -6936,6 +6991,20 @@ test_case('admin Posts list search replacement overrides earlier posts_pre_query
 
         assert_same([832, 831], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'eligible admin replacement should override earlier posts_pre_query results with FTS-ranked posts');
         assert_same(2, $query->found_posts, 'admin precedence replacement should expose the FTS visible total');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['search_provider_compatibility' => 'respect_existing']
+        );
+        $respectQuery = new WP_FTS_Test_Query([
+            's' => 'adminprecedenceneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_admin_post_search_posts($incoming, $respectQuery), 'admin coexistence mode should preserve an earlier non-null posts_pre_query result');
+        assert_same(0, $respectQuery->found_posts, 'admin coexistence mode should not write FTS totals when it stands down');
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = WP_FTS_Plugin::default_settings();
 
         $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ADMIN_POST_SEARCH_REPLACEMENT_FILTER] = static fn(mixed $replace, mixed $filterQuery): bool => false;
         $optOutQuery = new WP_FTS_Test_Query([
