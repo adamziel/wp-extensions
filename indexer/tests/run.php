@@ -4327,6 +4327,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
     ] as $field => $expected) {
         [$label, $value] = $expected;
         assert_contains($label, $settingsHtml, "settings ranking controls should label {$field} plainly");
+        assert_contains('step="0.01" name="wp_fts_settings[field_boosts][' . $field . ']"', $settingsHtml, "settings ranking controls should use a step compatible with the {$field} boost precision");
         assert_contains('name="wp_fts_settings[field_boosts][' . $field . ']" value="' . $value . '"', $settingsHtml, "settings ranking controls should render the default {$field} boost");
     }
     assert_contains('Matches in the main saved post content', $settingsHtml, 'settings ranking controls should explain main content');

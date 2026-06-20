@@ -2281,7 +2281,7 @@ final class WP_FTS_Plugin
         foreach (self::FIELD_BOOST_LABELS as $field => $copy) {
             $id = 'wp-fts-settings-field-boost-' . self::sanitize_key($field);
             echo '<tr><th scope="row"><label for="' . self::esc_attr($id) . '">' . self::esc_html($copy['label']) . '</label></th><td>';
-            echo '<input id="' . self::esc_attr($id) . '" type="number" min="' . self::esc_attr((string) self::FIELD_BOOST_MIN) . '" max="' . self::esc_attr((string) self::FIELD_BOOST_MAX) . '" step="0.1" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[field_boosts][' . self::esc_attr($field) . ']" value="' . self::esc_attr(self::format_field_boost((float) ($boosts[$field] ?? self::FIELD_BOOST_DEFAULTS[$field]))) . '">';
+            echo '<input id="' . self::esc_attr($id) . '" type="number" min="' . self::esc_attr((string) self::FIELD_BOOST_MIN) . '" max="' . self::esc_attr((string) self::FIELD_BOOST_MAX) . '" step="0.01" name="' . self::esc_attr(self::SETTINGS_OPTION) . '[field_boosts][' . self::esc_attr($field) . ']" value="' . self::esc_attr(self::format_field_boost((float) ($boosts[$field] ?? self::FIELD_BOOST_DEFAULTS[$field]))) . '">';
             echo '<p class="description">' . self::esc_html($copy['description']) . '</p>';
             echo '</td></tr>';
         }
