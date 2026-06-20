@@ -12659,6 +12659,139 @@ test_case('wp cli reindex uses plugin runtime analyzer pack configuration', func
 
 discover_quality_tests();
 
+test_case('T5 MySQL and file backends return identical rankings for full query suite', function (): void {
+    $initialDocuments = [
+        101 => [
+            'lang' => 'en',
+            'html' => '<article><p>alpha bridge river shared</p><span lang="fr">cafe pont</span><nav>alpha hiddennav</nav><script>bridge ghost</script></article>',
+        ],
+        102 => [
+            'lang' => 'pl',
+            'html' => '<article><h1>zamek most</h1><p>rzeka shared</p><footer>zamek hiddenfooter</footer></article>',
+        ],
+        103 => [
+            'lang' => 'de',
+            'html' => '<article><p>strasse fluss bruecke shared</p><strong>fluss</strong></article>',
+        ],
+        104 => [
+            'lang' => 'fr',
+            'html' => '<article><p>cafe pont riviere shared</p><h2>cafe</h2></article>',
+        ],
+        105 => [
+            'lang' => 'tr',
+            'html' => '<article><p>istanbul kopru nehir renk</p><aside>istanbul hiddenaside</aside></article>',
+        ],
+        106 => [
+            'lang' => 'es',
+            'html' => '<article><p>castillo rio puente color</p><strong>rio</strong></article>',
+        ],
+        107 => [
+            'lang' => 'nl',
+            'html' => '<article><p>kasteel rivier brug kleur</p><script>kasteel hidden</script></article>',
+        ],
+        108 => [
+            'lang' => 'en',
+            'html' => '<article><p>obsolete alpha stale</p></article>',
+        ],
+        109 => [
+            'lang' => 'de',
+            'html' => '<article><p>deletedonly strasse fluss</p></article>',
+        ],
+        110 => [
+            'lang' => 'zh-Hans',
+            'html' => '<article><p>hanzi sousuo qiao yanse</p><strong>hanzi</strong></article>',
+        ],
+        150 => [
+            'lang' => 'en',
+            'html' => '<article><h1>alpha alpha alpha</h1><p>bridge harbor shared</p></article>',
+        ],
+    ];
+    $updatedDocuments = [
+        108 => [
+            'lang' => 'pl',
+            'html' => '<article><h2>zamek zamek</h2><p>most rzeka shared</p><span lang="de">fluss bruecke</span></article>',
+        ],
+    ];
+    $deletedDocumentIds = [109];
+    $analyzer = new WP_FTS_Analyzer();
+    $mysqlWpdb = new WP_FTS_Test_WPDB();
+    $mysql = new WP_FTS_Storage_Mysql($mysqlWpdb);
+    $mysql->create_tables();
+    $file = new WP_FTS_Storage_File(temp_index_path('t5_mysql_file_full_suite'));
+
+    $buildCorpus = static function (WP_FTS_Storage $storage, string $label) use ($analyzer, $initialDocuments, $updatedDocuments, $deletedDocumentIds): void {
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        foreach ($initialDocuments as $docId => $document) {
+            assert_true($indexer->index_document((int) $docId, $document['html'], ['lang' => $document['lang']]), "{$label} initial document {$docId} should index");
+        }
+        foreach ($updatedDocuments as $docId => $document) {
+            assert_true($indexer->index_document((int) $docId, $document['html'], ['lang' => $document['lang']]), "{$label} updated document {$docId} should reindex");
+        }
+        foreach ($deletedDocumentIds as $docId) {
+            assert_true($indexer->delete_document($docId), "{$label} document {$docId} should tombstone");
+        }
+    };
+
+    try {
+        $buildCorpus($mysql, 'mysql');
+        $buildCorpus($file, 'file');
+
+        assert_same($file->all_doc_ids(true), $mysql->all_doc_ids(true), 'T5 MySQL/file full corpus should contain the same known doc ids');
+        assert_same($file->all_doc_ids(), $mysql->all_doc_ids(), 'T5 MySQL/file full corpus should contain the same active doc ids');
+        assert_true(in_array('DELETE FROM wp_fts_postings WHERE doc_id = %d', $mysqlWpdb->queries, true), 'T5 MySQL build should exercise row-posting replacement through WP_FTS_Storage_Mysql');
+
+        $mysqlSearcher = new WP_FTS_Searcher($mysql, $analyzer);
+        $fileSearcher = new WP_FTS_Searcher($file, $analyzer);
+        $fullQuerySuite = [
+            'en-alpha-ranking-or' => ['query' => 'alpha', 'lang' => 'en', 'mode' => 'OR', 'limit' => 10, 'non_trivial' => true],
+            'en-alpha-bridge-and' => ['query' => 'alpha bridge', 'lang' => 'en', 'mode' => 'AND', 'limit' => 10],
+            'en-hidden-skip-or' => ['query' => 'hiddennav ghost', 'lang' => 'en', 'mode' => 'OR', 'limit' => 10],
+            'en-obsolete-update-or' => ['query' => 'obsolete', 'lang' => 'en', 'mode' => 'OR', 'limit' => 10],
+            'pl-zamek-most-or' => ['query' => 'zamek most', 'lang' => 'pl', 'mode' => 'OR', 'limit' => 10],
+            'pl-zamek-most-and' => ['query' => 'zamek most', 'lang' => 'pl', 'mode' => 'AND', 'limit' => 10],
+            'de-strasse-fluss-or' => ['query' => 'strasse fluss', 'lang' => 'de', 'mode' => 'OR', 'limit' => 10],
+            'de-deleted-tombstone-or' => ['query' => 'deletedonly strasse', 'lang' => 'de', 'mode' => 'OR', 'limit' => 10],
+            'fr-cafe-pont-and' => ['query' => 'cafe pont', 'lang' => 'fr', 'mode' => 'AND', 'limit' => 10],
+            'tr-istanbul-kopru-or' => ['query' => 'istanbul kopru', 'lang' => 'tr', 'mode' => 'OR', 'limit' => 10],
+            'es-rio-puente-or' => ['query' => 'rio puente', 'lang' => 'es', 'mode' => 'OR', 'limit' => 10],
+            'nl-kasteel-brug-and' => ['query' => 'kasteel brug', 'lang' => 'nl', 'mode' => 'AND', 'limit' => 10],
+            'zh-hans-hanzi-qiao-or' => ['query' => 'hanzi qiao', 'lang' => 'zh-Hans', 'mode' => 'OR', 'limit' => 10],
+        ];
+
+        $runSuite = static function (string $phase) use ($fullQuerySuite, $fileSearcher, $mysqlSearcher): void {
+            $sawNonTrivialRanking = false;
+            foreach ($fullQuerySuite as $name => $queryCase) {
+                $opts = [
+                    'lang' => $queryCase['lang'],
+                    'mode' => $queryCase['mode'],
+                    'limit' => $queryCase['limit'],
+                ];
+                $fileResults = $fileSearcher->search($queryCase['query'], $opts);
+                $mysqlResults = $mysqlSearcher->search($queryCase['query'], $opts);
+                assert_search_results_equal($fileResults, $mysqlResults, "T5 {$phase} full query suite {$name}");
+
+                $fileIds = array_column($fileResults, 'doc_id');
+                assert_true(!in_array(109, $fileIds, true), "T5 {$phase} query {$name} should not return tombstoned document 109");
+                if (!empty($queryCase['non_trivial'])) {
+                    $sortedIds = $fileIds;
+                    sort($sortedIds, SORT_NUMERIC);
+                    $sawNonTrivialRanking = count($fileIds) >= 2 && $fileIds !== $sortedIds;
+                }
+            }
+
+            assert_true($sawNonTrivialRanking, "T5 {$phase} full query suite should include a non-trivial ranking order");
+        };
+
+        $runSuite('before optimize');
+        $mysql->optimize();
+        $file->optimize();
+        assert_same($file->all_doc_ids(true), $mysql->all_doc_ids(true), 'T5 MySQL/file optimized corpus should purge the same tombstones');
+        $runSuite('after optimize');
+    } finally {
+        cleanup_storage($file);
+    }
+});
+
 test_case('quality discovery loads tests/quality files', function (): void {
     $discovered = array_map('basename', discovered_quality_test_files());
     sort($discovered, SORT_STRING);

@@ -1,6 +1,209 @@
 <?php
 declare(strict_types=1);
 
+if (!function_exists('test_case')) {
+    define('WP_FTS_QSSP_DIRECT_RUN', true);
+    require_once __DIR__ . '/../../src/bootstrap.php';
+
+    final class WP_FTS_TestFailure extends RuntimeException
+    {
+    }
+
+    /**
+     * @var array<int,array{name:string,fn:callable}>
+     */
+    $tests = [];
+    $wp_fts_check_count = 0;
+
+    function test_case(string $name, callable $fn): void
+    {
+        global $tests;
+        $tests[] = ['name' => $name, 'fn' => $fn];
+    }
+
+    function record_check(?string $label = null, int $count = 1): void
+    {
+        if ($count < 1) {
+            throw new WP_FTS_TestFailure('record_check() count must be at least 1.');
+        }
+
+        global $wp_fts_check_count;
+        $wp_fts_check_count += $count;
+    }
+
+    function assert_true(bool $condition, string $message): void
+    {
+        record_check($message);
+        if (!$condition) {
+            throw new WP_FTS_TestFailure($message);
+        }
+    }
+
+    function assert_same(mixed $expected, mixed $actual, string $message): void
+    {
+        record_check($message);
+        if ($expected !== $actual) {
+            throw new WP_FTS_TestFailure($message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true));
+        }
+    }
+
+    function assert_float_near(float $expected, float $actual, string $message, float $epsilon = 1e-6): void
+    {
+        record_check($message);
+        $scale = max(1.0, abs($expected), abs($actual));
+        if (abs($expected - $actual) / $scale > $epsilon) {
+            throw new WP_FTS_TestFailure($message . "\nExpected: {$expected}\nActual: {$actual}");
+        }
+    }
+
+    function assert_contains(string $needle, string $haystack, string $message): void
+    {
+        record_check($message);
+        if (!str_contains($haystack, $needle)) {
+            throw new WP_FTS_TestFailure($message . "\nMissing: " . var_export($needle, true) . "\nIn: " . $haystack);
+        }
+    }
+
+    function test_bm25_score(int $tf, int $docLen, int $docCount, int $docFreq, float $avgDocLen, float $k1 = 1.2, float $b = 0.75): float
+    {
+        $idf = log(1.0 + (($docCount - $docFreq + 0.5) / ($docFreq + 0.5)));
+        $normalizer = $tf + $k1 * (1.0 - $b + $b * ($docLen / max(1.0, $avgDocLen)));
+
+        return $idf * (($tf * ($k1 + 1.0)) / $normalizer);
+    }
+
+    function assert_search_results_equal(array $expected, array $actual, string $message): void
+    {
+        assert_same(count($expected), count($actual), $message . ' result count');
+        foreach ($expected as $i => $expectedRow) {
+            assert_same($expectedRow['doc_id'], $actual[$i]['doc_id'], $message . " doc_id at {$i}");
+            assert_float_near($expectedRow['score'], $actual[$i]['score'], $message . " score at {$i}");
+        }
+    }
+
+    function temp_index_path(string $suffix): string
+    {
+        return sys_get_temp_dir() . '/wp_fts_' . getmypid() . '_' . $suffix . '_' . bin2hex(random_bytes(4)) . '.json';
+    }
+
+    /**
+     * @return array<string,callable():WP_FTS_Storage>
+     */
+    function storage_factories(string $suffix): array
+    {
+        return [
+            'memory' => static fn(): WP_FTS_Storage => new WP_FTS_Storage_InMemory(),
+            'file' => static fn(): WP_FTS_Storage => new WP_FTS_Storage_File(temp_index_path($suffix)),
+        ];
+    }
+
+    function cleanup_storage(WP_FTS_Storage $storage): void
+    {
+        if (!$storage instanceof WP_FTS_Storage_File) {
+            return;
+        }
+
+        $ref = new ReflectionClass($storage);
+        $prop = $ref->getProperty('path');
+        $prop->setAccessible(true);
+        $path = (string) $prop->getValue($storage);
+        if (is_file($path)) {
+            unlink($path);
+        }
+    }
+
+    /**
+     * @return array{terms:array<string,array{df:int,postings:array<int,int>}>,docs:array<int,array<string,mixed>>,doc_meta:array<int,array<string,mixed>>,meta:array<string,array{doc_count:int,len_sum:int}>}
+     */
+    function storage_snapshot(WP_FTS_Storage $storage): array
+    {
+        $terms = [];
+        foreach ($storage->all_terms() as $term) {
+            $row = $storage->get_terms([$term])[$term];
+            $terms[$term] = [
+                'df' => $row['df'],
+                'postings' => WP_FTS_PostingsCodec::decode($row['postings']),
+            ];
+        }
+        ksort($terms, SORT_STRING);
+
+        $docs = [];
+        foreach ($storage->all_doc_ids(true) as $docId) {
+            $docs[$docId] = $storage->get_doc($docId);
+        }
+        ksort($docs, SORT_NUMERIC);
+
+        return [
+            'terms' => $terms,
+            'docs' => $docs,
+            'doc_meta' => WP_FTS_StorageCompat::get_doc_metadata($storage, array_keys($docs)),
+            'meta' => storage_meta_snapshot($storage, $docs),
+        ];
+    }
+
+    /**
+     * @param array<int,array<string,mixed>>|null $docs
+     * @return array<string,array{doc_count:int,len_sum:int}>
+     */
+    function storage_meta_snapshot(WP_FTS_Storage $storage, ?array $docs = null): array
+    {
+        $docs ??= [];
+        if ($docs === []) {
+            foreach ($storage->all_doc_ids(true) as $docId) {
+                $doc = $storage->get_doc($docId);
+                if ($doc !== null) {
+                    $docs[$docId] = $doc;
+                }
+            }
+        }
+
+        $langs = [];
+        foreach ($docs as $doc) {
+            foreach (($doc['lang_lengths'] ?? []) as $lang => $_) {
+                $langs[(string) $lang] = true;
+            }
+        }
+        ksort($langs, SORT_STRING);
+
+        $meta = ['*' => $storage->get_meta()];
+        foreach (array_keys($langs) as $lang) {
+            $meta[$lang] = $storage->get_meta($lang);
+        }
+        ksort($meta, SORT_STRING);
+
+        return $meta;
+    }
+
+    function wp_fts_qssp_run_registered_tests_and_exit(): void
+    {
+        global $tests, $wp_fts_check_count;
+
+        $failures = 0;
+        $start = microtime(true);
+        foreach ($tests as $test) {
+            try {
+                ($test['fn'])();
+                fwrite(STDOUT, "[PASS] {$test['name']}\n");
+            } catch (Throwable $e) {
+                $failures++;
+                fwrite(STDERR, "[FAIL] {$test['name']}\n{$e->getMessage()}\n{$e->getTraceAsString()}\n");
+            }
+        }
+
+        $duration = number_format(microtime(true) - $start, 3);
+        $count = count($tests);
+        $passed = $count - $failures;
+        $summary = "{$passed}/{$count} named tests passed; failures={$failures}; checks/scenarios={$wp_fts_check_count}; duration={$duration}s\n";
+        if ($failures > 0) {
+            fwrite(STDERR, $summary);
+            exit(1);
+        }
+
+        fwrite(STDOUT, $summary);
+        exit(0);
+    }
+}
+
 /**
  * @return string[]
  */
@@ -713,3 +916,7 @@ test_case('quality randomized incremental indexing converges with full rebuild f
         }
     }
 });
+
+if (defined('WP_FTS_QSSP_DIRECT_RUN') && WP_FTS_QSSP_DIRECT_RUN) {
+    wp_fts_qssp_run_registered_tests_and_exit();
+}
