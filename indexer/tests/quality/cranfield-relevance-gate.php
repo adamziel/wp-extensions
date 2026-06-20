@@ -17,6 +17,46 @@ test_case('quality Cranfield importer builds native relevance suite from source-
     assert_same('content', $suite['documents'][0]['fields'][2]['name'], 'Cranfield .W text should become content when .A is present and .B is absent');
 });
 
+test_case('quality Cranfield importer omits fully empty official records and matching qrels', function (): void {
+    $suite = WP_FTS_Cranfield_Relevance_Gate::build_suite_from_dir(WP_FTS_Cranfield_Relevance_Gate::empty_records_fixture_dir());
+
+    assert_same(1, count($suite['documents']), 'empty-record fixture should import only the non-empty document');
+    assert_same('cranfield-1', $suite['documents'][0]['id'], 'non-empty document should keep the expected namespaced id');
+    assert_same(2, (int) ($suite['omitted_documents']['count'] ?? -1), 'fully empty records should be reported as omitted');
+    assert_same(['471', '995'], $suite['omitted_documents']['ids'] ?? [], 'omitted document ids should be deterministic');
+    assert_same(2, count($suite['queries']), 'queries should still import when some judgments target omitted documents');
+    assert_same('cranfield-q-4', $suite['queries'][1]['id'], 'official ordinal qrels should map to non-contiguous query record ids');
+    assert_same(['cranfield-1' => 2], $suite['queries'][0]['judgments'], 'qrels for omitted judged documents should be dropped from mixed judged queries');
+    assert_same([], $suite['queries'][1]['judgments'], 'queries judged only against omitted documents should become unjudged');
+
+    $result = WP_FTS_Cranfield_Relevance_Gate::run(WP_FTS_Cranfield_Relevance_Gate::empty_records_fixture_dir(), [
+        'max_ndcg_delta' => 0.000001,
+        'max_map_delta' => 0.000001,
+        'max_precision_at_5_delta' => 0.000001,
+    ]);
+
+    assert_true((bool) $result['passed'], 'empty-record fixture gate should still produce relevance results: ' . WP_FTS_Cranfield_Relevance_Gate::format_text($result));
+    assert_same(1, (int) $result['documents']['count'], 'empty-record fixture gate should index only non-empty documents');
+    assert_same(1, (int) $result['queries']['judged_count'], 'empty-record fixture gate should score the remaining judged query');
+    assert_same('cranfield-q-1', $result['query_results'][0]['id'] ?? '', 'remaining judged query should be reported');
+});
+
+test_case('quality Cranfield importer still rejects partially populated documents without W text', function (): void {
+    $dir = WP_FTS_Cranfield_Relevance_Gate::empty_records_fixture_dir();
+    try {
+        WP_FTS_Cranfield_Relevance_Gate::build_suite(
+            $dir . '/cran.malformed.no-w',
+            $dir . '/cran.qry',
+            $dir . '/qrels.text'
+        );
+    } catch (RuntimeException $e) {
+        assert_contains('Cranfield document 2 has no .W content.', $e->getMessage(), 'partially populated no-W document should remain malformed');
+        return;
+    }
+
+    assert_true(false, 'partially populated no-W document should throw');
+});
+
 test_case('quality Cranfield metrics compute nDCG@10 MAP and P@5', function (): void {
     $judgments = [
         'doc-a' => 3,

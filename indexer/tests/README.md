@@ -59,6 +59,16 @@ No full Cranfield data is committed or downloaded by the tests. Without
 the synthetic parser, importer, metric, and mini-gate checks still hard-fail on
 regression.
 
+The official Cranfield document file includes a small number of records whose
+`.T`, `.A`, `.B`, and `.W` sections are all present and empty. The importer
+omits those fully empty records and also omits qrel judgments targeting them;
+partially populated records without `.W` text still fail as malformed local
+data. Numeric Cranfield ids are canonicalized before record and qrel matching,
+so official padded query ids such as `.I 001` match qrel ids such as `1`.
+When qrel query ids use the official ordinal numbering rather than the
+non-contiguous `cran.qry` record ids, the importer maps them to query record
+order only if every qrel query id is a valid ordinal.
+
 The analyzer source-lock quality test validates the synthetic no-op manifest in
 `tests/fixtures/analyzer-source-locks/` and proves unsafe no-op metadata is
 rejected. Run the verifier directly when changing manifests:

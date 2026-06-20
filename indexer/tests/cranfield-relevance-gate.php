@@ -23,6 +23,11 @@ final class WP_FTS_Cranfield_Relevance_Gate
         return __DIR__ . '/fixtures/cranfield-mini';
     }
 
+    public static function empty_records_fixture_dir(): string
+    {
+        return __DIR__ . '/fixtures/cranfield-empty-records';
+    }
+
     /**
      * Build the native relevance-suite JSON shape from a local Cranfield
      * directory. Supported filenames are the classic Cranfield names plus a few
@@ -76,12 +81,16 @@ final class WP_FTS_Cranfield_Relevance_Gate
      */
     public static function build_suite(string $documentsPath, string $queriesPath, string $qrelsPath, array $options = []): array
     {
-        $documents = self::parse_documents($documentsPath);
+        $documentImport = self::parse_documents($documentsPath);
+        $documents = $documentImport['documents'];
+        $omittedDocumentIdList = $documentImport['omitted_ids'];
+        $omittedDocumentIds = array_fill_keys($omittedDocumentIdList, true);
         $queries = self::parse_queries($queriesPath);
         $qrels = self::parse_qrels($qrelsPath);
         $topK = max(1, (int) ($options['top_k'] ?? self::DEFAULT_TOP_K));
         $docIds = [];
         $queryIds = [];
+        $ordinalQueryIds = [];
 
         $suiteDocuments = [];
         foreach ($documents as $document) {
@@ -98,15 +107,20 @@ final class WP_FTS_Cranfield_Relevance_Gate
             ];
         }
 
-        foreach ($queries as $query) {
+        foreach ($queries as $index => $query) {
             $queryIds[$query['id']] = true;
+            $ordinalQueryIds[(string) ($index + 1)] = $query['id'];
         }
+        $qrels = self::normalize_qrel_query_ids($qrels, $queryIds, $ordinalQueryIds);
 
         $suiteQueries = [];
         foreach ($queries as $query) {
             $judgments = [];
             foreach ($qrels[$query['id']] ?? [] as $docId => $grade) {
                 if (!isset($docIds[$docId])) {
+                    if (isset($omittedDocumentIds[$docId])) {
+                        continue;
+                    }
                     throw new RuntimeException("Qrels reference unknown Cranfield document {$docId} for query {$query['id']}.");
                 }
                 if ($grade > 0) {
@@ -143,33 +157,68 @@ final class WP_FTS_Cranfield_Relevance_Gate
                 'auto_detect_language' => false,
             ],
             'documents' => $suiteDocuments,
+            'omitted_documents' => [
+                'count' => count($omittedDocumentIds),
+                'ids' => $omittedDocumentIdList,
+                'reason' => 'Fully empty Cranfield records with empty .T, .A, .B, and .W sections are omitted; qrels targeting omitted records are omitted as well.',
+            ],
             'queries' => $suiteQueries,
         ];
     }
 
     /**
-     * @return array<int,array{id:string,title:string,author:string,bibliography:string,content:string}>
+     * @return array{documents:array<int,array{id:string,title:string,author:string,bibliography:string,content:string}>,omitted_ids:string[]}
      */
     private static function parse_documents(string $path): array
     {
         $records = self::parse_tagged_records($path);
         $documents = [];
+        $omittedIds = [];
         foreach ($records as $record) {
             $id = self::required_record_id($record, $path);
+            $title = self::normalize_space((string) ($record['T'] ?? ''));
+            $author = self::normalize_space((string) ($record['A'] ?? ''));
+            $bibliography = self::normalize_space((string) ($record['B'] ?? ''));
             $content = self::normalize_space((string) ($record['W'] ?? ''));
             if ($content === '') {
+                if (self::is_omittable_empty_document($record)) {
+                    $omittedIds[] = $id;
+                    continue;
+                }
                 throw new RuntimeException("Cranfield document {$id} has no .W content.");
             }
             $documents[] = [
                 'id' => $id,
-                'title' => self::normalize_space((string) ($record['T'] ?? '')),
-                'author' => self::normalize_space((string) ($record['A'] ?? '')),
-                'bibliography' => self::normalize_space((string) ($record['B'] ?? '')),
+                'title' => $title,
+                'author' => $author,
+                'bibliography' => $bibliography,
                 'content' => $content,
             ];
         }
 
-        return $documents;
+        return [
+            'documents' => $documents,
+            'omitted_ids' => $omittedIds,
+        ];
+    }
+
+    /**
+     * The official cran.all.1400 archive contains records whose .T, .A, .B, and
+     * .W sections are all present and empty. Those records are deterministic
+     * no-op documents for this gate and are omitted, while partially populated
+     * records with missing .W text still fail as malformed local data.
+     *
+     * @param array<string,string> $record
+     */
+    private static function is_omittable_empty_document(array $record): bool
+    {
+        foreach (['T', 'A', 'B', 'W'] as $section) {
+            if (!array_key_exists($section, $record) || self::normalize_space($record[$section]) !== '') {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -282,6 +331,18 @@ final class WP_FTS_Cranfield_Relevance_Gate
             throw new RuntimeException("Cranfield record without .I id in {$path}.");
         }
 
+        return self::canonical_cranfield_id($id);
+    }
+
+    private static function canonical_cranfield_id(string $id): string
+    {
+        $id = trim($id);
+        if (preg_match('/^[0-9]+$/', $id) === 1) {
+            $id = ltrim($id, '0');
+
+            return $id !== '' ? $id : '0';
+        }
+
         return $id;
     }
 
@@ -315,13 +376,53 @@ final class WP_FTS_Cranfield_Relevance_Gate
             if (!is_numeric($grade)) {
                 throw new RuntimeException(sprintf('Non-numeric Cranfield qrels grade in %s on line %d.', $path, $lineNumber + 1));
             }
-            $qrels[(string) $queryId][(string) $docId] = max(0, (int) $grade);
+            $queryId = self::canonical_cranfield_id((string) $queryId);
+            $docId = self::canonical_cranfield_id((string) $docId);
+            $qrels[$queryId][$docId] = max(0, (int) $grade);
         }
         if ($qrels === []) {
             throw new RuntimeException("No Cranfield qrels parsed from {$path}.");
         }
 
         return $qrels;
+    }
+
+    /**
+     * Official Cranfield qrels number queries by their ordinal position in
+     * cran.qry, while cran.qry .I ids can be padded and non-contiguous. Only use
+     * ordinal mapping when at least one qrel query id cannot match a parsed
+     * record id and every qrel query id is a valid query ordinal.
+     *
+     * @param array<string,array<string,int>> $qrels
+     * @param array<string,true> $queryIds
+     * @param array<string,string> $ordinalQueryIds
+     * @return array<string,array<string,int>>
+     */
+    private static function normalize_qrel_query_ids(array $qrels, array $queryIds, array $ordinalQueryIds): array
+    {
+        $hasUnknownRecordId = false;
+        foreach (array_keys($qrels) as $queryId) {
+            $queryId = (string) $queryId;
+            if (!isset($queryIds[$queryId])) {
+                $hasUnknownRecordId = true;
+            }
+            if (preg_match('/^[1-9][0-9]*$/', $queryId) !== 1 || !isset($ordinalQueryIds[$queryId])) {
+                return $qrels;
+            }
+        }
+        if (!$hasUnknownRecordId) {
+            return $qrels;
+        }
+
+        $normalized = [];
+        foreach ($qrels as $queryId => $judgments) {
+            $recordId = $ordinalQueryIds[(string) $queryId];
+            foreach ($judgments as $docId => $grade) {
+                $normalized[$recordId][$docId] = $grade;
+            }
+        }
+
+        return $normalized;
     }
 
     /**
