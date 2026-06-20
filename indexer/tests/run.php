@@ -3958,7 +3958,7 @@ PHP;
 
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
-    assert_same(['found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'render_block', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end and admin search replacement filters');
+    assert_same(['debug_bar_panels', 'found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'render_block', 'the_content', 'the_excerpt', 'the_title'], $filterHooks, 'bootstrap should register front-end, admin, and diagnostics filters');
 
     $searchActionPriorities = [];
     foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
@@ -4535,6 +4535,93 @@ test_case('health manual batch lock skip displays no-overlap notice', function (
     assert_contains('Another indexing batch is already running. No overlapping batch was started; try again shortly.', $html, 'manual health lock skip should explain that no overlap occurred');
     assert_same([], $fake->docs, 'manual health lock skip should not index content');
     assert_same(true, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['last_skipped_locked'] ?? null, 'manual health lock skip should update health state');
+});
+
+test_case('request diagnostics stay disabled for normal visitors and render escaped bounded admin output', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $normalQuery = new WP_FTS_Test_Query(['s' => 'visitor-debug-disabled', 'cat' => 7]);
+        WP_FTS_Plugin::prepare_frontend_search_query($normalQuery);
+        assert_same([], WP_FTS_Plugin::debug_traces(), 'diagnostics should collect nothing for normal visitors by default');
+
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+        $longQuery = '<script>alert(1)</script>' . str_repeat('x', 220);
+        WP_FTS_Plugin::prepare_frontend_search_query(new WP_FTS_Test_Query([
+            's' => $longQuery,
+            'cat' => 5,
+            'posts_per_page' => 10,
+        ]));
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'enabled diagnostics should capture one frontend bailout trace');
+        assert_same('bailed', $traces[0]['status'] ?? null, 'frontend bailout trace should be marked as bailed');
+        assert_contains('Unsupported query shape', (string) ($traces[0]['bailout_reason'] ?? ''), 'frontend bailout trace should include a readable reason');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [];
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+
+        assert_contains('Request diagnostics', $html, 'Health tab should expose diagnostics when Debug Bar is absent');
+        assert_contains('&lt;script&gt;alert(1)&lt;/script&gt;', $html, 'rendered diagnostics should escape query text');
+        assert_true(!str_contains($html, '<script>alert(1)</script>'), 'rendered diagnostics should not output raw query HTML');
+        assert_true(!str_contains($html, str_repeat('x', 180)), 'rendered diagnostics should truncate long query text');
+        assert_contains('...', $html, 'rendered diagnostics should indicate truncated values');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('Debug Bar diagnostics panel registration is conditional and safe', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+
+    if (!class_exists('Debug_Bar_Panel')) {
+        $unchanged = WP_FTS_Plugin::register_debug_bar_panel(['existing-panel']);
+        assert_same(['existing-panel'], $unchanged, 'Debug Bar panel callback should no-op when Debug Bar classes are absent');
+    }
+
+    if (!class_exists('Debug_Bar_Panel')) {
+        class Debug_Bar_Panel
+        {
+            public string $title = '';
+
+            public function init(): void
+            {
+            }
+
+            public function render(): void
+            {
+            }
+        }
+    }
+
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $panels = WP_FTS_Plugin::register_debug_bar_panel(['existing-panel']);
+    assert_same(2, count($panels), 'Debug Bar panel callback should append one panel when Debug Bar is available and visible');
+    $panel = $panels[1];
+    assert_true(is_object($panel), 'Debug Bar diagnostics panel should be an object');
+    $panel->init();
+    assert_same('FTS', $panel->title, 'Debug Bar diagnostics panel should use a compact title');
+
+    ob_start();
+    try {
+        $panel->render();
+        $html = ob_get_clean();
+    } catch (Throwable $e) {
+        ob_end_clean();
+        throw $e;
+    }
+    assert_contains('Full-Text Search diagnostics', is_string($html) ? $html : '', 'Debug Bar diagnostics panel should render the shared diagnostics surface');
 });
 
 test_case('playground blueprint preserves sandbox landing tab', function (): void {
@@ -5160,6 +5247,22 @@ test_case('sandbox searches existing indexed content without creating demo posts
         $html = wp_fts_test_capture_admin_sandbox();
         assert_contains('Search returned 1 result(s).', $html, 'sandbox should search the existing full-text index');
         assert_contains('Existing Indexed Sandbox Content', $html, 'sandbox search should return existing indexed site content');
+        $traces = WP_FTS_Plugin::debug_traces();
+        $sandboxTrace = null;
+        foreach ($traces as $trace) {
+            if (($trace['context'] ?? null) === 'sandbox search') {
+                $sandboxTrace = $trace;
+                break;
+            }
+        }
+        assert_true(is_array($sandboxTrace), 'sandbox diagnostics should record the sandbox search context');
+        assert_same('ran', $sandboxTrace['status'] ?? null, 'sandbox diagnostics should mark successful searches as ran');
+        assert_same('existingneedle', $sandboxTrace['search_text'] ?? null, 'sandbox diagnostics should record bounded search text');
+        assert_same('en', $sandboxTrace['query_lang'] ?? null, 'sandbox diagnostics should record selected query language');
+        $sandboxCounts = is_array($sandboxTrace['counts'] ?? null) ? $sandboxTrace['counts'] : [];
+        assert_same(1, (int) ($sandboxCounts['visible_results'] ?? 0), 'sandbox diagnostics should count visible results');
+        $sandboxTimings = is_array($sandboxTrace['timings_ms'] ?? null) ? $sandboxTrace['timings_ms'] : [];
+        assert_true(array_key_exists('storage/search', $sandboxTimings), 'sandbox diagnostics should record storage/search timing');
         assert_same([904], array_keys($GLOBALS['wp_fts_test_posts']), 'sandbox search should not add demo posts alongside existing content');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION]), 'sandbox search should not write the legacy demo post option');
         foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
@@ -6072,6 +6175,87 @@ test_case('front-end main query search is replaced with FTS-ranked WP_Post resul
             wp_fts_test_end_frontend_search_loop($query);
         }
         assert_contains('<mark>frontneedle</mark>', $excerpt, 'front-end excerpts should use highlighted FTS snippets in the replaced main loop');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('enabled diagnostics record frontend search timings counts language settings and highlights', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $low = (object) [
+        'ID' => 505,
+        'post_title' => 'Lower diagnostics rank',
+        'post_content' => '<p>diagnosticneedle appears once.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-15 00:00:00',
+    ];
+    $high = (object) [
+        'ID' => 506,
+        'post_title' => 'Higher diagnostics rank',
+        'post_content' => '<p>diagnosticneedle diagnosticneedle diagnosticneedle.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-15 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][505] = $low;
+    $GLOBALS['wp_fts_test_posts'][506] = $high;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(505, $low, true);
+        WP_FTS_Plugin::handle_post_save(506, $high, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'diagnosticneedle',
+            'posts_per_page' => 10,
+            'paged' => 1,
+            'post_type' => 'post',
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($query);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        assert_same([506, 505], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'diagnostic frontend search should still return FTS-ranked posts');
+
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            WP_FTS_Plugin::frontend_search_excerpt('', $posts[0]);
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+        }
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'frontend diagnostics should record one run trace');
+        $trace = $traces[0];
+        assert_same('frontend search', $trace['context'] ?? null, 'frontend diagnostics should record the request context');
+        assert_same('ran', $trace['status'] ?? null, 'frontend diagnostics should mark successful FTS replacement as ran');
+        assert_same('diagnosticneedle', $trace['search_text'] ?? null, 'frontend diagnostics should record bounded search text');
+        assert_same('en', $trace['query_lang'] ?? null, 'frontend diagnostics should record the resolved query language');
+
+        $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
+        assert_same('enabled', $settings['public_site_search'] ?? null, 'frontend diagnostics should record public search replacement setting');
+        assert_same('OR', $settings['match_mode'] ?? null, 'frontend diagnostics should record match mode setting');
+        assert_same('enabled', $settings['prefix_matching'] ?? null, 'frontend diagnostics should record prefix matching setting');
+
+        $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
+        assert_true((int) ($counts['candidate_rows'] ?? 0) >= 2, 'frontend diagnostics should count candidate rows');
+        assert_same(2, (int) ($counts['result_ids_returned'] ?? 0), 'frontend diagnostics should count returned result ids');
+        assert_same(2, (int) ($counts['visible_results'] ?? 0), 'frontend diagnostics should count visible results');
+        assert_true((int) ($counts['snippets_generated'] ?? 0) >= 2, 'frontend diagnostics should count generated snippets');
+        assert_true((int) ($counts['highlight_replacements'] ?? 0) >= 1, 'frontend diagnostics should count rendered highlight replacements');
+
+        $timings = is_array($trace['timings_ms'] ?? null) ? $trace['timings_ms'] : [];
+        foreach (['analyzer/query preparation', 'storage/search', 'visibility filtering', 'snippet generation', 'title highlighting', 'total'] as $phase) {
+            assert_true(array_key_exists($phase, $timings), "frontend diagnostics should record {$phase} timing");
+            assert_true((float) $timings[$phase] >= 0.0, "{$phase} timing should be non-negative");
+        }
     } finally {
         $wpdb = $oldWpdb;
     }
