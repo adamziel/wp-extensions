@@ -162,6 +162,118 @@ $resultExplain = $explainPayload['explain']['results'][0] ?? [];
 wp_fts_component_hardening_check((int) ($resultExplain['doc_id'] ?? 0) > 0, 'explain should include per-result diagnostics for the returned page');
 wp_fts_component_hardening_check(($resultExplain['matches'] ?? []) !== [], 'explain per-result diagnostics should include matched terms');
 
+$fieldStorage = new WP_FTS_Storage_InMemory();
+$fieldIndexer = new WP_FTS_Indexer($fieldStorage, $analyzer);
+wp_fts_component_hardening_check($fieldIndexer->index_document_fields(501, [
+    ['name' => 'title', 'text' => 'titlealpha sharedfield', 'boost' => 5.0],
+    ['name' => 'content', 'text' => 'contentbeta sharedfield', 'boost' => 1.0],
+    ['name' => 'excerpt', 'text' => 'excerptgamma sharedfield', 'boost' => 2.0],
+    ['name' => 'rendered', 'text' => 'rendereddelta sharedfield', 'boost' => 1.5],
+    ['name' => 'custom_fields', 'text' => 'customomega sharedfield', 'boost' => 3.0],
+], [
+    'lang' => 'en',
+    'metadata' => [
+        'post_id' => 501,
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-02-01 00:00:00',
+        'title' => 'Field explain fixture',
+    ],
+]), 'field explain multi-field fixture should index');
+wp_fts_component_hardening_check($fieldIndexer->index_document_fields(502, [
+    ['name' => 'title', 'text' => 'contentbeta swapped title', 'boost' => 5.0],
+    ['name' => 'content', 'text' => 'titlealpha swapped content', 'boost' => 1.0],
+], [
+    'lang' => 'en',
+    'metadata' => [
+        'post_id' => 502,
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-02-02 00:00:00',
+        'title' => 'Swapped field explain fixture',
+    ],
+]), 'field explain swapped-field fixture should index');
+$fieldSearcher = new WP_FTS_Searcher($fieldStorage, $analyzer);
+$fieldDefault = $fieldSearcher->search('titlealpha contentbeta', ['lang' => 'en', 'limit' => 10]);
+wp_fts_component_hardening_check(!array_key_exists('field_matches', $fieldDefault[0] ?? []), 'default search rows should not expose explain field diagnostics');
+$fieldExplain = $fieldSearcher->search('titlealpha contentbeta excerptgamma rendereddelta customomega', [
+    'lang' => 'en',
+    'limit' => 5,
+    'include_total' => true,
+    'explain' => true,
+]);
+$fieldResult = [];
+foreach (($fieldExplain['explain']['results'] ?? []) as $row) {
+    if (($row['doc_id'] ?? null) === 501) {
+        $fieldResult = $row;
+        break;
+    }
+}
+wp_fts_component_hardening_check($fieldResult !== [], 'field explain should include the multi-field document');
+$fieldMatches = $fieldResult['field_matches'] ?? [];
+wp_fts_component_hardening_check(is_array($fieldMatches) && $fieldMatches !== [], 'field explain should include per-field matches');
+$fieldNames = array_column($fieldMatches, 'field');
+foreach (['title', 'content', 'excerpt', 'rendered', 'custom_fields'] as $fieldName) {
+    wp_fts_component_hardening_check(in_array($fieldName, $fieldNames, true), "field explain should report {$fieldName} matches");
+}
+$titleField = [];
+foreach ($fieldMatches as $fieldMatch) {
+    if (($fieldMatch['field'] ?? null) === 'title') {
+        $titleField = $fieldMatch;
+        break;
+    }
+}
+wp_fts_component_hardening_same(5.0, $titleField['weight'] ?? null, 'field explain should expose configured title weight');
+wp_fts_component_hardening_check((int) ($titleField['match_count'] ?? 0) > 0, 'field explain should count title hits');
+wp_fts_component_hardening_check((float) ($titleField['weighted_match_count'] ?? 0.0) >= 5.0, 'field explain should include weighted title hit counts');
+wp_fts_component_hardening_check((float) ($titleField['score_subtotal'] ?? 0.0) > 0.0, 'field explain should include a bounded score subtotal');
+wp_fts_component_hardening_check(($titleField['terms'][0]['term'] ?? null) === 'titlealpha', 'field explain should list matched analyzed terms');
+
+$swappedResult = [];
+foreach (($fieldExplain['explain']['results'] ?? []) as $row) {
+    if (($row['doc_id'] ?? null) === 502) {
+        $swappedResult = $row;
+        break;
+    }
+}
+wp_fts_component_hardening_check($swappedResult !== [], 'field explain should include the swapped-field document');
+$swappedFields = array_column($swappedResult['field_matches'] ?? [], 'field');
+wp_fts_component_hardening_check(in_array('title', $swappedFields, true) && in_array('content', $swappedFields, true), 'field explain should describe different matching fields on different documents');
+wp_fts_component_hardening_same([], $fieldSearcher->search('rendereddeltas', ['lang' => 'en', 'mode' => 'AND']), 'field explain support should not add hard-coded word-family matching');
+
+$manyFields = [];
+$manyTerms = [];
+for ($i = 0; $i < 12; $i++) {
+    $termsForField = [];
+    for ($j = 0; $j < 8; $j++) {
+        $term = "boundfield{$i}term{$j}";
+        $termsForField[] = $term;
+        $manyTerms[] = $term;
+    }
+    $manyFields[] = ['name' => "field_{$i}", 'text' => implode(' ', $termsForField), 'boost' => 1.0 + $i];
+}
+wp_fts_component_hardening_check($fieldIndexer->index_document_fields(503, $manyFields, [
+    'lang' => 'en',
+    'metadata' => [
+        'post_id' => 503,
+        'post_type' => 'post',
+        'post_status' => 'publish',
+        'post_date_gmt' => '2026-02-03 00:00:00',
+        'title' => 'Bounded field explain fixture',
+    ],
+]), 'field explain bounded fixture should index');
+$boundedExplain = $fieldSearcher->search(implode(' ', $manyTerms), [
+    'lang' => 'en',
+    'limit' => 1,
+    'include_total' => true,
+    'explain' => true,
+]);
+$boundedFields = $boundedExplain['explain']['results'][0]['field_matches'] ?? [];
+wp_fts_component_hardening_check(count($boundedFields) <= 6, 'field explain should cap fields per result');
+wp_fts_component_hardening_same(true, $boundedExplain['explain']['results'][0]['field_matches_more'] ?? null, 'field explain should flag omitted field rows');
+wp_fts_component_hardening_check(count($boundedFields[0]['terms'] ?? []) <= 6, 'field explain should cap matched terms per field');
+wp_fts_component_hardening_same(true, $boundedFields[0]['terms_more'] ?? null, 'field explain should flag omitted per-field terms');
+
 $stemAnalyzer = new WP_FTS_Analyzer([
     'auto_detect_language' => false,
     'default_lang' => 'en',

@@ -785,9 +785,10 @@ scan visible text nodes and source offsets rather than applying regex
 replacements, preserving inline markup without marking script, style, or comment
 text.
 
-Current search does not support phrases, positions, field-specific result
-explanations, facets, typo tolerance, query-time synonyms, or cross-language
-score merging.
+Current search does not support phrases, positions, facets, typo tolerance,
+query-time synonyms, pagination cursors, or cross-language score merging. Explain
+diagnostics can report bounded field-level result matches for indexed field
+sources when that metadata is available.
 
 ## Storage Prefix
 

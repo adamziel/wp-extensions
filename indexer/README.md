@@ -161,7 +161,7 @@ content or create sample posts.
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
-| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, recency boost status, per-result match details, performance-budget status, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, recency boost status, per-result and field-specific match details, performance-budget status, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
 
 ## Search Accuracy And Automatic Fast Mode
 

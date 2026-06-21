@@ -11,6 +11,9 @@ declare(strict_types=1);
 final class WP_FTS_Indexer
 {
     private const INDEX_SIGNATURE_VERSION = 'wp-fts-indexer-v2';
+    private const FIELD_METADATA_MAX_FIELDS = 16;
+    private const FIELD_METADATA_TEXT_BYTES = 2000;
+    private const FIELD_METADATA_HTML_BYTES = 2000;
 
     /**
      * @param WP_FTS_Storage $storage Storage backend for terms, documents, and
@@ -107,6 +110,12 @@ final class WP_FTS_Indexer
             $searchHtml = $this->fields_search_html($fields, (int) ($opts['metadata_html_limit'] ?? $opts['metadata_text_limit'] ?? 20000));
             if ($searchHtml !== '') {
                 $metadata['search_html'] = $searchHtml;
+            }
+        }
+        if ($metadata !== null && !array_key_exists('search_fields', $metadata)) {
+            $searchFields = $this->fields_search_metadata($fields, $opts);
+            if ($searchFields !== []) {
+                $metadata['search_fields'] = $searchFields;
             }
         }
         $hash = $this->content_hash($this->fields_hash_source($fields, $metadata), $primaryLang);
@@ -533,6 +542,68 @@ final class WP_FTS_Indexer
         }
 
         return rtrim(WP_FTS_Utf8::truncate_bytes(implode(' ', array_keys($fragments)), max(1, $limit)));
+    }
+
+    /**
+     * Store a compact per-field source sidecar for explain-only diagnostics.
+     *
+     * @param array<int,array{name:string,text:string,html?:string,boost:float}> $fields
+     * @return array<int,array{name:string,text:string,boost:float,html?:string}>
+     */
+    private function fields_search_metadata(array $fields, array $opts): array
+    {
+        $fieldLimit = $this->bounded_positive_option(
+            $opts['metadata_field_limit'] ?? null,
+            self::FIELD_METADATA_MAX_FIELDS,
+            1,
+            100
+        );
+        $textLimit = $this->bounded_positive_option(
+            $opts['metadata_field_text_limit'] ?? null,
+            self::FIELD_METADATA_TEXT_BYTES,
+            1,
+            20000
+        );
+        $htmlLimit = $this->bounded_positive_option(
+            $opts['metadata_field_html_limit'] ?? null,
+            self::FIELD_METADATA_HTML_BYTES,
+            1,
+            20000
+        );
+
+        $metadata = [];
+        foreach ($fields as $field) {
+            $name = trim((string) ($field['name'] ?? ''));
+            $text = rtrim(WP_FTS_Utf8::truncate_bytes((string) ($field['text'] ?? ''), $textLimit));
+            $html = isset($field['html'])
+                ? rtrim(WP_FTS_Utf8::truncate_bytes((string) $field['html'], $htmlLimit))
+                : '';
+            if ($name === '' || ($text === '' && trim($html) === '')) {
+                continue;
+            }
+
+            $row = [
+                'name' => $name,
+                'text' => $text,
+                'boost' => $this->normalize_field_boost((float) ($field['boost'] ?? 1.0)),
+            ];
+            if (trim($html) !== '') {
+                $row['html'] = $html;
+            }
+            $metadata[] = $row;
+            if (count($metadata) >= $fieldLimit) {
+                break;
+            }
+        }
+
+        return $metadata;
+    }
+
+    private function bounded_positive_option(mixed $value, int $default, int $min, int $max): int
+    {
+        $resolved = is_numeric($value) ? (int) $value : $default;
+
+        return max($min, min($max, $resolved));
     }
 
     /**

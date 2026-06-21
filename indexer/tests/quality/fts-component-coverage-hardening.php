@@ -150,6 +150,120 @@ test_case('quality component generated search policies match deterministic metad
     }
 });
 
+test_case('quality component field-specific explain diagnostics are weighted bounded and opt-in', function (): void {
+    $analyzer = new WP_FTS_Analyzer([
+        'auto_detect_language' => false,
+        'enable_stemming' => false,
+        'default_lang' => 'en',
+    ]);
+    $storage = new WP_FTS_Storage_InMemory();
+    $indexer = new WP_FTS_Indexer($storage, $analyzer);
+
+    assert_true($indexer->index_document_fields(9101, [
+        ['name' => 'title', 'text' => 'titlealpha sharedfield', 'boost' => 5.0],
+        ['name' => 'content', 'text' => 'contentbeta sharedfield', 'boost' => 1.0],
+        ['name' => 'excerpt', 'text' => 'excerptgamma sharedfield', 'boost' => 2.0],
+        ['name' => 'rendered', 'text' => 'rendereddelta sharedfield', 'boost' => 1.5],
+        ['name' => 'custom_fields', 'text' => 'customomega sharedfield', 'boost' => 3.0],
+    ], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 9101,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-04-01 00:00:00',
+            'title' => 'Field explain quality fixture',
+        ],
+    ]), 'quality field explain multi-field fixture should index');
+    assert_true($indexer->index_document_fields(9102, [
+        ['name' => 'title', 'text' => 'contentbeta swapped title', 'boost' => 5.0],
+        ['name' => 'content', 'text' => 'titlealpha swapped content', 'boost' => 1.0],
+    ], [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 9102,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-04-02 00:00:00',
+            'title' => 'Field explain swapped quality fixture',
+        ],
+    ]), 'quality field explain swapped-field fixture should index');
+
+    $searcher = new WP_FTS_Searcher($storage, $analyzer);
+    $plainRows = $searcher->search('titlealpha contentbeta', ['lang' => 'en', 'limit' => 10]);
+    assert_true(!array_key_exists('field_matches', $plainRows[0] ?? []), 'plain field search should not expose diagnostics');
+    assert_same([], $searcher->search('rendereddeltas', ['lang' => 'en', 'mode' => 'AND']), 'field explain should not introduce hard-coded morphology');
+
+    $payload = $searcher->search('titlealpha contentbeta excerptgamma rendereddelta customomega', [
+        'lang' => 'en',
+        'limit' => 5,
+        'include_total' => true,
+        'explain' => true,
+    ]);
+    assert_true(!array_key_exists('field_matches', $payload['results'][0] ?? []), 'public result rows should stay compatible when explain is requested');
+
+    $byDoc = [];
+    foreach ($payload['explain']['results'] ?? [] as $row) {
+        $byDoc[(int) ($row['doc_id'] ?? 0)] = $row;
+    }
+    assert_true(isset($byDoc[9101], $byDoc[9102]), 'field explain should include both returned documents');
+    $fieldMatches = is_array($byDoc[9101]['field_matches'] ?? null) ? $byDoc[9101]['field_matches'] : [];
+    $fieldNames = array_column($fieldMatches, 'field');
+    foreach (['title', 'content', 'excerpt', 'rendered', 'custom_fields'] as $fieldName) {
+        assert_true(in_array($fieldName, $fieldNames, true), "quality field explain should include {$fieldName}");
+    }
+
+    $titleMatch = [];
+    foreach ($fieldMatches as $fieldMatch) {
+        if (($fieldMatch['field'] ?? null) === 'title') {
+            $titleMatch = $fieldMatch;
+            break;
+        }
+    }
+    assert_same(5.0, $titleMatch['weight'] ?? null, 'quality field explain should expose title weight');
+    assert_true((int) ($titleMatch['match_count'] ?? 0) > 0, 'quality field explain should count title matches');
+    assert_true((float) ($titleMatch['weighted_match_count'] ?? 0.0) >= 5.0, 'quality field explain should expose weighted title matches');
+    assert_true((float) ($titleMatch['score_subtotal'] ?? 0.0) > 0.0, 'quality field explain should expose score subtotal');
+    assert_same(true, $titleMatch['score_subtotal_approximate'] ?? null, 'quality field explain should mark score subtotal as approximate');
+    assert_same('titlealpha', $titleMatch['terms'][0]['term'] ?? null, 'quality field explain should list analyzed title term');
+
+    $swappedNames = array_column($byDoc[9102]['field_matches'] ?? [], 'field');
+    assert_true(in_array('title', $swappedNames, true) && in_array('content', $swappedNames, true), 'quality field explain should report different matching fields per document');
+
+    $manyFields = [];
+    $manyTerms = [];
+    for ($field = 0; $field < 12; $field++) {
+        $fieldTerms = [];
+        for ($term = 0; $term < 8; $term++) {
+            $value = "qualityfield{$field}term{$term}";
+            $fieldTerms[] = $value;
+            $manyTerms[] = $value;
+        }
+        $manyFields[] = ['name' => "quality_field_{$field}", 'text' => implode(' ', $fieldTerms), 'boost' => 1.0 + $field];
+    }
+    assert_true($indexer->index_document_fields(9103, $manyFields, [
+        'lang' => 'en',
+        'metadata' => [
+            'post_id' => 9103,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-04-03 00:00:00',
+            'title' => 'Bounded field explain quality fixture',
+        ],
+    ]), 'quality field explain bounded fixture should index');
+    $bounded = $searcher->search(implode(' ', $manyTerms), [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'explain' => true,
+    ]);
+    $boundedFields = $bounded['explain']['results'][0]['field_matches'] ?? [];
+    assert_true(count($boundedFields) <= 6, 'quality field explain should cap field entries');
+    assert_same(true, $bounded['explain']['results'][0]['field_matches_more'] ?? null, 'quality field explain should flag omitted fields');
+    assert_true(count($boundedFields[0]['terms'] ?? []) <= 6, 'quality field explain should cap terms per field');
+    assert_same(true, $boundedFields[0]['terms_more'] ?? null, 'quality field explain should flag omitted field terms');
+});
+
 test_case('quality component snippets preserve visible marks without exposing hidden HTML', function (): void {
     $analyzer = new WP_FTS_Analyzer([
         'auto_detect_language' => false,
