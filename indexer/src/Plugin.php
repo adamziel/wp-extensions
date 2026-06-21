@@ -253,6 +253,7 @@ final class WP_FTS_Plugin
     private const DEBUG_MAX_SQL_QUERIES = 8;
     private const DEBUG_MAX_ASSOC_ITEMS = 16;
     private const DEBUG_MAX_TIMING_PHASES = 16;
+    private const ANALYZER_PACK_STATUS_MATRIX_MAX_ROWS = 64;
     private const FTS_TABLE_SUFFIXES = [
         'fts_terms',
         'fts_postings',
@@ -4052,6 +4053,7 @@ final class WP_FTS_Plugin
     {
         echo '<h2>Analyzer packs</h2>';
         echo '<p>Analyzer packs add language-specific tokenization or word-form matching. Runtime packs affect real site searches; sandbox packs are bundled so Sandbox searches have realistic language behavior.</p>';
+        self::render_analyzer_pack_status_matrix();
         self::render_bundled_runtime_lemma_pack_controls();
         echo '<h3>Runtime analyzer packs</h3>';
         self::render_analyzer_pack_statuses(self::runtime_analyzer_pack_statuses());
@@ -6550,6 +6552,336 @@ final class WP_FTS_Plugin
             echo '</tr>';
         }
         echo '</tbody></table>';
+    }
+
+    private static function render_analyzer_pack_status_matrix(): void
+    {
+        $rows = self::analyzer_pack_status_matrix_rows();
+
+        echo '<h3>Analyzer pack status matrix</h3>';
+        echo '<p>Current WordPress site language: <strong>' . self::esc_html(self::sandbox_language_display(self::site_language())) . '</strong>.</p>';
+        echo '<table class="widefat striped wp-fts-analyzer-pack-status-matrix">';
+        echo '<thead><tr><th scope="col">Language</th><th scope="col">Runtime support</th><th scope="col">Runtime pack/status</th><th scope="col">Sandbox support</th><th scope="col">Server/runtime requirements</th><th scope="col">Action</th></tr></thead>';
+        echo '<tbody>';
+        foreach ($rows as $row) {
+            echo '<tr>';
+            echo '<td>' . self::esc_html($row['language_label']) . '</td>';
+            echo '<td>' . self::esc_html($row['runtime_support']) . '</td>';
+            echo '<td>' . self::esc_html($row['runtime_pack']) . '</td>';
+            echo '<td>' . self::esc_html($row['sandbox_support']) . '</td>';
+            echo '<td>' . self::esc_html($row['requirements']) . '</td>';
+            echo '<td>' . self::esc_html($row['action']) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    /**
+     * @return array<int,array{language_label:string,runtime_support:string,runtime_pack:string,sandbox_support:string,requirements:string,action:string}>
+     */
+    private static function analyzer_pack_status_matrix_rows(): array
+    {
+        $siteLanguage = WP_FTS_TermNamespace::canonicalize_lang(self::site_language(), WP_FTS_TermNamespace::DEFAULT_LANG);
+        $runtimeStatuses = self::runtime_analyzer_pack_statuses();
+        $sandboxStatuses = self::sandbox_demo_analyzer_pack_statuses();
+        $manifests = self::bundled_runtime_lemma_pack_control_manifests();
+        $controlRows = self::bundled_runtime_lemma_pack_control_rows($manifests);
+        $topLanguageConfig = self::top_language_pack_config_by_language();
+        $gzipAvailable = WP_FTS_AnalyzerPackValidator::gzip_available();
+        $rows = [];
+
+        foreach (self::analyzer_pack_status_matrix_languages($siteLanguage, $runtimeStatuses, $sandboxStatuses, $manifests, $topLanguageConfig) as $language) {
+            $controlRow = self::analyzer_pack_status_matrix_control_row_for_language($language, $controlRows);
+            $runtimeSupport = self::language_support_details($language, false);
+            $runtimeSupportLabel = self::analyzer_pack_status_matrix_support_label($language, $runtimeSupport, $topLanguageConfig);
+            $sandboxSupportLabel = self::analyzer_pack_status_matrix_support_label($language, self::language_support_details($language, true), $topLanguageConfig);
+            $matchingStatuses = self::analyzer_pack_status_matrix_matching_statuses($runtimeStatuses, $language);
+            $languageConfig = self::analyzer_pack_status_matrix_language_config($language, $topLanguageConfig);
+
+            $rows[] = [
+                'language_label' => self::sandbox_language_display($language) . ($language === $siteLanguage ? ' - current site language' : ''),
+                'runtime_support' => $runtimeSupportLabel,
+                'runtime_pack' => self::analyzer_pack_status_matrix_runtime_pack_summary($language, $matchingStatuses, $controlRow, $languageConfig, $gzipAvailable),
+                'sandbox_support' => $sandboxSupportLabel === $runtimeSupportLabel
+                    ? $sandboxSupportLabel . ' - same as runtime'
+                    : $sandboxSupportLabel . ' - differs from runtime',
+                'requirements' => self::analyzer_pack_status_matrix_requirements($runtimeSupportLabel, $controlRow, $languageConfig, $gzipAvailable),
+                'action' => self::analyzer_pack_status_matrix_action($runtimeSupportLabel, $controlRow, $languageConfig, $gzipAvailable),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $runtimeStatuses
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $sandboxStatuses
+     * @param array<string,string> $manifests
+     * @param array<string,array<string,mixed>> $topLanguageConfig
+     * @return string[]
+     */
+    private static function analyzer_pack_status_matrix_languages(string $siteLanguage, array $runtimeStatuses, array $sandboxStatuses, array $manifests, array $topLanguageConfig): array
+    {
+        $bounded = [];
+        $addLanguage = static function (mixed $language) use (&$bounded): void {
+            if (count($bounded) >= self::ANALYZER_PACK_STATUS_MATRIX_MAX_ROWS || !is_scalar($language)) {
+                return;
+            }
+
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language, WP_FTS_TermNamespace::DEFAULT_LANG);
+            if ($language === '' || isset($bounded[$language])) {
+                return;
+            }
+
+            $bounded[$language] = true;
+        };
+
+        $addLanguage($siteLanguage);
+        foreach (array_keys($topLanguageConfig) as $language) {
+            $addLanguage($language);
+        }
+        foreach (array_keys($manifests) as $language) {
+            $addLanguage($language);
+        }
+        foreach (array_merge($runtimeStatuses, $sandboxStatuses) as $status) {
+            $addLanguage($status['language'] ?? '');
+        }
+        foreach (array_keys(self::filter_controlled_runtime_lemma_pack_languages()) as $language) {
+            $addLanguage($language);
+        }
+
+        return array_keys($bounded);
+    }
+
+    /**
+     * @return array<string,array<string,mixed>>
+     */
+    private static function top_language_pack_config_by_language(): array
+    {
+        static $cache = null;
+        if (is_array($cache)) {
+            return $cache;
+        }
+
+        $cache = [];
+        $path = dirname(__DIR__) . '/config/top-language-lemma-packs.json';
+        $json = is_file($path) ? file_get_contents($path) : false;
+        if (!is_string($json)) {
+            return $cache;
+        }
+
+        $decoded = json_decode($json, true);
+        $entries = is_array($decoded) && isset($decoded['languages']) && is_array($decoded['languages'])
+            ? $decoded['languages']
+            : [];
+        foreach ($entries as $entry) {
+            if (!is_array($entry) || !is_scalar($entry['language'] ?? null)) {
+                continue;
+            }
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $entry['language'], WP_FTS_TermNamespace::DEFAULT_LANG);
+            if ($language === '') {
+                continue;
+            }
+            $cache[$language] = $entry;
+        }
+
+        return $cache;
+    }
+
+    /**
+     * @param array<string,array<string,mixed>> $topLanguageConfig
+     * @return array<string,mixed>
+     */
+    private static function analyzer_pack_status_matrix_language_config(string $language, array $topLanguageConfig): array
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG);
+        $base = self::base_language($language);
+
+        return $topLanguageConfig[$language] ?? $topLanguageConfig[$base] ?? [];
+    }
+
+    /**
+     * @param array{label:string,full:bool,reason:string,matched_language:string} $support
+     * @param array<string,array<string,mixed>> $topLanguageConfig
+     */
+    private static function analyzer_pack_status_matrix_support_label(string $language, array $support, array $topLanguageConfig): string
+    {
+        if ($support['label'] === 'Tokenizer pack') {
+            return 'Tokenizer-only support';
+        }
+
+        $languageConfig = self::analyzer_pack_status_matrix_language_config($language, $topLanguageConfig);
+        if (!$support['full'] && (string) ($languageConfig['support_kind'] ?? '') === 'tokenizer') {
+            return 'Tokenizer-only support';
+        }
+
+        return $support['label'];
+    }
+
+    /**
+     * @param array<int,array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}> $controlRows
+     * @return array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null
+     */
+    private static function analyzer_pack_status_matrix_control_row_for_language(string $language, array $controlRows): ?array
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG);
+        $base = self::base_language($language);
+        $baseRow = null;
+
+        foreach ($controlRows as $row) {
+            $rowLanguage = WP_FTS_TermNamespace::canonicalize_lang((string) ($row['language'] ?? ''), WP_FTS_TermNamespace::DEFAULT_LANG);
+            if ($rowLanguage === $language) {
+                return $row;
+            }
+            if ($base !== '' && $rowLanguage === $base) {
+                $baseRow = $row;
+            }
+        }
+
+        return $baseRow;
+    }
+
+    /**
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $statuses
+     * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
+     */
+    private static function analyzer_pack_status_matrix_matching_statuses(array $statuses, string $language): array
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG);
+        $base = self::base_language($language);
+        $matches = [];
+
+        foreach ($statuses as $status) {
+            $statusLanguage = WP_FTS_TermNamespace::canonicalize_lang((string) ($status['language'] ?? ''), WP_FTS_TermNamespace::DEFAULT_LANG);
+            if ($statusLanguage === $language || ($base !== '' && self::base_language($statusLanguage) === $base)) {
+                $matches[] = $status;
+            }
+        }
+
+        return $matches;
+    }
+
+    /**
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $statuses
+     * @param array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null $controlRow
+     * @param array<string,mixed> $languageConfig
+     */
+    private static function analyzer_pack_status_matrix_runtime_pack_summary(string $language, array $statuses, ?array $controlRow, array $languageConfig, bool $gzipAvailable): string
+    {
+        if ($statuses !== []) {
+            $summaries = [];
+            foreach ($statuses as $status) {
+                $summaries[] = self::analyzer_pack_status_matrix_status_summary($status);
+            }
+            if ($controlRow !== null) {
+                $summaries[] = $controlRow['status'] . ' Bundled pack: ' . $controlRow['pack_id'] . '.';
+            }
+
+            return implode(' ', $summaries);
+        }
+
+        if ((string) ($languageConfig['support_kind'] ?? '') === 'license_blocked') {
+            return 'License-blocked; no bundled runtime pack is offered.';
+        }
+
+        if ($controlRow !== null) {
+            if (!$gzipAvailable) {
+                return 'Bundled pack available but blocked by missing PHP gzip support: ' . $controlRow['pack_id'] . '.';
+            }
+
+            return $controlRow['status'] . ' Bundled pack: ' . $controlRow['pack_id'] . '.';
+        }
+
+        if ((string) ($languageConfig['support_kind'] ?? '') === 'tokenizer') {
+            return 'Tokenizer-only language; no runtime lemma pack is configured.';
+        }
+
+        return $languageConfig === []
+            ? 'Unsupported; no runtime analyzer pack is configured.'
+            : 'Missing; no runtime analyzer pack is configured.';
+    }
+
+    /**
+     * @param array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string} $status
+     */
+    private static function analyzer_pack_status_matrix_status_summary(array $status): string
+    {
+        $kind = (string) ($status['kind'] ?? 'pack');
+        $state = (string) ($status['status'] ?? 'unknown');
+        $packId = (string) ($status['pack_id'] ?? '');
+        if ($state === 'active') {
+            $scope = !empty($status['fixture_only']) ? 'fixture' : 'full local pack';
+            $pack = $packId !== '' ? ' Pack: ' . $packId . '.' : '';
+
+            return 'Active ' . $scope . ' ' . $kind . '.' . $pack;
+        }
+
+        $reason = trim((string) ($status['reason'] ?? ''));
+        $suffix = $reason !== '' ? ' ' . $reason : '';
+
+        return ucfirst($state) . ' ' . $kind . '.' . $suffix;
+    }
+
+    /**
+     * @param array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null $controlRow
+     * @param array<string,mixed> $languageConfig
+     */
+    private static function analyzer_pack_status_matrix_requirements(string $runtimeSupportLabel, ?array $controlRow, array $languageConfig, bool $gzipAvailable): string
+    {
+        if ((string) ($languageConfig['support_kind'] ?? '') === 'license_blocked') {
+            return 'Bundled pack redistribution is blocked by missing license evidence.';
+        }
+        if ($controlRow !== null && empty($controlRow['editable'])) {
+            return 'Managed outside this UI; verify external pack files remain readable.';
+        }
+        if ($controlRow !== null && !$gzipAvailable) {
+            return 'PHP gzip stream support is required before bundled gzip packs can be enabled.';
+        }
+        if ($controlRow !== null && !empty($controlRow['editable'])) {
+            return 'PHP gzip stream support is available for bundled packs.';
+        }
+        if ($runtimeSupportLabel === 'Fixture morphology') {
+            return 'Fixture coverage only; full production morphology needs a source-backed pack.';
+        }
+        if ($runtimeSupportLabel === 'Tokenizer-only support') {
+            return 'No morphology pack is active; tokenizer-only matching remains available.';
+        }
+
+        return 'No bundled runtime pack is available for this language.';
+    }
+
+    /**
+     * @param array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null $controlRow
+     * @param array<string,mixed> $languageConfig
+     */
+    private static function analyzer_pack_status_matrix_action(string $runtimeSupportLabel, ?array $controlRow, array $languageConfig, bool $gzipAvailable): string
+    {
+        if ((string) ($languageConfig['support_kind'] ?? '') === 'license_blocked') {
+            return 'Configure an external pack with usable license evidence, or accept fallback.';
+        }
+        if ($controlRow !== null && empty($controlRow['editable'])) {
+            return 'Keep the external configuration, or change it outside this UI and reindex existing content.';
+        }
+        if ($controlRow !== null && !$gzipAvailable) {
+            return 'Install or enable PHP zlib/gzip support, then enable the bundled pack and reindex existing content.';
+        }
+        if ($controlRow !== null && !empty($controlRow['enabled'])) {
+            return 'Reindex existing content after enabling or changing analyzer packs.';
+        }
+        if ($controlRow !== null) {
+            return 'Enable the bundled pack, save, then reindex existing content.';
+        }
+        if ($runtimeSupportLabel === 'Full morphology') {
+            return 'Reindex existing content after analyzer changes.';
+        }
+        if ($runtimeSupportLabel === 'Fixture morphology') {
+            return 'Configure a source-backed external pack for full morphology, or accept fixture coverage.';
+        }
+        if ($runtimeSupportLabel === 'Tokenizer-only support') {
+            return 'Accept tokenizer-only support, or configure an external tokenizer or lemma pack.';
+        }
+
+        return 'Configure an external pack, or accept conservative fallback.';
     }
 
     private static function render_bundled_runtime_lemma_pack_controls(): void

@@ -5925,6 +5925,24 @@ test_case('settings page reports unsupported site language without storing fallb
     assert_true(!str_contains($html, 'fallback_language'), 'settings page should not store a stale fallback language value');
 });
 
+test_case('admin analyzer pack status matrix summarizes current language and blocked languages', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_locale'] = 'qaa';
+
+    $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+
+    assert_contains('wp-fts-analyzer-pack-status-matrix', $html, 'analyzer packs tab should render a status matrix');
+    assert_contains('Current WordPress site language: <strong>QAA (qaa)</strong>', $html, 'matrix should state the current WordPress site language');
+    assert_contains('QAA (qaa) - current site language', $html, 'matrix should put the current site language in the first row');
+    assert_contains('Conservative fallback', $html, 'matrix should show fallback support for unsupported current languages');
+    assert_contains('Unsupported; no runtime analyzer pack is configured.', $html, 'matrix should identify unsupported languages without inventing a pack');
+    assert_contains('Urdu (ur)', $html, 'matrix should include the known license-blocked Urdu lane');
+    assert_contains('License-blocked; no bundled runtime pack is offered.', $html, 'matrix should identify license-blocked languages');
+    assert_contains('Bundled pack redistribution is blocked by missing license evidence.', $html, 'matrix should explain the license-blocked server requirement');
+    assert_contains('Configure an external pack with usable license evidence, or accept fallback.', $html, 'matrix should provide license-blocked next steps');
+});
+
 test_case('settings page explains en-US support through active base English analyzer pack', function (): void {
     $packDir = temp_directory_path('admin_en_base_pack');
 
@@ -5951,6 +5969,9 @@ test_case('settings page explains en-US support through active base English anal
         assert_contains('English (en)', $analyzerHtml, 'analyzer packs table should list the active base English pack');
         assert_contains('en-synthetic-full-status', $analyzerHtml, 'analyzer packs table should expose the configured English pack id');
         assert_contains('Full local pack', $analyzerHtml, 'analyzer packs table should label the synthetic English pack as full local data');
+        assert_contains('English (en-US) - current site language', $analyzerHtml, 'matrix should include the current en-US site language row');
+        assert_contains('Active full local pack lemmatizer. Pack: en-synthetic-full-status.', $analyzerHtml, 'matrix should identify the active base English runtime pack without exposing its path');
+        assert_contains('Full morphology - same as runtime', $analyzerHtml, 'matrix should show full support consistently when runtime and sandbox both use the active pack');
     } finally {
         remove_directory_tree($packDir);
     }
@@ -6014,19 +6035,60 @@ test_case('admin analyzer packs tab renders bundled runtime pack controls when g
 
     $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
 
+    assert_contains('Analyzer pack status matrix', $html, 'analyzer packs tab should include the read-only status matrix');
     assert_contains('Bundled runtime lemma packs', $html, 'analyzer packs tab should include the bundled runtime control section');
     assert_contains('Custom pack paths can still be configured with the', $html, 'analyzer controls should keep custom paths out of the form');
     assert_contains('This page does not install external data or create sample content.', $html, 'analyzer controls should state the bounded side effects');
+    assert_contains('Urdu (ur)', $html, 'status matrix should include the license-blocked Urdu lane');
+    assert_contains('License-blocked; no bundled runtime pack is offered.', $html, 'status matrix should identify license-blocked bundled support');
     if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_contains('Available to enable. Bundled pack: en-unimorph-eng-66e0e9e8e2dc.', $html, 'matrix should show bundled runtime packs as available before they are enabled');
+        assert_contains('Enable the bundled pack, save, then reindex existing content.', $html, 'matrix should guide available bundled packs toward enable-and-reindex');
         assert_contains('name="wp_fts_bundled_runtime_lemma_packs[]"', $html, 'eligible bundled runtime packs should render checkbox controls');
         assert_contains('English (en)', $html, 'eligible bundled runtime controls should include English');
         assert_contains('en-unimorph-eng-66e0e9e8e2dc', $html, 'eligible bundled runtime controls should expose the bundled English pack id');
         assert_contains('Save bundled pack choices', $html, 'eligible bundled runtime controls should render a bounded save button');
         assert_true(!str_contains($html, 'name="wp_fts_bundled_runtime_manifest_path"'), 'analyzer controls should not expose arbitrary manifest path inputs');
     } else {
+        assert_contains('Bundled pack available but blocked by missing PHP gzip support: en-unimorph-eng-66e0e9e8e2dc.', $html, 'matrix should show why bundled gzip packs are unavailable');
+        assert_contains('PHP gzip stream support is required before bundled gzip packs can be enabled.', $html, 'matrix should explain the missing gzip requirement');
+        assert_contains('Install or enable PHP zlib/gzip support, then enable the bundled pack and reindex existing content.', $html, 'matrix should not render misleading enable actions without gzip');
         assert_contains('does not provide gzip stream support', $html, 'gzip-free runtimes should explain why bundled controls are unavailable');
         assert_true(!str_contains($html, 'name="wp_fts_bundled_runtime_lemma_packs[]"'), 'gzip-free runtimes should not render misleading enable controls');
     }
+});
+
+test_case('admin analyzer pack status matrix reports bundled enabled external and filter-controlled states', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so enabled bundled runtime analyzer matrix coverage is skipped.');
+        return;
+    }
+
+    $manifests = bundled_unimorph_top_language_pack_manifests();
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'lemmatizer_packs_by_lang' => [
+            'en' => $manifests['en'],
+            'bn' => '/srv/wp-fts/custom-bn/manifest.json',
+        ],
+    ];
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (array $options): array {
+        $options['lemmatizer_packs_by_lang']['de'] = '/srv/wp-fts/filter-de/manifest.json';
+
+        return $options;
+    };
+
+    $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+
+    assert_contains('Enabled from the bundled manifest. Bundled pack: en-unimorph-eng-66e0e9e8e2dc.', $html, 'matrix should report enabled bundled runtime packs');
+    assert_contains('Configured outside this UI by the stored analyzer option. Bundled pack: bn-unimorph-ben-55a44fa60e9b.', $html, 'matrix should report custom stored pack state');
+    assert_contains('Configured outside this UI by the analyzer options filter. Bundled pack: de-unimorph-deu-d226d2112d34.', $html, 'matrix should report filter-controlled pack state');
+    assert_contains('Available to enable. Bundled pack: es-unimorph-spa-b9655efb0e5c.', $html, 'matrix should keep other bundled languages available to enable');
+    assert_true(!str_contains($html, '/srv/wp-fts/custom-bn/manifest.json'), 'matrix should not expose arbitrary stored manifest paths');
+    assert_true(!str_contains($html, '/srv/wp-fts/filter-de/manifest.json'), 'matrix should not expose arbitrary filter manifest paths');
+    assert_true(!str_contains($html, 'name="wp_fts_bundled_runtime_manifest_path"'), 'matrix should not add arbitrary manifest path inputs');
 });
 
 test_case('admin analyzer pack save enables selected bundled runtime packs without indexing side effects', function (): void {
@@ -6060,6 +6122,7 @@ test_case('admin analyzer pack save enables selected bundled runtime packs witho
         $stored = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? [];
 
         assert_contains('Bundled analyzer pack settings saved. Reindex existing content', $html, 'successful bundled pack save should tell operators to reindex content');
+        assert_contains('Analyzer pack status matrix', $html, 'save response should still render the read-only status matrix');
         assert_same($manifests['en'], $stored['lemmatizer_packs_by_lang']['en'] ?? null, 'saving English should persist the bundled English manifest path');
         assert_same($manifests['bn'], $stored['lemmatizer_packs_by_lang']['bn'] ?? null, 'saving Bengali should persist the bundled Bengali manifest path');
         assert_true(!array_key_exists('unknown-language', $stored['lemmatizer_packs_by_lang'] ?? []), 'unknown submitted languages should be ignored');
