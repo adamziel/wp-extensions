@@ -55,6 +55,45 @@ current main until WordPress.org-style `readme.txt`, GPL-compatible package
 license evidence, valid directory assets, public redistribution policy, and
 public-submission authority evidence are supplied and reviewed.
 
+## Disposable Release Smoke
+
+Run the disposable WordPress release smoke only against a throwaway WordPress
+site. It installs and activates a direct-install ZIP, checks operator status,
+repairs schema without indexing content, creates one generated post fixture,
+runs one bounded indexing batch, verifies `wp fts search --format=json`, and
+then deletes only that generated fixture.
+
+The command exits with `SKIP:` and status 0 when WP-CLI or `WP_FTS_WP_PATH` is
+not configured, when `WP_FTS_WP_PATH` is not an installed WordPress root, or
+when the explicit disposable-site write guard is absent:
+
+```sh
+composer test:smoke:release
+```
+
+Minimal disposable-site run with an existing release ZIP:
+
+```sh
+touch /path/to/wordpress/.wp-fts-disposable-smoke
+WP_FTS_WP_PATH=/path/to/wordpress \
+WP_FTS_WP_CLI=wp \
+WP_FTS_RELEASE_ZIP=/path/to/wp-fts-indexer.zip \
+WP_FTS_DISPOSABLE_SMOKE_ALLOW=1 \
+php tools/smoke-disposable-wordpress-release.php
+```
+
+If `WP_FTS_RELEASE_ZIP` or `--zip=PATH` is omitted, the smoke builds a temporary
+direct-install ZIP with `tools/build-release-zip.php` from the current checkout
+and removes the temporary build directory on exit. For disposable roots where a
+marker file is inconvenient, set
+`WP_FTS_DISPOSABLE_SMOKE_CONFIRM_PATH=/path/to/wordpress` to the exact same
+real path as `WP_FTS_WP_PATH`.
+
+Do not set `WP_FTS_DISPOSABLE_SMOKE_ALLOW=1` for production or shared staging
+data. The smoke is an operator-facing release/package proof; it does not
+replace the normal PHP harness, the Playground SQLite smoke, or the optional
+real WordPress/MySQL integration and production-path proofs.
+
 ## Analyzer Language Quality
 
 Run the analyzer language corpus directly when changing language tokenization,

@@ -30,6 +30,7 @@
     "test:snowball": "php tests/snowball-compliance.php",
     "test:integration:real": "php tests/integration/real-wordpress-mysql.php",
     "test:integration:mysql-proof": "php tests/integration/real-mysql-production-proof.php",
-    "test:integration:concurrent": "php tests/integration/concurrent-indexing.php"
+    "test:integration:concurrent": "php tests/integration/concurrent-indexing.php",
+    "test:smoke:release": "php tools/smoke-disposable-wordpress-release.php"
   }
 }
