@@ -1515,6 +1515,8 @@ final class WP_FTS_Plugin
             'visible_results' => 0,
             'incoming_provider_results' => 0,
             'prior_provider_responses_replaced' => 0,
+            'snippets_reused' => 0,
+            'snippet_reuse_misses' => 0,
             'snippets_generated' => 0,
             'title_snippets_generated' => 0,
             'highlight_replacements' => 0,
@@ -8339,6 +8341,8 @@ JS;
         }
 
         $settings ??= self::settings();
+        $build_frontend_previews = $visibility_context === 'frontend';
+        $reuse_search_result_snippets = $build_frontend_previews && !empty($settings['highlight']);
         $prep_started = microtime(true);
         $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
         $search_options = [
@@ -8347,7 +8351,7 @@ JS;
             'offset' => 0,
             'include_total' => true,
             'include_metadata' => true,
-            'include_snippets' => true,
+            'include_snippets' => $reuse_search_result_snippets,
             'highlight' => $settings['highlight'],
             'snippet_length' => $settings['snippet_length'],
             'prefix_matching' => $settings['prefix_matching'],
@@ -8438,24 +8442,36 @@ JS;
                 }
 
                 $posts[] = $post;
-                $document_lang = self::frontend_result_language($post_id);
-                $result_lang = $document_lang !== '' ? $document_lang : $query_lang;
-                $snippet_started = microtime(true);
-                $snippet = self::frontend_content_preview_snippet($searcher, $post, $search_query, $query_lang, $result_lang, $snippet_languages);
-                self::debug_add_timing($trace_id, 'snippet generation', $snippet_started);
-                if ($snippet === '' && isset($row['snippet']) && is_scalar($row['snippet'])) {
-                    $snippet = self::sanitize_frontend_snippet_html((string) $row['snippet']);
-                }
-                if ($snippet !== '') {
-                    $snippets[$post_id] = $snippet;
-                    self::debug_add_count($trace_id, 'snippets_generated');
-                }
-                $title_started = microtime(true);
-                $title = self::frontend_title_snippet($searcher, $post, $search_query, $query_lang, $result_lang, $snippet_languages);
-                self::debug_add_timing($trace_id, 'title highlighting', $title_started);
-                if ($title !== '') {
-                    $titles[$post_id] = $title;
-                    self::debug_add_count($trace_id, 'title_snippets_generated');
+                if ($build_frontend_previews) {
+                    $document_lang = self::frontend_result_language($post_id);
+                    $result_lang = $document_lang !== '' ? $document_lang : $query_lang;
+                    $reuse_started = microtime(true);
+                    $snippet = self::frontend_reusable_content_snippet($row['snippet'] ?? null, $post);
+                    self::debug_add_timing($trace_id, 'snippet reuse', $reuse_started);
+                    if ($snippet !== '') {
+                        self::debug_add_count($trace_id, 'snippets_reused');
+                    } else {
+                        if (isset($row['snippet']) && is_scalar($row['snippet']) && trim((string) $row['snippet']) !== '') {
+                            self::debug_add_count($trace_id, 'snippet_reuse_misses');
+                        }
+                        $snippet_started = microtime(true);
+                        $snippet = self::frontend_content_preview_snippet($searcher, $post, $search_query, $query_lang, $result_lang, $snippet_languages);
+                        self::debug_add_timing($trace_id, 'snippet generation', $snippet_started);
+                        if ($snippet !== '') {
+                            self::debug_add_count($trace_id, 'snippets_generated');
+                        }
+                    }
+                    if ($snippet !== '') {
+                        $snippets[$post_id] = $snippet;
+                    }
+
+                    $title_started = microtime(true);
+                    $title = self::frontend_title_snippet($searcher, $post, $search_query, $query_lang, $result_lang, $snippet_languages);
+                    self::debug_add_timing($trace_id, 'title highlighting', $title_started);
+                    if ($title !== '') {
+                        $titles[$post_id] = $title;
+                        self::debug_add_count($trace_id, 'title_snippets_generated');
+                    }
                 }
             }
 
@@ -8504,6 +8520,49 @@ JS;
             $query,
             self::frontend_snippet_options($query_lang, $result_lang, self::settings()['snippet_length'], $languages)
         ));
+    }
+
+    private static function frontend_reusable_content_snippet(mixed $raw_snippet, object $post): string
+    {
+        if (!is_scalar($raw_snippet) || trim((string) $raw_snippet) === '') {
+            return '';
+        }
+
+        $snippet = self::sanitize_frontend_snippet_html((string) $raw_snippet);
+        if ($snippet === '' || !self::frontend_snippet_matches_post_content($snippet, $post)) {
+            return '';
+        }
+
+        return $snippet;
+    }
+
+    private static function frontend_snippet_matches_post_content(string $snippet, object $post): bool
+    {
+        $content = isset($post->post_content) && is_scalar($post->post_content)
+            ? (string) $post->post_content
+            : '';
+        if (trim($content) === '') {
+            return false;
+        }
+
+        $needle = self::frontend_normalized_visible_snippet_text($snippet);
+        if ($needle === '') {
+            return false;
+        }
+
+        $haystack = self::frontend_normalized_visible_snippet_text($content);
+
+        return $haystack !== '' && str_contains($haystack, $needle);
+    }
+
+    private static function frontend_normalized_visible_snippet_text(string $html): string
+    {
+        $text = WP_FTS_Html_Text_Stream::visible_text($html);
+        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+        $text = preg_replace('/^\.\.\.\s*/', '', $text) ?? $text;
+        $text = preg_replace('/\s*\.\.\.$/', '', $text) ?? $text;
+
+        return trim($text);
     }
 
     /**

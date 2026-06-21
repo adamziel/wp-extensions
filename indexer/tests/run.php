@@ -8803,7 +8803,7 @@ test_case('enabled diagnostics record frontend search timings counts language se
     $low = (object) [
         'ID' => 505,
         'post_title' => 'Lower diagnostics rank',
-        'post_content' => '<p>diagnosticneedle appears once.</p>',
+        'post_content' => '<p>diagnostic<em>needle</em> appears once.</p>',
         'post_excerpt' => '',
         'post_status' => 'publish',
         'post_type' => 'post',
@@ -8812,7 +8812,7 @@ test_case('enabled diagnostics record frontend search timings counts language se
     $high = (object) [
         'ID' => 506,
         'post_title' => 'Higher diagnostics rank',
-        'post_content' => '<p>diagnosticneedle diagnosticneedle diagnosticneedle.</p>',
+        'post_content' => '<p>diagnostic<em>needle</em> diagnostic<em>needle</em> diagnostic<em>needle</em>.</p>',
         'post_excerpt' => '',
         'post_status' => 'publish',
         'post_type' => 'post',
@@ -8863,14 +8863,16 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_true((int) ($counts['candidate_rows'] ?? 0) >= 2, 'frontend diagnostics should count candidate rows');
         assert_same(2, (int) ($counts['result_ids_returned'] ?? 0), 'frontend diagnostics should count returned result ids');
         assert_same(2, (int) ($counts['visible_results'] ?? 0), 'frontend diagnostics should count visible results');
-        assert_true((int) ($counts['snippets_generated'] ?? 0) >= 2, 'frontend diagnostics should count generated snippets');
+        assert_true((int) ($counts['snippets_reused'] ?? 0) >= 2, 'frontend diagnostics should count snippets reused from search results');
+        assert_same(0, (int) ($counts['snippets_generated'] ?? 0), 'frontend diagnostics should not count reused snippets as generated snippets');
         assert_true((int) ($counts['highlight_replacements'] ?? 0) >= 1, 'frontend diagnostics should count rendered highlight replacements');
 
         $timings = is_array($trace['timings_ms'] ?? null) ? $trace['timings_ms'] : [];
-        foreach (['analyzer/query preparation', 'storage/search', 'visibility filtering', 'snippet generation', 'title highlighting', 'total'] as $phase) {
+        foreach (['analyzer/query preparation', 'storage/search', 'visibility filtering', 'snippet reuse', 'title highlighting', 'total'] as $phase) {
             assert_true(array_key_exists($phase, $timings), "frontend diagnostics should record {$phase} timing");
             assert_true((float) $timings[$phase] >= 0.0, "{$phase} timing should be non-negative");
         }
+        assert_true(!array_key_exists('snippet generation', $timings), 'frontend diagnostics should not record snippet generation timing when all content snippets are reused');
 
         $explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
         assert_true($explain !== [], 'frontend diagnostics should capture search explain payload when tracing is active');
@@ -10012,6 +10014,7 @@ test_case('front-end search highlights title-only matches while keeping previews
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => $context === 'frontend search';
     add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_content'], 20, 1);
     add_filter('the_title', [WP_FTS_Plugin::class, 'frontend_search_title'], 10, 2);
 
@@ -10055,6 +10058,87 @@ test_case('front-end search highlights title-only matches while keeping previews
         assert_contains('Body preview stays tied to the actual edited post content.', $renderedContent, 'front-end content previews should come from post_content');
         assert_true(!str_contains($renderedContent, 'Running Title Signal'), 'front-end content previews should not include indexed title metadata for title-only matches');
         assert_true(!str_contains($renderedContent, 'Excerpt metadata'), 'front-end content previews should not include indexed excerpt metadata');
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'title-only front-end search should record one diagnostics trace');
+        $counts = is_array($traces[0]['counts'] ?? null) ? $traces[0]['counts'] : [];
+        assert_same(0, (int) ($counts['snippets_reused'] ?? 0), 'title-only aggregate snippets should not be reused as content previews');
+        assert_true((int) ($counts['snippet_reuse_misses'] ?? 0) >= 1, 'title-only aggregate snippets should count a reuse miss');
+        assert_true((int) ($counts['snippets_generated'] ?? 0) >= 1, 'title-only matches should fall back to content snippet generation');
+        assert_true((int) ($counts['title_snippets_generated'] ?? 0) >= 1, 'title-only matches should still generate title highlights');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('front-end search reuses sanitized searcher snippets for content previews', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => $context === 'frontend search';
+    add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_content'], 20, 1);
+    add_filter('the_excerpt', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 10, 1);
+    add_filter('the_title', [WP_FTS_Plugin::class, 'frontend_search_title'], 10, 2);
+
+    $post = (object) [
+        'ID' => 814,
+        'post_title' => 'Reusable reusecontentneedle title',
+        'post_content' => '<p>Intro <span onclick="alert(1)">reusecontent<em>needle</em></span> body preview.</p>',
+        'post_excerpt' => 'Metadata excerpt reusecontentneedle should not be needed.',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-13 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][814] = $post;
+
+    try {
+        WP_FTS_Plugin::handle_post_save(814, $post, true);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'reusecontentneedle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        assert_same([814], array_map(static fn(object $post): int => (int) $post->ID, $posts), 'reusable front-end search should return the matching post');
+
+        $oldGlobalPost = $GLOBALS['post'] ?? null;
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            $GLOBALS['post'] = $posts[0];
+            $renderedExcerpt = apply_filters('the_excerpt', 'Theme fallback excerpt.');
+            $renderedContent = apply_filters('the_content', '<p>Theme fallback content.</p>');
+            $renderedTitle = apply_filters('the_title', $post->post_title, 814);
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+            if ($oldGlobalPost === null) {
+                unset($GLOBALS['post']);
+            } else {
+                $GLOBALS['post'] = $oldGlobalPost;
+            }
+        }
+
+        assert_contains('<mark>', $renderedExcerpt, 'reused front-end excerpts should preserve highlighted content');
+        assert_contains('reusecontent<em>needle</em>', $renderedExcerpt, 'reused front-end excerpts should preserve split inline content');
+        assert_contains('<mark>', $renderedContent, 'reused front-end content previews should preserve highlighted content');
+        assert_contains('reusecontent<em>needle</em>', $renderedContent, 'reused front-end content previews should preserve split inline content');
+        assert_contains('<mark>reusecontentneedle</mark>', $renderedTitle, 'title highlighting should still run separately');
+        assert_true(!str_contains($renderedExcerpt, 'onclick'), 'reused snippets should still be sanitized before storage');
+        assert_true(!str_contains($renderedContent, 'Metadata excerpt'), 'reused content previews should not fall back to aggregate excerpt metadata');
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'reusable front-end search should record one diagnostics trace');
+        $counts = is_array($traces[0]['counts'] ?? null) ? $traces[0]['counts'] : [];
+        assert_same(1, (int) ($counts['snippets_reused'] ?? 0), 'reusable content snippets should count searcher snippet reuse');
+        assert_same(0, (int) ($counts['snippets_generated'] ?? 0), 'reusable content snippets should not be counted as generated fallback snippets');
+        assert_same(0, (int) ($counts['snippet_reuse_misses'] ?? 0), 'reusable content snippets should not count reuse misses');
+        assert_true((int) ($counts['title_snippets_generated'] ?? 0) >= 1, 'title highlighting should remain counted separately');
+        $timings = is_array($traces[0]['timings_ms'] ?? null) ? $traces[0]['timings_ms'] : [];
+        assert_true(array_key_exists('snippet reuse', $timings), 'reusable content snippets should report snippet reuse timing');
+        assert_true(!array_key_exists('snippet generation', $timings), 'reusable content snippets should not report fallback generation timing');
+        assert_true(array_key_exists('title highlighting', $timings), 'title highlighting timing should remain present');
     } finally {
         $wpdb = $oldWpdb;
     }
