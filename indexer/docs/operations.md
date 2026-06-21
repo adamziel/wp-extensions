@@ -161,6 +161,24 @@ bounded extracted text:
 wp fts search "release notes" --post_type=post,page --post_status=publish --after=2026-01-01 --snippet
 ```
 
+For scripts and runbooks, emit the paginated search payload as JSON:
+
+```sh
+wp fts search "release notes" --lang=en-US --limit=10 --format=json
+```
+
+To diagnose why a result matched or ranked, add bounded read-only search
+explain data:
+
+```sh
+wp fts search "release notes" --lang=en-US --explain --format=json
+```
+
+The explain payload includes the analyzed query plan, prefix and fast-mode
+state, scoring counts, recency boost details, storage metadata availability,
+and bounded per-result match details. It does not mutate the index and should be
+treated as operational diagnostics, not persistent logging.
+
 Use a recency boost only when operators want newer posts to receive a small
 query-time ranking lift from indexed `post_date_gmt` metadata:
 

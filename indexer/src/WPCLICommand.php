@@ -10,6 +10,8 @@ declare(strict_types=1);
 final class WP_FTS_WPCLI_Command
 {
     private const DEFAULT_REINDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
+    private const EXPLAIN_SUMMARY_MAX_ITEMS = 5;
+    private const EXPLAIN_SUMMARY_MAX_BYTES = 800;
 
     /**
      * Register the `wp fts` command when WP-CLI is loaded.
@@ -130,6 +132,12 @@ final class WP_FTS_WPCLI_Command
      * [--snippet]
      * : Include snippets from bounded extracted text.
      *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * [--explain]
+     * : Include bounded read-only search diagnostics. JSON output includes the structured explain payload; table output appends a concise summary.
+     *
      * @param string[] $args First positional argument is the query string.
      * @param array<string,mixed> $assoc_args Options for mode, limit, and
      *        language. Missing language lets the analyzer resolve or detect the
@@ -138,6 +146,8 @@ final class WP_FTS_WPCLI_Command
     public function search(array $args, array $assoc_args): void
     {
         $query = (string) ($args[0] ?? '');
+        $format = (string) $this->assoc_arg($assoc_args, ['format'], 'table');
+        $explain = $this->bool_flag_arg($assoc_args, ['explain', 'debug'], false);
         $searcher = new WP_FTS_Searcher($this->storage(), WP_FTS_Plugin::runtime_analyzer());
         $searchOptions = [
             'mode' => (string) ($assoc_args['mode'] ?? 'OR'),
@@ -147,6 +157,9 @@ final class WP_FTS_WPCLI_Command
             'include_metadata' => true,
             'include_snippets' => array_key_exists('snippet', $assoc_args) || array_key_exists('snippets', $assoc_args),
         ];
+        if ($explain) {
+            $searchOptions['explain'] = true;
+        }
         $langArg = $this->assoc_arg($assoc_args, ['lang', 'language'], null);
         if ($langArg !== null) {
             $searchOptions['lang'] = $this->language_arg($langArg);
@@ -195,6 +208,11 @@ final class WP_FTS_WPCLI_Command
 
         /** @var array{total:int,results:array<int,array<string,mixed>>} $payload */
         $payload = $searcher->search($query, $searchOptions);
+        if ($format === 'json') {
+            $this->line($this->json_payload($payload));
+            return;
+        }
+
         $results = $payload['results'];
         foreach ($results as &$row) {
             $row['total'] = $payload['total'];
@@ -212,7 +230,13 @@ final class WP_FTS_WPCLI_Command
             $fields[] = 'snippet';
         }
 
-        $this->format_items('table', $results, $fields);
+        $this->format_items($format, $results, $fields);
+        if ($explain && $format === 'table' && isset($payload['explain']) && is_array($payload['explain'])) {
+            $summaryRows = $this->search_explain_summary_rows($payload['explain']);
+            if ($summaryRows !== []) {
+                $this->format_items('table', $summaryRows, ['field', 'value']);
+            }
+        }
     }
 
     /**
@@ -730,6 +754,252 @@ final class WP_FTS_WPCLI_Command
         }
 
         return '';
+    }
+
+    /**
+     * Convert the structured searcher explain payload into a compact table.
+     *
+     * @param array<string,mixed> $explain
+     * @return array<int,array{field:string,value:string}>
+     */
+    private function search_explain_summary_rows(array $explain): array
+    {
+        $summaries = [
+            'storage' => $this->explain_storage_summary($explain['storage'] ?? null),
+            'query_plan' => $this->explain_query_plan_summary($explain['query_plan'] ?? null),
+            'fast_mode' => $this->explain_fast_mode_summary($explain['fast_mode'] ?? null),
+            'scoring' => $this->explain_scoring_summary($explain['scoring'] ?? null),
+            'recency_boost' => $this->explain_recency_boost_summary($explain['recency_boost'] ?? null),
+            'result_matches' => $this->explain_result_matches_summary($explain['results'] ?? null),
+        ];
+
+        $rows = [];
+        foreach ($summaries as $field => $summary) {
+            if ($summary !== '') {
+                $rows[] = [
+                    'field' => $field,
+                    'value' => $this->bounded_cli_text($summary, self::EXPLAIN_SUMMARY_MAX_BYTES),
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
+    private function explain_storage_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        return $this->summary_parts([
+            'backend' => $value['backend'] ?? '',
+            'metadata' => $value['metadata'] ?? '',
+        ]);
+    }
+
+    private function explain_query_plan_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $parts = [
+            $this->summary_parts([
+                'match_mode' => $value['match_mode'] ?? '',
+                'logical_groups' => $value['logical_group_count'] ?? '',
+                'prefix_matching' => $value['prefix_matching'] ?? '',
+                'prefix_added_terms' => $value['prefix_added_terms'] ?? '',
+                'prefix_min_length' => $value['prefix_min_length'] ?? '',
+                'prefix_max_terms' => $value['prefix_max_terms'] ?? '',
+            ]),
+        ];
+
+        if (isset($value['analyzed_languages']) && is_array($value['analyzed_languages'])) {
+            $parts[] = 'languages=' . $this->summary_list($value['analyzed_languages']);
+        }
+
+        $terms = [];
+        if (isset($value['terms']) && is_array($value['terms'])) {
+            foreach ($value['terms'] as $term) {
+                if (is_array($term)) {
+                    $terms[] = $this->explain_term_summary($term);
+                }
+                if (count($terms) >= self::EXPLAIN_SUMMARY_MAX_ITEMS) {
+                    break;
+                }
+            }
+        }
+        if ($terms !== []) {
+            $parts[] = 'terms=' . implode(' | ', array_filter($terms, static fn(string $term): bool => $term !== ''))
+                . (!empty($value['terms_more']) ? ' | ...' : '');
+        }
+
+        return implode(', ', array_filter($parts, static fn(string $part): bool => $part !== ''));
+    }
+
+    private function explain_fast_mode_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        return $this->summary_parts([
+            'mode' => $value['mode'] ?? '',
+            'source' => $value['source'] ?? '',
+            'estimated_candidates' => $value['estimated_candidates'] ?? '',
+            'threshold' => $value['threshold'] ?? '',
+            'candidate_cap' => $value['candidate_cap'] ?? '',
+        ]);
+    }
+
+    private function explain_scoring_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        return $this->summary_parts([
+            'candidate_rows_fetched' => $value['candidate_rows_fetched'] ?? '',
+            'candidate_rows_considered' => $value['candidate_rows_considered'] ?? '',
+            'candidate_docs_considered' => $value['candidate_docs_considered'] ?? '',
+            'candidate_docs_scored' => $value['candidate_docs_scored'] ?? '',
+            'scoring_terms' => $value['scoring_terms'] ?? '',
+            'total' => $value['total'] ?? '',
+            'total_accuracy' => $value['total_accuracy'] ?? '',
+        ]);
+    }
+
+    private function explain_recency_boost_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        return $this->summary_parts([
+            'enabled' => $value['enabled'] ?? '',
+            'strength' => $value['strength'] ?? '',
+            'half_life_days' => $value['half_life_days'] ?? '',
+            'documents_considered' => $value['documents_considered'] ?? '',
+            'documents_applied' => $value['documents_applied'] ?? '',
+            'metadata_unavailable' => $value['metadata_unavailable'] ?? '',
+            'missing_or_invalid_dates' => $value['missing_or_invalid_dates'] ?? '',
+        ]);
+    }
+
+    private function explain_result_matches_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $rows = [];
+        foreach ($value as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $matches = [];
+            if (isset($row['matches']) && is_array($row['matches'])) {
+                foreach ($row['matches'] as $match) {
+                    if (is_array($match)) {
+                        $matches[] = $this->explain_term_summary($match);
+                    }
+                    if (count($matches) >= self::EXPLAIN_SUMMARY_MAX_ITEMS) {
+                        break;
+                    }
+                }
+            }
+            $rows[] = 'doc ' . $this->bounded_cli_text($row['doc_id'] ?? '?', 40) . '=' . ($matches !== [] ? implode(' | ', array_filter($matches)) : '-')
+                . (!empty($row['matches_more']) ? ' | ...' : '');
+            if (count($rows) >= self::EXPLAIN_SUMMARY_MAX_ITEMS) {
+                break;
+            }
+        }
+
+        return implode('; ', $rows);
+    }
+
+    /**
+     * @param array<string,mixed> $term
+     */
+    private function explain_term_summary(array $term): string
+    {
+        $lang = $this->bounded_cli_text($term['lang'] ?? '', 40);
+        $surface = $this->bounded_cli_text($term['surface'] ?? '', 80);
+        $analyzed = $this->bounded_cli_text($term['term'] ?? '', 80);
+        $rank = $this->bounded_cli_text($term['rank_class'] ?? '', 40);
+
+        $text = $analyzed;
+        if ($surface !== '' && $analyzed !== '' && $surface !== $analyzed) {
+            $text = $surface . '->' . $analyzed;
+        } elseif ($surface !== '') {
+            $text = $surface;
+        }
+
+        return trim($lang . ':' . $text . ($rank !== '' ? ' ' . $rank : ''));
+    }
+
+    /**
+     * @param array<string,mixed> $parts
+     */
+    private function summary_parts(array $parts): string
+    {
+        $summary = [];
+        foreach ($parts as $key => $value) {
+            $formatted = $this->bounded_cli_text($value, 120);
+            if ($formatted !== '') {
+                $summary[] = $key . '=' . $formatted;
+            }
+        }
+
+        return implode(', ', $summary);
+    }
+
+    /**
+     * @param array<int,mixed> $values
+     */
+    private function summary_list(array $values): string
+    {
+        $items = [];
+        foreach ($values as $value) {
+            $items[] = $this->bounded_cli_text($value, 80);
+            if (count($items) >= self::EXPLAIN_SUMMARY_MAX_ITEMS) {
+                break;
+            }
+        }
+
+        $items = array_values(array_filter($items, static fn(string $item): bool => $item !== ''));
+        if (count($values) > count($items)) {
+            $items[] = '...';
+        }
+
+        return implode(',', $items);
+    }
+
+    private function bounded_cli_text(mixed $value, int $maxBytes): string
+    {
+        if (is_bool($value)) {
+            $text = $value ? 'yes' : 'no';
+        } elseif ($value === null) {
+            $text = '';
+        } elseif (is_scalar($value)) {
+            $text = (string) $value;
+        } else {
+            $text = $this->json_payload(is_array($value) ? $value : []);
+        }
+
+        $text = class_exists('WP_FTS_Utf8') ? WP_FTS_Utf8::repair($text) : $text;
+        $text = trim(str_replace(["\r", "\n", "\t"], ' ', $text));
+        $text = preg_replace('/\s+/', ' ', $text) ?? $text;
+        if ($maxBytes <= 0 || strlen($text) <= $maxBytes) {
+            return $text;
+        }
+
+        if (class_exists('WP_FTS_Utf8')) {
+            return rtrim(WP_FTS_Utf8::truncate_bytes($text, max(0, $maxBytes - 3))) . '...';
+        }
+
+        return rtrim(substr($text, 0, max(0, $maxBytes - 3))) . '...';
     }
 
     /**

@@ -15166,6 +15166,158 @@ test_case('wp cli reindex accepts language source filters and limit', function (
     assert_same(['publish', 'draft', 'post', 'page', 0, 1], $postSelect['args'], 'CLI source filters and remaining limit should be prepared');
 });
 
+function wp_fts_test_with_cli_search_index(callable $callback): mixed
+{
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    try {
+        $storage = WP_FTS_Plugin::storage(true);
+        $analyzer = WP_FTS_Plugin::runtime_analyzer();
+        $indexer = new WP_FTS_Indexer($storage, $analyzer);
+        $indexer->index_document_fields(1, [['name' => 'content', 'text' => 'needle cli diagnostics']], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 1,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-06-18 00:00:00',
+                'title' => 'CLI diagnostics needle',
+                'search_text' => 'needle cli diagnostics',
+            ],
+        ]);
+        $indexer->index_document_fields(2, [['name' => 'content', 'text' => 'needle cli reference']], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 2,
+                'post_type' => 'page',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-06-19 00:00:00',
+                'title' => 'CLI reference needle',
+                'search_text' => 'needle cli reference',
+            ],
+        ]);
+
+        return $callback($fake);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+}
+
+test_case('wp cli search default table output remains compatible', function (): void {
+    wp_fts_test_with_cli_search_index(static function (): void {
+        $GLOBALS['wp_fts_quality_cli_format_items'] = [];
+        (new WP_FTS_WPCLI_Command())->search(['needle'], [
+            'lang' => 'en',
+            'limit' => '1',
+        ]);
+        $formats = $GLOBALS['wp_fts_quality_cli_format_items'] ?? [];
+
+        assert_same(1, count($formats), 'default CLI search should format only the result table');
+        assert_same('table', $formats[0]['format'], 'default CLI search should keep table format');
+        assert_same(['doc_id', 'score', 'total', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title'], $formats[0]['fields'], 'default CLI search should keep the legacy result columns');
+        assert_same([1], array_column($formats[0]['items'], 'doc_id'), 'default CLI search result ordering should remain stable');
+        assert_same(2, $formats[0]['items'][0]['total'] ?? null, 'default CLI search rows should keep total metadata in the result row');
+    });
+});
+
+test_case('wp cli search format json emits payload metadata and rows', function (): void {
+    wp_fts_test_with_cli_search_index(static function (): void {
+        $raw = wp_fts_test_capture_cli(static function (): void {
+            (new WP_FTS_WPCLI_Command())->search(['needle'], [
+                'lang' => 'en',
+                'limit' => '1',
+                'format' => 'json',
+            ]);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+
+        assert_same(2, $payload['total'] ?? null, 'CLI JSON search should expose total metadata');
+        assert_same(1, $payload['limit'] ?? null, 'CLI JSON search should expose the effective limit');
+        assert_same(0, $payload['offset'] ?? null, 'CLI JSON search should expose the effective offset');
+        assert_same('en', $payload['query_lang'] ?? null, 'CLI JSON search should expose query language');
+        assert_true(is_array($payload['results'] ?? null), 'CLI JSON search should expose result rows');
+        assert_same(1, $payload['results'][0]['doc_id'] ?? null, 'CLI JSON search should preserve result ordering');
+        assert_true(!array_key_exists('explain', $payload), 'CLI JSON search without --explain should not include diagnostics');
+    });
+});
+
+test_case('wp cli search explain json includes structured diagnostics and per-result matches', function (): void {
+    wp_fts_test_with_cli_search_index(static function (): void {
+        $raw = wp_fts_test_capture_cli(static function (): void {
+            (new WP_FTS_WPCLI_Command())->search(['needle'], [
+                'lang' => 'en',
+                'limit' => '1',
+                'format' => 'json',
+                'explain' => true,
+            ]);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+        $explain = is_array($payload['explain'] ?? null) ? $payload['explain'] : [];
+
+        assert_true(is_array($explain['query_plan'] ?? null), 'CLI explain JSON should include query_plan diagnostics');
+        assert_true(is_array($explain['fast_mode'] ?? null), 'CLI explain JSON should include fast_mode diagnostics');
+        assert_true(is_array($explain['scoring'] ?? null), 'CLI explain JSON should include scoring diagnostics');
+        assert_same('OR', $explain['query_plan']['match_mode'] ?? null, 'CLI explain JSON should expose the effective match mode');
+        assert_same('exact', $explain['scoring']['total_accuracy'] ?? null, 'small CLI explain search should report exact totals');
+        assert_true(is_array($explain['results'][0]['matches'] ?? null), 'CLI explain JSON should include per-result match rows');
+        assert_true(($explain['results'][0]['matches'] ?? []) !== [], 'CLI explain JSON should include at least one matched term for the indexed result');
+        assert_true(in_array('en', $explain['results'][0]['matched_languages'] ?? [], true), 'CLI explain JSON should include matched languages');
+        assert_same('exact', $explain['results'][0]['matches'][0]['rank_class'] ?? null, 'CLI explain JSON should expose rank class for result matches');
+    });
+});
+
+test_case('wp cli search explain table output is bounded and human-readable', function (): void {
+    wp_fts_test_with_cli_search_index(static function (): void {
+        $GLOBALS['wp_fts_quality_cli_format_items'] = [];
+        (new WP_FTS_WPCLI_Command())->search(['needle'], [
+            'lang' => 'en',
+            'limit' => '1',
+            'explain' => true,
+        ]);
+        $formats = $GLOBALS['wp_fts_quality_cli_format_items'] ?? [];
+
+        assert_same(2, count($formats), 'table explain should format result rows plus one concise diagnostics table');
+        assert_same(['doc_id', 'score', 'total', 'post_id', 'post_type', 'post_status', 'post_date_gmt', 'title'], $formats[0]['fields'], 'table explain should keep result columns compatible');
+        assert_same(['field', 'value'], $formats[1]['fields'], 'table explain should render diagnostics as field/value rows');
+
+        $rowsByField = [];
+        foreach ($formats[1]['items'] as $row) {
+            $rowsByField[(string) ($row['field'] ?? '')] = (string) ($row['value'] ?? '');
+            assert_true(strlen((string) ($row['value'] ?? '')) <= 800, 'table explain summary cells should stay bounded');
+        }
+
+        assert_contains('match_mode=OR', $rowsByField['query_plan'] ?? '', 'table explain should summarize query planning');
+        assert_contains('mode=', $rowsByField['fast_mode'] ?? '', 'table explain should summarize fast mode');
+        assert_contains('candidate_docs_scored=', $rowsByField['scoring'] ?? '', 'table explain should summarize scoring');
+        assert_contains('doc 1=', $rowsByField['result_matches'] ?? '', 'table explain should summarize per-result matches');
+        assert_true(!str_contains($rowsByField['query_plan'] ?? '', '[{'), 'table explain should not dump nested arrays into cells');
+    });
+});
+
+test_case('wp cli search explain json remains valid for empty result sets', function (): void {
+    wp_fts_test_with_cli_search_index(static function (): void {
+        $raw = wp_fts_test_capture_cli(static function (): void {
+            (new WP_FTS_WPCLI_Command())->search(['missingneedle'], [
+                'lang' => 'en',
+                'format' => 'json',
+                'explain' => true,
+            ]);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+
+        assert_same(0, $payload['total'] ?? null, 'empty CLI explain JSON should expose zero total');
+        assert_same([], $payload['results'] ?? null, 'empty CLI explain JSON should expose an empty results array');
+        assert_true(is_array($payload['explain']['query_plan'] ?? null), 'empty CLI explain JSON should still include query_plan diagnostics');
+        assert_true(is_array($payload['explain']['fast_mode'] ?? null), 'empty CLI explain JSON should still include fast_mode diagnostics');
+        assert_true(is_array($payload['explain']['scoring'] ?? null), 'empty CLI explain JSON should still include scoring diagnostics');
+    });
+});
+
 test_case('wp cli search accepts recency boost ranking options', function (): void {
     global $wpdb;
 
