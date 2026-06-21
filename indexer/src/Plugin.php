@@ -44,6 +44,8 @@ final class WP_FTS_Plugin
     private const MAX_INDEX_MEMORY_MARGIN_BYTES = 536870912;
     private const MAX_INDEX_FAILURE_TITLE_BYTES = 120;
     private const MAX_INDEX_FAILURE_ERROR_BYTES = 240;
+    private const MAX_INDEX_DIAGNOSTIC_TEXT_BYTES = 160;
+    private const MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES = 120;
     private const ADMIN_NONCE_ACTION = 'wp_fts_sandbox_admin_action';
     private const ADMIN_NONCE_FIELD = 'wp_fts_sandbox_nonce';
     private const ADMIN_ACTION_FIELD = 'wp_fts_sandbox_action';
@@ -664,6 +666,7 @@ final class WP_FTS_Plugin
             'schema_status' => $schema['status'],
             'schema_version' => $schema['stored_version'],
             'expected_schema_version' => $schema['expected_version'],
+            'storage_backend' => self::index_storage_backend_label(),
             'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
             'lock_state' => $lock['state'],
             'lock_active' => (bool) $lock['active'],
@@ -693,6 +696,7 @@ final class WP_FTS_Plugin
             'eligible_count' => $eligible_count,
             'indexed_count' => $indexed_count,
             'remaining_count' => max(0, $eligible_count - $indexed_count),
+            'latest_batch_diagnostics' => self::latest_index_batch_diagnostics_from_health($health),
         ];
     }
 
@@ -1576,10 +1580,13 @@ final class WP_FTS_Plugin
         return $rows;
     }
 
-    private static function render_debug_diagnostics_panel(string $heading): void
+    private static function render_debug_diagnostics_panel(string $heading, bool $include_indexing_batch = true): void
     {
         echo '<div class="wp-fts-debug-diagnostics">';
         echo '<h3>' . self::esc_html($heading) . '</h3>';
+        if ($include_indexing_batch) {
+            self::render_debug_indexing_batch_diagnostics();
+        }
         if (self::$debug_traces === []) {
             echo '<p>No FTS diagnostics were collected for this request.</p>';
             echo '</div>';
@@ -1615,6 +1622,27 @@ final class WP_FTS_Plugin
             echo '</details>';
         }
         echo '</div>';
+    }
+
+    private static function render_debug_indexing_batch_diagnostics(): void
+    {
+        $diagnostics = self::latest_index_batch_diagnostics_from_health(self::index_health_state());
+        if ($diagnostics === []) {
+            return;
+        }
+
+        echo '<h4>Latest indexing batch</h4>';
+        echo '<table class="widefat striped wp-fts-debug-table"><tbody>';
+        self::render_debug_row('Trigger', self::index_batch_trigger_summary($diagnostics));
+        self::render_debug_row('Timing', self::index_batch_timing_summary($diagnostics));
+        self::render_debug_row('Queue', self::index_batch_queue_summary($diagnostics));
+        self::render_debug_row('Backfill', self::index_batch_backfill_summary($diagnostics));
+        self::render_debug_row('Lock', self::index_batch_lock_summary($diagnostics));
+        self::render_debug_row('Schema and storage', self::index_batch_schema_storage_summary($diagnostics));
+        self::render_debug_row('Retry or reschedule', self::index_batch_reschedule_summary($diagnostics));
+        self::render_debug_row('Stop reason', self::index_batch_stop_summary($diagnostics));
+        self::render_debug_row('Error', self::index_batch_error_summary($diagnostics));
+        echo '</tbody></table>';
     }
 
     private static function render_debug_row(string $label, string $value): void
@@ -2151,7 +2179,7 @@ final class WP_FTS_Plugin
 
         if ($action === self::ADMIN_HEALTH_MANUAL_BATCH_ACTION) {
             try {
-                return [self::manual_index_batch_notice(self::process_manual_index_batch())];
+                return [self::manual_index_batch_notice(self::process_manual_index_batch(['source' => 'admin-health']))];
             } catch (Throwable $e) {
                 return [['error', 'Could not index the next batch: ' . self::bounded_admin_error_message($e)]];
             }
@@ -2555,10 +2583,11 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Last batch processed', self::last_batch_processed_summary($health));
         self::render_health_status_row('Batch status', self::last_batch_status_summary($health));
         self::render_health_status_row('Last indexing failure', self::last_indexing_failure_summary($health));
+        self::render_latest_index_batch_diagnostics_rows($health);
         echo '</tbody></table>';
 
         if (!class_exists('Debug_Bar_Panel') && self::can_view_debug_diagnostics()) {
-            self::render_debug_diagnostics_panel('Request diagnostics');
+            self::render_debug_diagnostics_panel('Request diagnostics', false);
         }
 
         echo '<h3>Schema controls</h3>';
@@ -2581,6 +2610,27 @@ final class WP_FTS_Plugin
     private static function render_health_status_row(string $label, string $value): void
     {
         echo '<tr><th scope="row">' . self::esc_html($label) . '</th><td>' . self::esc_html($value) . '</td></tr>';
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function render_latest_index_batch_diagnostics_rows(array $health): void
+    {
+        $diagnostics = self::latest_index_batch_diagnostics_from_health($health);
+        if ($diagnostics === []) {
+            return;
+        }
+
+        self::render_health_status_row('Batch trigger', self::index_batch_trigger_summary($diagnostics));
+        self::render_health_status_row('Batch timing', self::index_batch_timing_summary($diagnostics));
+        self::render_health_status_row('Batch queue state', self::index_batch_queue_summary($diagnostics));
+        self::render_health_status_row('Batch backfill state', self::index_batch_backfill_summary($diagnostics));
+        self::render_health_status_row('Batch lock state', self::index_batch_lock_summary($diagnostics));
+        self::render_health_status_row('Batch schema and storage', self::index_batch_schema_storage_summary($diagnostics));
+        self::render_health_status_row('Batch retry or reschedule', self::index_batch_reschedule_summary($diagnostics));
+        self::render_health_status_row('Batch stop reason', self::index_batch_stop_summary($diagnostics));
+        self::render_health_status_row('Batch error', self::index_batch_error_summary($diagnostics));
     }
 
     private static function schema_status_label(string $status): string
@@ -2777,6 +2827,246 @@ final class WP_FTS_Plugin
         return is_scalar($health['last_run_at'] ?? null) && trim((string) $health['last_run_at']) !== ''
             ? 'Completed without more content reported.'
             : 'Waiting for the first batch.';
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     * @return array<string,mixed>
+     */
+    private static function latest_index_batch_diagnostics_from_health(array $health): array
+    {
+        return self::sanitize_index_batch_diagnostics($health['latest_batch_diagnostics'] ?? []);
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_trigger_summary(array $diagnostics): string
+    {
+        $trigger = self::index_batch_mode_label((string) ($diagnostics['trigger'] ?? ''));
+        $source = self::index_batch_source_label((string) ($diagnostics['source'] ?? ''));
+        $status = self::index_batch_status_label((string) ($diagnostics['status'] ?? ''));
+
+        $parts = [];
+        if ($trigger !== '') {
+            $parts[] = $trigger;
+        }
+        if ($source !== '') {
+            $parts[] = 'source ' . $source;
+        }
+        if ($status !== '') {
+            $parts[] = 'status ' . $status;
+        }
+
+        return $parts !== [] ? implode('; ', $parts) : 'Not recorded';
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_timing_summary(array $diagnostics): string
+    {
+        $started = is_scalar($diagnostics['started_at'] ?? null) ? trim((string) $diagnostics['started_at']) : '';
+        $finished = is_scalar($diagnostics['finished_at'] ?? null) ? trim((string) $diagnostics['finished_at']) : '';
+        $elapsed = is_numeric($diagnostics['elapsed_ms'] ?? null) ? (float) $diagnostics['elapsed_ms'] : 0.0;
+
+        $parts = [];
+        if ($started !== '') {
+            $parts[] = 'started ' . self::debug_truncate_text($started, 32) . ' UTC';
+        }
+        if ($finished !== '') {
+            $parts[] = 'finished ' . self::debug_truncate_text($finished, 32) . ' UTC';
+        }
+        $parts[] = 'elapsed ' . number_format(max(0.0, $elapsed), 3, '.', '') . ' ms';
+
+        return implode('; ', $parts);
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_queue_summary(array $diagnostics): string
+    {
+        return sprintf(
+            'before %d, after %d, processed %d',
+            max(0, (int) ($diagnostics['queue_before'] ?? 0)),
+            max(0, (int) ($diagnostics['queue_after'] ?? 0)),
+            max(0, (int) ($diagnostics['queue_processed'] ?? 0))
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_backfill_summary(array $diagnostics): string
+    {
+        return sprintf(
+            'scanned %d, selected %d, processed %d',
+            max(0, (int) ($diagnostics['backfill_scanned'] ?? 0)),
+            max(0, (int) ($diagnostics['backfill_queued'] ?? 0)),
+            max(0, (int) ($diagnostics['backfill_processed'] ?? 0))
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_lock_summary(array $diagnostics): string
+    {
+        $start = self::index_batch_lock_status_label($diagnostics['lock_at_start'] ?? []);
+        $end = self::index_batch_lock_status_label($diagnostics['lock_at_end'] ?? []);
+        $prevented = !empty($diagnostics['lock_prevented_work']) ? 'yes' : 'no';
+
+        return 'start ' . $start . '; end ' . $end . '; prevented work ' . $prevented;
+    }
+
+    /**
+     * @param mixed $lock
+     */
+    private static function index_batch_lock_status_label(mixed $lock): string
+    {
+        if (!is_array($lock)) {
+            return 'not recorded';
+        }
+
+        $state = is_scalar($lock['state'] ?? null) ? (string) $lock['state'] : '';
+        $mode = self::index_batch_mode_label(is_scalar($lock['mode'] ?? null) ? (string) $lock['mode'] : '');
+        $started = is_scalar($lock['started_at'] ?? null) ? trim((string) $lock['started_at']) : '';
+        $expires = is_scalar($lock['expires_at'] ?? null) ? trim((string) $lock['expires_at']) : '';
+        $label = match ($state) {
+            'active' => 'active',
+            'expired' => 'expired',
+            'none' => 'inactive',
+            default => $state !== '' ? self::debug_truncate_text($state, 40) : 'not recorded',
+        };
+        $parts = [$label];
+        if ($mode !== '') {
+            $parts[] = $mode;
+        }
+        if ($started !== '') {
+            $parts[] = 'started ' . self::debug_truncate_text($started, 32) . ' UTC';
+        }
+        if ($expires !== '') {
+            $parts[] = 'expires ' . self::debug_truncate_text($expires, 32) . ' UTC';
+        }
+
+        return implode(', ', $parts);
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_schema_storage_summary(array $diagnostics): string
+    {
+        $status = self::schema_status_label((string) ($diagnostics['schema_status'] ?? ''));
+        $stored = max(0, (int) ($diagnostics['schema_version'] ?? 0));
+        $expected = max(0, (int) ($diagnostics['expected_schema_version'] ?? 0));
+        $storage = self::debug_truncate_text((string) ($diagnostics['storage_backend'] ?? ''), 80);
+
+        return sprintf(
+            '%s (%d/%d); storage %s',
+            $status,
+            $stored,
+            $expected,
+            $storage !== '' ? $storage : 'not recorded'
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_reschedule_summary(array $diagnostics): string
+    {
+        $decision = (string) ($diagnostics['reschedule_decision'] ?? '');
+
+        return match ($decision) {
+            'scheduled' => 'Scheduled another WP-Cron run.',
+            'scheduled_after_lock_skip' => 'Scheduled another WP-Cron run after lock contention.',
+            'not_needed' => 'No follow-up run needed.',
+            'not_applicable_manual' => 'Not applicable to manual batches.',
+            default => $decision !== '' ? self::debug_truncate_text($decision, 80) : 'Not recorded',
+        };
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_stop_summary(array $diagnostics): string
+    {
+        $reason = (string) ($diagnostics['stop_reason'] ?? '');
+
+        return match ($reason) {
+            '' => 'No stop reason recorded.',
+            'batch_cap' => 'Stopped at the batch limit.',
+            'time_budget' => 'Stopped at the time budget.',
+            'memory_budget' => 'Stopped before the memory limit.',
+            'callback_budget' => 'Stopped by the caller budget check.',
+            'lock_active' => 'Skipped because another batch held the lock.',
+            default => self::debug_truncate_text($reason, 80),
+        };
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_error_summary(array $diagnostics): string
+    {
+        $failures = max(0, (int) ($diagnostics['failures'] ?? 0));
+        $class = is_scalar($diagnostics['error_class'] ?? null) ? trim((string) $diagnostics['error_class']) : '';
+        $message = is_scalar($diagnostics['error_message'] ?? null) ? trim((string) $diagnostics['error_message']) : '';
+        $post_id = max(0, (int) ($diagnostics['last_failed_post_id'] ?? 0));
+        $title = is_scalar($diagnostics['last_failed_post_title'] ?? null) ? trim((string) $diagnostics['last_failed_post_title']) : '';
+
+        if ($failures <= 0 && $class === '' && $message === '') {
+            return 'No batch error recorded.';
+        }
+
+        $parts = [];
+        if ($failures > 0) {
+            $parts[] = sprintf('%d %s failed', $failures, self::item_count_label($failures));
+        }
+        if ($post_id > 0) {
+            $parts[] = trim(($title !== '' ? $title : '(untitled)') . ' (ID ' . $post_id . ')');
+        }
+        if ($class !== '') {
+            $parts[] = $class;
+        }
+        if ($message !== '') {
+            $parts[] = $message;
+        }
+
+        return implode('; ', $parts);
+    }
+
+    private static function index_batch_mode_label(string $mode): string
+    {
+        return match ($mode) {
+            'cron' => 'WP-Cron',
+            'manual' => 'Manual batch',
+            default => $mode !== '' ? self::debug_truncate_text($mode, 60) : '',
+        };
+    }
+
+    private static function index_batch_source_label(string $source): string
+    {
+        return match ($source) {
+            'admin-health' => 'Health tab',
+            'wp-cli' => 'WP-CLI',
+            'cron' => 'WP-Cron',
+            'manual' => 'manual caller',
+            default => $source !== '' ? self::debug_truncate_text($source, 60) : '',
+        };
+    }
+
+    private static function index_batch_status_label(string $status): string
+    {
+        return match ($status) {
+            'success' => 'success',
+            'partial_failure' => 'partial failure',
+            'failed' => 'failed',
+            'skipped_locked' => 'skipped by lock',
+            default => $status !== '' ? self::debug_truncate_text($status, 60) : '',
+        };
     }
 
     private static function render_settings_tab(): void
@@ -7891,12 +8181,17 @@ JS;
     {
         $mode = $mode === 'cron' ? 'cron' : 'manual';
         $batch_size = self::index_batch_size($mode, $opts);
+        $started = microtime(true);
         $summary = self::default_index_batch_summary($mode, $batch_size);
+        self::initialize_index_batch_summary($summary, $opts, $started);
 
         $token = self::acquire_index_lock($mode);
         if ($token === null) {
             $summary['skipped_locked'] = true;
             $summary['has_more'] = true;
+            $summary['lock_prevented_work'] = true;
+            self::remember_index_batch_stop($summary, 'lock_active');
+            self::finalize_index_batch_summary($summary, $started);
             self::update_index_health_state($summary);
             if ($mode === 'cron') {
                 self::schedule_queue_processor();
@@ -7905,24 +8200,25 @@ JS;
             return $summary;
         }
 
+        $thrown = null;
         try {
             $budget = self::index_resource_budget($mode, $opts);
             $analyzer = self::runtime_analyzer();
             $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer);
 
             $remaining_capacity = max(0, $batch_size - (int) $summary['processed'] - (int) $summary['last_batch_failures']);
-            if ($remaining_capacity > 0 && !self::index_resource_budget_exhausted($budget, (int) $summary['processed'])) {
+            $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
+            if ($remaining_capacity > 0 && $stop_reason === '') {
                 self::process_backfill_for_index_batch($remaining_capacity, $budget, $summary, $analyzer, $failed_queue_ids);
             } elseif ($remaining_capacity > 0) {
-                $summary['stopped_by_budget'] = true;
-                $summary['has_more'] = true;
+                self::remember_index_batch_stop($summary, $stop_reason);
             }
 
             if (
                 $mode === 'cron'
                 && $remaining_capacity === 0
                 && empty($summary['has_more'])
-                && !self::index_resource_budget_exhausted($budget, (int) $summary['processed'])
+                && self::index_resource_budget_stop_reason($budget, (int) $summary['processed']) === ''
                 && self::has_eligible_unindexed_content()
             ) {
                 $summary['has_more'] = true;
@@ -7931,14 +8227,21 @@ JS;
             if (self::pending_queue() !== []) {
                 $summary['has_more'] = true;
             }
-
-            self::update_index_health_state($summary);
+        } catch (Throwable $e) {
+            $thrown = $e;
+            self::remember_index_batch_exception_in_summary($summary, $e);
         } finally {
             self::release_index_lock($token);
+            self::finalize_index_batch_summary($summary, $started);
+            self::update_index_health_state($summary);
         }
 
         if ($mode === 'cron' && !empty($summary['has_more'])) {
             self::schedule_queue_processor();
+        }
+
+        if ($thrown !== null) {
+            throw $thrown;
         }
 
         return $summary;
@@ -7966,7 +8269,72 @@ JS;
             'last_failed_post_title' => '',
             'last_failed_at' => '',
             'last_error' => '',
+            'last_error_class' => '',
+            'last_error_message' => '',
+            'trigger' => $mode,
+            'source' => '',
+            'status' => 'started',
+            'started_at' => '',
+            'finished_at' => '',
+            'elapsed_ms' => 0.0,
+            'queue_before' => 0,
+            'queue_after' => 0,
+            'backfill_scanned' => 0,
+            'backfill_queued' => 0,
+            'lock_before' => [],
+            'lock_after' => [],
+            'lock_prevented_work' => false,
+            'schema_status' => '',
+            'schema_version' => 0,
+            'expected_schema_version' => 0,
+            'storage_backend' => '',
+            'error_class' => '',
+            'error_message' => '',
+            'reschedule_decision' => '',
+            'stop_reason' => '',
         ];
+    }
+
+    /**
+     * @param array<string,mixed> $opts
+     * @param array<string,mixed> $summary
+     */
+    private static function initialize_index_batch_summary(array &$summary, array $opts, float $started): void
+    {
+        $schema = self::schema_status();
+        $summary['source'] = self::index_batch_source($summary['mode'] ?? 'manual', $opts);
+        $summary['started_at'] = self::current_gmt_datetime();
+        $summary['queue_before'] = count(self::pending_queue());
+        $summary['lock_before'] = self::index_lock_status();
+        $summary['schema_status'] = (string) $schema['status'];
+        $summary['schema_version'] = max(0, (int) $schema['stored_version']);
+        $summary['expected_schema_version'] = max(0, (int) $schema['expected_version']);
+        $summary['storage_backend'] = self::index_storage_backend_label();
+        $summary['elapsed_ms'] = max(0.0, (microtime(true) - $started) * 1000.0);
+    }
+
+    /**
+     * @param array<string,mixed> $opts
+     */
+    private static function index_batch_source(mixed $mode, array $opts): string
+    {
+        if (isset($opts['source']) && is_scalar($opts['source'])) {
+            $source = self::sanitize_key((string) $opts['source']);
+            if ($source !== '') {
+                return self::debug_truncate_text($source, 60);
+            }
+        }
+
+        if ($mode === 'cron') {
+            return 'cron';
+        }
+
+        return self::is_cli_request() ? 'wp-cli' : 'manual';
+    }
+
+    private static function index_storage_backend_label(): string
+    {
+        return 'mysql';
     }
 
     /**
@@ -7988,9 +8356,9 @@ JS;
         $index = 0;
 
         for ($index = 0, $count = count($claimed); $index < $count; $index++) {
-            if (self::index_resource_budget_exhausted($budget, (int) $summary['processed'])) {
-                $summary['stopped_by_budget'] = true;
-                $summary['has_more'] = true;
+            $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
+            if ($stop_reason !== '') {
+                self::remember_index_batch_stop($summary, $stop_reason);
                 break;
             }
 
@@ -8042,6 +8410,7 @@ JS;
         }
 
         $rows = self::select_eligible_unindexed_posts($limit + count($skip) + 1);
+        $summary['backfill_scanned'] = (int) ($summary['backfill_scanned'] ?? 0) + count($rows);
         if ($skip !== []) {
             $rows = array_values(array_filter(
                 $rows,
@@ -8053,11 +8422,12 @@ JS;
         }
 
         $work = array_slice($rows, 0, $limit);
+        $summary['backfill_queued'] = (int) ($summary['backfill_queued'] ?? 0) + count($work);
         $processed_rows = 0;
         foreach ($work as $post) {
-            if (self::index_resource_budget_exhausted($budget, (int) $summary['processed'])) {
-                $summary['stopped_by_budget'] = true;
-                $summary['has_more'] = true;
+            $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
+            if ($stop_reason !== '') {
+                self::remember_index_batch_stop($summary, $stop_reason);
                 break;
             }
 
@@ -8276,6 +8646,92 @@ WHERE p.post_password = ''
         $summary['last_failed_post_title'] = self::failure_post_title($post_id, $post);
         $summary['last_failed_at'] = self::current_gmt_datetime();
         $summary['last_error'] = self::index_failure_error_summary($error);
+        $summary['last_error_class'] = self::sanitize_index_diagnostic_text(get_class($error), self::MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES, false);
+        $summary['last_error_message'] = self::sanitize_index_failure_text($error->getMessage(), self::MAX_INDEX_FAILURE_ERROR_BYTES);
+        $summary['error_class'] = $summary['last_error_class'];
+        $summary['error_message'] = $summary['last_error_message'];
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function remember_index_batch_exception_in_summary(array &$summary, Throwable $error): void
+    {
+        $summary['status'] = 'failed';
+        $summary['has_more'] = true;
+        $summary['error_class'] = self::sanitize_index_diagnostic_text(get_class($error), self::MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES, false);
+        $summary['error_message'] = self::sanitize_index_failure_text($error->getMessage(), self::MAX_INDEX_FAILURE_ERROR_BYTES);
+        $summary['last_error'] = self::index_failure_error_summary($error);
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function remember_index_batch_stop(array &$summary, string $reason): void
+    {
+        $reason = self::sanitize_index_diagnostic_text($reason, 80, false);
+        if ($reason === '') {
+            return;
+        }
+
+        if (in_array($reason, ['callback_budget', 'time_budget', 'memory_budget'], true)) {
+            $summary['stopped_by_budget'] = true;
+        }
+
+        if (empty($summary['stop_reason'])) {
+            $summary['stop_reason'] = $reason;
+        }
+        $summary['has_more'] = true;
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function finalize_index_batch_summary(array &$summary, float $started): void
+    {
+        $summary['finished_at'] = self::current_gmt_datetime();
+        $summary['elapsed_ms'] = max(0.0, (microtime(true) - $started) * 1000.0);
+        $summary['queue_after'] = count(self::pending_queue());
+        $summary['lock_after'] = self::index_lock_status();
+
+        if (
+            empty($summary['stop_reason'])
+            && !empty($summary['has_more'])
+            && max(0, (int) ($summary['processed'] ?? 0)) + max(0, (int) ($summary['last_batch_failures'] ?? 0)) >= max(1, (int) ($summary['batch_size'] ?? 1))
+        ) {
+            $summary['stop_reason'] = 'batch_cap';
+        }
+
+        if (empty($summary['status']) || $summary['status'] === 'started') {
+            if (!empty($summary['skipped_locked'])) {
+                $summary['status'] = 'skipped_locked';
+            } elseif (max(0, (int) ($summary['last_batch_failures'] ?? 0)) > 0) {
+                $summary['status'] = max(0, (int) ($summary['processed'] ?? 0)) > 0 ? 'partial_failure' : 'failed';
+            } elseif (!empty($summary['error_class']) || !empty($summary['error_message'])) {
+                $summary['status'] = 'failed';
+            } else {
+                $summary['status'] = 'success';
+            }
+        }
+
+        $summary['reschedule_decision'] = self::index_batch_reschedule_decision($summary);
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function index_batch_reschedule_decision(array $summary): string
+    {
+        $mode = is_scalar($summary['mode'] ?? null) ? (string) $summary['mode'] : '';
+        if ($mode !== 'cron') {
+            return 'not_applicable_manual';
+        }
+
+        if (empty($summary['has_more'])) {
+            return 'not_needed';
+        }
+
+        return !empty($summary['skipped_locked']) ? 'scheduled_after_lock_skip' : 'scheduled';
     }
 
     private static function failure_post_title(int $post_id, ?object $post): string
@@ -8381,23 +8837,31 @@ WHERE p.post_password = ''
      */
     private static function index_resource_budget_exhausted(array $budget, int $processed): bool
     {
+        return self::index_resource_budget_stop_reason($budget, $processed) !== '';
+    }
+
+    /**
+     * @param array<string,mixed> $budget
+     */
+    private static function index_resource_budget_stop_reason(array $budget, int $processed): string
+    {
         if (is_callable($budget['callback'] ?? null) && (bool) call_user_func($budget['callback'], $processed)) {
-            return true;
+            return 'callback_budget';
         }
 
         if (isset($budget['deadline']) && is_float($budget['deadline']) && microtime(true) >= $budget['deadline']) {
-            return true;
+            return 'time_budget';
         }
 
         $memory_limit = isset($budget['memory_limit']) ? (int) $budget['memory_limit'] : 0;
         if ($memory_limit > 0) {
             $memory_margin = isset($budget['memory_margin']) ? max(0, (int) $budget['memory_margin']) : 0;
             if (memory_get_usage(true) + $memory_margin >= $memory_limit) {
-                return true;
+                return 'memory_budget';
             }
         }
 
-        return false;
+        return '';
     }
 
     private static function acquire_index_lock(string $mode): ?string
@@ -8522,6 +8986,7 @@ WHERE p.post_password = ''
         $state['has_more'] = (bool) $state['has_more'];
         $state['last_skipped_locked'] = (bool) $state['last_skipped_locked'];
         $state['last_stopped_by_budget'] = (bool) $state['last_stopped_by_budget'];
+        $state['latest_batch_diagnostics'] = self::sanitize_index_batch_diagnostics($state['latest_batch_diagnostics'] ?? []);
 
         return $state;
     }
@@ -8548,6 +9013,7 @@ WHERE p.post_password = ''
             'last_stopped_by_budget' => false,
             'last_mode' => '',
             'last_run_at' => '',
+            'latest_batch_diagnostics' => [],
         ];
     }
 
@@ -8589,7 +9055,138 @@ WHERE p.post_password = ''
             $state['last_indexed_at'] = is_scalar($summary['last_indexed_at'] ?? null) ? (string) $summary['last_indexed_at'] : self::current_gmt_datetime();
         }
 
+        $state['latest_batch_diagnostics'] = self::index_batch_diagnostics_from_summary($summary);
+
         self::set_option(self::INDEX_HEALTH_OPTION, $state);
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     * @return array<string,mixed>
+     */
+    private static function index_batch_diagnostics_from_summary(array $summary): array
+    {
+        return self::sanitize_index_batch_diagnostics([
+            'schema' => 'wp-fts-index-batch-diagnostics-v1',
+            'trigger' => $summary['trigger'] ?? $summary['mode'] ?? '',
+            'source' => $summary['source'] ?? '',
+            'status' => $summary['status'] ?? '',
+            'started_at' => $summary['started_at'] ?? '',
+            'finished_at' => $summary['finished_at'] ?? '',
+            'elapsed_ms' => $summary['elapsed_ms'] ?? 0.0,
+            'batch_limit' => $summary['batch_size'] ?? 0,
+            'processed' => $summary['processed'] ?? 0,
+            'queue_processed' => $summary['queue_processed'] ?? 0,
+            'backfill_processed' => $summary['backfill_processed'] ?? 0,
+            'queue_before' => $summary['queue_before'] ?? 0,
+            'queue_after' => $summary['queue_after'] ?? 0,
+            'backfill_scanned' => $summary['backfill_scanned'] ?? 0,
+            'backfill_queued' => $summary['backfill_queued'] ?? 0,
+            'failures' => $summary['last_batch_failures'] ?? 0,
+            'has_more' => $summary['has_more'] ?? false,
+            'skipped_locked' => $summary['skipped_locked'] ?? false,
+            'stopped_by_budget' => $summary['stopped_by_budget'] ?? false,
+            'lock_prevented_work' => $summary['lock_prevented_work'] ?? false,
+            'lock_at_start' => $summary['lock_before'] ?? [],
+            'lock_at_end' => $summary['lock_after'] ?? [],
+            'schema_status' => $summary['schema_status'] ?? '',
+            'schema_version' => $summary['schema_version'] ?? 0,
+            'expected_schema_version' => $summary['expected_schema_version'] ?? 0,
+            'storage_backend' => $summary['storage_backend'] ?? '',
+            'error_class' => $summary['error_class'] ?? $summary['last_error_class'] ?? '',
+            'error_message' => $summary['error_message'] ?? $summary['last_error_message'] ?? '',
+            'last_failed_post_id' => $summary['last_failed_post_id'] ?? 0,
+            'last_failed_post_title' => $summary['last_failed_post_title'] ?? '',
+            'last_failed_at' => $summary['last_failed_at'] ?? '',
+            'reschedule_decision' => $summary['reschedule_decision'] ?? '',
+            'stop_reason' => $summary['stop_reason'] ?? '',
+        ]);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function sanitize_index_batch_diagnostics(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $has_signal = false;
+        foreach (['schema', 'trigger', 'status', 'started_at', 'finished_at'] as $key) {
+            if (array_key_exists($key, $raw) && is_scalar($raw[$key]) && trim((string) $raw[$key]) !== '') {
+                $has_signal = true;
+                break;
+            }
+        }
+        if (!$has_signal) {
+            return [];
+        }
+
+        return [
+            'schema' => self::sanitize_index_diagnostic_text($raw['schema'] ?? '', 80, false),
+            'trigger' => self::sanitize_index_diagnostic_text($raw['trigger'] ?? '', 60, false),
+            'source' => self::sanitize_index_diagnostic_text($raw['source'] ?? '', 60, false),
+            'status' => self::sanitize_index_diagnostic_text($raw['status'] ?? '', 60, false),
+            'started_at' => self::sanitize_index_diagnostic_text($raw['started_at'] ?? '', 32, false),
+            'finished_at' => self::sanitize_index_diagnostic_text($raw['finished_at'] ?? '', 32, false),
+            'elapsed_ms' => round(self::clamp_float((float) ($raw['elapsed_ms'] ?? 0.0), 0.0, 86400000.0), 3),
+            'batch_limit' => max(0, (int) ($raw['batch_limit'] ?? 0)),
+            'processed' => max(0, (int) ($raw['processed'] ?? 0)),
+            'queue_processed' => max(0, (int) ($raw['queue_processed'] ?? 0)),
+            'backfill_processed' => max(0, (int) ($raw['backfill_processed'] ?? 0)),
+            'queue_before' => max(0, (int) ($raw['queue_before'] ?? 0)),
+            'queue_after' => max(0, (int) ($raw['queue_after'] ?? 0)),
+            'backfill_scanned' => max(0, (int) ($raw['backfill_scanned'] ?? 0)),
+            'backfill_queued' => max(0, (int) ($raw['backfill_queued'] ?? 0)),
+            'failures' => max(0, (int) ($raw['failures'] ?? 0)),
+            'has_more' => (bool) ($raw['has_more'] ?? false),
+            'skipped_locked' => (bool) ($raw['skipped_locked'] ?? false),
+            'stopped_by_budget' => (bool) ($raw['stopped_by_budget'] ?? false),
+            'lock_prevented_work' => (bool) ($raw['lock_prevented_work'] ?? false),
+            'lock_at_start' => self::sanitize_index_lock_diagnostics($raw['lock_at_start'] ?? []),
+            'lock_at_end' => self::sanitize_index_lock_diagnostics($raw['lock_at_end'] ?? []),
+            'schema_status' => self::sanitize_index_diagnostic_text($raw['schema_status'] ?? '', 40, false),
+            'schema_version' => max(0, (int) ($raw['schema_version'] ?? 0)),
+            'expected_schema_version' => max(0, (int) ($raw['expected_schema_version'] ?? 0)),
+            'storage_backend' => self::sanitize_index_diagnostic_text($raw['storage_backend'] ?? '', 80, false),
+            'error_class' => self::sanitize_index_diagnostic_text($raw['error_class'] ?? '', self::MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES, false),
+            'error_message' => self::sanitize_index_diagnostic_text($raw['error_message'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES),
+            'last_failed_post_id' => max(0, (int) ($raw['last_failed_post_id'] ?? 0)),
+            'last_failed_post_title' => self::sanitize_index_diagnostic_text($raw['last_failed_post_title'] ?? '', self::MAX_INDEX_FAILURE_TITLE_BYTES, false),
+            'last_failed_at' => self::sanitize_index_diagnostic_text($raw['last_failed_at'] ?? '', 32, false),
+            'reschedule_decision' => self::sanitize_index_diagnostic_text($raw['reschedule_decision'] ?? '', 80, false),
+            'stop_reason' => self::sanitize_index_diagnostic_text($raw['stop_reason'] ?? '', 80, false),
+        ];
+    }
+
+    /**
+     * @return array{state:string,active:bool,mode:string,started_at:string,expires_at:string}
+     */
+    private static function sanitize_index_lock_diagnostics(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [
+                'state' => 'none',
+                'active' => false,
+                'mode' => '',
+                'started_at' => '',
+                'expires_at' => '',
+            ];
+        }
+
+        return [
+            'state' => self::sanitize_index_diagnostic_text($raw['state'] ?? '', 40, false),
+            'active' => (bool) ($raw['active'] ?? false),
+            'mode' => self::sanitize_index_diagnostic_text($raw['mode'] ?? '', 40, false),
+            'started_at' => self::sanitize_index_diagnostic_text($raw['started_at'] ?? '', 32, false),
+            'expires_at' => self::sanitize_index_diagnostic_text($raw['expires_at'] ?? '', 32, false),
+        ];
+    }
+
+    private static function sanitize_index_diagnostic_text(mixed $value, int $max_bytes = self::MAX_INDEX_DIAGNOSTIC_TEXT_BYTES, bool $redact_sql = true): string
+    {
+        return self::sanitize_index_failure_text($value, $max_bytes, $redact_sql);
     }
 
     /**

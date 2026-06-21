@@ -3803,6 +3803,20 @@ function wp_fts_test_capture_admin_settings_tab(?string $tab = null): string
     }
 }
 
+function wp_fts_test_capture(callable $callback): string
+{
+    ob_start();
+    try {
+        $callback();
+        $output = ob_get_clean();
+
+        return is_string($output) ? $output : '';
+    } catch (Throwable $e) {
+        ob_end_clean();
+        throw $e;
+    }
+}
+
 function wp_fts_test_capture_cli(callable $callback): string
 {
     ob_start();
@@ -4756,6 +4770,16 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<th scope="row">Last batch</th><td>Manual at ', $html, 'health dashboard should show last batch time and mode');
     assert_contains('<th scope="row">Last batch processed</th><td>1 total (0 waiting updates, 1 remaining content, 0 failed)</td>', $html, 'health dashboard should show last batch processed counts');
     assert_contains('<th scope="row">Last indexing failure</th><td>No indexing failures recorded.</td>', $html, 'health dashboard should show the latest failure state');
+    assert_contains('<th scope="row">Batch trigger</th><td>Manual batch; source manual caller; status success</td>', $html, 'health dashboard should render latest batch trigger diagnostics');
+    assert_contains('<th scope="row">Batch timing</th><td>started ', $html, 'health dashboard should render latest batch timing diagnostics');
+    assert_contains('elapsed ', $html, 'health dashboard should render elapsed milliseconds for latest batch diagnostics');
+    assert_contains('<th scope="row">Batch queue state</th><td>before 0, after 0, processed 0</td>', $html, 'health dashboard should render latest batch queue diagnostics');
+    assert_contains('<th scope="row">Batch backfill state</th><td>scanned 2, selected 1, processed 1</td>', $html, 'health dashboard should render latest batch backfill diagnostics');
+    assert_contains('<th scope="row">Batch lock state</th><td>start inactive; end inactive; prevented work no</td>', $html, 'health dashboard should render latest batch lock diagnostics without token data');
+    assert_contains('<th scope="row">Batch schema and storage</th><td>Missing (0/' . WP_FTS_Plugin::SCHEMA_VERSION . '); storage mysql</td>', $html, 'health dashboard should render latest batch schema and backend diagnostics');
+    assert_contains('<th scope="row">Batch retry or reschedule</th><td>Not applicable to manual batches.</td>', $html, 'health dashboard should render latest batch reschedule diagnostics');
+    assert_contains('<th scope="row">Batch stop reason</th><td>Stopped at the batch limit.</td>', $html, 'health dashboard should render latest batch stop reason diagnostics');
+    assert_contains('<th scope="row">Batch error</th><td>No batch error recorded.</td>', $html, 'health dashboard should render latest batch error diagnostics');
     assert_contains('Repair FTS tables and the stored schema version without indexing content.', $html, 'health dashboard should explain schema repair scope');
     assert_contains('Repair schema tables', $html, 'health dashboard should expose schema repair action');
     assert_contains('Run one safe indexing pass now. You can use it again until Remaining to index reaches 0.', $html, 'health dashboard should explain the manual batch action in user-facing terms');
@@ -4924,6 +4948,17 @@ test_case('health manual batch POST requires capability and nonce before indexin
         assert_contains('Indexed 1 item. The index is up to date for the current settings.', $validHtml, 'valid manual health action should report the processed batch');
         assert_true(isset($fake->docs[711]), 'valid manual health action should call the manual batch path and index content');
         assert_same('manual', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['last_mode'] ?? null, 'manual health action should update health state as a manual batch');
+        $diagnostics = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['latest_batch_diagnostics'] ?? [];
+        assert_same('manual', $diagnostics['trigger'] ?? null, 'manual health action should record manual diagnostics trigger');
+        assert_same('admin-health', $diagnostics['source'] ?? null, 'manual health action should record Health tab source');
+        assert_same('success', $diagnostics['status'] ?? null, 'successful manual health action should record success status');
+        assert_same(100, $diagnostics['batch_limit'] ?? null, 'manual health diagnostics should record effective batch limit');
+        assert_same(1, $diagnostics['processed'] ?? null, 'manual health diagnostics should record processed count');
+        assert_same(0, $diagnostics['queue_before'] ?? null, 'manual health diagnostics should record queue count before work');
+        assert_same(0, $diagnostics['queue_after'] ?? null, 'manual health diagnostics should record queue count after work');
+        assert_same('not_applicable_manual', $diagnostics['reschedule_decision'] ?? null, 'manual health diagnostics should record reschedule decision');
+        assert_same('mysql', $diagnostics['storage_backend'] ?? null, 'manual health diagnostics should record storage backend');
+        assert_true(is_float($diagnostics['elapsed_ms'] ?? null), 'manual health diagnostics should record bounded elapsed milliseconds');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -4967,6 +5002,14 @@ test_case('health manual batch lock skip displays no-overlap notice', function (
     assert_contains('Another indexing batch is already running. No overlapping batch was started; try again shortly.', $html, 'manual health lock skip should explain that no overlap occurred');
     assert_same([], $fake->docs, 'manual health lock skip should not index content');
     assert_same(true, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['last_skipped_locked'] ?? null, 'manual health lock skip should update health state');
+    $diagnostics = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['latest_batch_diagnostics'] ?? [];
+    assert_same('skipped_locked', $diagnostics['status'] ?? null, 'manual health lock skip should record skipped diagnostics status');
+    assert_same(true, $diagnostics['lock_prevented_work'] ?? null, 'manual health lock skip should record that the lock prevented work');
+    assert_same(0, $diagnostics['processed'] ?? null, 'manual health lock skip diagnostics should record no processed items');
+    assert_same('active', $diagnostics['lock_at_start']['state'] ?? null, 'manual health lock skip diagnostics should record active start lock');
+    assert_same('cron', $diagnostics['lock_at_start']['mode'] ?? null, 'manual health lock skip diagnostics should record safe holder mode');
+    assert_same('lock_active', $diagnostics['stop_reason'] ?? null, 'manual health lock skip diagnostics should record lock stop reason');
+    assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'already-running'), 'manual health lock skip diagnostics should not expose lock token');
 });
 
 test_case('health manual batch records failures without exposing raw details', function (): void {
@@ -5005,9 +5048,22 @@ test_case('health manual batch records failures without exposing raw details', f
     assert_true(!str_contains($html, 'INSERT INTO wp_fts_docs'), 'health dashboard should not expose raw SQL in failure output');
     assert_true(!str_contains($html, 'SELECT * FROM'), 'health dashboard should not expose stack SQL in failure output');
     assert_true(!str_contains($html, '#0'), 'health dashboard should not expose stack traces in failure output');
+    assert_true(!str_contains($html, 'batchindexneedle 731'), 'health dashboard should not expose raw post body content in failure output');
     assert_true(!isset($fake->docs[731]), 'failed health batch item should not be marked indexed');
     assert_true(isset($fake->docs[732]), 'health batch should continue after a failed item');
     assert_same(1, $fake->failedDocWriteAttempts[731] ?? 0, 'failed health batch item should be attempted once');
+    $diagnostics = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]['latest_batch_diagnostics'] ?? [];
+    assert_same('partial_failure', $diagnostics['status'] ?? null, 'manual health failure diagnostics should record partial failure status');
+    assert_same(1, $diagnostics['failures'] ?? null, 'manual health failure diagnostics should record bounded failure count');
+    assert_same(731, $diagnostics['last_failed_post_id'] ?? null, 'manual health failure diagnostics should record failed post id');
+    assert_same('Health Failure', $diagnostics['last_failed_post_title'] ?? null, 'manual health failure diagnostics should record sanitized failed title');
+    assert_same('RuntimeException', $diagnostics['error_class'] ?? null, 'manual health failure diagnostics should record bounded error class');
+    assert_contains('INSERT statement', (string) ($diagnostics['error_message'] ?? ''), 'manual health failure diagnostics should redact SQL in error message');
+    $diagnosticJson = json_encode($diagnostics, JSON_THROW_ON_ERROR);
+    assert_true(!str_contains($diagnosticJson, 'INSERT INTO wp_fts_docs'), 'manual health failure diagnostics should not store raw SQL');
+    assert_true(!str_contains($diagnosticJson, 'SELECT * FROM'), 'manual health failure diagnostics should not store stack SQL');
+    assert_true(!str_contains($diagnosticJson, '#0'), 'manual health failure diagnostics should not store stack traces');
+    assert_true(!str_contains($diagnosticJson, 'batchindexneedle 731'), 'manual health failure diagnostics should not store raw post body content');
 });
 
 test_case('request diagnostics stay disabled for normal visitors and render escaped bounded admin output', function (): void {
@@ -5048,6 +5104,38 @@ test_case('request diagnostics stay disabled for normal visitors and render esca
         assert_true(!str_contains($html, '<script>alert(1)</script>'), 'rendered diagnostics should not output raw query HTML');
         assert_true(!str_contains($html, str_repeat('x', 180)), 'rendered diagnostics should truncate long query text');
         assert_contains('...', $html, 'rendered diagnostics should indicate truncated values');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
+            'latest_batch_diagnostics' => [
+                'schema' => 'wp-fts-index-batch-diagnostics-v1',
+                'trigger' => 'manual',
+                'source' => 'operator&cli',
+                'status' => 'failed',
+                'started_at' => '2026-06-19 10:00:00',
+                'finished_at' => '2026-06-19 10:00:01',
+                'elapsed_ms' => 1.25,
+                'batch_limit' => 1,
+                'processed' => 0,
+                'queue_before' => 1,
+                'queue_after' => 1,
+                'error_class' => 'RuntimeException',
+                'error_message' => 'Failure for AT&T SELECT * FROM wp_users',
+                'lock_at_start' => ['state' => 'none', 'active' => false, 'mode' => '', 'started_at' => '', 'expires_at' => ''],
+                'lock_at_end' => ['state' => 'none', 'active' => false, 'mode' => '', 'started_at' => '', 'expires_at' => ''],
+                'schema_status' => 'current',
+                'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+                'expected_schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+                'storage_backend' => 'mysql',
+            ],
+        ];
+        $debugHtml = wp_fts_test_capture(static function (): void {
+            WP_FTS_Plugin::render_debug_bar_diagnostics_panel();
+        });
+        assert_contains('Latest indexing batch', $debugHtml, 'Debug Bar diagnostics should render the latest indexing batch section for authorized admins');
+        assert_contains('source operator&amp;cli', $debugHtml, 'Debug Bar indexing diagnostics should escape source values');
+        assert_contains('Failure for AT&amp;T SELECT statement', $debugHtml, 'Debug Bar indexing diagnostics should escape and redact error values');
+        assert_true(!str_contains($debugHtml, 'operator&cli'), 'Debug Bar indexing diagnostics should not output raw ampersands');
+        assert_true(!str_contains($debugHtml, 'SELECT * FROM'), 'Debug Bar indexing diagnostics should not output raw SQL');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -6482,6 +6570,37 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
         'last_failed_post_title' => 'CLI <b>Status</b> Failed',
         'last_failed_at' => '2026-06-19 10:02:00',
         'last_error' => "RuntimeException: Failed to put FTS document: SELECT * FROM wp_users\n#0 stack trace",
+        'latest_batch_diagnostics' => [
+            'schema' => 'wp-fts-index-batch-diagnostics-v1',
+            'trigger' => 'manual',
+            'source' => 'wp-cli',
+            'status' => 'partial_failure',
+            'started_at' => '2026-06-19 10:00:00',
+            'finished_at' => '2026-06-19 10:01:00',
+            'elapsed_ms' => 12.5,
+            'batch_limit' => 5,
+            'processed' => 4,
+            'queue_processed' => 1,
+            'backfill_processed' => 3,
+            'queue_before' => 2,
+            'queue_after' => 1,
+            'backfill_scanned' => 4,
+            'backfill_queued' => 3,
+            'failures' => 2,
+            'error_class' => 'RuntimeException',
+            'error_message' => "Failed to put FTS document: SELECT * FROM wp_users\n#0 stack trace",
+            'last_failed_post_id' => 703,
+            'last_failed_post_title' => 'CLI <b>Status</b> Failed',
+            'last_failed_at' => '2026-06-19 10:02:00',
+            'reschedule_decision' => 'not_applicable_manual',
+            'stop_reason' => 'batch_cap',
+            'lock_at_start' => ['state' => 'none', 'active' => false, 'mode' => '', 'started_at' => '', 'expires_at' => ''],
+            'lock_at_end' => ['state' => 'none', 'active' => false, 'mode' => '', 'started_at' => '', 'expires_at' => ''],
+            'schema_status' => 'current',
+            'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+            'expected_schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+            'storage_backend' => 'mysql',
+        ],
     ];
 
     try {
@@ -6502,6 +6621,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_contains("last_batch_failures\t2", $human, 'default status output should include failure count');
     assert_same('current', $payload['schema_status'] ?? null, 'status JSON should report current schema status');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'status JSON should report stored schema version');
+    assert_same('mysql', $payload['storage_backend'] ?? null, 'status JSON should report storage backend');
     assert_same(1, $payload['pending_queue_count'] ?? null, 'status JSON should report pending queue count');
     assert_same('active', $payload['lock_state'] ?? null, 'status JSON should report lock state without exposing the token');
     assert_same(true, $payload['lock_active'] ?? null, 'status JSON should report active lock boolean');
@@ -6524,6 +6644,19 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same(2, $payload['eligible_count'] ?? null, 'status JSON should report eligible count');
     assert_same(1, $payload['indexed_count'] ?? null, 'status JSON should report indexed eligible count');
     assert_same(1, $payload['remaining_count'] ?? null, 'status JSON should report remaining eligible count');
+    $diagnostics = $payload['latest_batch_diagnostics'] ?? null;
+    assert_true(is_array($diagnostics), 'status JSON should expose latest batch diagnostics as a bounded object');
+    assert_same('manual', $diagnostics['trigger'] ?? null, 'status diagnostics should include latest batch trigger');
+    assert_same('wp-cli', $diagnostics['source'] ?? null, 'status diagnostics should include latest batch source');
+    assert_same('partial_failure', $diagnostics['status'] ?? null, 'status diagnostics should include latest batch status');
+    assert_same(5, $diagnostics['batch_limit'] ?? null, 'status diagnostics should include batch limit');
+    assert_same(4, $diagnostics['processed'] ?? null, 'status diagnostics should include processed count');
+    assert_same(2, $diagnostics['queue_before'] ?? null, 'status diagnostics should include queue before count');
+    assert_same(1, $diagnostics['queue_after'] ?? null, 'status diagnostics should include queue after count');
+    assert_same(4, $diagnostics['backfill_scanned'] ?? null, 'status diagnostics should include backfill scanned count');
+    assert_same(3, $diagnostics['backfill_queued'] ?? null, 'status diagnostics should include backfill selected count');
+    assert_contains('SELECT statement', (string) ($diagnostics['error_message'] ?? ''), 'status diagnostics should retain redacted error context');
+    assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'SELECT * FROM'), 'status diagnostics should not expose raw SQL');
     assert_same([], $fake->queries, 'status should not run schema repair or storage writes');
     assert_same([702], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'status should leave queue state unchanged');
     assert_same('do-not-expose', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'status should leave lock state unchanged');
@@ -6578,6 +6711,7 @@ test_case('wp-cli process-batch runs one bounded manual batch with queue and bac
             ]);
         });
         $payload = wp_fts_test_decode_cli_json_object($raw);
+        $health = WP_FTS_Plugin::search_health();
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -6595,6 +6729,11 @@ test_case('wp-cli process-batch runs one bounded manual batch with queue and bac
     assert_true(isset($fake->docs[81]), 'process-batch should index the queued post first');
     assert_true(isset($fake->docs[101]), 'process-batch should use remaining capacity for one backfill post');
     assert_true(!isset($fake->docs[102]), 'process-batch should leave later backfill posts for another invocation');
+    $diagnostics = $health['latest_batch_diagnostics'] ?? [];
+    assert_same('wp-cli', $diagnostics['source'] ?? null, 'process-batch should persist WP-CLI as the latest batch source');
+    assert_same(2, $diagnostics['batch_limit'] ?? null, 'process-batch diagnostics should record the requested batch limit');
+    assert_same(1, $diagnostics['queue_before'] ?? null, 'process-batch diagnostics should record queued work before processing');
+    assert_same(0, $diagnostics['queue_after'] ?? null, 'process-batch diagnostics should record queued work after processing');
 });
 
 test_case('wp-cli process-batch respects active indexing lock', function (): void {
@@ -6766,7 +6905,18 @@ test_case('scheduled indexing cron backfills only the default batch and reschedu
         assert_same(20, count($fake->docs), 'cron should not backfill all existing content in one run');
         assert_true((bool) $result['has_more'], 'cron should report that more eligible content remains');
         assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'cron should schedule another run when backfill work remains');
-        assert_same(20, WP_FTS_Plugin::search_health()['last_batch_processed'], 'health state should retain the last cron batch size');
+        $health = WP_FTS_Plugin::search_health();
+        assert_same(20, $health['last_batch_processed'], 'health state should retain the last cron batch size');
+        $diagnostics = $health['latest_batch_diagnostics'] ?? [];
+        assert_same('cron', $diagnostics['trigger'] ?? null, 'cron diagnostics should record cron trigger');
+        assert_same('cron', $diagnostics['source'] ?? null, 'cron diagnostics should record cron source');
+        assert_same('success', $diagnostics['status'] ?? null, 'cron diagnostics should record successful status');
+        assert_same(20, $diagnostics['batch_limit'] ?? null, 'cron diagnostics should record default batch limit');
+        assert_same(20, $diagnostics['processed'] ?? null, 'cron diagnostics should record processed count');
+        assert_same(21, $diagnostics['backfill_scanned'] ?? null, 'cron diagnostics should record bounded backfill scan count');
+        assert_same(20, $diagnostics['backfill_queued'] ?? null, 'cron diagnostics should record selected backfill count');
+        assert_same('scheduled', $diagnostics['reschedule_decision'] ?? null, 'cron diagnostics should record reschedule decision');
+        assert_same('batch_cap', $diagnostics['stop_reason'] ?? null, 'cron diagnostics should record batch cap stop reason');
     } finally {
         $wpdb = $oldWpdb;
     }
@@ -6895,6 +7045,48 @@ test_case('manual indexing resource budget can stop a batch early', function ():
         assert_same(true, $result['has_more'], 'budget stop should leave a has-more signal');
         assert_same(1, count($fake->docs), 'budget stop should keep the indexed row count bounded');
         assert_same(true, WP_FTS_Plugin::search_health()['last_stopped_by_budget'], 'health state should record the budget stop');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('latest indexing diagnostics remain bounded after repeated batches', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $firstJson = '';
+
+    try {
+        for ($i = 0; $i < 12; $i++) {
+            $postId = 901 + $i;
+            $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', 'Bounded Diagnostic ' . $i);
+            $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [$postId];
+            $fake->failDocWriteErrors[$postId] = 'diagnostic failure ' . $i . ' ' . str_repeat('overflow ', 80) . "SELECT * FROM wp_users\n#0 trace";
+
+            $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+            $diagnostics = WP_FTS_Plugin::search_health()['latest_batch_diagnostics'] ?? [];
+            $json = json_encode($diagnostics, JSON_THROW_ON_ERROR);
+            if ($i === 0) {
+                $firstJson = $json;
+            }
+
+            assert_same(0, $result['processed'], 'bounded diagnostics failure fixture should not mark failed queued posts indexed');
+            assert_same('failed', $diagnostics['status'] ?? null, 'all-failed batch diagnostics should record failed status');
+            assert_same(1, $diagnostics['failures'] ?? null, 'bounded diagnostics should record one failure for each latest batch');
+            assert_true(count($diagnostics) <= 40, 'latest diagnostics should stay fixed-size after repeated batches');
+            assert_true(strlen($json) < 2048, 'latest diagnostics JSON should remain bounded after repeated batches');
+            assert_true(!str_contains($json, 'SELECT * FROM'), 'latest diagnostics should not store raw SQL after repeated failures');
+            assert_true(!str_contains($json, '#0'), 'latest diagnostics should not store stack traces after repeated failures');
+        }
+
+        $latestJson = json_encode(WP_FTS_Plugin::search_health()['latest_batch_diagnostics'] ?? [], JSON_THROW_ON_ERROR);
+        assert_true($firstJson !== '', 'bounded diagnostics test should capture the first payload');
+        assert_true(!str_contains($latestJson, 'diagnostic failure 0'), 'latest diagnostics should overwrite earlier batch details instead of accumulating history');
+        assert_contains('diagnostic failure 11', $latestJson, 'latest diagnostics should retain the most recent bounded failure');
     } finally {
         $wpdb = $oldWpdb;
     }

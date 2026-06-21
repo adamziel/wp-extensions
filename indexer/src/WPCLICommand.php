@@ -260,7 +260,7 @@ final class WP_FTS_WPCLI_Command
      */
     public function process_batch(array $args, array $assoc_args): void
     {
-        $options = [];
+        $options = ['source' => 'wp-cli'];
         $batchSize = $this->assoc_arg($assoc_args, ['batch_size', 'batch-size'], null);
         if ($batchSize !== null) {
             $options['batch_size'] = $this->positive_int_arg($batchSize, WP_FTS_Plugin::DEFAULT_MANUAL_INDEX_BATCH_SIZE);
