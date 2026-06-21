@@ -30,6 +30,30 @@ php -n tests/run.php
 
 This verifies the fallback paths used when optional extensions are missing.
 
+## Release Readiness
+
+Run the release-readiness contracts directly when changing packaging,
+operator docs, or public-distribution policy:
+
+```sh
+php tests/quality/release-readiness-contracts.php
+php -n tests/quality/release-readiness-contracts.php
+```
+
+Before publishing a direct-install ZIP, run the readiness checker from the
+monorepo root:
+
+```sh
+php indexer/tools/check-release-readiness.php --target=direct-install
+php indexer/tools/check-release-readiness.php --target=public-submission
+```
+
+`direct-install` proves the supported `indexer/` ZIP path and production
+dependency boundary. `public-submission` is a separate authority gate and is
+expected to fail on current main until WordPress.org-style `readme.txt`,
+package-level license evidence, public redistribution policy, and any required
+public assets are supplied and reviewed.
+
 ## Analyzer Language Quality
 
 Run the analyzer language corpus directly when changing language tokenization,
