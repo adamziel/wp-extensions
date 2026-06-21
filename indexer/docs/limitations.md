@@ -226,17 +226,21 @@ writers rewrote the same decoded term payload for different documents.
 Important caveats remain:
 
 - large or common terms still produce many posting rows;
-- bulk reindex, delete, and optimize do not have a distributed lock;
+- WP-CLI reindex, delete, and optimize use the plugin's shared writer lock and
+  skip with an operator warning when another index writer is active, but the
+  lock is still option-backed rather than an external distributed lock;
 - file and in-memory storage are not production concurrency backends;
 - live behavior depends on the site's database isolation level, object cache,
   cron reliability, and hosting limits.
 
-Use one bulk writer at a time until the target environment has been validated.
+Use one bulk writer at a time until the target environment has been validated,
+and check `wp fts status` when a command reports lock contention.
 
 ## MySQL Error Handling
 
 The MySQL backend issues `$wpdb` queries directly. It uses transactions around
 document updates, `dbDelta()` when available, a stored schema version/repair
-path, and operation-specific exceptions for failed writes. It does not yet
-provide lock management, automatic retries, or broad live-site validation across
-hosting/database combinations.
+path, operation-specific exceptions for failed writes, and plugin-level writer
+coordination for cron/manual/WP-CLI indexing paths. It does not yet provide
+automatic retries or broad live-site validation across hosting/database
+combinations.

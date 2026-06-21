@@ -50,7 +50,6 @@ final class WP_FTS_WPCLI_Command
     {
         $langArg = $this->assoc_arg($assoc_args, ['lang', 'language'], null);
         $lang = $langArg !== null ? $this->language_arg($langArg) : null;
-        $indexer = $this->indexer();
         $options = [
             'post_status' => $this->csv_arg(
                 (string) $this->assoc_arg($assoc_args, ['post_status', 'post-status'], implode(',', self::DEFAULT_REINDEX_POST_STATUSES)),
@@ -64,7 +63,19 @@ final class WP_FTS_WPCLI_Command
             $options['lang'] = $lang;
         }
 
-        $count = $this->reindex_posts($indexer, $options);
+        $locked = WP_FTS_Plugin::run_index_writer_with_lock(
+            'wp-cli-reindex',
+            function () use ($options): int {
+                return $this->reindex_posts($this->indexer(), $options);
+            },
+            ['batch_size' => $options['batch_size']]
+        );
+        if (empty($locked['acquired'])) {
+            $this->warn_index_writer_locked('reindex');
+            return;
+        }
+
+        $count = max(0, (int) ($locked['result'] ?? 0));
 
         WP_CLI::success($lang !== null ? "Indexed {$count} posts in {$lang}." : "Indexed {$count} posts.");
     }
@@ -308,7 +319,19 @@ final class WP_FTS_WPCLI_Command
     public function delete(array $args, array $assoc_args): void
     {
         $docId = (int) ($args[0] ?? 0);
-        $deleted = $this->indexer()->delete_document($docId);
+        $locked = WP_FTS_Plugin::run_index_writer_with_lock(
+            'wp-cli-delete',
+            function () use ($docId): bool {
+                return $this->indexer()->delete_document($docId);
+            },
+            ['batch_size' => 1]
+        );
+        if (empty($locked['acquired'])) {
+            $this->warn_index_writer_locked('delete');
+            return;
+        }
+
+        $deleted = (bool) ($locked['result'] ?? false);
         if ($deleted) {
             WP_CLI::success("Deleted document {$docId}.");
             return;
@@ -325,7 +348,20 @@ final class WP_FTS_WPCLI_Command
      */
     public function optimize(array $args, array $assoc_args): void
     {
-        $this->indexer()->optimize();
+        $locked = WP_FTS_Plugin::run_index_writer_with_lock(
+            'wp-cli-optimize',
+            function (): int {
+                $this->indexer()->optimize();
+
+                return 1;
+            },
+            ['batch_size' => 1]
+        );
+        if (empty($locked['acquired'])) {
+            $this->warn_index_writer_locked('optimize');
+            return;
+        }
+
         WP_CLI::success('Optimized FTS index.');
     }
 
@@ -645,6 +681,20 @@ final class WP_FTS_WPCLI_Command
         }
 
         echo $message . PHP_EOL;
+    }
+
+    private function warn_index_writer_locked(string $operation): void
+    {
+        $message = sprintf(
+            'Skipped FTS %s: another index writer is already running. No overlapping writer was started; run `wp fts status` for lock details and try again shortly.',
+            $operation
+        );
+        if (class_exists('WP_CLI') && is_callable(['WP_CLI', 'warning'])) {
+            WP_CLI::warning($message);
+            return;
+        }
+
+        $this->line('WARNING: ' . $message);
     }
 
     /**

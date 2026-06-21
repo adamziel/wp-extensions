@@ -2939,6 +2939,9 @@ if (!class_exists('WP_CLI')) {
         /** @var string[] */
         public static array $successMessages = [];
 
+        /** @var string[] */
+        public static array $warningMessages = [];
+
         /** @var array<string,string> */
         public static array $commands = [];
 
@@ -2954,6 +2957,7 @@ if (!class_exists('WP_CLI')) {
 
         public static function warning(string $message): void
         {
+            self::$warningMessages[] = $message;
         }
     }
 }
@@ -3094,6 +3098,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_autosaves'] = [];
     WP_CLI::$commands = [];
     WP_CLI::$successMessages = [];
+    WP_CLI::$warningMessages = [];
     WP_FTS_Plugin::reset_request_caches();
 }
 
@@ -6688,6 +6693,115 @@ test_case('wp-cli repair runs schema upgrade without indexing content', function
     assert_same(6, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'repair should call the schema creation/repair path');
     assert_same([], $fake->docs, 'repair should not index existing content');
     assert_same([], $fake->terms, 'repair should not write FTS terms');
+});
+
+test_case('wp-cli reindex uses shared writer lock and records diagnostics', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $fake->postRows = [
+        wp_fts_test_backfill_post(61, 'post', 'publish', 'CLI Direct Writer'),
+    ];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $command->reindex([], [
+            'lang' => 'en',
+            'limit' => '1',
+            'batch_size' => '1',
+        ]);
+        $health = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(['Indexed 1 posts in en.'], WP_CLI::$successMessages, 'direct reindex should report the indexed count after acquiring the writer lock');
+    assert_same([], WP_CLI::$warningMessages, 'successful direct reindex should not warn about lock contention');
+    assert_true(isset($fake->docs[61]), 'direct reindex should index content while holding the shared writer lock');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]), 'direct reindex should release the shared writer lock');
+    assert_same(WP_FTS_Plugin::INDEX_LOCK_OPTION, $GLOBALS['wp_fts_test_added_options'][0]['name'] ?? null, 'direct reindex should acquire the same non-autoloaded index lock option');
+    assert_same('no', $GLOBALS['wp_fts_test_added_options'][0]['autoload'] ?? null, 'direct reindex lock should remain non-autoloaded');
+    assert_same(1, $health['last_batch_processed'] ?? null, 'direct reindex health should record processed writer work');
+    assert_same(false, $health['last_skipped_locked'] ?? null, 'direct reindex health should not record a lock skip');
+    $diagnostics = $health['latest_batch_diagnostics'] ?? [];
+    assert_same('manual', $diagnostics['trigger'] ?? null, 'direct reindex diagnostics should use the existing manual-trigger surface');
+    assert_same('wp-cli-reindex', $diagnostics['source'] ?? null, 'direct reindex diagnostics should identify the WP-CLI writer source');
+    assert_same('success', $diagnostics['status'] ?? null, 'direct reindex diagnostics should report success');
+    assert_same(1, $diagnostics['processed'] ?? null, 'direct reindex diagnostics should record processed count');
+    assert_same('none', $diagnostics['lock_at_start']['state'] ?? null, 'direct reindex diagnostics should record no preexisting lock');
+    assert_same('none', $diagnostics['lock_at_end']['state'] ?? null, 'direct reindex diagnostics should record released lock state');
+    assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'token'), 'direct reindex diagnostics should not expose lock tokens');
+});
+
+test_case('wp-cli direct writers skip safely when the shared indexing lock is active', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [901];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'active-writer-token',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    $fake->postRows = [
+        wp_fts_test_backfill_post(901, 'post', 'publish', 'Locked Direct Reindex'),
+    ];
+    $fake->docs[902] = [
+        'lang' => 'en',
+        'doc_len' => 3,
+        'content_hash' => 'delete-hash',
+        'is_deleted' => 0,
+    ];
+    $fake->docs[903] = [
+        'lang' => 'en',
+        'doc_len' => 1,
+        'content_hash' => 'optimize-hash',
+        'is_deleted' => 1,
+    ];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $command->reindex([], [
+            'lang' => 'en',
+            'limit' => '1',
+            'batch_size' => '1',
+        ]);
+        $command->delete([902], []);
+        $command->optimize([], []);
+        $health = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same([], WP_CLI::$successMessages, 'locked direct writers should not report successful writes');
+    assert_same(3, count(WP_CLI::$warningMessages), 'locked direct writers should warn for each skipped writer command');
+    assert_contains('Skipped FTS reindex: another index writer is already running.', WP_CLI::$warningMessages[0], 'locked reindex should explain the active writer lock');
+    assert_contains('Skipped FTS delete: another index writer is already running.', WP_CLI::$warningMessages[1], 'locked delete should explain the active writer lock');
+    assert_contains('Skipped FTS optimize: another index writer is already running.', WP_CLI::$warningMessages[2], 'locked optimize should explain the active writer lock');
+    assert_true(!isset($fake->docs[901]), 'locked reindex should not write the queued source post');
+    assert_same(0, $fake->docs[902]['is_deleted'] ?? null, 'locked delete should not tombstone an indexed document');
+    assert_true(isset($fake->docs[903]), 'locked optimize should not compact tombstoned documents');
+    assert_same([901], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'locked direct writers should not drain queued work');
+    assert_same('active-writer-token', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'locked direct writers should leave the active lock untouched');
+    assert_same(true, $health['last_skipped_locked'] ?? null, 'locked direct writer health should record a lock skip');
+    assert_same(0, $health['last_batch_processed'] ?? null, 'locked direct writer health should record no processed writes');
+    $diagnostics = $health['latest_batch_diagnostics'] ?? [];
+    assert_same('wp-cli-optimize', $diagnostics['source'] ?? null, 'latest direct-writer diagnostics should identify the skipped optimize command');
+    assert_same('skipped_locked', $diagnostics['status'] ?? null, 'locked direct writer diagnostics should report skipped status');
+    assert_same(true, $diagnostics['lock_prevented_work'] ?? null, 'locked direct writer diagnostics should record that the lock prevented work');
+    assert_same('lock_active', $diagnostics['stop_reason'] ?? null, 'locked direct writer diagnostics should record lock stop reason');
+    assert_same('active', $diagnostics['lock_at_start']['state'] ?? null, 'locked direct writer diagnostics should include active start lock state');
+    assert_same('cron', $diagnostics['lock_at_start']['mode'] ?? null, 'locked direct writer diagnostics should include safe holder mode');
+    assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'active-writer-token'), 'locked direct writer diagnostics should not expose lock tokens');
 });
 
 test_case('wp-cli process-batch runs one bounded manual batch with queue and backfill counts', function (): void {

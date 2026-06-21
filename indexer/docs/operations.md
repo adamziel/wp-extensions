@@ -120,9 +120,12 @@ wp post list --post_status=trash --format=ids | xargs -r -n1 wp fts delete
 The MySQL backend stores postings as rows and applies document-frequency deltas
 instead of rewriting whole per-term blobs during normal indexing. This removes
 the previous whole-blob lost-update failure mode for different documents, but
-there is still no distributed lock around bulk jobs. Avoid overlapping full
-reindex, delete, and optimize jobs until the target environment has been load
-tested.
+WP-CLI reindex, delete, and optimize now coordinate through the plugin's
+shared writer lock. If one of those commands reports lock contention, no
+overlapping writer was started; check `wp fts status` and try again after the
+active batch finishes. The lock is option-backed rather than an external
+distributed lock, so avoid overlapping full reindex, delete, and optimize jobs
+until the target environment has been load tested.
 
 ## Search Operation
 
@@ -289,8 +292,9 @@ Practical guidance for this branch:
 - Reindex off peak on large sites.
 - Start with `--batch_size=100` to `--batch_size=500`, then adjust based on DB
   load.
-- Avoid concurrent bulk reindex, delete, or optimize jobs unless the site has
-  been tested with its production database settings.
+- Treat a `wp fts reindex`, `wp fts delete`, or `wp fts optimize` lock warning
+  as a safe skip; the command did not mutate the index while another writer was
+  active.
 - Keep explicit `--post_type` and `--post_status` scopes narrow.
 - Use `--limit` for smoke tests before running a full reindex.
 - Monitor table sizes for the active prefix, especially `*_fts_postings`.

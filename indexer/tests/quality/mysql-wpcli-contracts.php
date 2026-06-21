@@ -59,6 +59,7 @@ namespace {
     {
         if (class_exists('WP_CLI')) {
             WP_CLI::$successMessages = [];
+            WP_CLI::$warningMessages = [];
             WP_CLI::$commands = [];
         }
 

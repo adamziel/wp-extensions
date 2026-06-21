@@ -623,6 +623,68 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Run a direct index writer under the shared indexing lock.
+     *
+     * WP-CLI reindex/delete/optimize do not flow through the bounded queue
+     * processor, but they still mutate the same index tables. This helper gives
+     * those writers the same lock and bounded diagnostics used by cron/manual
+     * batches so operators can see when a writer was skipped instead of
+     * overlapping another writer.
+     *
+     * @param callable():mixed $writer
+     * @param array<string,mixed> $opts Optional diagnostics hints.
+     * @return array{acquired:bool,result:mixed,summary:array<string,mixed>}
+     */
+    public static function run_index_writer_with_lock(string $source, callable $writer, array $opts = []): array
+    {
+        $started = microtime(true);
+        $source = self::index_writer_source($source);
+        $summary = self::default_index_batch_summary('manual', self::index_writer_batch_size($opts));
+        $summary['trigger'] = 'manual';
+        self::initialize_index_batch_summary($summary, ['source' => $source], $started);
+
+        $token = self::acquire_index_lock($source);
+        if ($token === null) {
+            $summary['skipped_locked'] = true;
+            $summary['has_more'] = true;
+            $summary['lock_prevented_work'] = true;
+            self::remember_index_batch_stop($summary, 'lock_active');
+            self::finalize_index_batch_summary($summary, $started);
+            self::update_index_health_state($summary);
+
+            return [
+                'acquired' => false,
+                'result' => null,
+                'summary' => $summary,
+            ];
+        }
+
+        $result = null;
+        $thrown = null;
+        try {
+            $result = $writer();
+            $summary['processed'] = self::index_writer_processed_count($result, $opts);
+        } catch (Throwable $e) {
+            $thrown = $e;
+            self::remember_index_batch_exception_in_summary($summary, $e);
+        } finally {
+            self::release_index_lock($token);
+            self::finalize_index_batch_summary($summary, $started);
+            self::update_index_health_state($summary);
+        }
+
+        if ($thrown !== null) {
+            throw $thrown;
+        }
+
+        return [
+            'acquired' => true,
+            'result' => $result,
+            'summary' => $summary,
+        ];
+    }
+
+    /**
      * Return compact indexing health state for the later admin dashboard.
      *
      * @return array<string,mixed>
@@ -8330,6 +8392,46 @@ JS;
         }
 
         return self::is_cli_request() ? 'wp-cli' : 'manual';
+    }
+
+    private static function index_writer_source(string $source): string
+    {
+        $source = self::sanitize_key($source);
+
+        return $source !== '' ? self::debug_truncate_text($source, 40) : 'manual';
+    }
+
+    /**
+     * @param array<string,mixed> $opts
+     */
+    private static function index_writer_batch_size(array $opts): int
+    {
+        if (isset($opts['batch_size']) && is_numeric($opts['batch_size'])) {
+            return max(0, (int) $opts['batch_size']);
+        }
+
+        return 0;
+    }
+
+    /**
+     * @param array<string,mixed> $opts
+     */
+    private static function index_writer_processed_count(mixed $result, array $opts): int
+    {
+        if (isset($opts['processed']) && is_numeric($opts['processed'])) {
+            return max(0, (int) $opts['processed']);
+        }
+        if (is_array($result) && isset($result['processed']) && is_numeric($result['processed'])) {
+            return max(0, (int) $result['processed']);
+        }
+        if (is_bool($result)) {
+            return $result ? 1 : 0;
+        }
+        if (is_int($result) || is_float($result) || (is_scalar($result) && is_numeric($result))) {
+            return max(0, (int) $result);
+        }
+
+        return 0;
     }
 
     private static function index_storage_backend_label(): string
