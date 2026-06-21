@@ -2115,6 +2115,7 @@ final class WP_FTS_Searcher
             }
             if ($includeSnippets) {
                 $resultLang = $this->snippet_result_language($row, $meta, $doc, $opts, $queryLang);
+                $snippetQueryGroups = $this->snippet_query_groups($query, $opts, $queryGroups, $queryLang, $resultLang, $doc);
                 $snippetLength = max(40, (int) ($opts['snippet_length'] ?? 180));
                 $highlight = !empty($opts['highlight']);
                 $searchHtml = (string) ($meta['search_html'] ?? '');
@@ -2124,7 +2125,7 @@ final class WP_FTS_Searcher
                         $query,
                         $snippetLength,
                         $opts,
-                        $queryGroups,
+                        $snippetQueryGroups,
                         $queryLang,
                         $resultLang
                     );
@@ -2145,7 +2146,7 @@ final class WP_FTS_Searcher
                     $snippetLength,
                     $highlight,
                     $opts,
-                    $queryGroups,
+                    $snippetQueryGroups,
                     $queryLang,
                     $resultLang
                 );
@@ -2154,6 +2155,42 @@ final class WP_FTS_Searcher
         unset($row);
 
         return $results;
+    }
+
+    /**
+     * Build a snippet-only query plan when callers need broad search recall but
+     * bounded highlighting. Without an explicit `snippet_languages` key, result
+     * enrichment keeps the search query plan for backwards compatibility.
+     *
+     * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int}>> $queryGroups
+     * @return array<int,array<int,array{key:string,lang:string,term:string,rank:int}>>
+     */
+    private function snippet_query_groups(string $query, array $opts, array $queryGroups, string $queryLang, string $resultLang, ?array $doc): array
+    {
+        if (!array_key_exists('snippet_languages', $opts)) {
+            return $queryGroups;
+        }
+
+        $languages = [];
+        foreach ($this->languages_from_value($opts['snippet_languages']) as $language) {
+            $languages[$language] = true;
+        }
+        foreach ([$queryLang, $resultLang] as $language) {
+            if (is_scalar($language) && trim((string) $language) !== '') {
+                $languages[WP_FTS_TermNamespace::canonicalize_lang((string) $language)] = true;
+            }
+        }
+        foreach ($this->document_length_languages($doc) as $language) {
+            $languages[$language] = true;
+        }
+
+        $snippetOpts = $opts;
+        unset($snippetOpts['langs'], $snippetOpts['languages']);
+        if ($languages !== []) {
+            $snippetOpts['languages'] = array_keys($languages);
+        }
+
+        return $this->build_query_groups($query, $snippetOpts);
     }
 
     /**
@@ -2464,6 +2501,7 @@ final class WP_FTS_Searcher
             $meta['language'] ?? null,
             $meta['lang'] ?? null,
             $meta['primary_lang'] ?? null,
+            $this->single_document_length_language($doc),
             $doc['primary_lang'] ?? null,
             $doc['lang'] ?? null,
             $doc['language'] ?? null,
@@ -2476,6 +2514,44 @@ final class WP_FTS_Searcher
         }
 
         return WP_FTS_TermNamespace::default_language($opts);
+    }
+
+    /**
+     * Return the only concrete language partition represented by a stored doc.
+     *
+     * @param array<string,mixed>|null $doc
+     */
+    private function single_document_length_language(?array $doc): string
+    {
+        $languages = $this->document_length_languages($doc);
+
+        return count($languages) === 1 ? $languages[0] : '';
+    }
+
+    /**
+     * Return concrete language partitions represented by a stored doc.
+     *
+     * @param array<string,mixed>|null $doc
+     * @return string[]
+     */
+    private function document_length_languages(?array $doc): array
+    {
+        if ($doc === null || !is_array($doc['lang_lengths'] ?? null)) {
+            return [];
+        }
+
+        $languages = [];
+        foreach ($doc['lang_lengths'] as $language => $length) {
+            if (!is_numeric($length) || (int) $length <= 0) {
+                continue;
+            }
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+            if ($language !== '') {
+                $languages[$language] = true;
+            }
+        }
+
+        return array_keys($languages);
     }
 
     /**

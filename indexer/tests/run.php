@@ -10144,6 +10144,123 @@ test_case('front-end search reuses sanitized searcher snippets for content previ
     }
 });
 
+test_case('front-end snippets bound active analyzer-pack languages while recall stays broad', function (): void {
+    global $wpdb;
+
+    require_once __DIR__ . '/../tools/import-lemma-tsv-pack.php';
+
+    $sourceDir = temp_directory_path('frontend_bounded_snippet_qaa_source');
+    $packDir = temp_directory_path('frontend_bounded_snippet_qaa_pack');
+    $oldWpdb = $wpdb ?? null;
+    try {
+        if (!mkdir($sourceDir, 0777, true) && !is_dir($sourceDir)) {
+            throw new WP_FTS_TestFailure("Could not create synthetic qaa source directory: {$sourceDir}");
+        }
+        $source = $sourceDir . '/qaa-normalized-lemma.tsv';
+        write_synthetic_qaa_lemma_tsv_source($source);
+        $options = WP_FTS_LemmaTsvPackImporter::parse_cli_options(synthetic_qaa_lemma_tsv_import_args($source, $packDir));
+        (new WP_FTS_LemmaTsvPackImporter())->import($options);
+        $manifest = $packDir . '/manifest.json';
+
+        $fake = new WP_FTS_Test_WPDB();
+        $wpdb = $fake;
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => $context === 'frontend search';
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'lemma_packs_by_lang' => [
+                'qaa' => $manifest,
+            ],
+        ];
+        WP_FTS_Plugin::reset_request_caches();
+        add_filter('the_content', [WP_FTS_Plugin::class, 'frontend_search_content'], 20, 1);
+        add_filter('the_excerpt', [WP_FTS_Plugin::class, 'frontend_search_excerpt'], 10, 1);
+        add_filter('the_title', [WP_FTS_Plugin::class, 'frontend_search_title'], 10, 2);
+
+        $english = (object) [
+            'ID' => 815,
+            'post_title' => 'frontneedle English qaaforma title',
+            'post_content' => '<p>frontneedle English qaaforma body preview.</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-13 00:00:00',
+        ];
+        $qaa = (object) [
+            'ID' => 816,
+            'post_title' => 'Synthetic qaa lemma result',
+            'post_content' => '<p>qaaforma synthetic pack-backed body.</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-13 00:00:00',
+        ];
+        $GLOBALS['wp_fts_test_posts'][815] = $english;
+        $GLOBALS['wp_fts_test_posts'][816] = $qaa;
+
+        $extractor = new WP_FTS_PostContentExtractor();
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer(), $extractor);
+        foreach ([815 => ['post' => $english, 'lang' => 'en'], 816 => ['post' => $qaa, 'lang' => 'qaa']] as $postId => $fixture) {
+            $lang = $fixture['lang'];
+            $extracted = $extractor->extract($fixture['post'], [
+                'lang' => $lang,
+                'field_boosts' => WP_FTS_Plugin::default_settings()['field_boosts'],
+            ]);
+            $indexer->index_document_fields($postId, $extracted['fields'], [
+                'lang' => $lang,
+                'metadata' => array_replace($extracted['metadata'], ['language' => $lang]),
+                'field_boosts' => $extracted['field_boosts'],
+            ]);
+        }
+
+        assert_true(isset($fake->terms[WP_FTS_TermNamespace::namespace_term('qaa', 'qaalemma')]), 'synthetic qaa pack should be active for runtime indexing');
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'frontneedle qaaformb',
+            'posts_per_page' => 10,
+        ]);
+        WP_FTS_Plugin::prepare_frontend_search_query($query);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+        $postIds = array_map(static fn(object $post): int => (int) $post->ID, $posts);
+        sort($postIds, SORT_NUMERIC);
+        assert_same([815, 816], $postIds, 'broad active analyzer-pack languages should still be used for frontend search recall');
+
+        $oldGlobalPost = $GLOBALS['post'] ?? null;
+        wp_fts_test_begin_frontend_search_loop($query);
+        try {
+            $GLOBALS['post'] = $english;
+            $englishExcerpt = WP_FTS_Plugin::frontend_search_excerpt('', $english);
+            $englishContent = apply_filters('the_content', '<p>Theme fallback content.</p>');
+            $englishTitle = apply_filters('the_title', $english->post_title, 815);
+            $GLOBALS['post'] = $qaa;
+            $qaaExcerpt = WP_FTS_Plugin::frontend_search_excerpt('', $qaa);
+        } finally {
+            wp_fts_test_end_frontend_search_loop($query);
+            if ($oldGlobalPost === null) {
+                unset($GLOBALS['post']);
+            } else {
+                $GLOBALS['post'] = $oldGlobalPost;
+            }
+        }
+
+        assert_contains('<mark>frontneedle</mark>', $englishExcerpt, 'English frontend excerpt should still highlight the English query term');
+        assert_contains('qaaforma', $englishExcerpt, 'English frontend excerpt should include the nearby active-pack surface as plain text');
+        assert_true(!str_contains($englishExcerpt, '<mark>qaaforma</mark>'), 'English frontend excerpt should not analyze through every active analyzer-pack language');
+        assert_true(!str_contains($englishContent, '<mark>qaaforma</mark>'), 'English frontend content preview should keep active-pack surfaces unmarked when the result language is English');
+        assert_true(!str_contains($englishTitle, '<mark>qaaforma</mark>'), 'English frontend title should not analyze through every active analyzer-pack language');
+        assert_contains('<mark>qaaforma</mark>', $qaaExcerpt, 'qaa result snippets should still highlight pack-backed document forms via the result language');
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'bounded snippet frontend search should record one diagnostics trace');
+        $plan = is_array($traces[0]['search_explain']['query_plan'] ?? null) ? $traces[0]['search_explain']['query_plan'] : [];
+        $analyzedLanguages = is_array($plan['analyzed_languages'] ?? null) ? $plan['analyzed_languages'] : [];
+        assert_true(in_array('qaa', $analyzedLanguages, true), 'frontend search explain should prove broad recall still analyzed the active qaa pack');
+    } finally {
+        $wpdb = $oldWpdb;
+        remove_directory_tree($sourceDir);
+        remove_directory_tree($packDir);
+    }
+});
+
 test_case('front-end search highlights from global main query outside loop scope', function (): void {
     global $wpdb;
 

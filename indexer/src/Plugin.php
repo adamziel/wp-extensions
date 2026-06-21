@@ -8366,15 +8366,20 @@ JS;
             $search_options['fallback_languages'] = $fallback_languages;
         }
         $explicit_language = self::query_var($query, 'wp_fts_lang', null);
-        $snippet_languages = [];
+        $explicit_snippet_language = '';
+        $search_languages = [];
         if (is_scalar($explicit_language) && trim((string) $explicit_language) !== '') {
-            $search_options['lang'] = (string) $explicit_language;
-            $search_options['query_lang'] = (string) $explicit_language;
+            $explicit_snippet_language = WP_FTS_TermNamespace::canonicalize_lang((string) $explicit_language);
+            $search_options['lang'] = $explicit_snippet_language;
+            $search_options['query_lang'] = $explicit_snippet_language;
         } else {
-            $snippet_languages = self::frontend_auto_search_languages($search_query);
-            if ($snippet_languages !== []) {
-                $search_options['languages'] = $snippet_languages;
+            $search_languages = self::frontend_auto_search_languages($search_query);
+            if ($search_languages !== []) {
+                $search_options['languages'] = $search_languages;
             }
+        }
+        if ($reuse_search_result_snippets) {
+            $search_options['snippet_languages'] = self::frontend_bounded_snippet_languages($explicit_snippet_language);
         }
         self::debug_add_timing($trace_id, 'analyzer/query preparation', $prep_started);
 
@@ -8383,7 +8388,7 @@ JS;
         $titles = [];
         $visible_total = 0;
         $search_offset = 0;
-        $query_lang = '';
+        $query_lang = $explicit_snippet_language;
         $metadata_total = 0;
         $seen = [];
 
@@ -8443,8 +8448,10 @@ JS;
 
                 $posts[] = $post;
                 if ($build_frontend_previews) {
-                    $document_lang = self::frontend_result_language($post_id);
+                    $document_languages = self::frontend_result_languages($post_id);
+                    $document_lang = $document_languages[0] ?? '';
                     $result_lang = $document_lang !== '' ? $document_lang : $query_lang;
+                    $snippet_languages = self::frontend_bounded_snippet_languages($explicit_snippet_language, $query_lang, $result_lang, ...$document_languages);
                     $reuse_started = microtime(true);
                     $snippet = self::frontend_reusable_content_snippet($row['snippet'] ?? null, $post);
                     self::debug_add_timing($trace_id, 'snippet reuse', $reuse_started);
@@ -8620,6 +8627,22 @@ JS;
     /**
      * @return string[]
      */
+    private static function frontend_bounded_snippet_languages(string ...$languages): array
+    {
+        $bounded = [];
+        foreach ($languages as $language) {
+            $language = WP_FTS_TermNamespace::canonicalize_lang($language);
+            if ($language !== '') {
+                $bounded[$language] = true;
+            }
+        }
+
+        return array_keys($bounded);
+    }
+
+    /**
+     * @return string[]
+     */
     private static function frontend_auto_search_languages(string $query): array
     {
         $languages = [];
@@ -8651,21 +8674,40 @@ JS;
         return array_keys($languages);
     }
 
-    private static function frontend_result_language(int $post_id): string
+    /**
+     * @return string[]
+     */
+    private static function frontend_result_languages(int $post_id): array
     {
         try {
             $doc = self::storage(false)->get_doc($post_id);
         } catch (Throwable) {
-            return '';
+            return [];
+        }
+
+        $languages = [];
+        if (is_array($doc['lang_lengths'] ?? null)) {
+            foreach ($doc['lang_lengths'] as $language => $length) {
+                if (!is_numeric($length) || (int) $length <= 0) {
+                    continue;
+                }
+                $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+                if ($language !== '') {
+                    $languages[$language] = true;
+                }
+            }
         }
 
         foreach ([$doc['primary_lang'] ?? null, $doc['lang'] ?? null] as $candidate) {
             if (is_scalar($candidate) && trim((string) $candidate) !== '') {
-                return WP_FTS_TermNamespace::canonicalize_lang((string) $candidate);
+                $language = WP_FTS_TermNamespace::canonicalize_lang((string) $candidate);
+                if ($language !== '') {
+                    $languages[$language] = true;
+                }
             }
         }
 
-        return '';
+        return array_keys($languages);
     }
 
     /**
