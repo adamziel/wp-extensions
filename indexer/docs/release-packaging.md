@@ -66,8 +66,49 @@ Do not ship:
 The `.distignore` file in this directory encodes that packaging boundary.
 
 This package is a direct-install ZIP boundary only. It does not make the plugin
-ready for WordPress.org or SVN submission, which still needs a separate
-readme/assets/license/public-submission authority pass.
+ready for WordPress.org or SVN submission, which still needs complete
+WordPress.org-style readme metadata, GPL-compatible license files and metadata,
+valid directory asset images, and recorded public-submission authority evidence.
+
+## Release Readiness Gate
+
+Run the release-readiness gate before publishing any package. The gate has two
+targets because direct-install readiness is not the same as WordPress.org/SVN
+or broader public-marketplace submission readiness.
+
+Direct-install readiness proves the current ZIP release path:
+
+```sh
+php indexer/tools/check-release-readiness.php --target=direct-install
+```
+
+This target checks the plugin header version, Composer metadata, direct ZIP
+builder, `indexer/` package root, required runtime files, production Composer
+dependencies, prohibited release artifacts, and ZIP boundary. The default
+readiness path uses a stable temporary build directory and normalized ZIP entry
+metadata so two unchanged runs produce identical JSON, including the operator
+evidence for ZIP path and SHA-256. A passing direct-install check means the
+project can produce the supported direct ZIP; it does not approve public
+marketplace distribution.
+
+Public-submission readiness is intentionally separate:
+
+```sh
+php indexer/tools/check-release-readiness.php --target=public-submission
+```
+
+Current main is expected to fail this target. The package does not yet carry a
+complete package-level `readme.txt`, package-level GPL-compatible license file,
+public redistribution license policy, valid WordPress.org-style banner/icon
+assets, or `docs/public-submission-readiness.json` authority evidence. The
+checker must continue to report those blockers until the project intentionally
+supplies and verifies the WordPress.org-style metadata/assets/license evidence
+needed for public submission.
+
+The public-submission authority evidence file is intentionally not a placeholder
+marker. To pass, it must record an approved WordPress.org/public-submission
+target, non-placeholder approver, review date, and explicit approved checks for
+readme, license, assets, and public-submission authority.
 
 ## Composer Dependency Handling
 
@@ -140,11 +181,16 @@ The schema probe should succeed even before any content is indexed.
 
 1. Start from a clean worktree.
 2. Run the normal PHP harness and any required hardening acceptance commands.
-3. Build the release ZIP with `php indexer/tools/build-release-zip.php`.
-4. Inspect the ZIP for unexpected `.cao`, dotfiles, root `tests/`,
+3. Run `php indexer/tools/check-release-readiness.php --target=direct-install`.
+4. Run `php indexer/tools/check-release-readiness.php --target=public-submission`
+   and treat the current blockers as expected unless the release explicitly
+   includes a completed public-submission authority pass.
+5. Build the release ZIP with `php indexer/tools/build-release-zip.php`.
+6. Inspect the ZIP for unexpected `.cao`, dotfiles, root `tests/`,
    dependency-internal vendor tests or coverage fixtures, or local cache files.
-5. Install the ZIP in a disposable WordPress site.
-6. Activate the plugin, run the schema probe, run a small reindex, and run one
+7. Install the ZIP in a disposable WordPress site.
+8. Activate the plugin, run the schema probe, run a small reindex, and run one
    search.
-7. Record the commit SHA, archive name, dependency versions, and test results in
+9. Record the commit SHA, archive name, dependency versions, readiness target
+   results, and test results in
    the release notes.
