@@ -21,11 +21,13 @@ caveats operators need to account for.
 - Runtime saves are processed through a bounded option-backed queue. This keeps
   hook work small, but it is not a durable external job queue.
 - Multisite support is limited to lifecycle schema and cleanup paths: activation
-  or repair affects the current site, new sites get empty FTS tables, and
-  WordPress site deletion can discover those tables. This is not a complete
-  enterprise multisite certification.
-- Uninstall currently clears operational options and pending queue state but
-  intentionally retains index tables and data.
+  or repair affects the current site, new sites get empty FTS tables, uninstall
+  clears plugin operational options per site, and WordPress site deletion can
+  discover those tables. This is not a complete enterprise multisite
+  certification.
+- Uninstall currently clears operational options and pending queue state, but
+  intentionally retains index tables and data. It does not create or delete
+  posts, demo content, or analyzer/upload/release artifacts.
 
 ## Content Scope
 

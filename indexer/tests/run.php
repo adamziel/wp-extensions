@@ -3124,11 +3124,16 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_is_cron'] = false;
     $GLOBALS['wp_fts_test_is_rest'] = false;
     $GLOBALS['wp_fts_test_is_network_admin'] = false;
+    $GLOBALS['wp_fts_test_is_multisite'] = false;
+    $GLOBALS['wp_fts_test_sites'] = [];
     $GLOBALS['wp_fts_test_current_blog_id'] = 1;
     $GLOBALS['wp_fts_test_blog_stack'] = [];
     $GLOBALS['wp_fts_test_switch_log'] = [];
     $GLOBALS['wp_fts_test_restore_log'] = [];
     $GLOBALS['wp_fts_test_switch_to_blog_returns_false'] = false;
+    $GLOBALS['wp_fts_test_use_blog_option_store'] = false;
+    $GLOBALS['wp_fts_test_site_options'] = [];
+    $GLOBALS['wp_fts_test_deleted_options'] = [];
     unset($GLOBALS['pagenow']);
     $GLOBALS['wp_fts_test_current_screen'] = null;
     $GLOBALS['wp_query'] = null;
@@ -3212,11 +3217,55 @@ if (!function_exists('register_uninstall_hook')) {
     }
 }
 
+function wp_fts_test_current_option_blog_id(): int
+{
+    return max(1, (int) ($GLOBALS['wp_fts_test_current_blog_id'] ?? 1));
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function &wp_fts_test_option_store(): array
+{
+    if (!empty($GLOBALS['wp_fts_test_use_blog_option_store'])) {
+        $blog_id = wp_fts_test_current_option_blog_id();
+        if (!isset($GLOBALS['wp_fts_test_site_options'][$blog_id]) || !is_array($GLOBALS['wp_fts_test_site_options'][$blog_id])) {
+            $GLOBALS['wp_fts_test_site_options'][$blog_id] = [];
+        }
+
+        return $GLOBALS['wp_fts_test_site_options'][$blog_id];
+    }
+
+    return $GLOBALS['wp_fts_test_options'];
+}
+
+if (!function_exists('is_multisite')) {
+    function is_multisite(): bool
+    {
+        return (bool) ($GLOBALS['wp_fts_test_is_multisite'] ?? false);
+    }
+}
+
+if (!function_exists('get_sites')) {
+    /**
+     * @param array<string,mixed>|string $args
+     * @return array<int,mixed>
+     */
+    function get_sites(array|string $args = []): array
+    {
+        $sites = $GLOBALS['wp_fts_test_sites'] ?? [];
+
+        return is_array($sites) ? array_values($sites) : [];
+    }
+}
+
 if (!function_exists('get_option')) {
     function get_option(string $name, mixed $default = false): mixed
     {
-        return array_key_exists($name, $GLOBALS['wp_fts_test_options'])
-            ? $GLOBALS['wp_fts_test_options'][$name]
+        $store =& wp_fts_test_option_store();
+
+        return array_key_exists($name, $store)
+            ? $store[$name]
             : $default;
     }
 }
@@ -3224,8 +3273,9 @@ if (!function_exists('get_option')) {
 if (!function_exists('update_option')) {
     function update_option(string $name, mixed $value): bool
     {
-        $old = $GLOBALS['wp_fts_test_options'][$name] ?? null;
-        $GLOBALS['wp_fts_test_options'][$name] = $value;
+        $store =& wp_fts_test_option_store();
+        $old = $store[$name] ?? null;
+        $store[$name] = $value;
 
         return $old !== $value;
     }
@@ -3234,11 +3284,12 @@ if (!function_exists('update_option')) {
 if (!function_exists('add_option')) {
     function add_option(string $name, mixed $value = '', string $deprecated = '', string|bool|null $autoload = null): bool
     {
-        if (array_key_exists($name, $GLOBALS['wp_fts_test_options'])) {
+        $store =& wp_fts_test_option_store();
+        if (array_key_exists($name, $store)) {
             return false;
         }
 
-        $GLOBALS['wp_fts_test_options'][$name] = $value;
+        $store[$name] = $value;
         $GLOBALS['wp_fts_test_added_options'][] = [
             'name' => $name,
             'value' => $value,
@@ -3252,8 +3303,14 @@ if (!function_exists('add_option')) {
 if (!function_exists('delete_option')) {
     function delete_option(string $name): bool
     {
-        $existed = array_key_exists($name, $GLOBALS['wp_fts_test_options']);
-        unset($GLOBALS['wp_fts_test_options'][$name]);
+        $store =& wp_fts_test_option_store();
+        $existed = array_key_exists($name, $store);
+        unset($store[$name]);
+        $GLOBALS['wp_fts_test_deleted_options'][] = [
+            'blog_id' => wp_fts_test_current_option_blog_id(),
+            'name' => $name,
+            'existed' => $existed,
+        ];
 
         return $existed;
     }
@@ -8007,20 +8064,52 @@ test_case('health and wp-cli status report stale debt progress without indexing 
     assert_same($docsBeforeStatus, $fake->docs, 'rendering health and status should not index more content');
 });
 
-test_case('deactivation and uninstall keep index data while clearing operational state', function (): void {
+/**
+ * @return string[]
+ */
+function wp_fts_test_uninstall_operational_option_names(): array
+{
+    return [
+        WP_FTS_Plugin::SCHEMA_VERSION_OPTION,
+        WP_FTS_Plugin::QUEUE_OPTION,
+        WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION,
+        WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION,
+        WP_FTS_Plugin::SETTINGS_OPTION,
+        WP_FTS_Plugin::INDEX_LOCK_OPTION,
+        WP_FTS_Plugin::INDEX_HEALTH_OPTION,
+        WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION,
+    ];
+}
+
+/**
+ * @param string[] $option_names
+ * @return array<string,mixed>
+ */
+function wp_fts_test_uninstall_seeded_options(array $option_names, int $site_id): array
+{
+    $options = ['wp_fts_non_operational_marker' => "keep-site-{$site_id}"];
+    foreach ($option_names as $option_name) {
+        $options[$option_name] = "remove-site-{$site_id}-{$option_name}";
+    }
+
+    return $options;
+}
+
+test_case('single-site deactivation and uninstall keep index data while clearing operational state', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
     $fake = new WP_FTS_Test_WPDB();
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
+    $operationalOptions = wp_fts_test_uninstall_operational_option_names();
 
     try {
         WP_FTS_Plugin::activate();
         $storage = WP_FTS_Plugin::storage(false);
         $storage->put_doc(31, 'en', ['en' => 2], 'hash-31');
         $storage->put_term(WP_FTS_TermNamespace::namespace_term('en', 'alpha'), 1, WP_FTS_PostingsCodec::encode([31 => 2]));
-        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [31, 32];
+        $GLOBALS['wp_fts_test_options'] = wp_fts_test_uninstall_seeded_options($operationalOptions, 1);
 
         WP_FTS_Plugin::deactivate();
         assert_true(isset($fake->docs[31]), 'deactivation should not destroy indexed documents');
@@ -8028,12 +8117,154 @@ test_case('deactivation and uninstall keep index data while clearing operational
         assert_true(isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'deactivation should leave schema version option intact');
         assert_true(in_array(WP_FTS_Plugin::CRON_HOOK, $GLOBALS['wp_fts_test_cleared_hooks'], true), 'deactivation should clear scheduled queue work');
 
+        $fake->queries = [];
         WP_FTS_Plugin::uninstall();
         assert_true(isset($fake->docs[31]), 'uninstall policy should retain index data until destructive cleanup is explicitly implemented');
         assert_true($fake->terms !== [], 'uninstall policy should retain term data');
-        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION]), 'uninstall should delete schema version option');
-        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION]), 'uninstall should delete pending queue option');
+        foreach ($operationalOptions as $option_name) {
+            assert_true(!isset($GLOBALS['wp_fts_test_options'][$option_name]), "single-site uninstall should delete {$option_name}");
+        }
+        assert_same('keep-site-1', $GLOBALS['wp_fts_test_options']['wp_fts_non_operational_marker'] ?? null, 'single-site uninstall should leave unrelated options alone');
+        assert_same([], $fake->queries, 'single-site uninstall should not run schema repair or custom-table SQL');
+        assert_same([], $GLOBALS['wp_fts_test_posts'], 'single-site uninstall should not create demo or content posts');
+        assert_same([], $GLOBALS['wp_fts_test_trashed_posts'], 'single-site uninstall should not delete or trash content posts');
         assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'uninstall should not drop custom tables under the documented deferred cleanup policy');
+        assert_true(!str_contains(implode("\n", $fake->queries), 'TRUNCATE TABLE'), 'uninstall should not truncate custom tables under the documented deferred cleanup policy');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('multisite uninstall clears operational options per site restores context and is idempotent', function (): void {
+    global $wpdb;
+
+    if (!function_exists('switch_to_blog')) {
+        function switch_to_blog(int $blog_id): bool
+        {
+            global $wpdb;
+
+            if (!empty($GLOBALS['wp_fts_test_switch_to_blog_returns_false'])) {
+                return false;
+            }
+
+            $current = (int) ($GLOBALS['wp_fts_test_current_blog_id'] ?? 1);
+            $GLOBALS['wp_fts_test_switch_log'][] = $blog_id;
+            $GLOBALS['wp_fts_test_blog_stack'][] = $current;
+            $GLOBALS['wp_fts_test_current_blog_id'] = $blog_id;
+
+            if (isset($wpdb) && is_object($wpdb) && method_exists($wpdb, 'get_blog_prefix')) {
+                $wpdb->prefix = $wpdb->get_blog_prefix($blog_id);
+                $wpdb->posts = $wpdb->prefix . 'posts';
+            }
+
+            return true;
+        }
+    }
+
+    if (!function_exists('restore_current_blog')) {
+        function restore_current_blog(): bool
+        {
+            global $wpdb;
+
+            $previous = array_pop($GLOBALS['wp_fts_test_blog_stack']);
+            if (!is_int($previous)) {
+                $previous = 1;
+            }
+
+            $GLOBALS['wp_fts_test_restore_log'][] = $previous;
+            $GLOBALS['wp_fts_test_current_blog_id'] = $previous;
+
+            if (isset($wpdb) && is_object($wpdb) && method_exists($wpdb, 'get_blog_prefix')) {
+                $wpdb->prefix = $wpdb->get_blog_prefix($previous);
+                $wpdb->posts = $wpdb->prefix . 'posts';
+            }
+
+            return true;
+        }
+    }
+
+    if (!function_exists('get_current_blog_id')) {
+        function get_current_blog_id(): int
+        {
+            return (int) ($GLOBALS['wp_fts_test_current_blog_id'] ?? 1);
+        }
+    }
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $operationalOptions = wp_fts_test_uninstall_operational_option_names();
+    $siteIds = [2, 3, 4];
+
+    try {
+        $GLOBALS['wp_fts_test_is_multisite'] = true;
+        $GLOBALS['wp_fts_test_sites'] = [2, 3, (object) ['blog_id' => 4], 0, 'invalid'];
+        $GLOBALS['wp_fts_test_use_blog_option_store'] = true;
+        $GLOBALS['wp_fts_test_current_blog_id'] = 11;
+        foreach ($siteIds as $siteId) {
+            $GLOBALS['wp_fts_test_site_options'][$siteId] = wp_fts_test_uninstall_seeded_options($operationalOptions, $siteId);
+        }
+        $fake->docs[41] = [
+            'lang' => 'en',
+            'doc_len' => 2,
+            'content_hash' => 'hash-41',
+            'is_deleted' => 0,
+        ];
+        $fake->terms[WP_FTS_TermNamespace::namespace_term('en', 'alpha')] = ['doc_freq' => 1];
+        $docsBefore = $fake->docs;
+        $termsBefore = $fake->terms;
+
+        WP_FTS_Plugin::uninstall();
+        WP_FTS_Plugin::uninstall();
+
+        assert_same([2, 3, 4, 2, 3, 4], $GLOBALS['wp_fts_test_switch_log'], 'multisite uninstall should iterate valid site IDs on each idempotent run');
+        assert_same([11, 11, 11, 11, 11, 11], $GLOBALS['wp_fts_test_restore_log'], 'multisite uninstall should restore the original blog after each switched cleanup');
+        assert_same(11, get_current_blog_id(), 'multisite uninstall should leave the original blog active after cleanup');
+        foreach ($siteIds as $siteId) {
+            foreach ($operationalOptions as $option_name) {
+                assert_true(!isset($GLOBALS['wp_fts_test_site_options'][$siteId][$option_name]), "multisite uninstall should delete {$option_name} on site {$siteId}");
+            }
+            assert_same("keep-site-{$siteId}", $GLOBALS['wp_fts_test_site_options'][$siteId]['wp_fts_non_operational_marker'] ?? null, "multisite uninstall should leave unrelated options on site {$siteId}");
+        }
+        assert_same($docsBefore, $fake->docs, 'multisite uninstall should not index or delete stored docs');
+        assert_same($termsBefore, $fake->terms, 'multisite uninstall should not drop or truncate term data');
+        assert_same([], $fake->queries, 'multisite uninstall should not run schema repair or custom-table SQL');
+        assert_same([], $GLOBALS['wp_fts_test_posts'], 'multisite uninstall should not create demo or content posts');
+        assert_same([], $GLOBALS['wp_fts_test_trashed_posts'], 'multisite uninstall should not delete or trash content posts');
+        assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'multisite uninstall should not drop custom tables');
+        assert_true(!str_contains(implode("\n", $fake->queries), 'TRUNCATE TABLE'), 'multisite uninstall should not truncate custom tables');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('multisite uninstall falls back to current-site cleanup when site enumeration is empty', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $operationalOptions = wp_fts_test_uninstall_operational_option_names();
+
+    try {
+        $GLOBALS['wp_fts_test_is_multisite'] = true;
+        $GLOBALS['wp_fts_test_sites'] = [];
+        $GLOBALS['wp_fts_test_use_blog_option_store'] = true;
+        $GLOBALS['wp_fts_test_current_blog_id'] = 7;
+        $GLOBALS['wp_fts_test_site_options'][7] = wp_fts_test_uninstall_seeded_options($operationalOptions, 7);
+
+        WP_FTS_Plugin::uninstall();
+
+        assert_same([], $GLOBALS['wp_fts_test_switch_log'], 'empty multisite enumeration should not switch blogs');
+        assert_same([], $GLOBALS['wp_fts_test_restore_log'], 'empty multisite enumeration should not restore an unmade switch');
+        assert_same(7, (int) ($GLOBALS['wp_fts_test_current_blog_id'] ?? 0), 'empty multisite enumeration should keep the current blog active');
+        foreach ($operationalOptions as $option_name) {
+            assert_true(!isset($GLOBALS['wp_fts_test_site_options'][7][$option_name]), "empty multisite enumeration fallback should delete {$option_name}");
+        }
+        assert_same('keep-site-7', $GLOBALS['wp_fts_test_site_options'][7]['wp_fts_non_operational_marker'] ?? null, 'empty multisite enumeration fallback should leave unrelated options alone');
+        assert_same([], $fake->queries, 'empty multisite enumeration fallback should not run schema repair or custom-table SQL');
     } finally {
         $wpdb = $oldWpdb;
     }

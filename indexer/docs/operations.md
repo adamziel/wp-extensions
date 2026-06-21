@@ -65,7 +65,10 @@ a schema or storage error.
 During multisite site deletion, the plugin contributes the target site's six
 `fts_*` table names to WordPress table discovery so core can clean them up with
 the deleted site. Plugin uninstall remains intentionally conservative: it clears
-operational options and pending queue state, but does not drop index tables.
+plugin operational options and pending queue state for each site on multisite,
+but does not drop index tables or delete indexed data. Uninstall does not create
+or delete posts, demo content, terms, users, attachments, uploads, analyzer
+packs, generated packs, or release artifacts.
 
 ## Reindex Strategy
 

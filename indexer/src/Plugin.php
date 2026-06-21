@@ -465,14 +465,92 @@ final class WP_FTS_Plugin
      */
     public static function uninstall(): void
     {
+        if (self::uninstall_multisite_options()) {
+            return;
+        }
+
+        self::uninstall_current_site_options();
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function uninstall_option_names(): array
+    {
+        return [
+            self::SCHEMA_VERSION_OPTION,
+            self::QUEUE_OPTION,
+            self::SANDBOX_DEMO_POSTS_OPTION,
+            self::ANALYZER_OPTIONS_OPTION,
+            self::SETTINGS_OPTION,
+            self::INDEX_LOCK_OPTION,
+            self::INDEX_HEALTH_OPTION,
+            self::ACTIVATION_REDIRECT_OPTION,
+        ];
+    }
+
+    /**
+     * Clear current-site operational state while retaining indexed data.
+     */
+    private static function uninstall_current_site_options(): void
+    {
         self::clear_scheduled_queue_processor();
-        self::delete_option(self::SCHEMA_VERSION_OPTION);
-        self::delete_option(self::QUEUE_OPTION);
-        self::delete_option(self::SANDBOX_DEMO_POSTS_OPTION);
-        self::delete_option(self::ANALYZER_OPTIONS_OPTION);
-        self::delete_option(self::SETTINGS_OPTION);
-        self::delete_option(self::INDEX_LOCK_OPTION);
-        self::delete_option(self::INDEX_HEALTH_OPTION);
+
+        foreach (self::uninstall_option_names() as $option_name) {
+            self::delete_option($option_name);
+        }
+    }
+
+    /**
+     * Clear operational state across multisite blogs when the required APIs exist.
+     */
+    private static function uninstall_multisite_options(): bool
+    {
+        if (
+            !function_exists('is_multisite')
+            || !is_multisite()
+            || !function_exists('get_sites')
+            || !function_exists('switch_to_blog')
+            || !function_exists('restore_current_blog')
+        ) {
+            return false;
+        }
+
+        $sites = get_sites([
+            'fields' => 'ids',
+            'number' => 0,
+        ]);
+        if (!is_array($sites)) {
+            return false;
+        }
+
+        $site_ids = [];
+        foreach ($sites as $site) {
+            $site_id = self::site_id_from_value($site);
+            if ($site_id > 0) {
+                $site_ids[$site_id] = $site_id;
+            }
+        }
+
+        if ($site_ids === []) {
+            return false;
+        }
+
+        $cleaned = false;
+        foreach ($site_ids as $site_id) {
+            if (!switch_to_blog($site_id)) {
+                continue;
+            }
+
+            try {
+                self::uninstall_current_site_options();
+                $cleaned = true;
+            } finally {
+                restore_current_blog();
+            }
+        }
+
+        return $cleaned;
     }
 
     /**
