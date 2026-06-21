@@ -8656,6 +8656,50 @@ test_case('enabled diagnostics record frontend search timings counts language se
     }
 });
 
+test_case('frontend replacement bailout without storage timing reports unavailable budget status', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $wpdb = new WP_FTS_Test_WPDB();
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    try {
+        $query = new WP_FTS_Test_Query([
+            's' => 'unsupportedbudgetneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'book',
+        ]);
+
+        WP_FTS_Plugin::prepare_frontend_search_query($query);
+        $posts = WP_FTS_Plugin::replace_frontend_search_posts(null, $query);
+
+        assert_same(true, $query->get('wp_fts_search_candidate'), 'unsupported requested post type should still reach the real replacement path after frontend eligibility marking');
+        assert_same([], $posts, 'unsupported requested post type replacement path should return an empty FTS result set after bailout');
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        assert_same(1, count($traces), 'unsupported requested post type should record one real replacement trace');
+        $trace = $traces[0];
+        assert_same('frontend search', $trace['context'] ?? null, 'unsupported post type bailout should keep the frontend trace context');
+        assert_same('bailed', $trace['status'] ?? null, 'unsupported post type replacement path should finish as a bailout');
+        assert_contains('no searchable post types or statuses', (string) ($trace['bailout_reason'] ?? ''), 'unsupported post type bailout should explain that no searchable scope remained');
+
+        $timings = is_array($trace['timings_ms'] ?? null) ? $trace['timings_ms'] : [];
+        assert_true(array_key_exists('total', $timings), 'unsupported post type bailout may keep a total elapsed timing');
+        assert_true(!array_key_exists('storage/search', $timings), 'unsupported post type bailout should not report storage/search timing when storage search never ran');
+
+        $budget = is_array($trace['performance_budget'] ?? null) ? $trace['performance_budget'] : [];
+        assert_same('unavailable', $budget['status'] ?? null, 'total-only replacement bailout should not be classified as within budget');
+        assert_true(isset($budget['total_elapsed_ms']) && is_numeric($budget['total_elapsed_ms']), 'total-only bailout budget summary should preserve total elapsed milliseconds');
+        assert_same(null, $budget['storage_search_elapsed_ms'] ?? null, 'total-only bailout budget summary should expose missing storage/search timing');
+        assert_float_near(100.0, (float) ($budget['total_budget_ms'] ?? -1), 'total-only bailout budget summary should retain the configured total budget');
+        assert_float_near(50.0, (float) ($budget['storage_search_budget_ms'] ?? -1), 'total-only bailout budget summary should retain the configured storage/search budget');
+        assert_contains('storage/search', (string) ($budget['explanation'] ?? ''), 'unavailable budget explanation should identify the missing enabled search phase timing');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('enabled diagnostics record auto fast mode threshold and cap decisions', function (): void {
     global $wpdb;
 

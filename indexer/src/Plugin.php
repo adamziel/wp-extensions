@@ -1591,22 +1591,34 @@ final class WP_FTS_Plugin
 
         $evaluated = [];
         $exceeded = [];
-        if ($total_budget > 0.0 && $total_elapsed !== null) {
-            $evaluated[] = self::debug_budget_phase_comparison('total', $total_elapsed, $total_budget);
-            if ($total_elapsed > $total_budget) {
-                $exceeded[] = 'total';
+        $missing = [];
+        if ($total_budget > 0.0) {
+            if ($total_elapsed === null) {
+                $missing[] = 'total';
+            } else {
+                $evaluated[] = self::debug_budget_phase_comparison('total', $total_elapsed, $total_budget);
+                if ($total_elapsed > $total_budget) {
+                    $exceeded[] = 'total';
+                }
             }
         }
-        if ($storage_budget > 0.0 && $storage_elapsed !== null) {
-            $evaluated[] = self::debug_budget_phase_comparison('storage/search', $storage_elapsed, $storage_budget);
-            if ($storage_elapsed > $storage_budget) {
-                $exceeded[] = 'storage/search';
+        if ($storage_budget > 0.0) {
+            if ($storage_elapsed === null) {
+                $missing[] = 'storage/search';
+            } else {
+                $evaluated[] = self::debug_budget_phase_comparison('storage/search', $storage_elapsed, $storage_budget);
+                if ($storage_elapsed > $storage_budget) {
+                    $exceeded[] = 'storage/search';
+                }
             }
         }
 
         if ($total_budget <= 0.0 && $storage_budget <= 0.0) {
             $status = 'disabled';
             $explanation = 'Search performance budgets are disabled; set a positive total or storage/search budget to evaluate request traces.';
+        } elseif ($missing !== []) {
+            $status = 'unavailable';
+            $explanation = 'Search performance budget unavailable because enabled budget phase timing is missing: ' . implode(', ', $missing) . '.';
         } elseif ($evaluated === []) {
             $status = 'unavailable';
             $explanation = 'Search performance budget unavailable because this trace has no total or storage/search timing data.';
