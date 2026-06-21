@@ -80,7 +80,9 @@ fully apply to existing posts. Programmatic indexing can still pass explicit
 `field_boosts` options to override the saved plugin settings for that call.
 Saving changed ranking weights or indexed post-type scope marks stale reindex
 debt in Health/status. The settings save does not rewrite content; a follow-up
-bounded reindex path / `wp fts reindex` handles rewriting existing rows.
+bounded `wp fts process-batch` run rewrites stale existing rows after queued
+updates and missing-content backfill. A scoped `wp fts reindex` is still
+available when an operator explicitly wants to rebuild a selected corpus.
 
 ## Recency Ranking Boost
 
@@ -239,7 +241,8 @@ Bundled analyzer-pack admin controls update stored runtime analyzer-pack
 selections and mark analyzer reindex debt when the effective plugin-owned
 runtime pack profile changes. Invalid or unknown submitted languages are
 ignored, and the save path does not create posts, drain queues, or write FTS
-terms.
+terms. Use Health > Index the next batch now or `wp fts process-batch` to
+consume the resulting stale debt in bounded steps.
 
 ## Stemmers
 

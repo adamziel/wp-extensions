@@ -33,9 +33,11 @@ wp fts status --format=json
 ```
 
 Status includes `index_profile_hash`, `accepted_index_profile_hash`,
-`stale_debt_active`, stale-debt reason labels, and debt timestamps. Stale debt
-means index-time configuration changed after the last accepted profile, so
-existing rows may need to be rewritten even when "Remaining to index" is `0`.
+`stale_debt_active`, stale-debt reason labels, debt timestamps, the active
+stale-debt cursor, processed count, remaining indexed-row count, and latest
+stale batch count. Stale debt means index-time configuration changed after the
+last accepted profile, so existing rows may need to be rewritten even when
+"Remaining to index" is `0`.
 
 To create or repair the schema and index content, run:
 
@@ -185,9 +187,9 @@ fallback, and indexed post types. Use the documented options and filters for
 analyzer pack paths and custom field selection.
 
 The Health tab shows schema status, stored and expected schema versions, safe
-indexing lock state, indexing counts, stale reindex debt, and the latest batch
-summary. Its repair button runs schema/table repair only; it does not index
-content, create sample posts, or drain the queue.
+indexing lock state, indexing counts, stale reindex debt progress, and the
+latest batch summary. Its repair button runs schema/table repair only; it does
+not index content, create sample posts, or drain the queue.
 
 Request-level diagnostics are collected only for authorized or debug-enabled
 contexts: a `manage_options` user, `WP_FTS_DEBUG`, or the
@@ -233,15 +235,23 @@ or stale and you do not want to index content:
 wp fts repair
 ```
 
-Use one manual lifecycle batch when queue or backfill work should advance under
-operator control without draining the whole site in one command:
+Use one manual lifecycle batch when queue, backfill, or stale reindex work
+should advance under operator control without draining the whole site in one
+command:
 
 ```sh
 wp fts process-batch --batch_size=100 --time_budget=20
 ```
 
+Each batch processes queued post updates first, then missing eligible content,
+then uses any remaining batch and time budget to reindex stale active indexed
+rows. Stale processing uses a deterministic post-ID cursor bound to the current
+index profile hash. If the profile changes before completion, the cursor
+restarts for the new profile instead of clearing debt for the old one.
+
 Repeat `wp fts process-batch` until `wp fts status` reports `has_more` as false
-if you intentionally want to catch up through bounded operator steps.
+and `stale_debt_active` as false if you intentionally want to catch up through
+bounded operator steps.
 
 If `wp fts status` reports `last_batch_failures` greater than zero, inspect the
 bounded failure fields (`last_failed_post_id`, `last_failed_post_title`,

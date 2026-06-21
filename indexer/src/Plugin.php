@@ -707,14 +707,18 @@ final class WP_FTS_Plugin
         $state = self::index_health_state();
         $state = array_replace($state, self::index_debt_state($state));
         $pending_queue_count = count(self::pending_queue());
+        $stale_remaining_count = self::count_stale_debt_remaining_content($state);
         $has_more = (bool) ($state['has_more'] ?? false);
         if ($pending_queue_count > 0) {
             $has_more = true;
         } elseif (self::has_eligible_unindexed_content()) {
             $has_more = true;
+        } elseif (!empty($state['stale_debt_active'])) {
+            $has_more = true;
         }
 
         $state['pending_queue_count'] = $pending_queue_count;
+        $state['stale_debt_remaining_count'] = $stale_remaining_count;
         $state['has_more'] = $has_more;
         $state['lock_active'] = self::index_lock_active();
 
@@ -750,6 +754,10 @@ final class WP_FTS_Plugin
             'stale_debt_reasons' => $stale_debt_reasons,
             'stale_debt_created_at' => is_scalar($health['stale_debt_created_at'] ?? null) ? (string) $health['stale_debt_created_at'] : '',
             'stale_debt_updated_at' => is_scalar($health['stale_debt_updated_at'] ?? null) ? (string) $health['stale_debt_updated_at'] : '',
+            'stale_debt_processing_profile_hash' => is_scalar($health['stale_debt_processing_profile_hash'] ?? null) ? (string) $health['stale_debt_processing_profile_hash'] : '',
+            'stale_debt_cursor_post_id' => max(0, (int) ($health['stale_debt_cursor_post_id'] ?? 0)),
+            'stale_debt_processed_count' => max(0, (int) ($health['stale_debt_processed_count'] ?? 0)),
+            'stale_debt_remaining_count' => max(0, (int) ($health['stale_debt_remaining_count'] ?? 0)),
             'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
             'lock_state' => $lock['state'],
             'lock_active' => (bool) $lock['active'],
@@ -762,6 +770,7 @@ final class WP_FTS_Plugin
             'last_batch_processed' => max(0, (int) ($health['last_batch_processed'] ?? 0)),
             'last_batch_queue_processed' => max(0, (int) ($health['last_batch_queue_processed'] ?? 0)),
             'last_batch_backfill_processed' => max(0, (int) ($health['last_batch_backfill_processed'] ?? 0)),
+            'last_batch_stale_processed' => max(0, (int) ($health['last_batch_stale_processed'] ?? 0)),
             'last_skipped_locked' => (bool) ($health['last_skipped_locked'] ?? false),
             'last_stopped_by_budget' => (bool) ($health['last_stopped_by_budget'] ?? false),
             'last_batch_failures' => max(0, (int) ($health['last_batch_failures'] ?? 0)),
@@ -1720,6 +1729,7 @@ final class WP_FTS_Plugin
         self::render_debug_row('Timing', self::index_batch_timing_summary($diagnostics));
         self::render_debug_row('Queue', self::index_batch_queue_summary($diagnostics));
         self::render_debug_row('Backfill', self::index_batch_backfill_summary($diagnostics));
+        self::render_debug_row('Stale debt', self::index_batch_stale_debt_summary($diagnostics));
         self::render_debug_row('Lock', self::index_batch_lock_summary($diagnostics));
         self::render_debug_row('Schema and storage', self::index_batch_schema_storage_summary($diagnostics));
         self::render_debug_row('Retry or reschedule', self::index_batch_reschedule_summary($diagnostics));
@@ -2710,6 +2720,8 @@ final class WP_FTS_Plugin
         echo '<table class="widefat striped wp-fts-health-table"><tbody>';
         self::render_health_status_row('Stale index debt', self::stale_debt_status_summary($health));
         self::render_health_status_row('Debt reasons', self::stale_debt_reason_summary($health));
+        self::render_health_status_row('Debt progress', self::stale_debt_progress_summary($health));
+        self::render_health_status_row('Debt processing profile', self::index_profile_hash_summary($health['stale_debt_processing_profile_hash'] ?? ''));
         self::render_health_status_row('Current index profile', self::index_profile_hash_summary($health['index_profile_hash'] ?? ''));
         self::render_health_status_row('Last accepted index profile', self::index_profile_hash_summary($health['accepted_index_profile_hash'] ?? ''));
         self::render_health_status_row('Debt marked', self::lock_time_summary($health['stale_debt_created_at'] ?? ''));
@@ -2766,6 +2778,7 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Batch timing', self::index_batch_timing_summary($diagnostics));
         self::render_health_status_row('Batch queue state', self::index_batch_queue_summary($diagnostics));
         self::render_health_status_row('Batch backfill state', self::index_batch_backfill_summary($diagnostics));
+        self::render_health_status_row('Batch stale debt state', self::index_batch_stale_debt_summary($diagnostics));
         self::render_health_status_row('Batch lock state', self::index_batch_lock_summary($diagnostics));
         self::render_health_status_row('Batch schema and storage', self::index_batch_schema_storage_summary($diagnostics));
         self::render_health_status_row('Batch retry or reschedule', self::index_batch_reschedule_summary($diagnostics));
@@ -2826,6 +2839,29 @@ final class WP_FTS_Plugin
         }
 
         return $labels === [] ? 'None recorded' : implode(', ', $labels);
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function stale_debt_progress_summary(array $health): string
+    {
+        if (empty($health['stale_debt_active'])) {
+            return 'No stale reindex work is active.';
+        }
+
+        $cursor = max(0, (int) ($health['stale_debt_cursor_post_id'] ?? 0));
+        $processed = max(0, (int) ($health['stale_debt_processed_count'] ?? 0));
+        $remaining = max(0, (int) ($health['stale_debt_remaining_count'] ?? 0));
+
+        return sprintf(
+            'Cursor ID %d; %d indexed %s processed in this sweep; %d indexed %s remain.',
+            $cursor,
+            $processed,
+            self::item_count_label($processed),
+            $remaining,
+            self::item_count_label($remaining)
+        );
     }
 
     private static function index_profile_hash_summary(mixed $value): string
@@ -2932,10 +2968,11 @@ final class WP_FTS_Plugin
     private static function last_batch_processed_summary(array $health): string
     {
         return sprintf(
-            '%d total (%d waiting updates, %d remaining content, %d failed)',
+            '%d total (%d waiting updates, %d remaining content, %d stale reindexes, %d failed)',
             max(0, (int) ($health['last_batch_processed'] ?? 0)),
             max(0, (int) ($health['last_batch_queue_processed'] ?? 0)),
             max(0, (int) ($health['last_batch_backfill_processed'] ?? 0)),
+            max(0, (int) ($health['last_batch_stale_processed'] ?? 0)),
             max(0, (int) ($health['last_batch_failures'] ?? 0))
         );
     }
@@ -3074,6 +3111,33 @@ final class WP_FTS_Plugin
             max(0, (int) ($diagnostics['backfill_queued'] ?? 0)),
             max(0, (int) ($diagnostics['backfill_processed'] ?? 0))
         );
+    }
+
+    /**
+     * @param array<string,mixed> $diagnostics
+     */
+    private static function index_batch_stale_debt_summary(array $diagnostics): string
+    {
+        $parts = [];
+        $parts[] = sprintf(
+            'scanned %d, selected %d, processed %d',
+            max(0, (int) ($diagnostics['stale_scanned'] ?? 0)),
+            max(0, (int) ($diagnostics['stale_queued'] ?? 0)),
+            max(0, (int) ($diagnostics['stale_processed'] ?? 0))
+        );
+        $parts[] = sprintf(
+            'cursor %d to %d',
+            max(0, (int) ($diagnostics['stale_cursor_before'] ?? 0)),
+            max(0, (int) ($diagnostics['stale_cursor_after'] ?? 0))
+        );
+        if (!empty($diagnostics['stale_completed'])) {
+            $parts[] = 'completed';
+        }
+        if (!empty($diagnostics['stale_profile_changed'])) {
+            $parts[] = 'profile changed';
+        }
+
+        return implode('; ', $parts);
     }
 
     /**
@@ -4142,6 +4206,10 @@ final class WP_FTS_Plugin
         $state['stale_debt_active'] = true;
         $state['stale_debt_reasons'] = self::sanitize_stale_debt_reasons(array_merge($existingReasons, $reasons));
         $state['index_profile_hash'] = self::sanitize_index_profile_hash($currentProfile['hash'] ?? self::index_profile_hash($currentProfile));
+        $state['stale_debt_processing_profile_hash'] = '';
+        $state['stale_debt_cursor_post_id'] = 0;
+        $state['stale_debt_processed_count'] = 0;
+        $state['stale_debt_remaining_count'] = 0;
         if (!$wasActive || self::sanitize_index_profile_hash($state['accepted_index_profile_hash'] ?? '') === '') {
             $state['accepted_index_profile_hash'] = self::sanitize_index_profile_hash($previousProfile['hash'] ?? self::index_profile_hash($previousProfile));
         }
@@ -8898,7 +8966,7 @@ JS;
             $analyzer = self::runtime_analyzer();
             $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer);
 
-            $remaining_capacity = max(0, $batch_size - (int) $summary['processed'] - (int) $summary['last_batch_failures']);
+            $remaining_capacity = self::remaining_index_batch_capacity($batch_size, $summary);
             $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
             if ($remaining_capacity > 0 && $stop_reason === '') {
                 self::process_backfill_for_index_batch($remaining_capacity, $budget, $summary, $analyzer, $failed_queue_ids);
@@ -8906,9 +8974,19 @@ JS;
                 self::remember_index_batch_stop($summary, $stop_reason);
             }
 
+            $remaining_capacity = self::remaining_index_batch_capacity($batch_size, $summary);
+            $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
+            if ($remaining_capacity > 0 && $stop_reason === '') {
+                self::process_stale_debt_for_index_batch($remaining_capacity, $budget, $summary, $analyzer);
+            } elseif (self::stale_index_debt_active()) {
+                $summary['has_more'] = true;
+                if ($remaining_capacity > 0 && $stop_reason !== '') {
+                    self::remember_index_batch_stop($summary, $stop_reason);
+                }
+            }
+
             if (
                 $mode === 'cron'
-                && $remaining_capacity === 0
                 && empty($summary['has_more'])
                 && self::index_resource_budget_stop_reason($budget, (int) $summary['processed']) === ''
                 && self::has_eligible_unindexed_content()
@@ -8950,6 +9028,7 @@ JS;
             'processed' => 0,
             'queue_processed' => 0,
             'backfill_processed' => 0,
+            'stale_processed' => 0,
             'has_more' => false,
             'skipped_locked' => false,
             'stopped_by_budget' => false,
@@ -8973,6 +9052,15 @@ JS;
             'queue_after' => 0,
             'backfill_scanned' => 0,
             'backfill_queued' => 0,
+            'stale_scanned' => 0,
+            'stale_queued' => 0,
+            'stale_debt_cursor_before' => 0,
+            'stale_debt_cursor_after' => 0,
+            'stale_debt_processed_before' => 0,
+            'stale_debt_processed_after' => 0,
+            'stale_debt_processing_profile_hash' => '',
+            'stale_debt_completed' => false,
+            'stale_debt_profile_changed' => false,
             'lock_before' => [],
             'lock_after' => [],
             'lock_prevented_work' => false,
@@ -9186,6 +9274,137 @@ JS;
     }
 
     /**
+     * @param array<string,mixed> $summary
+     */
+    private static function remaining_index_batch_capacity(int $batch_size, array $summary): int
+    {
+        return max(
+            0,
+            $batch_size
+                - max(0, (int) ($summary['processed'] ?? 0))
+                - max(0, (int) ($summary['last_batch_failures'] ?? 0))
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $budget
+     * @param array<string,mixed> $summary
+     */
+    private static function process_stale_debt_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): void
+    {
+        if ($limit <= 0) {
+            return;
+        }
+
+        $state = self::index_health_state();
+        if (empty($state['stale_debt_active'])) {
+            return;
+        }
+
+        $profile = self::current_index_profile();
+        $profile_hash = self::sanitize_index_profile_hash($profile['hash'] ?? self::index_profile_hash($profile));
+        if ($profile_hash === '') {
+            $summary['has_more'] = true;
+            return;
+        }
+
+        $cursor = self::stale_debt_processing_cursor($state, $profile_hash);
+        $processed_before = self::stale_debt_processing_count($state, $profile_hash);
+        $summary['stale_debt_cursor_before'] = $cursor;
+        $summary['stale_debt_cursor_after'] = $cursor;
+        $summary['stale_debt_processed_before'] = $processed_before;
+        $summary['stale_debt_processed_after'] = $processed_before;
+        $summary['stale_debt_processing_profile_hash'] = $profile_hash;
+
+        $rows = self::select_stale_debt_posts_after_cursor($cursor, $limit + 1);
+        $summary['stale_scanned'] = max(0, (int) ($summary['stale_scanned'] ?? 0)) + count($rows);
+        if ($rows === []) {
+            self::remember_stale_debt_completion($summary, $profile_hash);
+            return;
+        }
+
+        $work = array_slice($rows, 0, $limit);
+        $summary['stale_queued'] = max(0, (int) ($summary['stale_queued'] ?? 0)) + count($work);
+        $processed_rows = 0;
+        $last_cursor = $cursor;
+
+        foreach ($work as $post) {
+            $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
+            if ($stop_reason !== '') {
+                self::remember_index_batch_stop($summary, $stop_reason);
+                break;
+            }
+
+            $post_id = isset($post->ID) ? (int) $post->ID : 0;
+            try {
+                if (self::is_indexable_post($post)) {
+                    self::index_post($post, [], $analyzer);
+                    self::remember_indexed_post_in_summary($summary, $post);
+                } elseif ($post_id > 0) {
+                    self::tombstone_post($post_id);
+                }
+
+                if ($post_id > 0) {
+                    $last_cursor = max($last_cursor, $post_id);
+                }
+                $processed_rows++;
+                $summary['processed'] = (int) $summary['processed'] + 1;
+                $summary['stale_processed'] = (int) $summary['stale_processed'] + 1;
+            } catch (Throwable $e) {
+                self::remember_index_failure_in_summary($summary, $post_id, $post, $e);
+                self::remember_index_batch_stop($summary, 'stale_debt_failure');
+                break;
+            }
+        }
+
+        $summary['stale_debt_cursor_after'] = $last_cursor;
+        $summary['stale_debt_processed_after'] = $processed_before + max(0, (int) ($summary['stale_processed'] ?? 0));
+
+        if (count($rows) > $processed_rows) {
+            $summary['has_more'] = true;
+        }
+
+        if (
+            empty($summary['has_more'])
+            && max(0, (int) ($summary['last_batch_failures'] ?? 0)) === 0
+            && self::current_index_profile_hash() === $profile_hash
+            && self::select_stale_debt_posts_after_cursor($last_cursor, 1) === []
+        ) {
+            self::remember_stale_debt_completion($summary, $profile_hash);
+        } elseif (self::current_index_profile_hash() !== $profile_hash) {
+            $summary['stale_debt_profile_changed'] = true;
+            $summary['has_more'] = true;
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function remember_stale_debt_completion(array &$summary, string $profile_hash): void
+    {
+        if (self::current_index_profile_hash() !== $profile_hash) {
+            $summary['stale_debt_profile_changed'] = true;
+            $summary['has_more'] = true;
+            return;
+        }
+
+        if (max(0, (int) ($summary['last_batch_failures'] ?? 0)) > 0 || !empty($summary['stopped_by_budget'])) {
+            $summary['has_more'] = true;
+            return;
+        }
+
+        $summary['stale_debt_completed'] = true;
+        $summary['stale_debt_processing_profile_hash'] = $profile_hash;
+    }
+
+    private static function current_index_profile_hash(): string
+    {
+        $profile = self::current_index_profile();
+
+        return self::sanitize_index_profile_hash($profile['hash'] ?? self::index_profile_hash($profile));
+    }
+
+    /**
      * @return object[]
      */
     private static function select_eligible_unindexed_posts(int $limit): array
@@ -9217,6 +9436,53 @@ LEFT JOIN {$docs_table} d ON d.doc_id = p.ID AND d.is_deleted = 0
 WHERE d.doc_id IS NULL
   AND p.post_password = ''
   AND (" . implode(' OR ', $clauses) . ")
+ORDER BY p.ID ASC
+LIMIT %d",
+            ...$args
+        );
+
+        $rows = $wpdb->get_results($sql);
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        return array_values(array_filter($rows, static fn(mixed $row): bool => is_object($row)));
+    }
+
+    /**
+     * @return object[]
+     */
+    private static function select_stale_debt_posts_after_cursor(int $cursor, int $limit): array
+    {
+        global $wpdb;
+
+        $limit = max(1, $limit);
+        $cursor = max(0, $cursor);
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'prepare') || !method_exists($wpdb, 'get_results')) {
+            return [];
+        }
+
+        $post_types = self::configured_backfill_post_types();
+        if ($post_types === []) {
+            return [];
+        }
+
+        [$clauses, $args] = self::eligible_content_clauses_and_args('p', $post_types);
+
+        $posts_table = isset($wpdb->posts) && is_scalar($wpdb->posts)
+            ? (string) $wpdb->posts
+            : (string) ($wpdb->prefix ?? '') . 'posts';
+        $docs_table = (string) ($wpdb->prefix ?? '') . 'fts_docs';
+        $args[] = $cursor;
+        $args[] = $limit;
+
+        $sql = $wpdb->prepare(
+            "SELECT p.ID, p.post_content, p.post_title, p.post_excerpt, p.post_type, p.post_status, p.post_password, p.post_date_gmt, p.post_date
+FROM {$posts_table} p
+INNER JOIN {$docs_table} d ON d.doc_id = p.ID AND d.is_deleted = 0
+WHERE p.post_password = ''
+  AND (" . implode(' OR ', $clauses) . ")
+  AND p.ID > %d
 ORDER BY p.ID ASC
 LIMIT %d",
             ...$args
@@ -9318,6 +9584,53 @@ WHERE p.post_password = ''
         );
     }
 
+    /**
+     * @param array<string,mixed> $state
+     */
+    private static function count_stale_debt_remaining_content(array $state): int
+    {
+        if (empty($state['stale_debt_active'])) {
+            return 0;
+        }
+
+        return self::count_indexed_eligible_content_after_cursor(
+            self::stale_debt_processing_cursor($state, self::current_index_profile_hash())
+        );
+    }
+
+    private static function count_indexed_eligible_content_after_cursor(int $cursor): int
+    {
+        global $wpdb;
+
+        $cursor = max(0, $cursor);
+        if (!isset($wpdb) || !is_object($wpdb) || !method_exists($wpdb, 'prepare') || !method_exists($wpdb, 'get_var')) {
+            return 0;
+        }
+
+        [$clauses, $args] = self::eligible_content_clauses_and_args('p');
+        if ($clauses === []) {
+            return 0;
+        }
+
+        $posts_table = isset($wpdb->posts) && is_scalar($wpdb->posts)
+            ? (string) $wpdb->posts
+            : (string) ($wpdb->prefix ?? '') . 'posts';
+        $docs_table = (string) ($wpdb->prefix ?? '') . 'fts_docs';
+        $args[] = $cursor;
+
+        return self::prepared_count(
+            $wpdb->prepare(
+                "SELECT COUNT(DISTINCT p.ID)
+FROM {$posts_table} p
+INNER JOIN {$docs_table} d ON d.doc_id = p.ID AND d.is_deleted = 0
+WHERE p.post_password = ''
+  AND (" . implode(' OR ', $clauses) . ")
+  AND p.ID > %d",
+                ...$args
+            )
+        );
+    }
+
     private static function prepared_count(mixed $statement): int
     {
         global $wpdb;
@@ -9332,6 +9645,43 @@ WHERE p.post_password = ''
     private static function has_eligible_unindexed_content(): bool
     {
         return self::select_eligible_unindexed_posts(1) !== [];
+    }
+
+    private static function stale_index_debt_active(): bool
+    {
+        return !empty(self::index_health_state()['stale_debt_active']);
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     */
+    private static function stale_debt_processing_cursor(array $state, string $current_profile_hash): int
+    {
+        if (
+            empty($state['stale_debt_active'])
+            || $current_profile_hash === ''
+            || self::sanitize_index_profile_hash($state['stale_debt_processing_profile_hash'] ?? '') !== $current_profile_hash
+        ) {
+            return 0;
+        }
+
+        return max(0, (int) ($state['stale_debt_cursor_post_id'] ?? 0));
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     */
+    private static function stale_debt_processing_count(array $state, string $current_profile_hash): int
+    {
+        if (
+            empty($state['stale_debt_active'])
+            || $current_profile_hash === ''
+            || self::sanitize_index_profile_hash($state['stale_debt_processing_profile_hash'] ?? '') !== $current_profile_hash
+        ) {
+            return 0;
+        }
+
+        return max(0, (int) ($state['stale_debt_processed_count'] ?? 0));
     }
 
     /**
@@ -9751,6 +10101,10 @@ WHERE p.post_password = ''
             'stale_debt_reasons' => self::sanitize_stale_debt_reasons($state['stale_debt_reasons'] ?? []),
             'stale_debt_created_at' => self::sanitize_index_timestamp($state['stale_debt_created_at'] ?? ''),
             'stale_debt_updated_at' => self::sanitize_index_timestamp($state['stale_debt_updated_at'] ?? ''),
+            'stale_debt_processing_profile_hash' => self::sanitize_index_profile_hash($state['stale_debt_processing_profile_hash'] ?? ''),
+            'stale_debt_cursor_post_id' => max(0, (int) ($state['stale_debt_cursor_post_id'] ?? 0)),
+            'stale_debt_processed_count' => max(0, (int) ($state['stale_debt_processed_count'] ?? 0)),
+            'stale_debt_remaining_count' => max(0, (int) ($state['stale_debt_remaining_count'] ?? 0)),
         ];
     }
 
@@ -9768,6 +10122,7 @@ WHERE p.post_password = ''
         $state['last_batch_processed'] = max(0, (int) $state['last_batch_processed']);
         $state['last_batch_queue_processed'] = max(0, (int) $state['last_batch_queue_processed']);
         $state['last_batch_backfill_processed'] = max(0, (int) $state['last_batch_backfill_processed']);
+        $state['last_batch_stale_processed'] = max(0, (int) $state['last_batch_stale_processed']);
         $state['last_indexed_post_id'] = max(0, (int) $state['last_indexed_post_id']);
         $state['last_indexed_post_title'] = is_scalar($state['last_indexed_post_title']) ? (string) $state['last_indexed_post_title'] : '';
         $state['last_indexed_at'] = is_scalar($state['last_indexed_at']) ? (string) $state['last_indexed_at'] : '';
@@ -9788,6 +10143,10 @@ WHERE p.post_password = ''
         $state['stale_debt_reasons'] = self::sanitize_stale_debt_reasons($state['stale_debt_reasons'] ?? []);
         $state['stale_debt_created_at'] = self::sanitize_index_timestamp($state['stale_debt_created_at'] ?? '');
         $state['stale_debt_updated_at'] = self::sanitize_index_timestamp($state['stale_debt_updated_at'] ?? '');
+        $state['stale_debt_processing_profile_hash'] = self::sanitize_index_profile_hash($state['stale_debt_processing_profile_hash'] ?? '');
+        $state['stale_debt_cursor_post_id'] = max(0, (int) ($state['stale_debt_cursor_post_id'] ?? 0));
+        $state['stale_debt_processed_count'] = max(0, (int) ($state['stale_debt_processed_count'] ?? 0));
+        $state['stale_debt_remaining_count'] = max(0, (int) ($state['stale_debt_remaining_count'] ?? 0));
 
         return $state;
     }
@@ -9801,6 +10160,7 @@ WHERE p.post_password = ''
             'last_batch_processed' => 0,
             'last_batch_queue_processed' => 0,
             'last_batch_backfill_processed' => 0,
+            'last_batch_stale_processed' => 0,
             'has_more' => false,
             'last_indexed_post_id' => 0,
             'last_indexed_post_title' => '',
@@ -9821,6 +10181,10 @@ WHERE p.post_password = ''
             'stale_debt_reasons' => [],
             'stale_debt_created_at' => '',
             'stale_debt_updated_at' => '',
+            'stale_debt_processing_profile_hash' => '',
+            'stale_debt_cursor_post_id' => 0,
+            'stale_debt_processed_count' => 0,
+            'stale_debt_remaining_count' => 0,
         ];
     }
 
@@ -9833,6 +10197,7 @@ WHERE p.post_password = ''
         $state['last_batch_processed'] = max(0, (int) ($summary['processed'] ?? 0));
         $state['last_batch_queue_processed'] = max(0, (int) ($summary['queue_processed'] ?? 0));
         $state['last_batch_backfill_processed'] = max(0, (int) ($summary['backfill_processed'] ?? 0));
+        $state['last_batch_stale_processed'] = max(0, (int) ($summary['stale_processed'] ?? 0));
         $state['has_more'] = (bool) ($summary['has_more'] ?? false);
         $state['last_skipped_locked'] = (bool) ($summary['skipped_locked'] ?? false);
         $state['last_stopped_by_budget'] = (bool) ($summary['stopped_by_budget'] ?? false);
@@ -9864,15 +10229,98 @@ WHERE p.post_password = ''
 
         $state['latest_batch_diagnostics'] = self::index_batch_diagnostics_from_summary($summary);
         $profile = self::current_index_profile();
-        $state['index_profile_hash'] = self::sanitize_index_profile_hash($profile['hash'] ?? self::index_profile_hash($profile));
+        $current_profile_hash = self::sanitize_index_profile_hash($profile['hash'] ?? self::index_profile_hash($profile));
+        $state['index_profile_hash'] = $current_profile_hash;
         if (
             empty($state['stale_debt_active'])
             && self::index_batch_fully_accepts_current_profile($summary)
         ) {
             $state['accepted_index_profile_hash'] = $state['index_profile_hash'];
         }
+        if (!empty($state['stale_debt_active'])) {
+            self::update_stale_debt_health_state($state, $summary, $current_profile_hash);
+        }
 
         self::set_option(self::INDEX_HEALTH_OPTION, $state);
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     * @param array<string,mixed> $summary
+     */
+    private static function update_stale_debt_health_state(array &$state, array $summary, string $current_profile_hash): void
+    {
+        if ($current_profile_hash === '') {
+            $state['stale_debt_remaining_count'] = 0;
+            return;
+        }
+
+        $summary_profile_hash = self::sanitize_index_profile_hash($summary['stale_debt_processing_profile_hash'] ?? '');
+        $profile_changed = !empty($summary['stale_debt_profile_changed'])
+            || ($summary_profile_hash !== '' && $summary_profile_hash !== $current_profile_hash);
+
+        if ($profile_changed) {
+            self::restart_stale_debt_health_progress($state, $current_profile_hash);
+            return;
+        }
+
+        if (
+            !empty($summary['stale_debt_completed'])
+            && $summary_profile_hash === $current_profile_hash
+            && self::index_batch_fully_accepts_current_profile($summary)
+        ) {
+            self::clear_stale_debt_health_state($state, $current_profile_hash);
+            return;
+        }
+
+        if ($summary_profile_hash === $current_profile_hash) {
+            $state['stale_debt_processing_profile_hash'] = $current_profile_hash;
+            $state['stale_debt_cursor_post_id'] = max(0, (int) ($summary['stale_debt_cursor_after'] ?? 0));
+            $state['stale_debt_processed_count'] = max(0, (int) ($summary['stale_debt_processed_after'] ?? 0));
+            if (max(0, (int) ($summary['stale_processed'] ?? 0)) > 0) {
+                $state['stale_debt_updated_at'] = self::current_gmt_datetime();
+            }
+        } elseif (
+            self::sanitize_index_profile_hash($state['stale_debt_processing_profile_hash'] ?? '') !== ''
+            && self::sanitize_index_profile_hash($state['stale_debt_processing_profile_hash'] ?? '') !== $current_profile_hash
+        ) {
+            self::restart_stale_debt_health_progress($state, $current_profile_hash);
+            return;
+        }
+
+        $state['stale_debt_remaining_count'] = self::count_stale_debt_remaining_content($state);
+        if ($state['stale_debt_remaining_count'] > 0 || !empty($summary['has_more'])) {
+            $state['has_more'] = true;
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     */
+    private static function restart_stale_debt_health_progress(array &$state, string $current_profile_hash): void
+    {
+        $state['stale_debt_processing_profile_hash'] = $current_profile_hash;
+        $state['stale_debt_cursor_post_id'] = 0;
+        $state['stale_debt_processed_count'] = 0;
+        $state['stale_debt_remaining_count'] = self::count_stale_debt_remaining_content($state);
+        $state['stale_debt_updated_at'] = self::current_gmt_datetime();
+        $state['has_more'] = true;
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     */
+    private static function clear_stale_debt_health_state(array &$state, string $current_profile_hash): void
+    {
+        $state['stale_debt_active'] = false;
+        $state['stale_debt_reasons'] = [];
+        $state['stale_debt_created_at'] = '';
+        $state['stale_debt_updated_at'] = '';
+        $state['stale_debt_processing_profile_hash'] = '';
+        $state['stale_debt_cursor_post_id'] = 0;
+        $state['stale_debt_processed_count'] = 0;
+        $state['stale_debt_remaining_count'] = 0;
+        $state['accepted_index_profile_hash'] = $current_profile_hash;
     }
 
     /**
@@ -9905,10 +10353,17 @@ WHERE p.post_password = ''
             'processed' => $summary['processed'] ?? 0,
             'queue_processed' => $summary['queue_processed'] ?? 0,
             'backfill_processed' => $summary['backfill_processed'] ?? 0,
+            'stale_processed' => $summary['stale_processed'] ?? 0,
             'queue_before' => $summary['queue_before'] ?? 0,
             'queue_after' => $summary['queue_after'] ?? 0,
             'backfill_scanned' => $summary['backfill_scanned'] ?? 0,
             'backfill_queued' => $summary['backfill_queued'] ?? 0,
+            'stale_scanned' => $summary['stale_scanned'] ?? 0,
+            'stale_queued' => $summary['stale_queued'] ?? 0,
+            'stale_cursor_before' => $summary['stale_debt_cursor_before'] ?? 0,
+            'stale_cursor_after' => $summary['stale_debt_cursor_after'] ?? 0,
+            'stale_completed' => $summary['stale_debt_completed'] ?? false,
+            'stale_profile_changed' => $summary['stale_debt_profile_changed'] ?? false,
             'failures' => $summary['last_batch_failures'] ?? 0,
             'has_more' => $summary['has_more'] ?? false,
             'skipped_locked' => $summary['skipped_locked'] ?? false,
@@ -9962,10 +10417,17 @@ WHERE p.post_password = ''
             'processed' => max(0, (int) ($raw['processed'] ?? 0)),
             'queue_processed' => max(0, (int) ($raw['queue_processed'] ?? 0)),
             'backfill_processed' => max(0, (int) ($raw['backfill_processed'] ?? 0)),
+            'stale_processed' => max(0, (int) ($raw['stale_processed'] ?? 0)),
             'queue_before' => max(0, (int) ($raw['queue_before'] ?? 0)),
             'queue_after' => max(0, (int) ($raw['queue_after'] ?? 0)),
             'backfill_scanned' => max(0, (int) ($raw['backfill_scanned'] ?? 0)),
             'backfill_queued' => max(0, (int) ($raw['backfill_queued'] ?? 0)),
+            'stale_scanned' => max(0, (int) ($raw['stale_scanned'] ?? 0)),
+            'stale_queued' => max(0, (int) ($raw['stale_queued'] ?? 0)),
+            'stale_cursor_before' => max(0, (int) ($raw['stale_cursor_before'] ?? 0)),
+            'stale_cursor_after' => max(0, (int) ($raw['stale_cursor_after'] ?? 0)),
+            'stale_completed' => (bool) ($raw['stale_completed'] ?? false),
+            'stale_profile_changed' => (bool) ($raw['stale_profile_changed'] ?? false),
             'failures' => max(0, (int) ($raw['failures'] ?? 0)),
             'has_more' => (bool) ($raw['has_more'] ?? false),
             'skipped_locked' => (bool) ($raw['skipped_locked'] ?? false),

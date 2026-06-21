@@ -2016,12 +2016,17 @@ final class WP_FTS_Test_WPDB
                 $adminType = (string) ($args[$offset++] ?? '');
                 $adminStatuses = $this->prepared_in_args($sql, 'p.post_status', '%s', $args, $offset);
             }
+            $afterCursor = str_contains($sql, 'p.ID > %d') ? max(0, (int) ($args[$offset++] ?? 0)) : 0;
             $requiresIndexedDoc = str_contains($sql, 'JOIN wp_fts_docs d');
 
             $counted = [];
             foreach ($this->postRows as $row) {
                 $postId = isset($row->ID) ? (int) $row->ID : 0;
                 if ($postId <= 0) {
+                    continue;
+                }
+
+                if ($afterCursor > 0 && $postId <= $afterCursor) {
                     continue;
                 }
 
@@ -2459,6 +2464,47 @@ final class WP_FTS_Test_WPDB
                 $rows[] = (object) ['k' => $key, 'v' => $value];
             }
             return $rows;
+        }
+
+        if (
+            str_starts_with($sql, 'SELECT p.ID, p.post_content, p.post_title')
+            && str_contains($sql, 'INNER JOIN wp_fts_docs d')
+        ) {
+            $offset = 0;
+            $publicStatus = str_contains($sql, 'p.post_status = %s') ? (string) ($args[$offset++] ?? '') : '';
+            $publicTypes = $this->prepared_in_args($sql, 'p.post_type', '%s', $args, $offset);
+            $adminType = null;
+            $adminStatuses = [];
+            if (str_contains($sql, 'p.post_type = %s')) {
+                $adminType = (string) ($args[$offset++] ?? '');
+                $adminStatuses = $this->prepared_in_args($sql, 'p.post_status', '%s', $args, $offset);
+            }
+            $last = max(0, (int) ($args[$offset++] ?? 0));
+            $limit = max(0, (int) ($args[$offset] ?? $args[count($args) - 1] ?? 0));
+
+            $rows = [];
+            foreach ($this->postRows as $row) {
+                $postId = isset($row->ID) ? (int) $row->ID : 0;
+                if ($postId <= $last || ($this->docs[$postId]['is_deleted'] ?? 1) !== 0) {
+                    continue;
+                }
+
+                if (isset($row->post_password) && (string) $row->post_password !== '') {
+                    continue;
+                }
+
+                $type = isset($row->post_type) ? (string) $row->post_type : 'post';
+                $status = isset($row->post_status) ? (string) $row->post_status : 'draft';
+                $publicEligible = $publicStatus !== '' && $status === $publicStatus && in_array($type, array_map('strval', $publicTypes), true);
+                $adminEligible = $adminType !== null && $type === $adminType && in_array($status, array_map('strval', $adminStatuses), true);
+                if ($publicEligible || $adminEligible) {
+                    $rows[] = $row;
+                }
+            }
+
+            usort($rows, static fn(object $a, object $b): int => (int) $a->ID <=> (int) $b->ID);
+
+            return array_slice($rows, 0, $limit);
         }
 
         if (str_starts_with($sql, 'SELECT p.ID, p.post_content, p.post_title')) {
@@ -4000,6 +4046,64 @@ function wp_fts_test_seed_backfill_posts(WP_FTS_Test_WPDB $wpdb, int $count, int
     }
 }
 
+function wp_fts_test_seed_indexed_posts(WP_FTS_Test_WPDB $wpdb, int $count, int $start_id = 1, string $post_type = 'post', string $post_status = 'publish'): void
+{
+    for ($i = 0; $i < $count; $i++) {
+        $postId = $start_id + $i;
+        $post = wp_fts_test_backfill_post($postId, $post_type, $post_status, 'Indexed Stale ' . $postId);
+        $wpdb->postRows[] = $post;
+        $GLOBALS['wp_fts_test_posts'][$postId] = $post;
+        $wpdb->docs[$postId] = [
+            'lang' => 'en',
+            'doc_len' => 1,
+            'content_hash' => 'old-profile-' . $postId,
+            'is_deleted' => 0,
+        ];
+        $wpdb->docLengths[$postId] = ['en' => 1];
+        $wpdb->docMeta[$postId] = [
+            'doc_id' => $postId,
+            'post_id' => $postId,
+            'post_type' => $post_type,
+            'post_status' => $post_status,
+            'post_date_gmt' => '2026-06-18 00:00:00',
+            'title' => 'Indexed Stale ' . $postId,
+            'excerpt' => '',
+            'search_text' => 'old profile text',
+            'data' => '{}',
+        ];
+    }
+    ksort($wpdb->docs, SORT_NUMERIC);
+    ksort($wpdb->docLengths, SORT_NUMERIC);
+    ksort($wpdb->docMeta, SORT_NUMERIC);
+    ksort($GLOBALS['wp_fts_test_posts'], SORT_NUMERIC);
+}
+
+function wp_fts_test_mark_field_boost_stale_debt(float $title_boost = 8.0): array
+{
+    $oldPost = $_POST;
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $_POST = [
+        'option_page' => WP_FTS_Plugin::SETTINGS_OPTION,
+        'action' => 'update',
+        '_wpnonce' => wp_create_nonce(WP_FTS_Plugin::SETTINGS_OPTION . '-options'),
+    ];
+
+    try {
+        $newSettings = WP_FTS_Plugin::default_settings();
+        $newSettings['field_boosts'] = array_replace($newSettings['field_boosts'], [
+            'title' => $title_boost,
+        ]);
+        $sanitized = WP_FTS_Plugin::sanitize_settings_for_save($newSettings);
+        update_option(WP_FTS_Plugin::SETTINGS_OPTION, $sanitized);
+    } finally {
+        $_POST = $oldPost;
+    }
+
+    $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
+
+    return is_array($health) ? $health : [];
+}
+
 wp_fts_test_reset_wordpress_fakes();
 
 test_case('plugin bootstrap registers WordPress lifecycle hooks and preserves CLI-only bootstrap', function (): void {
@@ -4846,7 +4950,7 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<th scope="row">Remaining to index</th><td>2</td>', $html, 'health dashboard should show remaining unindexed count');
     assert_contains('Health First Indexed (ID 701)', $html, 'health dashboard should show last indexed title and ID');
     assert_contains('<th scope="row">Last batch</th><td>Manual at ', $html, 'health dashboard should show last batch time and mode');
-    assert_contains('<th scope="row">Last batch processed</th><td>1 total (0 waiting updates, 1 remaining content, 0 failed)</td>', $html, 'health dashboard should show last batch processed counts');
+    assert_contains('<th scope="row">Last batch processed</th><td>1 total (0 waiting updates, 1 remaining content, 0 stale reindexes, 0 failed)</td>', $html, 'health dashboard should show last batch processed counts');
     assert_contains('<th scope="row">Last indexing failure</th><td>No indexing failures recorded.</td>', $html, 'health dashboard should show the latest failure state');
     assert_contains('<th scope="row">Batch trigger</th><td>Manual batch; source manual caller; status success</td>', $html, 'health dashboard should render latest batch trigger diagnostics');
     assert_contains('<th scope="row">Batch timing</th><td>started ', $html, 'health dashboard should render latest batch timing diagnostics');
@@ -7590,6 +7694,184 @@ test_case('batch backfill includes pages from default settings', function (): vo
     } finally {
         $wpdb = $oldWpdb;
     }
+});
+
+test_case('bounded stale debt batch reindexes a slice and later clears debt on completion', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        wp_fts_test_seed_indexed_posts($fake, 5, 401);
+
+        $beforeSaveDocs = $fake->docs;
+        $marked = wp_fts_test_mark_field_boost_stale_debt();
+        $settingsSaveLeftDocsUntouched = $fake->docs === $beforeSaveDocs;
+        $first = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
+        $firstHealth = WP_FTS_Plugin::search_health();
+        $docsAfterFirst = $fake->docs;
+        $second = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 10]);
+        $completeHealth = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(true, $marked['stale_debt_active'] ?? null, 'settings save should mark stale debt before processing');
+    assert_true($settingsSaveLeftDocsUntouched, 'settings save itself should not rewrite indexed docs');
+    assert_same(2, $first['processed'], 'first stale batch should process only the bounded slice');
+    assert_same(0, $first['queue_processed'], 'first stale batch should not invent queued work');
+    assert_same(0, $first['backfill_processed'], 'first stale batch should not treat active indexed rows as unindexed backfill');
+    assert_same(2, $first['stale_processed'], 'first stale batch should report stale reindex work separately');
+    assert_same(true, $first['has_more'], 'first stale batch should keep has_more while stale rows remain');
+    assert_same(true, $firstHealth['stale_debt_active'], 'partial stale batch should leave debt active');
+    assert_same(402, $firstHealth['stale_debt_cursor_post_id'], 'partial stale batch should advance the deterministic cursor');
+    assert_same(2, $firstHealth['stale_debt_processed_count'], 'partial stale batch should persist sweep progress');
+    assert_same(3, $firstHealth['stale_debt_remaining_count'], 'partial stale batch should report remaining indexed rows');
+    assert_true(($fake->docs[401]['content_hash'] ?? '') !== 'old-profile-401', 'first stale row should be rewritten under the active profile');
+    assert_true(($fake->docs[402]['content_hash'] ?? '') !== 'old-profile-402', 'second stale row should be rewritten under the active profile');
+    assert_same('old-profile-403', $docsAfterFirst[403]['content_hash'] ?? null, 'later stale rows should remain untouched after the bounded slice');
+
+    assert_same(3, $second['stale_processed'], 'second stale batch should consume the remaining stale rows');
+    assert_same(false, $completeHealth['stale_debt_active'], 'clean stale completion should clear active debt');
+    assert_same($completeHealth['index_profile_hash'], $completeHealth['accepted_index_profile_hash'], 'clean stale completion should accept the current profile');
+    assert_same(0, $completeHealth['stale_debt_remaining_count'], 'clean stale completion should report no remaining stale rows');
+});
+
+test_case('queued work has priority over stale debt and preserves bounded processing', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        wp_fts_test_seed_indexed_posts($fake, 4, 501);
+        foreach ([601, 602] as $postId) {
+            $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', 'Queued Priority ' . $postId);
+        }
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [601, 602];
+        wp_fts_test_mark_field_boost_stale_debt();
+
+        $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 3]);
+        $health = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(3, $result['processed'], 'batch should stop at the requested size');
+    assert_same(2, $result['queue_processed'], 'queued posts should consume priority capacity first');
+    assert_same(1, $result['stale_processed'], 'stale debt should use only the remaining capacity');
+    assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'queued work should be drained before stale rows');
+    assert_true(isset($fake->docs[601], $fake->docs[602]), 'queued posts should be indexed in the same bounded batch');
+    assert_true(($fake->docs[501]['content_hash'] ?? '') !== 'old-profile-501', 'only one stale row should be rewritten after queued work');
+    assert_same('old-profile-502', $fake->docs[502]['content_hash'] ?? null, 'remaining stale rows should wait for later batches');
+    assert_same(true, $health['stale_debt_active'], 'debt should remain active when stale rows remain');
+    assert_same(3, $health['stale_debt_remaining_count'], 'health should report remaining stale rows after queue-priority processing');
+});
+
+test_case('stale debt failure leaves cursor before failed row and keeps debt active', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        wp_fts_test_seed_indexed_posts($fake, 3, 701);
+        wp_fts_test_mark_field_boost_stale_debt();
+        $fake->failDocWriteErrors[701] = "simulated stale failure for INSERT INTO wp_fts_docs\n#0 stack SELECT * FROM wp_users";
+
+        $result = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 3]);
+        $health = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(0, $result['processed'], 'failed first stale row should not count as processed');
+    assert_same(0, $result['stale_processed'], 'failed first stale row should not advance stale processed count');
+    assert_same(1, $result['last_batch_failures'], 'stale failure should be recorded in the batch');
+    assert_same(701, $result['last_failed_post_id'], 'stale failure should record the failed post id');
+    assert_same(true, $health['stale_debt_active'], 'stale failure should leave debt active');
+    assert_same(0, $health['stale_debt_cursor_post_id'], 'stale failure should not advance cursor past the failed row');
+    assert_same(3, $health['stale_debt_remaining_count'], 'stale failure should leave remaining stale rows visible');
+    assert_contains('INSERT statement', (string) ($health['last_error'] ?? ''), 'stale failure should redact SQL details');
+});
+
+test_case('profile change during stale sweep restarts debt progress instead of clearing it', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        wp_fts_test_seed_indexed_posts($fake, 3, 801);
+        wp_fts_test_mark_field_boost_stale_debt(8.0);
+        $partial = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        $partialHealth = WP_FTS_Plugin::search_health();
+        wp_fts_test_mark_field_boost_stale_debt(9.0);
+        $changedHealth = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(1, $partial['stale_processed'], 'setup should process one stale row before the profile changes again');
+    assert_same(801, $partialHealth['stale_debt_cursor_post_id'], 'setup should advance stale cursor before the profile change');
+    assert_same(true, $changedHealth['stale_debt_active'], 'profile change should keep debt active');
+    assert_same(0, $changedHealth['stale_debt_cursor_post_id'], 'profile change should restart the stale sweep cursor');
+    assert_same(0, $changedHealth['stale_debt_processed_count'], 'profile change should reset stale sweep progress');
+    assert_true(($changedHealth['index_profile_hash'] ?? '') !== ($partialHealth['index_profile_hash'] ?? ''), 'profile change should move the active profile hash');
+});
+
+test_case('health and wp-cli status report stale debt progress without indexing content', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        wp_fts_test_seed_indexed_posts($fake, 4, 901);
+        wp_fts_test_mark_field_boost_stale_debt();
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
+        $docsBeforeStatus = $fake->docs;
+
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->status([], ['format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('Debt progress', $html, 'health tab should expose stale debt progress');
+    assert_contains('Cursor ID 902', $html, 'health tab should expose the stale cursor');
+    assert_contains('Batch stale debt state', $html, 'health tab should expose latest stale batch diagnostics');
+    assert_same(true, $payload['stale_debt_active'] ?? null, 'status JSON should report active stale debt');
+    assert_same(902, $payload['stale_debt_cursor_post_id'] ?? null, 'status JSON should report stale cursor');
+    assert_same(2, $payload['stale_debt_processed_count'] ?? null, 'status JSON should report stale sweep progress count');
+    assert_same(2, $payload['stale_debt_remaining_count'] ?? null, 'status JSON should report remaining stale rows');
+    assert_same(2, $payload['last_batch_stale_processed'] ?? null, 'status JSON should report latest stale batch count');
+    $diagnostics = $payload['latest_batch_diagnostics'] ?? [];
+    assert_same(2, $diagnostics['stale_processed'] ?? null, 'status diagnostics should report stale processed count');
+    assert_same(0, $diagnostics['stale_cursor_before'] ?? null, 'status diagnostics should report stale cursor before the first batch');
+    assert_same(902, $diagnostics['stale_cursor_after'] ?? null, 'status diagnostics should report stale cursor after the batch');
+    assert_same($docsBeforeStatus, $fake->docs, 'rendering health and status should not index more content');
 });
 
 test_case('deactivation and uninstall keep index data while clearing operational state', function (): void {

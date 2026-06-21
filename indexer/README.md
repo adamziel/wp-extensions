@@ -140,8 +140,11 @@ When index-time settings change, the plugin records stale reindex debt instead
 of rewriting content during the settings request. Field ranking weights,
 indexed content scope, and stored runtime analyzer-pack selections all
 participate in the current index profile shown on the Health tab and in
-`wp fts status --format=json`. A follow-up bounded reindex path / `wp fts
-reindex` rewrites existing rows for the new profile.
+`wp fts status --format=json`. Health's "Index the next batch now" action and
+`wp fts process-batch` process queued updates first, missing eligible content
+next, and stale existing rows with any remaining batch/time budget. The stale
+cursor is tied to the current index profile and restarts if that profile changes
+before completion.
 
 The Health tab shows whether the stored schema version is current, missing, or
 stale. Its repair button runs the same table/schema repair path as
