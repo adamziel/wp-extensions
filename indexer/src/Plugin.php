@@ -1014,7 +1014,13 @@ final class WP_FTS_Plugin
 
     private static function debug_constant_enabled(): bool
     {
-        return defined('WP_FTS_DEBUG') && self::truthy_admin_value(constant('WP_FTS_DEBUG'));
+        foreach (['WP_FTS_DEBUG', 'WP_DEBUG'] as $constant) {
+            if (defined($constant) && self::truthy_admin_value(constant($constant))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function can_view_debug_diagnostics(): bool

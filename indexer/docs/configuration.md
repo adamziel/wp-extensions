@@ -737,6 +737,11 @@ a Performance budget row. The row reuses the trace's existing `timings_ms`
 values and reports whether the total search timing and the `storage/search`
 phase were within budget, over budget, disabled, or unavailable.
 
+Request diagnostics are enabled for `manage_options` users, `WP_FTS_DEBUG`,
+standard `WP_DEBUG`, or the `wp_fts_debug_enabled` filter. The plugin does not
+enable `SAVEQUERIES`; SQL summaries appear only when the environment already
+provides `$wpdb->queries`.
+
 Tune the thresholds in `wp-config.php` or an early plugin/bootstrap file before
 the plugin loads:
 

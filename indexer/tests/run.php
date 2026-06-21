@@ -5651,6 +5651,25 @@ test_case('SQL diagnostics report unavailable query capture when wpdb queries ar
     }
 });
 
+test_case('manage_options capability enables request diagnostics without debug constants', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+
+    $disabledTraceId = (int) $startTrace->invoke(null, 'normal visitor debug gate');
+    assert_same(0, $disabledTraceId, 'request diagnostics should stay disabled without admin capability or debug constants');
+    assert_same([], WP_FTS_Plugin::debug_traces(), 'disabled request diagnostics should not store traces');
+
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $adminTraceId = (int) $startTrace->invoke(null, 'admin capability debug gate', 'adminneedle');
+    assert_same(1, $adminTraceId, 'manage_options capability should enable request diagnostics');
+
+    $traces = WP_FTS_Plugin::debug_traces();
+    assert_same(1, count($traces), 'admin-enabled diagnostics should store one trace');
+    assert_same('admin capability debug gate', $traces[0]['context'] ?? null, 'admin-enabled diagnostics should record the trace context');
+});
+
 test_case('WP_FTS_DEBUG constant enables diagnostics when defined before plugin load', function (): void {
     $plugin = (string) realpath(__DIR__ . '/../indexer.php');
     $code = str_replace('__PLUGIN__', var_export($plugin, true), <<<'PHP'
@@ -5676,6 +5695,33 @@ PHP);
     assert_contains("count=1\n", $result['stdout'], 'WP_FTS_DEBUG subprocess should collect one diagnostic trace');
     assert_contains("context=constant debug path\n", $result['stdout'], 'WP_FTS_DEBUG subprocess should record the trace context');
     assert_contains("status=started\n", $result['stdout'], 'WP_FTS_DEBUG subprocess should record a started trace');
+});
+
+test_case('WP_DEBUG constant enables diagnostics when defined before plugin load', function (): void {
+    $plugin = (string) realpath(__DIR__ . '/../indexer.php');
+    $code = str_replace('__PLUGIN__', var_export($plugin, true), <<<'PHP'
+define('WP_DEBUG', true);
+require __PLUGIN__;
+$startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+$startTrace->setAccessible(true);
+$traceId = (int) $startTrace->invoke(null, 'standard debug path', 'wpdebugneedle');
+$traces = WP_FTS_Plugin::debug_traces();
+$trace = $traces[0] ?? [];
+echo 'id=', $traceId, "\n";
+echo 'count=', count($traces), "\n";
+echo 'context=', (string) ($trace['context'] ?? ''), "\n";
+echo 'status=', (string) ($trace['status'] ?? ''), "\n";
+PHP);
+
+    $result = test_run_php_without_extensions($code);
+    $stderr = trim($result['stderr']);
+    $detail = $stderr === '' ? '' : "\nSubprocess stderr: " . substr($stderr, 0, 500);
+
+    assert_same(0, $result['exit'], 'WP_DEBUG subprocess should exit cleanly' . $detail);
+    assert_contains("id=1\n", $result['stdout'], 'WP_DEBUG subprocess should create a trace id');
+    assert_contains("count=1\n", $result['stdout'], 'WP_DEBUG subprocess should collect one diagnostic trace');
+    assert_contains("context=standard debug path\n", $result['stdout'], 'WP_DEBUG subprocess should record the trace context');
+    assert_contains("status=started\n", $result['stdout'], 'WP_DEBUG subprocess should record a started trace');
 });
 
 test_case('Debug Bar diagnostics panel registration is conditional and safe', function (): void {

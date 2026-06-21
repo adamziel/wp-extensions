@@ -213,7 +213,7 @@ latest batch summary. Its repair button runs schema/table repair only; it does
 not index content, create sample posts, or drain the queue.
 
 Request-level diagnostics are collected only for authorized or debug-enabled
-contexts: a `manage_options` user, `WP_FTS_DEBUG`, or the
+contexts: a `manage_options` user, `WP_FTS_DEBUG`, standard `WP_DEBUG`, or the
 `wp_fts_debug_enabled` filter. When Debug Bar is active, the plugin registers an
 FTS panel. Without Debug Bar, authorized users can see the same bounded request
 diagnostics on the Health tab. These traces live in memory for the current PHP
