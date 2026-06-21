@@ -5,7 +5,8 @@ declare(strict_types=1);
  * WP-CLI command surface for managing the custom FTS index.
  *
  * The command creates MySQL tables on demand, reindexes WordPress posts, searches
- * the index, tombstones documents, and compacts deleted rows.
+ * the index, schedules background queue recovery, tombstones documents, and
+ * compacts deleted rows.
  */
 final class WP_FTS_WPCLI_Command
 {
@@ -253,6 +254,25 @@ final class WP_FTS_WPCLI_Command
     public function status(array $args, array $assoc_args): void
     {
         $this->output_assoc(WP_FTS_Plugin::operator_status(), $assoc_args);
+    }
+
+    /**
+     * Schedule the background queue processor when pending work exists.
+     *
+     * This only restores the future WP-Cron event. It does not process, index,
+     * repair, reset, or clear any content in the current command.
+     *
+     * ## OPTIONS
+     *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function schedule_queue(array $args, array $assoc_args): void
+    {
+        $this->output_assoc(WP_FTS_Plugin::schedule_queue_processor_for_operator(), $assoc_args);
     }
 
     /**

@@ -149,11 +149,14 @@ before completion.
 The same Health/status surfaces include a read-only queue processor schedule.
 `scheduled` means WordPress has a `wp_fts_process_index_queue` event waiting;
 `missing` means pending queue, backfill, or stale reindex work exists but no
-queue processor event is scheduled. In that case, check WP-Cron and use
-`wp fts process-batch --batch_size=100 --time_budget=20` to advance one bounded
-batch manually while the cron problem is investigated. `not_needed` means no
-pending indexing work was detected, and `unavailable` means the current context
-does not expose WordPress cron inspection helpers.
+queue processor event is scheduled. In that case, use the Health tab's queue
+processor control or `wp fts schedule-queue` to restore the future background
+event, then check WP-Cron. Schedule recovery only schedules a later background
+run; it does not index content immediately. `wp fts process-batch
+--batch_size=100 --time_budget=20` remains the manual one-pass fallback while
+the cron problem is investigated. `not_needed` means no pending indexing work
+was detected, and `unavailable` means the current context does not expose
+WordPress cron inspection helpers.
 
 The Health tab shows whether the stored schema version is current, missing, or
 stale. Its repair button runs the same table/schema repair path as
@@ -327,6 +330,10 @@ wp fts reindex --limit=100 --batch_size=25
 # Inspect lifecycle status without indexing or mutating state.
 wp fts status
 wp fts status --format=json
+
+# Restore a missing future queue processor event without indexing inline.
+wp fts schedule-queue
+wp fts schedule-queue --format=json
 
 # If status reports last_batch_failures, fix the affected post or environment
 # issue and rerun a bounded batch or scoped reindex.

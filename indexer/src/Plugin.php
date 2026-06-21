@@ -68,6 +68,7 @@ final class WP_FTS_Plugin
     private const ADMIN_HEALTH_ACTION_FIELD = 'wp_fts_health_action';
     private const ADMIN_HEALTH_MANUAL_BATCH_ACTION = 'index_next_batch';
     private const ADMIN_HEALTH_REPAIR_SCHEMA_ACTION = 'repair_schema';
+    private const ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION = 'schedule_queue';
     private const ADMIN_ANALYZER_NONCE_ACTION = 'wp_fts_analyzer_packs_admin_action';
     private const ADMIN_ANALYZER_NONCE_FIELD = 'wp_fts_analyzer_packs_nonce';
     private const ADMIN_ANALYZER_ACTION_FIELD = 'wp_fts_analyzer_packs_action';
@@ -983,7 +984,7 @@ final class WP_FTS_Plugin
 
         if ($pending_work) {
             $base['status'] = 'missing';
-            $base['advice'] = 'Pending indexing work exists but no WP-Cron queue processor event is scheduled. Check that WP-Cron is running, or run `wp fts process-batch` to advance one indexing pass manually.';
+            $base['advice'] = 'Pending indexing work exists but no WP-Cron queue processor event is scheduled. Use the Health queue processor controls or `wp fts schedule-queue` to restore the background event; `wp fts process-batch --batch_size=100 --time_budget=20` remains a one-pass manual fallback while cron is investigated.';
 
             return $base;
         }
@@ -992,6 +993,145 @@ final class WP_FTS_Plugin
         $base['advice'] = 'No pending indexing work is detected, so no queue processor event is needed.';
 
         return $base;
+    }
+
+    /**
+     * Schedule a future queue processor run from an explicit operator action.
+     *
+     * This path is intentionally separate from lifecycle/post-save scheduling:
+     * it proves pending work from bounded status inputs and never indexes
+     * content, repairs schema, clears hooks, or mutates unrelated options.
+     *
+     * @return array{status:string,scheduled_now:bool,hook:string,next_run_at:string,next_run_delay_seconds:?int,pending_work:bool,message:string}
+     */
+    public static function schedule_queue_processor_for_operator(): array
+    {
+        try {
+            $schedule = self::current_queue_processor_schedule_status();
+
+            if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_single_event')) {
+                return self::queue_processor_schedule_action_result(
+                    'unavailable',
+                    false,
+                    $schedule,
+                    'WP-Cron scheduling helpers are unavailable in this context.'
+                );
+            }
+
+            if (self::queue_processor_schedule_timestamp(wp_next_scheduled(self::CRON_HOOK)) !== null) {
+                $schedule = self::current_queue_processor_schedule_status();
+
+                return self::queue_processor_schedule_action_result(
+                    'already_scheduled',
+                    false,
+                    $schedule,
+                    'Queue processor event is already scheduled.'
+                );
+            }
+
+            if (empty($schedule['pending_work'])) {
+                return self::queue_processor_schedule_action_result(
+                    'not_needed',
+                    false,
+                    $schedule,
+                    'No pending indexing work was detected, so no queue processor event was scheduled.'
+                );
+            }
+
+            $timestamp = time() + 60;
+            $scheduled = wp_schedule_single_event($timestamp, self::CRON_HOOK);
+            if (function_exists('is_wp_error') && is_wp_error($scheduled)) {
+                $message = is_object($scheduled) && is_callable([$scheduled, 'get_error_message'])
+                    ? (string) $scheduled->get_error_message()
+                    : 'WordPress returned an error.';
+
+                return self::queue_processor_schedule_action_result(
+                    'failed',
+                    false,
+                    $schedule,
+                    'Could not schedule the queue processor event: ' . self::bounded_operator_schedule_message($message)
+                );
+            }
+
+            if ($scheduled !== true) {
+                return self::queue_processor_schedule_action_result(
+                    'failed',
+                    false,
+                    $schedule,
+                    'Could not schedule the queue processor event.'
+                );
+            }
+
+            $next = self::queue_processor_schedule_timestamp(wp_next_scheduled(self::CRON_HOOK)) ?? $timestamp;
+            $schedule['scheduled'] = true;
+            $schedule['status'] = 'scheduled';
+            $schedule['next_run_at'] = gmdate('Y-m-d\TH:i:s\Z', $next);
+            $schedule['next_run_delay_seconds'] = max(0, $next - time());
+
+            return self::queue_processor_schedule_action_result(
+                'scheduled',
+                true,
+                $schedule,
+                'Queue processor event scheduled. WP-Cron will run it in the background; no content was indexed in this request.'
+            );
+        } catch (Throwable $e) {
+            return self::queue_processor_schedule_action_result(
+                'failed',
+                false,
+                [
+                    'hook' => self::CRON_HOOK,
+                    'next_run_at' => '',
+                    'next_run_delay_seconds' => null,
+                    'pending_work' => false,
+                ],
+                'Could not inspect or schedule the queue processor event: ' . self::bounded_admin_error_message($e)
+            );
+        }
+    }
+
+    /**
+     * Return the current queue processor schedule status using the same bounded
+     * inputs as operator status and the Health tab.
+     *
+     * @return array<string,mixed>
+     */
+    private static function current_queue_processor_schedule_status(): array
+    {
+        $health = self::search_health();
+        $counts = self::search_health_counts();
+
+        return self::queue_processor_schedule_status($health, $counts['remaining']);
+    }
+
+    /**
+     * @param array<string,mixed> $schedule
+     * @return array{status:string,scheduled_now:bool,hook:string,next_run_at:string,next_run_delay_seconds:?int,pending_work:bool,message:string}
+     */
+    private static function queue_processor_schedule_action_result(string $status, bool $scheduled_now, array $schedule, string $message): array
+    {
+        $next_run_delay = null;
+        if (isset($schedule['next_run_delay_seconds']) && is_numeric($schedule['next_run_delay_seconds'])) {
+            $next_run_delay = max(0, (int) $schedule['next_run_delay_seconds']);
+        }
+
+        return [
+            'status' => $status,
+            'scheduled_now' => $scheduled_now,
+            'hook' => self::CRON_HOOK,
+            'next_run_at' => is_scalar($schedule['next_run_at'] ?? null) ? trim((string) $schedule['next_run_at']) : '',
+            'next_run_delay_seconds' => $next_run_delay,
+            'pending_work' => !empty($schedule['pending_work']),
+            'message' => self::bounded_operator_schedule_message($message),
+        ];
+    }
+
+    private static function bounded_operator_schedule_message(string $message): string
+    {
+        $message = preg_replace('/#\d+\s+.*$/s', '', $message) ?? $message;
+        $message = preg_replace('/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE)\b.*$/s', '$1 statement', $message) ?? $message;
+        $message = self::debug_truncate_text(self::sanitize_text($message), self::MAX_INDEX_FAILURE_ERROR_BYTES);
+
+        return $message !== '' ? $message : 'No schedule detail available.';
     }
 
     /**
@@ -2793,11 +2933,11 @@ final class WP_FTS_Plugin
 
         $action = self::health_post_action();
         if (!self::can_manage_admin_sandbox()) {
-            return [['error', $action === self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION ? 'You do not have permission to repair schema tables.' : 'You do not have permission to index content.']];
+            return [['error', self::health_post_action_permission_message($action)]];
         }
 
         if (!self::verify_health_nonce()) {
-            return [['error', $action === self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION ? 'The schema repair action could not be verified. Reload the page and try again.' : 'The indexing action could not be verified. Reload the page and try again.']];
+            return [['error', self::health_post_action_nonce_message($action)]];
         }
 
         if ($action === self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION) {
@@ -2816,7 +2956,29 @@ final class WP_FTS_Plugin
             }
         }
 
+        if ($action === self::ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION) {
+            return [self::queue_processor_schedule_notice(self::schedule_queue_processor_for_operator())];
+        }
+
         return [['error', 'Unsupported Health action. No changes were made.']];
+    }
+
+    private static function health_post_action_permission_message(string $action): string
+    {
+        return match ($action) {
+            self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION => 'You do not have permission to repair schema tables.',
+            self::ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION => 'You do not have permission to schedule the queue processor.',
+            default => 'You do not have permission to index content.',
+        };
+    }
+
+    private static function health_post_action_nonce_message(string $action): string
+    {
+        return match ($action) {
+            self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION => 'The schema repair action could not be verified. Reload the page and try again.',
+            self::ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION => 'The queue schedule action could not be verified. Reload the page and try again.',
+            default => 'The indexing action could not be verified. Reload the page and try again.',
+        };
     }
 
     /**
@@ -2909,6 +3071,23 @@ final class WP_FTS_Plugin
         }
 
         return ['info', 'No new eligible content needed indexing. The index is up to date for the current settings.'];
+    }
+
+    /**
+     * @param array<string,mixed> $result
+     * @return array{0:string,1:string}
+     */
+    private static function queue_processor_schedule_notice(array $result): array
+    {
+        $status = is_scalar($result['status'] ?? null) ? (string) $result['status'] : '';
+        $message = is_scalar($result['message'] ?? null) ? trim((string) $result['message']) : '';
+        $type = match ($status) {
+            'scheduled' => 'success',
+            'failed', 'unavailable' => 'error',
+            default => 'info',
+        };
+
+        return [$type, $message !== '' ? $message : 'No schedule detail available.'];
     }
 
     private static function item_count_label(int $count): string
@@ -3263,6 +3442,16 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Next queue run delay', self::queue_processor_schedule_delay_summary($queue_processor_schedule));
         self::render_health_status_row('Queue processor advice', self::queue_processor_schedule_advice_summary($queue_processor_schedule));
         echo '</tbody></table>';
+
+        if ((string) ($queue_processor_schedule['status'] ?? '') === 'missing') {
+            echo '<h3>Queue processor controls</h3>';
+            echo '<p class="wp-fts-health-copy">Schedule a future WP-Cron queue processor run. This does not index content in the current request.</p>';
+            echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">';
+            self::render_health_nonce_field();
+            echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION) . '">';
+            echo '<p><button type="submit" class="button">Schedule queue processor</button></p>';
+            echo '</form>';
+        }
 
         echo '<h3>Reindex debt</h3>';
         echo '<table class="widefat striped wp-fts-health-table"><tbody>';
@@ -5424,7 +5613,15 @@ final class WP_FTS_Plugin
     {
         $action = self::sanitize_key(self::request_text_value($_POST, self::ADMIN_HEALTH_ACTION_FIELD, 40));
 
-        return in_array($action, [self::ADMIN_HEALTH_MANUAL_BATCH_ACTION, self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION], true) ? $action : '';
+        return in_array(
+            $action,
+            [
+                self::ADMIN_HEALTH_MANUAL_BATCH_ACTION,
+                self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION,
+                self::ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION,
+            ],
+            true
+        ) ? $action : '';
     }
 
     private static function health_post_action_submitted(): bool

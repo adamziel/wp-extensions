@@ -7774,7 +7774,10 @@ test_case('status and health report missing queue processor schedule with pendin
     assert_contains('<th scope="row">Queue processor hook</th><td>' . WP_FTS_Plugin::CRON_HOOK . '</td>', $html, 'Health should render the cron hook name');
     assert_contains('<th scope="row">Queue processor scheduled</th><td>No</td>', $html, 'Health should render the missing scheduled-event boolean');
     assert_contains('<th scope="row">Queue processor status</th><td>Missing</td>', $html, 'Health should classify missing pending-work schedule state');
+    assert_contains('wp fts schedule-queue', $html, 'Health should mention the queue schedule recovery command');
     assert_contains('wp fts process-batch', $html, 'Health should include actionable missing-schedule advice');
+    assert_contains('<h3>Queue processor controls</h3>', $html, 'Health should render schedule recovery controls when the queue processor event is missing');
+    assert_contains('Schedule queue processor', $html, 'Health should expose the explicit schedule recovery action when useful');
     assert_same([WP_FTS_Plugin::CRON_HOOK, WP_FTS_Plugin::CRON_HOOK], $GLOBALS['wp_fts_test_next_scheduled_calls'], 'status and Health should inspect the existing cron schedule');
     assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'status and Health should not schedule queue work while rendering');
     assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'status and Health should not clear scheduled queue work while rendering');
@@ -7783,6 +7786,267 @@ test_case('status and health report missing queue processor schedule with pendin
     assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'status and Health should not delete options while rendering schedule diagnostics');
     assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'status and Health should leave queue and health options unchanged');
     assert_same($docsBefore, $fake->docs, 'status and Health should not index content while rendering schedule diagnostics');
+    assert_same([], $fake->terms, 'status and Health should not write FTS terms while rendering schedule diagnostics');
+});
+
+test_case('health queue schedule POST requires capability and nonce before scheduling', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [791];
+    $validPost = [
+        'wp_fts_health_action' => 'schedule_queue',
+        'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = $validPost;
+        $unauthorizedHtml = wp_fts_test_capture_admin_settings_tab(null);
+        assert_contains('You do not have permission to manage Full-Text Search settings.', $unauthorizedHtml, 'unauthorized schedule action should stop at the settings-page capability gate');
+        assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'unauthorized schedule action should not call the scheduler');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $_POST = [
+            'wp_fts_health_action' => 'schedule_queue',
+            'wp_fts_health_nonce' => 'not-a-valid-nonce',
+        ];
+        $invalidHtml = wp_fts_test_capture_admin_settings_tab(null);
+        assert_contains('The queue schedule action could not be verified', $invalidHtml, 'invalid schedule nonce should show an error');
+        assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'invalid schedule nonce should not call the scheduler');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same([], $fake->docs, 'rejected schedule actions should not index content');
+    assert_same([], $fake->terms, 'rejected schedule actions should not write FTS terms');
+    assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'rejected schedule actions should not repair schema');
+});
+
+test_case('health queue schedule POST schedules missing pending work without indexing or repair', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [792];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'queue-schedule-token-must-not-render',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    $GLOBALS['wp_fts_test_posts'][792] = (object) [
+        'ID' => 792,
+        'post_title' => "Queued Schedule Secret SELECT * FROM wp_users\n#0 stack trace",
+        'post_content' => 'Queued Schedule Hidden Content',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [
+            'wp_fts_health_action' => 'schedule_queue',
+            'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+        ];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('Queue processor event scheduled.', $html, 'valid schedule action should report a clear success notice');
+    assert_contains('no content was indexed in this request', $html, 'schedule success should clarify that content was not indexed inline');
+    assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'valid schedule action should call the scheduler once');
+    assert_same(WP_FTS_Plugin::CRON_HOOK, $GLOBALS['wp_fts_test_schedule_calls'][0]['hook'] ?? null, 'valid schedule action should schedule the queue processor hook');
+    assert_true(($GLOBALS['wp_fts_test_schedule_calls'][0]['timestamp'] ?? 0) >= time(), 'valid schedule action should schedule a future event');
+    assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'valid schedule action should leave a scheduled queue processor event');
+    assert_same([792], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'schedule action should not drain the indexing queue');
+    assert_same([], $fake->docs, 'schedule action should not index content');
+    assert_same([], $fake->terms, 'schedule action should not write FTS terms');
+    assert_same(0, count(array_filter($fake->queries, static fn(string $sql): bool => str_starts_with($sql, 'CREATE TABLE'))), 'schedule action should not repair schema');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]), 'schedule action should not record a manual indexing batch');
+    assert_true(!str_contains($html, 'queue-schedule-token-must-not-render'), 'schedule response should not expose lock tokens');
+    assert_true(!str_contains($html, 'SELECT * FROM'), 'schedule response should not expose raw SQL-looking content');
+    assert_true(!str_contains($html, '#0'), 'schedule response should not expose stack traces');
+    assert_true(!str_contains($html, 'Queued Schedule Hidden Content'), 'schedule response should not expose post content');
+});
+
+test_case('health queue schedule POST does not duplicate an already scheduled event', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [793];
+    $scheduledAt = time() + 300;
+    $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
+        'timestamp' => $scheduledAt,
+        'hook' => WP_FTS_Plugin::CRON_HOOK,
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [
+            'wp_fts_health_action' => 'schedule_queue',
+            'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+        ];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('Queue processor event is already scheduled.', $html, 'already scheduled action should report a no-op notice');
+    assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'already scheduled action should not create a duplicate event');
+    assert_same($scheduledAt, $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]['timestamp'] ?? null, 'already scheduled action should preserve the existing event timestamp');
+    assert_same([], $fake->docs, 'already scheduled action should not index content');
+    assert_same([], $fake->terms, 'already scheduled action should not write FTS terms');
+});
+
+test_case('health queue schedule POST reports not needed when no pending work exists', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [
+            'wp_fts_health_action' => 'schedule_queue',
+            'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
+        ];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('No pending indexing work was detected', $html, 'not-needed schedule action should report a clear no-op notice');
+    assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'not-needed schedule action should not call the scheduler');
+    assert_true(!isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'not-needed schedule action should not create a cron event');
+    assert_same([], $fake->docs, 'not-needed schedule action should not index content');
+    assert_same([], $fake->terms, 'not-needed schedule action should not write FTS terms');
+});
+
+test_case('wp-cli schedule-queue json schedules once for missing pending work', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [794];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'cli-schedule-token-must-not-render',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    $GLOBALS['wp_fts_test_posts'][794] = (object) [
+        'ID' => 794,
+        'post_title' => "CLI Schedule Secret SELECT * FROM wp_users\n#0 stack trace",
+        'post_content' => 'CLI Schedule Hidden Content',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+    ];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->schedule_queue([], ['format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('scheduled', $payload['status'] ?? null, 'schedule-queue JSON should report scheduled status for pending missing work');
+    assert_same(true, $payload['scheduled_now'] ?? null, 'schedule-queue JSON should report that it scheduled now');
+    assert_same(WP_FTS_Plugin::CRON_HOOK, $payload['hook'] ?? null, 'schedule-queue JSON should expose the bounded hook name');
+    assert_true(is_string($payload['next_run_at'] ?? null) && preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $payload['next_run_at']) === 1, 'schedule-queue JSON should expose a bounded UTC timestamp');
+    assert_true(is_int($payload['next_run_delay_seconds'] ?? null), 'schedule-queue JSON should expose a numeric delay');
+    assert_true(($payload['next_run_delay_seconds'] ?? -1) >= 0 && ($payload['next_run_delay_seconds'] ?? 999) <= 120, 'schedule-queue JSON should bound the schedule delay');
+    assert_same(true, $payload['pending_work'] ?? null, 'schedule-queue JSON should report pending-work context');
+    assert_contains('no content was indexed', (string) ($payload['message'] ?? ''), 'schedule-queue JSON should clarify that it did not index content inline');
+    assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'schedule-queue should call the scheduler once');
+    assert_same([], $fake->docs, 'schedule-queue should not index content');
+    assert_same([], $fake->terms, 'schedule-queue should not write FTS terms');
+    assert_true(!str_contains($raw, 'cli-schedule-token-must-not-render'), 'schedule-queue JSON should not expose lock tokens');
+    assert_true(!str_contains($raw, 'SELECT * FROM'), 'schedule-queue JSON should not expose raw SQL-looking content');
+    assert_true(!str_contains($raw, '#0'), 'schedule-queue JSON should not expose stack traces');
+    assert_true(!str_contains($raw, 'CLI Schedule Hidden Content'), 'schedule-queue JSON should not expose post content');
+});
+
+test_case('wp-cli schedule-queue is a no-op for already scheduled and not needed states', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [795];
+        $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
+            'timestamp' => time() + 300,
+            'hook' => WP_FTS_Plugin::CRON_HOOK,
+        ];
+        $command = new WP_FTS_WPCLI_Command();
+        $alreadyRaw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->schedule_queue([], ['format' => 'json']);
+        });
+        $already = wp_fts_test_decode_cli_json_object($alreadyRaw);
+        assert_same('already_scheduled', $already['status'] ?? null, 'schedule-queue should report already-scheduled no-op state');
+        assert_same(false, $already['scheduled_now'] ?? null, 'already scheduled no-op should not claim it scheduled now');
+        assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'already scheduled no-op should not call the scheduler');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        $notNeededRaw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->schedule_queue([], ['format' => 'json']);
+        });
+        $notNeeded = wp_fts_test_decode_cli_json_object($notNeededRaw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('not_needed', $notNeeded['status'] ?? null, 'schedule-queue should report not-needed no-op state');
+    assert_same(false, $notNeeded['scheduled_now'] ?? null, 'not-needed no-op should not claim it scheduled now');
+    assert_same(false, $notNeeded['pending_work'] ?? null, 'not-needed no-op should report no pending work');
+    assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'not-needed no-op should not call the scheduler');
+    assert_same([], $fake->docs, 'schedule-queue no-op paths should not index content');
+    assert_same([], $fake->terms, 'schedule-queue no-op paths should not write FTS terms');
 });
 
 test_case('status and health report no queue processor schedule as not needed when no work is pending', function (): void {
@@ -7811,6 +8075,7 @@ test_case('status and health report no queue processor schedule as not needed wh
     assert_true(!str_contains((string) ($schedule['advice'] ?? ''), 'wp fts process-batch'), 'no-work schedule advice should not tell operators to run a manual batch');
     assert_contains('<th scope="row">Queue processor status</th><td>Not needed</td>', $html, 'Health should render not-needed schedule state when no work is pending');
     assert_contains('<th scope="row">Queue processor advice</th><td>No pending indexing work is detected, so no queue processor event is needed.</td>', $html, 'Health should explain the non-urgent no-work state');
+    assert_true(!str_contains($html, '<h3>Queue processor controls</h3>'), 'Health should not render schedule controls when no queue event is needed');
     assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'not-needed status should not schedule queue work');
     assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'not-needed status should not clear queue work');
 });
