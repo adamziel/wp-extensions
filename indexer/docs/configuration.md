@@ -146,7 +146,7 @@ The next selectable/detectable set adds Russian (`ru`), German (`de`), Japanese
 | Language or partition | Routing support | Analyzer tier | Fallback and boundary |
 | --- | --- | --- | --- |
 | Polish (`pl`) | Explicit routing, detector evidence, multilingual metadata, and HTML scopes. | The WordPress runtime starts with the bundled Polish lemmatizer behavior: the compressed full Polish runtime pack when gzip support is available, otherwise the fixture pack. `polish_lemma_pack` and `polish_lemmatizer_pack` map to the generic pack runtime and can replace or disable that default; `polish_stemming => 'verified'` enables a fixture-backed stemmer slice when no valid pack is active. | The raw CLARIN-PL source archive, extracted TSV, and separately generated external PoliMorf pack are not bundled in release archives. |
-| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Configure them through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`; built-in Snowball, baseline, or no-op behavior remains the fallback when no pack is configured. |
+| English (`en`), Hindi (`hi`), Spanish (`es`), Arabic (`ar`), French (`fr`), Bengali (`bn`), Portuguese (`pt`), Indonesian (`id`), Russian (`ru`), German (`de`), Telugu (`te`), Turkish (`tr`), Italian (`it`), Persian (`fa`), Ukrainian (`uk`), Dutch (`nl`) | Selectable/detectable language partitions. | Source-backed UniMorph lemma packs are bundled as opt-in gzip-sharded analyzer packs. | Enable bundled packs from Settings > Full-Text Search > Analyzer packs when PHP gzip support is available, or configure pack paths through `lemma_packs_by_lang` / `lemmatizer_packs_by_lang`; built-in Snowball, baseline, or no-op behavior remains the fallback when no pack is configured. |
 | Catalan (`ca`), legacy Dutch Porter fallback (`nl`) | Explicit partitions and detector evidence where present. | Optional Wamania-backed Snowball paths when Composer dependencies are installed and compliance checks accept them. | Dutch now has a source-backed UniMorph pack when configured; the Wamania path is only the no-pack fallback. Other Wamania languages stay no-op until verified against the current Snowball fixtures. |
 | Chinese (`zh`) | Selectable/detectable CJK partition. | Deterministic fallback CJK tokenization plus optional Jieba dictionary segmentation from the pinned source submodule through `segmenter_packs_by_lang`. | Jieba is MIT source data, default-disabled outside the sandbox, and is segmentation only. Fallback n-grams remain enabled for unknown/subword recall. |
 | Japanese (`ja`), Korean (`ko`) | Selectable/detectable CJK/Hangul partitions. | Deterministic fallback n-gram tokenization. | No Japanese or Korean runtime lemma pack is committed because the current PHP pipeline has no source-backed word segmenter for those languages. Pinned UniMorph source submodules are retained for future external-pack work. |
@@ -362,6 +362,13 @@ add_filter(WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER, static function (array $optio
     return $options;
 });
 ```
+
+For bundled UniMorph packs shipped with the plugin, Settings > Full-Text Search
+> Analyzer packs provides a bounded checkbox UI that stores exact bundled
+manifest paths in `wp_fts_analyzer_options`. Bundled packs affect real site
+searches after content is reindexed. Custom pack paths remain option/filter
+configuration; the admin UI does not accept arbitrary filesystem paths, install
+external data, or create sample content.
 
 `lemma_packs_by_lang` wins over `lemmatizer_packs_by_lang` for the same
 language. The legacy `polish_lemma_pack` / `polish_lemmatizer_pack` aliases map

@@ -56,6 +56,11 @@ final class WP_FTS_Plugin
     private const ADMIN_HEALTH_ACTION_FIELD = 'wp_fts_health_action';
     private const ADMIN_HEALTH_MANUAL_BATCH_ACTION = 'index_next_batch';
     private const ADMIN_HEALTH_REPAIR_SCHEMA_ACTION = 'repair_schema';
+    private const ADMIN_ANALYZER_NONCE_ACTION = 'wp_fts_analyzer_packs_admin_action';
+    private const ADMIN_ANALYZER_NONCE_FIELD = 'wp_fts_analyzer_packs_nonce';
+    private const ADMIN_ANALYZER_ACTION_FIELD = 'wp_fts_analyzer_packs_action';
+    private const ADMIN_ANALYZER_SAVE_BUNDLED_ACTION = 'save_bundled_runtime_packs';
+    private const ADMIN_ANALYZER_LANGUAGE_FIELD = 'wp_fts_bundled_runtime_lemma_packs';
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
@@ -2098,6 +2103,9 @@ final class WP_FTS_Plugin
         foreach (self::handle_admin_sandbox_post_action() as $message) {
             self::render_sandbox_notice($message[0], $message[1]);
         }
+        foreach (self::handle_admin_analyzer_post_action() as $message) {
+            self::render_sandbox_notice($message[0], $message[1]);
+        }
         self::render_legacy_sandbox_demo_cleanup_affordance($tab);
 
         if ($tab === self::ADMIN_HEALTH_TAB) {
@@ -2391,6 +2399,44 @@ final class WP_FTS_Plugin
         }
 
         return [['info', 'No legacy sandbox demo posts were found. The stored sandbox demo marker was cleared.']];
+    }
+
+    /**
+     * @return array<int,array{0:string,1:string}>
+     */
+    private static function handle_admin_analyzer_post_action(): array
+    {
+        if (!self::analyzer_post_action_submitted()) {
+            return [];
+        }
+
+        if (!self::can_manage_admin_sandbox()) {
+            return [['error', 'You do not have permission to manage analyzer packs.']];
+        }
+
+        if (!self::verify_analyzer_nonce()) {
+            return [['error', 'The analyzer-pack action could not be verified. Reload the page and try again.']];
+        }
+
+        if (self::analyzer_post_action() !== self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) {
+            return [['error', 'Unsupported analyzer-pack action. No changes were made.']];
+        }
+
+        if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+            return [['warning', 'Bundled UniMorph packs need PHP gzip stream support and were not changed on this server.']];
+        }
+
+        $manifests = self::bundled_runtime_lemma_pack_control_manifests();
+        if ($manifests === []) {
+            return [['info', 'No bundled runtime lemma packs were found. Analyzer options were not changed.']];
+        }
+
+        self::save_bundled_runtime_lemma_pack_selection(
+            self::selected_bundled_runtime_lemma_pack_languages($manifests),
+            $manifests
+        );
+
+        return [['success', 'Bundled analyzer pack settings saved. Reindex existing content for analyzer changes to affect already-indexed posts.']];
     }
 
     private static function render_legacy_sandbox_demo_cleanup_affordance(string $tab): void
@@ -3455,6 +3501,7 @@ final class WP_FTS_Plugin
     {
         echo '<h2>Analyzer packs</h2>';
         echo '<p>Analyzer packs add language-specific tokenization or word-form matching. Runtime packs affect real site searches; sandbox packs are bundled so Sandbox searches have realistic language behavior.</p>';
+        self::render_bundled_runtime_lemma_pack_controls();
         echo '<h3>Runtime analyzer packs</h3>';
         self::render_analyzer_pack_statuses(self::runtime_analyzer_pack_statuses());
         echo '<h3>Sandbox analyzer packs</h3>';
@@ -4134,6 +4181,28 @@ final class WP_FTS_Plugin
         return wp_verify_nonce($nonce, self::ADMIN_HEALTH_NONCE_ACTION) !== false;
     }
 
+    private static function analyzer_post_action(): string
+    {
+        $action = self::sanitize_key(self::request_text_value($_POST, self::ADMIN_ANALYZER_ACTION_FIELD, 60));
+
+        return $action === self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION ? $action : '';
+    }
+
+    private static function analyzer_post_action_submitted(): bool
+    {
+        return self::request_text_value($_POST, self::ADMIN_ANALYZER_ACTION_FIELD, 60) !== '';
+    }
+
+    private static function verify_analyzer_nonce(): bool
+    {
+        $nonce = self::request_text_value($_POST, self::ADMIN_ANALYZER_NONCE_FIELD, 200);
+        if ($nonce === '' || !function_exists('wp_verify_nonce')) {
+            return false;
+        }
+
+        return wp_verify_nonce($nonce, self::ADMIN_ANALYZER_NONCE_ACTION) !== false;
+    }
+
     /**
      * @return int[]
      */
@@ -4570,6 +4639,44 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * @param string[] $selectedLanguages
+     * @param array<string,string> $bundledManifests
+     * @return array<string,mixed> Stored analyzer option value after the bounded merge.
+     */
+    private static function save_bundled_runtime_lemma_pack_selection(array $selectedLanguages, array $bundledManifests): array
+    {
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        $options = is_array($stored) ? $stored : [];
+        $selected = array_fill_keys($selectedLanguages, true);
+        $filterControlled = self::filter_controlled_runtime_lemma_pack_languages();
+
+        foreach ($bundledManifests as $language => $manifestPath) {
+            if (isset($filterControlled[$language]) || self::stored_runtime_lemma_pack_has_custom_value($options, $language, $manifestPath)) {
+                continue;
+            }
+
+            if (isset($selected[$language])) {
+                if (!isset($options['lemmatizer_packs_by_lang']) || !is_array($options['lemmatizer_packs_by_lang'])) {
+                    $options['lemmatizer_packs_by_lang'] = [];
+                }
+                $options['lemmatizer_packs_by_lang'] = self::set_language_pack_map_entry(
+                    $options['lemmatizer_packs_by_lang'],
+                    $language,
+                    $manifestPath,
+                    true
+                );
+                continue;
+            }
+
+            $options = self::remove_exact_bundled_runtime_lemma_pack_entry($options, $language, $manifestPath);
+        }
+
+        self::set_option(self::ANALYZER_OPTIONS_OPTION, $options);
+
+        return $options;
+    }
+
+    /**
      * Report configured runtime lemma packs for admin diagnostics.
      *
      * @return array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>
@@ -4720,15 +4827,7 @@ final class WP_FTS_Plugin
      */
     private static function raw_analyzer_options_with_bundled_packs(array $bundled_lemma_packs, array $bundled_segmenter_packs): array
     {
-        $options = [
-            'lemmatizer_packs_by_lang' => $bundled_lemma_packs,
-            'segmenter_packs_by_lang' => $bundled_segmenter_packs,
-        ];
-
-        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
-        if (is_array($stored)) {
-            $options = self::merge_runtime_analyzer_options($options, $stored);
-        }
+        $options = self::raw_analyzer_options_before_filter($bundled_lemma_packs, $bundled_segmenter_packs);
 
         if (function_exists('apply_filters')) {
             $base = $options;
@@ -4739,6 +4838,29 @@ final class WP_FTS_Plugin
                     self::runtime_analyzer_filter_override_layer($base, $filtered)
                 );
             }
+        }
+
+        return $options;
+    }
+
+    /**
+     * Read bundled defaults and the stored WordPress option without applying
+     * the higher-precedence analyzer-options filter.
+     *
+     * @param array<string,bool|string> $bundled_lemma_packs
+     * @param array<string,bool|string> $bundled_segmenter_packs
+     * @return array<string,mixed>
+     */
+    private static function raw_analyzer_options_before_filter(array $bundled_lemma_packs, array $bundled_segmenter_packs): array
+    {
+        $options = [
+            'lemmatizer_packs_by_lang' => $bundled_lemma_packs,
+            'segmenter_packs_by_lang' => $bundled_segmenter_packs,
+        ];
+
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        if (is_array($stored)) {
+            $options = self::merge_runtime_analyzer_options($options, $stored);
         }
 
         return $options;
@@ -5059,6 +5181,150 @@ final class WP_FTS_Plugin
         return $option === null || is_bool($option) || is_string($option) || is_array($option);
     }
 
+    /**
+     * @return array<string,string>
+     */
+    private static function bundled_runtime_lemma_pack_control_manifests(): array
+    {
+        $manifests = WP_FTS_AnalyzerPackValidator::bundled_unimorph_top_language_pack_manifests();
+        foreach ($manifests as $language => $manifestPath) {
+            if (!is_string($manifestPath) || !is_file($manifestPath)) {
+                unset($manifests[$language]);
+            }
+        }
+
+        ksort($manifests, SORT_STRING);
+
+        return $manifests;
+    }
+
+    /**
+     * @param array<string,string> $allowedManifests
+     * @return string[]
+     */
+    private static function selected_bundled_runtime_lemma_pack_languages(array $allowedManifests): array
+    {
+        return self::request_list_value(
+            $_POST,
+            self::ADMIN_ANALYZER_LANGUAGE_FIELD,
+            array_keys($allowedManifests),
+            []
+        );
+    }
+
+    /**
+     * @return array<string,bool>
+     */
+    private static function filter_controlled_runtime_lemma_pack_languages(): array
+    {
+        $beforeFilter = self::raw_analyzer_options_before_filter(
+            self::bundled_runtime_lemma_packs_by_lang(),
+            self::bundled_runtime_segmenter_packs_by_lang()
+        );
+        $afterFilter = self::raw_runtime_analyzer_options();
+        $beforePacks = self::runtime_lemma_pack_options_by_language($beforeFilter);
+        $afterPacks = self::runtime_lemma_pack_options_by_language($afterFilter);
+        $controlled = [];
+
+        foreach ($afterPacks as $language => $option) {
+            if (!array_key_exists($language, $beforePacks) || $beforePacks[$language] !== $option) {
+                $controlled[$language] = true;
+            }
+        }
+
+        return $controlled;
+    }
+
+    private static function stored_runtime_lemma_pack_has_custom_value(array $storedOptions, string $language, string $bundledManifestPath): bool
+    {
+        foreach (self::stored_runtime_lemma_pack_entries_for_language($storedOptions, $language) as $entry) {
+            if (!self::lemma_pack_option_points_to_manifest($entry, $bundledManifestPath)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $storedOptions
+     * @return mixed[]
+     */
+    private static function stored_runtime_lemma_pack_entries_for_language(array $storedOptions, string $language): array
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language);
+        $entries = [];
+        foreach (['lemmatizer_packs_by_lang', 'lemma_packs_by_lang'] as $key) {
+            if (!isset($storedOptions[$key]) || !is_array($storedOptions[$key])) {
+                continue;
+            }
+
+            foreach ($storedOptions[$key] as $entryLanguage => $option) {
+                if (!is_scalar($entryLanguage) || trim((string) $entryLanguage) === '') {
+                    continue;
+                }
+                if (WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) === $language) {
+                    $entries[] = $option;
+                }
+            }
+        }
+
+        return $entries;
+    }
+
+    private static function lemma_pack_option_points_to_manifest(mixed $option, string $manifestPath): bool
+    {
+        if (is_string($option)) {
+            $path = trim($option);
+            return ($path !== '' ? $path : '') === $manifestPath;
+        }
+
+        if (is_array($option)) {
+            foreach (['manifest', 'manifest_path', 'path'] as $key) {
+                if (!isset($option[$key]) || !is_scalar($option[$key])) {
+                    continue;
+                }
+
+                $path = trim((string) $option[$key]);
+                if ($path !== '') {
+                    return $path === $manifestPath;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private static function remove_exact_bundled_runtime_lemma_pack_entry(array $options, string $language, string $manifestPath): array
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language);
+        foreach (['lemmatizer_packs_by_lang', 'lemma_packs_by_lang'] as $key) {
+            if (!isset($options[$key]) || !is_array($options[$key])) {
+                continue;
+            }
+
+            foreach ($options[$key] as $entryLanguage => $option) {
+                if (!is_scalar($entryLanguage) || WP_FTS_TermNamespace::canonicalize_lang((string) $entryLanguage) !== $language) {
+                    continue;
+                }
+
+                if (self::lemma_pack_option_points_to_manifest($option, $manifestPath)) {
+                    unset($options[$key][$entryLanguage]);
+                }
+            }
+
+            if ($options[$key] === []) {
+                unset($options[$key]);
+            }
+        }
+
+        return $options;
+    }
+
     private static function lemma_pack_option_is_disabled(mixed $option): bool
     {
         if ($option === false || $option === null) {
@@ -5211,6 +5477,96 @@ final class WP_FTS_Plugin
             echo '</tr>';
         }
         echo '</tbody></table>';
+    }
+
+    private static function render_bundled_runtime_lemma_pack_controls(): void
+    {
+        echo '<h3>Bundled runtime lemma packs</h3>';
+        echo '<p>Enable bundled lemma packs for real site searches. Bundled packs affect real site searches after the content is reindexed. Custom pack paths can still be configured with the <code>' . self::esc_html(self::ANALYZER_OPTIONS_OPTION) . '</code> option or filter. This page does not install external data or create sample content.</p>';
+
+        if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+            echo '<p class="description">Bundled UniMorph packs are gzip-compressed, but this PHP runtime does not provide gzip stream support. They cannot be enabled for real site searches on this server.</p>';
+            return;
+        }
+
+        $manifests = self::bundled_runtime_lemma_pack_control_manifests();
+        if ($manifests === []) {
+            echo '<p>No bundled source-backed runtime lemma packs were found in this plugin install.</p>';
+            return;
+        }
+
+        $rows = self::bundled_runtime_lemma_pack_control_rows($manifests);
+        echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_ANALYZER_TAB)) . '">';
+        self::render_analyzer_nonce_field();
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) . '">';
+        echo '<table class="widefat striped">';
+        echo '<thead><tr><th scope="col">Enable</th><th scope="col">Language</th><th scope="col">Bundled pack</th><th scope="col">Configuration</th></tr></thead>';
+        echo '<tbody>';
+        foreach ($rows as $row) {
+            echo '<tr>';
+            echo '<td>';
+            if ($row['editable']) {
+                echo '<label>';
+                echo '<input type="checkbox" name="' . self::esc_attr(self::ADMIN_ANALYZER_LANGUAGE_FIELD) . '[]" value="' . self::esc_attr($row['language']) . '"' . ($row['enabled'] ? ' checked="checked"' : '') . '> ';
+                echo self::esc_html($row['enabled'] ? 'Enabled' : 'Enable');
+                echo '</label>';
+            } else {
+                echo self::esc_html('External');
+            }
+            echo '</td>';
+            echo '<td>' . self::esc_html(self::sandbox_language_display($row['language'])) . '</td>';
+            echo '<td><code>' . self::esc_html($row['pack_id']) . '</code></td>';
+            echo '<td>' . self::esc_html($row['status']) . '</td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+        echo '<p><button type="submit" class="button button-primary">Save bundled pack choices</button></p>';
+        echo '</form>';
+    }
+
+    /**
+     * @param array<string,string> $manifests
+     * @return array<int,array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}>
+     */
+    private static function bundled_runtime_lemma_pack_control_rows(array $manifests): array
+    {
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        $storedOptions = is_array($stored) ? $stored : [];
+        $beforeFilter = self::raw_analyzer_options_before_filter(
+            self::bundled_runtime_lemma_packs_by_lang(),
+            self::bundled_runtime_segmenter_packs_by_lang()
+        );
+        $beforePacks = self::runtime_lemma_pack_options_by_language($beforeFilter);
+        $filterControlled = self::filter_controlled_runtime_lemma_pack_languages();
+        $rows = [];
+
+        foreach ($manifests as $language => $manifestPath) {
+            $packId = basename(dirname($manifestPath));
+            $customStored = self::stored_runtime_lemma_pack_has_custom_value($storedOptions, $language, $manifestPath);
+            $enabled = isset($beforePacks[$language]) && self::lemma_pack_option_points_to_manifest($beforePacks[$language], $manifestPath);
+            $editable = !$customStored && !isset($filterControlled[$language]);
+            if (isset($filterControlled[$language])) {
+                $status = 'Configured outside this UI by the analyzer options filter.';
+            } elseif ($customStored) {
+                $status = 'Configured outside this UI by the stored analyzer option.';
+            } elseif ($enabled) {
+                $status = 'Enabled from the bundled manifest.';
+            } else {
+                $status = 'Available to enable.';
+            }
+
+            $rows[] = [
+                'language' => $language,
+                'pack_id' => $packId,
+                'enabled' => $enabled,
+                'editable' => $editable,
+                'status' => $status,
+            ];
+        }
+
+        usort($rows, static fn(array $a, array $b): int => strcmp((string) $a['language'], (string) $b['language']));
+
+        return $rows;
     }
 
     /**
@@ -6015,6 +6371,13 @@ JS;
         $nonce = self::create_admin_nonce(self::ADMIN_HEALTH_NONCE_ACTION);
 
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
+    }
+
+    private static function render_analyzer_nonce_field(): void
+    {
+        $nonce = self::create_admin_nonce(self::ADMIN_ANALYZER_NONCE_ACTION);
+
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_NONCE_FIELD) . '" value="' . self::esc_attr($nonce) . '">';
     }
 
     private static function create_admin_nonce(string $action): string

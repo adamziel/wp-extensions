@@ -5445,6 +5445,191 @@ test_case('settings page distinguishes en-US runtime fallback from sandbox Engli
     assert_contains('en-unimorph-eng-66e0e9e8e2dc', $analyzerHtml, 'analyzer packs table should expose the sandbox English pack id');
 });
 
+test_case('admin analyzer packs tab renders bundled runtime pack controls when gzip is available', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+
+    assert_contains('Bundled runtime lemma packs', $html, 'analyzer packs tab should include the bundled runtime control section');
+    assert_contains('Custom pack paths can still be configured with the', $html, 'analyzer controls should keep custom paths out of the form');
+    assert_contains('This page does not install external data or create sample content.', $html, 'analyzer controls should state the bounded side effects');
+    if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_contains('name="wp_fts_bundled_runtime_lemma_packs[]"', $html, 'eligible bundled runtime packs should render checkbox controls');
+        assert_contains('English (en)', $html, 'eligible bundled runtime controls should include English');
+        assert_contains('en-unimorph-eng-66e0e9e8e2dc', $html, 'eligible bundled runtime controls should expose the bundled English pack id');
+        assert_contains('Save bundled pack choices', $html, 'eligible bundled runtime controls should render a bounded save button');
+        assert_true(!str_contains($html, 'name="wp_fts_bundled_runtime_manifest_path"'), 'analyzer controls should not expose arbitrary manifest path inputs');
+    } else {
+        assert_contains('does not provide gzip stream support', $html, 'gzip-free runtimes should explain why bundled controls are unavailable');
+        assert_true(!str_contains($html, 'name="wp_fts_bundled_runtime_lemma_packs[]"'), 'gzip-free runtimes should not render misleading enable controls');
+    }
+});
+
+test_case('admin analyzer pack save enables selected bundled runtime packs without indexing side effects', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [451, 452];
+        $_GET = [];
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
+            'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_packs' => ['en', 'bn', 'unknown-language'],
+        ];
+
+        $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+        if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+            assert_contains('need PHP gzip stream support and were not changed', $html, 'gzip-free save attempts should report that bundled packs cannot be enabled');
+            assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION]), 'gzip-free save attempts should not create analyzer options');
+            return;
+        }
+
+        $manifests = bundled_unimorph_top_language_pack_manifests();
+        $stored = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? [];
+
+        assert_contains('Bundled analyzer pack settings saved. Reindex existing content', $html, 'successful bundled pack save should tell operators to reindex content');
+        assert_same($manifests['en'], $stored['lemmatizer_packs_by_lang']['en'] ?? null, 'saving English should persist the bundled English manifest path');
+        assert_same($manifests['bn'], $stored['lemmatizer_packs_by_lang']['bn'] ?? null, 'saving Bengali should persist the bundled Bengali manifest path');
+        assert_true(!array_key_exists('unknown-language', $stored['lemmatizer_packs_by_lang'] ?? []), 'unknown submitted languages should be ignored');
+        $runtimeOptions = WP_FTS_Plugin::runtime_analyzer_options();
+        assert_true(array_key_exists('pl', $runtimeOptions['lemmatizer_packs_by_lang'] ?? []), 'saving bundled non-Polish packs should preserve the Polish runtime default');
+        assert_same([451, 452], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'saving bundled analyzer packs should not drain the indexing queue');
+        assert_same([], $GLOBALS['wp_fts_test_posts'], 'saving bundled analyzer packs should not create posts');
+        assert_same([], $fake->terms, 'saving bundled analyzer packs should not write FTS terms');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin analyzer pack save removes only exact bundled manifest entries and preserves custom paths', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so bundled runtime analyzer save removal coverage is skipped.');
+        return;
+    }
+
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+
+    try {
+        $manifests = bundled_unimorph_top_language_pack_manifests();
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'lemmatizer_packs_by_lang' => [
+                'en' => $manifests['en'],
+                'bn' => '/srv/wp-fts/custom-bn/manifest.json',
+                'ur' => '/srv/wp-fts/custom-ur/manifest.json',
+            ],
+            'lemma_packs_by_lang' => [
+                'es' => $manifests['es'],
+                'fr' => '/srv/wp-fts/custom-fr/manifest.json',
+            ],
+        ];
+        $_GET = [];
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
+            'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_packs' => ['bn', 'fr'],
+        ];
+
+        $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+        $stored = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? [];
+
+        assert_contains('Configured outside this UI by the stored analyzer option.', $html, 'custom stored pack paths should be shown as externally configured');
+        assert_true(!array_key_exists('en', $stored['lemmatizer_packs_by_lang'] ?? []), 'unchecked English should remove the exact bundled lemmatizer entry');
+        assert_true(!array_key_exists('es', $stored['lemma_packs_by_lang'] ?? []), 'unchecked Spanish should remove the exact bundled higher-precedence alias entry');
+        assert_same('/srv/wp-fts/custom-bn/manifest.json', $stored['lemmatizer_packs_by_lang']['bn'] ?? null, 'custom Bengali stored path should not be overwritten by a malicious checked value');
+        assert_same('/srv/wp-fts/custom-fr/manifest.json', $stored['lemma_packs_by_lang']['fr'] ?? null, 'custom French alias path should not be removed by an unchecked exact-bundled save');
+        assert_same('/srv/wp-fts/custom-ur/manifest.json', $stored['lemmatizer_packs_by_lang']['ur'] ?? null, 'unrelated analyzer options should be preserved');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+    }
+});
+
+test_case('admin analyzer pack save respects filter-controlled languages', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so filter-controlled bundled runtime analyzer coverage is skipped.');
+        return;
+    }
+
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::ANALYZER_OPTIONS_FILTER] = static function (array $options): array {
+            $options['lemmatizer_packs_by_lang']['en'] = '/srv/wp-fts/filter-en/manifest.json';
+
+            return $options;
+        };
+        $_GET = [];
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
+            'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_packs' => ['en'],
+        ];
+
+        $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+        $stored = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? [];
+
+        assert_contains('Configured outside this UI by the analyzer options filter.', $html, 'filter-controlled languages should be shown as externally configured');
+        assert_true(!array_key_exists('en', $stored['lemmatizer_packs_by_lang'] ?? []), 'filter-controlled English should not be copied into stored analyzer options');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+    }
+});
+
+test_case('admin analyzer pack save rejects unauthorized and invalid nonce POSTs', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so analyzer save authorization coverage is skipped.');
+        return;
+    }
+
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $_GET = [];
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
+            'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_packs' => ['en'],
+        ];
+        $unauthorizedHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+        assert_contains('You do not have permission to manage Full-Text Search settings.', $unauthorizedHtml, 'unauthorized analyzer POST should fail at the admin capability gate');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION]), 'unauthorized analyzer POST should not change analyzer options');
+
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
+            'wp_fts_analyzer_packs_nonce' => 'bad-nonce',
+            'wp_fts_bundled_runtime_lemma_packs' => ['en'],
+        ];
+        $invalidHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+        assert_contains('The analyzer-pack action could not be verified', $invalidHtml, 'invalid analyzer nonce should produce an error notice');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION]), 'invalid analyzer nonce should not change analyzer options');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+    }
+});
+
 test_case('sandbox language fallback uses current site language dynamically', function (): void {
     global $wpdb;
 
