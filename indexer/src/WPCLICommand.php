@@ -771,6 +771,7 @@ final class WP_FTS_WPCLI_Command
             'scoring' => $this->explain_scoring_summary($explain['scoring'] ?? null),
             'recency_boost' => $this->explain_recency_boost_summary($explain['recency_boost'] ?? null),
             'result_matches' => $this->explain_result_matches_summary($explain['results'] ?? null),
+            'field_matches' => $this->explain_field_matches_summary($explain['results'] ?? null),
         ];
 
         $rows = [];
@@ -911,6 +912,60 @@ final class WP_FTS_WPCLI_Command
             }
             $rows[] = 'doc ' . $this->bounded_cli_text($row['doc_id'] ?? '?', 40) . '=' . ($matches !== [] ? implode(' | ', array_filter($matches)) : '-')
                 . (!empty($row['matches_more']) ? ' | ...' : '');
+            if (count($rows) >= self::EXPLAIN_SUMMARY_MAX_ITEMS) {
+                break;
+            }
+        }
+
+        return implode('; ', $rows);
+    }
+
+    private function explain_field_matches_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $rows = [];
+        foreach ($value as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $fields = [];
+            if (isset($row['field_matches']) && is_array($row['field_matches'])) {
+                foreach ($row['field_matches'] as $field) {
+                    if (!is_array($field)) {
+                        continue;
+                    }
+
+                    $terms = [];
+                    if (isset($field['terms']) && is_array($field['terms'])) {
+                        foreach ($field['terms'] as $term) {
+                            if (is_array($term)) {
+                                $terms[] = $this->explain_term_summary($term);
+                            }
+                            if (count($terms) >= 2) {
+                                break;
+                            }
+                        }
+                    }
+
+                    $fieldName = $this->bounded_cli_text($field['field'] ?? '?', 60);
+                    $fields[] = $fieldName . '(' . $this->summary_parts([
+                        'weight' => $field['weight'] ?? '',
+                        'hits' => $field['match_count'] ?? '',
+                        'weighted_hits' => $field['weighted_match_count'] ?? '',
+                        'score' => $field['score_subtotal'] ?? '',
+                    ]) . ($terms !== [] ? ', terms=' . implode(' | ', array_filter($terms)) : '') . (!empty($field['terms_more']) ? ' | ...' : '') . ')';
+                    if (count($fields) >= self::EXPLAIN_SUMMARY_MAX_ITEMS) {
+                        break;
+                    }
+                }
+            }
+
+            $rows[] = 'doc ' . $this->bounded_cli_text($row['doc_id'] ?? '?', 40) . '=' . ($fields !== [] ? implode(' ; ', $fields) : '-')
+                . (!empty($row['field_matches_more']) ? ' ; ...' : '');
             if (count($rows) >= self::EXPLAIN_SUMMARY_MAX_ITEMS) {
                 break;
             }

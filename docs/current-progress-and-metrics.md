@@ -111,7 +111,7 @@ is installed.
 | Indexing lifecycle | Implemented | Activation/schema repair, deactivation, uninstall state cleanup, runtime save/status/delete hooks, bounded queue processing, tombstoning non-searchable/protected posts. |
 | Content extraction | Implemented | Title, content, excerpt, rendered block deltas, taxonomy terms, selected custom fields, field boosts, and bounded metadata for filters/snippets. |
 | Search | Implemented baseline | BM25 scoring, `OR`/`AND`, limit/offset, per-term language routing, post metadata filters, snippets/highlighting. |
-| Search features beyond baseline | Not implemented | No phrase/position search, facets, typo tolerance, query-time synonyms, pagination cursors, field-specific explanations, or cross-language score merging. |
+| Search features beyond baseline | Partially implemented | Explain/debug diagnostics include bounded field-specific result matches. Phrase/position search, facets, typo tolerance, query-time synonyms, pagination cursors, and cross-language score merging remain out of scope. |
 | WordPress surfaces | Implemented with test doubles | WP-CLI reindex/search/delete/optimize, REST search helper, lifecycle hooks, visibility checks, and capability filtering are covered by the PHP harness. |
 | Production operations | Partially ready | Docs cover reindex, optimize, schema repair, backup/restore, and sizing notes. Large-site rollout still needs a real WordPress/MySQL validation pass. |
 

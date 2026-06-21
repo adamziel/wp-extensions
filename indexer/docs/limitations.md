@@ -213,11 +213,14 @@ It does not support:
 
 - phrases or positions;
 - facets;
-- field-specific explanations;
 - typo tolerance;
 - cross-language result merging;
 - query-time synonyms;
 - pagination cursors.
+
+Explain/debug diagnostics can include bounded field-specific result matches,
+term hit counts, configured field weights, and approximate score subtotals when
+the document was indexed with field metadata.
 
 ## Storage And Concurrency
 

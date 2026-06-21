@@ -15923,6 +15923,10 @@ test_case('wp cli search explain json includes structured diagnostics and per-re
         assert_true(($explain['results'][0]['matches'] ?? []) !== [], 'CLI explain JSON should include at least one matched term for the indexed result');
         assert_true(in_array('en', $explain['results'][0]['matched_languages'] ?? [], true), 'CLI explain JSON should include matched languages');
         assert_same('exact', $explain['results'][0]['matches'][0]['rank_class'] ?? null, 'CLI explain JSON should expose rank class for result matches');
+        assert_true(is_array($explain['results'][0]['field_matches'] ?? null), 'CLI explain JSON should include per-result field match rows');
+        assert_true(($explain['results'][0]['field_matches'] ?? []) !== [], 'CLI explain JSON should include at least one field match for the indexed result');
+        assert_same('content', $explain['results'][0]['field_matches'][0]['field'] ?? null, 'CLI explain JSON should expose the matching indexed field');
+        assert_true((float) ($explain['results'][0]['field_matches'][0]['weight'] ?? 0.0) > 0.0, 'CLI explain JSON should expose field weight');
     });
 });
 
@@ -15950,6 +15954,7 @@ test_case('wp cli search explain table output is bounded and human-readable', fu
         assert_contains('mode=', $rowsByField['fast_mode'] ?? '', 'table explain should summarize fast mode');
         assert_contains('candidate_docs_scored=', $rowsByField['scoring'] ?? '', 'table explain should summarize scoring');
         assert_contains('doc 1=', $rowsByField['result_matches'] ?? '', 'table explain should summarize per-result matches');
+        assert_contains('content(', $rowsByField['field_matches'] ?? '', 'table explain should summarize field-specific matches');
         assert_true(!str_contains($rowsByField['query_plan'] ?? '', '[{'), 'table explain should not dump nested arrays into cells');
     });
 });

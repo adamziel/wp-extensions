@@ -17,6 +17,8 @@ final class WP_FTS_Searcher
     private const EXPLAIN_MAX_TERMS = 12;
     private const EXPLAIN_MAX_RESULT_ROWS = 20;
     private const EXPLAIN_MAX_MATCHES_PER_RESULT = 8;
+    private const EXPLAIN_MAX_FIELD_MATCHES_PER_RESULT = 6;
+    private const EXPLAIN_MAX_TERMS_PER_FIELD = 6;
     private const EXPLAIN_MAX_TEXT_BYTES = 96;
     private const DEFAULT_RECENCY_BOOST_STRENGTH = 0.25;
     private const MAX_RECENCY_BOOST_STRENGTH = 2.0;
@@ -1982,7 +1984,7 @@ final class WP_FTS_Searcher
     /**
      * @param array<int,array<string,mixed>> $page
      * @param array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>> $groups
-     * @return array<int,array{doc_id:int,matches:array<int,array{key:string,term:string,lang:string,rank_class:string,surface?:string}>,matched_languages:array<int,string>,matches_more:bool}>
+     * @return array<int,array<string,mixed>>
      */
     private function explain_result_matches(array $page, array $groups): array
     {
@@ -2002,6 +2004,15 @@ final class WP_FTS_Searcher
         if ($candidateByKey === []) {
             return [];
         }
+
+        $pageDocIds = [];
+        foreach ($page as $row) {
+            $docId = max(0, (int) ($row['doc_id'] ?? 0));
+            if ($docId > 0) {
+                $pageDocIds[$docId] = true;
+            }
+        }
+        $metadataByDoc = WP_FTS_StorageCompat::get_doc_metadata($this->storage, array_keys($pageDocIds));
 
         $rows = [];
         foreach ($page as $row) {
@@ -2038,11 +2049,20 @@ final class WP_FTS_Searcher
                 }
             }
 
+            $fieldMatches = $this->explain_field_matches(
+                is_numeric($row['score'] ?? null) ? (float) $row['score'] : 0.0,
+                $candidateByKey,
+                $metadataByDoc[$docId] ?? [],
+                $this->storage->get_doc($docId)
+            );
+
             $rows[] = [
                 'doc_id' => $docId,
                 'matches' => $matches,
                 'matched_languages' => array_slice(array_keys($languages), 0, self::EXPLAIN_MAX_MATCHES_PER_RESULT),
                 'matches_more' => $matchCount > count($matches),
+                'field_matches' => $fieldMatches['matches'],
+                'field_matches_more' => $fieldMatches['more'],
             ];
             if (count($rows) >= self::EXPLAIN_MAX_RESULT_ROWS) {
                 break;
@@ -2050,6 +2070,280 @@ final class WP_FTS_Searcher
         }
 
         return $rows;
+    }
+
+    /**
+     * Build bounded field-level match diagnostics for one explained result.
+     *
+     * @param array<string,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}> $candidateByKey
+     * @param array<string,mixed> $metadata
+     * @param array<string,mixed>|null $doc
+     * @return array{matches:array<int,array<string,mixed>>,more:bool}
+     */
+    private function explain_field_matches(float $resultScore, array $candidateByKey, array $metadata, ?array $doc): array
+    {
+        $fields = $this->explain_field_sources($metadata);
+        if ($fields === []) {
+            return ['matches' => [], 'more' => false];
+        }
+
+        $documentLang = $this->explain_document_language($doc, $metadata);
+        $fieldRows = [];
+        $totalWeightedMatches = 0.0;
+
+        foreach ($fields as $field) {
+            $fieldName = $this->bounded_explain_text((string) ($field['name'] ?? ''), 80);
+            $fieldWeight = is_numeric($field['boost'] ?? null)
+                ? max(0.01, min(100.0, (float) $field['boost']))
+                : 1.0;
+            if ($fieldName === '') {
+                continue;
+            }
+
+            $terms = [];
+            $matchCount = 0;
+            $weightedMatchCount = 0.0;
+            foreach ($this->analyze_explain_field($field, $documentLang) as $occurrence) {
+                $termKey = $this->explain_occurrence_key($occurrence, $documentLang);
+                if ($termKey === null || !isset($candidateByKey[$termKey])) {
+                    continue;
+                }
+
+                $candidate = $candidateByKey[$termKey];
+                $occurrenceWeight = is_array($occurrence) && isset($occurrence['weight']) && is_numeric($occurrence['weight'])
+                    ? max(0.0, (float) $occurrence['weight'])
+                    : 1.0;
+                $weightedHit = $occurrenceWeight * $fieldWeight;
+                if ($weightedHit <= 0.0) {
+                    continue;
+                }
+
+                $matchCount++;
+                $weightedMatchCount += $weightedHit;
+                if (!isset($terms[$termKey])) {
+                    $term = [
+                        'key' => $this->bounded_explain_text($termKey),
+                        'term' => $this->bounded_explain_text((string) $candidate['term']),
+                        'lang' => WP_FTS_TermNamespace::canonicalize_lang((string) $candidate['lang']),
+                        'rank_class' => $this->candidate_rank_class($candidate),
+                        'hit_count' => 0,
+                        'weighted_hit_count' => 0.0,
+                    ];
+                    if (isset($candidate['surface']) && is_scalar($candidate['surface']) && trim((string) $candidate['surface']) !== '') {
+                        $term['surface'] = $this->bounded_explain_text((string) $candidate['surface']);
+                    }
+                    $terms[$termKey] = $term;
+                }
+                $terms[$termKey]['hit_count']++;
+                $terms[$termKey]['weighted_hit_count'] = round((float) $terms[$termKey]['weighted_hit_count'] + $weightedHit, 6);
+            }
+
+            if ($matchCount === 0 || $weightedMatchCount <= 0.0) {
+                continue;
+            }
+
+            $termRows = array_values($terms);
+            usort($termRows, static function (array $a, array $b): int {
+                $weighted = ((float) ($b['weighted_hit_count'] ?? 0.0)) <=> ((float) ($a['weighted_hit_count'] ?? 0.0));
+                if ($weighted !== 0) {
+                    return $weighted;
+                }
+
+                return strcmp((string) ($a['key'] ?? ''), (string) ($b['key'] ?? ''));
+            });
+
+            $fieldRows[] = [
+                'field' => $fieldName,
+                'weight' => round($fieldWeight, 6),
+                'match_count' => $matchCount,
+                'weighted_match_count' => round($weightedMatchCount, 6),
+                'terms' => array_slice($termRows, 0, self::EXPLAIN_MAX_TERMS_PER_FIELD),
+                'terms_more' => count($termRows) > self::EXPLAIN_MAX_TERMS_PER_FIELD,
+                'score_subtotal' => 0.0,
+                'score_subtotal_approximate' => true,
+            ];
+            $totalWeightedMatches += $weightedMatchCount;
+        }
+
+        if ($fieldRows === []) {
+            return ['matches' => [], 'more' => false];
+        }
+
+        foreach ($fieldRows as &$fieldRow) {
+            $share = $totalWeightedMatches > 0.0
+                ? (float) ($fieldRow['weighted_match_count'] ?? 0.0) / $totalWeightedMatches
+                : 0.0;
+            $fieldRow['score_subtotal'] = round(max(0.0, $resultScore) * $share, 12);
+        }
+        unset($fieldRow);
+
+        usort($fieldRows, static function (array $a, array $b): int {
+            $score = ((float) ($b['score_subtotal'] ?? 0.0)) <=> ((float) ($a['score_subtotal'] ?? 0.0));
+            if ($score !== 0) {
+                return $score;
+            }
+            $weighted = ((float) ($b['weighted_match_count'] ?? 0.0)) <=> ((float) ($a['weighted_match_count'] ?? 0.0));
+            if ($weighted !== 0) {
+                return $weighted;
+            }
+
+            return strcmp((string) ($a['field'] ?? ''), (string) ($b['field'] ?? ''));
+        });
+
+        return [
+            'matches' => array_slice($fieldRows, 0, self::EXPLAIN_MAX_FIELD_MATCHES_PER_RESULT),
+            'more' => count($fieldRows) > self::EXPLAIN_MAX_FIELD_MATCHES_PER_RESULT,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array<int,array{name:string,text:string,boost:float,html?:string}>
+     */
+    private function explain_field_sources(array $metadata): array
+    {
+        if (isset($metadata['search_fields']) && is_array($metadata['search_fields']) && $metadata['search_fields'] !== []) {
+            return $metadata['search_fields'];
+        }
+
+        $boosts = is_array($metadata['field_boosts'] ?? null) ? $metadata['field_boosts'] : [];
+        $fields = [];
+        foreach (['title', 'excerpt'] as $name) {
+            $text = is_scalar($metadata[$name] ?? null) ? trim((string) $metadata[$name]) : '';
+            if ($text !== '') {
+                $fields[] = [
+                    'name' => $name,
+                    'text' => $text,
+                    'boost' => is_numeric($boosts[$name] ?? null) ? (float) $boosts[$name] : 1.0,
+                ];
+            }
+        }
+
+        $termsText = $this->explain_metadata_list_text($metadata['terms'] ?? []);
+        if ($termsText !== '') {
+            $fields[] = [
+                'name' => 'terms',
+                'text' => $termsText,
+                'boost' => is_numeric($boosts['terms'] ?? null) ? (float) $boosts['terms'] : 1.0,
+            ];
+        }
+
+        $customFieldsText = $this->explain_metadata_list_text($metadata['custom_fields'] ?? []);
+        if ($customFieldsText !== '') {
+            $fields[] = [
+                'name' => 'custom_fields',
+                'text' => $customFieldsText,
+                'boost' => is_numeric($boosts['custom_fields'] ?? null) ? (float) $boosts['custom_fields'] : 1.0,
+            ];
+        }
+
+        $searchText = is_scalar($metadata['search_text'] ?? null) ? trim((string) $metadata['search_text']) : '';
+        $searchHtml = is_scalar($metadata['search_html'] ?? null) ? trim((string) $metadata['search_html']) : '';
+        if ($searchText !== '' || $searchHtml !== '') {
+            $field = [
+                'name' => 'content',
+                'text' => $searchText !== '' ? $searchText : WP_FTS_Html_Text_Stream::visible_text($searchHtml),
+                'boost' => is_numeric($boosts['content'] ?? null) ? (float) $boosts['content'] : 1.0,
+            ];
+            if ($searchHtml !== '') {
+                $field['html'] = $searchHtml;
+            }
+            $fields[] = $field;
+        }
+
+        return $fields;
+    }
+
+    private function explain_metadata_list_text(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $items = [];
+        foreach ($value as $list) {
+            foreach (is_array($list) ? $list : [$list] as $item) {
+                if (is_scalar($item) && trim((string) $item) !== '') {
+                    $items[] = (string) $item;
+                }
+            }
+        }
+
+        return trim(implode(' ', $items));
+    }
+
+    /**
+     * @param array<string,mixed>|null $doc
+     * @param array<string,mixed> $metadata
+     */
+    private function explain_document_language(?array $doc, array $metadata): string
+    {
+        foreach ([
+            $this->single_document_length_language($doc),
+            $doc['primary_lang'] ?? null,
+            $metadata['primary_lang'] ?? null,
+            $metadata['language'] ?? null,
+            $metadata['lang'] ?? null,
+        ] as $candidate) {
+            if (is_scalar($candidate) && trim((string) $candidate) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $candidate);
+            }
+        }
+
+        return WP_FTS_TermNamespace::default_language([]);
+    }
+
+    /**
+     * @param array<string,mixed> $field
+     * @return array<int,array<string,mixed>|string>
+     */
+    private function analyze_explain_field(array $field, string $documentLang): array
+    {
+        $opts = [
+            'lang' => $documentLang,
+            'language' => $documentLang,
+            'document_lang' => $documentLang,
+            'default_lang' => $documentLang,
+        ];
+
+        try {
+            if (isset($field['html']) && is_scalar($field['html']) && trim((string) $field['html']) !== '' && is_callable([$this->analyzer, 'analyze_content'])) {
+                return $this->analyzer->analyze_content((string) $field['html'], $opts);
+            }
+
+            if (!is_callable([$this->analyzer, 'analyze_plain_content'])) {
+                return [];
+            }
+
+            return $this->analyzer->analyze_plain_content((string) ($field['text'] ?? ''), $opts);
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    private function explain_occurrence_key(array|string $occurrence, string $defaultLang): ?string
+    {
+        $term = is_array($occurrence)
+            ? trim((string) ($occurrence['term'] ?? ''))
+            : trim((string) $occurrence);
+        if ($term === '') {
+            return null;
+        }
+
+        $split = WP_FTS_TermNamespace::split_term($term);
+        $lang = is_array($occurrence) && isset($occurrence['lang'])
+            ? WP_FTS_TermNamespace::canonicalize_lang((string) $occurrence['lang'], $defaultLang)
+            : WP_FTS_TermNamespace::canonicalize_lang($defaultLang);
+        if ($split !== null) {
+            $lang = $split['lang'];
+            $term = $split['term'];
+        }
+
+        if ($term === '' || !WP_FTS_TermNamespace::term_key_fits($term, $lang)) {
+            return null;
+        }
+
+        return WP_FTS_TermNamespace::namespace_term($lang, $term);
     }
 
     /**

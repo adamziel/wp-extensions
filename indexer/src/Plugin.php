@@ -1942,6 +1942,7 @@ final class WP_FTS_Plugin
             self::render_debug_row('Scoring', self::debug_assoc_summary($search_explain['scoring'] ?? []));
             self::render_debug_row('Recency boost', self::debug_assoc_summary($search_explain['recency_boost'] ?? []));
             self::render_debug_row('Result matches', self::debug_result_matches_summary($search_explain['results'] ?? []));
+            self::render_debug_row('Field matches', self::debug_field_matches_summary($search_explain['results'] ?? []));
             self::render_debug_row('Counts', self::debug_assoc_summary($trace['counts'] ?? []));
             self::render_debug_row('Timings', self::debug_timing_summary($trace['timings_ms'] ?? []));
             $performance_budget = is_array($trace['performance_budget'] ?? null)
@@ -2219,6 +2220,65 @@ final class WP_FTS_Plugin
                 }
             }
             $rows[] = 'doc ' . ($doc !== '' ? $doc : '?') . '=' . ($matches !== [] ? implode(' | ', $matches) : '-');
+            if (count($rows) >= self::DEBUG_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return self::debug_truncate_text(implode('; ', $rows), 800);
+    }
+
+    private static function debug_field_matches_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $rows = [];
+        foreach ($value as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $doc = self::debug_scalar_summary($row['doc_id'] ?? '');
+            $fields = [];
+            if (isset($row['field_matches']) && is_array($row['field_matches'])) {
+                foreach ($row['field_matches'] as $field) {
+                    if (!is_array($field)) {
+                        continue;
+                    }
+
+                    $terms = [];
+                    if (isset($field['terms']) && is_array($field['terms'])) {
+                        foreach ($field['terms'] as $term) {
+                            if (is_array($term)) {
+                                $terms[] = self::debug_explain_term_summary($term);
+                            }
+                            if (count($terms) >= 2) {
+                                break;
+                            }
+                        }
+                    }
+
+                    $field_name = self::debug_scalar_summary($field['field'] ?? '');
+                    $parts = [];
+                    foreach (['weight', 'match_count', 'weighted_match_count', 'score_subtotal'] as $key) {
+                        if (array_key_exists($key, $field)) {
+                            $parts[] = $key . '=' . self::debug_scalar_summary($field[$key]);
+                        }
+                    }
+                    if ($terms !== []) {
+                        $parts[] = 'terms=' . implode(' | ', $terms) . (!empty($field['terms_more']) ? ' ...' : '');
+                    }
+
+                    $fields[] = ($field_name !== '' ? $field_name : '?') . '(' . implode(', ', $parts) . ')';
+                    if (count($fields) >= self::DEBUG_MAX_LIST_ITEMS) {
+                        break;
+                    }
+                }
+            }
+
+            $rows[] = 'doc ' . ($doc !== '' ? $doc : '?') . '=' . ($fields !== [] ? implode(' ; ', $fields) : '-')
+                . (!empty($row['field_matches_more']) ? ' ; ...' : '');
             if (count($rows) >= self::DEBUG_MAX_LIST_ITEMS) {
                 break;
             }

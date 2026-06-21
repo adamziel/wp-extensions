@@ -11,6 +11,10 @@ declare(strict_types=1);
  */
 final class WP_FTS_StorageCompat
 {
+    private const METADATA_SEARCH_FIELD_MAX_FIELDS = 32;
+    private const METADATA_SEARCH_FIELD_TEXT_BYTES = 2000;
+    private const METADATA_SEARCH_FIELD_HTML_BYTES = 2000;
+
     /**
      * Replace one document's postings through a row-postings backend when possible.
      *
@@ -522,6 +526,7 @@ final class WP_FTS_StorageCompat
             'terms' => self::metadata_string_lists($metadata['terms'] ?? []),
             'custom_fields' => self::metadata_string_lists($metadata['custom_fields'] ?? []),
             'field_boosts' => [],
+            'search_fields' => self::metadata_search_fields($metadata['search_fields'] ?? []),
         ];
 
         foreach (($metadata['field_boosts'] ?? []) as $field => $boost) {
@@ -535,6 +540,51 @@ final class WP_FTS_StorageCompat
             $metadataKey = WP_FTS_Utf8::repair((string) $key);
             if ($metadataKey !== '' && !array_key_exists($metadataKey, $normalized)) {
                 $normalized[$metadataKey] = self::metadata_extra($value);
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Normalize bounded per-field explain sources.
+     *
+     * @param mixed $fields
+     * @return array<int,array{name:string,text:string,boost:float,html?:string}>
+     */
+    private static function metadata_search_fields(mixed $fields): array
+    {
+        $normalized = [];
+        foreach (is_array($fields) ? $fields : [] as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+
+            $name = self::metadata_text($field['name'] ?? '');
+            $text = rtrim(WP_FTS_Utf8::truncate_bytes(
+                self::metadata_text($field['text'] ?? ''),
+                self::METADATA_SEARCH_FIELD_TEXT_BYTES
+            ));
+            $html = is_scalar($field['html'] ?? null)
+                ? rtrim(WP_FTS_Utf8::truncate_bytes(WP_FTS_Utf8::repair((string) $field['html']), self::METADATA_SEARCH_FIELD_HTML_BYTES))
+                : '';
+            if ($name === '' || ($text === '' && trim($html) === '')) {
+                continue;
+            }
+
+            $row = [
+                'name' => $name,
+                'text' => $text,
+                'boost' => is_numeric($field['boost'] ?? null)
+                    ? max(0.01, min(100.0, (float) $field['boost']))
+                    : 1.0,
+            ];
+            if (trim($html) !== '') {
+                $row['html'] = $html;
+            }
+            $normalized[] = $row;
+            if (count($normalized) >= self::METADATA_SEARCH_FIELD_MAX_FIELDS) {
+                break;
             }
         }
 
