@@ -729,6 +729,37 @@ define('WP_FTS_FAST_MODE_CANDIDATE_CAP', 1000);
 define('WP_FTS_FAST_MODE_ENABLED', true);
 ```
 
+## Search Performance Budget Diagnostics
+
+When request diagnostics are visible through Debug Bar or the Health-tab
+fallback, completed front-end, wp-admin Posts, and Sandbox search traces include
+a Performance budget row. The row reuses the trace's existing `timings_ms`
+values and reports whether the total search timing and the `storage/search`
+phase were within budget, over budget, disabled, or unavailable.
+
+Tune the thresholds in `wp-config.php` or an early plugin/bootstrap file before
+the plugin loads:
+
+```php
+define('WP_FTS_SEARCH_TOTAL_BUDGET_MS', 100);
+define('WP_FTS_SEARCH_STORAGE_BUDGET_MS', 50);
+```
+
+Advanced operators can also filter both values:
+
+```php
+add_filter('wp_fts_search_performance_budget', static function (array $budgets, array $trace): array {
+    $budgets['total_ms'] = 150;
+    $budgets['storage_search_ms'] = 75;
+
+    return $budgets;
+}, 10, 2);
+```
+
+Values are clamped to a bounded positive millisecond range. Set either value to
+zero or a negative number to disable that specific budget without reporting a
+false over-budget status.
+
 Programmatic callers can set BM25 parameters in the searcher constructor:
 
 ```php

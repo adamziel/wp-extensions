@@ -220,8 +220,13 @@ Successful front-end and wp-admin Posts replacements include an explain summary
 when diagnostics are active. The trace identifies the storage backend, analyzed
 query languages, query surfaces with analyzed storage terms/keys, prefix
 expansion count, fast-mode source and cap, candidate rows/docs scored, exact
-versus approximate totals, and bounded per-result match reasons for the returned
-page. Bailout traces still keep their readable reason so operators can
+versus approximate totals, performance-budget status, and bounded per-result
+match reasons for the returned page. The Performance budget row compares the
+existing trace timings against the configured total and `storage/search`
+thresholds, then reports `within_budget`, `over_budget`, `disabled`, or
+`unavailable` with the crossed phases when a budget is exceeded. Bailout traces
+without timing data are reported as unavailable rather than fast. Bailout traces
+still keep their readable reason so operators can
 distinguish unsupported query shapes, disabled replacement settings, and
 successful FTS ownership without creating diagnostic content.
 

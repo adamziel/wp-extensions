@@ -5325,6 +5325,139 @@ test_case('request diagnostics stay disabled for normal visitors and render esca
     }
 });
 
+test_case('search performance budget diagnostics classify within and over budget traces', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+    $finishTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_finish_trace');
+    $finishTrace->setAccessible(true);
+
+    $withinId = (int) $startTrace->invoke(null, 'frontend search', 'fast budget needle', [], [
+        'timings_ms' => [
+            'total' => 80.125,
+            'storage/search' => 25.5,
+        ],
+    ]);
+    $finishTrace->invoke(null, $withinId, 'ran');
+
+    $overId = (int) $startTrace->invoke(null, 'admin post search', 'slow budget needle', [], [
+        'timings_ms' => [
+            'total' => 125.25,
+            'storage/search' => 75.75,
+        ],
+    ]);
+    $finishTrace->invoke(null, $overId, 'ran');
+
+    $traces = WP_FTS_Plugin::debug_traces();
+    assert_same(2, count($traces), 'budget diagnostics should preserve both deterministic traces');
+
+    $withinBudget = is_array($traces[0]['performance_budget'] ?? null) ? $traces[0]['performance_budget'] : [];
+    assert_same('within_budget', $withinBudget['status'] ?? null, 'within-threshold trace should store a within-budget status');
+    assert_float_near(80.125, (float) ($withinBudget['total_elapsed_ms'] ?? -1), 'within budget summary should store total elapsed milliseconds');
+    assert_float_near(100.0, (float) ($withinBudget['total_budget_ms'] ?? -1), 'within budget summary should store default total threshold');
+    assert_float_near(25.5, (float) ($withinBudget['storage_search_elapsed_ms'] ?? -1), 'within budget summary should store storage/search elapsed milliseconds');
+    assert_float_near(50.0, (float) ($withinBudget['storage_search_budget_ms'] ?? -1), 'within budget summary should store default storage/search threshold');
+    assert_same([], $withinBudget['exceeded_phases'] ?? null, 'within budget summary should not report exceeded phases');
+    assert_contains('within performance budget', (string) ($withinBudget['explanation'] ?? ''), 'within budget summary should include a readable explanation');
+
+    $overBudget = is_array($traces[1]['performance_budget'] ?? null) ? $traces[1]['performance_budget'] : [];
+    assert_same('over_budget', $overBudget['status'] ?? null, 'over-threshold trace should store an over-budget status');
+    assert_same(['total', 'storage/search'], $overBudget['exceeded_phases'] ?? null, 'over-budget trace should identify total and storage/search budget crossings');
+    assert_contains('total 125.250ms > 100.000ms', (string) ($overBudget['explanation'] ?? ''), 'over-budget summary should explain total threshold crossing');
+    assert_contains('storage/search 75.750ms > 50.000ms', (string) ($overBudget['explanation'] ?? ''), 'over-budget summary should explain storage/search threshold crossing');
+});
+
+test_case('search performance budget filter disables budgets without false over-budget status', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::SEARCH_PERFORMANCE_BUDGET_FILTER] = static function (array $budgets, array $trace): array {
+        return [
+            'total_ms' => 0,
+            'storage_search_ms' => -10,
+        ];
+    };
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+    $finishTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_finish_trace');
+    $finishTrace->setAccessible(true);
+
+    $traceId = (int) $startTrace->invoke(null, 'sandbox search', 'disabled budget needle', [], [
+        'timings_ms' => [
+            'total' => 999.0,
+            'storage/search' => 888.0,
+        ],
+    ]);
+    $finishTrace->invoke(null, $traceId, 'ran');
+
+    $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+    $budget = is_array($trace['performance_budget'] ?? null) ? $trace['performance_budget'] : [];
+    assert_same('disabled', $budget['status'] ?? null, 'zero and negative budget values should disable performance budget diagnostics');
+    assert_float_near(0.0, (float) ($budget['total_budget_ms'] ?? -1), 'disabled total budget should be stored as zero');
+    assert_float_near(0.0, (float) ($budget['storage_search_budget_ms'] ?? -1), 'disabled storage/search budget should be stored as zero');
+    assert_same([], $budget['exceeded_phases'] ?? null, 'disabled budgets should not report exceeded phases');
+    assert_true(!str_contains((string) ($budget['explanation'] ?? ''), 'exceeded'), 'disabled budget explanation should not claim an over-budget search');
+});
+
+test_case('search performance budget diagnostics render safely and avoid timingless fast claims', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $wpdb = new WP_FTS_Test_WPDB();
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+    $finishTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_finish_trace');
+    $finishTrace->setAccessible(true);
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [];
+
+        $slowId = (int) $startTrace->invoke(null, 'frontend search', '<script>alert(1)</script>' . str_repeat('x', 220), [], [
+            'timings_ms' => [
+                'total' => 150.0,
+                'storage/search' => 60.0,
+            ],
+        ]);
+        $finishTrace->invoke(null, $slowId, 'ran');
+
+        $bailoutId = (int) $startTrace->invoke(null, 'admin post search', 'timingless bailout needle');
+        $finishTrace->invoke(null, $bailoutId, 'bailed', 'Unsupported query shape for timingless budget test.');
+
+        $traces = WP_FTS_Plugin::debug_traces();
+        $timinglessBudget = is_array($traces[1]['performance_budget'] ?? null) ? $traces[1]['performance_budget'] : [];
+        assert_same('unavailable', $timinglessBudget['status'] ?? null, 'timingless bailout should report unavailable budget status instead of within-budget');
+
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+        assert_contains('Performance budget', $html, 'Health diagnostics should render the performance budget row');
+        assert_contains('status=over_budget', $html, 'rendered diagnostics should expose over-budget status');
+        assert_contains('status=unavailable', $html, 'rendered diagnostics should expose unavailable status for timingless bailouts');
+        assert_true(!str_contains($html, 'status=within_budget'), 'timingless bailout diagnostics should not render a false within-budget status');
+        assert_contains('&lt;script&gt;alert(1)&lt;/script&gt;', $html, 'rendered budget diagnostics context should escape trace text');
+        assert_true(!str_contains($html, '<script>alert(1)</script>'), 'rendered diagnostics should not emit raw trace text HTML');
+        assert_true(!str_contains($html, str_repeat('x', 180)), 'rendered budget diagnostics should keep long trace text bounded');
+
+        $debugHtml = wp_fts_test_capture(static function (): void {
+            WP_FTS_Plugin::render_debug_bar_diagnostics_panel();
+        });
+        assert_contains('Full-Text Search diagnostics', $debugHtml, 'Debug Bar diagnostics panel should render with budget diagnostics');
+        assert_contains('Performance budget', $debugHtml, 'Debug Bar diagnostics should render the performance budget row');
+        assert_contains('status=over_budget', $debugHtml, 'Debug Bar diagnostics should expose over-budget status');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
 test_case('bounded request diagnostics preserve trace ids after eviction', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;

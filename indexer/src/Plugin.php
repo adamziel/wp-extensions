@@ -28,6 +28,7 @@ final class WP_FTS_Plugin
     public const FRONTEND_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_frontend_search';
     public const ADMIN_POST_SEARCH_REPLACEMENT_FILTER = 'wp_fts_replace_admin_post_search';
     public const DEBUG_ENABLED_FILTER = 'wp_fts_debug_enabled';
+    public const SEARCH_PERFORMANCE_BUDGET_FILTER = 'wp_fts_search_performance_budget';
     public const SEARCH_REPLACEMENT_PRIORITY = 999;
     public const LANGUAGE_META_KEY = '_wp_fts_index_language';
     public const DEFAULT_BATCH_SIZE = 25;
@@ -36,11 +37,14 @@ final class WP_FTS_Plugin
     public const MAX_SEARCH_LIMIT = 50;
     private const DEFAULT_CRON_INDEX_TIME_BUDGET = 10.0;
     private const DEFAULT_MANUAL_INDEX_TIME_BUDGET = 20.0;
+    private const DEFAULT_SEARCH_TOTAL_BUDGET_MS = 100.0;
+    private const DEFAULT_SEARCH_STORAGE_BUDGET_MS = 50.0;
     private const DEFAULT_INDEX_MEMORY_MARGIN_BYTES = 16777216;
     private const DEFAULT_INDEX_LOCK_TTL = 300;
     private const MAX_CRON_INDEX_BATCH_SIZE = 500;
     private const MAX_MANUAL_INDEX_BATCH_SIZE = 1000;
     private const MAX_INDEX_TIME_BUDGET = 300.0;
+    private const MAX_SEARCH_PERFORMANCE_BUDGET_MS = 60000.0;
     private const MAX_INDEX_MEMORY_MARGIN_BYTES = 536870912;
     private const MAX_INDEX_FAILURE_TITLE_BYTES = 120;
     private const MAX_INDEX_FAILURE_ERROR_BYTES = 240;
@@ -971,6 +975,7 @@ final class WP_FTS_Plugin
             'counts' => self::debug_default_counts(),
             'analyzer_pack_status' => [],
             'search_explain' => [],
+            'performance_budget' => [],
             'sql_queries' => self::debug_sql_query_initial_summary($sql_capture),
             'notes' => [],
         ], self::debug_normalize_trace_extra($extra));
@@ -1003,6 +1008,7 @@ final class WP_FTS_Plugin
         if ($reason !== '') {
             self::$debug_traces[$trace_id]['bailout_reason'] = self::debug_truncate_text($reason);
         }
+        self::debug_set_performance_budget_summary($trace_id);
     }
 
     /**
@@ -1324,6 +1330,9 @@ final class WP_FTS_Plugin
         $elapsed = max(0.0, (microtime(true) - $started) * 1000.0);
         $timings[$phase] = round((float) ($timings[$phase] ?? 0.0) + $elapsed, 3);
         self::$debug_traces[$trace_id]['timings_ms'] = $timings;
+        if (is_array(self::$debug_traces[$trace_id]['performance_budget'] ?? null) && self::$debug_traces[$trace_id]['performance_budget'] !== []) {
+            self::debug_set_performance_budget_summary($trace_id);
+        }
     }
 
     private static function debug_add_count(int $trace_id, string $key, int $delta = 1): void
@@ -1558,6 +1567,136 @@ final class WP_FTS_Plugin
         self::$debug_traces[$trace_id]['search_explain'] = self::debug_normalize_structured_value($explain);
     }
 
+    private static function debug_set_performance_budget_summary(int $trace_id): void
+    {
+        if (!isset(self::$debug_traces[$trace_id])) {
+            return;
+        }
+
+        self::$debug_traces[$trace_id]['performance_budget'] = self::debug_performance_budget_from_trace(self::$debug_traces[$trace_id]);
+    }
+
+    /**
+     * @param array<string,mixed> $trace
+     * @return array<string,mixed>
+     */
+    private static function debug_performance_budget_from_trace(array $trace): array
+    {
+        $timings = is_array($trace['timings_ms'] ?? null) ? $trace['timings_ms'] : [];
+        $total_elapsed = self::debug_timing_value_ms($timings['total'] ?? null);
+        $storage_elapsed = self::debug_timing_value_ms($timings['storage/search'] ?? null);
+        $budgets = self::debug_search_performance_budgets($trace);
+        $total_budget = $budgets['total_ms'];
+        $storage_budget = $budgets['storage_search_ms'];
+
+        $evaluated = [];
+        $exceeded = [];
+        if ($total_budget > 0.0 && $total_elapsed !== null) {
+            $evaluated[] = self::debug_budget_phase_comparison('total', $total_elapsed, $total_budget);
+            if ($total_elapsed > $total_budget) {
+                $exceeded[] = 'total';
+            }
+        }
+        if ($storage_budget > 0.0 && $storage_elapsed !== null) {
+            $evaluated[] = self::debug_budget_phase_comparison('storage/search', $storage_elapsed, $storage_budget);
+            if ($storage_elapsed > $storage_budget) {
+                $exceeded[] = 'storage/search';
+            }
+        }
+
+        if ($total_budget <= 0.0 && $storage_budget <= 0.0) {
+            $status = 'disabled';
+            $explanation = 'Search performance budgets are disabled; set a positive total or storage/search budget to evaluate request traces.';
+        } elseif ($evaluated === []) {
+            $status = 'unavailable';
+            $explanation = 'Search performance budget unavailable because this trace has no total or storage/search timing data.';
+        } elseif ($exceeded !== []) {
+            $status = 'over_budget';
+            $explanation = 'Search exceeded performance budget: ' . implode('; ', $evaluated) . '.';
+        } else {
+            $status = 'within_budget';
+            $explanation = 'Search stayed within performance budget: ' . implode('; ', $evaluated) . '.';
+        }
+
+        return [
+            'status' => $status,
+            'total_elapsed_ms' => $total_elapsed,
+            'total_budget_ms' => $total_budget,
+            'storage_search_elapsed_ms' => $storage_elapsed,
+            'storage_search_budget_ms' => $storage_budget,
+            'exceeded_phases' => array_slice($exceeded, 0, self::DEBUG_MAX_LIST_ITEMS),
+            'explanation' => self::debug_truncate_text($explanation, 240),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $trace
+     * @return array{total_ms:float,storage_search_ms:float}
+     */
+    private static function debug_search_performance_budgets(array $trace): array
+    {
+        $defaults = [
+            'total_ms' => self::configured_search_performance_budget_ms(
+                'WP_FTS_SEARCH_TOTAL_BUDGET_MS',
+                self::DEFAULT_SEARCH_TOTAL_BUDGET_MS
+            ),
+            'storage_search_ms' => self::configured_search_performance_budget_ms(
+                'WP_FTS_SEARCH_STORAGE_BUDGET_MS',
+                self::DEFAULT_SEARCH_STORAGE_BUDGET_MS
+            ),
+        ];
+        $filtered = $defaults;
+        if (function_exists('apply_filters')) {
+            $candidate = apply_filters(self::SEARCH_PERFORMANCE_BUDGET_FILTER, $defaults, $trace);
+            if (is_array($candidate)) {
+                $filtered = $candidate;
+            }
+        }
+
+        return [
+            'total_ms' => self::sanitize_search_performance_budget_ms($filtered['total_ms'] ?? $defaults['total_ms'], $defaults['total_ms']),
+            'storage_search_ms' => self::sanitize_search_performance_budget_ms($filtered['storage_search_ms'] ?? $defaults['storage_search_ms'], $defaults['storage_search_ms']),
+        ];
+    }
+
+    private static function configured_search_performance_budget_ms(string $constant, float $default): float
+    {
+        return self::sanitize_search_performance_budget_ms(defined($constant) ? constant($constant) : $default, $default);
+    }
+
+    private static function sanitize_search_performance_budget_ms(mixed $value, float $default): float
+    {
+        if (!is_numeric($value)) {
+            $value = $default;
+        }
+
+        $budget = (float) $value;
+        if ($budget !== $budget) {
+            $budget = $default;
+        }
+        if ($budget <= 0.0) {
+            return 0.0;
+        }
+
+        return round(self::clamp_float($budget, 0.0, self::MAX_SEARCH_PERFORMANCE_BUDGET_MS), 3);
+    }
+
+    private static function debug_timing_value_ms(mixed $value): ?float
+    {
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        return round(max(0.0, (float) $value), 3);
+    }
+
+    private static function debug_budget_phase_comparison(string $phase, float $elapsed, float $budget): string
+    {
+        return self::debug_truncate_text($phase, 80) . ' ' . number_format($elapsed, 3, '.', '') . 'ms '
+            . ($elapsed > $budget ? '> ' : '<= ')
+            . number_format($budget, 3, '.', '') . 'ms';
+    }
+
     private static function debug_normalize_structured_value(mixed $value, int $depth = 0): mixed
     {
         if ($value === null) {
@@ -1707,6 +1846,10 @@ final class WP_FTS_Plugin
             self::render_debug_row('Result matches', self::debug_result_matches_summary($search_explain['results'] ?? []));
             self::render_debug_row('Counts', self::debug_assoc_summary($trace['counts'] ?? []));
             self::render_debug_row('Timings', self::debug_timing_summary($trace['timings_ms'] ?? []));
+            $performance_budget = is_array($trace['performance_budget'] ?? null)
+                ? $trace['performance_budget']
+                : self::debug_performance_budget_from_trace($trace);
+            self::render_debug_row('Performance budget', self::debug_performance_budget_summary($performance_budget));
             self::render_debug_row('SQL queries', self::debug_sql_queries_summary($trace['sql_queries'] ?? []));
             self::render_debug_row('Analyzer packs', self::debug_pack_status_summary($trace['analyzer_pack_status'] ?? []));
             self::render_debug_row('Notes', self::debug_list_summary($trace['notes'] ?? []));
@@ -1798,6 +1941,46 @@ final class WP_FTS_Plugin
         }
 
         return self::debug_truncate_text(implode(', ', $parts), 800);
+    }
+
+    private static function debug_performance_budget_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $parts = [];
+        $status = self::debug_scalar_summary($value['status'] ?? '');
+        if ($status !== '') {
+            $parts[] = 'status=' . $status;
+        }
+        $parts[] = 'total=' . self::debug_performance_budget_phase_summary(
+            $value['total_elapsed_ms'] ?? null,
+            $value['total_budget_ms'] ?? null
+        );
+        $parts[] = 'storage/search=' . self::debug_performance_budget_phase_summary(
+            $value['storage_search_elapsed_ms'] ?? null,
+            $value['storage_search_budget_ms'] ?? null
+        );
+
+        $exceeded = self::debug_list_summary($value['exceeded_phases'] ?? []);
+        if ($exceeded !== '') {
+            $parts[] = 'exceeded=' . $exceeded;
+        }
+
+        $explanation = self::debug_scalar_summary($value['explanation'] ?? '');
+
+        return self::debug_truncate_text(implode(', ', $parts) . ($explanation !== '' ? '; ' . $explanation : ''), 800);
+    }
+
+    private static function debug_performance_budget_phase_summary(mixed $elapsed, mixed $budget): string
+    {
+        $elapsed_summary = is_numeric($elapsed) ? number_format((float) $elapsed, 3, '.', '') . 'ms' : 'unavailable';
+        $budget_summary = is_numeric($budget) && (float) $budget > 0.0
+            ? number_format((float) $budget, 3, '.', '') . 'ms'
+            : 'disabled';
+
+        return $elapsed_summary . '/' . $budget_summary;
     }
 
     private static function debug_sql_queries_summary(mixed $value): string
@@ -8047,8 +8230,8 @@ JS;
         $limit = self::frontend_query_limit($query);
         $offset = self::frontend_query_offset($query, $limit);
         if ($post_types === [] || $post_statuses === []) {
-            self::debug_finish_trace($trace_id, 'bailed', 'Unsupported query shape: no searchable post types or statuses are available.');
             self::debug_add_timing($trace_id, 'total', $trace_started);
+            self::debug_finish_trace($trace_id, 'bailed', 'Unsupported query shape: no searchable post types or statuses are available.');
             return [
                 'posts' => [],
                 'snippets' => [],
