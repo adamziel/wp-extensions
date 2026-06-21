@@ -78,6 +78,9 @@ These weights are written into the index, not applied as live query-time
 overrides. After changing them, reindex content to make the new ranking weights
 fully apply to existing posts. Programmatic indexing can still pass explicit
 `field_boosts` options to override the saved plugin settings for that call.
+Saving changed ranking weights or indexed post-type scope marks stale reindex
+debt in Health/status. The settings save does not rewrite content; a follow-up
+bounded reindex path / `wp fts reindex` handles rewriting existing rows.
 
 ## Recency Ranking Boost
 
@@ -231,6 +234,12 @@ Analyzer behavior participates in stale-document detection. A reindex skips
 unchanged content only when the source content, primary language, and
 analyzer/index signature still match; stemming or language-pipeline changes
 force existing documents to be rewritten.
+
+Bundled analyzer-pack admin controls update stored runtime analyzer-pack
+selections and mark analyzer reindex debt when the effective plugin-owned
+runtime pack profile changes. Invalid or unknown submitted languages are
+ignored, and the save path does not create posts, drain queues, or write FTS
+terms.
 
 ## Stemmers
 

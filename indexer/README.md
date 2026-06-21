@@ -83,6 +83,8 @@ The defaults match the extractor defaults: title `5.0`, content `1.0`, excerpt
 `2.0`, taxonomy terms `1.5`, selected custom fields `1.0`, and rendered-only
 content `1.0`. These are index-time weights stored with indexed content, so
 changed weights fully affect existing content only after it is reindexed.
+Saving changed weights marks stale reindex debt in Health/status; it does not
+index content during the settings save.
 
 The same Ranking weights section also includes an optional recent post boost.
 It is off by default (`0`). When enabled, query-time ranking gives newer posts a
@@ -133,6 +135,13 @@ searcher callers can still use the existing `WP_FTS_PREFIX_MIN_LENGTH` and
 The index is derived state. Rebuild it after content imports, analyzer changes,
 language-routing changes, or environment moves where the FTS tables were not
 restored with WordPress content.
+
+When index-time settings change, the plugin records stale reindex debt instead
+of rewriting content during the settings request. Field ranking weights,
+indexed content scope, and stored runtime analyzer-pack selections all
+participate in the current index profile shown on the Health tab and in
+`wp fts status --format=json`. A follow-up bounded reindex path / `wp fts
+reindex` rewrites existing rows for the new profile.
 
 The Health tab shows whether the stored schema version is current, missing, or
 stale. Its repair button runs the same table/schema repair path as

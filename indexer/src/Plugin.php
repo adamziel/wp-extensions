@@ -46,6 +46,14 @@ final class WP_FTS_Plugin
     private const MAX_INDEX_FAILURE_ERROR_BYTES = 240;
     private const MAX_INDEX_DIAGNOSTIC_TEXT_BYTES = 160;
     private const MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES = 120;
+    private const INDEX_PROFILE_SCHEMA = 'wp-fts-index-profile-v1';
+    private const INDEX_PROFILE_INDEXER_SIGNATURE = 'wp-fts-indexer-v2';
+    private const STALE_DEBT_REASON_LABELS = [
+        'analyzer_options_changed' => 'Analyzer options changed',
+        'field_boosts_changed' => 'Field ranking weights changed',
+        'indexed_scope_changed' => 'Indexed content scope changed',
+        'index_profile_changed' => 'Index profile changed',
+    ];
     private const ADMIN_NONCE_ACTION = 'wp_fts_sandbox_admin_action';
     private const ADMIN_NONCE_FIELD = 'wp_fts_sandbox_nonce';
     private const ADMIN_ACTION_FIELD = 'wp_fts_sandbox_action';
@@ -697,6 +705,7 @@ final class WP_FTS_Plugin
     public static function search_health(): array
     {
         $state = self::index_health_state();
+        $state = array_replace($state, self::index_debt_state($state));
         $pending_queue_count = count(self::pending_queue());
         $has_more = (bool) ($state['has_more'] ?? false);
         if ($pending_queue_count > 0) {
@@ -728,12 +737,19 @@ final class WP_FTS_Plugin
         $last_indexed_title = is_scalar($health['last_indexed_post_title'] ?? null)
             ? (string) $health['last_indexed_post_title']
             : '';
+        $stale_debt_reasons = self::sanitize_stale_debt_reasons($health['stale_debt_reasons'] ?? []);
 
         return [
             'schema_status' => $schema['status'],
             'schema_version' => $schema['stored_version'],
             'expected_schema_version' => $schema['expected_version'],
             'storage_backend' => self::index_storage_backend_label(),
+            'index_profile_hash' => is_scalar($health['index_profile_hash'] ?? null) ? (string) $health['index_profile_hash'] : '',
+            'accepted_index_profile_hash' => is_scalar($health['accepted_index_profile_hash'] ?? null) ? (string) $health['accepted_index_profile_hash'] : '',
+            'stale_debt_active' => (bool) ($health['stale_debt_active'] ?? false),
+            'stale_debt_reasons' => $stale_debt_reasons,
+            'stale_debt_created_at' => is_scalar($health['stale_debt_created_at'] ?? null) ? (string) $health['stale_debt_created_at'] : '',
+            'stale_debt_updated_at' => is_scalar($health['stale_debt_updated_at'] ?? null) ? (string) $health['stale_debt_updated_at'] : '',
             'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
             'lock_state' => $lock['state'],
             'lock_active' => (bool) $lock['active'],
@@ -1994,7 +2010,7 @@ final class WP_FTS_Plugin
 
         register_setting(self::SETTINGS_GROUP, self::SETTINGS_OPTION, [
             'type' => 'array',
-            'sanitize_callback' => [self::class, 'sanitize_settings'],
+            'sanitize_callback' => [self::class, 'sanitize_settings_for_save'],
             'default' => self::default_settings(),
         ]);
     }
@@ -2431,10 +2447,16 @@ final class WP_FTS_Plugin
             return [['info', 'No bundled runtime lemma packs were found. Analyzer options were not changed.']];
         }
 
+        $previousProfile = self::current_index_profile();
         self::save_bundled_runtime_lemma_pack_selection(
             self::selected_bundled_runtime_lemma_pack_languages($manifests),
             $manifests
         );
+        $currentProfile = self::current_index_profile();
+        $reasons = self::index_profile_change_reasons($previousProfile, $currentProfile);
+        if ($reasons !== []) {
+            self::mark_stale_index_debt($reasons, $previousProfile, $currentProfile);
+        }
 
         return [['success', 'Bundled analyzer pack settings saved. Reindex existing content for analyzer changes to affect already-indexed posts.']];
     }
@@ -2684,6 +2706,16 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Remaining to index', (string) $counts['remaining']);
         echo '</tbody></table>';
 
+        echo '<h3>Reindex debt</h3>';
+        echo '<table class="widefat striped wp-fts-health-table"><tbody>';
+        self::render_health_status_row('Stale index debt', self::stale_debt_status_summary($health));
+        self::render_health_status_row('Debt reasons', self::stale_debt_reason_summary($health));
+        self::render_health_status_row('Current index profile', self::index_profile_hash_summary($health['index_profile_hash'] ?? ''));
+        self::render_health_status_row('Last accepted index profile', self::index_profile_hash_summary($health['accepted_index_profile_hash'] ?? ''));
+        self::render_health_status_row('Debt marked', self::lock_time_summary($health['stale_debt_created_at'] ?? ''));
+        self::render_health_status_row('Debt updated', self::lock_time_summary($health['stale_debt_updated_at'] ?? ''));
+        echo '</tbody></table>';
+
         echo '<h3>Latest batch</h3>';
         echo '<table class="widefat striped wp-fts-health-table"><tbody>';
         self::render_health_status_row('Last indexed content', self::last_indexed_content_summary($health));
@@ -2773,6 +2805,34 @@ final class WP_FTS_Plugin
         $value = is_scalar($value) ? trim((string) $value) : '';
 
         return $value !== '' ? self::debug_truncate_text($value, 32) . ' UTC' : 'Not recorded';
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function stale_debt_status_summary(array $health): string
+    {
+        return !empty($health['stale_debt_active']) ? 'Active - reindex existing content' : 'None recorded';
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function stale_debt_reason_summary(array $health): string
+    {
+        $labels = [];
+        foreach (self::sanitize_stale_debt_reasons($health['stale_debt_reasons'] ?? []) as $reason) {
+            $labels[] = self::STALE_DEBT_REASON_LABELS[$reason] ?? $reason;
+        }
+
+        return $labels === [] ? 'None recorded' : implode(', ', $labels);
+    }
+
+    private static function index_profile_hash_summary(mixed $value): string
+    {
+        $hash = self::sanitize_index_profile_hash($value);
+
+        return $hash !== '' ? substr($hash, 0, 12) : 'Not recorded';
     }
 
     /**
@@ -3671,6 +3731,57 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Sanitize Settings API saves and mark stale index debt only for verified admin saves.
+     *
+     * Direct callers should use sanitize_settings() when they only need a pure
+     * normalized value.
+     *
+     * @param mixed $value Raw option value from Settings API.
+     * @return array<string,mixed>
+     */
+    public static function sanitize_settings_for_save(mixed $value): array
+    {
+        $previousSettings = self::settings();
+        $previousProfile = self::current_index_profile($previousSettings);
+        $sanitized = self::sanitize_settings($value);
+
+        if (self::settings_save_request_can_mark_index_debt()) {
+            $currentProfile = self::current_index_profile($sanitized);
+            $reasons = self::index_profile_change_reasons($previousProfile, $currentProfile);
+            if ($reasons !== []) {
+                self::mark_stale_index_debt($reasons, $previousProfile, $currentProfile);
+            }
+        }
+
+        return $sanitized;
+    }
+
+    private static function settings_save_request_can_mark_index_debt(): bool
+    {
+        if (!function_exists('current_user_can') || !current_user_can(self::ADMIN_CAPABILITY)) {
+            return false;
+        }
+
+        if (!isset($_POST) || !is_array($_POST)) {
+            return false;
+        }
+
+        $optionPage = self::request_text_value($_POST, 'option_page', 80);
+        $action = self::request_text_value($_POST, 'action', 40);
+        if ($optionPage !== self::SETTINGS_GROUP || $action !== 'update') {
+            return false;
+        }
+
+        if (!function_exists('wp_verify_nonce')) {
+            return false;
+        }
+
+        $nonce = self::request_text_value($_POST, '_wpnonce', 200);
+
+        return $nonce !== '' && wp_verify_nonce($nonce, self::SETTINGS_GROUP . '-options') !== false;
+    }
+
+    /**
      * @param mixed $value
      * @return array<string,float>
      */
@@ -3884,6 +3995,162 @@ final class WP_FTS_Plugin
         sort($choices, SORT_STRING);
 
         return $choices;
+    }
+
+    /**
+     * Build the deterministic profile for plugin-owned index-time inputs.
+     *
+     * @param array<string,mixed>|null $settings Optional sanitized settings snapshot.
+     * @return array<string,mixed>
+     */
+    private static function current_index_profile(?array $settings = null): array
+    {
+        $settings ??= self::settings();
+        $profile = [
+            'schema' => self::INDEX_PROFILE_SCHEMA,
+            'indexer_signature' => self::INDEX_PROFILE_INDEXER_SIGNATURE,
+            'analyzer_signature' => self::runtime_analyzer_index_signature(),
+            'runtime_analyzer_options' => self::stored_runtime_analyzer_profile_options(),
+            'field_boosts' => self::settings_field_boosts($settings['field_boosts'] ?? []),
+            'indexed_scope' => self::index_profile_scope($settings),
+        ];
+        $profile['hash'] = self::index_profile_hash($profile);
+
+        return $profile;
+    }
+
+    private static function runtime_analyzer_index_signature(): string
+    {
+        try {
+            $signature = self::runtime_analyzer()->index_signature();
+            if (is_scalar($signature) && trim((string) $signature) !== '') {
+                return (string) $signature;
+            }
+        } catch (Throwable) {
+            // Fall through to a conservative class-level signature.
+        }
+
+        return 'analyzer:' . WP_FTS_Analyzer::class;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function stored_runtime_analyzer_profile_options(): array
+    {
+        return self::sanitize_runtime_analyzer_options(
+            self::raw_analyzer_options_before_filter(
+                self::bundled_runtime_lemma_packs_by_lang(),
+                self::bundled_runtime_segmenter_packs_by_lang()
+            )
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     * @return array{post_types:string[],frontend_post_statuses:string[],admin_post_statuses:string[]}
+     */
+    private static function index_profile_scope(array $settings): array
+    {
+        $postTypes = self::sanitize_post_type_list($settings['index_post_types'] ?? [], self::settings_post_type_choices());
+        sort($postTypes, SORT_STRING);
+
+        return [
+            'post_types' => $postTypes,
+            'frontend_post_statuses' => self::FRONTEND_SEARCH_POST_STATUSES,
+            'admin_post_statuses' => self::ADMIN_POST_SEARCH_POST_STATUSES,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $profile
+     */
+    private static function index_profile_hash(array $profile): string
+    {
+        $hashInput = $profile;
+        unset($hashInput['hash']);
+        $json = json_encode(self::normalize_index_profile_hash_value($hashInput), JSON_UNESCAPED_SLASHES);
+
+        return sha1(is_string($json) ? $json : serialize($hashInput));
+    }
+
+    private static function normalize_index_profile_hash_value(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            if (is_bool($value) || $value === null || is_int($value) || is_float($value) || is_string($value)) {
+                return $value;
+            }
+
+            return is_scalar($value) ? (string) $value : get_debug_type($value);
+        }
+
+        $normalized = [];
+        foreach ($value as $key => $item) {
+            $normalized[is_int($key) ? $key : (string) $key] = self::normalize_index_profile_hash_value($item);
+        }
+        ksort($normalized);
+
+        return $normalized;
+    }
+
+    /**
+     * @param array<string,mixed> $previousProfile
+     * @param array<string,mixed> $currentProfile
+     * @return string[]
+     */
+    private static function index_profile_change_reasons(array $previousProfile, array $currentProfile): array
+    {
+        if (($previousProfile['hash'] ?? '') === ($currentProfile['hash'] ?? '')) {
+            return [];
+        }
+
+        $reasons = [];
+        if (($previousProfile['runtime_analyzer_options'] ?? []) !== ($currentProfile['runtime_analyzer_options'] ?? [])
+            || ($previousProfile['analyzer_signature'] ?? '') !== ($currentProfile['analyzer_signature'] ?? '')
+        ) {
+            $reasons[] = 'analyzer_options_changed';
+        }
+        if (($previousProfile['field_boosts'] ?? []) !== ($currentProfile['field_boosts'] ?? [])) {
+            $reasons[] = 'field_boosts_changed';
+        }
+        if (($previousProfile['indexed_scope'] ?? []) !== ($currentProfile['indexed_scope'] ?? [])) {
+            $reasons[] = 'indexed_scope_changed';
+        }
+        if ($reasons === []) {
+            $reasons[] = 'index_profile_changed';
+        }
+
+        return self::sanitize_stale_debt_reasons($reasons);
+    }
+
+    /**
+     * @param string[] $reasons
+     * @param array<string,mixed> $previousProfile
+     * @param array<string,mixed> $currentProfile
+     */
+    private static function mark_stale_index_debt(array $reasons, array $previousProfile, array $currentProfile): void
+    {
+        $reasons = self::sanitize_stale_debt_reasons($reasons);
+        if ($reasons === []) {
+            return;
+        }
+
+        $state = self::index_health_state();
+        $wasActive = !empty($state['stale_debt_active']);
+        $now = self::current_gmt_datetime();
+        $existingReasons = $wasActive ? self::sanitize_stale_debt_reasons($state['stale_debt_reasons'] ?? []) : [];
+        $state['stale_debt_active'] = true;
+        $state['stale_debt_reasons'] = self::sanitize_stale_debt_reasons(array_merge($existingReasons, $reasons));
+        $state['index_profile_hash'] = self::sanitize_index_profile_hash($currentProfile['hash'] ?? self::index_profile_hash($currentProfile));
+        if (!$wasActive || self::sanitize_index_profile_hash($state['accepted_index_profile_hash'] ?? '') === '') {
+            $state['accepted_index_profile_hash'] = self::sanitize_index_profile_hash($previousProfile['hash'] ?? self::index_profile_hash($previousProfile));
+        }
+        $state['stale_debt_created_at'] = $wasActive && is_scalar($state['stale_debt_created_at'] ?? null) && (string) $state['stale_debt_created_at'] !== ''
+            ? (string) $state['stale_debt_created_at']
+            : $now;
+        $state['stale_debt_updated_at'] = $now;
+
+        self::set_option(self::INDEX_HEALTH_OPTION, $state);
     }
 
     /**
@@ -9242,6 +9509,49 @@ WHERE p.post_password = ''
         return WP_FTS_Utf8::truncate_bytes(trim((string) $text), max(0, $max_bytes));
     }
 
+    private static function sanitize_index_profile_hash(mixed $value): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        $hash = strtolower(trim((string) $value));
+
+        return preg_match('/^[a-f0-9]{40}$/', $hash) === 1 ? $hash : '';
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function sanitize_stale_debt_reasons(mixed $value): array
+    {
+        $items = is_array($value) ? $value : [];
+        $reasons = [];
+        foreach ($items as $reason) {
+            if (!is_scalar($reason)) {
+                continue;
+            }
+
+            $reason = self::sanitize_key((string) $reason);
+            if (!array_key_exists($reason, self::STALE_DEBT_REASON_LABELS)) {
+                continue;
+            }
+
+            $reasons[$reason] = true;
+        }
+
+        return array_keys($reasons);
+    }
+
+    private static function sanitize_index_timestamp(mixed $value): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        return self::sanitize_index_failure_text($value, 32, false);
+    }
+
     /**
      * @param array<string,mixed> $opts
      */
@@ -9425,6 +9735,26 @@ WHERE p.post_password = ''
     }
 
     /**
+     * @param array<string,mixed>|null $state
+     * @return array<string,mixed>
+     */
+    private static function index_debt_state(?array $state = null): array
+    {
+        $state ??= self::index_health_state();
+        $profile = self::current_index_profile();
+        $currentHash = self::sanitize_index_profile_hash($profile['hash'] ?? self::index_profile_hash($profile));
+
+        return [
+            'index_profile_hash' => $currentHash,
+            'accepted_index_profile_hash' => self::sanitize_index_profile_hash($state['accepted_index_profile_hash'] ?? ''),
+            'stale_debt_active' => (bool) ($state['stale_debt_active'] ?? false),
+            'stale_debt_reasons' => self::sanitize_stale_debt_reasons($state['stale_debt_reasons'] ?? []),
+            'stale_debt_created_at' => self::sanitize_index_timestamp($state['stale_debt_created_at'] ?? ''),
+            'stale_debt_updated_at' => self::sanitize_index_timestamp($state['stale_debt_updated_at'] ?? ''),
+        ];
+    }
+
+    /**
      * @return array<string,mixed>
      */
     private static function index_health_state(): array
@@ -9452,6 +9782,12 @@ WHERE p.post_password = ''
         $state['last_skipped_locked'] = (bool) $state['last_skipped_locked'];
         $state['last_stopped_by_budget'] = (bool) $state['last_stopped_by_budget'];
         $state['latest_batch_diagnostics'] = self::sanitize_index_batch_diagnostics($state['latest_batch_diagnostics'] ?? []);
+        $state['index_profile_hash'] = self::sanitize_index_profile_hash($state['index_profile_hash'] ?? '');
+        $state['accepted_index_profile_hash'] = self::sanitize_index_profile_hash($state['accepted_index_profile_hash'] ?? '');
+        $state['stale_debt_active'] = (bool) $state['stale_debt_active'];
+        $state['stale_debt_reasons'] = self::sanitize_stale_debt_reasons($state['stale_debt_reasons'] ?? []);
+        $state['stale_debt_created_at'] = self::sanitize_index_timestamp($state['stale_debt_created_at'] ?? '');
+        $state['stale_debt_updated_at'] = self::sanitize_index_timestamp($state['stale_debt_updated_at'] ?? '');
 
         return $state;
     }
@@ -9479,6 +9815,12 @@ WHERE p.post_password = ''
             'last_mode' => '',
             'last_run_at' => '',
             'latest_batch_diagnostics' => [],
+            'index_profile_hash' => '',
+            'accepted_index_profile_hash' => '',
+            'stale_debt_active' => false,
+            'stale_debt_reasons' => [],
+            'stale_debt_created_at' => '',
+            'stale_debt_updated_at' => '',
         ];
     }
 
@@ -9521,8 +9863,28 @@ WHERE p.post_password = ''
         }
 
         $state['latest_batch_diagnostics'] = self::index_batch_diagnostics_from_summary($summary);
+        $profile = self::current_index_profile();
+        $state['index_profile_hash'] = self::sanitize_index_profile_hash($profile['hash'] ?? self::index_profile_hash($profile));
+        if (
+            empty($state['stale_debt_active'])
+            && self::index_batch_fully_accepts_current_profile($summary)
+        ) {
+            $state['accepted_index_profile_hash'] = $state['index_profile_hash'];
+        }
 
         self::set_option(self::INDEX_HEALTH_OPTION, $state);
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function index_batch_fully_accepts_current_profile(array $summary): bool
+    {
+        return empty($summary['has_more'])
+            && empty($summary['skipped_locked'])
+            && empty($summary['stopped_by_budget'])
+            && max(0, (int) ($summary['last_batch_failures'] ?? 0)) === 0
+            && in_array((string) ($summary['status'] ?? 'success'), ['success', ''], true);
     }
 
     /**

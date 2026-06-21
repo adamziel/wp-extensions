@@ -4302,6 +4302,79 @@ test_case('settings sanitization clamps recency ranking boost controls', functio
     assert_same(0.25, $legacyToggle['recency_boost_strength'], 'boolean recency boost setting should normalize to the small default strength');
 });
 
+test_case('authorized settings save marks field boost stale debt without indexing content', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [901, 902];
+        $_POST = [
+            'option_page' => WP_FTS_Plugin::SETTINGS_OPTION,
+            'action' => 'update',
+            '_wpnonce' => wp_create_nonce(WP_FTS_Plugin::SETTINGS_OPTION . '-options'),
+        ];
+
+        $newSettings = WP_FTS_Plugin::default_settings();
+        $newSettings['field_boosts'] = array_replace($newSettings['field_boosts'], [
+            'title' => 8.0,
+        ]);
+        $sanitized = WP_FTS_Plugin::sanitize_settings_for_save($newSettings);
+        update_option(WP_FTS_Plugin::SETTINGS_OPTION, $sanitized);
+
+        $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
+    } finally {
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(true, $health['stale_debt_active'] ?? null, 'authorized field boost save should mark stale debt active');
+    assert_same(['field_boosts_changed'], $health['stale_debt_reasons'] ?? null, 'field boost save should store the concise field-boost reason');
+    assert_true(is_string($health['index_profile_hash'] ?? null) && preg_match('/^[a-f0-9]{40}$/', $health['index_profile_hash']) === 1, 'field boost save should persist the current profile hash');
+    assert_true(is_string($health['accepted_index_profile_hash'] ?? null) && preg_match('/^[a-f0-9]{40}$/', $health['accepted_index_profile_hash']) === 1, 'field boost save should persist the previously accepted profile hash');
+    assert_true(($health['index_profile_hash'] ?? '') !== ($health['accepted_index_profile_hash'] ?? ''), 'changed field boosts should move the current profile away from the accepted profile');
+    assert_true(is_string($health['stale_debt_created_at'] ?? null) && $health['stale_debt_created_at'] !== '', 'field boost save should timestamp debt creation');
+    assert_same([901, 902], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'settings save should not drain the indexing queue');
+    assert_same([], $fake->docs, 'settings save should not index documents');
+    assert_same([], $fake->terms, 'settings save should not write FTS terms');
+});
+
+test_case('unauthorized settings save does not mark stale debt or index content', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $_POST = [
+            'option_page' => WP_FTS_Plugin::SETTINGS_OPTION,
+            'action' => 'update',
+            '_wpnonce' => wp_create_nonce(WP_FTS_Plugin::SETTINGS_OPTION . '-options'),
+        ];
+
+        $newSettings = WP_FTS_Plugin::default_settings();
+        $newSettings['field_boosts'] = array_replace($newSettings['field_boosts'], [
+            'title' => 8.0,
+        ]);
+        WP_FTS_Plugin::sanitize_settings_for_save($newSettings);
+    } finally {
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]), 'unauthorized settings save should not create stale debt state');
+    assert_same([], $fake->docs, 'unauthorized settings save should not index documents');
+    assert_same([], $fake->terms, 'unauthorized settings save should not write FTS terms');
+});
+
 test_case('prepare post index options uses saved field boosts unless caller overrides them', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $savedBoosts = [
@@ -5445,6 +5518,37 @@ test_case('settings page distinguishes en-US runtime fallback from sandbox Engli
     assert_contains('en-unimorph-eng-66e0e9e8e2dc', $analyzerHtml, 'analyzer packs table should expose the sandbox English pack id');
 });
 
+test_case('health tab renders stale reindex debt separately from remaining count', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
+            'accepted_index_profile_hash' => str_repeat('a', 40),
+            'stale_debt_active' => true,
+            'stale_debt_reasons' => ['field_boosts_changed'],
+            'stale_debt_created_at' => '2026-06-21 08:00:00',
+            'stale_debt_updated_at' => '2026-06-21 08:05:00',
+        ];
+
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('<h3>Reindex debt</h3>', $html, 'health tab should render reindex debt as its own section');
+    assert_contains('Stale index debt', $html, 'health tab should label stale index debt explicitly');
+    assert_contains('Active - reindex existing content', $html, 'health tab should report active stale debt separately');
+    assert_contains('Field ranking weights changed', $html, 'health tab should render human-readable stale debt reasons');
+    assert_true(strpos($html, 'Remaining to index') < strpos($html, '<h3>Reindex debt</h3>'), 'health tab should keep stale debt separate from remaining-to-index counts');
+    assert_same([], $fake->terms, 'health render should not write FTS terms');
+});
+
 test_case('admin analyzer packs tab renders bundled runtime pack controls when gzip is available', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
@@ -5500,6 +5604,11 @@ test_case('admin analyzer pack save enables selected bundled runtime packs witho
         assert_same($manifests['en'], $stored['lemmatizer_packs_by_lang']['en'] ?? null, 'saving English should persist the bundled English manifest path');
         assert_same($manifests['bn'], $stored['lemmatizer_packs_by_lang']['bn'] ?? null, 'saving Bengali should persist the bundled Bengali manifest path');
         assert_true(!array_key_exists('unknown-language', $stored['lemmatizer_packs_by_lang'] ?? []), 'unknown submitted languages should be ignored');
+        $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
+        assert_same(true, $health['stale_debt_active'] ?? null, 'saving bundled analyzer packs should mark stale debt active');
+        assert_same(['analyzer_options_changed'], $health['stale_debt_reasons'] ?? null, 'saving bundled analyzer packs should store the analyzer-options reason only');
+        assert_true(is_string($health['index_profile_hash'] ?? null) && preg_match('/^[a-f0-9]{40}$/', $health['index_profile_hash']) === 1, 'saving bundled analyzer packs should persist a current profile hash');
+        assert_true(is_string($health['accepted_index_profile_hash'] ?? null) && preg_match('/^[a-f0-9]{40}$/', $health['accepted_index_profile_hash']) === 1, 'saving bundled analyzer packs should persist an accepted profile hash');
         $runtimeOptions = WP_FTS_Plugin::runtime_analyzer_options();
         assert_true(array_key_exists('pl', $runtimeOptions['lemmatizer_packs_by_lang'] ?? []), 'saving bundled non-Polish packs should preserve the Polish runtime default');
         assert_same([451, 452], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'saving bundled analyzer packs should not drain the indexing queue');
@@ -5510,6 +5619,44 @@ test_case('admin analyzer pack save enables selected bundled runtime packs witho
         $_POST = $oldPost;
         $wpdb = $oldWpdb;
     }
+});
+
+test_case('admin analyzer pack save ignores unknown languages without bogus stale reasons', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so unknown bundled runtime analyzer language coverage is skipped.');
+        return;
+    }
+
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $_GET = [];
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
+            'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_packs' => ['unknown-language'],
+        ];
+
+        wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    $health = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] ?? [];
+    assert_true(empty($health['stale_debt_active'] ?? false), 'unknown analyzer-pack languages alone should not mark stale debt');
+    assert_true(!in_array('unknown-language', $health['stale_debt_reasons'] ?? [], true), 'unknown analyzer-pack languages should not be stored as stale reasons');
+    assert_same([], $fake->docs, 'unknown analyzer-pack language save should not index documents');
+    assert_same([], $fake->terms, 'unknown analyzer-pack language save should not write FTS terms');
 });
 
 test_case('admin analyzer pack save removes only exact bundled manifest entries and preserves custom paths', function (): void {
@@ -5599,8 +5746,13 @@ test_case('admin analyzer pack save rejects unauthorized and invalid nonce POSTs
         return;
     }
 
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
     $oldGet = $_GET;
     $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
 
     try {
         wp_fts_test_reset_wordpress_fakes();
@@ -5613,6 +5765,7 @@ test_case('admin analyzer pack save rejects unauthorized and invalid nonce POSTs
         $unauthorizedHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
         assert_contains('You do not have permission to manage Full-Text Search settings.', $unauthorizedHtml, 'unauthorized analyzer POST should fail at the admin capability gate');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION]), 'unauthorized analyzer POST should not change analyzer options');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]), 'unauthorized analyzer POST should not mark stale debt');
 
         wp_fts_test_reset_wordpress_fakes();
         $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
@@ -5624,9 +5777,13 @@ test_case('admin analyzer pack save rejects unauthorized and invalid nonce POSTs
         $invalidHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
         assert_contains('The analyzer-pack action could not be verified', $invalidHtml, 'invalid analyzer nonce should produce an error notice');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION]), 'invalid analyzer nonce should not change analyzer options');
+        assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION]), 'invalid analyzer nonce should not mark stale debt');
+        assert_same([], $fake->docs, 'invalid analyzer nonce should not index documents');
+        assert_same([], $fake->terms, 'invalid analyzer nonce should not write FTS terms');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
+        $wpdb = $oldWpdb;
     }
 });
 
@@ -6760,6 +6917,11 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
         'last_failed_post_title' => 'CLI <b>Status</b> Failed',
         'last_failed_at' => '2026-06-19 10:02:00',
         'last_error' => "RuntimeException: Failed to put FTS document: SELECT * FROM wp_users\n#0 stack trace",
+        'accepted_index_profile_hash' => str_repeat('b', 40),
+        'stale_debt_active' => true,
+        'stale_debt_reasons' => ['analyzer_options_changed', 'field_boosts_changed', 'unknown_reason'],
+        'stale_debt_created_at' => '2026-06-19 09:55:00',
+        'stale_debt_updated_at' => '2026-06-19 09:59:00',
         'latest_batch_diagnostics' => [
             'schema' => 'wp-fts-index-batch-diagnostics-v1',
             'trigger' => 'manual',
@@ -6809,9 +6971,16 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_contains("field\tvalue", $human, 'default status output should be a human-readable field list');
     assert_contains("pending_queue_count\t1", $human, 'default status output should include queue count');
     assert_contains("last_batch_failures\t2", $human, 'default status output should include failure count');
+    assert_contains("stale_debt_active\tyes", $human, 'default status output should include stale debt state');
     assert_same('current', $payload['schema_status'] ?? null, 'status JSON should report current schema status');
     assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'status JSON should report stored schema version');
     assert_same('mysql', $payload['storage_backend'] ?? null, 'status JSON should report storage backend');
+    assert_true(is_string($payload['index_profile_hash'] ?? null) && preg_match('/^[a-f0-9]{40}$/', $payload['index_profile_hash']) === 1, 'status JSON should expose the current index profile hash');
+    assert_same(str_repeat('b', 40), $payload['accepted_index_profile_hash'] ?? null, 'status JSON should expose the last accepted index profile hash');
+    assert_same(true, $payload['stale_debt_active'] ?? null, 'status JSON should expose active stale debt state');
+    assert_same(['analyzer_options_changed', 'field_boosts_changed'], $payload['stale_debt_reasons'] ?? null, 'status JSON should expose sanitized stale debt reasons');
+    assert_same('2026-06-19 09:55:00', $payload['stale_debt_created_at'] ?? null, 'status JSON should expose debt creation time');
+    assert_same('2026-06-19 09:59:00', $payload['stale_debt_updated_at'] ?? null, 'status JSON should expose debt update time');
     assert_same(1, $payload['pending_queue_count'] ?? null, 'status JSON should report pending queue count');
     assert_same('active', $payload['lock_state'] ?? null, 'status JSON should report lock state without exposing the token');
     assert_same(true, $payload['lock_active'] ?? null, 'status JSON should report active lock boolean');

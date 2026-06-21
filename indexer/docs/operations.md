@@ -32,6 +32,11 @@ wp fts status
 wp fts status --format=json
 ```
 
+Status includes `index_profile_hash`, `accepted_index_profile_hash`,
+`stale_debt_active`, stale-debt reason labels, and debt timestamps. Stale debt
+means index-time configuration changed after the last accepted profile, so
+existing rows may need to be rewritten even when "Remaining to index" is `0`.
+
 To create or repair the schema and index content, run:
 
 ```sh
@@ -180,9 +185,9 @@ fallback, and indexed post types. Use the documented options and filters for
 analyzer pack paths and custom field selection.
 
 The Health tab shows schema status, stored and expected schema versions, safe
-indexing lock state, indexing counts, and the latest batch summary. Its repair
-button runs schema/table repair only; it does not index content, create sample
-posts, or drain the queue.
+indexing lock state, indexing counts, stale reindex debt, and the latest batch
+summary. Its repair button runs schema/table repair only; it does not index
+content, create sample posts, or drain the queue.
 
 Request-level diagnostics are collected only for authorized or debug-enabled
 contexts: a `manage_options` user, `WP_FTS_DEBUG`, or the
