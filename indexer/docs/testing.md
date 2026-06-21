@@ -49,10 +49,11 @@ php indexer/tools/check-release-readiness.php --target=public-submission
 ```
 
 `direct-install` proves the supported `indexer/` ZIP path and production
-dependency boundary. `public-submission` is a separate authority gate and is
-expected to fail on current main until WordPress.org-style `readme.txt`,
-package-level license evidence, public redistribution policy, and any required
-public assets are supplied and reviewed.
+dependency boundary; unchanged default runs must produce identical JSON.
+`public-submission` is a separate authority gate and is expected to fail on
+current main until WordPress.org-style `readme.txt`, GPL-compatible package
+license evidence, valid directory assets, public redistribution policy, and
+public-submission authority evidence are supplied and reviewed.
 
 ## Analyzer Language Quality
 

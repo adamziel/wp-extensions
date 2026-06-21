@@ -66,8 +66,9 @@ Do not ship:
 The `.distignore` file in this directory encodes that packaging boundary.
 
 This package is a direct-install ZIP boundary only. It does not make the plugin
-ready for WordPress.org or SVN submission, which still needs a separate
-readme/assets/license/public-submission authority pass.
+ready for WordPress.org or SVN submission, which still needs complete
+WordPress.org-style readme metadata, GPL-compatible license files and metadata,
+valid directory asset images, and recorded public-submission authority evidence.
 
 ## Release Readiness Gate
 
@@ -83,9 +84,12 @@ php indexer/tools/check-release-readiness.php --target=direct-install
 
 This target checks the plugin header version, Composer metadata, direct ZIP
 builder, `indexer/` package root, required runtime files, production Composer
-dependencies, prohibited release artifacts, and ZIP boundary. A passing
-direct-install check means the project can produce the supported direct ZIP; it
-does not approve public marketplace distribution.
+dependencies, prohibited release artifacts, and ZIP boundary. The default
+readiness path uses a stable temporary build directory and normalized ZIP entry
+metadata so two unchanged runs produce identical JSON, including the operator
+evidence for ZIP path and SHA-256. A passing direct-install check means the
+project can produce the supported direct ZIP; it does not approve public
+marketplace distribution.
 
 Public-submission readiness is intentionally separate:
 
@@ -94,11 +98,17 @@ php indexer/tools/check-release-readiness.php --target=public-submission
 ```
 
 Current main is expected to fail this target. The package does not yet carry a
-package-level `readme.txt`, package-level license file, public redistribution
-license policy, or public-submission authority pass. The checker must continue
-to report those blockers until the project intentionally supplies and verifies
-the WordPress.org-style metadata/assets/license evidence needed for public
-submission.
+complete package-level `readme.txt`, package-level GPL-compatible license file,
+public redistribution license policy, valid WordPress.org-style banner/icon
+assets, or `docs/public-submission-readiness.json` authority evidence. The
+checker must continue to report those blockers until the project intentionally
+supplies and verifies the WordPress.org-style metadata/assets/license evidence
+needed for public submission.
+
+The public-submission authority evidence file is intentionally not a placeholder
+marker. To pass, it must record an approved WordPress.org/public-submission
+target, non-placeholder approver, review date, and explicit approved checks for
+readme, license, assets, and public-submission authority.
 
 ## Composer Dependency Handling
 

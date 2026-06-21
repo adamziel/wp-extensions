@@ -12,6 +12,7 @@ final class WP_FTS_ReleasePackageBuilder
 {
     private const PLUGIN_DIR_NAME = 'indexer';
     private const DEFAULT_ZIP_NAME = 'wp-fts-indexer.zip';
+    private const DETERMINISTIC_ZIP_MTIME = 946684800; // 2000-01-01T00:00:00Z.
     private const VENDOR_DEVELOPMENT_DIRS = ['test', 'tests', 'Tests', 'coverage'];
     private const PROHIBITED_RELATIVE_PATHS = [
         '.cao',
@@ -277,6 +278,7 @@ final class WP_FTS_ReleasePackageBuilder
                 $zip->close();
                 throw new RuntimeException("Could not add {$archiveName} to release ZIP.");
             }
+            self::normalize_zip_entry_metadata($zip, $archiveName);
         }
 
         if (!$zip->close()) {
@@ -302,6 +304,20 @@ final class WP_FTS_ReleasePackageBuilder
     private static function default_build_dir(): string
     {
         return sys_get_temp_dir() . '/wp-fts-indexer-release-' . date('Ymd-His') . '-' . bin2hex(random_bytes(4));
+    }
+
+    private static function normalize_zip_entry_metadata(ZipArchive $zip, string $archiveName): void
+    {
+        if (method_exists($zip, 'setMtimeName') && !$zip->setMtimeName($archiveName, self::DETERMINISTIC_ZIP_MTIME)) {
+            throw new RuntimeException("Could not normalize ZIP mtime for {$archiveName}.");
+        }
+
+        if (method_exists($zip, 'setExternalAttributesName')) {
+            $permissions = str_ends_with($archiveName, '.sh') ? 0100755 : 0100644;
+            if (!$zip->setExternalAttributesName($archiveName, ZipArchive::OPSYS_UNIX, $permissions << 16)) {
+                throw new RuntimeException("Could not normalize ZIP attributes for {$archiveName}.");
+            }
+        }
     }
 
     private static function existing_directory(string $path, string $label): string

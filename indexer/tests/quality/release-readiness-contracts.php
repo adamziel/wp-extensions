@@ -74,6 +74,15 @@ function wp_fts_release_readiness_contract_remove_tree(string $directory): void
     rmdir($directory);
 }
 
+function wp_fts_release_readiness_contract_pending(string $message): void
+{
+    if (function_exists('mark_pending')) {
+        mark_pending($message);
+    }
+
+    throw new RuntimeException($message);
+}
+
 function wp_fts_release_readiness_contract_write_file(string $path, string $contents = "fixture\n"): void
 {
     $directory = dirname($path);
@@ -98,7 +107,37 @@ function wp_fts_release_readiness_contract_write_json(string $path, array $data)
 }
 
 /**
- * @param array{version?:string,license?:string,composer_version?:string,readme?:bool,license_file?:bool,public_assets?:bool,public_docs_ready?:bool} $options
+ * @param string[] $command
+ * @return array{exit:int,stdout:string,stderr:string}
+ */
+function wp_fts_release_readiness_contract_run_command(array $command, string $cwd): array
+{
+    $descriptors = [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ];
+    $process = proc_open($command, $descriptors, $pipes, $cwd);
+    if (!is_resource($process)) {
+        throw new RuntimeException('Could not start command: ' . implode(' ', $command));
+    }
+
+    fclose($pipes[0]);
+    $stdout = (string) stream_get_contents($pipes[1]);
+    $stderr = (string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exit = proc_close($process);
+
+    return [
+        'exit' => is_int($exit) ? $exit : 1,
+        'stdout' => $stdout,
+        'stderr' => $stderr,
+    ];
+}
+
+/**
+ * @param array{version?:string,license?:string,composer_version?:string,readme?:bool,license_file?:bool,public_assets?:bool,public_docs_ready?:bool,public_evidence?:bool} $options
  */
 function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $options = []): string
 {
@@ -124,22 +163,64 @@ function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $op
     if (($options['readme'] ?? false) === true) {
         wp_fts_release_readiness_contract_write_file(
             $source . '/readme.txt',
-            "=== Pure PHP FTS Indexer ===\nStable tag: {$version}\n"
+            implode("\n", [
+                '=== Pure PHP FTS Indexer ===',
+                'Contributors: fixture-maintainer',
+                'Tags: search, full text search, indexing',
+                'Requires at least: 6.5',
+                'Tested up to: 6.9',
+                'Requires PHP: 8.1',
+                "Stable tag: {$version}",
+                'License: GPL-2.0-or-later',
+                'License URI: https://www.gnu.org/licenses/gpl-2.0.html',
+                '',
+                '== Description ==',
+                'Fixture public submission readme content with reviewable details for search indexing.',
+                '',
+                '== Installation ==',
+                'Upload the plugin directory, activate it, and run a small indexing smoke check.',
+                '',
+                '== FAQ ==',
+                '= Does this fixture include public metadata? =',
+                'Yes. The fixture carries enough public metadata to exercise the readiness gate.',
+                '',
+                '== Changelog ==',
+                "= {$version} =",
+                'Initial public-submission fixture release.',
+                '',
+            ])
         );
     }
 
     if (($options['license_file'] ?? false) === true) {
-        wp_fts_release_readiness_contract_write_file($source . '/LICENSE', "Fixture public redistribution license text.\n");
+        wp_fts_release_readiness_contract_write_file($source . '/LICENSE', "GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\nFixture redistribution terms for gate coverage.\n");
     }
 
     if (($options['public_assets'] ?? false) === true) {
-        wp_fts_release_readiness_contract_write_file($source . '/assets/banner-772x250.png', "fixture asset bytes\n");
+        $png = (string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', true);
+        wp_fts_release_readiness_contract_write_file($source . '/assets/banner-772x250.png', $png);
+        wp_fts_release_readiness_contract_write_file($source . '/assets/icon-128x128.png', $png);
     }
 
     $docs = ($options['public_docs_ready'] ?? false) === true
         ? "Public-submission artifacts have been reviewed and approved for this fixture.\n"
         : "This package is a direct-install ZIP boundary only and is not public-submission-ready.\n";
     wp_fts_release_readiness_contract_write_file($source . '/docs/release-packaging.md', $docs);
+
+    if (($options['public_evidence'] ?? false) === true) {
+        wp_fts_release_readiness_contract_write_json($source . '/docs/public-submission-readiness.json', [
+            'status' => 'approved',
+            'target' => 'wordpress.org-plugin-directory',
+            'approver' => 'Fixture Reviewer',
+            'reviewed_at' => '2026-06-21',
+            'checks' => [
+                'readme' => true,
+                'license' => true,
+                'assets' => true,
+                'public_submission_authority' => true,
+            ],
+        ]);
+    }
 
     return $source;
 }
@@ -241,7 +322,7 @@ function wp_fts_release_readiness_contract_current_public_blocked(): void
     $ids = wp_fts_release_readiness_contract_blocker_ids($report);
 
     wp_fts_release_readiness_contract_same('blocked', $report['status'] ?? null, 'current package should not pass public-submission readiness');
-    foreach (['composer_public_license', 'docs_public_submission_blocker', 'package_license_file', 'package_public_assets', 'package_readme_txt'] as $id) {
+    foreach (['composer_public_license', 'docs_public_submission_blocker', 'package_license_file', 'package_public_assets', 'package_readme_txt', 'public_submission_authority_evidence'] as $id) {
         wp_fts_release_readiness_contract_true(in_array($id, $ids, true), "current package should report public-submission blocker {$id}");
     }
 }
@@ -303,6 +384,70 @@ function wp_fts_release_readiness_contract_public_readme_and_license_blockers():
     }
 }
 
+function wp_fts_release_readiness_contract_public_placeholder_artifacts_blocked(): void
+{
+    $tmp = wp_fts_release_readiness_contract_temp_dir();
+    try {
+        $source = $tmp . '/source';
+        wp_fts_release_readiness_contract_write_file($source . '/indexer.php', "<?php\n/**\n * Plugin Name: Pure PHP FTS Indexer\n * Version: 9.9.9\n */\n");
+        wp_fts_release_readiness_contract_write_json($source . '/composer.json', [
+            'name' => 'local/wp-pure-php-fts',
+            'type' => 'wordpress-plugin',
+            'license' => 'GPL-2.0-or-later',
+            'require' => [
+                'php' => '>=8.1',
+                'wp-php-toolkit/full-text-search' => '^0.1',
+            ],
+        ]);
+        wp_fts_release_readiness_contract_write_file($source . '/readme.txt', "=== Pure PHP FTS Indexer ===\nStable tag: 9.9.9\n");
+        wp_fts_release_readiness_contract_write_file($source . '/LICENSE', "placeholder license text\n");
+        wp_fts_release_readiness_contract_write_file($source . '/assets/not-a-wordpress-org-asset.txt', "placeholder asset\n");
+        wp_fts_release_readiness_contract_write_file($source . '/docs/release-packaging.md', "Public submission placeholders are present.\n");
+
+        $report = (new WP_FTS_ReleaseReadinessChecker())->check([
+            'target' => 'public-submission',
+            'plugin_src' => $source,
+            'monorepo_root' => $tmp,
+        ]);
+        $ids = wp_fts_release_readiness_contract_blocker_ids($report);
+
+        wp_fts_release_readiness_contract_same('blocked', $report['status'] ?? null, 'placeholder public-submission artifacts must not pass readiness');
+        foreach (['package_license_file', 'package_public_assets', 'package_readme_txt', 'public_submission_authority_evidence'] as $id) {
+            wp_fts_release_readiness_contract_true(in_array($id, $ids, true), "placeholder public-submission fixture should report blocker {$id}");
+        }
+    } finally {
+        wp_fts_release_readiness_contract_remove_tree($tmp);
+    }
+}
+
+function wp_fts_release_readiness_contract_public_complete_fixture_ready(): void
+{
+    $tmp = wp_fts_release_readiness_contract_temp_dir();
+    try {
+        $source = wp_fts_release_readiness_contract_source_fixture($tmp, [
+            'license' => 'GPL-2.0-or-later',
+            'readme' => true,
+            'license_file' => true,
+            'public_assets' => true,
+            'public_docs_ready' => true,
+            'public_evidence' => true,
+        ]);
+        $report = (new WP_FTS_ReleaseReadinessChecker())->check([
+            'target' => 'public-submission',
+            'plugin_src' => $source,
+            'monorepo_root' => dirname($source),
+        ]);
+
+        wp_fts_release_readiness_contract_same('ready', $report['status'] ?? null, 'complete public-submission evidence fixture should pass readiness');
+        wp_fts_release_readiness_contract_true(
+            wp_fts_release_readiness_contract_has_check($report, 'public_submission_authority_evidence', 'pass'),
+            'complete public-submission fixture should validate authority evidence'
+        );
+    } finally {
+        wp_fts_release_readiness_contract_remove_tree($tmp);
+    }
+}
+
 function wp_fts_release_readiness_contract_prohibited_package_paths(): void
 {
     $tmp = wp_fts_release_readiness_contract_temp_dir();
@@ -358,6 +503,26 @@ function wp_fts_release_readiness_contract_version_mismatch(): void
     }
 }
 
+function wp_fts_release_readiness_contract_default_direct_cli_output_is_deterministic(): void
+{
+    if (!class_exists('ZipArchive')) {
+        wp_fts_release_readiness_contract_pending('ZipArchive is unavailable; default direct-install CLI ZIP build is covered in the normal PHP lane.');
+    }
+
+    $root = dirname(__DIR__, 2);
+    $monorepoRoot = dirname($root);
+    $command = [PHP_BINARY, 'indexer/tools/check-release-readiness.php', '--target=direct-install'];
+
+    $first = wp_fts_release_readiness_contract_run_command($command, $monorepoRoot);
+    $second = wp_fts_release_readiness_contract_run_command($command, $monorepoRoot);
+
+    wp_fts_release_readiness_contract_same(0, $first['exit'], 'first default direct-install readiness CLI run should pass');
+    wp_fts_release_readiness_contract_same('', $first['stderr'], 'first default direct-install readiness CLI run should not emit stderr');
+    wp_fts_release_readiness_contract_same(0, $second['exit'], 'second default direct-install readiness CLI run should pass');
+    wp_fts_release_readiness_contract_same('', $second['stderr'], 'second default direct-install readiness CLI run should not emit stderr');
+    wp_fts_release_readiness_contract_same($first['stdout'], $second['stdout'], 'default direct-install readiness CLI JSON output should be deterministic across unchanged runs');
+}
+
 function wp_fts_release_readiness_contract_deterministic_output_and_docs(): void
 {
     $tmp = wp_fts_release_readiness_contract_temp_dir();
@@ -398,11 +563,20 @@ if (function_exists('test_case')) {
     test_case('quality release readiness reports public metadata and license blockers', function (): void {
         wp_fts_release_readiness_contract_public_readme_and_license_blockers();
     });
+    test_case('quality release readiness blocks placeholder public-submission artifacts', function (): void {
+        wp_fts_release_readiness_contract_public_placeholder_artifacts_blocked();
+    });
+    test_case('quality release readiness accepts complete public-submission evidence fixtures', function (): void {
+        wp_fts_release_readiness_contract_public_complete_fixture_ready();
+    });
     test_case('quality release readiness detects prohibited direct package paths', function (): void {
         wp_fts_release_readiness_contract_prohibited_package_paths();
     });
     test_case('quality release readiness detects version mismatches', function (): void {
         wp_fts_release_readiness_contract_version_mismatch();
+    });
+    test_case('quality release readiness default direct-install CLI output is deterministic', function (): void {
+        wp_fts_release_readiness_contract_default_direct_cli_output_is_deterministic();
     });
     test_case('quality release readiness output and docs are deterministic', function (): void {
         wp_fts_release_readiness_contract_deterministic_output_and_docs();
@@ -411,8 +585,11 @@ if (function_exists('test_case')) {
     wp_fts_release_readiness_contract_direct_ready();
     wp_fts_release_readiness_contract_current_public_blocked();
     wp_fts_release_readiness_contract_public_readme_and_license_blockers();
+    wp_fts_release_readiness_contract_public_placeholder_artifacts_blocked();
+    wp_fts_release_readiness_contract_public_complete_fixture_ready();
     wp_fts_release_readiness_contract_prohibited_package_paths();
     wp_fts_release_readiness_contract_version_mismatch();
+    wp_fts_release_readiness_contract_default_direct_cli_output_is_deterministic();
     wp_fts_release_readiness_contract_deterministic_output_and_docs();
     fwrite(STDOUT, "OK: release readiness contracts distinguish direct-install and public-submission gates.\n");
 }

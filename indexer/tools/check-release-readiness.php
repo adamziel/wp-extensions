@@ -13,6 +13,33 @@ final class WP_FTS_ReleaseReadinessChecker
 {
     private const TARGET_DIRECT_INSTALL = 'direct-install';
     private const TARGET_PUBLIC_SUBMISSION = 'public-submission';
+    private const READINESS_BUILD_DIR_PREFIX = 'wp-fts-indexer-release-readiness-';
+    private const PUBLIC_SUBMISSION_EVIDENCE_PATH = 'docs/public-submission-readiness.json';
+
+    private const PUBLIC_README_REQUIRED_FIELDS = [
+        'Contributors',
+        'Tags',
+        'Requires at least',
+        'Tested up to',
+        'Requires PHP',
+        'Stable tag',
+        'License',
+        'License URI',
+    ];
+
+    private const PUBLIC_README_REQUIRED_SECTIONS = [
+        'Description',
+        'Installation',
+        'FAQ',
+        'Changelog',
+    ];
+
+    private const PUBLIC_SUBMISSION_REQUIRED_EVIDENCE_CHECKS = [
+        'readme',
+        'license',
+        'assets',
+        'public_submission_authority',
+    ];
 
     private const REQUIRED_PACKAGE_PATHS = [
         'indexer.php',
@@ -232,6 +259,9 @@ final class WP_FTS_ReleaseReadinessChecker
             'plugin_src' => $pluginSource,
             'monorepo_root' => $monorepoRoot,
         ];
+        if (!isset($options['build_dir']) && !isset($options['output'])) {
+            $buildOptions['build_dir'] = self::default_readiness_build_dir($pluginSource, $monorepoRoot);
+        }
         foreach (['build_dir', 'output'] as $key) {
             if (isset($options[$key])) {
                 $buildOptions[$key] = (string) $options[$key];
@@ -262,49 +292,11 @@ final class WP_FTS_ReleaseReadinessChecker
      */
     private function check_public_submission(string $pluginSource, array &$checks, array &$blockers): void
     {
-        $this->check_plugin_metadata($pluginSource, $checks, $blockers, 'public_source');
+        $sourceMetadata = $this->check_plugin_metadata($pluginSource, $checks, $blockers, 'public_source');
 
-        $readmePath = $pluginSource . '/readme.txt';
-        if (!is_file($readmePath)) {
-            $this->record($checks, $blockers, 'package_readme_txt', 'fail', 'Missing package-level readme.txt with public marketplace metadata.');
-        } else {
-            $readme = self::read_text_file($readmePath, 'public readme');
-            $hasPluginHeading = preg_match('/^===\s+.+\s+===\s*$/m', $readme) === 1;
-            $hasStableTag = preg_match('/^Stable tag:\s*\S+/mi', $readme) === 1;
-            $this->record(
-                $checks,
-                $blockers,
-                'package_readme_txt',
-                $hasPluginHeading && $hasStableTag ? 'pass' : 'fail',
-                $hasPluginHeading && $hasStableTag
-                    ? 'Package-level readme.txt has required public metadata markers.'
-                    : 'Package-level readme.txt is missing WordPress.org-style heading or Stable tag metadata.'
-            );
-        }
-
-        $licensePath = $this->find_license_file($pluginSource);
-        $this->record(
-            $checks,
-            $blockers,
-            'package_license_file',
-            $licensePath === null ? 'fail' : 'pass',
-            $licensePath === null
-                ? 'Missing package-level license file for public redistribution review.'
-                : 'Package-level license file exists.',
-            $licensePath === null ? [] : ['path' => basename($licensePath)]
-        );
-
-        $assetFiles = $this->public_asset_files($pluginSource);
-        $this->record(
-            $checks,
-            $blockers,
-            'package_public_assets',
-            $assetFiles === [] ? 'fail' : 'pass',
-            $assetFiles === []
-                ? 'Missing public-submission assets or documented asset approval evidence.'
-                : 'Public-submission asset directory contains reviewable assets.',
-            $assetFiles === [] ? [] : ['asset_file_count' => count($assetFiles)]
-        );
+        $this->check_public_readme_txt($pluginSource, $sourceMetadata['version'], $checks, $blockers);
+        $this->check_public_license_file($pluginSource, $checks, $blockers);
+        $this->check_public_assets($pluginSource, $checks, $blockers);
 
         $composer = $this->read_json_blocker($pluginSource . '/composer.json', 'composer metadata', 'composer_public_license', $checks, $blockers);
         $license = is_array($composer) ? ($composer['license'] ?? null) : null;
@@ -315,11 +307,186 @@ final class WP_FTS_ReleaseReadinessChecker
             'composer_public_license',
             $publicLicenseOk ? 'pass' : 'fail',
             $publicLicenseOk
-                ? 'Composer license metadata is not proprietary or unresolved.'
-                : 'Composer license metadata is proprietary, missing, or unresolved for public redistribution.',
+                ? 'Composer license metadata declares a GPL-compatible public redistribution license.'
+                : 'Composer license metadata is missing, proprietary, unresolved, or not GPL-compatible for public redistribution.',
             ['license' => $license]
         );
 
+        $this->check_public_submission_docs($pluginSource, $checks, $blockers);
+        $this->check_public_submission_evidence($pluginSource, $checks, $blockers);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $checks
+     * @param array<int,array<string,mixed>> $blockers
+     */
+    private function check_public_readme_txt(
+        string $pluginSource,
+        ?string $sourceVersion,
+        array &$checks,
+        array &$blockers
+    ): void {
+        $readmePath = $pluginSource . '/readme.txt';
+        if (!is_file($readmePath)) {
+            $this->record($checks, $blockers, 'package_readme_txt', 'fail', 'Missing package-level readme.txt with public marketplace metadata.');
+            return;
+        }
+
+        $readme = self::read_text_file($readmePath, 'public readme');
+        $fields = self::parse_readme_fields($readme);
+        $missingFields = [];
+        foreach (self::PUBLIC_README_REQUIRED_FIELDS as $field) {
+            $key = strtolower($field);
+            if (!isset($fields[$key]) || trim($fields[$key]) === '') {
+                $missingFields[] = $field;
+            }
+        }
+
+        $missingSections = [];
+        foreach (self::PUBLIC_README_REQUIRED_SECTIONS as $section) {
+            if (!self::readme_section_has_reviewable_content($readme, $section)) {
+                $missingSections[] = $section;
+            }
+        }
+
+        $stableTag = isset($fields['stable tag']) ? trim($fields['stable tag']) : null;
+        $stableMatchesSource = $sourceVersion !== null && $stableTag === $sourceVersion;
+        $licenseIdentifier = $fields['license'] ?? null;
+        $licenseOk = self::public_license_identifier_is_gpl_compatible($licenseIdentifier);
+        $hasPluginHeading = preg_match('/^===\s+.+\s+===\s*$/m', $readme) === 1;
+        $readmeOk = $hasPluginHeading
+            && $missingFields === []
+            && $missingSections === []
+            && $stableMatchesSource
+            && $licenseOk;
+
+        $details = [
+            'stable_tag' => $stableTag,
+            'source_version' => $sourceVersion,
+            'license' => $licenseIdentifier,
+        ];
+        if (!$hasPluginHeading) {
+            $details['missing_heading'] = true;
+        }
+        if ($missingFields !== []) {
+            $details['missing_fields'] = $missingFields;
+        }
+        if ($missingSections !== []) {
+            $details['missing_sections'] = $missingSections;
+        }
+
+        $this->record(
+            $checks,
+            $blockers,
+            'package_readme_txt',
+            $readmeOk ? 'pass' : 'fail',
+            $readmeOk
+                ? 'Package-level readme.txt has complete WordPress.org-style metadata and reviewable sections.'
+                : 'Package-level readme.txt is missing complete WordPress.org-style metadata, matching Stable tag, GPL-compatible license metadata, or reviewable sections.',
+            $details
+        );
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $checks
+     * @param array<int,array<string,mixed>> $blockers
+     */
+    private function check_public_license_file(string $pluginSource, array &$checks, array &$blockers): void
+    {
+        $licensePath = $this->find_license_file($pluginSource);
+        if ($licensePath === null) {
+            $this->record($checks, $blockers, 'package_license_file', 'fail', 'Missing package-level license file for public redistribution review.');
+            return;
+        }
+
+        $licenseText = self::read_text_file($licensePath, 'public license file');
+        $licenseOk = self::public_license_text_is_gpl_compatible($licenseText)
+            && !self::contains_placeholder_marker($licenseText);
+        $this->record(
+            $checks,
+            $blockers,
+            'package_license_file',
+            $licenseOk ? 'pass' : 'fail',
+            $licenseOk
+                ? 'Package-level license file contains GPL-compatible public redistribution terms.'
+                : 'Package-level license file does not contain reviewable GPL-compatible public redistribution terms.',
+            ['path' => basename($licensePath)]
+        );
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $checks
+     * @param array<int,array<string,mixed>> $blockers
+     */
+    private function check_public_assets(string $pluginSource, array &$checks, array &$blockers): void
+    {
+        $assetFiles = $this->public_asset_files($pluginSource);
+        $recognized = [];
+        $invalid = [];
+        $hasBanner = false;
+        $hasIcon = false;
+
+        foreach ($assetFiles as $relativePath) {
+            $kind = self::public_asset_kind($relativePath);
+            if ($kind === null) {
+                continue;
+            }
+
+            if (!self::public_asset_has_valid_signature($pluginSource . '/' . $relativePath, $relativePath)) {
+                $invalid[] = $relativePath;
+                continue;
+            }
+
+            $recognized[] = $relativePath;
+            if ($kind === 'banner') {
+                $hasBanner = true;
+            }
+            if ($kind === 'icon') {
+                $hasIcon = true;
+            }
+        }
+
+        sort($recognized, SORT_STRING);
+        sort($invalid, SORT_STRING);
+
+        $missingKinds = [];
+        if (!$hasBanner) {
+            $missingKinds[] = 'banner';
+        }
+        if (!$hasIcon) {
+            $missingKinds[] = 'icon';
+        }
+
+        $assetsOk = $missingKinds === [] && $invalid === [];
+        $details = [
+            'asset_file_count' => count($assetFiles),
+            'recognized_asset_files' => $recognized,
+        ];
+        if ($missingKinds !== []) {
+            $details['missing_required_asset_kinds'] = $missingKinds;
+        }
+        if ($invalid !== []) {
+            $details['invalid_asset_files'] = $invalid;
+        }
+
+        $this->record(
+            $checks,
+            $blockers,
+            'package_public_assets',
+            $assetsOk ? 'pass' : 'fail',
+            $assetsOk
+                ? 'Public-submission asset directory contains valid WordPress.org-style banner and icon assets.'
+                : 'Public-submission assets must include valid WordPress.org-style banner and icon image files.',
+            $details
+        );
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $checks
+     * @param array<int,array<string,mixed>> $blockers
+     */
+    private function check_public_submission_docs(string $pluginSource, array &$checks, array &$blockers): void
+    {
         $releaseDocs = $pluginSource . '/docs/release-packaging.md';
         if (is_file($releaseDocs)) {
             $docs = self::read_text_file($releaseDocs, 'release packaging docs');
@@ -338,6 +505,72 @@ final class WP_FTS_ReleaseReadinessChecker
         } else {
             $this->record($checks, $blockers, 'docs_public_submission_blocker', 'fail', 'Release packaging docs are missing.');
         }
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $checks
+     * @param array<int,array<string,mixed>> $blockers
+     */
+    private function check_public_submission_evidence(string $pluginSource, array &$checks, array &$blockers): void
+    {
+        $evidencePath = $pluginSource . '/' . self::PUBLIC_SUBMISSION_EVIDENCE_PATH;
+        if (!is_file($evidencePath)) {
+            $this->record(
+                $checks,
+                $blockers,
+                'public_submission_authority_evidence',
+                'fail',
+                'Missing completed public-submission authority evidence file.',
+                ['expected_path' => self::PUBLIC_SUBMISSION_EVIDENCE_PATH]
+            );
+            return;
+        }
+
+        $evidence = $this->read_json_blocker($evidencePath, 'public-submission authority evidence', 'public_submission_authority_evidence', $checks, $blockers);
+        if ($evidence === null) {
+            return;
+        }
+
+        $target = isset($evidence['target']) && is_scalar($evidence['target']) ? strtolower(trim((string) $evidence['target'])) : '';
+        $approver = isset($evidence['approver']) && is_scalar($evidence['approver']) ? trim((string) $evidence['approver']) : '';
+        $reviewedAt = isset($evidence['reviewed_at']) && is_scalar($evidence['reviewed_at']) ? trim((string) $evidence['reviewed_at']) : '';
+        $evidenceChecks = isset($evidence['checks']) && is_array($evidence['checks']) ? $evidence['checks'] : [];
+        $missingEvidenceChecks = [];
+        foreach (self::PUBLIC_SUBMISSION_REQUIRED_EVIDENCE_CHECKS as $check) {
+            if (($evidenceChecks[$check] ?? null) !== true) {
+                $missingEvidenceChecks[] = $check;
+            }
+        }
+
+        $targetOk = in_array($target, ['wordpress.org', 'wordpress.org-plugin-directory', 'public-submission'], true);
+        $approverOk = $approver !== '' && !self::contains_placeholder_marker($approver);
+        $reviewedAtOk = preg_match('/^\d{4}-\d{2}-\d{2}$/', $reviewedAt) === 1;
+        $evidenceOk = ($evidence['status'] ?? null) === 'approved'
+            && $targetOk
+            && $approverOk
+            && $reviewedAtOk
+            && $missingEvidenceChecks === [];
+
+        $details = [
+            'path' => self::PUBLIC_SUBMISSION_EVIDENCE_PATH,
+            'status' => $evidence['status'] ?? null,
+            'target' => $target,
+            'reviewed_at' => $reviewedAt,
+        ];
+        if ($missingEvidenceChecks !== []) {
+            $details['missing_or_unapproved_checks'] = $missingEvidenceChecks;
+        }
+
+        $this->record(
+            $checks,
+            $blockers,
+            'public_submission_authority_evidence',
+            $evidenceOk ? 'pass' : 'fail',
+            $evidenceOk
+                ? 'Public-submission authority evidence records approved readme, license, asset, and submission checks.'
+                : 'Public-submission authority evidence is missing approval status, target, approver, review date, or required approved checks.',
+            $details
+        );
     }
 
     /**
@@ -736,6 +969,126 @@ final class WP_FTS_ReleaseReadinessChecker
         return $files;
     }
 
+    /**
+     * @return array<string,string>
+     */
+    private static function parse_readme_fields(string $readme): array
+    {
+        $fields = [];
+        if (preg_match_all('/^([A-Za-z][A-Za-z ]+):\s*(.+)$/m', $readme, $matches, PREG_SET_ORDER) !== false) {
+            foreach ($matches as $match) {
+                $fields[strtolower(trim($match[1]))] = trim($match[2]);
+            }
+        }
+
+        return $fields;
+    }
+
+    private static function readme_section_has_reviewable_content(string $readme, string $section): bool
+    {
+        $pattern = '/^==\s*' . preg_quote($section, '/') . '\s*==\s*$'
+            . '(.*?)'
+            . '(?=^==\s*.+?\s*==\s*$|\z)/ims';
+        if (preg_match($pattern, $readme, $matches) !== 1) {
+            return false;
+        }
+
+        $contents = trim(strip_tags((string) $matches[1]));
+        if (self::contains_placeholder_marker($contents)) {
+            return false;
+        }
+
+        return strlen($contents) >= 20;
+    }
+
+    private static function public_asset_kind(string $relativePath): ?string
+    {
+        $name = strtolower(basename(str_replace('\\', '/', $relativePath)));
+        if (preg_match('/^banner-(?:772x250|1544x500)\.(?:png|jpe?g)$/', $name) === 1) {
+            return 'banner';
+        }
+        if (preg_match('/^icon-(?:128x128|256x256)\.(?:png|jpe?g)$/', $name) === 1 || $name === 'icon.svg') {
+            return 'icon';
+        }
+        if (preg_match('/^screenshot-[1-9][0-9]*\.(?:png|jpe?g)$/', $name) === 1) {
+            return 'screenshot';
+        }
+
+        return null;
+    }
+
+    private static function public_asset_has_valid_signature(string $path, string $relativePath): bool
+    {
+        $bytes = file_get_contents($path, false, null, 0, 512);
+        if (!is_string($bytes) || $bytes === '') {
+            return false;
+        }
+
+        $extension = strtolower(pathinfo($relativePath, PATHINFO_EXTENSION));
+        if ($extension === 'png') {
+            return str_starts_with($bytes, "\x89PNG\r\n\x1a\n");
+        }
+        if ($extension === 'jpg' || $extension === 'jpeg') {
+            return str_starts_with($bytes, "\xff\xd8\xff");
+        }
+        if ($extension === 'svg') {
+            return preg_match('/<svg(?:\s|>)/i', ltrim($bytes)) === 1;
+        }
+
+        return false;
+    }
+
+    private static function public_license_identifier_is_gpl_compatible(mixed $license): bool
+    {
+        if (!is_scalar($license)) {
+            return false;
+        }
+
+        $normalized = strtolower(trim((string) $license));
+        if ($normalized === '' || self::contains_placeholder_marker($normalized)) {
+            return false;
+        }
+
+        return in_array($normalized, [
+            'gpl-2.0',
+            'gpl-2.0+',
+            'gpl-2.0-only',
+            'gpl-2.0-or-later',
+            'gpl-3.0',
+            'gpl-3.0+',
+            'gpl-3.0-only',
+            'gpl-3.0-or-later',
+            'gplv2',
+            'gplv2 or later',
+            'gplv3',
+            'gplv3 or later',
+        ], true);
+    }
+
+    private static function public_license_text_is_gpl_compatible(string $licenseText): bool
+    {
+        return preg_match(
+            '/GNU GENERAL PUBLIC LICENSE|GPL-2\.0(?:-or-later|\+)?|GPL-3\.0(?:-or-later|\+)?|GPLv?2(?:\.0)?\s+or\s+later/i',
+            $licenseText
+        ) === 1;
+    }
+
+    private static function contains_placeholder_marker(string $text): bool
+    {
+        $normalized = strtolower(trim($text));
+        if ($normalized === '') {
+            return true;
+        }
+
+        foreach (['placeholder', 'todo', 'tbd', 'pending', 'unresolved', 'lorem ipsum'] as $marker) {
+            if (str_contains($normalized, $marker)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static function composer_license_is_public_ready(mixed $license): bool
     {
         $licenses = is_array($license) ? $license : [$license];
@@ -751,13 +1104,17 @@ final class WP_FTS_ReleaseReadinessChecker
             return false;
         }
 
+        $hasCompatibleLicense = false;
         foreach ($normalized as $item) {
             if ($item === '' || $item === 'proprietary' || str_contains($item, 'pending') || str_contains($item, 'unresolved')) {
                 return false;
             }
+            if (self::public_license_identifier_is_gpl_compatible($item)) {
+                $hasCompatibleLicense = true;
+            }
         }
 
-        return true;
+        return $hasCompatibleLicense;
     }
 
     /**
@@ -809,6 +1166,13 @@ final class WP_FTS_ReleaseReadinessChecker
         }
 
         return $contents;
+    }
+
+    private static function default_readiness_build_dir(string $pluginSource, string $monorepoRoot): string
+    {
+        $fingerprint = substr(hash('sha256', $pluginSource . "\0" . $monorepoRoot), 0, 16);
+
+        return sys_get_temp_dir() . '/' . self::READINESS_BUILD_DIR_PREFIX . $fingerprint;
     }
 
     private static function existing_directory(string $path, string $label): string
