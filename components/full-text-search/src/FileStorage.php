@@ -7,7 +7,7 @@ declare(strict_types=1);
  * The backend stores binary postings as base64 in a versioned JSON payload,
  * supports snapshot rollback, and persists immediately outside transactions.
  */
-final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Prefix_Term_Storage
+final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
 {
     private string $path;
 
@@ -388,6 +388,37 @@ final class WP_FTS_Storage_File implements WP_FTS_Storage, WP_FTS_DocumentMetada
             $this->persist();
             $this->dirty = false;
         }
+    }
+
+    /**
+     * Clear all derived index rows while keeping the JSON storage file usable.
+     *
+     * @return array<string,int>
+     */
+    public function reset_index(): array
+    {
+        $counts = [
+            'postings_deleted' => array_sum(array_map(
+                static fn(array $row): int => count(WP_FTS_PostingsCodec::decode($row['postings'])),
+                $this->terms
+            )),
+            'terms_deleted' => count($this->terms),
+            'docs_deleted' => count($this->docs),
+            'doc_lengths_deleted' => array_sum(array_map(
+                static fn(array $doc): int => count($doc['lang_lengths'] ?? []),
+                $this->docs
+            )),
+            'doc_metadata_deleted' => count($this->docMetadata),
+            'collection_metadata_deleted' => count($this->meta),
+        ];
+
+        $this->terms = [];
+        $this->docs = [];
+        $this->docMetadata = [];
+        $this->meta = [];
+        $this->changed();
+
+        return $counts;
     }
 
     /**

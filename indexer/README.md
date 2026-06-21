@@ -322,6 +322,12 @@ wp fts status --format=json
 # If status reports last_batch_failures, fix the affected post or environment
 # issue and rerun a bounded batch or scoped reindex.
 
+# Clear only derived FTS index data and runtime indexing state. Requires
+# confirmation and preserves WordPress posts, plugin settings, analyzer options,
+# and schema version.
+wp fts reset-index --yes
+wp fts reset-index --yes --format=json
+
 # Repair schema without indexing content.
 wp fts repair
 

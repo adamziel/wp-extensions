@@ -1724,6 +1724,35 @@ test_case('storage optimize purges tombstoned docs from language-namespaced post
     }
 });
 
+test_case('storage reset clears derived index rows while preserving backend contract', function (): void {
+    $term = WP_FTS_TermNamespace::namespace_term('pl', 'zamek');
+    foreach (storage_factories('reset_index') as $name => $factory) {
+        $storage = $factory();
+        assert_true($storage instanceof WP_FTS_Resettable_Storage, "{$name} storage should expose resettable index capability");
+        $storage->put_doc(1, 'pl', ['pl' => 2, 'en' => 1], 'hash-1');
+        $storage->put_doc(2, 'en', ['en' => 3], 'hash-2');
+        $storage->put_term($term, 2, WP_FTS_PostingsCodec::encode([1 => 2, 2 => 1]));
+        if ($storage instanceof WP_FTS_DocumentMetadataStorage) {
+            $storage->put_doc_metadata(1, ['post_id' => 1, 'post_type' => 'post', 'post_status' => 'publish']);
+        }
+        $storage->add_meta('pl', 1, 2);
+
+        $summary = $storage->reset_index();
+
+        assert_same(2, $summary['postings_deleted'] ?? null, "{$name} reset should report posting rows");
+        assert_same(1, $summary['terms_deleted'] ?? null, "{$name} reset should report term rows");
+        assert_same(2, $summary['docs_deleted'] ?? null, "{$name} reset should report document rows");
+        assert_same([], $storage->all_terms(), "{$name} reset should clear term keys");
+        assert_same([], $storage->all_doc_ids(true), "{$name} reset should clear documents and tombstones");
+        assert_same(['doc_count' => 0, 'len_sum' => 0], $storage->get_meta('pl'), "{$name} reset should clear collection metadata");
+        if ($storage instanceof WP_FTS_DocumentMetadataStorage) {
+            assert_same([], $storage->get_doc_metadata([1]), "{$name} reset should clear document metadata");
+        }
+
+        cleanup_storage($storage);
+    }
+});
+
 test_case('file backend persists language-aware state and migrates legacy docs', function (): void {
     $path = temp_index_path('legacy_migrate');
     file_put_contents($path, json_encode([
@@ -2093,6 +2122,12 @@ final class WP_FTS_Test_WPDB
             return 1;
         }
 
+        if ($sql === 'DELETE FROM wp_fts_terms') {
+            $count = count($this->terms);
+            $this->terms = [];
+            return $count;
+        }
+
         if (str_starts_with($sql, 'DELETE FROM wp_fts_terms WHERE term = %s AND doc_freq = 0')) {
             $term = (string) $args[0];
             if (($this->terms[$term]['doc_freq'] ?? null) === 0) {
@@ -2113,6 +2148,12 @@ final class WP_FTS_Test_WPDB
             ksort($this->postings[$term], SORT_NUMERIC);
             ksort($this->postings, SORT_STRING);
             return 1;
+        }
+
+        if ($sql === 'DELETE FROM wp_fts_postings') {
+            $count = array_sum(array_map('count', $this->postings));
+            $this->postings = [];
+            return $count;
         }
 
         if (str_starts_with($sql, 'DELETE FROM wp_fts_postings WHERE doc_id = %d')) {
@@ -2172,6 +2213,12 @@ final class WP_FTS_Test_WPDB
             return 1;
         }
 
+        if ($sql === 'DELETE FROM wp_fts_doc_lengths') {
+            $count = array_sum(array_map('count', $this->docLengths));
+            $this->docLengths = [];
+            return $count;
+        }
+
         if (str_starts_with($sql, 'DELETE FROM wp_fts_doc_lengths WHERE doc_id = %d')) {
             unset($this->docLengths[(int) $args[0]]);
             return 1;
@@ -2182,6 +2229,12 @@ final class WP_FTS_Test_WPDB
                 unset($this->docLengths[(int) $docId]);
             }
             return 1;
+        }
+
+        if ($sql === 'DELETE FROM wp_fts_docmeta') {
+            $count = count($this->docMeta);
+            $this->docMeta = [];
+            return $count;
         }
 
         if (str_starts_with($sql, 'DELETE FROM wp_fts_docmeta WHERE doc_id IN')) {
@@ -2226,8 +2279,15 @@ final class WP_FTS_Test_WPDB
         }
 
         if ($sql === 'DELETE FROM wp_fts_meta') {
+            $count = count($this->meta);
             $this->meta = [];
-            return 1;
+            return $count;
+        }
+
+        if ($sql === 'DELETE FROM wp_fts_docs') {
+            $count = count($this->docs);
+            $this->docs = [];
+            return $count;
         }
 
         if (str_starts_with($sql, 'DELETE FROM wp_fts_docs WHERE doc_id IN')) {
@@ -4129,6 +4189,114 @@ function wp_fts_test_seed_backfill_posts(WP_FTS_Test_WPDB $wpdb, int $count, int
     for ($i = 0; $i < $count; $i++) {
         $wpdb->postRows[] = wp_fts_test_backfill_post($start_id + $i, $post_type, $post_status);
     }
+}
+
+/**
+ * @return array<string,mixed>
+ */
+function wp_fts_test_seed_reset_index_state(WP_FTS_Test_WPDB $wpdb): array
+{
+    $plTerm = WP_FTS_TermNamespace::namespace_term('pl', 'zamek');
+    $enTerm = WP_FTS_TermNamespace::namespace_term('en', 'castle');
+    $wpdb->terms = [
+        $enTerm => ['doc_freq' => 1],
+        $plTerm => ['doc_freq' => 1],
+    ];
+    ksort($wpdb->terms, SORT_STRING);
+    $wpdb->postings = [
+        $enTerm => [912 => 1],
+        $plTerm => [911 => 3],
+    ];
+    ksort($wpdb->postings, SORT_STRING);
+    $wpdb->docs = [
+        911 => ['lang' => 'pl', 'doc_len' => 4, 'content_hash' => 'hash-911', 'is_deleted' => 0],
+        912 => ['lang' => 'en', 'doc_len' => 3, 'content_hash' => 'hash-912', 'is_deleted' => 1],
+    ];
+    $wpdb->docLengths = [
+        911 => ['pl' => 4],
+        912 => ['en' => 3],
+    ];
+    $wpdb->docMeta = [
+        911 => [
+            'doc_id' => 911,
+            'post_id' => 911,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'post_date_gmt' => '2026-06-18 00:00:00',
+            'title' => 'Indexed Reset Fixture',
+            'excerpt' => '',
+            'search_text' => 'Indexed reset fixture',
+            'data' => '{}',
+        ],
+    ];
+    $wpdb->meta = [
+        'en' => ['doc_count' => 1, 'len_sum' => 3],
+        'pl' => ['doc_count' => 1, 'len_sum' => 4],
+    ];
+    $wpdb->postRows = [
+        wp_fts_test_backfill_post(911, 'post', 'publish', 'Indexed Reset Fixture'),
+        wp_fts_test_backfill_post(913, 'post', 'publish', 'Unindexed Reset Fixture'),
+    ];
+
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = [
+        'index_post_types' => ['post'],
+        'snippet_length' => 140,
+        'field_boosts' => ['title' => 7.0],
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'enable_stemming' => true,
+        'runtime_lemma_packs' => [],
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [911, 913];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
+        'last_batch_processed' => 5,
+        'last_batch_queue_processed' => 2,
+        'last_batch_backfill_processed' => 1,
+        'last_batch_stale_processed' => 2,
+        'has_more' => true,
+        'last_indexed_post_id' => 911,
+        'last_indexed_post_title' => 'Indexed Reset Fixture',
+        'last_indexed_at' => '2026-06-18 01:00:00',
+        'last_batch_failures' => 1,
+        'last_failed_post_id' => 913,
+        'last_failed_post_title' => 'Unindexed Reset Fixture',
+        'last_failed_at' => '2026-06-18 01:05:00',
+        'last_error' => 'RuntimeException: old failure',
+        'last_skipped_locked' => false,
+        'last_stopped_by_budget' => true,
+        'last_mode' => 'manual',
+        'last_run_at' => '2026-06-18 01:05:00',
+        'latest_batch_diagnostics' => [
+            'schema' => 'wp-fts-index-batch-diagnostics-v1',
+            'trigger' => 'manual',
+            'source' => 'wp-cli-process-batch',
+            'status' => 'failed',
+            'started_at' => '2026-06-18 01:04:00',
+            'finished_at' => '2026-06-18 01:05:00',
+        ],
+        'index_profile_hash' => str_repeat('a', 40),
+        'accepted_index_profile_hash' => str_repeat('b', 40),
+        'stale_debt_active' => true,
+        'stale_debt_reasons' => ['field_boosts_changed'],
+        'stale_debt_created_at' => '2026-06-18 00:00:00',
+        'stale_debt_updated_at' => '2026-06-18 00:30:00',
+        'stale_debt_processing_profile_hash' => str_repeat('a', 40),
+        'stale_debt_cursor_post_id' => 900,
+        'stale_debt_processed_count' => 2,
+        'stale_debt_remaining_count' => 4,
+    ];
+
+    return [
+        'terms' => $wpdb->terms,
+        'postings' => $wpdb->postings,
+        'docs' => $wpdb->docs,
+        'docLengths' => $wpdb->docLengths,
+        'docMeta' => $wpdb->docMeta,
+        'meta' => $wpdb->meta,
+        'postRows' => $wpdb->postRows,
+        'options' => $GLOBALS['wp_fts_test_options'],
+    ];
 }
 
 function wp_fts_test_seed_indexed_posts(WP_FTS_Test_WPDB $wpdb, int $count, int $start_id = 1, string $post_type = 'post', string $post_status = 'publish'): void
@@ -7678,6 +7846,160 @@ test_case('wp-cli direct writers skip safely when the shared indexing lock is ac
     assert_same('active', $diagnostics['lock_at_start']['state'] ?? null, 'locked direct writer diagnostics should include active start lock state');
     assert_same('cron', $diagnostics['lock_at_start']['mode'] ?? null, 'locked direct writer diagnostics should include safe holder mode');
     assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'active-writer-token'), 'locked direct writer diagnostics should not expose lock tokens');
+});
+
+test_case('wp-cli reset-index requires explicit confirmation before mutating state', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $snapshot = wp_fts_test_seed_reset_index_state($fake);
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->reset_index([], ['format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('confirmation_required', $payload['status'] ?? null, 'reset-index without --yes should report confirmation requirement');
+    assert_same(false, $payload['reset'] ?? null, 'reset-index without --yes should report no reset');
+    assert_same($snapshot['terms'], $fake->terms, 'reset-index without --yes should not clear terms');
+    assert_same($snapshot['postings'], $fake->postings, 'reset-index without --yes should not clear postings');
+    assert_same($snapshot['docs'], $fake->docs, 'reset-index without --yes should not clear docs');
+    assert_same($snapshot['docLengths'], $fake->docLengths, 'reset-index without --yes should not clear doc lengths');
+    assert_same($snapshot['docMeta'], $fake->docMeta, 'reset-index without --yes should not clear doc metadata');
+    assert_same($snapshot['meta'], $fake->meta, 'reset-index without --yes should not clear collection metadata');
+    assert_same($snapshot['options'], $GLOBALS['wp_fts_test_options'], 'reset-index without --yes should not mutate plugin options');
+    assert_contains('Confirmation required', WP_CLI::$warningMessages[0] ?? '', 'reset-index without --yes should warn operators');
+});
+
+test_case('wp-cli reset-index skips under active writer lock without clearing state', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $snapshot = wp_fts_test_seed_reset_index_state($fake);
+    $activeLock = [
+        'token' => 'reset-index-active-token',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = $activeLock;
+    $snapshot['options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = $activeLock;
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->reset_index([], ['yes' => true, 'format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('skipped_locked', $payload['status'] ?? null, 'locked reset-index should report skipped status');
+    assert_same(false, $payload['reset'] ?? null, 'locked reset-index should report no reset');
+    assert_same(true, $payload['lock_active'] ?? null, 'locked reset-index JSON should report active lock without exposing token');
+    assert_same($snapshot['terms'], $fake->terms, 'locked reset-index should not clear terms');
+    assert_same($snapshot['postings'], $fake->postings, 'locked reset-index should not clear postings');
+    assert_same($snapshot['docs'], $fake->docs, 'locked reset-index should not clear docs');
+    assert_same($snapshot['docLengths'], $fake->docLengths, 'locked reset-index should not clear doc lengths');
+    assert_same($snapshot['docMeta'], $fake->docMeta, 'locked reset-index should not clear doc metadata');
+    assert_same($snapshot['meta'], $fake->meta, 'locked reset-index should not clear collection metadata');
+    assert_same($snapshot['options'], $GLOBALS['wp_fts_test_options'], 'locked reset-index should leave queue, stale debt, failure state, and lock untouched');
+    assert_contains('Skipped FTS reset-index: another index writer is already running.', WP_CLI::$warningMessages[0] ?? '', 'locked reset-index should warn operators about the active writer lock');
+    assert_true(!str_contains(json_encode($payload, JSON_THROW_ON_ERROR), 'reset-index-active-token'), 'locked reset-index JSON should not expose lock token');
+});
+
+test_case('wp-cli reset-index clears FTS data and operational state while preserving posts and settings', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $snapshot = wp_fts_test_seed_reset_index_state($fake);
+    $settingsBefore = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION];
+    $analyzerBefore = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->reset_index([], ['yes' => true, 'format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+        $statusRaw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->status([], ['format' => 'json']);
+        });
+        $status = wp_fts_test_decode_cli_json_object($statusRaw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('reset', $payload['status'] ?? null, 'confirmed reset-index should report reset status');
+    assert_same(true, $payload['reset'] ?? null, 'confirmed reset-index should report a performed reset');
+    assert_same('current', $payload['schema_status'] ?? null, 'confirmed reset-index should keep schema current');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $payload['schema_version'] ?? null, 'confirmed reset-index should preserve schema version');
+    assert_same(2, $payload['postings_deleted'] ?? null, 'confirmed reset-index should report cleared posting rows');
+    assert_same(2, $payload['terms_deleted'] ?? null, 'confirmed reset-index should report cleared terms');
+    assert_same(2, $payload['docs_deleted'] ?? null, 'confirmed reset-index should report cleared docs');
+    assert_same(2, $payload['doc_lengths_deleted'] ?? null, 'confirmed reset-index should report cleared doc lengths');
+    assert_same(1, $payload['doc_metadata_deleted'] ?? null, 'confirmed reset-index should report cleared doc metadata');
+    assert_same(2, $payload['collection_metadata_deleted'] ?? null, 'confirmed reset-index should report cleared collection metadata');
+    assert_same(2, $payload['pending_queue_cleared'] ?? null, 'confirmed reset-index should report cleared queue length');
+    assert_same(true, $payload['stale_debt_cleared'] ?? null, 'confirmed reset-index should report stale debt cleanup');
+    assert_same(1, $payload['last_batch_failures_cleared'] ?? null, 'confirmed reset-index should report cleared failure count');
+    assert_same(0, $payload['wordpress_posts_deleted'] ?? null, 'confirmed reset-index should report that no posts were deleted');
+    assert_same(true, $payload['settings_preserved'] ?? null, 'confirmed reset-index should report settings preservation');
+    assert_same(true, $payload['analyzer_options_preserved'] ?? null, 'confirmed reset-index should report analyzer option preservation');
+
+    assert_same([], $fake->terms, 'confirmed reset-index should clear terms');
+    assert_same([], $fake->postings, 'confirmed reset-index should clear postings');
+    assert_same([], $fake->docs, 'confirmed reset-index should clear docs and tombstones');
+    assert_same([], $fake->docLengths, 'confirmed reset-index should clear doc lengths');
+    assert_same([], $fake->docMeta, 'confirmed reset-index should clear doc metadata');
+    assert_same([], $fake->meta, 'confirmed reset-index should clear collection metadata');
+    assert_same($snapshot['postRows'], $fake->postRows, 'confirmed reset-index should not delete or trash WordPress posts');
+    assert_same(WP_FTS_Plugin::SCHEMA_VERSION, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] ?? null, 'confirmed reset-index should preserve schema option');
+    assert_same($settingsBefore, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] ?? null, 'confirmed reset-index should preserve plugin settings');
+    assert_same($analyzerBefore, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? null, 'confirmed reset-index should preserve analyzer options');
+    assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'confirmed reset-index should clear the pending queue option');
+
+    foreach ($fake->queries as $query) {
+        $sql = is_array($query) ? (string) ($query[0] ?? '') : (string) $query;
+        if (in_array($sql, ['START TRANSACTION', 'COMMIT'], true)) {
+            continue;
+        }
+        assert_true(str_starts_with($sql, 'DELETE FROM wp_fts_'), "confirmed reset-index should only issue FTS table deletes, saw {$sql}");
+        assert_true(!str_contains($sql, 'wp_posts'), "confirmed reset-index should not run SQL against wp_posts, saw {$sql}");
+        assert_true(!str_contains($sql, 'DROP '), "confirmed reset-index should not drop tables, saw {$sql}");
+    }
+
+    assert_same('current', $status['schema_status'] ?? null, 'status after reset should keep schema current');
+    assert_same(0, $status['indexed_count'] ?? null, 'status after reset should report an empty index');
+    assert_same(0, $status['pending_queue_count'] ?? null, 'status after reset should report no pending queue');
+    assert_same(false, $status['stale_debt_active'] ?? null, 'status after reset should report no stale debt');
+    assert_same([], $status['stale_debt_reasons'] ?? null, 'status after reset should clear stale debt reasons');
+    assert_same(0, $status['stale_debt_cursor_post_id'] ?? null, 'status after reset should clear stale debt cursor');
+    assert_same(0, $status['last_batch_failures'] ?? null, 'status after reset should clear batch failures');
+    assert_same(0, $status['last_failed_post_id'] ?? null, 'status after reset should clear failed post id');
+    assert_same('', $status['last_failed_post_title'] ?? null, 'status after reset should clear failed post title');
+    assert_same('', $status['last_error'] ?? null, 'status after reset should clear failure error');
+    $diagnostics = $status['latest_batch_diagnostics'] ?? [];
+    assert_same('wp-cli-reset-index', $diagnostics['source'] ?? null, 'status after reset should identify reset as the latest writer');
+    assert_same('success', $diagnostics['status'] ?? null, 'status after reset should report successful reset diagnostics');
+    assert_true(!str_contains(json_encode($payload, JSON_THROW_ON_ERROR), 'SELECT '), 'reset-index JSON should not include raw SQL');
+    assert_true(!str_contains(json_encode($payload, JSON_THROW_ON_ERROR), 'Indexed reset fixture'), 'reset-index JSON should not include post content or titles');
+    assert_same([], WP_CLI::$warningMessages, 'confirmed reset-index should not warn');
 });
 
 test_case('wp-cli process-batch runs one bounded manual batch with queue and backfill counts', function (): void {

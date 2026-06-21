@@ -10,7 +10,7 @@ declare(strict_types=1);
  * flag, and per-language lengths live in a separate table so BM25 can score
  * inside one language partition without mixing collection statistics.
  */
-final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage
+final class WP_FTS_Storage_Mysql implements WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
 {
     private object $wpdb;
     private string $termsTable;
@@ -779,6 +779,32 @@ ON DUPLICATE KEY UPDATE v = GREATEST(0, v + %d)",
     }
 
     /**
+     * Clear all FTS data rows without dropping or recreating tables.
+     *
+     * @return array<string,int>
+     */
+    public function reset_index(): array
+    {
+        $this->begin_transaction();
+        try {
+            $counts = [
+                'postings_deleted' => $this->delete_all_from_table($this->postingsTable, 'clear FTS postings'),
+                'terms_deleted' => $this->delete_all_from_table($this->termsTable, 'clear FTS terms'),
+                'doc_lengths_deleted' => $this->delete_all_from_table($this->docLengthsTable, 'clear FTS document lengths'),
+                'doc_metadata_deleted' => $this->delete_all_from_table($this->docMetaTable, 'clear FTS document metadata'),
+                'docs_deleted' => $this->delete_all_from_table($this->docsTable, 'clear FTS documents'),
+                'collection_metadata_deleted' => $this->delete_all_from_table($this->metaTable, 'clear FTS collection metadata'),
+            ];
+            $this->commit();
+        } catch (Throwable $e) {
+            $this->rollback();
+            throw $e;
+        }
+
+        return $counts;
+    }
+
+    /**
      * Compact tombstoned documents and rebuild collection metadata.
      *
      * Deleted ids are removed with row deletes from the postings table, term
@@ -1218,6 +1244,21 @@ WHERE term = %s",
         }
 
         $this->assert_no_database_error($context);
+    }
+
+    /**
+     * Delete every row from one plugin-owned FTS table and return affected rows.
+     */
+    private function delete_all_from_table(string $table, string $context): int
+    {
+        $result = $this->wpdb->query("DELETE FROM {$table}");
+        if ($result === false) {
+            throw $this->database_exception($context);
+        }
+
+        $this->assert_no_database_error($context);
+
+        return is_int($result) ? max(0, $result) : 0;
     }
 
     /**

@@ -130,12 +130,42 @@ wp post list --post_status=trash --format=ids | xargs -r -n1 wp fts delete
 The MySQL backend stores postings as rows and applies document-frequency deltas
 instead of rewriting whole per-term blobs during normal indexing. This removes
 the previous whole-blob lost-update failure mode for different documents, but
-WP-CLI reindex, delete, and optimize now coordinate through the plugin's
-shared writer lock. If one of those commands reports lock contention, no
-overlapping writer was started; check `wp fts status` and try again after the
-active batch finishes. The lock is option-backed rather than an external
-distributed lock, so avoid overlapping full reindex, delete, and optimize jobs
-until the target environment has been load tested.
+WP-CLI reindex, delete, optimize, and reset jobs now coordinate through the
+plugin's shared writer lock. If one of those commands reports lock contention,
+no overlapping writer was started; check `wp fts status` and try again after
+the active batch finishes. The lock is option-backed rather than an external
+distributed lock, so avoid overlapping full reindex, delete, optimize, and reset
+jobs until the target environment has been load tested.
+
+## Index Reset
+
+Use reset when an operator needs to clear only the derived Language FTS index
+and runtime indexing state while keeping WordPress content and plugin
+configuration:
+
+```sh
+wp fts reset-index --yes
+wp fts reset-index --yes --format=json
+```
+
+The command requires `--yes`. Without confirmation it reports
+`confirmation_required` and does not mutate FTS storage or plugin options. With
+confirmation it clears the plugin-owned FTS documents, postings, document
+lengths, document metadata, term rows, collection metadata, pending queue, stale
+debt, and stale failure/latest-batch state. It preserves WordPress posts, post
+meta, terms, unrelated options, plugin settings, analyzer-pack options, schema
+version, and the existing `fts_*` table contract. It does not change uninstall
+behavior; uninstall remains conservative and data-retaining.
+
+If another index writer holds the shared lock, reset reports `skipped_locked`
+and leaves storage, queue, stale debt, failure state, and the lock untouched.
+
+After reset, repopulate the index with bounded batches or a scoped reindex:
+
+```sh
+wp fts process-batch --batch_size=100 --time_budget=20
+wp fts reindex --post_type=post,page --post_status=publish --batch_size=200
+```
 
 ## Search Operation
 
@@ -334,9 +364,9 @@ Practical guidance for this branch:
 - Reindex off peak on large sites.
 - Start with `--batch_size=100` to `--batch_size=500`, then adjust based on DB
   load.
-- Treat a `wp fts reindex`, `wp fts delete`, or `wp fts optimize` lock warning
-  as a safe skip; the command did not mutate the index while another writer was
-  active.
+- Treat a `wp fts reindex`, `wp fts delete`, `wp fts optimize`, or
+  `wp fts reset-index` lock warning as a safe skip; the command did not mutate
+  the index while another writer was active.
 - Keep explicit `--post_type` and `--post_status` scopes narrow.
 - Use `--limit` for smoke tests before running a full reindex.
 - Monitor table sizes for the active prefix, especially `*_fts_postings`.

@@ -228,3 +228,19 @@ interface WP_FTS_Prefix_Term_Storage extends WP_FTS_Storage
      */
     public function terms_with_prefix(string $prefix, int $limit): array;
 }
+
+/**
+ * Optional storage extension for table-preserving whole-index resets.
+ *
+ * Implementations must remove only derived FTS rows and leave schema/table
+ * contracts intact so a later reindex can repopulate the same backend.
+ */
+interface WP_FTS_Resettable_Storage extends WP_FTS_Storage
+{
+    /**
+     * Clear all indexed document, posting, term, and collection metadata rows.
+     *
+     * @return array<string,int> Bounded row counts keyed by deleted data kind.
+     */
+    public function reset_index(): array;
+}

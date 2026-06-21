@@ -812,7 +812,9 @@ final class WP_FTS_Plugin
             $summary['lock_prevented_work'] = true;
             self::remember_index_batch_stop($summary, 'lock_active');
             self::finalize_index_batch_summary($summary, $started);
-            self::update_index_health_state($summary);
+            if (!array_key_exists('record_skip', $opts) || (bool) $opts['record_skip']) {
+                self::update_index_health_state($summary);
+            }
 
             return [
                 'acquired' => false,
@@ -951,6 +953,54 @@ final class WP_FTS_Plugin
         self::upgrade_schema();
 
         return self::schema_status();
+    }
+
+    /**
+     * Clear derived FTS index data and runtime indexing state.
+     *
+     * WordPress posts, plugin settings, analyzer options, and schema version are
+     * intentionally preserved so operators can repopulate with reindex/batches.
+     *
+     * @return array<string,mixed>
+     */
+    public static function reset_index(): array
+    {
+        self::maybe_upgrade_schema();
+        $storage = self::storage(false);
+        if (!$storage instanceof WP_FTS_Resettable_Storage) {
+            throw new RuntimeException('Configured FTS storage does not support index reset.');
+        }
+
+        $queue_before = count(self::pending_queue());
+        $health_before = self::index_health_state();
+        $counts = $storage->reset_index();
+
+        self::set_option(self::QUEUE_OPTION, []);
+        self::clear_scheduled_queue_processor();
+        self::reset_index_health_state();
+
+        $schema = self::schema_status();
+
+        return [
+            'status' => 'reset',
+            'reset' => true,
+            'schema_status' => $schema['status'],
+            'schema_version' => $schema['stored_version'],
+            'expected_schema_version' => $schema['expected_version'],
+            'storage_backend' => self::index_storage_backend_label(),
+            'postings_deleted' => max(0, (int) ($counts['postings_deleted'] ?? 0)),
+            'terms_deleted' => max(0, (int) ($counts['terms_deleted'] ?? 0)),
+            'docs_deleted' => max(0, (int) ($counts['docs_deleted'] ?? 0)),
+            'doc_lengths_deleted' => max(0, (int) ($counts['doc_lengths_deleted'] ?? 0)),
+            'doc_metadata_deleted' => max(0, (int) ($counts['doc_metadata_deleted'] ?? 0)),
+            'collection_metadata_deleted' => max(0, (int) ($counts['collection_metadata_deleted'] ?? 0)),
+            'pending_queue_cleared' => $queue_before,
+            'stale_debt_cleared' => (bool) ($health_before['stale_debt_active'] ?? false),
+            'last_batch_failures_cleared' => max(0, (int) ($health_before['last_batch_failures'] ?? 0)),
+            'wordpress_posts_deleted' => 0,
+            'settings_preserved' => true,
+            'analyzer_options_preserved' => true,
+        ];
     }
 
     /**
@@ -11355,6 +11405,17 @@ WHERE p.post_password = ''
             'stale_debt_processed_count' => 0,
             'stale_debt_remaining_count' => 0,
         ];
+    }
+
+    private static function reset_index_health_state(): void
+    {
+        $state = self::default_index_health_state();
+        $profile = self::current_index_profile();
+        $current_profile_hash = self::sanitize_index_profile_hash($profile['hash'] ?? self::index_profile_hash($profile));
+        $state['index_profile_hash'] = $current_profile_hash;
+        $state['accepted_index_profile_hash'] = $current_profile_hash;
+
+        self::set_option(self::INDEX_HEALTH_OPTION, $state);
     }
 
     /**

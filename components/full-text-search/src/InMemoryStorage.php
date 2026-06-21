@@ -7,7 +7,7 @@ declare(strict_types=1);
  * State lives in PHP arrays, supports rollback logs, and mirrors the
  * language-aware storage contract without any persistence layer.
  */
-final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage
+final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMetadataStorage, WP_FTS_DocumentMetadataFilterStorage, WP_FTS_Row_Postings_Storage, WP_FTS_Capped_Postings_Storage, WP_FTS_Document_Terms_Storage, WP_FTS_Prefix_Term_Storage, WP_FTS_Resettable_Storage
 {
     /** @var array<string,array{df:int,postings:string}> Encoded row cache for blob-shaped compatibility reads. */
     private array $terms = [];
@@ -609,6 +609,39 @@ final class WP_FTS_Storage_InMemory implements WP_FTS_Storage, WP_FTS_DocumentMe
      */
     public function flush(): void
     {
+    }
+
+    /**
+     * Clear all derived index rows while preserving the storage object itself.
+     *
+     * @return array<string,int>
+     */
+    public function reset_index(): array
+    {
+        $this->remember_full_state();
+        $counts = [
+            'postings_deleted' => array_sum(array_map('count', $this->postingsByTerm)),
+            'terms_deleted' => count($this->postingsByTerm),
+            'docs_deleted' => count($this->docs),
+            'doc_lengths_deleted' => array_sum(array_map(
+                static fn(array $doc): int => count($doc['lang_lengths'] ?? []),
+                $this->docs
+            )),
+            'doc_metadata_deleted' => count($this->docMetadata),
+            'collection_metadata_deleted' => count($this->meta),
+        ];
+
+        $this->terms = [];
+        $this->postingsByTerm = [];
+        $this->postingsSortedByTerm = [];
+        $this->termsByDoc = [];
+        $this->docs = [];
+        $this->docMetadata = [];
+        $this->meta = [];
+        $this->metaDirty = false;
+        $this->clear_document_read_cache();
+
+        return $counts;
     }
 
     /**

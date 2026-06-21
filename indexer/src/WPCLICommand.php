@@ -256,6 +256,58 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
+     * Clear FTS index data and runtime indexing state without deleting posts.
+     *
+     * ## OPTIONS
+     *
+     * --yes
+     * : Required destructive confirmation. Without it, no storage or options are mutated.
+     *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function reset_index(array $args, array $assoc_args): void
+    {
+        if (!$this->bool_flag_arg($assoc_args, ['yes'], false)) {
+            $this->output_assoc([
+                'status' => 'confirmation_required',
+                'reset' => false,
+                'message' => 'Pass --yes to clear FTS index data.',
+            ], $assoc_args);
+            if (class_exists('WP_CLI') && is_callable(['WP_CLI', 'warning'])) {
+                WP_CLI::warning('Confirmation required: pass --yes to clear FTS index data. WordPress posts and plugin settings will be preserved.');
+            }
+            return;
+        }
+
+        $locked = WP_FTS_Plugin::run_index_writer_with_lock(
+            'wp-cli-reset-index',
+            static fn(): array => WP_FTS_Plugin::reset_index(),
+            [
+                'batch_size' => 0,
+                'processed' => 0,
+                'record_skip' => false,
+            ]
+        );
+        if (empty($locked['acquired'])) {
+            $this->warn_index_writer_locked('reset-index');
+            $this->output_assoc([
+                'status' => 'skipped_locked',
+                'reset' => false,
+                'lock_active' => true,
+                'message' => 'Another index writer is already running; no reset was performed.',
+            ], $assoc_args);
+            return;
+        }
+
+        $result = is_array($locked['result'] ?? null) ? $locked['result'] : [];
+        $this->output_assoc($result, $assoc_args);
+    }
+
+    /**
      * Repair the FTS schema without indexing content.
      *
      * ## OPTIONS
