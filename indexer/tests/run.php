@@ -4135,6 +4135,16 @@ function wp_fts_test_seed_indexed_posts(WP_FTS_Test_WPDB $wpdb, int $count, int 
     ksort($GLOBALS['wp_fts_test_posts'], SORT_NUMERIC);
 }
 
+function wp_fts_test_index_saved_post(int $post_id, object $post, mixed ...$unused): void
+{
+    WP_FTS_Plugin::handle_post_save($post_id, $post, ...$unused);
+    WP_FTS_Plugin::process_queue(1);
+
+    if (($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? []) === []) {
+        unset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]);
+    }
+}
+
 function wp_fts_test_mark_field_boost_stale_debt(float $title_boost = 8.0): array
 {
     $oldPost = $_POST;
@@ -4614,7 +4624,7 @@ test_case('post language meta box defaults to automatic detection and stores ove
         WP_FTS_Plugin::save_post_language_override(77, $post, true);
         assert_same('pl', get_post_meta(77, WP_FTS_Plugin::LANGUAGE_META_KEY, true), 'valid post save should store the selected language override');
 
-        WP_FTS_Plugin::handle_post_save(77, $post, true);
+        wp_fts_test_index_saved_post(77, $post, true);
         assert_same('pl', $fake->docs[77]['lang'] ?? null, 'post language override should reach incremental indexing');
         assert_true(isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'zamek')]), 'manual Polish override should index through the Polish partition');
 
@@ -6177,8 +6187,8 @@ test_case('sandbox language fallback uses current site language dynamically', fu
         $GLOBALS['wp_fts_test_posts'][612] = $polish;
         update_post_meta(611, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
         update_post_meta(612, WP_FTS_Plugin::LANGUAGE_META_KEY, 'pl');
-        WP_FTS_Plugin::handle_post_save(611, $english, true);
-        WP_FTS_Plugin::handle_post_save(612, $polish, true);
+        wp_fts_test_index_saved_post(611, $english, true);
+        wp_fts_test_index_saved_post(612, $polish, true);
 
         $GLOBALS['wp_fts_test_locale'] = 'en';
         $englishHtml = $render();
@@ -6236,7 +6246,7 @@ test_case('sandbox passes search knobs to Searcher options', function (): void {
             ];
             $GLOBALS['wp_fts_test_posts'][$postId] = $post;
             update_post_meta($postId, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
-            WP_FTS_Plugin::handle_post_save($postId, $post, true);
+            wp_fts_test_index_saved_post($postId, $post, true);
         }
 
         $_POST = [];
@@ -6386,7 +6396,7 @@ test_case('admin sandbox indexed terms expose stored Polish lemmas for split inl
     try {
         $GLOBALS['wp_fts_test_posts'][901] = $post;
         update_post_meta(901, WP_FTS_Plugin::LANGUAGE_META_KEY, 'pl');
-        WP_FTS_Plugin::handle_post_save(901, $post, true);
+        wp_fts_test_index_saved_post(901, $post, true);
 
         $_POST = [];
         $_GET = [
@@ -6668,7 +6678,7 @@ test_case('sandbox searches existing indexed content without creating demo posts
         ];
         $GLOBALS['wp_fts_test_posts'][904] = $post;
         update_post_meta(904, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
-        WP_FTS_Plugin::handle_post_save(904, $post, true);
+        wp_fts_test_index_saved_post(904, $post, true);
 
         $_POST = [];
         $_GET = [
@@ -6735,7 +6745,7 @@ test_case('admin sandbox progressive render defers snippets and debug terms', fu
         ];
         $GLOBALS['wp_fts_test_posts'][914] = $post;
         update_post_meta(914, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
-        WP_FTS_Plugin::handle_post_save(914, $post, true);
+        wp_fts_test_index_saved_post(914, $post, true);
 
         $fake->prepared = [];
         $_POST = [];
@@ -6819,7 +6829,7 @@ test_case('admin sandbox detail ajax returns sanitized snippets and explicit deb
         ];
         $GLOBALS['wp_fts_test_posts'][915] = $post;
         update_post_meta(915, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
-        WP_FTS_Plugin::handle_post_save(915, $post, true);
+        wp_fts_test_index_saved_post(915, $post, true);
 
         $request = [
             'wp_fts_sandbox_details_nonce' => wp_create_nonce('wp_fts_sandbox_result_details'),
@@ -6900,7 +6910,7 @@ test_case('legacy sandbox demo cleanup moves exact posts to trash and leaves unr
                 'post_date_gmt' => '2026-06-12 00:00:00',
             ];
             $GLOBALS['wp_fts_test_posts'][$post_id] = $post;
-            WP_FTS_Plugin::handle_post_save($post_id, $post, true);
+            wp_fts_test_index_saved_post($post_id, $post, true);
         }
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SANDBOX_DEMO_POSTS_OPTION] = [100, 101, 102, 103];
 
@@ -6966,7 +6976,7 @@ test_case('admin sandbox indexed post list comes from storage and paginates', fu
                 'post_date_gmt' => '2026-06-12 00:00:00',
             ];
             $GLOBALS['wp_fts_test_posts'][$post_id] = $post;
-            WP_FTS_Plugin::handle_post_save($post_id, $post, true);
+            wp_fts_test_index_saved_post($post_id, $post, true);
         }
 
         wp_fts_test_capture_admin_sandbox();
@@ -8316,7 +8326,7 @@ test_case('multisite uninstall falls back to current-site cleanup when site enum
     }
 });
 
-test_case('runtime post hooks index visible posts immediately and tombstone invisible posts', function (): void {
+test_case('runtime post hooks queue eligible saves and status transitions then processors index them', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -8341,27 +8351,76 @@ test_case('runtime post hooks index visible posts immediately and tombstone invi
 
     try {
         WP_FTS_Plugin::handle_post_save(101, $post, true);
+        assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'eligible save hooks should enqueue the post');
+        assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'eligible save hooks should schedule the bounded processor');
+        assert_same([], $fake->docs, 'eligible save hooks should not write FTS docs inline');
+        assert_same([], $fake->terms, 'eligible save hooks should not write FTS terms inline');
+        assert_same([], $fake->postings, 'eligible save hooks should not write postings inline');
+        assert_same([], WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'queued saves should not become searchable before a processor run');
+
         WP_FTS_Plugin::handle_post_save(101, $post, true);
-        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'save hooks should not require background queue processing for visible posts');
-        assert_true(isset($fake->docs[101]) && $fake->docs[101]['is_deleted'] === 0, 'save hooks should write an active document immediately');
-        assert_true($fake->terms !== [], 'save hooks should write term postings immediately');
+        assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'duplicate eligible saves should dedupe queue entries');
+
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+            'token' => 'active-save-queue-lock',
+            'mode' => 'cron',
+            'started_at' => time(),
+            'expires_at' => time() + 300,
+        ];
+        $locked = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        assert_same(true, $locked['skipped_locked'], 'manual processor should skip when a writer lock is active');
+        assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'locked processors should preserve queued save work');
+        assert_same([], $fake->docs, 'locked processors should not write queued docs');
+        unset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]);
+
+        $processed = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1, 'source' => 'test-save-queue']);
+        assert_same(1, $processed['processed'], 'manual processor should index one queued save');
+        assert_same(1, $processed['queue_processed'], 'manual processor should report queued save work separately');
+        assert_same(0, $processed['backfill_processed'], 'manual processor should not spend capacity on backfill while queued save work fills the batch');
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'processed queued saves should leave the queue empty');
+        assert_true(isset($fake->docs[101]) && $fake->docs[101]['is_deleted'] === 0, 'processor should write an active document for queued saves');
+        assert_true($fake->terms !== [], 'processor should write term postings for queued saves');
         assert_same([101], array_column(WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'doc_id'), 'search helper should expose the indexed public post');
-        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeExcerptSignal', ['limit' => 10]), 'doc_id'), 'immediate indexing should include extracted excerpts');
-        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeCustomSignal', ['limit' => 10]), 'doc_id'), 'immediate indexing should include selected custom fields');
-        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeRenderedSignal', ['limit' => 10]), 'doc_id'), 'immediate indexing should include rendered-only block output');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeExcerptSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include extracted excerpts');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeCustomSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include selected custom fields');
+        assert_same([101], array_column(WP_FTS_Plugin::search('RuntimeRenderedSignal', ['limit' => 10]), 'doc_id'), 'queued indexing should include rendered-only block output');
         $filtered = (new WP_FTS_Searcher(WP_FTS_Plugin::storage(false), new WP_FTS_Analyzer()))->search('Needle', [
             'lang' => 'en',
             'include_total' => true,
             'post_status' => 'publish',
         ]);
-        assert_same(1, $filtered['total'], 'immediate indexing should write metadata usable by status filters');
-        assert_contains('RuntimeExcerptSignal', $fake->docMeta[101]['search_text'] ?? '', 'immediate metadata should keep excerpt text for snippets');
-        assert_contains('RuntimeCustomSignal', $fake->docMeta[101]['search_text'] ?? '', 'immediate metadata should keep custom field text for snippets');
-        assert_contains('RuntimeRenderedSignal', $fake->docMeta[101]['search_text'] ?? '', 'immediate metadata should keep rendered text for snippets');
+        assert_same(1, $filtered['total'], 'queued indexing should write metadata usable by status filters');
+        assert_contains('RuntimeExcerptSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep excerpt text for snippets');
+        assert_contains('RuntimeCustomSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep custom field text for snippets');
+        assert_contains('RuntimeRenderedSignal', $fake->docMeta[101]['search_text'] ?? '', 'queued metadata should keep rendered text for snippets');
+        $health = WP_FTS_Plugin::search_health();
+        assert_same(1, $health['last_batch_queue_processed'] ?? null, 'health should record latest queued-save processing count');
+        $diagnostics = $health['latest_batch_diagnostics'] ?? [];
+        assert_same(1, $diagnostics['queue_before'] ?? null, 'latest diagnostics should record queue count before processing');
+        assert_same(0, $diagnostics['queue_after'] ?? null, 'latest diagnostics should record queue count after processing');
+        assert_same(1, $diagnostics['queue_processed'] ?? null, 'latest diagnostics should record queue work processed');
+
+        $statusPost = (object) [
+            'ID' => 103,
+            'post_title' => 'Status queued',
+            'post_content' => '<p>statusqueueneedle body</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-07 00:00:00',
+        ];
+        $GLOBALS['wp_fts_test_posts'][103] = $statusPost;
+        WP_FTS_Plugin::handle_status_transition('publish', 'draft', $statusPost);
+        assert_same([103], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'eligible status transitions should enqueue instead of indexing inline');
+        assert_true(!isset($fake->docs[103]), 'eligible status transitions should not write docs inline');
+        $cron = WP_FTS_Plugin::process_scheduled_indexing();
+        assert_same(1, $cron['queue_processed'], 'cron processor should consume queued status-transition work before backfill');
+        assert_true(($fake->docs[103]['is_deleted'] ?? 1) === 0, 'cron processor should index the queued status-transition post');
 
         $post->post_status = 'trash';
         WP_FTS_Plugin::handle_status_transition('trash', 'publish', $post);
         assert_true($fake->docs[101]['is_deleted'] === 1, 'leaving searchable status should tombstone the indexed document');
+        assert_true(!in_array(101, $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], true), 'leaving searchable status should remove stale queued entries for the post');
         assert_same([], WP_FTS_Plugin::search('alpha', ['limit' => 10]), 'tombstoned documents should not be returned');
 
         $GLOBALS['wp_fts_test_revisions'][102] = true;
@@ -8391,7 +8450,7 @@ test_case('search helper uses saved prefix thresholds and preserves explicit ove
     $GLOBALS['wp_fts_test_posts'][1181] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(1181, $post, true);
+        wp_fts_test_index_saved_post(1181, $post, true);
         assert_same([], WP_FTS_Plugin::search('qua', ['limit' => 10]), 'default prefix minimum length should not expand a three-letter query');
 
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
@@ -8458,8 +8517,8 @@ test_case('saved field boost settings change runtime ranking after reindex', fun
 
     try {
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $withBoosts(1.0, 8.0);
-        WP_FTS_Plugin::handle_post_save(124701, $titleMatch, true);
-        WP_FTS_Plugin::handle_post_save(124702, $contentMatch, true);
+        wp_fts_test_index_saved_post(124701, $titleMatch, true);
+        wp_fts_test_index_saved_post(124702, $contentMatch, true);
         $contentFirst = (new WP_FTS_Searcher(WP_FTS_Plugin::storage(false), WP_FTS_Plugin::runtime_analyzer()))->search('rankboostneedle', [
             'lang' => 'en',
             'limit' => 2,
@@ -8469,8 +8528,8 @@ test_case('saved field boost settings change runtime ranking after reindex', fun
         assert_same(8.0, $contentMetadata['field_boosts']['content'] ?? null, 'runtime indexing should store the effective content boost in metadata');
 
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $withBoosts(8.0, 1.0);
-        WP_FTS_Plugin::handle_post_save(124701, $titleMatch, true);
-        WP_FTS_Plugin::handle_post_save(124702, $contentMatch, true);
+        wp_fts_test_index_saved_post(124701, $titleMatch, true);
+        wp_fts_test_index_saved_post(124702, $contentMatch, true);
         $titleFirst = (new WP_FTS_Searcher(WP_FTS_Plugin::storage(false), WP_FTS_Plugin::runtime_analyzer()))->search('rankboostneedle', [
             'lang' => 'en',
             'limit' => 2,
@@ -8504,12 +8563,17 @@ test_case('disabled auto-index blocks status transition indexing but still tombs
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $settings;
 
     try {
+        WP_FTS_Plugin::handle_post_save(111, $post, true);
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'disabled auto-index should not queue eligible saves');
+        assert_true(!isset($fake->docs[111]), 'disabled auto-index should not index eligible saves inline');
+
         WP_FTS_Plugin::handle_status_transition('publish', 'draft', $post);
+        assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'disabled auto-index should not queue eligible status transitions');
         assert_true(!isset($fake->docs[111]), 'disabled auto-index should not index when a post transitions into a searchable status');
         assert_same([], WP_FTS_Plugin::search('manualtransitionneedle', ['limit' => 10]), 'blocked transition indexing should leave FTS results empty');
 
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace($settings, ['auto_index' => true]);
-        WP_FTS_Plugin::handle_post_save(111, $post, true);
+        wp_fts_test_index_saved_post(111, $post, true);
         assert_true(($fake->docs[111]['is_deleted'] ?? 1) === 0, 'test setup should create an active indexed document');
 
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $settings;
@@ -8586,7 +8650,7 @@ test_case('password-protected published posts are not queued indexed or exposed'
         $GLOBALS['wp_fts_test_caps']['read_post'][311] = true;
         assert_same([312], array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id'), 'public search should hide password-protected posts even when stale indexed rows exist');
 
-        WP_FTS_Plugin::handle_post_save(311, $passworded, true);
+        wp_fts_test_index_saved_post(311, $passworded, true);
         assert_same([], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'password-protected publish saves should not enqueue indexing work');
         assert_true(($fake->docs[311]['is_deleted'] ?? 0) === 1, 'password-protected publish saves should tombstone stale indexed rows');
     } finally {
@@ -8751,8 +8815,8 @@ test_case('front-end main query search is replaced with FTS-ranked WP_Post resul
     $GLOBALS['wp_fts_test_posts'][502] = $high;
 
     try {
-        WP_FTS_Plugin::handle_post_save(501, $low, true);
-        WP_FTS_Plugin::handle_post_save(502, $high, true);
+        wp_fts_test_index_saved_post(501, $low, true);
+        wp_fts_test_index_saved_post(502, $high, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'frontneedle',
@@ -8822,8 +8886,8 @@ test_case('enabled diagnostics record frontend search timings counts language se
     $GLOBALS['wp_fts_test_posts'][506] = $high;
 
     try {
-        WP_FTS_Plugin::handle_post_save(505, $low, true);
-        WP_FTS_Plugin::handle_post_save(506, $high, true);
+        wp_fts_test_index_saved_post(505, $low, true);
+        wp_fts_test_index_saved_post(506, $high, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'diagnosticneedle',
@@ -9066,7 +9130,7 @@ test_case('front-end search totals are not capped by visibility refill scan size
                 'post_date_gmt' => '2026-06-13 00:00:00',
             ];
             $GLOBALS['wp_fts_test_posts'][$postId] = $post;
-            WP_FTS_Plugin::handle_post_save($postId, $post, true);
+            wp_fts_test_index_saved_post($postId, $post, true);
         }
 
         $query = new WP_FTS_Test_Query([
@@ -9104,7 +9168,7 @@ test_case('front-end search replacement respects pagination and explicit offset'
                 'post_date_gmt' => '2026-06-13 00:00:00',
             ];
             $GLOBALS['wp_fts_test_posts'][$postId] = $post;
-            WP_FTS_Plugin::handle_post_save($postId, $post, true);
+            wp_fts_test_index_saved_post($postId, $post, true);
         }
 
         $pageTwo = new WP_FTS_Test_Query([
@@ -9160,8 +9224,8 @@ test_case('front-end search replacement overrides earlier posts_pre_query provid
     $GLOBALS['wp_fts_test_posts'][822] = $high;
 
     try {
-        WP_FTS_Plugin::handle_post_save(821, $low, true);
-        WP_FTS_Plugin::handle_post_save(822, $high, true);
+        wp_fts_test_index_saved_post(821, $low, true);
+        wp_fts_test_index_saved_post(822, $high, true);
 
         $incoming = [(object) ['ID' => 820, 'post_title' => 'Earlier provider result']];
         $query = new WP_FTS_Test_Query([
@@ -9278,7 +9342,7 @@ test_case('enabled diagnostics record search provider compatibility overrides', 
     $GLOBALS['wp_fts_test_posts'][842] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(842, $post, true);
+        wp_fts_test_index_saved_post(842, $post, true);
 
         $incoming = [
             (object) ['ID' => 840, 'post_title' => 'Earlier provider result A'],
@@ -9397,8 +9461,8 @@ test_case('admin Posts list search is replaced with FTS-ranked WP_Post results',
     $GLOBALS['wp_fts_test_posts'][552] = $high;
 
     try {
-        WP_FTS_Plugin::handle_post_save(551, $low, true);
-        WP_FTS_Plugin::handle_post_save(552, $high, true);
+        wp_fts_test_index_saved_post(551, $low, true);
+        wp_fts_test_index_saved_post(552, $high, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'adminneedle',
@@ -9464,8 +9528,8 @@ test_case('admin Posts list search replacement overrides earlier posts_pre_query
     $GLOBALS['wp_fts_test_posts'][832] = $high;
 
     try {
-        WP_FTS_Plugin::handle_post_save(831, $low, true);
-        WP_FTS_Plugin::handle_post_save(832, $high, true);
+        wp_fts_test_index_saved_post(831, $low, true);
+        wp_fts_test_index_saved_post(832, $high, true);
 
         $incoming = [(object) ['ID' => 830, 'post_title' => 'Earlier admin provider result']];
         $query = new WP_FTS_Test_Query([
@@ -9556,7 +9620,7 @@ test_case('admin Posts list default search covers supported statuses and filters
                 'post_date_gmt' => '2026-06-14 00:00:00',
             ];
             $GLOBALS['wp_fts_test_posts'][$postId] = $post;
-            WP_FTS_Plugin::handle_post_save($postId, $post, true);
+            wp_fts_test_index_saved_post($postId, $post, true);
         }
 
         foreach ([561, 562, 563, 564, 565] as $postId) {
@@ -9658,7 +9722,7 @@ test_case('admin Posts list search replacement can be disabled independently', f
     $GLOBALS['wp_fts_test_posts'][553] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(553, $post, true);
+        wp_fts_test_index_saved_post(553, $post, true);
 
         $GLOBALS['wp_fts_test_is_admin'] = true;
         $GLOBALS['pagenow'] = 'edit.php';
@@ -9790,7 +9854,7 @@ test_case('front-end search replacement declines constrained WP_Query searches',
     $GLOBALS['wp_fts_test_posts'][751] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(751, $post, true);
+        wp_fts_test_index_saved_post(751, $post, true);
 
         $constrainedVars = [
             'category id' => ['cat' => 5],
@@ -9906,7 +9970,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
     $GLOBALS['wp_fts_test_posts'][801] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(801, $post, true);
+        wp_fts_test_index_saved_post(801, $post, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'kierować',
@@ -9970,7 +10034,7 @@ test_case('front-end search auto-detects Polish and highlights morphology-backed
             . '<p>W książkach i zamkach i w sta<strong>jn<em>ia</em></strong>ch wyszukujemy wpisy oraz kierujemy katalog.</p>' . "\n"
             . '<!-- /wp:paragraph -->';
         $GLOBALS['wp_fts_test_posts'][801] = $post;
-        WP_FTS_Plugin::handle_post_save(801, $post, true);
+        wp_fts_test_index_saved_post(801, $post, true);
 
         assert_true(
             isset($fake->terms[WP_FTS_TermNamespace::namespace_term('pl', 'stajnia')]),
@@ -10030,7 +10094,7 @@ test_case('front-end search highlights title-only matches while keeping previews
     $GLOBALS['wp_fts_test_posts'][802] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(802, $post, true);
+        wp_fts_test_index_saved_post(802, $post, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'run',
@@ -10095,7 +10159,7 @@ test_case('front-end search reuses sanitized searcher snippets for content previ
     $GLOBALS['wp_fts_test_posts'][814] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(814, $post, true);
+        wp_fts_test_index_saved_post(814, $post, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'reusecontentneedle',
@@ -10281,7 +10345,7 @@ test_case('front-end search highlights from global main query outside loop scope
     $GLOBALS['wp_fts_test_posts'][803] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(803, $post, true);
+        wp_fts_test_index_saved_post(803, $post, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'globalneedle',
@@ -10351,7 +10415,7 @@ test_case('front-end search highlights core post blocks from block query context
     $GLOBALS['wp_fts_test_posts'][804] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(804, $post, true);
+        wp_fts_test_index_saved_post(804, $post, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'university',
@@ -10494,7 +10558,7 @@ test_case('front-end search snippets preserve split inline HTML safely', functio
     $GLOBALS['wp_fts_test_posts'][811] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(811, $post, true);
+        wp_fts_test_index_saved_post(811, $post, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'Węgorz',
@@ -10537,7 +10601,7 @@ test_case('front-end search snippets remove hidden bodies from split highlighted
     $GLOBALS['wp_fts_test_posts'][812] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(812, $post, true);
+        wp_fts_test_index_saved_post(812, $post, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'needle',
@@ -10579,7 +10643,7 @@ test_case('front-end search excerpts are scoped to the active replaced main loop
     $GLOBALS['wp_fts_test_posts'][813] = $post;
 
     try {
-        WP_FTS_Plugin::handle_post_save(813, $post, true);
+        wp_fts_test_index_saved_post(813, $post, true);
 
         $query = new WP_FTS_Test_Query([
             's' => 'scopeneedle',
