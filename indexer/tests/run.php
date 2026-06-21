@@ -3163,7 +3163,10 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_uninstall_hooks'] = [];
     $GLOBALS['wp_fts_test_options'] = [];
     $GLOBALS['wp_fts_test_added_options'] = [];
+    $GLOBALS['wp_fts_test_updated_options'] = [];
     $GLOBALS['wp_fts_test_scheduled'] = [];
+    $GLOBALS['wp_fts_test_next_scheduled_calls'] = [];
+    $GLOBALS['wp_fts_test_schedule_calls'] = [];
     $GLOBALS['wp_fts_test_cleared_hooks'] = [];
     $GLOBALS['wp_fts_test_rest_routes'] = [];
     $GLOBALS['wp_fts_test_admin_pages'] = [];
@@ -3364,6 +3367,11 @@ if (!function_exists('update_option')) {
         $store =& wp_fts_test_option_store();
         $old = $store[$name] ?? null;
         $store[$name] = $value;
+        $GLOBALS['wp_fts_test_updated_options'][] = [
+            'blog_id' => wp_fts_test_current_option_blog_id(),
+            'name' => $name,
+            'value' => $value,
+        ];
 
         return $old !== $value;
     }
@@ -3439,6 +3447,8 @@ if (!function_exists('wp_upload_dir')) {
 if (!function_exists('wp_next_scheduled')) {
     function wp_next_scheduled(string $hook): int|false
     {
+        $GLOBALS['wp_fts_test_next_scheduled_calls'][] = $hook;
+
         return $GLOBALS['wp_fts_test_scheduled'][$hook]['timestamp'] ?? false;
     }
 }
@@ -3446,6 +3456,10 @@ if (!function_exists('wp_next_scheduled')) {
 if (!function_exists('wp_schedule_single_event')) {
     function wp_schedule_single_event(int $timestamp, string $hook): bool
     {
+        $GLOBALS['wp_fts_test_schedule_calls'][] = [
+            'timestamp' => $timestamp,
+            'hook' => $hook,
+        ];
         $GLOBALS['wp_fts_test_scheduled'][$hook] = [
             'timestamp' => $timestamp,
             'hook' => $hook,
@@ -7584,6 +7598,11 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     ];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [702];
+    $scheduledAt = $now + 120;
+    $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
+        'timestamp' => $scheduledAt,
+        'hook' => WP_FTS_Plugin::CRON_HOOK,
+    ];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
         'token' => 'do-not-expose',
         'mode' => 'manual',
@@ -7672,6 +7691,15 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same('2026-06-19 09:55:00', $payload['stale_debt_created_at'] ?? null, 'status JSON should expose debt creation time');
     assert_same('2026-06-19 09:59:00', $payload['stale_debt_updated_at'] ?? null, 'status JSON should expose debt update time');
     assert_same(1, $payload['pending_queue_count'] ?? null, 'status JSON should report pending queue count');
+    $schedule = $payload['queue_processor_schedule'] ?? null;
+    assert_true(is_array($schedule), 'status JSON should expose queue processor schedule as a bounded object');
+    assert_same(WP_FTS_Plugin::CRON_HOOK, $schedule['hook'] ?? null, 'status JSON should expose the queue processor cron hook');
+    assert_same(true, $schedule['scheduled'] ?? null, 'status JSON should report the scheduled queue processor event');
+    assert_same('scheduled', $schedule['status'] ?? null, 'status JSON should classify an existing event as scheduled');
+    assert_same(gmdate('Y-m-d\TH:i:s\Z', $scheduledAt), $schedule['next_run_at'] ?? null, 'status JSON should expose the next queue run as a bounded UTC timestamp');
+    assert_true(is_int($schedule['next_run_delay_seconds'] ?? null), 'status JSON should expose a numeric next-run delay when scheduled');
+    assert_true(($schedule['next_run_delay_seconds'] ?? -1) >= 0 && ($schedule['next_run_delay_seconds'] ?? 999) <= 120, 'status JSON should bound next-run delay to a nonnegative value');
+    assert_same(true, $schedule['pending_work'] ?? null, 'status JSON should keep pending-work context with schedule state');
     assert_same('active', $payload['lock_state'] ?? null, 'status JSON should report lock state without exposing the token');
     assert_same(true, $payload['lock_active'] ?? null, 'status JSON should report active lock boolean');
     assert_true(!array_key_exists('token', $payload), 'status JSON should not expose lock token');
@@ -7706,10 +7734,105 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same(3, $diagnostics['backfill_queued'] ?? null, 'status diagnostics should include backfill selected count');
     assert_contains('SELECT statement', (string) ($diagnostics['error_message'] ?? ''), 'status diagnostics should retain redacted error context');
     assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'SELECT * FROM'), 'status diagnostics should not expose raw SQL');
+    assert_contains("queue_processor_schedule\t", $human, 'default status output should include queue processor schedule');
+    assert_same([WP_FTS_Plugin::CRON_HOOK, WP_FTS_Plugin::CRON_HOOK], $GLOBALS['wp_fts_test_next_scheduled_calls'], 'status should inspect the cron schedule without mutating it');
+    assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'status should not schedule queue processors while rendering status');
+    assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'status should not clear queue processor events while rendering status');
     assert_same([], $fake->queries, 'status should not run schema repair or storage writes');
     assert_same([702], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'status should leave queue state unchanged');
     assert_same('do-not-expose', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'status should leave lock state unchanged');
     assert_same(1, count($fake->docs), 'status should not index additional content');
+});
+
+test_case('status and health report missing queue processor schedule with pending work without mutating state', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [702];
+    $optionsBefore = $GLOBALS['wp_fts_test_options'];
+    $docsBefore = $fake->docs;
+
+    try {
+        $status = WP_FTS_Plugin::operator_status();
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $schedule = $status['queue_processor_schedule'] ?? null;
+    assert_true(is_array($schedule), 'operator status should expose queue processor schedule details');
+    assert_same(false, $schedule['scheduled'] ?? null, 'missing schedule should report no scheduled event');
+    assert_same('missing', $schedule['status'] ?? null, 'pending work without a cron event should be classified as missing');
+    assert_same(true, $schedule['pending_work'] ?? null, 'missing schedule should retain pending-work context');
+    assert_contains('wp fts process-batch', (string) ($schedule['advice'] ?? ''), 'missing schedule advice should mention the manual bounded command');
+    assert_contains('<h3>Queue processor schedule</h3>', $html, 'Health should render a queue processor schedule section');
+    assert_contains('<th scope="row">Queue processor hook</th><td>' . WP_FTS_Plugin::CRON_HOOK . '</td>', $html, 'Health should render the cron hook name');
+    assert_contains('<th scope="row">Queue processor scheduled</th><td>No</td>', $html, 'Health should render the missing scheduled-event boolean');
+    assert_contains('<th scope="row">Queue processor status</th><td>Missing</td>', $html, 'Health should classify missing pending-work schedule state');
+    assert_contains('wp fts process-batch', $html, 'Health should include actionable missing-schedule advice');
+    assert_same([WP_FTS_Plugin::CRON_HOOK, WP_FTS_Plugin::CRON_HOOK], $GLOBALS['wp_fts_test_next_scheduled_calls'], 'status and Health should inspect the existing cron schedule');
+    assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'status and Health should not schedule queue work while rendering');
+    assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'status and Health should not clear scheduled queue work while rendering');
+    assert_same([], $GLOBALS['wp_fts_test_added_options'], 'status and Health should not add options while rendering schedule diagnostics');
+    assert_same([], $GLOBALS['wp_fts_test_updated_options'], 'status and Health should not update options while rendering schedule diagnostics');
+    assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'status and Health should not delete options while rendering schedule diagnostics');
+    assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'status and Health should leave queue and health options unchanged');
+    assert_same($docsBefore, $fake->docs, 'status and Health should not index content while rendering schedule diagnostics');
+});
+
+test_case('status and health report no queue processor schedule as not needed when no work is pending', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+
+    try {
+        $status = WP_FTS_Plugin::operator_status();
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $schedule = $status['queue_processor_schedule'] ?? null;
+    assert_true(is_array($schedule), 'operator status should expose schedule details even when no work is pending');
+    assert_same(false, $schedule['scheduled'] ?? null, 'no-work status should report no scheduled event');
+    assert_same('not_needed', $schedule['status'] ?? null, 'no-work status should classify a missing event as not needed');
+    assert_same(false, $schedule['pending_work'] ?? null, 'no-work status should report no pending schedule work');
+    assert_contains('No pending indexing work', (string) ($schedule['advice'] ?? ''), 'no-work schedule advice should not be urgent');
+    assert_true(!str_contains((string) ($schedule['advice'] ?? ''), 'wp fts process-batch'), 'no-work schedule advice should not tell operators to run a manual batch');
+    assert_contains('<th scope="row">Queue processor status</th><td>Not needed</td>', $html, 'Health should render not-needed schedule state when no work is pending');
+    assert_contains('<th scope="row">Queue processor advice</th><td>No pending indexing work is detected, so no queue processor event is needed.</td>', $html, 'Health should explain the non-urgent no-work state');
+    assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'not-needed status should not schedule queue work');
+    assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'not-needed status should not clear queue work');
+});
+
+test_case('operator status reports queue processor schedule unavailable without WordPress cron helpers', function (): void {
+    $code = <<<'PHP'
+require 'src/bootstrap.php';
+$status = WP_FTS_Plugin::operator_status();
+echo json_encode($status['queue_processor_schedule'] ?? [], JSON_UNESCAPED_SLASHES);
+PHP;
+
+    $result = test_run_php_without_extensions($code);
+    $detail = $result['stderr'] !== '' ? "\nSTDERR:\n" . $result['stderr'] : '';
+    assert_same(0, $result['exit'], 'operator status should not fatal when cron helpers are unavailable' . $detail);
+    $payload = json_decode(trim($result['stdout']), true, 512, JSON_THROW_ON_ERROR);
+
+    assert_true(is_array($payload), 'unavailable cron helper payload should decode to an object');
+    assert_same(WP_FTS_Plugin::CRON_HOOK, $payload['hook'] ?? null, 'unavailable schedule payload should still expose the bounded hook name');
+    assert_same(false, $payload['scheduled'] ?? null, 'unavailable cron helper path should report no known scheduled event');
+    assert_same('unavailable', $payload['status'] ?? null, 'unavailable cron helper path should be classified as unavailable');
+    assert_same(null, $payload['next_run_delay_seconds'] ?? null, 'unavailable cron helper path should omit next-run delay data');
+    assert_contains('unavailable', (string) ($payload['advice'] ?? ''), 'unavailable cron helper path should include concise advice');
 });
 
 test_case('wp-cli repair runs schema upgrade without indexing content', function (): void {
@@ -8847,6 +8970,7 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
         WP_FTS_Plugin::handle_post_save(101, $post, true);
         assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'eligible save hooks should enqueue the post');
         assert_true(isset($GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK]), 'eligible save hooks should schedule the bounded processor');
+        assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'eligible save hooks should call the scheduler once for new queued work');
         assert_same([], $fake->docs, 'eligible save hooks should not write FTS docs inline');
         assert_same([], $fake->terms, 'eligible save hooks should not write FTS terms inline');
         assert_same([], $fake->postings, 'eligible save hooks should not write postings inline');
@@ -8854,6 +8978,7 @@ test_case('runtime post hooks queue eligible saves and status transitions then p
 
         WP_FTS_Plugin::handle_post_save(101, $post, true);
         assert_same([101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'duplicate eligible saves should dedupe queue entries');
+        assert_same(1, count($GLOBALS['wp_fts_test_schedule_calls']), 'duplicate eligible saves should not schedule duplicate queue processor events');
 
         $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
             'token' => 'active-save-queue-lock',

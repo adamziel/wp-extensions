@@ -146,6 +146,15 @@ next, and stale existing rows with any remaining batch/time budget. The stale
 cursor is tied to the current index profile and restarts if that profile changes
 before completion.
 
+The same Health/status surfaces include a read-only queue processor schedule.
+`scheduled` means WordPress has a `wp_fts_process_index_queue` event waiting;
+`missing` means pending queue, backfill, or stale reindex work exists but no
+queue processor event is scheduled. In that case, check WP-Cron and use
+`wp fts process-batch --batch_size=100 --time_budget=20` to advance one bounded
+batch manually while the cron problem is investigated. `not_needed` means no
+pending indexing work was detected, and `unavailable` means the current context
+does not expose WordPress cron inspection helpers.
+
 The Health tab shows whether the stored schema version is current, missing, or
 stale. Its repair button runs the same table/schema repair path as
 `wp fts repair`; it touches schema and table definitions only and does not index

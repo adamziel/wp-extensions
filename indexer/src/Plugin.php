@@ -888,6 +888,8 @@ final class WP_FTS_Plugin
         $lock = self::index_lock_status();
         $eligible_count = self::count_eligible_content();
         $indexed_count = self::count_indexed_eligible_content();
+        $remaining_count = max(0, $eligible_count - $indexed_count);
+        $queue_processor_schedule = self::queue_processor_schedule_status($health, $remaining_count);
         $last_indexed_post_id = max(0, (int) ($health['last_indexed_post_id'] ?? 0));
         $last_indexed_title = is_scalar($health['last_indexed_post_title'] ?? null)
             ? (string) $health['last_indexed_post_title']
@@ -910,6 +912,7 @@ final class WP_FTS_Plugin
             'stale_debt_processed_count' => max(0, (int) ($health['stale_debt_processed_count'] ?? 0)),
             'stale_debt_remaining_count' => max(0, (int) ($health['stale_debt_remaining_count'] ?? 0)),
             'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
+            'queue_processor_schedule' => $queue_processor_schedule,
             'lock_state' => $lock['state'],
             'lock_active' => (bool) $lock['active'],
             'lock_mode' => $lock['mode'],
@@ -938,9 +941,80 @@ final class WP_FTS_Plugin
             'last_indexed_at' => is_scalar($health['last_indexed_at'] ?? null) ? (string) $health['last_indexed_at'] : '',
             'eligible_count' => $eligible_count,
             'indexed_count' => $indexed_count,
-            'remaining_count' => max(0, $eligible_count - $indexed_count),
+            'remaining_count' => $remaining_count,
             'latest_batch_diagnostics' => self::latest_index_batch_diagnostics_from_health($health),
         ];
+    }
+
+    /**
+     * Return read-only WP-Cron schedule state for the bounded queue processor.
+     *
+     * @param array<string,mixed> $health
+     * @return array{hook:string,scheduled:bool,status:string,next_run_at:string,next_run_delay_seconds:?int,pending_work:bool,advice:string}
+     */
+    private static function queue_processor_schedule_status(array $health, ?int $remaining_count = null): array
+    {
+        $pending_work = self::queue_processor_pending_work($health, $remaining_count);
+        $base = [
+            'hook' => self::CRON_HOOK,
+            'scheduled' => false,
+            'status' => 'unavailable',
+            'next_run_at' => '',
+            'next_run_delay_seconds' => null,
+            'pending_work' => $pending_work,
+            'advice' => 'WP-Cron schedule helpers are unavailable in this context.',
+        ];
+
+        if (!function_exists('wp_next_scheduled')) {
+            return $base;
+        }
+
+        $next = wp_next_scheduled(self::CRON_HOOK);
+        $timestamp = self::queue_processor_schedule_timestamp($next);
+        if ($timestamp !== null) {
+            $base['scheduled'] = true;
+            $base['status'] = 'scheduled';
+            $base['next_run_at'] = gmdate('Y-m-d\TH:i:s\Z', $timestamp);
+            $base['next_run_delay_seconds'] = max(0, $timestamp - time());
+            $base['advice'] = 'WP-Cron has a queue processor event scheduled.';
+
+            return $base;
+        }
+
+        if ($pending_work) {
+            $base['status'] = 'missing';
+            $base['advice'] = 'Pending indexing work exists but no WP-Cron queue processor event is scheduled. Check that WP-Cron is running, or run `wp fts process-batch` to advance one indexing pass manually.';
+
+            return $base;
+        }
+
+        $base['status'] = 'not_needed';
+        $base['advice'] = 'No pending indexing work is detected, so no queue processor event is needed.';
+
+        return $base;
+    }
+
+    /**
+     * @param array<string,mixed> $health
+     */
+    private static function queue_processor_pending_work(array $health, ?int $remaining_count = null): bool
+    {
+        return max(0, (int) ($health['pending_queue_count'] ?? 0)) > 0
+            || max(0, (int) ($health['stale_debt_remaining_count'] ?? 0)) > 0
+            || max(0, (int) ($remaining_count ?? 0)) > 0
+            || !empty($health['stale_debt_active'])
+            || !empty($health['has_more']);
+    }
+
+    private static function queue_processor_schedule_timestamp(mixed $value): ?int
+    {
+        if (!is_scalar($value) || !is_numeric($value)) {
+            return null;
+        }
+
+        $timestamp = (int) $value;
+
+        return $timestamp > 0 ? $timestamp : null;
     }
 
     /**
@@ -3153,6 +3227,7 @@ final class WP_FTS_Plugin
             $counts = self::empty_search_health_counts();
             self::render_sandbox_notice('error', 'Could not read index counts: ' . $e->getMessage());
         }
+        $queue_processor_schedule = self::queue_processor_schedule_status($health, $counts['remaining']);
 
         echo '<h2>Search health</h2>';
         echo '<p class="wp-fts-health-copy">The plugin builds the search index in small batches so large sites stay responsive. WP-Cron continues indexing a small amount in the background. Use the button below to index the next larger batch now; large sites may need several batches, and that is intentional.</p>';
@@ -3177,6 +3252,16 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Indexed', (string) $counts['indexed']);
         self::render_health_status_row('Waiting in the update queue', (string) $counts['pending']);
         self::render_health_status_row('Remaining to index', (string) $counts['remaining']);
+        echo '</tbody></table>';
+
+        echo '<h3>Queue processor schedule</h3>';
+        echo '<table class="widefat striped wp-fts-health-table"><tbody>';
+        self::render_health_status_row('Queue processor hook', is_scalar($queue_processor_schedule['hook'] ?? null) ? (string) $queue_processor_schedule['hook'] : '');
+        self::render_health_status_row('Queue processor scheduled', !empty($queue_processor_schedule['scheduled']) ? 'Yes' : 'No');
+        self::render_health_status_row('Queue processor status', self::queue_processor_schedule_status_label($queue_processor_schedule));
+        self::render_health_status_row('Next queue run', self::queue_processor_schedule_next_run_summary($queue_processor_schedule));
+        self::render_health_status_row('Next queue run delay', self::queue_processor_schedule_delay_summary($queue_processor_schedule));
+        self::render_health_status_row('Queue processor advice', self::queue_processor_schedule_advice_summary($queue_processor_schedule));
         echo '</tbody></table>';
 
         echo '<h3>Reindex debt</h3>';
@@ -3257,6 +3342,57 @@ final class WP_FTS_Plugin
             'stale' => 'Stale',
             default => 'Unknown',
         };
+    }
+
+    /**
+     * @param array<string,mixed> $schedule
+     */
+    private static function queue_processor_schedule_status_label(array $schedule): string
+    {
+        $status = is_scalar($schedule['status'] ?? null) ? (string) $schedule['status'] : '';
+
+        return match ($status) {
+            'scheduled' => 'Scheduled',
+            'missing' => 'Missing',
+            'not_needed' => 'Not needed',
+            'unavailable' => 'Unavailable',
+            default => 'Unknown',
+        };
+    }
+
+    /**
+     * @param array<string,mixed> $schedule
+     */
+    private static function queue_processor_schedule_next_run_summary(array $schedule): string
+    {
+        $next_run = is_scalar($schedule['next_run_at'] ?? null) ? trim((string) $schedule['next_run_at']) : '';
+        if ($next_run !== '') {
+            return $next_run;
+        }
+
+        return self::queue_processor_schedule_status_label($schedule) === 'Unavailable' ? 'Unavailable' : 'Not scheduled';
+    }
+
+    /**
+     * @param array<string,mixed> $schedule
+     */
+    private static function queue_processor_schedule_delay_summary(array $schedule): string
+    {
+        if (isset($schedule['next_run_delay_seconds']) && is_numeric($schedule['next_run_delay_seconds'])) {
+            return max(0, (int) $schedule['next_run_delay_seconds']) . ' seconds';
+        }
+
+        return self::queue_processor_schedule_status_label($schedule) === 'Unavailable' ? 'Unavailable' : 'Not scheduled';
+    }
+
+    /**
+     * @param array<string,mixed> $schedule
+     */
+    private static function queue_processor_schedule_advice_summary(array $schedule): string
+    {
+        $advice = is_scalar($schedule['advice'] ?? null) ? trim((string) $schedule['advice']) : '';
+
+        return $advice !== '' ? $advice : 'No schedule advice available.';
     }
 
     /**

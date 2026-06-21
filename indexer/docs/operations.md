@@ -39,6 +39,17 @@ stale batch count. Stale debt means index-time configuration changed after the
 last accepted profile, so existing rows may need to be rewritten even when
 "Remaining to index" is `0`.
 
+Status also includes `queue_processor_schedule`, a read-only view of the
+`wp_fts_process_index_queue` WP-Cron event. `scheduled` means WordPress has a
+queue processor event waiting and reports the next UTC run time and delay.
+`missing` means bounded status inputs show pending queue, backfill, or stale
+reindex work but no queue processor event is scheduled. That usually points to
+disabled or stalled WP-Cron; check the environment and run
+`wp fts process-batch --batch_size=100 --time_budget=20` for one manual bounded
+pass while cron is repaired. `not_needed` means no pending indexing work was
+detected, and `unavailable` means the current non-WordPress context cannot
+inspect cron helpers.
+
 To create or repair the schema and index content, run:
 
 ```sh
