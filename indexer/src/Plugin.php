@@ -612,8 +612,7 @@ final class WP_FTS_Plugin
         }
 
         if ($post !== null) {
-            self::index_post($post, [], self::runtime_analyzer());
-            self::remove_from_queue([$post_id]);
+            self::queue_post($post_id);
         }
     }
 
@@ -638,8 +637,7 @@ final class WP_FTS_Plugin
                 return;
             }
 
-            self::index_post($post, [], self::runtime_analyzer());
-            self::remove_from_queue([$post_id]);
+            self::queue_post($post_id);
             return;
         }
 
@@ -659,6 +657,7 @@ final class WP_FTS_Plugin
         }
 
         self::tombstone_post($post_id);
+        self::remove_from_queue([$post_id]);
     }
 
     /**

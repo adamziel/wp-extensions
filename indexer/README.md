@@ -156,7 +156,7 @@ content or create sample posts.
 | Area | Current support |
 | --- | --- |
 | Indexing | Builds derived `fts_*` tables from WordPress posts, including title, content, excerpt, rendered block deltas, taxonomy terms, selected custom fields, boosts, and bounded result metadata. |
-| Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, post save/status/delete hooks index or tombstone posts, and `wp fts reindex` can rebuild a scoped corpus. |
+| Lifecycle updates | Activation repairs schema, WP-Cron drains bounded runtime work, save/status hooks queue eligible updates, status/delete hooks tombstone posts that leave searchable scopes, and `wp fts reindex` can rebuild a scoped corpus. |
 | Language routing | Terms are stored in language namespaces. Explicit `--lang`, the wp-admin `FTS Language` field, Polylang/WPML metadata, and HTML `lang`/`xml:lang` scopes route content before conservative detector fallback. |
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
