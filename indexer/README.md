@@ -158,6 +158,15 @@ the cron problem is investigated. `not_needed` means no pending indexing work
 was detected, and `unavailable` means the current context does not expose
 WordPress cron inspection helpers.
 
+Health/status also include a read-only `cron_runner` diagnostic. It reports
+`traffic_triggered` when regular WordPress traffic can start WP-Cron,
+`external_required` when `DISABLE_WP_CRON` is enabled, and `unknown` when the
+runner mode cannot be confirmed. If pending work exists and
+`cron_runner.status=external_required`, a scheduled queue event alone is not
+enough; configure a host/system cron trigger for `wp-cron.php` or run bounded
+manual batches such as `wp fts process-batch --batch_size=100 --time_budget=20`
+while cron is fixed.
+
 The Health tab shows whether the stored schema version is current, missing, or
 stale. Its repair button runs the same table/schema repair path as
 `wp fts repair`; it touches schema and table definitions only and does not index

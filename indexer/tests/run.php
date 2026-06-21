@@ -7700,6 +7700,13 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_true(is_int($schedule['next_run_delay_seconds'] ?? null), 'status JSON should expose a numeric next-run delay when scheduled');
     assert_true(($schedule['next_run_delay_seconds'] ?? -1) >= 0 && ($schedule['next_run_delay_seconds'] ?? 999) <= 120, 'status JSON should bound next-run delay to a nonnegative value');
     assert_same(true, $schedule['pending_work'] ?? null, 'status JSON should keep pending-work context with schedule state');
+    $runner = $payload['cron_runner'] ?? null;
+    assert_true(is_array($runner), 'status JSON should expose cron runner diagnostics as a bounded object');
+    assert_same('traffic_triggered', $runner['status'] ?? null, 'status JSON should report traffic-triggered cron when DISABLE_WP_CRON is not set');
+    assert_same(false, $runner['wp_cron_disabled'] ?? null, 'status JSON should expose the DISABLE_WP_CRON state');
+    assert_same(false, $runner['alternate_wp_cron'] ?? null, 'status JSON should expose the ALTERNATE_WP_CRON state');
+    assert_same(true, $runner['pending_work'] ?? null, 'cron runner diagnostics should reuse pending-work context');
+    assert_contains('traffic-triggered', (string) ($runner['advice'] ?? ''), 'cron runner advice should explain traffic-triggered cron mode');
     assert_same('active', $payload['lock_state'] ?? null, 'status JSON should report lock state without exposing the token');
     assert_same(true, $payload['lock_active'] ?? null, 'status JSON should report active lock boolean');
     assert_true(!array_key_exists('token', $payload), 'status JSON should not expose lock token');
@@ -7735,6 +7742,7 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_contains('SELECT statement', (string) ($diagnostics['error_message'] ?? ''), 'status diagnostics should retain redacted error context');
     assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'SELECT * FROM'), 'status diagnostics should not expose raw SQL');
     assert_contains("queue_processor_schedule\t", $human, 'default status output should include queue processor schedule');
+    assert_contains("cron_runner\t", $human, 'default status output should include cron runner diagnostics');
     assert_same([WP_FTS_Plugin::CRON_HOOK, WP_FTS_Plugin::CRON_HOOK], $GLOBALS['wp_fts_test_next_scheduled_calls'], 'status should inspect the cron schedule without mutating it');
     assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'status should not schedule queue processors while rendering status');
     assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'status should not clear queue processor events while rendering status');
@@ -7770,10 +7778,19 @@ test_case('status and health report missing queue processor schedule with pendin
     assert_same('missing', $schedule['status'] ?? null, 'pending work without a cron event should be classified as missing');
     assert_same(true, $schedule['pending_work'] ?? null, 'missing schedule should retain pending-work context');
     assert_contains('wp fts process-batch', (string) ($schedule['advice'] ?? ''), 'missing schedule advice should mention the manual bounded command');
+    $runner = $status['cron_runner'] ?? null;
+    assert_true(is_array($runner), 'operator status should expose cron runner diagnostics');
+    assert_same('traffic_triggered', $runner['status'] ?? null, 'cron runner should report traffic-triggered cron when DISABLE_WP_CRON is not set');
+    assert_same(false, $runner['wp_cron_disabled'] ?? null, 'cron runner should expose disabled-cron constant state');
+    assert_same(true, $runner['pending_work'] ?? null, 'cron runner should share pending-work context with schedule advice');
+    assert_contains('traffic-triggered', (string) ($runner['advice'] ?? ''), 'pending cron runner advice should describe the traffic-triggered path');
     assert_contains('<h3>Queue processor schedule</h3>', $html, 'Health should render a queue processor schedule section');
     assert_contains('<th scope="row">Queue processor hook</th><td>' . WP_FTS_Plugin::CRON_HOOK . '</td>', $html, 'Health should render the cron hook name');
     assert_contains('<th scope="row">Queue processor scheduled</th><td>No</td>', $html, 'Health should render the missing scheduled-event boolean');
     assert_contains('<th scope="row">Queue processor status</th><td>Missing</td>', $html, 'Health should classify missing pending-work schedule state');
+    assert_contains('<h3>Cron runner</h3>', $html, 'Health should render cron runner diagnostics near the queue schedule');
+    assert_contains('<th scope="row">WP-Cron runner</th><td>Traffic-triggered</td>', $html, 'Health should render the traffic-triggered cron runner state');
+    assert_contains('<th scope="row">Cron runner pending work</th><td>Yes</td>', $html, 'Health should render the shared pending-work context');
     assert_contains('wp fts schedule-queue', $html, 'Health should mention the queue schedule recovery command');
     assert_contains('wp fts process-batch', $html, 'Health should include actionable missing-schedule advice');
     assert_contains('<h3>Queue processor controls</h3>', $html, 'Health should render schedule recovery controls when the queue processor event is missing');
@@ -8073,8 +8090,17 @@ test_case('status and health report no queue processor schedule as not needed wh
     assert_same(false, $schedule['pending_work'] ?? null, 'no-work status should report no pending schedule work');
     assert_contains('No pending indexing work', (string) ($schedule['advice'] ?? ''), 'no-work schedule advice should not be urgent');
     assert_true(!str_contains((string) ($schedule['advice'] ?? ''), 'wp fts process-batch'), 'no-work schedule advice should not tell operators to run a manual batch');
+    $runner = $status['cron_runner'] ?? null;
+    assert_true(is_array($runner), 'operator status should expose cron runner diagnostics even when no work is pending');
+    assert_same('traffic_triggered', $runner['status'] ?? null, 'default cron runner status should be traffic-triggered when cron is not disabled');
+    assert_same(false, $runner['wp_cron_disabled'] ?? null, 'default cron runner status should expose disabled-cron as false');
+    assert_same(false, $runner['pending_work'] ?? null, 'default cron runner status should report no pending work');
+    assert_contains('no pending indexing work', (string) ($runner['advice'] ?? ''), 'no-work cron runner advice should stay non-urgent');
+    assert_true(!str_contains((string) ($runner['advice'] ?? ''), 'wp fts process-batch'), 'no-work cron runner advice should not recommend a manual batch');
     assert_contains('<th scope="row">Queue processor status</th><td>Not needed</td>', $html, 'Health should render not-needed schedule state when no work is pending');
     assert_contains('<th scope="row">Queue processor advice</th><td>No pending indexing work is detected, so no queue processor event is needed.</td>', $html, 'Health should explain the non-urgent no-work state');
+    assert_contains('<th scope="row">WP-Cron runner</th><td>Traffic-triggered</td>', $html, 'Health should render the default cron runner state');
+    assert_contains('<th scope="row">Cron runner pending work</th><td>No</td>', $html, 'Health should render no pending cron runner work');
     assert_true(!str_contains($html, '<h3>Queue processor controls</h3>'), 'Health should not render schedule controls when no queue event is needed');
     assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'not-needed status should not schedule queue work');
     assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'not-needed status should not clear queue work');
@@ -8084,20 +8110,93 @@ test_case('operator status reports queue processor schedule unavailable without 
     $code = <<<'PHP'
 require 'src/bootstrap.php';
 $status = WP_FTS_Plugin::operator_status();
-echo json_encode($status['queue_processor_schedule'] ?? [], JSON_UNESCAPED_SLASHES);
+echo json_encode([
+    'schedule' => $status['queue_processor_schedule'] ?? [],
+    'runner' => $status['cron_runner'] ?? [],
+], JSON_UNESCAPED_SLASHES);
 PHP;
 
     $result = test_run_php_without_extensions($code);
     $detail = $result['stderr'] !== '' ? "\nSTDERR:\n" . $result['stderr'] : '';
     assert_same(0, $result['exit'], 'operator status should not fatal when cron helpers are unavailable' . $detail);
     $payload = json_decode(trim($result['stdout']), true, 512, JSON_THROW_ON_ERROR);
+    $schedule = is_array($payload['schedule'] ?? null) ? $payload['schedule'] : [];
+    $runner = is_array($payload['runner'] ?? null) ? $payload['runner'] : [];
 
-    assert_true(is_array($payload), 'unavailable cron helper payload should decode to an object');
-    assert_same(WP_FTS_Plugin::CRON_HOOK, $payload['hook'] ?? null, 'unavailable schedule payload should still expose the bounded hook name');
-    assert_same(false, $payload['scheduled'] ?? null, 'unavailable cron helper path should report no known scheduled event');
-    assert_same('unavailable', $payload['status'] ?? null, 'unavailable cron helper path should be classified as unavailable');
-    assert_same(null, $payload['next_run_delay_seconds'] ?? null, 'unavailable cron helper path should omit next-run delay data');
-    assert_contains('unavailable', (string) ($payload['advice'] ?? ''), 'unavailable cron helper path should include concise advice');
+    assert_same(WP_FTS_Plugin::CRON_HOOK, $schedule['hook'] ?? null, 'unavailable schedule payload should still expose the bounded hook name');
+    assert_same(false, $schedule['scheduled'] ?? null, 'unavailable cron helper path should report no known scheduled event');
+    assert_same('unavailable', $schedule['status'] ?? null, 'unavailable cron helper path should be classified as unavailable');
+    assert_same(null, $schedule['next_run_delay_seconds'] ?? null, 'unavailable cron helper path should omit next-run delay data');
+    assert_contains('unavailable', (string) ($schedule['advice'] ?? ''), 'unavailable cron helper path should include concise advice');
+    assert_same('unknown', $runner['status'] ?? null, 'unavailable cron helper path should report unknown cron runner mode');
+    assert_same(false, $runner['wp_cron_disabled'] ?? null, 'unavailable cron helper path should still expose disabled-cron as false');
+    assert_same(false, $runner['pending_work'] ?? null, 'unavailable cron helper path should preserve no-work context');
+    assert_contains('cannot be confirmed', (string) ($runner['advice'] ?? ''), 'unavailable cron runner advice should stay conservative');
+});
+
+test_case('disabled wp cron runner reports external requirement even when queue event is scheduled', function (): void {
+    $code = <<<'PHP'
+define('DISABLE_WP_CRON', true);
+$GLOBALS['wp_fts_test_options'] = [
+    'wp_fts_schema_version' => 1,
+    'wp_fts_pending_index_post_ids' => [702],
+    'wp_fts_indexing_lock' => [
+        'token' => 'disabled-cron-token-must-not-render',
+        'mode' => 'cron',
+        'started_at' => time(),
+        'expires_at' => time() + 300,
+    ],
+];
+function get_option(string $name, mixed $default = false): mixed
+{
+    return array_key_exists($name, $GLOBALS['wp_fts_test_options'])
+        ? $GLOBALS['wp_fts_test_options'][$name]
+        : $default;
+}
+function wp_next_scheduled(string $hook): int|false
+{
+    return $hook === 'wp_fts_process_index_queue' ? time() + 300 : false;
+}
+require 'src/bootstrap.php';
+$status = WP_FTS_Plugin::operator_status();
+$render = new ReflectionMethod(WP_FTS_Plugin::class, 'render_health_tab');
+$render->setAccessible(true);
+ob_start();
+$render->invoke(null);
+$html = (string) ob_get_clean();
+echo json_encode([
+    'schedule' => $status['queue_processor_schedule'] ?? [],
+    'runner' => $status['cron_runner'] ?? [],
+    'html' => $html,
+], JSON_UNESCAPED_SLASHES);
+PHP;
+
+    $result = test_run_php_without_extensions($code);
+    $detail = $result['stderr'] !== '' ? "\nSTDERR:\n" . $result['stderr'] : '';
+    assert_same(0, $result['exit'], 'disabled-cron subprocess should exit cleanly' . $detail);
+
+    $payload = json_decode(trim($result['stdout']), true, 512, JSON_THROW_ON_ERROR);
+    $schedule = is_array($payload['schedule'] ?? null) ? $payload['schedule'] : [];
+    $runner = is_array($payload['runner'] ?? null) ? $payload['runner'] : [];
+    $html = is_scalar($payload['html'] ?? null) ? (string) $payload['html'] : '';
+    $encodedRunner = json_encode($runner, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+    assert_same('scheduled', $schedule['status'] ?? null, 'disabled-cron diagnostic should work when the queue event is already scheduled');
+    assert_same(true, $schedule['scheduled'] ?? null, 'scheduled-event context should remain visible');
+    assert_same(true, $schedule['pending_work'] ?? null, 'scheduled-event context should keep pending-work state');
+    assert_same('external_required', $runner['status'] ?? null, 'disabled cron with pending work should require an external runner');
+    assert_same(true, $runner['wp_cron_disabled'] ?? null, 'cron runner JSON should expose DISABLE_WP_CRON=true');
+    assert_same(false, $runner['alternate_wp_cron'] ?? null, 'cron runner JSON should expose ALTERNATE_WP_CRON=false by default');
+    assert_same(true, $runner['pending_work'] ?? null, 'cron runner JSON should report pending indexing work');
+    assert_contains('scheduled queue event alone is not enough', (string) ($runner['advice'] ?? ''), 'disabled-cron advice should not imply scheduling alone is sufficient');
+    assert_contains('wp-cron.php', (string) ($runner['advice'] ?? ''), 'disabled-cron advice should mention a host/system cron trigger');
+    assert_contains('wp fts process-batch --batch_size=100 --time_budget=20', (string) ($runner['advice'] ?? ''), 'disabled-cron advice should include the bounded manual fallback');
+    assert_contains('<th scope="row">WP-Cron runner</th><td>External cron required</td>', $html, 'Health should render external-cron-required status');
+    assert_contains('A scheduled queue event alone is not enough', $html, 'Health advice should clarify that scheduling alone is insufficient');
+    assert_true(!str_contains($encodedRunner, 'disabled-cron-token-must-not-render'), 'cron runner diagnostics should not expose lock tokens');
+    assert_true(!str_contains($encodedRunner, 'SELECT * FROM'), 'cron runner diagnostics should not expose raw SQL');
+    assert_true(!str_contains($encodedRunner, '#0'), 'cron runner diagnostics should not expose stack traces');
+    assert_true(!str_contains($encodedRunner, 'wp_fts_test_options'), 'cron runner diagnostics should not expose arbitrary environment data');
 });
 
 test_case('wp-cli repair runs schema upgrade without indexing content', function (): void {

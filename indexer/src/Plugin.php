@@ -891,6 +891,7 @@ final class WP_FTS_Plugin
         $indexed_count = self::count_indexed_eligible_content();
         $remaining_count = max(0, $eligible_count - $indexed_count);
         $queue_processor_schedule = self::queue_processor_schedule_status($health, $remaining_count);
+        $cron_runner = self::cron_runner_status($queue_processor_schedule);
         $last_indexed_post_id = max(0, (int) ($health['last_indexed_post_id'] ?? 0));
         $last_indexed_title = is_scalar($health['last_indexed_post_title'] ?? null)
             ? (string) $health['last_indexed_post_title']
@@ -914,6 +915,7 @@ final class WP_FTS_Plugin
             'stale_debt_remaining_count' => max(0, (int) ($health['stale_debt_remaining_count'] ?? 0)),
             'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
             'queue_processor_schedule' => $queue_processor_schedule,
+            'cron_runner' => $cron_runner,
             'lock_state' => $lock['state'],
             'lock_active' => (bool) $lock['active'],
             'lock_mode' => $lock['mode'],
@@ -1132,6 +1134,58 @@ final class WP_FTS_Plugin
         $message = self::debug_truncate_text(self::sanitize_text($message), self::MAX_INDEX_FAILURE_ERROR_BYTES);
 
         return $message !== '' ? $message : 'No schedule detail available.';
+    }
+
+    /**
+     * Return read-only guidance for whether traffic-triggered WP-Cron can run.
+     *
+     * @param array<string,mixed> $queue_processor_schedule
+     * @return array{status:string,wp_cron_disabled:bool,alternate_wp_cron:bool,pending_work:bool,advice:string}
+     */
+    private static function cron_runner_status(array $queue_processor_schedule): array
+    {
+        $pending_work = !empty($queue_processor_schedule['pending_work']);
+        $wp_cron_disabled = defined('DISABLE_WP_CRON') && (bool) DISABLE_WP_CRON;
+        $alternate_wp_cron = defined('ALTERNATE_WP_CRON') && (bool) ALTERNATE_WP_CRON;
+
+        if ($wp_cron_disabled) {
+            return [
+                'status' => 'external_required',
+                'wp_cron_disabled' => true,
+                'alternate_wp_cron' => $alternate_wp_cron,
+                'pending_work' => $pending_work,
+                'advice' => $pending_work
+                    ? 'DISABLE_WP_CRON is enabled and pending indexing work exists. A scheduled queue event alone is not enough; configure a host/system cron trigger for wp-cron.php or run a bounded fallback such as `wp fts process-batch --batch_size=100 --time_budget=20` until cron is fixed.'
+                    : 'DISABLE_WP_CRON is enabled, so normal site traffic will not start WP-Cron. No pending indexing work is detected; keep a host/system cron trigger for wp-cron.php in place for future queue work.',
+            ];
+        }
+
+        if (!function_exists('wp_next_scheduled')) {
+            return [
+                'status' => 'unknown',
+                'wp_cron_disabled' => false,
+                'alternate_wp_cron' => $alternate_wp_cron,
+                'pending_work' => $pending_work,
+                'advice' => $pending_work
+                    ? 'WP-Cron helpers are unavailable in this context, so the runner mode cannot be confirmed. Pending indexing work exists; verify a host/system cron trigger for wp-cron.php or run `wp fts process-batch --batch_size=100 --time_budget=20` as a bounded fallback.'
+                    : 'WP-Cron helpers are unavailable in this context, so the runner mode cannot be confirmed. No pending indexing work is detected.',
+            ];
+        }
+
+        $advice = $pending_work
+            ? 'WP-Cron is traffic-triggered in this environment. Pending indexing work can run when WordPress receives traffic; if the site is low-traffic or batches stall, use a host/system cron trigger for wp-cron.php or `wp fts process-batch --batch_size=100 --time_budget=20` as a bounded fallback.'
+            : 'WP-Cron is traffic-triggered and no pending indexing work is detected.';
+        if ($alternate_wp_cron) {
+            $advice .= ' ALTERNATE_WP_CRON is enabled.';
+        }
+
+        return [
+            'status' => 'traffic_triggered',
+            'wp_cron_disabled' => false,
+            'alternate_wp_cron' => $alternate_wp_cron,
+            'pending_work' => $pending_work,
+            'advice' => $advice,
+        ];
     }
 
     /**
@@ -3407,6 +3461,7 @@ final class WP_FTS_Plugin
             self::render_sandbox_notice('error', 'Could not read index counts: ' . $e->getMessage());
         }
         $queue_processor_schedule = self::queue_processor_schedule_status($health, $counts['remaining']);
+        $cron_runner = self::cron_runner_status($queue_processor_schedule);
 
         echo '<h2>Search health</h2>';
         echo '<p class="wp-fts-health-copy">The plugin builds the search index in small batches so large sites stay responsive. WP-Cron continues indexing a small amount in the background. Use the button below to index the next larger batch now; large sites may need several batches, and that is intentional.</p>';
@@ -3441,6 +3496,15 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Next queue run', self::queue_processor_schedule_next_run_summary($queue_processor_schedule));
         self::render_health_status_row('Next queue run delay', self::queue_processor_schedule_delay_summary($queue_processor_schedule));
         self::render_health_status_row('Queue processor advice', self::queue_processor_schedule_advice_summary($queue_processor_schedule));
+        echo '</tbody></table>';
+
+        echo '<h3>Cron runner</h3>';
+        echo '<table class="widefat striped wp-fts-health-table"><tbody>';
+        self::render_health_status_row('WP-Cron runner', self::cron_runner_status_label($cron_runner));
+        self::render_health_status_row('DISABLE_WP_CRON', !empty($cron_runner['wp_cron_disabled']) ? 'Yes' : 'No');
+        self::render_health_status_row('ALTERNATE_WP_CRON', !empty($cron_runner['alternate_wp_cron']) ? 'Yes' : 'No');
+        self::render_health_status_row('Cron runner pending work', !empty($cron_runner['pending_work']) ? 'Yes' : 'No');
+        self::render_health_status_row('Cron runner advice', self::cron_runner_advice_summary($cron_runner));
         echo '</tbody></table>';
 
         if ((string) ($queue_processor_schedule['status'] ?? '') === 'missing') {
@@ -3582,6 +3646,31 @@ final class WP_FTS_Plugin
         $advice = is_scalar($schedule['advice'] ?? null) ? trim((string) $schedule['advice']) : '';
 
         return $advice !== '' ? $advice : 'No schedule advice available.';
+    }
+
+    /**
+     * @param array<string,mixed> $runner
+     */
+    private static function cron_runner_status_label(array $runner): string
+    {
+        $status = is_scalar($runner['status'] ?? null) ? (string) $runner['status'] : '';
+
+        return match ($status) {
+            'traffic_triggered' => 'Traffic-triggered',
+            'external_required' => 'External cron required',
+            'unknown' => 'Unknown',
+            default => 'Unknown',
+        };
+    }
+
+    /**
+     * @param array<string,mixed> $runner
+     */
+    private static function cron_runner_advice_summary(array $runner): string
+    {
+        $advice = is_scalar($runner['advice'] ?? null) ? trim((string) $runner['advice']) : '';
+
+        return $advice !== '' ? $advice : 'No cron runner advice available.';
     }
 
     /**

@@ -52,6 +52,16 @@ one-pass fallback while cron is investigated. `not_needed` means no pending
 indexing work was detected, and `unavailable` means the current non-WordPress
 context cannot inspect cron helpers.
 
+Status also includes `cron_runner`, a read-only environment diagnostic for
+traffic-triggered WP-Cron. `traffic_triggered` means normal WordPress traffic can
+start WP-Cron in this process. `external_required` means `DISABLE_WP_CRON` is
+enabled; when pending work exists, a scheduled queue event alone is not enough
+and the site needs a host/system cron trigger for `wp-cron.php` or bounded manual
+batches such as `wp fts process-batch --batch_size=100 --time_budget=20` while
+cron is fixed. `unknown` means the current context cannot confirm the runner
+mode. The Health tab renders the same fields, including `DISABLE_WP_CRON`,
+`ALTERNATE_WP_CRON`, pending-work context, and concise advice.
+
 To create or repair the schema and index content, run:
 
 ```sh
@@ -314,7 +324,9 @@ wp fts schedule-queue --format=json
 ```
 
 This only restores a future background event. It does not index content in the
-current request or command.
+current request or command. If `cron_runner.status=external_required`, confirm a
+host/system cron trigger for `wp-cron.php`; schedule recovery by itself does not
+make traffic-triggered cron run when `DISABLE_WP_CRON` is enabled.
 
 Use one manual lifecycle batch when queue, backfill, or stale reindex work
 should advance under operator control without draining the whole site in one
