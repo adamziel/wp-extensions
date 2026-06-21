@@ -3133,6 +3133,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
     $GLOBALS['wp_fts_test_switch_to_blog_returns_false'] = false;
     $GLOBALS['wp_fts_test_use_blog_option_store'] = false;
     $GLOBALS['wp_fts_test_site_options'] = [];
+    $GLOBALS['wp_fts_test_network_options'] = [];
     $GLOBALS['wp_fts_test_deleted_options'] = [];
     unset($GLOBALS['pagenow']);
     $GLOBALS['wp_fts_test_current_screen'] = null;
@@ -3267,6 +3268,33 @@ if (!function_exists('get_option')) {
         return array_key_exists($name, $store)
             ? $store[$name]
             : $default;
+    }
+}
+
+if (!function_exists('get_site_option')) {
+    function get_site_option(string $name, mixed $default = false, bool $deprecated = true): mixed
+    {
+        $store = $GLOBALS['wp_fts_test_network_options'] ?? [];
+
+        return is_array($store) && array_key_exists($name, $store)
+            ? $store[$name]
+            : $default;
+    }
+}
+
+if (!function_exists('get_network_option')) {
+    function get_network_option(mixed $network_id, string $option, mixed $default = false): mixed
+    {
+        return get_site_option($option, $default);
+    }
+}
+
+if (!function_exists('is_plugin_active_for_network')) {
+    function is_plugin_active_for_network(string $plugin): bool
+    {
+        $active = get_site_option('active_sitewide_plugins', []);
+
+        return is_array($active) && array_key_exists($plugin, $active);
     }
 }
 
@@ -4804,6 +4832,87 @@ test_case('authorized admin sandbox render includes search form and creates no p
     foreach (wp_fts_test_legacy_sandbox_demo_signatures() as $signature) {
         assert_true(!str_contains($indexedHtml, $signature['title']), "indexed-content tab should not list the legacy {$signature['title']} title");
     }
+});
+
+test_case('known search provider advisory renders neutral Health and Settings output', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $wpdb = new WP_FTS_Test_WPDB();
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [];
+        $healthHtml = wp_fts_test_capture_admin_settings_tab('health');
+        $settingsHtml = wp_fts_test_capture_admin_settings_tab('settings');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('<th scope="row">Known search providers</th><td>No known search provider detected</td>', $healthHtml, 'Health should render a neutral known-provider advisory when none are detected');
+    assert_contains('Known search providers', $settingsHtml, 'Settings should render the known-provider advisory near provider compatibility');
+    assert_contains('No known search provider detected', $settingsHtml, 'Settings should clearly state when no known provider was detected');
+    assert_contains('Current mode: Prefer Language FTS. No compatibility action is recommended from this advisory.', $settingsHtml, 'Settings neutral advisory should include the current mode and no-action recommendation');
+    assert_contains('not an end-to-end integration certification', $settingsHtml, 'Settings advisory should state the advisory-only certification boundary');
+});
+
+test_case('known search provider advisory detects supported families from safe active-plugin signals', function (): void {
+    $method = new ReflectionMethod(WP_FTS_Plugin::class, 'known_search_provider_advisory');
+    $method->setAccessible(true);
+
+    $cases = [
+        'jetpack/jetpack.php' => 'Jetpack Search / Jetpack',
+        'searchwp/index.php' => 'SearchWP',
+        'relevanssi/relevanssi.php' => 'Relevanssi',
+        'elasticpress/elasticpress.php' => 'ElasticPress',
+    ];
+
+    foreach ($cases as $basename => $expectedLabel) {
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_options']['active_plugins'] = [$basename];
+
+        $advisory = $method->invoke(null, WP_FTS_Plugin::default_settings());
+        $names = is_array($advisory) && is_array($advisory['provider_names'] ?? null) ? $advisory['provider_names'] : [];
+
+        assert_true(in_array($expectedLabel, $names, true), "{$expectedLabel} should be detected from active plugin basename {$basename}");
+        assert_same(1, (int) ($advisory['detected_count'] ?? 0), "{$expectedLabel} basename detection should produce one provider family");
+    }
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_network_options']['active_sitewide_plugins'] = ['elasticpress/elasticpress.php' => time()];
+    $networkAdvisory = $method->invoke(null, WP_FTS_Plugin::default_settings());
+    $networkNames = is_array($networkAdvisory) && is_array($networkAdvisory['provider_names'] ?? null) ? $networkAdvisory['provider_names'] : [];
+    assert_true(in_array('ElasticPress', $networkNames, true), 'network-active provider basename should be detected through safe network option/API signals');
+
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options']['jetpack_active_modules'] = ['search'];
+    $moduleAdvisory = $method->invoke(null, WP_FTS_Plugin::default_settings());
+    $moduleNames = is_array($moduleAdvisory) && is_array($moduleAdvisory['provider_names'] ?? null) ? $moduleAdvisory['provider_names'] : [];
+    assert_true(in_array('Jetpack Search / Jetpack', $moduleNames, true), 'Jetpack Search should be detected from the bounded active-module option signal');
+});
+
+test_case('known search provider recommendations differ by compatibility mode', function (): void {
+    $method = new ReflectionMethod(WP_FTS_Plugin::class, 'known_search_provider_advisory');
+    $method->setAccessible(true);
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options']['active_plugins'] = ['jetpack/jetpack.php'];
+
+    $prefer = $method->invoke(null, WP_FTS_Plugin::default_settings());
+    $respectSettings = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['search_provider_compatibility' => 'respect_existing']
+    );
+    $respect = $method->invoke(null, $respectSettings);
+
+    assert_contains('switch to Keep another search provider', (string) ($prefer['recommendation'] ?? ''), 'Prefer mode recommendation should point operators to coexistence mode when another provider should answer first');
+    assert_contains('use Prefer Language FTS only', (string) ($respect['recommendation'] ?? ''), 'Respect-existing mode recommendation should point operators back to FTS precedence only when desired');
+    assert_true((string) ($prefer['recommendation'] ?? '') !== (string) ($respect['recommendation'] ?? ''), 'provider recommendations should differ between compatibility modes');
 });
 
 test_case('admin settings route defaults to Health and direct tab URLs render selected panels', function (): void {
@@ -9319,6 +9428,42 @@ test_case('enabled diagnostics record search provider compatibility stand-down',
     assert_contains('Another search provider already returned', (string) ($adminTrace['bailout_reason'] ?? ''), 'admin provider compatibility trace should explain the stand-down reason');
     $adminSettings = is_array($adminTrace['settings'] ?? null) ? $adminTrace['settings'] : [];
     assert_same('respect_existing_provider', $adminSettings['provider_compatibility'] ?? null, 'admin provider compatibility trace should expose the effective mode');
+});
+
+test_case('diagnostics include bounded known-provider summary without provider payloads', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_options']['active_plugins'] = ['searchwp/index.php'];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['search_provider_compatibility' => 'respect_existing']
+    );
+
+    $incoming = [
+        (object) [
+            'ID' => 850,
+            'post_title' => 'raw-provider-payload-title-must-not-leak',
+            'provider_payload' => [
+                'hits' => ['raw-provider-secret-hit'],
+            ],
+        ],
+    ];
+    $query = new WP_FTS_Test_Query([
+        's' => 'diagnosticpayloadneedle',
+        'posts_per_page' => 10,
+    ]);
+    WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
+
+    $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+    $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
+    assert_same('respect_existing_provider', $settings['provider_compatibility'] ?? null, 'known-provider diagnostics should include the compatibility mode');
+    assert_same('SearchWP', $settings['known_search_providers'] ?? null, 'known-provider diagnostics should include only bounded provider family names');
+    assert_same(1, (int) ($settings['known_search_provider_count'] ?? 0), 'known-provider diagnostics should include the bounded provider family count');
+
+    $traceJson = json_encode($trace, JSON_THROW_ON_ERROR);
+    assert_true(!str_contains($traceJson, 'raw-provider-payload-title-must-not-leak'), 'known-provider diagnostics should not include earlier provider post titles');
+    assert_true(!str_contains($traceJson, 'raw-provider-secret-hit'), 'known-provider diagnostics should not include earlier provider payload data');
+    assert_true(!str_contains($traceJson, 'provider_payload'), 'known-provider diagnostics should not include provider payload keys');
 });
 
 test_case('enabled diagnostics record search provider compatibility overrides', function (): void {

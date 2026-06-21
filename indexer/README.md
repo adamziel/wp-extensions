@@ -386,7 +386,11 @@ Current caveats:
   provider compatibility setting defaults to Prefer Language FTS; switch it to
   keep another search provider's results when Jetpack Search, SearchWP,
   Relevanssi, a theme filter, or custom search code appears to win or lose and
-  should answer first;
+  should answer first. The Health and Settings tabs show a read-only advisory
+  when common providers such as Jetpack Search/Jetpack, SearchWP, Relevanssi, or
+  ElasticPress are detected from safe activation/option/class/function signals;
+  that advisory does not call provider APIs and is not certification that those
+  products have been tested end to end;
 - wp-admin Posts list search replacement is enabled for safe main-list searches
   over indexed supported admin post statuses and uses the same provider
   compatibility setting. The `wp_fts_replace_frontend_search` and

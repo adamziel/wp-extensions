@@ -156,6 +156,73 @@ final class WP_FTS_Plugin
     ];
     private const SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS = 'prefer_fts';
     private const SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING = 'respect_existing';
+    private const KNOWN_SEARCH_PROVIDER_FAMILIES = [
+        'jetpack' => [
+            'label' => 'Jetpack Search / Jetpack',
+            'plugin_basenames' => [
+                'jetpack/jetpack.php',
+                'jetpack-search/jetpack-search.php',
+            ],
+            'classes' => [
+                'Jetpack',
+                'Jetpack_Search',
+                'Automattic\\Jetpack\\Search\\Search',
+            ],
+            'functions' => [
+                'jetpack_search_supported',
+            ],
+            'option_signals' => [
+                [
+                    'option' => 'jetpack_active_modules',
+                    'contains' => 'search',
+                ],
+            ],
+        ],
+        'searchwp' => [
+            'label' => 'SearchWP',
+            'plugin_basenames' => [
+                'searchwp/index.php',
+                'searchwp/searchwp.php',
+            ],
+            'classes' => [
+                'SearchWP',
+                'SWP_Query',
+            ],
+            'functions' => [
+                'searchwp',
+            ],
+            'option_signals' => [],
+        ],
+        'relevanssi' => [
+            'label' => 'Relevanssi',
+            'plugin_basenames' => [
+                'relevanssi/relevanssi.php',
+                'relevanssi-premium/relevanssi.php',
+                'relevanssi-premium/relevanssi-premium.php',
+            ],
+            'classes' => [
+                'Relevanssi_Search',
+            ],
+            'functions' => [
+                'relevanssi_do_query',
+            ],
+            'option_signals' => [],
+        ],
+        'elasticpress' => [
+            'label' => 'ElasticPress',
+            'plugin_basenames' => [
+                'elasticpress/elasticpress.php',
+            ],
+            'classes' => [
+                'ElasticPress',
+                'ElasticPress\\Plugin',
+            ],
+            'functions' => [
+                'ep_is_feature_active',
+            ],
+            'option_signals' => [],
+        ],
+    ];
     private const DEFAULT_SETTINGS = [
         'index_post_types' => ['post', 'page'],
         'auto_index' => true,
@@ -1549,10 +1616,13 @@ final class WP_FTS_Plugin
      */
     private static function debug_effective_settings(array $settings, array $overrides = []): array
     {
+        $known_provider_advisory = self::known_search_provider_advisory($settings);
         $summary = [
             'public_site_search' => !empty($settings['replace_frontend_search']) ? 'enabled' : 'disabled',
             'admin_posts_search' => !empty($settings['replace_admin_post_search']) ? 'enabled' : 'disabled',
             'provider_compatibility' => self::search_provider_compatibility_debug_value((string) ($settings['search_provider_compatibility'] ?? self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS)),
+            'known_search_providers' => self::known_search_provider_debug_summary($known_provider_advisory),
+            'known_search_provider_count' => max(0, (int) ($known_provider_advisory['detected_count'] ?? 0)),
             'match_mode' => (string) ($settings['match_mode'] ?? 'OR'),
             'prefix_matching' => !empty($settings['prefix_matching']) ? 'enabled' : 'disabled',
             'prefix_min_length' => self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT),
@@ -3022,6 +3092,7 @@ final class WP_FTS_Plugin
     private static function render_health_tab(): void
     {
         $settings = self::settings();
+        $known_provider_advisory = self::known_search_provider_advisory($settings);
         $health = self::search_health();
         $schema = self::schema_status();
         $lock = self::index_lock_status();
@@ -3047,6 +3118,7 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Public site search', !empty($settings['replace_frontend_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('wp-admin Posts search', !empty($settings['replace_admin_post_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('Search provider compatibility', self::search_provider_compatibility_label((string) $settings['search_provider_compatibility']));
+        self::render_health_status_row('Known search providers', (string) $known_provider_advisory['summary']);
         self::render_health_status_row('Field ranking weights', self::field_boost_summary($settings['field_boosts'] ?? []));
         self::render_health_status_row('Recency ranking boost', self::recency_boost_summary($settings));
         self::render_health_status_row('Indexed post types', self::health_post_type_summary($settings['index_post_types']));
@@ -3856,6 +3928,21 @@ final class WP_FTS_Plugin
                 ],
             ]
         );
+        self::render_settings_known_search_provider_advisory_row($settings);
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     */
+    private static function render_settings_known_search_provider_advisory_row(array $settings): void
+    {
+        $advisory = self::known_search_provider_advisory($settings);
+
+        echo '<tr><th scope="row">Known search providers</th><td>';
+        echo '<p>' . self::esc_html((string) $advisory['summary']) . '</p>';
+        echo '<p class="description">Current mode: ' . self::esc_html((string) $advisory['mode_label']) . '. ' . self::esc_html((string) $advisory['recommendation']) . '</p>';
+        echo '<p class="description">' . self::esc_html((string) $advisory['detection_note']) . '</p>';
+        echo '</td></tr>';
     }
 
     /**
@@ -4308,6 +4395,317 @@ final class WP_FTS_Plugin
         }
 
         return 'prefer_language_fts';
+    }
+
+    /**
+     * Return a bounded, read-only advisory for common third-party search providers.
+     *
+     * @param array<string,mixed>|null $settings
+     * @return array{
+     *   mode:string,
+     *   mode_label:string,
+     *   providers:array<int,array{key:string,label:string,signals:string[]}>,
+     *   provider_names:string[],
+     *   detected_count:int,
+     *   summary:string,
+     *   recommendation:string,
+     *   detection_note:string
+     * }
+     */
+    private static function known_search_provider_advisory(?array $settings = null): array
+    {
+        $settings ??= self::settings();
+        $mode = self::sanitize_search_provider_compatibility(
+            $settings['search_provider_compatibility'] ?? null,
+            self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS
+        );
+        $providers = self::detect_known_search_providers();
+        $provider_names = self::known_search_provider_names($providers);
+
+        return [
+            'mode' => $mode,
+            'mode_label' => self::search_provider_compatibility_label($mode),
+            'providers' => $providers,
+            'provider_names' => $provider_names,
+            'detected_count' => count($providers),
+            'summary' => self::known_search_provider_summary($provider_names),
+            'recommendation' => self::known_search_provider_recommendation($mode, $provider_names),
+            'detection_note' => 'This advisory uses safe activation, option, class, and function signals only; it is not an end-to-end integration certification.',
+        ];
+    }
+
+    /**
+     * @return array<int,array{key:string,label:string,signals:string[]}>
+     */
+    private static function detect_known_search_providers(): array
+    {
+        $active_plugins = array_fill_keys(self::known_search_provider_active_plugin_basenames(), true);
+        $network_plugins = array_fill_keys(self::known_search_provider_network_active_plugin_basenames(), true);
+        $providers = [];
+
+        foreach (self::KNOWN_SEARCH_PROVIDER_FAMILIES as $key => $family) {
+            $signals = [];
+            foreach (is_array($family['plugin_basenames'] ?? null) ? $family['plugin_basenames'] : [] as $basename) {
+                $basename = self::normalize_plugin_basename($basename);
+                if ($basename === '') {
+                    continue;
+                }
+                if (isset($active_plugins[$basename])) {
+                    $signals['active_plugin'] = true;
+                }
+                if (isset($network_plugins[$basename])) {
+                    $signals['network_active_plugin'] = true;
+                }
+            }
+
+            foreach (is_array($family['classes'] ?? null) ? $family['classes'] : [] as $class) {
+                if (is_scalar($class) && class_exists((string) $class, false)) {
+                    $signals['class_exists'] = true;
+                }
+            }
+
+            foreach (is_array($family['functions'] ?? null) ? $family['functions'] : [] as $function) {
+                if (is_scalar($function) && function_exists((string) $function)) {
+                    $signals['function_exists'] = true;
+                }
+            }
+
+            foreach (is_array($family['option_signals'] ?? null) ? $family['option_signals'] : [] as $signal) {
+                if (is_array($signal) && self::known_search_provider_option_signal_matches($signal)) {
+                    $signals['option'] = true;
+                }
+            }
+
+            if ($signals === []) {
+                continue;
+            }
+
+            $label = is_scalar($family['label'] ?? null) ? (string) $family['label'] : (string) $key;
+            $providers[] = [
+                'key' => (string) $key,
+                'label' => self::debug_truncate_text($label, 80),
+                'signals' => array_keys($signals),
+            ];
+        }
+
+        return $providers;
+    }
+
+    /**
+     * @param array<int,array{key:string,label:string,signals:string[]}> $providers
+     * @return string[]
+     */
+    private static function known_search_provider_names(array $providers): array
+    {
+        $names = [];
+        foreach ($providers as $provider) {
+            $label = is_scalar($provider['label'] ?? null) ? trim((string) $provider['label']) : '';
+            if ($label !== '') {
+                $names[] = self::debug_truncate_text($label, 80);
+            }
+            if (count($names) >= self::DEBUG_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * @param string[] $provider_names
+     */
+    private static function known_search_provider_summary(array $provider_names): string
+    {
+        return $provider_names === []
+            ? 'No known search provider detected'
+            : implode(', ', $provider_names);
+    }
+
+    /**
+     * @param string[] $provider_names
+     */
+    private static function known_search_provider_recommendation(string $mode, array $provider_names): string
+    {
+        if ($provider_names === []) {
+            return 'No compatibility action is recommended from this advisory.';
+        }
+
+        if ($mode === self::SEARCH_PROVIDER_COMPATIBILITY_RESPECT_EXISTING) {
+            return 'Keep another search provider\'s results is appropriate when the detected provider should stay in charge; use Prefer Language FTS only when Language FTS should override earlier provider results.';
+        }
+
+        return 'Prefer Language FTS is appropriate when Language FTS should own eligible searches; switch to Keep another search provider\'s results if the detected provider should answer first.';
+    }
+
+    /**
+     * @param array<string,mixed> $advisory
+     */
+    private static function known_search_provider_debug_summary(array $advisory): string
+    {
+        $provider_names = is_array($advisory['provider_names'] ?? null) ? $advisory['provider_names'] : [];
+        $summary = self::known_search_provider_summary(self::debug_normalize_list($provider_names));
+
+        return $summary === 'No known search provider detected' ? 'none' : $summary;
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function known_search_provider_active_plugin_basenames(): array
+    {
+        return self::normalize_plugin_basename_list(self::get_option('active_plugins', []));
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function known_search_provider_network_active_plugin_basenames(): array
+    {
+        $basenames = [];
+
+        if (function_exists('get_site_option')) {
+            $basenames = array_merge($basenames, self::normalize_plugin_basename_list(get_site_option('active_sitewide_plugins', [])));
+        }
+
+        if (function_exists('get_network_option')) {
+            $basenames = array_merge($basenames, self::normalize_plugin_basename_list(get_network_option(null, 'active_sitewide_plugins', [])));
+        }
+
+        if (function_exists('is_plugin_active_for_network')) {
+            foreach (self::known_search_provider_configured_basenames() as $basename) {
+                try {
+                    if (is_plugin_active_for_network($basename)) {
+                        $basenames[] = $basename;
+                    }
+                } catch (Throwable) {
+                    continue;
+                }
+            }
+        }
+
+        return array_values(array_unique($basenames));
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function known_search_provider_configured_basenames(): array
+    {
+        $basenames = [];
+        foreach (self::KNOWN_SEARCH_PROVIDER_FAMILIES as $family) {
+            foreach (is_array($family['plugin_basenames'] ?? null) ? $family['plugin_basenames'] : [] as $basename) {
+                $basename = self::normalize_plugin_basename($basename);
+                if ($basename !== '') {
+                    $basenames[] = $basename;
+                }
+            }
+        }
+
+        return array_values(array_unique($basenames));
+    }
+
+    /**
+     * @param array<string,mixed> $signal
+     */
+    private static function known_search_provider_option_signal_matches(array $signal): bool
+    {
+        $option = is_scalar($signal['option'] ?? null) ? self::sanitize_key((string) $signal['option']) : '';
+        if ($option === '') {
+            return false;
+        }
+
+        $value = self::get_option($option, null);
+        if ($value === null || $value === false || $value === '') {
+            return false;
+        }
+
+        if (isset($signal['contains']) && is_scalar($signal['contains'])) {
+            return self::known_search_provider_value_contains($value, (string) $signal['contains']);
+        }
+
+        return true;
+    }
+
+    private static function known_search_provider_value_contains(mixed $value, string $needle, int $depth = 0): bool
+    {
+        $needle = strtolower(trim($needle));
+        if ($needle === '' || $depth > 3) {
+            return false;
+        }
+
+        if (is_scalar($value)) {
+            return strtolower(trim((string) $value)) === $needle;
+        }
+
+        if (!is_array($value)) {
+            return false;
+        }
+
+        $checked = 0;
+        foreach ($value as $key => $item) {
+            if (is_scalar($key) && strtolower(trim((string) $key)) === $needle) {
+                return true;
+            }
+            if (self::known_search_provider_value_contains($item, $needle, $depth + 1)) {
+                return true;
+            }
+            $checked++;
+            if ($checked >= self::DEBUG_MAX_ASSOC_ITEMS) {
+                break;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param mixed $raw
+     * @return string[]
+     */
+    private static function normalize_plugin_basename_list(mixed $raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+
+        $basenames = [];
+        foreach ($raw as $key => $value) {
+            $candidates = [];
+            if (is_scalar($value)) {
+                $candidates[] = (string) $value;
+            }
+            if (is_scalar($key)) {
+                $candidates[] = (string) $key;
+            }
+
+            foreach ($candidates as $candidate) {
+                $basename = self::normalize_plugin_basename($candidate);
+                if ($basename !== '') {
+                    $basenames[] = $basename;
+                }
+            }
+            if (count($basenames) >= 64) {
+                break;
+            }
+        }
+
+        return array_values(array_unique($basenames));
+    }
+
+    private static function normalize_plugin_basename(mixed $basename): string
+    {
+        if (!is_scalar($basename)) {
+            return '';
+        }
+
+        $basename = strtolower(trim(str_replace('\\', '/', (string) $basename)));
+        $basename = preg_replace('#/+#', '/', $basename) ?? $basename;
+        $basename = ltrim($basename, '/');
+        if ($basename === '' || strlen($basename) > 160 || !str_contains($basename, '.php')) {
+            return '';
+        }
+
+        return $basename;
     }
 
     /**

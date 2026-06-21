@@ -32,10 +32,23 @@ checkboxes. Use the compatibility mode to coexist with another provider on an
 enabled surface; use the `wp_fts_replace_frontend_search` or
 `wp_fts_replace_admin_post_search` filters to disable a replacement surface
 entirely. Request diagnostics include the effective provider compatibility mode
-and record whether Language FTS replaced an earlier provider response or bailed
-out because coexistence mode kept another provider's result. Check this setting
-first when another search plugin, theme filter, or custom search code appears to
-win or lose on an enabled replacement surface.
+plus a compact known-provider summary, and record whether Language FTS replaced
+an earlier provider response or bailed out because coexistence mode kept another
+provider's result. Check this setting first when another search plugin, theme
+filter, or custom search code appears to win or lose on an enabled replacement
+surface.
+
+The Health and Settings tabs also show a read-only known-provider advisory for
+common search plugins such as Jetpack Search/Jetpack, SearchWP, Relevanssi, and
+ElasticPress. Detection is deliberately bounded: it uses normal plugin
+activation options, network-active plugin state when WordPress exposes it,
+selected provider option flags, and loaded class/function names. It does not
+call third-party provider APIs, perform network requests, scan content, or claim
+that an end-to-end integration has been certified. When a known provider is
+detected, **Prefer Language FTS** keeps Language FTS in charge of eligible
+searches, while **Keep another search provider's results when it has already
+answered** is the safer coexistence choice when the detected provider should
+answer first.
 
 ## Word Beginning Prefix Tuning
 
