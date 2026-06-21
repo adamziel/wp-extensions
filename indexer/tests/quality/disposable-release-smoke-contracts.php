@@ -353,15 +353,106 @@ test_case('quality disposable release smoke builds bounded WP-CLI command sequen
     }
 });
 
+test_case('quality disposable release smoke sanitizes successful JSON evidence', function (): void {
+    $tmp = wp_fts_disposable_smoke_contract_temp_dir();
+    try {
+        $wpRoot = wp_fts_disposable_smoke_contract_wp_root($tmp, true);
+        $zip = $tmp . '/wp-fts-indexer.zip';
+        wp_fts_disposable_smoke_contract_write_file($zip, "zip fixture\n");
+        $rawPasswordValue = 'hunter' . '2';
+        $rawPasswordAssignment = 'password=' . $rawPasswordValue;
+        $rawBearerToken = 'abc' . '123';
+        $rawLocalPath = '/' . 'home' . '/' . 'claude' . '/' . 'private' . '/' . 'path';
+        $rawPrivateKey = '-----BEGIN ' . 'PRIVATE ' . 'KEY-----'
+            . "\nfixture\n"
+            . '-----END ' . 'PRIVATE ' . 'KEY-----';
+
+        $runner = new WP_FTS_DisposableReleaseSmokeRunner(
+            function (array $command) use ($rawPasswordValue, $rawPasswordAssignment, $rawBearerToken, $rawLocalPath, $rawPrivateKey): array {
+                $joined = implode(' ', $command);
+                if (str_contains($joined, 'core is-installed')) {
+                    return ['exit' => 0, 'stdout' => '', 'stderr' => ''];
+                }
+                if (str_contains($joined, 'plugin install')) {
+                    return ['exit' => 0, 'stdout' => 'Activated plugin.', 'stderr' => ''];
+                }
+                if (str_contains($joined, 'fts status')) {
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([
+                        'schema_status' => 'ok',
+                        'diagnostics' => [
+                            'note' => $rawPasswordAssignment . ' Authorization: Bearer ' . $rawBearerToken . ' ' . $rawLocalPath,
+                            'pem' => $rawPrivateKey,
+                        ],
+                        'password' => $rawPasswordValue,
+                        $rawLocalPath => 'path key should be sanitized too',
+                    ]), 'stderr' => ''];
+                }
+                if (str_contains($joined, 'fts repair')) {
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['schema_status' => 'ok', 'schema_version' => 1]), 'stderr' => ''];
+                }
+                if (str_contains($joined, 'post create')) {
+                    return ['exit' => 0, 'stdout' => "123\n", 'stderr' => ''];
+                }
+                if (str_contains($joined, 'fts process-batch')) {
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([
+                        'processed' => 1,
+                        'debug' => $rawPasswordAssignment . ' ' . $rawLocalPath,
+                    ]), 'stderr' => ''];
+                }
+                if (str_contains($joined, 'fts search')) {
+                    return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([
+                        'total' => 1,
+                        'results' => [
+                            ['doc_id' => 123, 'post_id' => 123, 'title' => 'Fixture'],
+                        ],
+                    ]), 'stderr' => ''];
+                }
+                if (str_contains($joined, 'post delete') || str_contains($joined, 'fts delete')) {
+                    return ['exit' => 0, 'stdout' => 'Deleted.', 'stderr' => ''];
+                }
+
+                return ['exit' => 1, 'stdout' => '', 'stderr' => 'Unexpected command: ' . $joined];
+            },
+            null,
+            null,
+            [
+                WP_FTS_DisposableReleaseSmokeRunner::WP_PATH_ENV => $wpRoot,
+                WP_FTS_DisposableReleaseSmokeRunner::ALLOW_ENV => '1',
+                WP_FTS_DisposableReleaseSmokeRunner::WP_CLI_ENV => 'custom-wp',
+            ]
+        );
+        $result = $runner->run(['zip' => $zip]);
+        $encodedReport = wp_fts_disposable_smoke_contract_json($result['report']);
+
+        wp_fts_disposable_smoke_contract_same('passed', $result['status'], 'successful fixture should pass');
+        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, $rawPasswordAssignment), 'successful JSON evidence should redact password assignments');
+        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, $rawPasswordValue), 'successful JSON evidence should redact sensitive keyed values');
+        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, $rawBearerToken), 'successful JSON evidence should redact bearer tokens');
+        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, $rawLocalPath), 'successful JSON evidence should redact local paths');
+        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, 'BEGIN ' . 'PRIVATE ' . 'KEY'), 'successful JSON evidence should redact private key markers');
+        wp_fts_disposable_smoke_contract_contains('schema_status', $encodedReport, 'successful JSON evidence should retain useful status fields');
+        wp_fts_disposable_smoke_contract_contains('processed', $encodedReport, 'successful JSON evidence should retain useful indexing fields');
+        wp_fts_disposable_smoke_contract_contains('[redacted]', $encodedReport, 'successful JSON evidence should show redaction markers');
+        wp_fts_disposable_smoke_contract_contains('[path]', $encodedReport, 'successful JSON evidence should show path redaction markers');
+    } finally {
+        wp_fts_disposable_smoke_contract_remove_tree($tmp);
+    }
+});
+
 test_case('quality disposable release smoke sanitizes and bounds failed command output', function (): void {
     $tmp = wp_fts_disposable_smoke_contract_temp_dir();
     try {
         $wpRoot = wp_fts_disposable_smoke_contract_wp_root($tmp, true);
         $zip = $tmp . '/wp-fts-indexer.zip';
         wp_fts_disposable_smoke_contract_write_file($zip, "zip fixture\n");
+        $rawPasswordValue = 'hunter' . '2';
+        $rawPasswordAssignment = 'password=' . $rawPasswordValue;
+        $rawBearerToken = 'abc' . '123';
+        $rawLocalPath = '/' . 'home' . '/' . 'claude' . '/' . 'private' . '/' . 'path';
+        $failureDetail = $rawPasswordAssignment . ' Authorization: Bearer ' . $rawBearerToken . ' ' . $rawLocalPath . ' failure';
 
         $runner = new WP_FTS_DisposableReleaseSmokeRunner(
-            function (array $command): array {
+            function (array $command) use ($failureDetail): array {
                 $joined = implode(' ', $command);
                 if (str_contains($joined, 'core is-installed')) {
                     return ['exit' => 0, 'stdout' => '', 'stderr' => ''];
@@ -370,7 +461,7 @@ test_case('quality disposable release smoke sanitizes and bounds failed command 
                 return [
                     'exit' => 1,
                     'stdout' => str_repeat('x', 1400),
-                    'stderr' => 'password=hunter2 Authorization: Bearer abc123 /home/claude/private/path failure',
+                    'stderr' => $failureDetail,
                 ];
             },
             null,
@@ -385,9 +476,9 @@ test_case('quality disposable release smoke sanitizes and bounds failed command 
         $encodedReport = wp_fts_disposable_smoke_contract_json($result['report']);
 
         wp_fts_disposable_smoke_contract_same('failed', $result['status'], 'failed WP-CLI command should fail the smoke');
-        wp_fts_disposable_smoke_contract_true(!str_contains($result['message'], 'hunter2'), 'failure message should redact password values');
-        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, 'abc123'), 'report should redact bearer tokens');
-        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, '/home/claude/private/path'), 'report should redact local paths');
+        wp_fts_disposable_smoke_contract_true(!str_contains($result['message'], $rawPasswordValue), 'failure message should redact password values');
+        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, $rawBearerToken), 'report should redact bearer tokens');
+        wp_fts_disposable_smoke_contract_true(!str_contains($encodedReport, $rawLocalPath), 'report should redact local paths');
         wp_fts_disposable_smoke_contract_contains('[redacted]', $encodedReport, 'report should show redaction markers');
         wp_fts_disposable_smoke_contract_contains('[path]', $encodedReport, 'report should show path redaction markers');
         wp_fts_disposable_smoke_contract_contains('[truncated]', $encodedReport, 'report should bound long command output');

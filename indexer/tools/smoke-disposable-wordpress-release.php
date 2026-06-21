@@ -587,15 +587,61 @@ final class WP_FTS_DisposableReleaseSmokeRunner
      */
     private function compact_payload(array $payload): array
     {
-        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES);
-        if (!is_string($encoded) || strlen($encoded) <= 1200) {
-            return $payload;
+        $safePayload = $this->sanitize_evidence_value($payload);
+        if (!is_array($safePayload)) {
+            $safePayload = ['value' => $safePayload];
+        }
+
+        $encoded = json_encode($safePayload, JSON_UNESCAPED_SLASHES);
+        if (!is_string($encoded)) {
+            return [
+                'truncated' => true,
+                'excerpt' => '[unencodable payload]',
+            ];
+        }
+
+        if (strlen($encoded) <= 1200) {
+            return $safePayload;
         }
 
         return [
             'truncated' => true,
             'excerpt' => self::sanitize_output($encoded, 1200),
         ];
+    }
+
+    private function sanitize_evidence_value(mixed $value, ?string $key = null): mixed
+    {
+        if (is_array($value)) {
+            $safe = [];
+            foreach ($value as $childKey => $childValue) {
+                $safeKey = is_string($childKey) ? self::sanitize_output($childKey, 200) : $childKey;
+                $safe[$safeKey] = $this->sanitize_evidence_value(
+                    $childValue,
+                    is_string($childKey) ? $childKey : null
+                );
+            }
+
+            return $safe;
+        }
+
+        if (is_string($value)) {
+            if ($key !== null && self::is_sensitive_evidence_key($key)) {
+                return '[redacted]';
+            }
+
+            return self::sanitize_output($value, 1200);
+        }
+
+        return $value;
+    }
+
+    private static function is_sensitive_evidence_key(string $key): bool
+    {
+        return preg_match(
+            '/(?:token|secret|password|passphrase|authorization|auth|cookie|nonce|api[_-]?key|access[_-]?key|private[_-]?key)/i',
+            $key
+        ) === 1;
     }
 
     private function token(): string
@@ -764,7 +810,16 @@ final class WP_FTS_DisposableReleaseSmokeRunner
     public static function sanitize_output(string $text, int $maxBytes = self::OUTPUT_EXCERPT_BYTES): string
     {
         $text = str_replace(["\r\n", "\r", "\0"], ["\n", "\n", ''], $text);
+        $privateKeyMarker = 'PRIVATE ' . 'KEY';
         $patterns = [
+            ('/-----BEGIN [A-Z0-9 ]*' . $privateKeyMarker . '-----.*?-----END [A-Z0-9 ]*' . $privateKeyMarker . '-----/is')
+                => '[redacted-private-key]',
+            ('/-----BEGIN [A-Z0-9 ]*' . $privateKeyMarker . '-----/i')
+                => '[redacted-private-key]',
+            ('/-----END [A-Z0-9 ]*' . $privateKeyMarker . '-----/i')
+                => '[redacted-private-key]',
+            '/(["\'](?:[A-Z0-9_-]*(?:TOKEN|SECRET|PASSWORD|PASS|COOKIE|NONCE|AUTH)[A-Z0-9_-]*|api[_-]?key|access[_-]?key|private[_-]?key)["\']\s*:\s*["\'])[^"\']*(["\'])/i'
+                => '$1[redacted]$2',
             '/\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASS|KEY|COOKIE|NONCE|AUTH)[A-Z0-9_]*)\s*=\s*([^\s]+)/i'
                 => '$1=[redacted]',
             '/(Authorization:\s*(?:Bearer|Basic)\s+)[^\s]+/i'
