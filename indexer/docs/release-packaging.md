@@ -165,6 +165,10 @@ php indexer/tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-upgrade-multisite-smoke \
   --previous-direct-package=/path/to/previous-wp-fts-indexer.zip
+php indexer/tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-upgrade-multisite-smoke \
+  --previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA
 ```
 
 Use the public-submission target only for WordPress.org/SVN or other public
@@ -190,16 +194,25 @@ disposable WordPress/MariaDB stack, proves activation/repair/deactivation and
 uninstall retention boundaries, and does not build a public-submission artifact.
 Multisite lifecycle proof is explicitly not run by that lane, and the collector
 records that boundary. The upgrade/multisite Docker lane is direct-install/operator upgrade evidence:
-it requires `--previous-direct-package=/path/to/previous-wp-fts-indexer.zip`,
-builds the current ZIP in temporary storage, installs the previous package in a
-disposable WordPress/MariaDB stack, upgrades to the current package, checks
-schema version/status after upgrade, repair idempotence after upgrade, search
-continuity for generated fixture content, queue health after upgrade, and
-cleanup of generated fixtures and temporary resources. Missing or invalid previous packages are `unavailable`, not passes. Multisite runtime proof is not
-claimed unless the lane reports a real multisite runtime pass; the current lane
-records an explicit boundary instead. These lanes do not modify WordPress.org/SVN state, tags,
-public assets, package readme/license files, or authority evidence, and a
-direct-install `pass` does not approve public-submission readiness.
+it requires either `--previous-direct-package=/path/to/previous-wp-fts-indexer.zip`
+or `--previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA`. The ref form is
+for release reviews that need repo-owned evidence without a manually supplied
+ZIP: the collector resolves the local ref/SHA without fetching, rejects the
+current target commit, verifies release-build tooling and the committed
+Composer lockfile at that ref, archives only the package source paths into
+temporary storage, and builds the previous ZIP with isolated Composer
+home/auth, an existing local Composer package cache when available, and network
+access disabled. The lane then builds the current ZIP in temporary storage,
+installs the previous package in a disposable WordPress/MariaDB stack, upgrades
+to the current package, checks schema version/status after upgrade, repair
+idempotence after upgrade, search continuity for generated fixture content,
+queue health after upgrade, and cleanup of generated fixtures and temporary
+resources. Missing or invalid previous packages/refs are `unavailable`, not
+passes. Multisite runtime proof is not claimed unless the lane reports a real
+multisite runtime pass; the current lane records an explicit boundary instead.
+These lanes do not modify WordPress.org/SVN state, tags, public assets, package
+readme/license files, or authority evidence, and a direct-install `pass` does
+not approve public-submission readiness.
 
 ## Composer Dependency Handling
 

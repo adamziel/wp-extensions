@@ -579,7 +579,10 @@ test_case('quality upgrade/multisite docs and composer command are operator-faci
         'composer test:smoke:upgrade-multisite:docker -- --previous-package=/path/to/previous-wp-fts-indexer.zip',
         '--run-docker-upgrade-multisite-smoke',
         '--previous-direct-package=/path/to/previous-wp-fts-indexer.zip',
-        'missing previous package is reported as `unavailable`',
+        '--previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA',
+        'A missing previous package or previous local ref is reported as `unavailable`',
+        'isolated Composer home/auth',
+        'network access disabled',
         'Multisite runtime proof is not claimed by this lane',
     ] as $needle) {
         wp_fts_upgrade_contract_contains($needle, $testingDocs, "testing docs should mention {$needle}");
@@ -588,6 +591,9 @@ test_case('quality upgrade/multisite docs and composer command are operator-faci
     foreach ([
         'Upgrade release evidence',
         'previous direct-install package',
+        '--previous-direct-package-ref=REF',
+        'isolated Composer home/auth',
+        'network access disabled',
         'repair idempotence after upgrade',
         'queue health after upgrade',
         'Multisite runtime proof is not claimed',
@@ -598,9 +604,11 @@ test_case('quality upgrade/multisite docs and composer command are operator-faci
     foreach ([
         '--run-docker-upgrade-multisite-smoke',
         '--previous-direct-package=/path/to/previous-wp-fts-indexer.zip',
+        '--previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA',
         'direct-install/operator upgrade evidence',
-        'Missing or invalid previous packages are `unavailable`, not passes',
-        'does not approve public-submission readiness',
+        'Missing or invalid previous packages/refs are `unavailable`',
+        'access disabled',
+        'public-submission readiness',
     ] as $needle) {
         wp_fts_upgrade_contract_contains($needle, $releaseDocs, "release evidence docs should mention {$needle}");
     }

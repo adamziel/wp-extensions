@@ -140,6 +140,15 @@ fixture content before the disposable stack is removed. Multisite runtime proof 
 explicit multisite boundary unless a future disposable multisite topology
 produces runtime evidence.
 
+The release evidence collector can also build the previous direct-install
+package from a local Git ref/SHA with `--previous-direct-package-ref=REF`. That
+path resolves only local history, rejects the current target commit, requires
+the release builder and Composer lockfile at the previous ref, archives package
+source paths into temporary storage, and runs the previous ZIP build with
+isolated Composer home/auth, an existing local Composer package cache when
+available, and network access disabled before invoking the Docker upgrade
+wrapper.
+
 ## Reindex Strategy
 
 Run a full reindex after first activation, after large content imports, and

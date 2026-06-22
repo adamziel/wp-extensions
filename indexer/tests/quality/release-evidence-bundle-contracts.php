@@ -331,6 +331,108 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
     };
 }
 
+function wp_fts_release_evidence_contract_previous_ref_runner(string $mode = 'pass', ?array &$observedCommands = null): callable
+{
+    $base = wp_fts_release_evidence_contract_fake_runner();
+    $currentSha = str_repeat('b', 40);
+    $previousSha = str_repeat('c', 40);
+    $observedCommands = [];
+
+    return static function (array $command, string $cwd, int $timeout) use ($base, $mode, $currentSha, $previousSha, &$observedCommands): array {
+        $observedCommands[] = $command;
+
+        if (($command[0] ?? '') === 'git') {
+            if (($command[1] ?? '') === 'rev-parse' && ($command[2] ?? '') === 'HEAD') {
+                return ['exit' => 0, 'stdout' => $currentSha . "\n", 'stderr' => ''];
+            }
+            if (($command[1] ?? '') === 'rev-parse' && ($command[2] ?? '') === '--abbrev-ref') {
+                return ['exit' => 0, 'stdout' => "task/fake-release-evidence\n", 'stderr' => ''];
+            }
+            if (($command[1] ?? '') === 'rev-parse' && in_array('--verify', $command, true)) {
+                if ($mode === 'unresolved') {
+                    return ['exit' => 1, 'stdout' => '', 'stderr' => ''];
+                }
+
+                return [
+                    'exit' => 0,
+                    'stdout' => ($mode === 'current-ref' ? $currentSha : $previousSha) . "\n",
+                    'stderr' => '',
+                ];
+            }
+            if (($command[1] ?? '') === 'cat-file') {
+                return [
+                    'exit' => $mode === 'missing-tooling' ? 1 : 0,
+                    'stdout' => '',
+                    'stderr' => $mode === 'missing-tooling' ? 'missing required path' : '',
+                ];
+            }
+            if (($command[1] ?? '') === 'ls-tree') {
+                $paths = [
+                    'components/full-text-search/composer.json',
+                    'components/full-text-search/src/bootstrap.php',
+                    'indexer/.distignore',
+                    'indexer/composer.json',
+                    'indexer/composer.lock',
+                    'indexer/tools/build-release-zip.php',
+                ];
+                if ($mode === 'secret-path') {
+                    $paths[] = 'indexer/.env';
+                }
+
+                return ['exit' => 0, 'stdout' => implode("\n", $paths) . "\n", 'stderr' => ''];
+            }
+            if (($command[1] ?? '') === 'archive') {
+                return ['exit' => 0, 'stdout' => '', 'stderr' => ''];
+            }
+        }
+
+        if (($command[0] ?? '') === 'tar') {
+            return ['exit' => 0, 'stdout' => '', 'stderr' => ''];
+        }
+
+        if (($command[0] ?? '') === 'env') {
+            if ($mode === 'build-unavailable') {
+                return [
+                    'exit' => 1,
+                    'stdout' => '',
+                    'stderr' => 'Release package build failed: The PHP zip extension is required to create the release archive.',
+                ];
+            }
+            if ($mode === 'build-fail') {
+                return [
+                    'exit' => 1,
+                    'stdout' => '',
+                    'stderr' => 'Release package build failed: Staged package still contains prohibited paths.',
+                ];
+            }
+
+            foreach ($command as $arg) {
+                if (str_starts_with($arg, '--output=')) {
+                    $zipPath = substr($arg, strlen('--output='));
+                    file_put_contents($zipPath, 'fake generated previous package zip');
+                    break;
+                }
+            }
+
+            return [
+                'exit' => 0,
+                'stdout' => json_encode(['status' => 'ok'], JSON_UNESCAPED_SLASHES) . "\n",
+                'stderr' => '',
+            ];
+        }
+
+        if (($command[0] ?? '') === 'tools/run-disposable-upgrade-multisite-smoke.sh') {
+            return [
+                'exit' => 0,
+                'stdout' => wp_fts_release_evidence_contract_upgrade_output('passed', 'not_run'),
+                'stderr' => '',
+            ];
+        }
+
+        return $base($command, $cwd, $timeout);
+    };
+}
+
 /**
  * @param array<string,mixed> $options
  * @return array<string,mixed>
@@ -429,6 +531,7 @@ test_case('quality release evidence collector documents upgrade/multisite opt-in
     wp_fts_release_evidence_contract_same(0, $result['exit'], 'collector help should exit zero');
     wp_fts_release_evidence_contract_contains('--run-docker-upgrade-multisite-smoke', $result['stdout'], 'collector help should document the upgrade/multisite opt-in');
     wp_fts_release_evidence_contract_contains('--previous-direct-package=PATH', $result['stdout'], 'collector help should document the previous direct-install package option');
+    wp_fts_release_evidence_contract_contains('--previous-direct-package-ref=REF', $result['stdout'], 'collector help should document the previous direct-install package ref option');
 });
 
 test_case('quality release evidence collector runs Docker disposable smokes only with explicit opt-in', function (): void {
@@ -480,7 +583,7 @@ test_case('quality release evidence collector runs Docker upgrade/multisite smok
     );
     $defaultDetails = is_array($defaultLane['details'] ?? null) ? $defaultLane['details'] : [];
     wp_fts_release_evidence_contract_same('skip', $defaultLane['status'] ?? null, 'Docker upgrade/multisite lane should skip without explicit opt-in');
-    wp_fts_release_evidence_contract_same('--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH', $defaultDetails['enable_with'] ?? null, 'Docker upgrade/multisite lane should document its collector opt-in');
+    wp_fts_release_evidence_contract_same('--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH or --previous-direct-package-ref=REF', $defaultDetails['enable_with'] ?? null, 'Docker upgrade/multisite lane should document its collector opt-in');
     wp_fts_release_evidence_contract_contains('not public-submission readiness', (string) ($defaultDetails['target_policy'] ?? ''), 'Docker upgrade/multisite lane should label direct-install/operator evidence');
 
     $missingLane = wp_fts_release_evidence_contract_lane(
@@ -527,6 +630,98 @@ test_case('quality release evidence collector runs Docker upgrade/multisite smok
             unlink($zip);
         }
     }
+});
+
+test_case('quality release evidence collector rejects invalid or current previous package refs', function (): void {
+    $invalidLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report([
+            'run_docker_upgrade_multisite_smoke' => true,
+            'previous_direct_package_ref' => 'bad ref with spaces',
+        ]),
+        'docker_disposable_upgrade_multisite_smoke'
+    );
+    $invalidDetails = is_array($invalidLane['details'] ?? null) ? $invalidLane['details'] : [];
+    wp_fts_release_evidence_contract_same('unavailable', $invalidLane['status'] ?? null, 'invalid previous package ref should be unavailable, not pass');
+    wp_fts_release_evidence_contract_same('invalid_previous_package_ref', $invalidDetails['previous_package_policy'] ?? null, 'invalid ref should record a precise policy');
+
+    $observed = [];
+    $currentLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report_with_runner(
+            wp_fts_release_evidence_contract_previous_ref_runner('current-ref', $observed),
+            [
+                'run_docker_upgrade_multisite_smoke' => true,
+                'previous_direct_package_ref' => 'main',
+            ]
+        ),
+        'docker_disposable_upgrade_multisite_smoke'
+    );
+    $currentDetails = is_array($currentLane['details'] ?? null) ? $currentLane['details'] : [];
+    wp_fts_release_evidence_contract_same('unavailable', $currentLane['status'] ?? null, 'current previous package ref should be unavailable, not pass');
+    wp_fts_release_evidence_contract_same('previous_ref_matches_current_target', $currentDetails['previous_package_policy'] ?? null, 'current ref should explain the meaningless upgrade boundary');
+    wp_fts_release_evidence_contract_same('unavailable', $currentDetails['upgrade_evidence_status'] ?? null, 'current ref should not record upgrade proof');
+
+    foreach ($observed as $command) {
+        wp_fts_release_evidence_contract_true(
+            ($command[0] ?? '') !== 'tools/run-disposable-upgrade-multisite-smoke.sh',
+            'current ref should stop before the Docker upgrade wrapper is launched'
+        );
+    }
+});
+
+test_case('quality release evidence collector runs Docker upgrade with a generated previous package ref', function (): void {
+    $observed = [];
+    $report = wp_fts_release_evidence_contract_fake_report_with_runner(
+        wp_fts_release_evidence_contract_previous_ref_runner('pass', $observed),
+        [
+            'run_docker_upgrade_multisite_smoke' => true,
+            'previous_direct_package_ref' => 'refs/tags/previous-release',
+        ]
+    );
+    $lane = wp_fts_release_evidence_contract_lane($report, 'docker_disposable_upgrade_multisite_smoke');
+    $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
+
+    wp_fts_release_evidence_contract_same('pass', $lane['status'] ?? null, 'generated previous package ref should feed the Docker upgrade wrapper');
+    wp_fts_release_evidence_contract_same('tools/run-disposable-upgrade-multisite-smoke.sh --previous-package=[path]', $lane['command'] ?? null, 'generated previous package path should be redacted in the reported command');
+    wp_fts_release_evidence_contract_same('generated_from_local_git_ref', $details['previous_package_policy'] ?? null, 'collector should record generated previous package provenance');
+    wp_fts_release_evidence_contract_same('refs/tags/previous-release', $details['previous_package_ref'] ?? null, 'collector should record the selected previous ref');
+    wp_fts_release_evidence_contract_same(str_repeat('c', 40), $details['previous_package_sha'] ?? null, 'collector should record the resolved previous SHA');
+    wp_fts_release_evidence_contract_same('pass', $details['previous_package_build_status'] ?? null, 'collector should record previous package build success');
+    wp_fts_release_evidence_contract_same(hash('sha256', 'fake generated previous package zip'), $details['previous_package_zip_sha256'] ?? null, 'collector should record a bounded previous package hash');
+    wp_fts_release_evidence_contract_same(strlen('fake generated previous package zip'), $details['previous_package_zip_bytes'] ?? null, 'collector should record previous package size');
+    wp_fts_release_evidence_contract_same('built_by_upgrade_wrapper_from_current_checkout', $details['current_package_policy'] ?? null, 'collector should record that the current package is built by the wrapper');
+    wp_fts_release_evidence_contract_same('passed', $details['upgrade_report_status'] ?? null, 'collector should require a passed inner upgrade report');
+    wp_fts_release_evidence_contract_same('passed', $details['upgrade_evidence_status'] ?? null, 'collector should record passed upgrade evidence');
+    wp_fts_release_evidence_contract_same('not_run', $details['multisite_evidence_status'] ?? null, 'collector should preserve the multisite not-run boundary');
+
+    $sawNetworkDisabledBuild = false;
+    foreach ($observed as $command) {
+        if (($command[0] ?? '') !== 'env') {
+            continue;
+        }
+        $sawNetworkDisabledBuild = in_array('COMPOSER_DISABLE_NETWORK=1', $command, true)
+            && count(array_filter($command, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_HOME='))) === 1
+            && count(array_filter($command, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_CACHE_DIR='))) === 1;
+    }
+    wp_fts_release_evidence_contract_true($sawNetworkDisabledBuild, 'generated previous package build should isolate Composer and disable network access');
+});
+
+test_case('quality release evidence collector reports generated previous package build prerequisites as unavailable', function (): void {
+    $lane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report_with_runner(
+            wp_fts_release_evidence_contract_previous_ref_runner('build-unavailable'),
+            [
+                'run_docker_upgrade_multisite_smoke' => true,
+                'previous_direct_package_ref' => 'refs/tags/previous-release',
+            ]
+        ),
+        'docker_disposable_upgrade_multisite_smoke'
+    );
+    $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
+
+    wp_fts_release_evidence_contract_same('unavailable', $lane['status'] ?? null, 'missing previous package build prerequisites should be unavailable');
+    wp_fts_release_evidence_contract_same('previous_ref_package_build_failed', $details['previous_package_policy'] ?? null, 'build prerequisite failure should keep precise policy');
+    wp_fts_release_evidence_contract_same('unavailable', $details['previous_package_build_status'] ?? null, 'build prerequisite failure should not become pass');
+    wp_fts_release_evidence_contract_contains('zip extension is required', (string) ($details['stderr_excerpt'] ?? ''), 'build prerequisite stderr should be bounded into details');
 });
 
 test_case('quality release evidence collector does not pass Docker upgrade lane from wrapper PASS text alone', function (): void {

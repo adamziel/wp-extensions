@@ -20,6 +20,15 @@ final class WP_FTS_ReleaseEvidenceCollector
     private const OUTPUT_EXCERPT_BYTES = 1200;
     private const RAW_OUTPUT_CAPTURE_BYTES = 12000;
     private const DEFAULT_TIMEOUT_SECONDS = 90;
+    private const PREVIOUS_PACKAGE_TEMP_PREFIX = 'wp-fts-previous-direct-package-';
+    private const PREVIOUS_PACKAGE_ARCHIVE_PATHS = ['indexer', 'components/full-text-search'];
+    private const PREVIOUS_PACKAGE_REQUIRED_PATHS = [
+        'indexer/tools/build-release-zip.php',
+        'indexer/.distignore',
+        'indexer/composer.json',
+        'indexer/composer.lock',
+        'components/full-text-search/composer.json',
+    ];
 
     /** @var callable(array<int,string>, string, int): array{exit:int,stdout:string,stderr:string,timed_out?:bool,stdout_truncated?:bool,stderr_truncated?:bool} */
     private $processRunner;
@@ -79,7 +88,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                 continue;
             }
 
-            foreach (['format', 'release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'previous-direct-package', 'timeout'] as $name) {
+            foreach (['format', 'release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'previous-direct-package', 'previous-direct-package-ref', 'timeout'] as $name) {
                 $prefix = "--{$name}=";
                 if (str_starts_with($arg, $prefix)) {
                     $key = str_replace('-', '_', $name);
@@ -125,6 +134,8 @@ final class WP_FTS_ReleaseEvidenceCollector
             '  --run-docker-upgrade-multisite-smoke',
             '                                  Run Docker-backed upgrade evidence from a previous direct-install package.',
             '  --previous-direct-package=PATH   Previous direct-install ZIP for the upgrade evidence lane.',
+            '  --previous-direct-package-ref=REF',
+            '                                  Local Git ref/SHA used to build a previous direct-install ZIP in temporary storage.',
             '  -h, --help                       Show this help.',
             '',
         ]);
@@ -489,6 +500,7 @@ final class WP_FTS_ReleaseEvidenceCollector
     private function docker_upgrade_multisite_smoke_lane(string $pluginSource, int $timeout, array $options): array
     {
         $previousPackage = trim((string) ($options['previous_direct_package'] ?? ''));
+        $previousPackageRef = trim((string) ($options['previous_direct_package_ref'] ?? ''));
         $args = ['tools/run-disposable-upgrade-multisite-smoke.sh'];
         if ($previousPackage !== '') {
             $args[] = '--previous-package=' . $previousPackage;
@@ -503,7 +515,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                 'summary' => 'Skipped by default because this lane builds a current direct-install ZIP, requires a previous direct-install ZIP, and starts disposable WordPress/MariaDB containers.',
                 'details' => [
                     'artifact_policy' => 'requires_explicit_collector_opt_in',
-                    'enable_with' => '--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH',
+                    'enable_with' => '--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH or --previous-direct-package-ref=REF',
                     'previous_package_policy' => 'required_for_upgrade_proof',
                     'upgrade_evidence_status' => 'not_run',
                     'multisite_evidence_status' => 'not_run',
@@ -514,25 +526,72 @@ final class WP_FTS_ReleaseEvidenceCollector
             ];
         }
 
-        if ($previousPackage === '') {
-            return $this->upgrade_multisite_unavailable_lane(
+        if ($previousPackage !== '' && $previousPackageRef !== '') {
+            return $this->upgrade_multisite_generation_failure_lane(
                 $args,
-                'No previous direct-install package was supplied, so no upgrade proof was run.'
+                [
+                    'status' => 'unavailable',
+                    'summary' => 'Both a previous direct-install package path and previous package ref were supplied; choose one previous package source.',
+                    'previous_package_policy' => 'ambiguous_previous_package_source',
+                    'previous_package_ref' => $previousPackageRef,
+                ]
             );
         }
 
-        $previousReal = realpath($previousPackage);
-        if (!is_string($previousReal) || !is_file($previousReal)) {
+        if ($previousPackage === '' && $previousPackageRef === '') {
             return $this->upgrade_multisite_unavailable_lane(
                 $args,
-                'Previous direct-install package path is missing or invalid, so no upgrade proof was run.'
+                'No previous direct-install package path or local Git ref was supplied, so no upgrade proof was run.'
             );
+        }
+
+        $generatedPackage = null;
+        if ($previousPackageRef !== '') {
+            $generatedPackage = $this->build_previous_direct_package_from_ref(
+                $previousPackageRef,
+                dirname($pluginSource),
+                $timeout
+            );
+            if (empty($generatedPackage['ok'])) {
+                return $this->upgrade_multisite_generation_failure_lane($args, $generatedPackage);
+            }
+
+            $previousReal = (string) $generatedPackage['zip_path'];
+        } else {
+            $previousReal = realpath($previousPackage);
+            if (!is_string($previousReal) || !is_file($previousReal)) {
+                return $this->upgrade_multisite_unavailable_lane(
+                    $args,
+                    'Previous direct-install package path is missing or invalid, so no upgrade proof was run.'
+                );
+            }
         }
 
         $args = ['tools/run-disposable-upgrade-multisite-smoke.sh', '--previous-package=' . $previousReal];
-        $result = $this->run_raw_command($args, $pluginSource, $timeout);
-        $upgradeReport = $this->decode_upgrade_smoke_report($result['stdout']);
-        $status = $this->status_from_upgrade_command_output($result, $upgradeReport);
+        try {
+            $result = $this->run_raw_command($args, $pluginSource, $timeout);
+            $upgradeReport = $this->decode_upgrade_smoke_report($result['stdout']);
+            $status = $this->status_from_upgrade_command_output($result, $upgradeReport);
+        } finally {
+            if (is_array($generatedPackage) && isset($generatedPackage['cleanup_dir'])) {
+                self::remove_previous_package_temp_tree((string) $generatedPackage['cleanup_dir']);
+            }
+        }
+
+        $previousPackageDetails = [
+            'previous_package_policy' => 'validated_supplied_previous_direct_install_zip',
+        ];
+        if (is_array($generatedPackage)) {
+            $previousPackageDetails = [
+                'previous_package_policy' => 'generated_from_local_git_ref',
+                'previous_package_ref' => self::sanitize_text((string) ($generatedPackage['ref'] ?? $previousPackageRef), 200),
+                'previous_package_sha' => self::sanitize_text((string) ($generatedPackage['sha'] ?? ''), 80),
+                'previous_package_zip_sha256' => self::sanitize_text((string) ($generatedPackage['sha256'] ?? ''), 80),
+                'previous_package_zip_bytes' => (int) ($generatedPackage['bytes'] ?? 0),
+                'previous_package_build_status' => 'pass',
+                'previous_package_build_tooling' => 'indexer/tools/build-release-zip.php',
+            ];
+        }
 
         return [
             'id' => 'docker_disposable_upgrade_multisite_smoke',
@@ -551,10 +610,11 @@ final class WP_FTS_ReleaseEvidenceCollector
                 'upgrade_report_status' => is_array($upgradeReport) ? ($upgradeReport['status'] ?? null) : null,
                 'upgrade_evidence_status' => is_array($upgradeReport) ? ($upgradeReport['upgrade_evidence_status'] ?? null) : null,
                 'multisite_evidence_status' => is_array($upgradeReport) ? ($upgradeReport['multisite_evidence_status'] ?? null) : null,
-                'previous_package_policy' => 'validated_supplied_previous_direct_install_zip',
+                'current_package_policy' => 'built_by_upgrade_wrapper_from_current_checkout',
+                'current_package_source_sha' => $this->git_scalar(['rev-parse', 'HEAD'], dirname($pluginSource), min($timeout, 15)),
                 'target_policy' => 'direct-install/operator upgrade evidence only; not public-submission readiness',
                 'multisite_policy' => 'must be a runtime pass or an explicit not_run/skipped boundary; single-site upgrade evidence is not multisite proof',
-            ],
+            ] + $previousPackageDetails,
             'required' => false,
         ];
     }
@@ -573,7 +633,7 @@ final class WP_FTS_ReleaseEvidenceCollector
             'summary' => $summary,
             'details' => [
                 'artifact_policy' => 'requires_explicit_collector_opt_in',
-                'enable_with' => '--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH',
+                'enable_with' => '--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH or --previous-direct-package-ref=REF',
                 'previous_package_policy' => 'missing_or_invalid_previous_package_is_not_upgrade_proof',
                 'upgrade_evidence_status' => 'unavailable',
                 'multisite_evidence_status' => 'not_run',
@@ -582,6 +642,306 @@ final class WP_FTS_ReleaseEvidenceCollector
             ],
             'required' => false,
         ];
+    }
+
+    /**
+     * @param array<int,string> $args
+     * @param array<string,mixed> $generation
+     * @return array<string,mixed>
+     */
+    private function upgrade_multisite_generation_failure_lane(array $args, array $generation): array
+    {
+        $status = (string) ($generation['status'] ?? 'unavailable');
+        if (!in_array($status, ['unavailable', 'fail'], true)) {
+            $status = 'unavailable';
+        }
+
+        $details = [
+            'artifact_policy' => 'requires_explicit_collector_opt_in',
+            'enable_with' => '--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH or --previous-direct-package-ref=REF',
+            'previous_package_policy' => (string) ($generation['previous_package_policy'] ?? 'generated_previous_package_unavailable'),
+            'upgrade_evidence_status' => $status === 'fail' ? 'failed' : 'unavailable',
+            'multisite_evidence_status' => 'not_run',
+            'target_policy' => 'direct-install/operator upgrade evidence only; not public-submission readiness',
+            'multisite_policy' => 'must be a runtime pass or an explicit not_run/skipped boundary; single-site upgrade evidence is not multisite proof',
+        ];
+
+        foreach ([
+            'previous_package_ref',
+            'previous_package_sha',
+            'previous_package_build_status',
+            'previous_package_build_command',
+            'previous_package_build_exit_code',
+            'stdout_excerpt',
+            'stderr_excerpt',
+            'timed_out',
+        ] as $key) {
+            if (array_key_exists($key, $generation)) {
+                $details[$key] = self::sanitize_value($generation[$key], $key);
+            }
+        }
+
+        return [
+            'id' => 'docker_disposable_upgrade_multisite_smoke',
+            'label' => 'Docker disposable upgrade/multisite smoke',
+            'status' => $status,
+            'command' => self::display_command($args, ''),
+            'summary' => self::sanitize_text((string) ($generation['summary'] ?? 'Previous direct-install package could not be generated from the selected local Git ref.'), 500),
+            'details' => $details,
+            'required' => false,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function build_previous_direct_package_from_ref(string $ref, string $monorepoRoot, int $timeout): array
+    {
+        $ref = trim($ref);
+        if (!self::is_safe_previous_package_ref($ref)) {
+            return [
+                'ok' => false,
+                'status' => 'unavailable',
+                'summary' => 'Previous direct-install package ref is empty or contains unsupported characters; no upgrade proof was run.',
+                'previous_package_policy' => 'invalid_previous_package_ref',
+                'previous_package_ref' => $ref,
+                'previous_package_build_status' => 'unavailable',
+            ];
+        }
+
+        $currentSha = $this->git_scalar(['rev-parse', 'HEAD'], $monorepoRoot, min($timeout, 15));
+        if ($currentSha === '') {
+            return [
+                'ok' => false,
+                'status' => 'unavailable',
+                'summary' => 'Current Git HEAD could not be resolved, so the previous direct-install package ref was not used.',
+                'previous_package_policy' => 'current_git_head_unavailable',
+                'previous_package_ref' => $ref,
+                'previous_package_build_status' => 'unavailable',
+            ];
+        }
+
+        $resolvedSha = $this->git_scalar(['rev-parse', '--verify', '--quiet', '--end-of-options', $ref . '^{commit}'], $monorepoRoot, min($timeout, 15));
+        if ($resolvedSha === '') {
+            return [
+                'ok' => false,
+                'status' => 'unavailable',
+                'summary' => 'Previous direct-install package ref could not be resolved from local Git history; no network fetch was attempted.',
+                'previous_package_policy' => 'unresolved_local_git_ref',
+                'previous_package_ref' => $ref,
+                'previous_package_build_status' => 'unavailable',
+            ];
+        }
+
+        if ($resolvedSha === $currentSha) {
+            return [
+                'ok' => false,
+                'status' => 'unavailable',
+                'summary' => 'Previous direct-install package ref resolves to the current target commit, so the upgrade proof would be meaningless.',
+                'previous_package_policy' => 'previous_ref_matches_current_target',
+                'previous_package_ref' => $ref,
+                'previous_package_sha' => $resolvedSha,
+                'previous_package_build_status' => 'unavailable',
+            ];
+        }
+
+        foreach (self::PREVIOUS_PACKAGE_REQUIRED_PATHS as $path) {
+            $exists = $this->run_git_command(['cat-file', '-e', $resolvedSha . ':' . $path], $monorepoRoot, min($timeout, 15));
+            if (($exists['exit'] ?? 1) !== 0) {
+                return [
+                    'ok' => false,
+                    'status' => 'unavailable',
+                    'summary' => 'Previous direct-install package ref does not contain the release-build tooling required to create a direct-install ZIP.',
+                    'previous_package_policy' => 'previous_ref_missing_release_build_tooling',
+                    'previous_package_ref' => $ref,
+                    'previous_package_sha' => $resolvedSha,
+                    'previous_package_build_status' => 'unavailable',
+                ];
+            }
+        }
+
+        $tree = $this->run_git_command(array_merge(['ls-tree', '-r', '--name-only', $resolvedSha, '--'], self::PREVIOUS_PACKAGE_ARCHIVE_PATHS), $monorepoRoot, min($timeout, 30));
+        if (($tree['exit'] ?? 1) !== 0) {
+            return $this->previous_package_command_failure(
+                'unavailable',
+                'Previous direct-install package ref contents could not be listed from local Git history.',
+                'previous_ref_tree_unavailable',
+                $ref,
+                $resolvedSha,
+                ['git', 'ls-tree', '-r', '--name-only', '[previous-sha]', '--', 'indexer', 'components/full-text-search'],
+                $tree
+            );
+        }
+
+        $prohibitedPathCount = self::count_prohibited_previous_ref_paths((string) ($tree['stdout'] ?? ''));
+        if ($prohibitedPathCount > 0) {
+            return [
+                'ok' => false,
+                'status' => 'unavailable',
+                'summary' => 'Previous direct-install package ref contains tracked secret-like paths in the source needed for packaging; no checkout or package build was run.',
+                'previous_package_policy' => 'previous_ref_contains_secret_like_paths',
+                'previous_package_ref' => $ref,
+                'previous_package_sha' => $resolvedSha,
+                'previous_package_build_status' => 'unavailable',
+            ];
+        }
+
+        $tempRoot = self::create_previous_package_temp_dir();
+        $success = false;
+        try {
+            $checkoutRoot = $tempRoot . '/source';
+            self::ensure_directory($checkoutRoot);
+            self::ensure_directory($tempRoot . '/composer-home');
+            $composerCacheDir = self::safe_composer_cache_dir($this->env, $tempRoot);
+            self::ensure_directory($composerCacheDir);
+
+            $archivePath = $tempRoot . '/source.tar';
+            $archive = $this->run_git_command(
+                array_merge(['archive', '--format=tar', '--output=' . $archivePath, $resolvedSha], self::PREVIOUS_PACKAGE_ARCHIVE_PATHS),
+                $monorepoRoot,
+                min($timeout, 60)
+            );
+            if (($archive['exit'] ?? 1) !== 0) {
+                return $this->previous_package_command_failure(
+                    self::command_failure_status($archive),
+                    'Previous direct-install package ref could not be archived from local Git history.',
+                    'previous_ref_archive_failed',
+                    $ref,
+                    $resolvedSha,
+                    ['git', 'archive', '--format=tar', '--output=[path]', '[previous-sha]', 'indexer', 'components/full-text-search'],
+                    $archive
+                );
+            }
+
+            $extract = $this->run_raw_command(['tar', '-xf', $archivePath, '-C', $checkoutRoot], $monorepoRoot, min($timeout, 60));
+            if (($extract['exit'] ?? 1) !== 0) {
+                return $this->previous_package_command_failure(
+                    self::command_failure_status($extract),
+                    'Previous direct-install package source archive could not be extracted in temporary storage.',
+                    'previous_ref_archive_extract_failed',
+                    $ref,
+                    $resolvedSha,
+                    ['tar', '-xf', '[path]', '-C', '[path]'],
+                    $extract
+                );
+            }
+
+            $zipPath = $tempRoot . '/previous-wp-fts-indexer.zip';
+            $buildCommand = [
+                'env',
+                'COMPOSER_HOME=' . $tempRoot . '/composer-home',
+                'COMPOSER_CACHE_DIR=' . $composerCacheDir,
+                'COMPOSER_DISABLE_NETWORK=1',
+                PHP_BINARY,
+                $checkoutRoot . '/indexer/tools/build-release-zip.php',
+                '--plugin-src=' . $checkoutRoot . '/indexer',
+                '--monorepo-root=' . $checkoutRoot,
+                '--build-dir=' . $tempRoot . '/build',
+                '--output=' . $zipPath,
+            ];
+            $build = $this->run_raw_command($buildCommand, $checkoutRoot . '/indexer', $timeout);
+            if (($build['exit'] ?? 1) !== 0) {
+                return $this->previous_package_command_failure(
+                    self::command_failure_status($build),
+                    'Previous direct-install package generation from the selected local Git ref did not complete.',
+                    'previous_ref_package_build_failed',
+                    $ref,
+                    $resolvedSha,
+                    $buildCommand,
+                    $build
+                );
+            }
+
+            $zipReal = realpath($zipPath);
+            if (!is_string($zipReal) || !is_file($zipReal)) {
+                return [
+                    'ok' => false,
+                    'status' => 'fail',
+                    'summary' => 'Previous direct-install package generation completed without producing the expected ZIP.',
+                    'previous_package_policy' => 'previous_ref_package_build_missing_zip',
+                    'previous_package_ref' => $ref,
+                    'previous_package_sha' => $resolvedSha,
+                    'previous_package_build_status' => 'fail',
+                    'previous_package_build_command' => self::display_generation_command($buildCommand),
+                ];
+            }
+
+            $sha256 = hash_file('sha256', $zipReal);
+            $bytes = filesize($zipReal);
+            if (!is_string($sha256) || !is_int($bytes)) {
+                return [
+                    'ok' => false,
+                    'status' => 'fail',
+                    'summary' => 'Previous direct-install package ZIP was built but could not be measured for bounded evidence.',
+                    'previous_package_policy' => 'previous_ref_package_metadata_failed',
+                    'previous_package_ref' => $ref,
+                    'previous_package_sha' => $resolvedSha,
+                    'previous_package_build_status' => 'fail',
+                ];
+            }
+
+            $success = true;
+            return [
+                'ok' => true,
+                'ref' => $ref,
+                'sha' => $resolvedSha,
+                'zip_path' => $zipReal,
+                'sha256' => $sha256,
+                'bytes' => $bytes,
+                'cleanup_dir' => $tempRoot,
+            ];
+        } finally {
+            if (!$success) {
+                self::remove_previous_package_temp_tree($tempRoot);
+            }
+        }
+    }
+
+    /**
+     * @param array<int,string> $command
+     * @param array{exit:int,stdout:string,stderr:string,timed_out?:bool,stdout_truncated?:bool,stderr_truncated?:bool} $result
+     * @return array<string,mixed>
+     */
+    private function previous_package_command_failure(
+        string $status,
+        string $summary,
+        string $policy,
+        string $ref,
+        string $sha,
+        array $command,
+        array $result
+    ): array {
+        return [
+            'ok' => false,
+            'status' => in_array($status, ['unavailable', 'fail'], true) ? $status : 'fail',
+            'summary' => $summary,
+            'previous_package_policy' => $policy,
+            'previous_package_ref' => $ref,
+            'previous_package_sha' => $sha,
+            'previous_package_build_status' => in_array($status, ['unavailable', 'fail'], true) ? $status : 'fail',
+            'previous_package_build_command' => self::display_generation_command($command),
+            'previous_package_build_exit_code' => $result['exit'] ?? null,
+            'stdout_excerpt' => self::sanitize_text((string) ($result['stdout'] ?? ''), self::OUTPUT_EXCERPT_BYTES),
+            'stderr_excerpt' => self::sanitize_text((string) ($result['stderr'] ?? ''), self::OUTPUT_EXCERPT_BYTES),
+            'timed_out' => !empty($result['timed_out']),
+        ];
+    }
+
+    /**
+     * @param array<int,string> $args
+     * @return array{exit:int,stdout:string,stderr:string,timed_out?:bool,stdout_truncated?:bool,stderr_truncated?:bool}
+     */
+    private function run_git_command(array $args, string $cwd, int $timeout): array
+    {
+        if (!function_exists('proc_open')) {
+            return [
+                'exit' => 127,
+                'stdout' => '',
+                'stderr' => 'proc_open() is unavailable; cannot launch git.',
+            ];
+        }
+
+        return ($this->processRunner)(array_merge(['git'], $args), $cwd, $timeout);
     }
 
     /**
@@ -1036,7 +1396,7 @@ final class WP_FTS_ReleaseEvidenceCollector
     {
         $output = ltrim($result['stdout'] . $result['stderr']);
         if (str_starts_with($output, 'SKIP:')) {
-            return 'skip';
+            return 'unavailable';
         }
         if (!empty($result['timed_out'])) {
             return 'fail';
@@ -1098,6 +1458,12 @@ final class WP_FTS_ReleaseEvidenceCollector
      */
     private function upgrade_command_summary(string $status, array $result, ?array $upgradeReport): string
     {
+        $output = trim($result['stdout'] . "\n" . $result['stderr']);
+        if ($status === 'unavailable' && str_starts_with(ltrim($output), 'SKIP:')) {
+            return 'Upgrade/multisite smoke unavailable: '
+                . self::sanitize_text(preg_replace('/^SKIP:\s*/', '', ltrim($output)) ?? $output, 400);
+        }
+
         $reportStatus = is_array($upgradeReport) ? (string) ($upgradeReport['status'] ?? '') : '';
         $multisiteStatus = is_array($upgradeReport) ? (string) ($upgradeReport['multisite_evidence_status'] ?? '') : '';
         if ($status === 'pass') {
@@ -1303,6 +1669,200 @@ final class WP_FTS_ReleaseEvidenceCollector
         }
 
         return implode(' ', $parts);
+    }
+
+    /**
+     * @param array<int,string> $command
+     */
+    private static function display_generation_command(array $command): string
+    {
+        $parts = [];
+        foreach ($command as $arg) {
+            if (str_starts_with($arg, 'COMPOSER_HOME=') || str_starts_with($arg, 'COMPOSER_CACHE_DIR=')) {
+                [$name] = explode('=', $arg, 2);
+                $parts[] = $name . '=[path]';
+                continue;
+            }
+            if (str_starts_with($arg, '--output=')
+                || str_starts_with($arg, '--plugin-src=')
+                || str_starts_with($arg, '--monorepo-root=')
+                || str_starts_with($arg, '--build-dir=')
+            ) {
+                [$name] = explode('=', $arg, 2);
+                $parts[] = $name . '=[path]';
+                continue;
+            }
+            if (str_contains($arg, '/')) {
+                $parts[] = self::sanitize_text($arg, 200);
+                continue;
+            }
+
+            $parts[] = self::sanitize_text($arg, 200);
+        }
+
+        return implode(' ', $parts);
+    }
+
+    private static function is_safe_previous_package_ref(string $ref): bool
+    {
+        if ($ref === '' || strlen($ref) > 200 || $ref[0] === '-') {
+            return false;
+        }
+        if (str_contains($ref, '..') || str_contains($ref, '//') || str_ends_with($ref, '.')) {
+            return false;
+        }
+
+        return preg_match('/^[A-Za-z0-9._\/-]+$/', $ref) === 1;
+    }
+
+    private static function command_failure_status(array $result): string
+    {
+        if (!empty($result['timed_out'])) {
+            return 'fail';
+        }
+
+        $output = strtolower((string) ($result['stdout'] ?? '') . "\n" . (string) ($result['stderr'] ?? ''));
+        foreach ([
+            'command not found',
+            'no such file or directory',
+            'is unavailable',
+            'proc_open() is unavailable',
+            'zip extension is required',
+            'network is disabled',
+            'composer_disable_network',
+            'could not launch',
+        ] as $needle) {
+            if (str_contains($output, $needle)) {
+                return 'unavailable';
+            }
+        }
+
+        return 'fail';
+    }
+
+    private static function count_prohibited_previous_ref_paths(string $paths): int
+    {
+        $count = 0;
+        foreach (preg_split('/\r\n|\r|\n/', $paths) ?: [] as $path) {
+            $path = trim(str_replace('\\', '/', $path));
+            if ($path === '') {
+                continue;
+            }
+
+            $basename = basename($path);
+            if ($basename === '.env'
+                || str_ends_with(strtolower($basename), '.pem')
+                || str_ends_with(strtolower($basename), '.key')
+                || str_contains($path, '/.ssh/')
+                || str_starts_with($path, '.ssh/')
+            ) {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    private static function create_previous_package_temp_dir(): string
+    {
+        $base = rtrim(sys_get_temp_dir(), '/');
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            $path = $base . '/' . self::PREVIOUS_PACKAGE_TEMP_PREFIX . getmypid() . '-' . bin2hex(random_bytes(4));
+            if (mkdir($path, 0777, true)) {
+                return $path;
+            }
+        }
+
+        throw new RuntimeException('Could not create temporary directory for previous direct-install package generation.');
+    }
+
+    /**
+     * @param array<string,string> $env
+     */
+    private static function safe_composer_cache_dir(array $env, string $tempRoot): string
+    {
+        $candidates = [];
+        if (($env['COMPOSER_CACHE_DIR'] ?? '') !== '') {
+            $candidates[] = (string) $env['COMPOSER_CACHE_DIR'];
+        }
+        if (($env['XDG_CACHE_HOME'] ?? '') !== '') {
+            $candidates[] = rtrim((string) $env['XDG_CACHE_HOME'], '/') . '/composer';
+        }
+        if (($env['HOME'] ?? '') !== '') {
+            $candidates[] = rtrim((string) $env['HOME'], '/') . '/.cache/composer';
+        }
+
+        foreach ($candidates as $candidate) {
+            $candidate = rtrim($candidate, '/');
+            if ($candidate === '' || !is_dir($candidate) || !self::is_safe_local_cache_path($candidate)) {
+                continue;
+            }
+
+            return $candidate;
+        }
+
+        return $tempRoot . '/composer-cache';
+    }
+
+    private static function is_safe_local_cache_path(string $path): bool
+    {
+        $normalized = strtolower(str_replace('\\', '/', $path));
+        foreach ([
+            '/.aws',
+            '/.ssh',
+            '/.gnupg',
+            '/credentials',
+            '/secret',
+            '/secrets',
+            '/private',
+        ] as $needle) {
+            if (str_contains($normalized, $needle)) {
+                return false;
+            }
+        }
+
+        $basename = basename($normalized);
+        return $basename !== '.env'
+            && !str_ends_with($basename, '.pem')
+            && !str_ends_with($basename, '.key');
+    }
+
+    private static function ensure_directory(string $path): void
+    {
+        if (is_dir($path)) {
+            return;
+        }
+        if (!mkdir($path, 0777, true) && !is_dir($path)) {
+            throw new RuntimeException("Could not create directory: {$path}");
+        }
+    }
+
+    private static function remove_previous_package_temp_tree(string $directory): void
+    {
+        $directory = rtrim($directory, '/');
+        if ($directory === '' || !is_dir($directory)) {
+            return;
+        }
+
+        $basename = basename($directory);
+        if (!str_starts_with($basename, self::PREVIOUS_PACKAGE_TEMP_PREFIX)) {
+            return;
+        }
+
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($iterator as $item) {
+            if ($item->isDir() && !$item->isLink()) {
+                rmdir($item->getPathname());
+                continue;
+            }
+
+            unlink($item->getPathname());
+        }
+
+        rmdir($directory);
     }
 
     public static function sanitize_text(string $text, int $maxBytes = self::OUTPUT_EXCERPT_BYTES): string

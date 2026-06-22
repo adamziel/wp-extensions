@@ -150,6 +150,10 @@ php tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-upgrade-multisite-smoke \
   --previous-direct-package=/path/to/previous-wp-fts-indexer.zip
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-upgrade-multisite-smoke \
+  --previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA
 WP_FTS_EVIDENCE_RUN_REAL_WORDPRESS_MYSQL=1 php tools/collect-release-evidence.php
 ```
 
@@ -321,13 +325,25 @@ php tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-upgrade-multisite-smoke \
   --previous-direct-package=/path/to/previous-wp-fts-indexer.zip
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-upgrade-multisite-smoke \
+  --previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA
 ```
 
-A missing previous package is reported as `unavailable`, not as a pass. Missing
-Docker, Docker Compose, or daemon access remains a skip from the wrapper because
-no disposable runtime proof was possible. Multisite runtime proof is not claimed by this lane; the current wrapper records an explicit `not_run` multisite boundary
-instead of treating single-site upgrade evidence as network evidence. This is
-direct-install/operator evidence only and is not public-submission readiness.
+A missing previous package or previous local ref is reported as `unavailable`,
+not as a pass. The `--previous-direct-package-ref` form resolves a local Git
+ref/SHA without fetching, rejects the current target commit, requires the
+previous ref to contain the release ZIP builder and Composer lockfile, archives
+only package source paths into temporary storage, and builds the previous ZIP
+with isolated Composer home/auth, an existing local Composer package cache when
+available, and network access disabled. Missing Docker, Docker Compose, or
+daemon access remains a wrapper `SKIP:` and is recorded by the collector as
+non-pass/unavailable because no disposable runtime proof was possible.
+Multisite runtime proof is not claimed by this lane; the current wrapper records
+an explicit `not_run` multisite boundary instead of treating single-site upgrade
+evidence as network evidence. This is direct-install/operator evidence only and
+is not public-submission readiness.
 
 ## Analyzer Language Quality
 
