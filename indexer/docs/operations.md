@@ -62,6 +62,18 @@ cron is fixed. `unknown` means the current context cannot confirm the runner
 mode. The Health tab renders the same fields, including `DISABLE_WP_CRON`,
 `ALTERNATE_WP_CRON`, pending-work context, and concise advice.
 
+Status also includes `search_provider_compatibility`, a read-only summary of the
+effective provider compatibility mode, public-site and wp-admin Posts
+replacement state, bounded known-provider family names, and the current
+recommendation/advisory text. `wp fts status --format=json` exposes the nested
+block for automation; table output also includes concise flattened rows such as
+`search_provider_compatibility_mode` and
+`search_provider_compatibility_known_provider_names`. This status path reads
+safe activation, option, class, and function signals only. It does not call
+third-party provider search APIs, invoke provider callbacks, run searches,
+mutate options, drain the queue, write index tables, or expose raw plugin
+basenames/provider payloads.
+
 To create or repair the schema and index content, run:
 
 ```sh
@@ -266,9 +278,10 @@ the current user to pass `read_post`.
 Settings > Full-Text Search exposes Health, Settings, Sandbox, Indexed content,
 and Analyzer packs tabs to users who can `manage_options`. The Settings tab can
 toggle automatic indexing, public search replacement, wp-admin Posts search
-replacement, highlighting, snippets, prefix matching, result limits, language
-fallback, and indexed post types. Use the documented options and filters for
-analyzer pack paths and custom field selection.
+replacement, search-provider compatibility, highlighting, snippets, prefix
+matching, result limits, language fallback, and indexed post types. Use the
+documented options and filters for analyzer pack paths and custom field
+selection.
 
 The Health tab shows schema status, stored and expected schema versions, safe
 indexing lock state, indexing counts, stale reindex debt progress, and the
@@ -279,6 +292,12 @@ stale payload will be replaced automatically by the next indexing writer, while
 recurring expired locks indicate interrupted or fatal indexing jobs. Its repair
 button runs schema/table repair only; it does not index content, create sample
 posts, drain the queue, or force-unlock the shared writer lock.
+
+The Health and Settings tabs also show the known search-provider advisory near
+the compatibility controls. The advisory is meant to help operators decide
+between "Prefer Language FTS" and "Keep another search provider's results"; it
+is not live certification that a detected Jetpack, SearchWP, Relevanssi, or
+ElasticPress installation has been tested end to end on the current site.
 
 Request-level diagnostics are collected only for authorized or debug-enabled
 contexts: a `manage_options` user, `WP_FTS_DEBUG`, standard `WP_DEBUG`, or the
