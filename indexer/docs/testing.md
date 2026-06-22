@@ -141,6 +141,9 @@ php tools/collect-release-evidence.php \
 php tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-disposable-smokes
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-lifecycle-smokes
 WP_FTS_EVIDENCE_RUN_REAL_WORDPRESS_MYSQL=1 php tools/collect-release-evidence.php
 ```
 
@@ -233,6 +236,54 @@ php tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-disposable-smokes
 ```
+
+## Docker Disposable Lifecycle Smoke
+
+Use the Docker-backed lifecycle wrapper when a release review needs
+direct-install/operator lifecycle evidence without targeting a host-provided
+WordPress root:
+
+```sh
+tools/run-disposable-lifecycle-smoke.sh
+composer test:smoke:lifecycle:docker
+```
+
+The wrapper starts disposable WordPress and MariaDB containers, installs a
+source-copy plugin with production Composer dependencies, marks the WordPress
+root with `.wp-fts-lifecycle-smoke`, and runs
+`tools/smoke-disposable-wordpress-lifecycle.php`. The inner runner is also
+skip-first for host-provided disposable sites:
+
+```sh
+touch /path/to/wordpress/.wp-fts-lifecycle-smoke
+WP_FTS_WP_PATH=/path/to/wordpress \
+WP_FTS_WP_CLI=wp \
+WP_FTS_LIFECYCLE_SMOKE_ALLOW=1 \
+php tools/smoke-disposable-wordpress-lifecycle.php
+composer test:smoke:lifecycle
+```
+
+The smoke proves that activation creates the FTS schema, repair restores a
+missing plugin table, activation and repair do not index pre-existing content
+or create demo posts, `wp fts status --format=json` and
+`wp fts repair --format=json` report schema state, deactivation clears
+scheduled queue processing while retaining index tables/data. It proves
+deactivation clears scheduled queue processing, and uninstall clears plugin-owned operational options and queue state and retains the `fts_*` tables and data. It
+does not build a ZIP, does not create
+public-submission artifacts, and is not public-submission readiness.
+
+The release evidence collector records this Docker lifecycle lane as skipped by
+default:
+
+```sh
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-lifecycle-smokes
+```
+
+Multisite lifecycle proof is explicitly not run by this lane. The command and
+collector record that boundary instead of treating single-site proof as
+multisite evidence.
 
 ## Analyzer Language Quality
 

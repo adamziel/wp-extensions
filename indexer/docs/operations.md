@@ -119,6 +119,16 @@ but does not drop index tables or delete indexed data. Uninstall does not create
 or delete posts, demo content, terms, users, attachments, uploads, analyzer
 packs, generated packs, or release artifacts.
 
+Disposable lifecycle evidence is available through
+`tools/run-disposable-lifecycle-smoke.sh` for direct-install/operator reviews.
+That smoke creates an isolated Docker WordPress/MariaDB site, installs a source
+copy of the plugin, and proves that activation/repair create or repair schema
+without indexing pre-existing content or creating demo posts. It also proves
+deactivation clears scheduled queue processing while retaining `fts_*` data,
+and uninstall clears plugin-owned operational options and pending queue state while retaining `fts_*` tables/data. Multisite lifecycle proof is explicitly not run by that smoke; the command and release evidence collector
+record the multisite boundary instead of reporting a single-site pass as
+network evidence.
+
 ## Reindex Strategy
 
 Run a full reindex after first activation, after large content imports, and

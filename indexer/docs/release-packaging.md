@@ -158,6 +158,9 @@ php indexer/tools/collect-release-evidence.php \
 php indexer/tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-disposable-smokes
+php indexer/tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-lifecycle-smokes
 ```
 
 Use the public-submission target only for WordPress.org/SVN or other public
@@ -172,13 +175,19 @@ public-submission artifacts, license/readme metadata, public redistribution
 policy, and authority evidence are supplied. The bundle also records
 skip/pass/fail evidence for the host-configured disposable WordPress release
 smoke, host-configured provider compatibility smoke, explicitly opted-in Docker
-disposable release/provider smoke, real WordPress/MySQL integration proof, real
-MySQL production proof, and PR-safe production-scale benchmark. The Docker lane
+disposable release/provider smoke, explicitly opted-in Docker disposable
+lifecycle smoke, real WordPress/MySQL integration proof, real MySQL production
+proof, and PR-safe production-scale benchmark. The release/provider Docker lane
 builds a temporary direct-install ZIP and disposable WordPress/MariaDB stack so
 it can replace the host-environment skip with direct-install release/provider
-smoke evidence when Docker is available. It does not modify WordPress.org/SVN
-state, tags, public assets, package readme/license files, or authority evidence,
-and a direct-install `pass` is not public-submission approval.
+smoke evidence when Docker is available. The lifecycle Docker lane is
+direct-install/operator lifecycle evidence: it installs a source copy in a
+disposable WordPress/MariaDB stack, proves activation/repair/deactivation and
+uninstall retention boundaries, and does not build a public-submission artifact.
+Multisite lifecycle proof is explicitly not run by that lane, and the collector
+records that boundary. These lanes do not modify WordPress.org/SVN state, tags,
+public assets, package readme/license files, or authority evidence, and a
+direct-install `pass` is not public-submission approval.
 
 ## Composer Dependency Handling
 

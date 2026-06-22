@@ -70,6 +70,10 @@ final class WP_FTS_ReleaseEvidenceCollector
                 $options['run_docker_disposable_smokes'] = true;
                 continue;
             }
+            if ($arg === '--run-docker-lifecycle-smokes') {
+                $options['run_docker_lifecycle_smokes'] = true;
+                continue;
+            }
 
             foreach (['format', 'release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'timeout'] as $name) {
                 $prefix = "--{$name}=";
@@ -113,6 +117,7 @@ final class WP_FTS_ReleaseEvidenceCollector
             '  --run-direct-install-readiness   Allow direct-install readiness to build/stage artifacts.',
             '  --run-real-wordpress-mysql       Allow the real WordPress/MySQL integration lane.',
             '  --run-docker-disposable-smokes   Run Docker-backed release/provider smokes in a disposable stack.',
+            '  --run-docker-lifecycle-smokes    Run Docker-backed lifecycle smokes in a disposable stack.',
             '  -h, --help                       Show this help.',
             '',
         ]);
@@ -161,6 +166,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                 $timeout
             ),
             $this->docker_disposable_smoke_lane($pluginSource, $timeout, $options),
+            $this->docker_lifecycle_smoke_lane($pluginSource, $timeout, $options),
             $this->real_wordpress_mysql_lane($pluginSource, $timeout, $options),
             $this->optional_command_lane(
                 'real_mysql_production_proof',
@@ -413,6 +419,53 @@ final class WP_FTS_ReleaseEvidenceCollector
                 'stderr_truncated' => !empty($result['stderr_truncated']),
                 'timed_out' => !empty($result['timed_out']),
                 'target_policy' => 'direct-install and provider smoke evidence only; public-submission readiness remains non-target evidence',
+            ],
+            'required' => false,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private function docker_lifecycle_smoke_lane(string $pluginSource, int $timeout, array $options): array
+    {
+        $args = ['tools/run-disposable-lifecycle-smoke.sh'];
+        if (empty($options['run_docker_lifecycle_smokes'])) {
+            return [
+                'id' => 'docker_disposable_lifecycle_smoke',
+                'label' => 'Docker disposable lifecycle smoke',
+                'status' => 'skip',
+                'command' => self::display_command($args, ''),
+                'summary' => 'Skipped by default because this lane starts disposable WordPress/MariaDB containers and runs lifecycle write probes.',
+                'details' => [
+                    'artifact_policy' => 'requires_explicit_collector_opt_in',
+                    'enable_with' => '--run-docker-lifecycle-smokes',
+                    'target_policy' => 'direct-install/operator lifecycle evidence only; not public-submission readiness',
+                    'multisite_policy' => 'single-site Docker lifecycle proof only; multisite lifecycle proof is explicitly not run by this lane',
+                ],
+                'required' => false,
+            ];
+        }
+
+        $result = $this->run_raw_command($args, $pluginSource, $timeout);
+        $status = $this->status_from_command_output($result);
+
+        return [
+            'id' => 'docker_disposable_lifecycle_smoke',
+            'label' => 'Docker disposable lifecycle smoke',
+            'status' => $status,
+            'command' => self::display_command($args, ''),
+            'exit_code' => $result['exit'],
+            'summary' => $this->command_summary($status, $result),
+            'details' => [
+                'stdout_excerpt' => self::sanitize_text($result['stdout'], self::OUTPUT_EXCERPT_BYTES),
+                'stderr_excerpt' => self::sanitize_text($result['stderr'], self::OUTPUT_EXCERPT_BYTES),
+                'stdout_truncated' => !empty($result['stdout_truncated']),
+                'stderr_truncated' => !empty($result['stderr_truncated']),
+                'timed_out' => !empty($result['timed_out']),
+                'target_policy' => 'direct-install/operator lifecycle evidence only; not public-submission readiness',
+                'multisite_policy' => 'single-site Docker lifecycle proof only; multisite lifecycle proof is explicitly not run by this lane',
             ],
             'required' => false,
         ];

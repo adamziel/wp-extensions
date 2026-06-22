@@ -35,6 +35,8 @@
     "test:smoke:provider-compatibility": "php tools/smoke-search-provider-compatibility.php",
     "test:smoke:release": "php tools/smoke-disposable-wordpress-release.php",
     "test:smoke:release-provider:docker": "tools/run-disposable-release-provider-smoke.sh",
+    "test:smoke:lifecycle": "php tools/smoke-disposable-wordpress-lifecycle.php",
+    "test:smoke:lifecycle:docker": "tools/run-disposable-lifecycle-smoke.sh",
     "release:evidence": "php tools/collect-release-evidence.php"
   }
 }

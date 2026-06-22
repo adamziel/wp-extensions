@@ -126,6 +126,8 @@ function wp_fts_release_evidence_contract_clean_env(): array
         'WP_FTS_RELEASE_ZIP' => '',
         'WP_FTS_DISPOSABLE_SMOKE_ALLOW' => '',
         'WP_FTS_DISPOSABLE_SMOKE_CONFIRM_PATH' => '',
+        'WP_FTS_LIFECYCLE_SMOKE_ALLOW' => '',
+        'WP_FTS_LIFECYCLE_SMOKE_CONFIRM_PATH' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_ALLOW' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_CONFIRM_PATH' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_INSIDE' => '',
@@ -262,6 +264,13 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
                 'stderr' => '',
             ];
         }
+        if (($command[0] ?? '') === 'tools/run-disposable-lifecycle-smoke.sh') {
+            return [
+                'exit' => 0,
+                'stdout' => "PASS: Docker disposable lifecycle smoke completed.\n",
+                'stderr' => '',
+            ];
+        }
 
         return [
             'exit' => 0,
@@ -307,6 +316,7 @@ test_case('quality release evidence collector default report has stable schema a
     $expectedLanes = [
         'direct_install_readiness',
         'disposable_wordpress_release_smoke',
+        'docker_disposable_lifecycle_smoke',
         'docker_disposable_release_provider_smoke',
         'production_scale_benchmark',
         'provider_compatibility_smoke',
@@ -333,6 +343,7 @@ test_case('quality release evidence collector reports expected default skips and
 
     wp_fts_release_evidence_contract_same('blocked', wp_fts_release_evidence_contract_lane($report, 'direct_install_readiness')['status'] ?? null, 'required direct-install readiness should block by default until artifact-producing readiness is explicitly opted in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'disposable_wordpress_release_smoke')['status'] ?? null, 'disposable smoke should skip without WordPress config');
+    wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'docker_disposable_lifecycle_smoke')['status'] ?? null, 'Docker lifecycle smokes should require explicit collector opt-in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'docker_disposable_release_provider_smoke')['status'] ?? null, 'Docker disposable smokes should require explicit collector opt-in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'provider_compatibility_smoke')['status'] ?? null, 'provider smoke should skip without WordPress config');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'real_wordpress_mysql_integration')['status'] ?? null, 'real WordPress/MySQL integration should require collector opt-in');
@@ -361,6 +372,28 @@ test_case('quality release evidence collector runs Docker disposable smokes only
     wp_fts_release_evidence_contract_same('pass', $optInLane['status'] ?? null, 'Docker disposable smoke lane should run through the shell wrapper when opted in');
     wp_fts_release_evidence_contract_same('tools/run-disposable-release-provider-smoke.sh', $optInLane['command'] ?? null, 'Docker lane should report the shell wrapper command');
     wp_fts_release_evidence_contract_contains('direct-install and provider smoke evidence only', (string) ($optInDetails['target_policy'] ?? ''), 'Docker lane should keep target policy explicit');
+});
+
+test_case('quality release evidence collector runs Docker lifecycle smokes only with explicit opt-in', function (): void {
+    $defaultLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report([]),
+        'docker_disposable_lifecycle_smoke'
+    );
+    $defaultDetails = is_array($defaultLane['details'] ?? null) ? $defaultLane['details'] : [];
+    wp_fts_release_evidence_contract_same('skip', $defaultLane['status'] ?? null, 'Docker lifecycle smoke lane should skip without explicit opt-in');
+    wp_fts_release_evidence_contract_same('--run-docker-lifecycle-smokes', $defaultDetails['enable_with'] ?? null, 'Docker lifecycle lane should document its collector opt-in flag');
+    wp_fts_release_evidence_contract_contains('not public-submission readiness', (string) ($defaultDetails['target_policy'] ?? ''), 'Docker lifecycle lane should label direct-install/operator evidence');
+    wp_fts_release_evidence_contract_contains('multisite lifecycle proof is explicitly not run', (string) ($defaultDetails['multisite_policy'] ?? ''), 'Docker lifecycle lane should record the multisite boundary');
+
+    $optInLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report(['run_docker_lifecycle_smokes' => true]),
+        'docker_disposable_lifecycle_smoke'
+    );
+    $optInDetails = is_array($optInLane['details'] ?? null) ? $optInLane['details'] : [];
+    wp_fts_release_evidence_contract_same('pass', $optInLane['status'] ?? null, 'Docker lifecycle smoke lane should run through the shell wrapper when opted in');
+    wp_fts_release_evidence_contract_same('tools/run-disposable-lifecycle-smoke.sh', $optInLane['command'] ?? null, 'Docker lifecycle lane should report the shell wrapper command');
+    wp_fts_release_evidence_contract_contains('not public-submission readiness', (string) ($optInDetails['target_policy'] ?? ''), 'Docker lifecycle lane should keep target policy explicit');
+    wp_fts_release_evidence_contract_contains('multisite lifecycle proof is explicitly not run', (string) ($optInDetails['multisite_policy'] ?? ''), 'Docker lifecycle lane should keep multisite boundary explicit');
 });
 
 test_case('quality release evidence collector captures public-submission blockers as blocked evidence', function (): void {
