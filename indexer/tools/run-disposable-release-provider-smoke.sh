@@ -68,6 +68,34 @@ run_step() {
     printf 'PASS: %s\n' "${label}"
 }
 
+# Keep source-copy Composer isolated from ambient credential-capable env.
+run_source_copy_composer_install() {
+    local composer_home="${PROOF_ROOT}/composer-home"
+    local composer_cache_dir="${PROOF_ROOT}/composer-cache"
+    local composer_tmp_dir="${PROOF_ROOT}/composer-tmp"
+    local composer_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
+    local locale_key
+    local -a composer_env=(
+        -i
+        "PATH=${composer_path}"
+        "TMPDIR=${composer_tmp_dir}"
+        "TMP=${composer_tmp_dir}"
+        "TEMP=${composer_tmp_dir}"
+        "COMPOSER_HOME=${composer_home}"
+        "COMPOSER_CACHE_DIR=${composer_cache_dir}"
+    )
+
+    mkdir -p "${composer_home}" "${composer_cache_dir}" "${composer_tmp_dir}"
+
+    for locale_key in LANG LC_ALL LC_CTYPE; do
+        if [[ -n "${!locale_key:-}" ]]; then
+            composer_env+=("${locale_key}=${!locale_key}")
+        fi
+    done
+
+    env "${composer_env[@]}" composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader
+}
+
 require_command php
 require_command tar
 require_command composer
@@ -129,7 +157,7 @@ mkdir -p "${PROOF_ROOT}/plugin" "${PROOF_ROOT}/components/full-text-search" "${P
 )
 
 run_step "Installing source-copy Composer production dependencies" \
-    composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader
+    run_source_copy_composer_install
 
 run_step "Building direct-install release ZIP in disposable temp storage" \
     php "${PLUGIN_DIR}/tools/build-release-zip.php" \
