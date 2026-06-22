@@ -74,8 +74,12 @@ final class WP_FTS_ReleaseEvidenceCollector
                 $options['run_docker_lifecycle_smokes'] = true;
                 continue;
             }
+            if ($arg === '--run-docker-upgrade-multisite-smoke') {
+                $options['run_docker_upgrade_multisite_smoke'] = true;
+                continue;
+            }
 
-            foreach (['format', 'release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'timeout'] as $name) {
+            foreach (['format', 'release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'previous-direct-package', 'timeout'] as $name) {
                 $prefix = "--{$name}=";
                 if (str_starts_with($arg, $prefix)) {
                     $key = str_replace('-', '_', $name);
@@ -118,6 +122,9 @@ final class WP_FTS_ReleaseEvidenceCollector
             '  --run-real-wordpress-mysql       Allow the real WordPress/MySQL integration lane.',
             '  --run-docker-disposable-smokes   Run Docker-backed release/provider smokes in a disposable stack.',
             '  --run-docker-lifecycle-smokes    Run Docker-backed lifecycle smokes in a disposable stack.',
+            '  --run-docker-upgrade-multisite-smoke',
+            '                                  Run Docker-backed upgrade evidence from a previous direct-install package.',
+            '  --previous-direct-package=PATH   Previous direct-install ZIP for the upgrade evidence lane.',
             '  -h, --help                       Show this help.',
             '',
         ]);
@@ -167,6 +174,7 @@ final class WP_FTS_ReleaseEvidenceCollector
             ),
             $this->docker_disposable_smoke_lane($pluginSource, $timeout, $options),
             $this->docker_lifecycle_smoke_lane($pluginSource, $timeout, $options),
+            $this->docker_upgrade_multisite_smoke_lane($pluginSource, $timeout, $options),
             $this->real_wordpress_mysql_lane($pluginSource, $timeout, $options),
             $this->optional_command_lane(
                 'real_mysql_production_proof',
@@ -469,6 +477,108 @@ final class WP_FTS_ReleaseEvidenceCollector
                 'lifecycle_report_status' => is_array($lifecycleReport) ? ($lifecycleReport['status'] ?? null) : null,
                 'target_policy' => 'direct-install/operator lifecycle evidence only; not public-submission readiness',
                 'multisite_policy' => 'single-site Docker lifecycle proof only; multisite lifecycle proof is explicitly not run by this lane',
+            ],
+            'required' => false,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
+    private function docker_upgrade_multisite_smoke_lane(string $pluginSource, int $timeout, array $options): array
+    {
+        $previousPackage = trim((string) ($options['previous_direct_package'] ?? ''));
+        $args = ['tools/run-disposable-upgrade-multisite-smoke.sh'];
+        if ($previousPackage !== '') {
+            $args[] = '--previous-package=' . $previousPackage;
+        }
+
+        if (empty($options['run_docker_upgrade_multisite_smoke'])) {
+            return [
+                'id' => 'docker_disposable_upgrade_multisite_smoke',
+                'label' => 'Docker disposable upgrade/multisite smoke',
+                'status' => 'skip',
+                'command' => self::display_command($args, ''),
+                'summary' => 'Skipped by default because this lane builds a current direct-install ZIP, requires a previous direct-install ZIP, and starts disposable WordPress/MariaDB containers.',
+                'details' => [
+                    'artifact_policy' => 'requires_explicit_collector_opt_in',
+                    'enable_with' => '--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH',
+                    'previous_package_policy' => 'required_for_upgrade_proof',
+                    'upgrade_evidence_status' => 'not_run',
+                    'multisite_evidence_status' => 'not_run',
+                    'target_policy' => 'direct-install/operator upgrade evidence only; not public-submission readiness',
+                    'multisite_policy' => 'must be a runtime pass or an explicit not_run/skipped boundary; single-site upgrade evidence is not multisite proof',
+                ],
+                'required' => false,
+            ];
+        }
+
+        if ($previousPackage === '') {
+            return $this->upgrade_multisite_unavailable_lane(
+                $args,
+                'No previous direct-install package was supplied, so no upgrade proof was run.'
+            );
+        }
+
+        $previousReal = realpath($previousPackage);
+        if (!is_string($previousReal) || !is_file($previousReal)) {
+            return $this->upgrade_multisite_unavailable_lane(
+                $args,
+                'Previous direct-install package path is missing or invalid, so no upgrade proof was run.'
+            );
+        }
+
+        $args = ['tools/run-disposable-upgrade-multisite-smoke.sh', '--previous-package=' . $previousReal];
+        $result = $this->run_raw_command($args, $pluginSource, $timeout);
+        $upgradeReport = $this->decode_upgrade_smoke_report($result['stdout']);
+        $status = $this->status_from_upgrade_command_output($result, $upgradeReport);
+
+        return [
+            'id' => 'docker_disposable_upgrade_multisite_smoke',
+            'label' => 'Docker disposable upgrade/multisite smoke',
+            'status' => $status,
+            'command' => self::display_command($args, ''),
+            'exit_code' => $result['exit'],
+            'summary' => $this->upgrade_command_summary($status, $result, $upgradeReport),
+            'details' => [
+                'stdout_excerpt' => self::sanitize_text($result['stdout'], self::OUTPUT_EXCERPT_BYTES),
+                'stderr_excerpt' => self::sanitize_text($result['stderr'], self::OUTPUT_EXCERPT_BYTES),
+                'stdout_truncated' => !empty($result['stdout_truncated']),
+                'stderr_truncated' => !empty($result['stderr_truncated']),
+                'timed_out' => !empty($result['timed_out']),
+                'upgrade_report_schema' => is_array($upgradeReport) ? ($upgradeReport['schema'] ?? null) : null,
+                'upgrade_report_status' => is_array($upgradeReport) ? ($upgradeReport['status'] ?? null) : null,
+                'upgrade_evidence_status' => is_array($upgradeReport) ? ($upgradeReport['upgrade_evidence_status'] ?? null) : null,
+                'multisite_evidence_status' => is_array($upgradeReport) ? ($upgradeReport['multisite_evidence_status'] ?? null) : null,
+                'previous_package_policy' => 'validated_supplied_previous_direct_install_zip',
+                'target_policy' => 'direct-install/operator upgrade evidence only; not public-submission readiness',
+                'multisite_policy' => 'must be a runtime pass or an explicit not_run/skipped boundary; single-site upgrade evidence is not multisite proof',
+            ],
+            'required' => false,
+        ];
+    }
+
+    /**
+     * @param array<int,string> $args
+     * @return array<string,mixed>
+     */
+    private function upgrade_multisite_unavailable_lane(array $args, string $summary): array
+    {
+        return [
+            'id' => 'docker_disposable_upgrade_multisite_smoke',
+            'label' => 'Docker disposable upgrade/multisite smoke',
+            'status' => 'unavailable',
+            'command' => self::display_command($args, ''),
+            'summary' => $summary,
+            'details' => [
+                'artifact_policy' => 'requires_explicit_collector_opt_in',
+                'enable_with' => '--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH',
+                'previous_package_policy' => 'missing_or_invalid_previous_package_is_not_upgrade_proof',
+                'upgrade_evidence_status' => 'unavailable',
+                'multisite_evidence_status' => 'not_run',
+                'target_policy' => 'direct-install/operator upgrade evidence only; not public-submission readiness',
+                'multisite_policy' => 'must be a runtime pass or an explicit not_run/skipped boundary; single-site upgrade evidence is not multisite proof',
             ],
             'required' => false,
         ];
@@ -781,6 +891,34 @@ final class WP_FTS_ReleaseEvidenceCollector
     }
 
     /**
+     * @return array<string,mixed>|null
+     */
+    private function decode_upgrade_smoke_report(string $output): ?array
+    {
+        foreach (self::decode_json_objects($output) as $decoded) {
+            if (($decoded['schema'] ?? null) === 'wp-fts-disposable-upgrade-smoke-v1') {
+                return [
+                    'schema' => $decoded['schema'],
+                    'status' => $decoded['status'] ?? null,
+                    'upgrade_evidence_status' => $decoded['upgrade_evidence']['status'] ?? ($decoded['status'] ?? null),
+                    'multisite_evidence_status' => $decoded['multisite_evidence']['status'] ?? null,
+                ];
+            }
+            if (($decoded['schema'] ?? null) === 'wp-fts-disposable-upgrade-multisite-wrapper-proof-v1') {
+                return [
+                    'schema' => $decoded['inner_report_schema'] ?? null,
+                    'status' => $decoded['inner_report_status'] ?? null,
+                    'upgrade_evidence_status' => $decoded['upgrade_evidence_status'] ?? null,
+                    'multisite_evidence_status' => $decoded['multisite_evidence_status'] ?? null,
+                    'wrapper_proof_schema' => $decoded['schema'],
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @return array<int,array<string,mixed>>
      */
     private static function decode_json_objects(string $output): array
@@ -891,6 +1029,31 @@ final class WP_FTS_ReleaseEvidenceCollector
     }
 
     /**
+     * @param array{exit:int,stdout:string,stderr:string,timed_out?:bool} $result
+     * @param array<string,mixed>|null $upgradeReport
+     */
+    private function status_from_upgrade_command_output(array $result, ?array $upgradeReport): string
+    {
+        $output = ltrim($result['stdout'] . $result['stderr']);
+        if (str_starts_with($output, 'SKIP:')) {
+            return 'skip';
+        }
+        if (!empty($result['timed_out'])) {
+            return 'fail';
+        }
+
+        $reportStatus = is_array($upgradeReport) ? (string) ($upgradeReport['status'] ?? '') : '';
+        if ($reportStatus === 'passed') {
+            return $result['exit'] === 0 ? 'pass' : 'fail';
+        }
+        if (in_array($reportStatus, ['skipped', 'skip', 'unavailable', 'not_run'], true)) {
+            return 'unavailable';
+        }
+
+        return 'fail';
+    }
+
+    /**
      * @param array{stdout:string,stderr:string,timed_out?:bool} $result
      */
     private function command_summary(string $status, array $result): string
@@ -924,6 +1087,29 @@ final class WP_FTS_ReleaseEvidenceCollector
         }
         if ($status === 'fail' && $reportStatus === '') {
             return 'Docker lifecycle smoke did not emit a parseable inner lifecycle report with status passed.';
+        }
+
+        return $this->command_summary($status, $result);
+    }
+
+    /**
+     * @param array{stdout:string,stderr:string,timed_out?:bool} $result
+     * @param array<string,mixed>|null $upgradeReport
+     */
+    private function upgrade_command_summary(string $status, array $result, ?array $upgradeReport): string
+    {
+        $reportStatus = is_array($upgradeReport) ? (string) ($upgradeReport['status'] ?? '') : '';
+        $multisiteStatus = is_array($upgradeReport) ? (string) ($upgradeReport['multisite_evidence_status'] ?? '') : '';
+        if ($status === 'pass') {
+            return $multisiteStatus === 'passed'
+                ? 'Docker upgrade/multisite smoke completed with upgrade and multisite runtime evidence.'
+                : 'Docker upgrade smoke completed; multisite evidence is recorded as an explicit boundary, not as runtime proof.';
+        }
+        if (in_array($reportStatus, ['skipped', 'skip', 'unavailable', 'not_run'], true)) {
+            return 'Upgrade/multisite smoke reported status ' . self::sanitize_text($reportStatus, 80) . '; not treated as upgrade proof.';
+        }
+        if ($status === 'fail' && $reportStatus === '') {
+            return 'Docker upgrade/multisite smoke did not emit a parseable inner upgrade report with status passed.';
         }
 
         return $this->command_summary($status, $result);
@@ -998,6 +1184,7 @@ final class WP_FTS_ReleaseEvidenceCollector
         $counts = [
             'pass' => 0,
             'skip' => 0,
+            'unavailable' => 0,
             'blocked' => 0,
             'fail' => 0,
         ];
@@ -1101,6 +1288,10 @@ final class WP_FTS_ReleaseEvidenceCollector
         foreach ($scriptAndArgs as $arg) {
             if (str_starts_with($arg, '--package-dir=')) {
                 $parts[] = '--package-dir=[path]';
+                continue;
+            }
+            if (str_starts_with($arg, '--previous-package=')) {
+                $parts[] = '--previous-package=[path]';
                 continue;
             }
             if (str_starts_with($arg, '--plugin-src=') || str_starts_with($arg, '--monorepo-root=')) {

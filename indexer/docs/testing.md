@@ -118,6 +118,8 @@ the PR-safe pure-PHP production-scale benchmark. The JSON statuses are:
 
 - `pass`: the lane completed and its evidence passed.
 - `skip`: the lane was not configured or was intentionally deferred.
+- `unavailable`: the lane was explicitly requested but required disposable
+  evidence inputs, such as a previous direct-install package, were missing or invalid.
 - `blocked`: the lane found expected release policy blockers.
 - `fail`: the lane attempted to run and failed unexpectedly.
 
@@ -144,6 +146,10 @@ php tools/collect-release-evidence.php \
 php tools/collect-release-evidence.php \
   --release-target=direct-install \
   --run-docker-lifecycle-smokes
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-upgrade-multisite-smoke \
+  --previous-direct-package=/path/to/previous-wp-fts-indexer.zip
 WP_FTS_EVIDENCE_RUN_REAL_WORDPRESS_MYSQL=1 php tools/collect-release-evidence.php
 ```
 
@@ -284,6 +290,44 @@ php tools/collect-release-evidence.php \
 Multisite lifecycle proof is explicitly not run by this lane. The command and
 collector record that boundary instead of treating single-site proof as
 multisite evidence.
+
+## Docker Disposable Upgrade/Multisite Smoke
+
+Use the Docker-backed upgrade wrapper when a direct-install release review needs
+runtime evidence that the current package upgrades cleanly from a previous
+direct-install package:
+
+```sh
+tools/run-disposable-upgrade-multisite-smoke.sh --previous-package=/path/to/previous-wp-fts-indexer.zip
+composer test:smoke:upgrade-multisite:docker -- --previous-package=/path/to/previous-wp-fts-indexer.zip
+```
+
+The wrapper copies the supplied previous ZIP into temporary storage, builds the
+current direct-install ZIP in temporary storage, starts disposable WordPress and
+MariaDB containers, marks the WordPress root with `.wp-fts-upgrade-smoke`, and
+runs `tools/smoke-disposable-wordpress-upgrade.php`. The inner runner installs
+and activates the previous package, creates disposable fixture content, indexes
+and searches that fixture, installs the current package over it, verifies schema
+version/status after upgrade, runs repair twice for repair idempotence after
+upgrade, checks search continuity and queue health after upgrade, and deletes
+the generated fixture posts before the wrapper destroys containers, volumes,
+temporary roots, temporary ZIPs, and reports.
+
+The release evidence collector records this Docker upgrade/multisite lane as
+skipped by default:
+
+```sh
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-upgrade-multisite-smoke \
+  --previous-direct-package=/path/to/previous-wp-fts-indexer.zip
+```
+
+A missing previous package is reported as `unavailable`, not as a pass. Missing
+Docker, Docker Compose, or daemon access remains a skip from the wrapper because
+no disposable runtime proof was possible. Multisite runtime proof is not claimed by this lane; the current wrapper records an explicit `not_run` multisite boundary
+instead of treating single-site upgrade evidence as network evidence. This is
+direct-install/operator evidence only and is not public-submission readiness.
 
 ## Analyzer Language Quality
 

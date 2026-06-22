@@ -128,6 +128,11 @@ function wp_fts_release_evidence_contract_clean_env(): array
         'WP_FTS_DISPOSABLE_SMOKE_CONFIRM_PATH' => '',
         'WP_FTS_LIFECYCLE_SMOKE_ALLOW' => '',
         'WP_FTS_LIFECYCLE_SMOKE_CONFIRM_PATH' => '',
+        'WP_FTS_UPGRADE_SMOKE_ALLOW' => '',
+        'WP_FTS_UPGRADE_SMOKE_CONFIRM_PATH' => '',
+        'WP_FTS_PREVIOUS_RELEASE_ZIP' => '',
+        'WP_FTS_CURRENT_RELEASE_ZIP' => '',
+        'WP_FTS_PREVIOUS_DIRECT_PACKAGE' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_ALLOW' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_CONFIRM_PATH' => '',
         'WP_FTS_PROVIDER_COMPATIBILITY_INSIDE' => '',
@@ -211,6 +216,26 @@ function wp_fts_release_evidence_contract_lifecycle_output(string $status): stri
             : "SKIP: Lifecycle preconditions were not met.\nPASS: Running disposable lifecycle smoke against source-copy plugin\n");
 }
 
+function wp_fts_release_evidence_contract_upgrade_output(string $status, string $multisiteStatus = 'not_run'): string
+{
+    $json = json_encode([
+        'schema' => 'wp-fts-disposable-upgrade-multisite-wrapper-proof-v1',
+        'inner_report_schema' => 'wp-fts-disposable-upgrade-smoke-v1',
+        'inner_report_status' => $status,
+        'upgrade_evidence_status' => $status === 'passed' ? 'passed' : $status,
+        'multisite_evidence_status' => $multisiteStatus,
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    if (!is_string($json)) {
+        throw new RuntimeException('Could not encode fake upgrade report.');
+    }
+
+    return "INFO: Running disposable upgrade smoke from previous package to current package\n"
+        . $json . "\n"
+        . ($status === 'passed'
+            ? "PASS: Docker disposable upgrade/multisite smoke completed.\n"
+            : "SKIP: Upgrade preconditions were not met.\n");
+}
+
 function wp_fts_release_evidence_contract_fake_runner(): callable
 {
     return static function (array $command, string $cwd, int $timeout): array {
@@ -290,6 +315,13 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
                 'stderr' => '',
             ];
         }
+        if (($command[0] ?? '') === 'tools/run-disposable-upgrade-multisite-smoke.sh') {
+            return [
+                'exit' => 0,
+                'stdout' => wp_fts_release_evidence_contract_upgrade_output('passed', 'not_run'),
+                'stderr' => '',
+            ];
+        }
 
         return [
             'exit' => 0,
@@ -349,6 +381,7 @@ test_case('quality release evidence collector default report has stable schema a
         'disposable_wordpress_release_smoke',
         'docker_disposable_lifecycle_smoke',
         'docker_disposable_release_provider_smoke',
+        'docker_disposable_upgrade_multisite_smoke',
         'production_scale_benchmark',
         'provider_compatibility_smoke',
         'public_submission_readiness',
@@ -363,7 +396,7 @@ test_case('quality release evidence collector default report has stable schema a
             wp_fts_release_evidence_contract_true(array_key_exists($key, $lane), "evidence lane should include {$key}");
         }
         wp_fts_release_evidence_contract_true(
-            in_array($lane['status'], ['pass', 'skip', 'blocked', 'fail'], true),
+            in_array($lane['status'], ['pass', 'skip', 'unavailable', 'blocked', 'fail'], true),
             'evidence lane status should use the stable status vocabulary'
         );
     }
@@ -376,6 +409,7 @@ test_case('quality release evidence collector reports expected default skips and
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'disposable_wordpress_release_smoke')['status'] ?? null, 'disposable smoke should skip without WordPress config');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'docker_disposable_lifecycle_smoke')['status'] ?? null, 'Docker lifecycle smokes should require explicit collector opt-in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'docker_disposable_release_provider_smoke')['status'] ?? null, 'Docker disposable smokes should require explicit collector opt-in');
+    wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'docker_disposable_upgrade_multisite_smoke')['status'] ?? null, 'Docker upgrade/multisite smoke should require explicit collector opt-in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'provider_compatibility_smoke')['status'] ?? null, 'provider smoke should skip without WordPress config');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'real_wordpress_mysql_integration')['status'] ?? null, 'real WordPress/MySQL integration should require collector opt-in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'real_mysql_production_proof')['status'] ?? null, 'real MySQL proof should skip without WordPress config');
@@ -384,6 +418,17 @@ test_case('quality release evidence collector reports expected default skips and
     $counts = $report['summary']['status_counts'] ?? [];
     wp_fts_release_evidence_contract_same(2, $counts['blocked'] ?? null, 'default direct-install evidence should have required direct-install and non-target public-submission blocked lanes');
     wp_fts_release_evidence_contract_true(($counts['skip'] ?? 0) >= 5, 'default evidence should record optional lanes as skips');
+});
+
+test_case('quality release evidence collector documents upgrade/multisite opt-in flags in help', function (): void {
+    $result = wp_fts_release_evidence_contract_run_command(
+        [PHP_BINARY, 'tools/collect-release-evidence.php', '--help'],
+        wp_fts_release_evidence_contract_clean_env()
+    );
+
+    wp_fts_release_evidence_contract_same(0, $result['exit'], 'collector help should exit zero');
+    wp_fts_release_evidence_contract_contains('--run-docker-upgrade-multisite-smoke', $result['stdout'], 'collector help should document the upgrade/multisite opt-in');
+    wp_fts_release_evidence_contract_contains('--previous-direct-package=PATH', $result['stdout'], 'collector help should document the previous direct-install package option');
 });
 
 test_case('quality release evidence collector runs Docker disposable smokes only with explicit opt-in', function (): void {
@@ -426,6 +471,103 @@ test_case('quality release evidence collector runs Docker lifecycle smokes only 
     wp_fts_release_evidence_contract_same('passed', $optInDetails['lifecycle_report_status'] ?? null, 'Docker lifecycle lane should require a passed inner lifecycle report');
     wp_fts_release_evidence_contract_contains('not public-submission readiness', (string) ($optInDetails['target_policy'] ?? ''), 'Docker lifecycle lane should keep target policy explicit');
     wp_fts_release_evidence_contract_contains('multisite lifecycle proof is explicitly not run', (string) ($optInDetails['multisite_policy'] ?? ''), 'Docker lifecycle lane should keep multisite boundary explicit');
+});
+
+test_case('quality release evidence collector runs Docker upgrade/multisite smoke only with explicit opt-in and previous package', function (): void {
+    $defaultLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report([]),
+        'docker_disposable_upgrade_multisite_smoke'
+    );
+    $defaultDetails = is_array($defaultLane['details'] ?? null) ? $defaultLane['details'] : [];
+    wp_fts_release_evidence_contract_same('skip', $defaultLane['status'] ?? null, 'Docker upgrade/multisite lane should skip without explicit opt-in');
+    wp_fts_release_evidence_contract_same('--run-docker-upgrade-multisite-smoke --previous-direct-package=PATH', $defaultDetails['enable_with'] ?? null, 'Docker upgrade/multisite lane should document its collector opt-in');
+    wp_fts_release_evidence_contract_contains('not public-submission readiness', (string) ($defaultDetails['target_policy'] ?? ''), 'Docker upgrade/multisite lane should label direct-install/operator evidence');
+
+    $missingLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report(['run_docker_upgrade_multisite_smoke' => true]),
+        'docker_disposable_upgrade_multisite_smoke'
+    );
+    $missingDetails = is_array($missingLane['details'] ?? null) ? $missingLane['details'] : [];
+    wp_fts_release_evidence_contract_same('unavailable', $missingLane['status'] ?? null, 'missing previous package should be unavailable, not pass');
+    wp_fts_release_evidence_contract_same('unavailable', $missingDetails['upgrade_evidence_status'] ?? null, 'missing previous package should record unavailable upgrade evidence');
+    wp_fts_release_evidence_contract_contains('No previous direct-install package', (string) ($missingLane['summary'] ?? ''), 'missing previous package should explain that no proof was run');
+
+    $invalidLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report([
+            'run_docker_upgrade_multisite_smoke' => true,
+            'previous_direct_package' => dirname(__DIR__, 2) . '/missing-previous.zip',
+        ]),
+        'docker_disposable_upgrade_multisite_smoke'
+    );
+    wp_fts_release_evidence_contract_same('unavailable', $invalidLane['status'] ?? null, 'invalid previous package should be unavailable, not pass');
+
+    $tmp = tempnam(sys_get_temp_dir(), 'wp-fts-previous-package-');
+    if (!is_string($tmp)) {
+        throw new RuntimeException('Could not create temporary previous package fixture.');
+    }
+    $zip = $tmp . '.zip';
+    rename($tmp, $zip);
+    file_put_contents($zip, 'fake previous zip');
+    try {
+        $optInLane = wp_fts_release_evidence_contract_lane(
+            wp_fts_release_evidence_contract_fake_report([
+                'run_docker_upgrade_multisite_smoke' => true,
+                'previous_direct_package' => $zip,
+            ]),
+            'docker_disposable_upgrade_multisite_smoke'
+        );
+        $optInDetails = is_array($optInLane['details'] ?? null) ? $optInLane['details'] : [];
+        wp_fts_release_evidence_contract_same('pass', $optInLane['status'] ?? null, 'Docker upgrade/multisite lane should run through the shell wrapper when opted in with a previous package');
+        wp_fts_release_evidence_contract_same('tools/run-disposable-upgrade-multisite-smoke.sh --previous-package=[path]', $optInLane['command'] ?? null, 'Docker upgrade/multisite lane should redact the previous package path');
+        wp_fts_release_evidence_contract_same('passed', $optInDetails['upgrade_report_status'] ?? null, 'collector should require a passed inner upgrade report');
+        wp_fts_release_evidence_contract_same('passed', $optInDetails['upgrade_evidence_status'] ?? null, 'collector should record passed upgrade evidence');
+        wp_fts_release_evidence_contract_same('not_run', $optInDetails['multisite_evidence_status'] ?? null, 'collector should record explicit multisite boundary when runtime multisite proof is not run');
+    } finally {
+        if (is_file($zip)) {
+            unlink($zip);
+        }
+    }
+});
+
+test_case('quality release evidence collector does not pass Docker upgrade lane from wrapper PASS text alone', function (): void {
+    $tmp = tempnam(sys_get_temp_dir(), 'wp-fts-previous-package-');
+    if (!is_string($tmp)) {
+        throw new RuntimeException('Could not create temporary previous package fixture.');
+    }
+    $zip = $tmp . '.zip';
+    rename($tmp, $zip);
+    file_put_contents($zip, 'fake previous zip');
+    try {
+        $base = wp_fts_release_evidence_contract_fake_runner();
+        $runner = static function (array $command, string $cwd, int $timeout) use ($base): array {
+            if (($command[0] ?? '') === 'tools/run-disposable-upgrade-multisite-smoke.sh') {
+                return [
+                    'exit' => 0,
+                    'stdout' => "INFO: Running upgrade smoke\nPASS: Docker disposable upgrade/multisite smoke completed.\n",
+                    'stderr' => '',
+                ];
+            }
+
+            return $base($command, $cwd, $timeout);
+        };
+
+        $lane = wp_fts_release_evidence_contract_lane(
+            wp_fts_release_evidence_contract_fake_report_with_runner($runner, [
+                'run_docker_upgrade_multisite_smoke' => true,
+                'previous_direct_package' => $zip,
+            ]),
+            'docker_disposable_upgrade_multisite_smoke'
+        );
+        $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
+
+        wp_fts_release_evidence_contract_same('fail', $lane['status'] ?? null, 'wrapper PASS text without an inner passed upgrade report must not become proof');
+        wp_fts_release_evidence_contract_same(null, $details['upgrade_report_status'] ?? null, 'collector should expose missing inner upgrade report status');
+        wp_fts_release_evidence_contract_contains('did not emit a parseable inner upgrade report', (string) ($lane['summary'] ?? ''), 'collector should explain missing inner upgrade report proof');
+    } finally {
+        if (is_file($zip)) {
+            unlink($zip);
+        }
+    }
 });
 
 test_case('quality release evidence collector does not pass Docker lifecycle lane when inner report is skipped', function (): void {

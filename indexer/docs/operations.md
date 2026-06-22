@@ -129,6 +129,17 @@ and uninstall clears plugin-owned operational options and pending queue state wh
 record the multisite boundary instead of reporting a single-site pass as
 network evidence.
 
+Upgrade release evidence is available through
+`tools/run-disposable-upgrade-multisite-smoke.sh` for direct-install/operator
+reviews when a previous direct-install package is supplied. That smoke creates
+an isolated Docker WordPress/MariaDB site, installs the previous direct-install
+package, indexes generated fixture content, upgrades to the current package,
+checks schema version/status, proves repair idempotence after upgrade, checks
+search continuity and queue health after upgrade, and deletes the generated
+fixture content before the disposable stack is removed. Multisite runtime proof is not claimed by this lane; the command and release evidence collector record an
+explicit multisite boundary unless a future disposable multisite topology
+produces runtime evidence.
+
 ## Reindex Strategy
 
 Run a full reindex after first activation, after large content imports, and

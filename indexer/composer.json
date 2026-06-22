@@ -37,6 +37,7 @@
     "test:smoke:release-provider:docker": "tools/run-disposable-release-provider-smoke.sh",
     "test:smoke:lifecycle": "php tools/smoke-disposable-wordpress-lifecycle.php",
     "test:smoke:lifecycle:docker": "tools/run-disposable-lifecycle-smoke.sh",
+    "test:smoke:upgrade-multisite:docker": "tools/run-disposable-upgrade-multisite-smoke.sh",
     "release:evidence": "php tools/collect-release-evidence.php"
   }
 }
