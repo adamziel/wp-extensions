@@ -524,7 +524,18 @@ test_case('quality Docker disposable upgrade/multisite wrapper is guarded and di
         '${PROOF_ROOT}/plugin:/smoke-src:ro',
         '${PROOF_ROOT}/release:/release:ro',
         '${PROOF_ROOT}/reports:/smoke-reports',
-        'composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader',
+        'run_source_copy_composer_install()',
+        'local composer_home="${PROOF_ROOT}/composer-home"',
+        'local composer_cache_dir="${PROOF_ROOT}/composer-cache"',
+        'local composer_tmp_dir="${PROOF_ROOT}/composer-tmp"',
+        'local -a composer_env=(',
+        '        -i',
+        '"PATH=${composer_path}"',
+        '"TMPDIR=${composer_tmp_dir}"',
+        '"COMPOSER_HOME=${composer_home}"',
+        '"COMPOSER_CACHE_DIR=${composer_cache_dir}"',
+        'env "${composer_env[@]}" composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader',
+        "run_step \"Installing source-copy Composer production dependencies\" \\\n    run_source_copy_composer_install",
         'touch /var/www/html/.wp-fts-upgrade-smoke',
         'upgrade-report.json',
         'upgrade-output.txt',
@@ -540,6 +551,20 @@ test_case('quality Docker disposable upgrade/multisite wrapper is guarded and di
         'PASS: Docker disposable upgrade/multisite smoke completed.',
     ] as $needle) {
         wp_fts_upgrade_contract_contains($needle, $script, "Docker upgrade wrapper should contain {$needle}");
+    }
+
+    wp_fts_upgrade_contract_same(
+        1,
+        substr_count($script, 'composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader'),
+        'Docker upgrade wrapper should keep the source-copy Composer install behind the isolated helper only'
+    );
+
+    foreach (['COMPOSER_AUTH=', 'GITHUB_TOKEN=', 'GH_TOKEN=', 'GIT_ASKPASS=', 'SSH_AUTH_SOCK=', 'WP_FTS_SECRET_TOKEN='] as $blockedPrefix) {
+        wp_fts_upgrade_contract_not_contains(
+            $blockedPrefix,
+            $script,
+            "Docker upgrade wrapper should not pass ambient credential-capable {$blockedPrefix} into Composer"
+        );
     }
 
     foreach ([

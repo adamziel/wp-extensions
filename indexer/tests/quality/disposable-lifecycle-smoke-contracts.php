@@ -548,7 +548,18 @@ test_case('quality Docker disposable lifecycle wrapper is guarded and disposable
         'MARIADB_ROOT_PASSWORD: wpfts_lifecycle_smoke_root_dev_only',
         'WORDPRESS_DB_PASSWORD: wpfts_lifecycle_smoke_dev_only',
         '${PROOF_ROOT}/plugin:/smoke-src:ro',
-        'composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader',
+        'run_source_copy_composer_install()',
+        'local composer_home="${PROOF_ROOT}/composer-home"',
+        'local composer_cache_dir="${PROOF_ROOT}/composer-cache"',
+        'local composer_tmp_dir="${PROOF_ROOT}/composer-tmp"',
+        'local -a composer_env=(',
+        '        -i',
+        '"PATH=${composer_path}"',
+        '"TMPDIR=${composer_tmp_dir}"',
+        '"COMPOSER_HOME=${composer_home}"',
+        '"COMPOSER_CACHE_DIR=${composer_cache_dir}"',
+        'env "${composer_env[@]}" composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader',
+        "run_step \"Installing source-copy Composer production dependencies\" \\\n    run_source_copy_composer_install",
         'cp -R /smoke-src /var/www/html/wp-content/plugins/indexer',
         'touch /var/www/html/.wp-fts-lifecycle-smoke',
         '${PROOF_ROOT}/reports:/smoke-reports',
@@ -564,6 +575,20 @@ test_case('quality Docker disposable lifecycle wrapper is guarded and disposable
         'PASS: Docker disposable lifecycle smoke completed.',
     ] as $needle) {
         wp_fts_lifecycle_contract_contains($needle, $script, "Docker lifecycle wrapper should contain {$needle}");
+    }
+
+    wp_fts_lifecycle_contract_same(
+        1,
+        substr_count($script, 'composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader'),
+        'Docker lifecycle wrapper should keep the source-copy Composer install behind the isolated helper only'
+    );
+
+    foreach (['COMPOSER_AUTH=', 'GITHUB_TOKEN=', 'GH_TOKEN=', 'GIT_ASKPASS=', 'SSH_AUTH_SOCK=', 'WP_FTS_SECRET_TOKEN='] as $blockedPrefix) {
+        wp_fts_lifecycle_contract_not_contains(
+            $blockedPrefix,
+            $script,
+            "Docker lifecycle wrapper should not pass ambient credential-capable {$blockedPrefix} into Composer"
+        );
     }
 
     foreach ([
