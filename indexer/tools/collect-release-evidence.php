@@ -15,6 +15,8 @@ final class WP_FTS_ReleaseEvidenceCollector
     public const SCHEMA = 'wp-fts-release-evidence-bundle-v1';
     public const REAL_INTEGRATION_OPT_IN_ENV = 'WP_FTS_EVIDENCE_RUN_REAL_WORDPRESS_MYSQL';
 
+    private const TARGET_DIRECT_INSTALL = 'direct-install';
+    private const TARGET_PUBLIC_SUBMISSION = 'public-submission';
     private const OUTPUT_EXCERPT_BYTES = 1200;
     private const RAW_OUTPUT_CAPTURE_BYTES = 12000;
     private const DEFAULT_TIMEOUT_SECONDS = 90;
@@ -43,6 +45,7 @@ final class WP_FTS_ReleaseEvidenceCollector
     {
         $options = [
             'format' => 'json',
+            'release_target' => self::TARGET_DIRECT_INSTALL,
             'timeout' => self::DEFAULT_TIMEOUT_SECONDS,
         ];
 
@@ -64,7 +67,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                 continue;
             }
 
-            foreach (['format', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'timeout'] as $name) {
+            foreach (['format', 'release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'timeout'] as $name) {
                 $prefix = "--{$name}=";
                 if (str_starts_with($arg, $prefix)) {
                     $key = str_replace('-', '_', $name);
@@ -79,6 +82,7 @@ final class WP_FTS_ReleaseEvidenceCollector
         if ((string) $options['format'] !== 'json') {
             throw new InvalidArgumentException('Only --format=json is supported.');
         }
+        $options['release_target'] = self::normalize_release_target((string) $options['release_target']);
 
         $timeout = (int) $options['timeout'];
         if ($timeout < 5 || $timeout > 900) {
@@ -97,6 +101,7 @@ final class WP_FTS_ReleaseEvidenceCollector
             'Options:',
             '  --format=json                    Output JSON. This is the default.',
             '  --json                           Alias for --format=json.',
+            '  --release-target=TARGET          direct-install (default) or public-submission.',
             '  --plugin-src=PATH                Plugin source directory. Defaults to this script parent.',
             '  --monorepo-root=PATH             Monorepo root. Defaults to the plugin source parent.',
             '  --timeout=SECONDS                Per-subprocess timeout. Defaults to 90.',
@@ -116,11 +121,26 @@ final class WP_FTS_ReleaseEvidenceCollector
     {
         $pluginSource = self::existing_directory((string) ($options['plugin_src'] ?? dirname(__DIR__)), 'plugin source');
         $monorepoRoot = self::existing_directory((string) ($options['monorepo_root'] ?? dirname($pluginSource)), 'monorepo root');
+        $releaseTarget = self::normalize_release_target((string) ($options['release_target'] ?? self::TARGET_DIRECT_INSTALL));
         $timeout = (int) ($options['timeout'] ?? self::DEFAULT_TIMEOUT_SECONDS);
+        $requiredReadinessLane = $releaseTarget === self::TARGET_PUBLIC_SUBMISSION
+            ? 'public_submission_readiness'
+            : 'direct_install_readiness';
 
         $lanes = [
-            $this->direct_install_readiness_lane($pluginSource, $monorepoRoot, $options, $timeout),
-            $this->public_submission_readiness_lane($pluginSource, $monorepoRoot, $timeout),
+            $this->direct_install_readiness_lane(
+                $pluginSource,
+                $monorepoRoot,
+                $options,
+                $timeout,
+                $releaseTarget === self::TARGET_DIRECT_INSTALL
+            ),
+            $this->public_submission_readiness_lane(
+                $pluginSource,
+                $monorepoRoot,
+                $timeout,
+                $releaseTarget === self::TARGET_PUBLIC_SUBMISSION
+            ),
             $this->optional_command_lane(
                 'disposable_wordpress_release_smoke',
                 'Disposable WordPress release smoke',
@@ -147,22 +167,24 @@ final class WP_FTS_ReleaseEvidenceCollector
         ];
 
         $counts = self::status_counts($lanes);
-        $requiredFailures = array_values(array_filter(
-            $lanes,
-            static fn(array $lane): bool => !empty($lane['required']) && ($lane['status'] ?? null) === 'fail'
-        ));
-        $overallStatus = $requiredFailures !== []
-            ? 'fail'
-            : (($counts['blocked'] ?? 0) > 0 ? 'blocked' : 'pass');
+        $requiredFailures = self::required_lanes_with_status($lanes, ['fail']);
+        $requiredBlocked = self::required_lanes_with_status($lanes, ['blocked', 'skip']);
+        $overallStatus = self::overall_status($lanes);
 
         return [
             'schema' => self::SCHEMA,
             'generated_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            'release_target' => $releaseTarget,
             'overall_status' => $overallStatus,
             'summary' => [
                 'status_counts' => $counts,
                 'required_failure_count' => count($requiredFailures),
+                'required_blocked_count' => count($requiredBlocked),
+                'required_readiness_lane' => $requiredReadinessLane,
                 'lane_count' => count($lanes),
+                'target_policy' => $releaseTarget === self::TARGET_DIRECT_INSTALL
+                    ? 'Overall status is scoped to direct-install evidence; public-submission readiness remains non-target evidence and is not approved by this bundle.'
+                    : 'Overall status is scoped to public-submission evidence and remains blocked until real public-submission artifacts and authority evidence pass.',
             ],
             'source' => $this->source_metadata($pluginSource, $monorepoRoot, $timeout),
             'collector' => [
@@ -194,7 +216,7 @@ final class WP_FTS_ReleaseEvidenceCollector
      * @param array<string,mixed> $options
      * @return array<string,mixed>
      */
-    private function direct_install_readiness_lane(string $pluginSource, string $monorepoRoot, array $options, int $timeout): array
+    private function direct_install_readiness_lane(string $pluginSource, string $monorepoRoot, array $options, int $timeout, bool $required): array
     {
         $args = ['tools/check-release-readiness.php', '--target=direct-install'];
         $explicitPackageDir = trim((string) ($options['direct_package_dir'] ?? ''));
@@ -207,14 +229,17 @@ final class WP_FTS_ReleaseEvidenceCollector
             return [
                 'id' => 'direct_install_readiness',
                 'label' => 'Direct-install readiness',
-                'status' => 'skip',
+                'status' => $required ? 'blocked' : 'skip',
                 'command' => self::display_command($args),
-                'summary' => 'Skipped by default because the existing direct-install readiness checker stages/builds release artifacts.',
+                'summary' => $required
+                    ? 'Required for release-target=direct-install but not run because the readiness checker stages/builds release artifacts and requires explicit opt-in.'
+                    : 'Not selected for the current release target; direct-install artifact staging remains opt-in.',
                 'details' => [
                     'artifact_policy' => 'not_run_by_default',
                     'enable_with' => '--run-direct-install-readiness or --direct-package-dir=PATH',
+                    'target_role' => $required ? 'required' : 'non_target',
                 ],
-                'required' => false,
+                'required' => $required,
             ];
         }
 
@@ -224,11 +249,13 @@ final class WP_FTS_ReleaseEvidenceCollector
             $args,
             $pluginSource,
             $timeout,
-            false
+            'fail',
+            $required
         );
         $lane['details']['artifact_policy'] = $explicitPackageDir !== ''
             ? 'validated_supplied_package_directory'
             : 'explicit_build_or_staging_opt_in';
+        $lane['details']['target_role'] = $required ? 'required' : 'non_target';
 
         return $lane;
     }
@@ -236,16 +263,27 @@ final class WP_FTS_ReleaseEvidenceCollector
     /**
      * @return array<string,mixed>
      */
-    private function public_submission_readiness_lane(string $pluginSource, string $monorepoRoot, int $timeout): array
+    private function public_submission_readiness_lane(string $pluginSource, string $monorepoRoot, int $timeout, bool $required): array
     {
-        return $this->run_json_readiness_lane(
+        $lane = $this->run_json_readiness_lane(
             'public_submission_readiness',
             'Public-submission readiness',
             ['tools/check-release-readiness.php', '--target=public-submission'],
             $pluginSource,
             $timeout,
-            true
+            'blocked',
+            $required
         );
+        $lane['details']['target_role'] = $required ? 'required' : 'non_target';
+        $lane['details']['target_policy'] = $required
+            ? 'public-submission readiness is the selected release target and is blocking until all public-submission evidence passes'
+            : 'public-submission readiness is non-target evidence for this direct-install bundle; it remains blocked if release-target=public-submission is selected';
+        if (!$required && ($lane['status'] ?? null) === 'blocked') {
+            $lane['summary'] = 'Non-target public-submission readiness remains blocked if selected: '
+                . implode(', ', array_slice((array) ($lane['details']['blocker_ids'] ?? []), 0, 12));
+        }
+
+        return $lane;
     }
 
     /**
@@ -258,7 +296,8 @@ final class WP_FTS_ReleaseEvidenceCollector
         array $args,
         string $cwd,
         int $timeout,
-        bool $publicSubmission
+        string $blockedStatus,
+        bool $required
     ): array {
         $result = $this->run_php_script($args, $cwd, $timeout);
         $decoded = $this->decode_json_object($result['stdout']);
@@ -278,10 +317,8 @@ final class WP_FTS_ReleaseEvidenceCollector
         $status = 'fail';
         if ($readinessStatus === 'ready' && $result['exit'] === 0) {
             $status = 'pass';
-        } elseif ($publicSubmission && $readinessStatus === 'blocked') {
-            $status = 'blocked';
-        } elseif (!$publicSubmission && $readinessStatus === 'blocked') {
-            $status = 'fail';
+        } elseif ($readinessStatus === 'blocked') {
+            $status = $blockedStatus;
         }
 
         return [
@@ -300,7 +337,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                 'stdout_truncated' => !empty($result['stdout_truncated']),
                 'stderr_truncated' => !empty($result['stderr_truncated']),
             ],
-            'required' => !$publicSubmission,
+            'required' => $required,
         ];
     }
 
@@ -729,6 +766,50 @@ final class WP_FTS_ReleaseEvidenceCollector
         }
 
         return $counts;
+    }
+
+    private static function normalize_release_target(string $target): string
+    {
+        $target = strtolower(trim($target));
+        if (in_array($target, [self::TARGET_DIRECT_INSTALL, self::TARGET_PUBLIC_SUBMISSION], true)) {
+            return $target;
+        }
+
+        throw new InvalidArgumentException(
+            'Unknown release target: ' . self::sanitize_text($target, 80) . ' (expected direct-install or public-submission).'
+        );
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $lanes
+     */
+    private static function overall_status(array $lanes): string
+    {
+        if (self::required_lanes_with_status($lanes, ['fail']) !== []) {
+            return 'fail';
+        }
+        if (self::required_lanes_with_status($lanes, ['blocked', 'skip']) !== []) {
+            return 'blocked';
+        }
+
+        return 'pass';
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $lanes
+     * @param string[] $statuses
+     * @return array<int,array<string,mixed>>
+     */
+    private static function required_lanes_with_status(array $lanes, array $statuses): array
+    {
+        $matches = [];
+        foreach ($lanes as $lane) {
+            if (!empty($lane['required']) && in_array((string) ($lane['status'] ?? ''), $statuses, true)) {
+                $matches[] = $lane;
+            }
+        }
+
+        return $matches;
     }
 
     /**

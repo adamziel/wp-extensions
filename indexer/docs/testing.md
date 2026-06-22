@@ -97,24 +97,25 @@ Use the release evidence collector when a release review needs one sanitized
 current-checkout report instead of separate command transcripts:
 
 ```sh
-php tools/collect-release-evidence.php
+php tools/collect-release-evidence.php --release-target=direct-install
 composer release:evidence
 php -n tools/collect-release-evidence.php
 ```
 
-The default collector is read-only. It records Git source metadata, skips the
-direct-install readiness build lane unless explicitly opted in, captures
-public-submission blockers as `blocked`, runs the optional WordPress/MySQL lanes
-only through their existing skip-first guards, and runs the PR-safe pure-PHP
-production-scale benchmark. The JSON statuses are:
+The default collector target is `direct-install`, matching the documented
+direct-install ZIP release boundary. It records Git source metadata, keeps the
+direct-install readiness build lane blocked until explicitly opted in, captures
+public-submission blockers as non-target evidence, runs the optional
+WordPress/MySQL lanes only through their existing skip-first guards, and runs
+the PR-safe pure-PHP production-scale benchmark. The JSON statuses are:
 
 - `pass`: the lane completed and its evidence passed.
 - `skip`: the lane was not configured or was intentionally deferred.
 - `blocked`: the lane found expected release policy blockers.
 - `fail`: the lane attempted to run and failed unexpectedly.
 
-The report proves the current checkout's release evidence posture for
-direct-install readiness policy, disposable WordPress smoke readiness,
+The report proves the current checkout's release evidence posture for the
+selected release target, disposable WordPress smoke readiness,
 provider-compatibility smoke readiness, real WordPress/MySQL proof availability,
 real MySQL production proof availability, public-submission blockers, and the
 generated-corpus benchmark. It does not create a release ZIP by default, does
@@ -124,15 +125,28 @@ disposable WordPress/MySQL run, and does not prove live production traffic.
 Optional write-enabled evidence remains explicit:
 
 ```sh
-php tools/collect-release-evidence.php --run-direct-install-readiness
-php tools/collect-release-evidence.php --direct-package-dir=/path/to/staged/indexer
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-direct-install-readiness
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --direct-package-dir=/path/to/staged/indexer
 WP_FTS_EVIDENCE_RUN_REAL_WORDPRESS_MYSQL=1 php tools/collect-release-evidence.php
 ```
 
+Use the public-submission target when the review is explicitly about
+WordPress.org/SVN or broader public-marketplace submission readiness:
+
+```sh
+php tools/collect-release-evidence.php --release-target=public-submission
+```
+
+That target is expected to stay `blocked` until the project resolves product
+policy, public assets, license, readme, and authority-evidence requirements.
 Do not use the direct-install or real WordPress/MySQL opt-ins against production
-or shared staging data. The public-submission lane is expected to stay
-`blocked` until the project resolves product policy, public assets, license,
-readme, and authority-evidence requirements.
+or shared staging data. A `pass` for `--release-target=direct-install` is only
+evidence for the supported direct-install ZIP path; it does not approve public
+submission.
 
 ## Disposable Release Smoke
 

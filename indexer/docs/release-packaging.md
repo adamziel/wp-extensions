@@ -128,27 +128,51 @@ for the current checkout:
 php indexer/tools/collect-release-evidence.php
 ```
 
-The default bundle is safe to run before release assets exist. It does not build
-or write a direct-install ZIP by default; that lane is reported as `skip` with
-an explicit artifact policy. It does run the public-submission readiness target
-and records the current blockers as `blocked` evidence rather than treating them
-as a collector failure. It also records skip/pass/fail evidence for the
-disposable WordPress release smoke, provider compatibility smoke, real
-WordPress/MySQL integration proof, real MySQL production proof, and PR-safe
-production-scale benchmark.
-
-Use direct-install opt-ins only when a review intentionally wants artifact
-staging evidence:
+The collector has an explicit release target:
 
 ```sh
-php indexer/tools/collect-release-evidence.php --run-direct-install-readiness
-php indexer/tools/collect-release-evidence.php --direct-package-dir=/path/to/staged/indexer
+php indexer/tools/collect-release-evidence.php --release-target=direct-install
+php indexer/tools/collect-release-evidence.php --release-target=public-submission
 ```
 
-The bundle does not modify WordPress.org/SVN state, tags, or release assets, and
-it is not public-submission approval. The current public-submission blockers are
-expected until product policy, package assets, license/readme metadata, and
-authority evidence are completed.
+The default target is `direct-install`, matching the current product policy
+that this package is a direct-install ZIP boundary only. The default bundle is
+safe to run before release assets exist: it does not build or write a
+direct-install ZIP by default. Because direct-install readiness is the required
+lane for the default target, the default bundle is `blocked` until the operator
+either explicitly allows direct-install readiness to stage/build artifacts or
+supplies an already staged package directory. Public-submission readiness is
+still included as non-target evidence, and it must continue to say that public
+submission is not approved and remains blocked if that target is selected.
+
+Use a direct-install target bundle with explicit readiness evidence when a
+review needs a truthful pass/fail bundle for the supported release path:
+
+```sh
+php indexer/tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-direct-install-readiness
+php indexer/tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --direct-package-dir=/path/to/staged/indexer
+```
+
+Use the public-submission target only for WordPress.org/SVN or other public
+marketplace submission review:
+
+```sh
+php indexer/tools/collect-release-evidence.php --release-target=public-submission
+```
+
+That target remains `blocked` on current main until the real
+public-submission artifacts, license/readme metadata, public redistribution
+policy, and authority evidence are supplied. The bundle also records
+skip/pass/fail evidence for the disposable WordPress release smoke, provider
+compatibility smoke, real WordPress/MySQL integration proof, real MySQL
+production proof, and PR-safe production-scale benchmark. It does not modify
+WordPress.org/SVN state, tags, public assets, package readme/license files, or
+authority evidence, and a direct-install `pass` is not public-submission
+approval.
 
 ## Composer Dependency Handling
 
@@ -223,15 +247,18 @@ The schema probe should succeed even before any content is indexed.
 1. Start from a clean worktree.
 2. Run the normal PHP harness and any required hardening acceptance commands.
 3. Run `php indexer/tools/check-release-readiness.php --target=direct-install`.
-4. Run `php indexer/tools/check-release-readiness.php --target=public-submission`
+4. Run `php indexer/tools/collect-release-evidence.php --release-target=direct-install --run-direct-install-readiness`
+   or use `--direct-package-dir=/path/to/staged/indexer` when validating an
+   existing staged package.
+5. Run `php indexer/tools/check-release-readiness.php --target=public-submission`
    and treat the current blockers as expected unless the release explicitly
    includes a completed public-submission authority pass.
-5. Build the release ZIP with `php indexer/tools/build-release-zip.php`.
-6. Inspect the ZIP for unexpected `.cao`, dotfiles, root `tests/`,
+6. Build the release ZIP with `php indexer/tools/build-release-zip.php`.
+7. Inspect the ZIP for unexpected `.cao`, dotfiles, root `tests/`,
    dependency-internal vendor tests or coverage fixtures, or local cache files.
-7. Install the ZIP in a disposable WordPress site.
-8. Activate the plugin, run the schema probe, run a small reindex, and run one
+8. Install the ZIP in a disposable WordPress site.
+9. Activate the plugin, run the schema probe, run a small reindex, and run one
    search.
-9. Record the commit SHA, archive name, dependency versions, readiness target
+10. Record the commit SHA, archive name, dependency versions, readiness target
    results, and test results in
    the release notes.

@@ -191,6 +191,98 @@ function wp_fts_release_evidence_contract_lane_ids(array $report): array
     return $ids;
 }
 
+function wp_fts_release_evidence_contract_fake_runner(): callable
+{
+    return static function (array $command, string $cwd, int $timeout): array {
+        unset($cwd, $timeout);
+
+        if (($command[0] ?? '') === 'git') {
+            if (($command[1] ?? '') === 'rev-parse' && ($command[2] ?? '') === 'HEAD') {
+                return ['exit' => 0, 'stdout' => str_repeat('a', 40) . "\n", 'stderr' => ''];
+            }
+            if (($command[1] ?? '') === 'rev-parse' && ($command[2] ?? '') === '--abbrev-ref') {
+                return ['exit' => 0, 'stdout' => "task/fake-release-evidence\n", 'stderr' => ''];
+            }
+            if (($command[1] ?? '') === 'status') {
+                return ['exit' => 0, 'stdout' => '', 'stderr' => ''];
+            }
+        }
+
+        $script = (string) ($command[1] ?? '');
+        if ($script === 'tools/check-release-readiness.php' && in_array('--target=direct-install', $command, true)) {
+            return [
+                'exit' => 0,
+                'stdout' => json_encode([
+                    'tool' => 'wp-fts-release-readiness',
+                    'target' => 'direct-install',
+                    'status' => 'ready',
+                    'checks' => [
+                        ['id' => 'direct_zip_boundary', 'status' => 'pass', 'message' => 'Direct ZIP boundary passed.'],
+                    ],
+                    'blockers' => [],
+                ], JSON_UNESCAPED_SLASHES) . "\n",
+                'stderr' => '',
+            ];
+        }
+        if ($script === 'tools/check-release-readiness.php' && in_array('--target=public-submission', $command, true)) {
+            return [
+                'exit' => 1,
+                'stdout' => json_encode([
+                    'tool' => 'wp-fts-release-readiness',
+                    'target' => 'public-submission',
+                    'status' => 'blocked',
+                    'checks' => [
+                        ['id' => 'package_readme_txt', 'status' => 'fail', 'message' => 'Missing public readme.'],
+                        ['id' => 'public_submission_authority_evidence', 'status' => 'fail', 'message' => 'Missing authority evidence.'],
+                    ],
+                    'blockers' => [
+                        ['id' => 'package_readme_txt', 'message' => 'Missing public readme.'],
+                        ['id' => 'public_submission_authority_evidence', 'message' => 'Missing authority evidence.'],
+                    ],
+                ], JSON_UNESCAPED_SLASHES) . "\n",
+                'stderr' => '',
+            ];
+        }
+        if ($script === 'tests/production-scale-benchmark.php') {
+            return [
+                'exit' => 0,
+                'stdout' => json_encode([
+                    'passed' => true,
+                    'profile' => ['name' => 'fake', 'documents' => 12],
+                    'metrics' => ['indexed_documents' => 12, 'query_checks_passed' => 4],
+                    'failures' => [],
+                ], JSON_UNESCAPED_SLASHES) . "\n",
+                'stderr' => '',
+            ];
+        }
+
+        return [
+            'exit' => 0,
+            'stdout' => 'SKIP: fake optional lane is not configured.',
+            'stderr' => '',
+        ];
+    };
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array<string,mixed>
+ */
+function wp_fts_release_evidence_contract_fake_report(array $options): array
+{
+    $root = dirname(__DIR__, 2);
+    $collector = new WP_FTS_ReleaseEvidenceCollector(
+        wp_fts_release_evidence_contract_fake_runner(),
+        wp_fts_release_evidence_contract_clean_env()
+    );
+
+    return $collector->collect(array_merge([
+        'plugin_src' => $root,
+        'monorepo_root' => dirname($root),
+        'timeout' => 120,
+    ], $options));
+}
+
 test_case('quality release evidence collector default report has stable schema and metadata', function (): void {
     $report = wp_fts_release_evidence_contract_default_report();
 
@@ -199,7 +291,9 @@ test_case('quality release evidence collector default report has stable schema a
         preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', (string) ($report['generated_at'] ?? '')) === 1,
         'release evidence should include an ISO UTC generation timestamp'
     );
-    wp_fts_release_evidence_contract_same('blocked', $report['overall_status'] ?? null, 'current default evidence should be blocked only by public-submission readiness');
+    wp_fts_release_evidence_contract_same('direct-install', $report['release_target'] ?? null, 'default release evidence target should be direct-install');
+    wp_fts_release_evidence_contract_same('blocked', $report['overall_status'] ?? null, 'default direct-install evidence should be blocked until required direct-install readiness is explicitly run');
+    wp_fts_release_evidence_contract_same('direct_install_readiness', $report['summary']['required_readiness_lane'] ?? null, 'default required readiness lane should match the direct-install release target');
     wp_fts_release_evidence_contract_same('indexer', $report['source']['plugin_path'] ?? null, 'source metadata should use a relative plugin path');
     wp_fts_release_evidence_contract_true(isset($report['collector']['output_policy']), 'collector metadata should describe bounded output policy');
 
@@ -229,7 +323,7 @@ test_case('quality release evidence collector default report has stable schema a
 test_case('quality release evidence collector reports expected default skips and benchmark pass', function (): void {
     $report = wp_fts_release_evidence_contract_default_report();
 
-    wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'direct_install_readiness')['status'] ?? null, 'direct-install readiness should skip by default');
+    wp_fts_release_evidence_contract_same('blocked', wp_fts_release_evidence_contract_lane($report, 'direct_install_readiness')['status'] ?? null, 'required direct-install readiness should block by default until artifact-producing readiness is explicitly opted in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'disposable_wordpress_release_smoke')['status'] ?? null, 'disposable smoke should skip without WordPress config');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'provider_compatibility_smoke')['status'] ?? null, 'provider smoke should skip without WordPress config');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'real_wordpress_mysql_integration')['status'] ?? null, 'real WordPress/MySQL integration should require collector opt-in');
@@ -237,8 +331,8 @@ test_case('quality release evidence collector reports expected default skips and
     wp_fts_release_evidence_contract_same('pass', wp_fts_release_evidence_contract_lane($report, 'production_scale_benchmark')['status'] ?? null, 'PR-safe production benchmark should run by default');
 
     $counts = $report['summary']['status_counts'] ?? [];
-    wp_fts_release_evidence_contract_same(1, $counts['blocked'] ?? null, 'default evidence should have one blocked lane');
-    wp_fts_release_evidence_contract_true(($counts['skip'] ?? 0) >= 5, 'default evidence should record optional lanes as skips');
+    wp_fts_release_evidence_contract_same(2, $counts['blocked'] ?? null, 'default direct-install evidence should have required direct-install and non-target public-submission blocked lanes');
+    wp_fts_release_evidence_contract_true(($counts['skip'] ?? 0) >= 4, 'default evidence should record optional lanes as skips');
 });
 
 test_case('quality release evidence collector captures public-submission blockers as blocked evidence', function (): void {
@@ -247,6 +341,7 @@ test_case('quality release evidence collector captures public-submission blocker
     $blockers = is_array($details['blocker_ids'] ?? null) ? $details['blocker_ids'] : [];
 
     wp_fts_release_evidence_contract_same('blocked', $lane['status'] ?? null, 'public-submission readiness should be blocked on current main');
+    wp_fts_release_evidence_contract_same('non_target', $details['target_role'] ?? null, 'default direct-install evidence should label public-submission as non-target evidence');
     foreach (['composer_public_license', 'package_license_file', 'package_public_assets', 'package_readme_txt', 'public_submission_authority_evidence'] as $id) {
         wp_fts_release_evidence_contract_true(in_array($id, $blockers, true), "public-submission evidence should include blocker {$id}");
     }
@@ -258,10 +353,57 @@ test_case('quality release evidence collector does not silently create direct-in
     $lane = wp_fts_release_evidence_contract_lane(wp_fts_release_evidence_contract_default_report(), 'direct_install_readiness');
     $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
 
-    wp_fts_release_evidence_contract_same('skip', $lane['status'] ?? null, 'default direct-install lane should not run artifact-producing readiness');
+    wp_fts_release_evidence_contract_same('blocked', $lane['status'] ?? null, 'default direct-install lane should not run artifact-producing readiness');
     wp_fts_release_evidence_contract_same('not_run_by_default', $details['artifact_policy'] ?? null, 'default direct-install lane should declare artifact policy');
     wp_fts_release_evidence_contract_true(!file_exists($root . '/wp-fts-indexer.zip'), 'collector should not create a release ZIP in the plugin root');
     wp_fts_release_evidence_contract_true(!is_dir($root . '/build'), 'collector should not create a build directory in the plugin root');
+});
+
+test_case('quality release evidence collector direct-install target can pass with explicit readiness evidence', function (): void {
+    $report = wp_fts_release_evidence_contract_fake_report([
+        'release_target' => 'direct-install',
+        'run_direct_install_readiness' => true,
+    ]);
+
+    wp_fts_release_evidence_contract_same('direct-install', $report['release_target'] ?? null, 'direct-install report should record the selected target');
+    wp_fts_release_evidence_contract_same('pass', $report['overall_status'] ?? null, 'direct-install target should pass when required direct-install and pure-PHP lanes pass');
+    wp_fts_release_evidence_contract_same('direct_install_readiness', $report['summary']['required_readiness_lane'] ?? null, 'direct-install target should require direct-install readiness');
+    wp_fts_release_evidence_contract_same('pass', wp_fts_release_evidence_contract_lane($report, 'direct_install_readiness')['status'] ?? null, 'direct-install readiness should pass with explicit opt-in evidence');
+
+    $publicLane = wp_fts_release_evidence_contract_lane($report, 'public_submission_readiness');
+    $publicDetails = is_array($publicLane['details'] ?? null) ? $publicLane['details'] : [];
+    wp_fts_release_evidence_contract_same('blocked', $publicLane['status'] ?? null, 'public-submission blockers should remain visible in direct-install evidence');
+    wp_fts_release_evidence_contract_same('non_target', $publicDetails['target_role'] ?? null, 'public-submission readiness should be non-target evidence for direct-install');
+    wp_fts_release_evidence_contract_contains('Non-target public-submission readiness remains blocked', (string) ($publicLane['summary'] ?? ''), 'direct-install evidence should not imply public-submission approval');
+});
+
+test_case('quality release evidence collector public-submission target remains blocked by public evidence', function (): void {
+    $report = wp_fts_release_evidence_contract_fake_report([
+        'release_target' => 'public-submission',
+    ]);
+    $publicLane = wp_fts_release_evidence_contract_lane($report, 'public_submission_readiness');
+    $publicDetails = is_array($publicLane['details'] ?? null) ? $publicLane['details'] : [];
+    $directDetails = is_array(wp_fts_release_evidence_contract_lane($report, 'direct_install_readiness')['details'] ?? null)
+        ? wp_fts_release_evidence_contract_lane($report, 'direct_install_readiness')['details']
+        : [];
+
+    wp_fts_release_evidence_contract_same('public-submission', $report['release_target'] ?? null, 'public-submission report should record the selected target');
+    wp_fts_release_evidence_contract_same('blocked', $report['overall_status'] ?? null, 'public-submission target should remain blocked on missing public evidence');
+    wp_fts_release_evidence_contract_same('public_submission_readiness', $report['summary']['required_readiness_lane'] ?? null, 'public-submission target should require public-submission readiness');
+    wp_fts_release_evidence_contract_same('blocked', $publicLane['status'] ?? null, 'public-submission readiness should be blocked');
+    wp_fts_release_evidence_contract_same('required', $publicDetails['target_role'] ?? null, 'public-submission readiness should be required for public-submission target');
+    wp_fts_release_evidence_contract_same('non_target', $directDetails['target_role'] ?? null, 'direct-install readiness should be non-target evidence for public-submission target');
+});
+
+test_case('quality release evidence collector rejects invalid release target values', function (): void {
+    $result = wp_fts_release_evidence_contract_run_command(
+        [PHP_BINARY, 'tools/collect-release-evidence.php', '--release-target=wporg', '--timeout=120'],
+        wp_fts_release_evidence_contract_clean_env()
+    );
+
+    wp_fts_release_evidence_contract_same(2, $result['exit'], 'invalid release target should fail with usage error exit code');
+    wp_fts_release_evidence_contract_same('', $result['stdout'], 'invalid release target should not emit a report');
+    wp_fts_release_evidence_contract_contains('Unknown release target: wporg', $result['stderr'], 'invalid release target should report a clear error');
 });
 
 test_case('quality release evidence collector records Git SHA when available', function (): void {
@@ -331,5 +473,5 @@ test_case('quality release evidence collector works under php without loaded ext
     $decoded = json_decode($result['stdout'], true);
     wp_fts_release_evidence_contract_true(is_array($decoded), 'php -n release evidence collector should emit JSON');
     wp_fts_release_evidence_contract_same(WP_FTS_ReleaseEvidenceCollector::SCHEMA, $decoded['schema'] ?? null, 'php -n release evidence collector should emit the same schema');
-    wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($decoded, 'direct_install_readiness')['status'] ?? null, 'php -n direct-install lane should keep read-only skip behavior');
+    wp_fts_release_evidence_contract_same('blocked', wp_fts_release_evidence_contract_lane($decoded, 'direct_install_readiness')['status'] ?? null, 'php -n direct-install lane should keep read-only opt-in behavior');
 });
