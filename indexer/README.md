@@ -167,6 +167,15 @@ enough; configure a host/system cron trigger for `wp-cron.php` or run bounded
 manual batches such as `wp fts process-batch --batch_size=100 --time_budget=20`
 while cron is fixed.
 
+Health/status also include a sanitized shared writer lock diagnostic. `none`
+means no index writer lock is held, `active` means another writer is currently
+preventing overlap, and `expired` means a stale lock payload remains and will be
+replaced automatically by the next indexing writer attempt. Expired locks that
+recur usually indicate interrupted or fatal indexing jobs; inspect latest batch
+and failure diagnostics rather than force-unlocking. This slice intentionally
+does not provide a force-unlock control, because deleting an active lock can
+allow overlapping index writes.
+
 The Health tab shows whether the stored schema version is current, missing, or
 stale. Its repair button runs the same table/schema repair path as
 `wp fts repair`; it touches schema and table definitions only and does not index

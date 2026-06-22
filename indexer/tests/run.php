@@ -5295,6 +5295,9 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_contains('<th scope="row">Lock mode</th><td>Manual</td>', $html, 'health dashboard should show safe lock mode');
     assert_contains('<th scope="row">Lock started</th><td>' . gmdate('Y-m-d H:i:s', $lockStarted) . ' UTC</td>', $html, 'health dashboard should show safe lock start time');
     assert_contains('<th scope="row">Lock expires</th><td>' . gmdate('Y-m-d H:i:s', $lockExpires) . ' UTC</td>', $html, 'health dashboard should show safe lock expiry time');
+    assert_contains('<th scope="row">Lock age</th><td>', $html, 'health dashboard should show bounded lock age');
+    assert_contains('<th scope="row">Lock timing</th><td>Expires in ', $html, 'health dashboard should show bounded active-lock expiry timing');
+    assert_contains('Another index writer is running; retry shortly and check `wp fts status` for current lock details.', $html, 'health dashboard should explain active lock contention');
     assert_true(!str_contains($html, 'health-lock-token-must-not-render'), 'health dashboard should not expose lock tokens');
     assert_contains('<th scope="row">Public site search</th><td>Enabled</td>', $html, 'health dashboard should show public search replacement state');
     assert_contains('<th scope="row">wp-admin Posts search</th><td>Disabled</td>', $html, 'health dashboard should show admin search replacement state');
@@ -5331,6 +5334,104 @@ test_case('health dashboard displays search state counts and last indexed conten
     assert_true(!str_contains($html, 'wp_fts_sandbox_action'), 'health dashboard should not render sandbox demo action controls');
     assert_true(!str_contains($html, 'Create or refresh demo posts'), 'health dashboard should not reintroduce demo post creation controls');
     assert_true(!str_contains($html, 'Build demo index'), 'health dashboard should not reintroduce demo indexing controls');
+});
+
+test_case('health dashboard renders expired lock diagnostics without exposing token data', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $lockStarted = time() - 360;
+    $lockExpires = time() - 60;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'expired-health-token-must-not-render',
+        'mode' => 'wp-cli-reindex',
+        'started_at' => $lockStarted,
+        'expires_at' => $lockExpires,
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [];
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('<th scope="row">Indexing lock</th><td>Expired</td>', $html, 'health dashboard should distinguish expired lock state');
+    assert_contains('<th scope="row">Lock mode</th><td>wp-cli-reindex</td>', $html, 'health dashboard should show sanitized expired lock mode');
+    assert_contains('<th scope="row">Lock started</th><td>' . gmdate('Y-m-d H:i:s', $lockStarted) . ' UTC</td>', $html, 'health dashboard should show sanitized expired lock start time');
+    assert_contains('<th scope="row">Lock expires</th><td>' . gmdate('Y-m-d H:i:s', $lockExpires) . ' UTC</td>', $html, 'health dashboard should show sanitized expired lock expiry time');
+    assert_contains('<th scope="row">Lock age</th><td>', $html, 'health dashboard should show bounded expired lock age');
+    assert_contains('<th scope="row">Lock timing</th><td>Expired ', $html, 'health dashboard should show bounded expired lock timing');
+    assert_contains('A stale index writer lock remains; the next indexing writer will replace it automatically.', $html, 'health dashboard should explain automatic replacement for expired locks');
+    assert_contains('Recurring expired locks indicate interrupted or fatal indexing jobs.', $html, 'health dashboard should explain recurring expired-lock risk');
+    assert_true(!str_contains($html, 'expired-health-token-must-not-render'), 'health dashboard should not expose expired lock token');
+    assert_true(!str_contains($html, '"token"'), 'health dashboard should not render raw lock payload fields');
+});
+
+test_case('health dashboard lock advice distinguishes none active and expired states', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        foreach (['none', 'active', 'expired'] as $state) {
+            wp_fts_test_reset_wordpress_fakes();
+            $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+            $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+            if ($state === 'active') {
+                $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+                    'token' => 'active-advice-token-must-not-render',
+                    'mode' => 'manual',
+                    'started_at' => time() - 30,
+                    'expires_at' => time() + 270,
+                ];
+            } elseif ($state === 'expired') {
+                $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+                    'token' => 'expired-advice-token-must-not-render',
+                    'mode' => 'cron',
+                    'started_at' => time() - 400,
+                    'expires_at' => time() - 100,
+                ];
+            }
+
+            $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+            $_POST = [];
+            $html = wp_fts_test_capture_admin_settings_tab('health');
+
+            if ($state === 'none') {
+                assert_contains('<th scope="row">Indexing lock</th><td>None</td>', $html, 'health dashboard should label missing lock as none');
+                assert_contains('No index writer lock is currently held.', $html, 'health dashboard should explain missing lock state');
+                assert_contains('<th scope="row">Lock timing</th><td>No active lock timing</td>', $html, 'health dashboard should not invent timing for missing locks');
+            } elseif ($state === 'active') {
+                assert_contains('<th scope="row">Indexing lock</th><td>Active</td>', $html, 'health dashboard should label active lock state');
+                assert_contains('Another index writer is running; retry shortly and check `wp fts status` for current lock details.', $html, 'health dashboard should explain active lock state');
+                assert_true(!str_contains($html, 'active-advice-token-must-not-render'), 'active lock advice should not expose tokens');
+            } else {
+                assert_contains('<th scope="row">Indexing lock</th><td>Expired</td>', $html, 'health dashboard should label expired lock state');
+                assert_contains('A stale index writer lock remains; the next indexing writer will replace it automatically.', $html, 'health dashboard should explain expired lock state');
+                assert_contains('Recurring expired locks indicate interrupted or fatal indexing jobs.', $html, 'health dashboard should explain repeated expired locks');
+                assert_true(!str_contains($html, 'expired-advice-token-must-not-render'), 'expired lock advice should not expose tokens');
+            }
+        }
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
 });
 
 test_case('health schema repair POST requires capability and nonce before repairing', function (): void {
@@ -7709,6 +7810,19 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_contains('traffic-triggered', (string) ($runner['advice'] ?? ''), 'cron runner advice should explain traffic-triggered cron mode');
     assert_same('active', $payload['lock_state'] ?? null, 'status JSON should report lock state without exposing the token');
     assert_same(true, $payload['lock_active'] ?? null, 'status JSON should report active lock boolean');
+    assert_true(is_int($payload['lock_age_seconds'] ?? null), 'status JSON should expose bounded lock age');
+    assert_true(($payload['lock_age_seconds'] ?? -1) >= 0 && ($payload['lock_age_seconds'] ?? 999) <= 30, 'status JSON should bound active lock age near the fixture age');
+    assert_true(is_int($payload['lock_expires_in_seconds'] ?? null), 'status JSON should expose seconds until active lock expiry');
+    assert_true(($payload['lock_expires_in_seconds'] ?? -1) >= 260 && ($payload['lock_expires_in_seconds'] ?? 999) <= 300, 'status JSON should bound active lock expiry timing near the fixture expiry');
+    assert_same(null, $payload['lock_expired_seconds'] ?? null, 'status JSON should not report expired seconds for active locks');
+    assert_contains('Another index writer is running', (string) ($payload['lock_advice'] ?? ''), 'status JSON should expose active lock advice');
+    $lock = $payload['lock'] ?? null;
+    assert_true(is_array($lock), 'status JSON should expose nested sanitized lock diagnostics');
+    assert_same('active', $lock['state'] ?? null, 'nested lock diagnostics should include active state');
+    assert_same('manual', $lock['mode'] ?? null, 'nested lock diagnostics should include sanitized lock mode');
+    assert_true(is_int($lock['age_seconds'] ?? null), 'nested lock diagnostics should include bounded age');
+    assert_true(is_int($lock['expires_in_seconds'] ?? null), 'nested lock diagnostics should include bounded active expiry timing');
+    assert_true(!str_contains(json_encode($lock, JSON_THROW_ON_ERROR), 'do-not-expose'), 'nested lock diagnostics should not expose the token');
     assert_true(!array_key_exists('token', $payload), 'status JSON should not expose lock token');
     assert_same(true, $payload['has_more'] ?? null, 'status JSON should include has-more state from queued work');
     assert_same('manual', $payload['last_mode'] ?? null, 'status JSON should report last run mode');
@@ -7743,6 +7857,9 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'SELECT * FROM'), 'status diagnostics should not expose raw SQL');
     assert_contains("queue_processor_schedule\t", $human, 'default status output should include queue processor schedule');
     assert_contains("cron_runner\t", $human, 'default status output should include cron runner diagnostics');
+    assert_contains("lock_age_seconds\t", $human, 'default status output should include lock age');
+    assert_contains("lock_advice\tAnother index writer is running", $human, 'default status output should include lock advice');
+    assert_contains("lock\t", $human, 'default status output should include nested sanitized lock diagnostics');
     assert_same([WP_FTS_Plugin::CRON_HOOK, WP_FTS_Plugin::CRON_HOOK], $GLOBALS['wp_fts_test_next_scheduled_calls'], 'status should inspect the cron schedule without mutating it');
     assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'status should not schedule queue processors while rendering status');
     assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'status should not clear queue processor events while rendering status');
@@ -7750,6 +7867,65 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same([702], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'status should leave queue state unchanged');
     assert_same('do-not-expose', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'status should leave lock state unchanged');
     assert_same(1, count($fake->docs), 'status should not index additional content');
+});
+
+test_case('wp-cli status reports expired lock diagnostics without exposing token data', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $now = time();
+    $lockStarted = $now - 3600;
+    $lockExpires = $now - 60;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'expired-status-token-must-not-render',
+        'mode' => 'wp-cli-reindex',
+        'started_at' => $lockStarted,
+        'expires_at' => $lockExpires,
+    ];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $human = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->status([], []);
+        });
+        $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->status([], ['format' => 'json']);
+        });
+        $payload = wp_fts_test_decode_cli_json_object($raw);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('expired', $payload['lock_state'] ?? null, 'status JSON should report expired lock state');
+    assert_same(false, $payload['lock_active'] ?? null, 'status JSON should report expired locks as inactive for writer coordination');
+    assert_same('wp-cli-reindex', $payload['lock_mode'] ?? null, 'status JSON should expose sanitized expired lock mode');
+    assert_same(gmdate('Y-m-d H:i:s', $lockStarted), $payload['lock_started_at'] ?? null, 'status JSON should expose bounded expired lock start time');
+    assert_same(gmdate('Y-m-d H:i:s', $lockExpires), $payload['lock_expires_at'] ?? null, 'status JSON should expose bounded expired lock expiry time');
+    assert_true(is_int($payload['lock_age_seconds'] ?? null), 'status JSON should expose bounded expired lock age');
+    assert_true(($payload['lock_age_seconds'] ?? -1) >= 3600 && ($payload['lock_age_seconds'] ?? 99999) <= 3610, 'status JSON expired lock age should stay near the fixture age');
+    assert_same(null, $payload['lock_expires_in_seconds'] ?? null, 'status JSON should not report active expiry seconds for expired locks');
+    assert_true(is_int($payload['lock_expired_seconds'] ?? null), 'status JSON should expose bounded seconds since expiry');
+    assert_true(($payload['lock_expired_seconds'] ?? -1) >= 60 && ($payload['lock_expired_seconds'] ?? 99999) <= 70, 'status JSON expired lock timing should stay near the fixture expiry');
+    assert_contains('next indexing writer will replace it automatically', (string) ($payload['lock_advice'] ?? ''), 'status JSON should expose expired lock recovery advice');
+    assert_contains('Recurring expired locks indicate interrupted or fatal indexing jobs.', (string) ($payload['lock_advice'] ?? ''), 'status JSON should expose recurring expired-lock guidance');
+    $lock = $payload['lock'] ?? null;
+    assert_true(is_array($lock), 'status JSON should include nested expired lock diagnostics');
+    assert_same('expired', $lock['state'] ?? null, 'nested lock diagnostics should include expired state');
+    assert_same(false, $lock['active'] ?? null, 'nested lock diagnostics should keep expired lock inactive');
+    assert_same('wp-cli-reindex', $lock['mode'] ?? null, 'nested lock diagnostics should include sanitized expired mode');
+    assert_true(is_int($lock['age_seconds'] ?? null), 'nested lock diagnostics should include bounded expired age');
+    assert_true(is_int($lock['expired_seconds'] ?? null), 'nested lock diagnostics should include bounded expired timing');
+    assert_true(!str_contains(json_encode($payload, JSON_THROW_ON_ERROR), 'expired-status-token-must-not-render'), 'status JSON should not expose expired lock token anywhere');
+    assert_true(!str_contains($human, 'expired-status-token-must-not-render'), 'default status output should not expose expired lock token');
+    assert_contains("lock_state\texpired", $human, 'default status output should expose expired lock state');
+    assert_contains("lock_expired_seconds\t", $human, 'default status output should expose expired lock timing');
+    assert_contains('next indexing writer will replace it automatically', $human, 'default status output should include expired lock advice');
+    assert_same('expired-status-token-must-not-render', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'status should leave expired lock payload unchanged');
+    assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'status should not clean expired locks while rendering diagnostics');
 });
 
 test_case('status and health report missing queue processor schedule with pending work without mutating state', function (): void {
@@ -8266,6 +8442,55 @@ test_case('wp-cli reindex uses shared writer lock and records diagnostics', func
     assert_same('none', $diagnostics['lock_at_start']['state'] ?? null, 'direct reindex diagnostics should record no preexisting lock');
     assert_same('none', $diagnostics['lock_at_end']['state'] ?? null, 'direct reindex diagnostics should record released lock state');
     assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'token'), 'direct reindex diagnostics should not expose lock tokens');
+});
+
+test_case('wp-cli direct writers replace expired locks automatically while acquiring the writer lock', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'expired-direct-writer-token',
+        'mode' => 'wp-cli-optimize',
+        'started_at' => time() - 900,
+        'expires_at' => time() - 600,
+    ];
+    $fake->postRows = [
+        wp_fts_test_backfill_post(62, 'post', 'publish', 'Expired Lock Direct Writer'),
+    ];
+
+    try {
+        $command = new WP_FTS_WPCLI_Command();
+        $command->reindex([], [
+            'lang' => 'en',
+            'limit' => '1',
+            'batch_size' => '1',
+        ]);
+        $health = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(['Indexed 1 posts in en.'], WP_CLI::$successMessages, 'expired direct-writer lock should not block a new writer');
+    assert_same([], WP_CLI::$warningMessages, 'expired direct-writer lock should not produce lock contention warnings');
+    assert_true(isset($fake->docs[62]), 'direct writer should index content after replacing an expired lock');
+    assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]), 'direct writer should release the replacement lock after completion');
+    assert_same(WP_FTS_Plugin::INDEX_LOCK_OPTION, $GLOBALS['wp_fts_test_deleted_options'][0]['name'] ?? null, 'direct writer acquisition should delete the expired lock before replacing it');
+    assert_same(WP_FTS_Plugin::INDEX_LOCK_OPTION, $GLOBALS['wp_fts_test_added_options'][0]['name'] ?? null, 'direct writer acquisition should add a replacement lock');
+    assert_true(is_array($GLOBALS['wp_fts_test_added_options'][0]['value'] ?? null), 'replacement lock should be a structured lock payload');
+    assert_same('wp-cli-reindex', $GLOBALS['wp_fts_test_added_options'][0]['value']['mode'] ?? null, 'replacement lock should record the new writer mode');
+    assert_true(($GLOBALS['wp_fts_test_added_options'][0]['value']['token'] ?? null) !== 'expired-direct-writer-token', 'replacement lock should use a fresh token');
+    assert_same(1, $health['last_batch_processed'] ?? null, 'expired-lock replacement writer should record processed work');
+    assert_same(false, $health['last_skipped_locked'] ?? null, 'expired-lock replacement writer should not record a lock skip');
+    $diagnostics = $health['latest_batch_diagnostics'] ?? [];
+    assert_same('expired', $diagnostics['lock_at_start']['state'] ?? null, 'direct writer diagnostics should record the expired preexisting lock');
+    assert_same('wp-cli-optimize', $diagnostics['lock_at_start']['mode'] ?? null, 'direct writer diagnostics should record the safe expired lock mode');
+    assert_true(is_int($diagnostics['lock_at_start']['expired_seconds'] ?? null), 'direct writer diagnostics should include bounded expired timing');
+    assert_same('none', $diagnostics['lock_at_end']['state'] ?? null, 'direct writer diagnostics should record released replacement lock state');
+    assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'expired-direct-writer-token'), 'direct writer diagnostics should not expose the expired token');
 });
 
 test_case('wp-cli direct writers skip safely when the shared indexing lock is active', function (): void {

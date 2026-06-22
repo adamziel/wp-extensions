@@ -156,7 +156,16 @@ the previous whole-blob lost-update failure mode for different documents, but
 WP-CLI reindex, delete, optimize, and reset jobs now coordinate through the
 plugin's shared writer lock. If one of those commands reports lock contention,
 no overlapping writer was started; check `wp fts status` and try again after
-the active batch finishes. The lock is option-backed rather than an external
+the active batch finishes. `wp fts status --format=json` reports
+`lock_state=none`, `active`, or `expired` with sanitized mode/start/expiry
+fields, bounded age/expiry timing, and operator advice. An active lock means
+another writer is currently preventing overlap. An expired lock means a stale
+payload remains; the next indexing writer attempt replaces it automatically
+before writing. Recurring expired locks usually point to interrupted or fatal
+indexing jobs and should be investigated through the latest batch/failure
+diagnostics. There is intentionally no force-unlock control in this slice: a
+manual delete path could clear an active writer's safety token and allow
+overlapping writes. The lock is option-backed rather than an external
 distributed lock, so avoid overlapping full reindex, delete, optimize, and reset
 jobs until the target environment has been load tested.
 
@@ -263,8 +272,13 @@ analyzer pack paths and custom field selection.
 
 The Health tab shows schema status, stored and expected schema versions, safe
 indexing lock state, indexing counts, stale reindex debt progress, and the
-latest batch summary. Its repair button runs schema/table repair only; it does
-not index content, create sample posts, or drain the queue.
+latest batch summary. Its lock row distinguishes `None`, `Active`, and
+`Expired`. Active-lock advice means another writer is running and operators
+should retry shortly or check `wp fts status`; expired-lock advice means the
+stale payload will be replaced automatically by the next indexing writer, while
+recurring expired locks indicate interrupted or fatal indexing jobs. Its repair
+button runs schema/table repair only; it does not index content, create sample
+posts, drain the queue, or force-unlock the shared writer lock.
 
 Request-level diagnostics are collected only for authorized or debug-enabled
 contexts: a `manage_options` user, `WP_FTS_DEBUG`, standard `WP_DEBUG`, or the

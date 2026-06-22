@@ -41,6 +41,7 @@ final class WP_FTS_Plugin
     private const DEFAULT_SEARCH_STORAGE_BUDGET_MS = 50.0;
     private const DEFAULT_INDEX_MEMORY_MARGIN_BYTES = 16777216;
     private const DEFAULT_INDEX_LOCK_TTL = 300;
+    private const MAX_INDEX_LOCK_DIAGNOSTIC_SECONDS = 2592000;
     private const MAX_CRON_INDEX_BATCH_SIZE = 500;
     private const MAX_MANUAL_INDEX_BATCH_SIZE = 1000;
     private const MAX_INDEX_TIME_BUDGET = 300.0;
@@ -921,6 +922,11 @@ final class WP_FTS_Plugin
             'lock_mode' => $lock['mode'],
             'lock_started_at' => $lock['started_at'],
             'lock_expires_at' => $lock['expires_at'],
+            'lock_age_seconds' => $lock['age_seconds'],
+            'lock_expires_in_seconds' => $lock['expires_in_seconds'],
+            'lock_expired_seconds' => $lock['expired_seconds'],
+            'lock_advice' => $lock['advice'],
+            'lock' => $lock,
             'has_more' => (bool) ($health['has_more'] ?? false),
             'last_mode' => is_scalar($health['last_mode'] ?? null) ? (string) $health['last_mode'] : '',
             'last_run_at' => is_scalar($health['last_run_at'] ?? null) ? (string) $health['last_run_at'] : '',
@@ -3471,10 +3477,13 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Schema status', self::schema_status_label((string) $schema['status']));
         self::render_health_status_row('Stored schema version', (string) max(0, (int) $schema['stored_version']));
         self::render_health_status_row('Expected schema version', (string) max(0, (int) $schema['expected_version']));
-        self::render_health_status_row('Indexing lock', !empty($lock['active']) ? 'Active' : 'Inactive');
+        self::render_health_status_row('Indexing lock', self::lock_state_summary($lock));
         self::render_health_status_row('Lock mode', self::lock_mode_summary($lock));
         self::render_health_status_row('Lock started', self::lock_time_summary($lock['started_at'] ?? ''));
         self::render_health_status_row('Lock expires', self::lock_time_summary($lock['expires_at'] ?? ''));
+        self::render_health_status_row('Lock age', self::lock_seconds_summary($lock['age_seconds'] ?? null));
+        self::render_health_status_row('Lock timing', self::lock_timing_summary($lock));
+        self::render_health_status_row('Lock advice', self::lock_advice_summary($lock));
         self::render_health_status_row('Public site search', !empty($settings['replace_frontend_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('wp-admin Posts search', !empty($settings['replace_admin_post_search']) ? 'Enabled' : 'Disabled');
         self::render_health_status_row('Search provider compatibility', self::search_provider_compatibility_label((string) $settings['search_provider_compatibility']));
@@ -3674,7 +3683,22 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array{state:string,active:bool,mode:string,started_at:string,expires_at:string} $lock
+     * @param array<string,mixed> $lock
+     */
+    private static function lock_state_summary(array $lock): string
+    {
+        $state = is_scalar($lock['state'] ?? null) ? (string) $lock['state'] : '';
+
+        return match ($state) {
+            'none' => 'None',
+            'active' => 'Active',
+            'expired' => 'Expired',
+            default => 'Unknown',
+        };
+    }
+
+    /**
+     * @param array<string,mixed> $lock
      */
     private static function lock_mode_summary(array $lock): string
     {
@@ -3695,6 +3719,45 @@ final class WP_FTS_Plugin
         $value = is_scalar($value) ? trim((string) $value) : '';
 
         return $value !== '' ? self::debug_truncate_text($value, 32) . ' UTC' : 'Not recorded';
+    }
+
+    private static function lock_seconds_summary(mixed $value): string
+    {
+        if (!is_int($value)) {
+            return 'Not recorded';
+        }
+
+        return max(0, $value) . ' seconds';
+    }
+
+    /**
+     * @param array<string,mixed> $lock
+     */
+    private static function lock_timing_summary(array $lock): string
+    {
+        $state = is_scalar($lock['state'] ?? null) ? (string) $lock['state'] : '';
+        if ($state === 'active') {
+            return is_int($lock['expires_in_seconds'] ?? null)
+                ? 'Expires in ' . max(0, (int) $lock['expires_in_seconds']) . ' seconds'
+                : 'Expiry not recorded';
+        }
+        if ($state === 'expired') {
+            return is_int($lock['expired_seconds'] ?? null)
+                ? 'Expired ' . max(0, (int) $lock['expired_seconds']) . ' seconds ago'
+                : 'Expired; expiry time not recorded';
+        }
+
+        return 'No active lock timing';
+    }
+
+    /**
+     * @param array<string,mixed> $lock
+     */
+    private static function lock_advice_summary(array $lock): string
+    {
+        $advice = is_scalar($lock['advice'] ?? null) ? trim((string) $lock['advice']) : '';
+
+        return $advice !== '' ? $advice : 'No index writer lock advice available.';
     }
 
     /**
@@ -11676,31 +11739,62 @@ WHERE p.post_password = ''
     /**
      * Return lock state without exposing the lock token.
      *
-     * @return array{state:string,active:bool,mode:string,started_at:string,expires_at:string}
+     * @return array{state:string,active:bool,mode:string,started_at:string,expires_at:string,age_seconds:?int,expires_in_seconds:?int,expired_seconds:?int,advice:string}
      */
     private static function index_lock_status(): array
     {
         $payload = self::get_option(self::INDEX_LOCK_OPTION, null);
         if (!is_array($payload)) {
-            return [
-                'state' => 'none',
-                'active' => false,
-                'mode' => '',
-                'started_at' => '',
-                'expires_at' => '',
-            ];
+            return self::empty_index_lock_status();
         }
 
         $now = time();
         $active = self::lock_payload_active($payload, $now);
+        $started = self::lock_timestamp_value($payload['started_at'] ?? null);
+        $expires = self::lock_timestamp_value($payload['expires_at'] ?? null);
+        $age = $started !== null ? self::bounded_lock_diagnostic_seconds(max(0, $now - $started)) : null;
+        $expires_in = $active && $expires !== null ? self::bounded_lock_diagnostic_seconds(max(0, $expires - $now)) : null;
+        $expired_seconds = (!$active && $expires !== null) ? self::bounded_lock_diagnostic_seconds(max(0, $now - $expires)) : null;
+        $state = $active ? 'active' : 'expired';
 
         return [
-            'state' => $active ? 'active' : 'expired',
+            'state' => $state,
             'active' => $active,
-            'mode' => is_scalar($payload['mode'] ?? null) ? (string) $payload['mode'] : '',
+            'mode' => self::sanitize_index_lock_mode($payload['mode'] ?? null),
             'started_at' => self::lock_timestamp_display($payload['started_at'] ?? null),
             'expires_at' => self::lock_timestamp_display($payload['expires_at'] ?? null),
+            'age_seconds' => $age,
+            'expires_in_seconds' => $expires_in,
+            'expired_seconds' => $expired_seconds,
+            'advice' => self::index_lock_advice($state),
         ];
+    }
+
+    /**
+     * @return array{state:string,active:bool,mode:string,started_at:string,expires_at:string,age_seconds:?int,expires_in_seconds:?int,expired_seconds:?int,advice:string}
+     */
+    private static function empty_index_lock_status(): array
+    {
+        return [
+            'state' => 'none',
+            'active' => false,
+            'mode' => '',
+            'started_at' => '',
+            'expires_at' => '',
+            'age_seconds' => null,
+            'expires_in_seconds' => null,
+            'expired_seconds' => null,
+            'advice' => self::index_lock_advice('none'),
+        ];
+    }
+
+    private static function index_lock_advice(string $state): string
+    {
+        return match ($state) {
+            'active' => 'Another index writer is running; retry shortly and check `wp fts status` for current lock details.',
+            'expired' => 'A stale index writer lock remains; the next indexing writer will replace it automatically. Recurring expired locks indicate interrupted or fatal indexing jobs.',
+            default => 'No index writer lock is currently held.',
+        };
     }
 
     private static function lock_payload_active(mixed $payload, int $now): bool
@@ -11711,18 +11805,39 @@ WHERE p.post_password = ''
             && (int) $payload['expires_at'] > $now;
     }
 
-    private static function lock_timestamp_display(mixed $value): string
+    private static function lock_timestamp_value(mixed $value): ?int
     {
         if (!is_scalar($value) || !is_numeric($value)) {
-            return '';
+            return null;
         }
 
         $timestamp = (int) $value;
-        if ($timestamp <= 0) {
+
+        return $timestamp > 0 ? $timestamp : null;
+    }
+
+    private static function lock_timestamp_display(mixed $value): string
+    {
+        $timestamp = self::lock_timestamp_value($value);
+        if ($timestamp === null) {
             return '';
         }
 
         return gmdate('Y-m-d H:i:s', $timestamp);
+    }
+
+    private static function bounded_lock_diagnostic_seconds(int $seconds): int
+    {
+        return min(max(0, $seconds), self::MAX_INDEX_LOCK_DIAGNOSTIC_SECONDS);
+    }
+
+    private static function sanitize_index_lock_mode(mixed $value): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        return self::debug_truncate_text(self::sanitize_key((string) $value), 40);
     }
 
     /**
@@ -12102,27 +12217,54 @@ WHERE p.post_password = ''
     }
 
     /**
-     * @return array{state:string,active:bool,mode:string,started_at:string,expires_at:string}
+     * @return array{state:string,active:bool,mode:string,started_at:string,expires_at:string,age_seconds:?int,expires_in_seconds:?int,expired_seconds:?int,advice:string}
      */
     private static function sanitize_index_lock_diagnostics(mixed $raw): array
     {
         if (!is_array($raw)) {
-            return [
-                'state' => 'none',
-                'active' => false,
-                'mode' => '',
-                'started_at' => '',
-                'expires_at' => '',
-            ];
+            return self::empty_index_lock_status();
+        }
+        $state = self::sanitize_index_lock_state($raw['state'] ?? '');
+        $active = (bool) ($raw['active'] ?? false);
+        if ($state === 'active') {
+            $active = true;
+        } elseif ($state === 'none' || $state === 'expired') {
+            $active = false;
         }
 
         return [
-            'state' => self::sanitize_index_diagnostic_text($raw['state'] ?? '', 40, false),
-            'active' => (bool) ($raw['active'] ?? false),
-            'mode' => self::sanitize_index_diagnostic_text($raw['mode'] ?? '', 40, false),
+            'state' => $state,
+            'active' => $active,
+            'mode' => self::sanitize_index_lock_mode($raw['mode'] ?? ''),
             'started_at' => self::sanitize_index_diagnostic_text($raw['started_at'] ?? '', 32, false),
             'expires_at' => self::sanitize_index_diagnostic_text($raw['expires_at'] ?? '', 32, false),
+            'age_seconds' => self::sanitize_lock_seconds_value($raw['age_seconds'] ?? null),
+            'expires_in_seconds' => self::sanitize_lock_seconds_value($raw['expires_in_seconds'] ?? null),
+            'expired_seconds' => self::sanitize_lock_seconds_value($raw['expired_seconds'] ?? null),
+            'advice' => self::sanitize_index_diagnostic_text(
+                is_scalar($raw['advice'] ?? null) && trim((string) $raw['advice']) !== ''
+                    ? (string) $raw['advice']
+                    : self::index_lock_advice($state),
+                240,
+                false
+            ),
         ];
+    }
+
+    private static function sanitize_index_lock_state(mixed $value): string
+    {
+        $state = is_scalar($value) ? self::sanitize_key((string) $value) : '';
+
+        return in_array($state, ['none', 'active', 'expired'], true) ? $state : 'none';
+    }
+
+    private static function sanitize_lock_seconds_value(mixed $value): ?int
+    {
+        if (!is_int($value) && (!is_scalar($value) || !is_numeric($value))) {
+            return null;
+        }
+
+        return self::bounded_lock_diagnostic_seconds(max(0, (int) $value));
     }
 
     private static function sanitize_index_diagnostic_text(mixed $value, int $max_bytes = self::MAX_INDEX_DIAGNOSTIC_TEXT_BYTES, bool $redact_sql = true): string
