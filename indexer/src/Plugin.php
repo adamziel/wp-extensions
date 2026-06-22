@@ -52,6 +52,13 @@ final class WP_FTS_Plugin
     private const MAX_INDEX_FAILURE_ERROR_BYTES = 240;
     private const MAX_INDEX_DIAGNOSTIC_TEXT_BYTES = 160;
     private const MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES = 120;
+    private const SUPPORT_SNAPSHOT_SCHEMA = 'wp-fts-support-snapshot-v1';
+    private const SUPPORT_SNAPSHOT_MAX_JSON_BYTES = 32768;
+    private const SUPPORT_SNAPSHOT_MAX_DEPTH = 6;
+    private const SUPPORT_SNAPSHOT_MAX_LIST_ITEMS = 12;
+    private const SUPPORT_SNAPSHOT_MAX_ASSOC_ITEMS = 80;
+    private const SUPPORT_SNAPSHOT_PLUGIN_NAME = 'Pure PHP FTS Indexer';
+    private const SUPPORT_SNAPSHOT_PLUGIN_VERSION = '0.1.9';
     private const INDEX_PROFILE_SCHEMA = 'wp-fts-index-profile-v1';
     private const INDEX_PROFILE_INDEXER_SIGNATURE = 'wp-fts-indexer-v2';
     private const STALE_DEBT_REASON_LABELS = [
@@ -71,6 +78,7 @@ final class WP_FTS_Plugin
     private const ADMIN_HEALTH_MANUAL_BATCH_ACTION = 'index_next_batch';
     private const ADMIN_HEALTH_REPAIR_SCHEMA_ACTION = 'repair_schema';
     private const ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION = 'schedule_queue';
+    private const ADMIN_HEALTH_SUPPORT_SNAPSHOT_ACTION = 'support_snapshot';
     private const ADMIN_ANALYZER_NONCE_ACTION = 'wp_fts_analyzer_packs_admin_action';
     private const ADMIN_ANALYZER_NONCE_FIELD = 'wp_fts_analyzer_packs_nonce';
     private const ADMIN_ANALYZER_ACTION_FIELD = 'wp_fts_analyzer_packs_action';
@@ -321,6 +329,12 @@ final class WP_FTS_Plugin
     private static array $language_support_details_cache = [];
 
     /**
+     * Same-request flag set only after the Health support snapshot action
+     * passes capability and nonce checks.
+     */
+    private static bool $admin_health_support_snapshot_visible = false;
+
+    /**
      * Clear request-scoped caches for test harnesses and same-request option changes.
      */
     public static function reset_request_caches(): void
@@ -332,6 +346,7 @@ final class WP_FTS_Plugin
         self::$debug_next_trace_id = 1;
         self::$debug_sql_query_starts = [];
         self::$search_final_ownership_state = [];
+        self::$admin_health_support_snapshot_visible = false;
     }
 
     /**
@@ -968,6 +983,329 @@ final class WP_FTS_Plugin
             'remaining_count' => $remaining_count,
             'latest_batch_diagnostics' => self::latest_index_batch_diagnostics_from_health($health),
         ];
+    }
+
+    /**
+     * Build a bounded, redacted, read-only support artifact for admin handoff.
+     *
+     * This deliberately reuses existing operator diagnostics and does not run
+     * searches, process indexing work, schedule cron, repair schema, write
+     * options, or call external providers.
+     *
+     * @return array<string,mixed>
+     */
+    public static function support_snapshot(): array
+    {
+        $operator = self::support_snapshot_redact_value(self::operator_status());
+        $snapshot = [
+            'schema' => self::SUPPORT_SNAPSHOT_SCHEMA,
+            'generated_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            'context' => self::support_snapshot_context($operator),
+            'operator_status' => $operator,
+            'provider_compatibility' => self::support_snapshot_array_section($operator['search_provider_compatibility'] ?? []),
+            'language_pack_status' => self::support_snapshot_array_section($operator['language_pack_status'] ?? []),
+            'queue_cron_indexing' => self::support_snapshot_queue_cron_indexing($operator),
+            'latest_batch_diagnostics' => self::support_snapshot_array_section($operator['latest_batch_diagnostics'] ?? []),
+            'current_request_diagnostics' => self::support_snapshot_current_request_diagnostics(),
+            'advice' => self::support_snapshot_advice($operator),
+            'boundaries' => [
+                'read_only' => true,
+                'proof_or_certification' => 'not_run',
+                'provider_api_calls' => 'not_run',
+                'indexing_or_schema_changes' => 'not_run',
+                'redaction' => 'local paths, plugin basenames, SQL, tokens, provider payloads, and secret-looking values are omitted or redacted where detected.',
+            ],
+        ];
+
+        return self::support_snapshot_redact_value($snapshot);
+    }
+
+    public static function support_snapshot_json(): string
+    {
+        $snapshot = self::support_snapshot();
+        $json = self::json_encode_support_snapshot($snapshot);
+        if (strlen($json) <= self::SUPPORT_SNAPSHOT_MAX_JSON_BYTES) {
+            return $json;
+        }
+
+        $snapshot['current_request_diagnostics'] = [
+            'omitted' => true,
+            'reason' => 'The request diagnostics section was omitted to keep the support snapshot bounded.',
+        ];
+        $snapshot['truncated'] = true;
+        $json = self::json_encode_support_snapshot($snapshot);
+        if (strlen($json) <= self::SUPPORT_SNAPSHOT_MAX_JSON_BYTES) {
+            return $json;
+        }
+
+        $snapshot['operator_status'] = [
+            'omitted' => true,
+            'reason' => 'The full operator status section was omitted to keep the support snapshot bounded.',
+        ];
+        $snapshot['truncated'] = true;
+
+        return self::json_encode_support_snapshot($snapshot);
+    }
+
+    /**
+     * @param array<string,mixed> $operator
+     * @return array<string,mixed>
+     */
+    private static function support_snapshot_context(array $operator): array
+    {
+        $schema = self::schema_status();
+
+        return [
+            'plugin' => [
+                'name' => self::support_snapshot_plugin_header('Plugin Name', self::SUPPORT_SNAPSHOT_PLUGIN_NAME),
+                'version' => self::support_snapshot_plugin_header('Version', self::SUPPORT_SNAPSHOT_PLUGIN_VERSION),
+                'source' => 'wordpress-plugin',
+            ],
+            'runtime' => [
+                'php_version' => PHP_VERSION,
+                'wordpress_version' => self::support_snapshot_wordpress_version(),
+                'site_language' => self::site_language(),
+                'storage_backend' => is_scalar($operator['storage_backend'] ?? null) ? (string) $operator['storage_backend'] : '',
+            ],
+            'schema' => [
+                'status' => (string) $schema['status'],
+                'stored_version' => max(0, (int) $schema['stored_version']),
+                'expected_version' => max(0, (int) $schema['expected_version']),
+            ],
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $operator
+     * @return array<string,mixed>
+     */
+    private static function support_snapshot_queue_cron_indexing(array $operator): array
+    {
+        return [
+            'pending_queue_count' => max(0, (int) ($operator['pending_queue_count'] ?? 0)),
+            'remaining_count' => max(0, (int) ($operator['remaining_count'] ?? 0)),
+            'has_more' => !empty($operator['has_more']),
+            'queue_processor_schedule' => self::support_snapshot_array_section($operator['queue_processor_schedule'] ?? []),
+            'cron_runner' => self::support_snapshot_array_section($operator['cron_runner'] ?? []),
+            'lock' => self::support_snapshot_array_section($operator['lock'] ?? []),
+            'stale_debt' => [
+                'active' => !empty($operator['stale_debt_active']),
+                'reasons' => self::support_snapshot_redact_value($operator['stale_debt_reasons'] ?? []),
+                'remaining_count' => max(0, (int) ($operator['stale_debt_remaining_count'] ?? 0)),
+                'processed_count' => max(0, (int) ($operator['stale_debt_processed_count'] ?? 0)),
+            ],
+            'latest_batch' => [
+                'mode' => is_scalar($operator['last_mode'] ?? null) ? (string) $operator['last_mode'] : '',
+                'last_run_at' => is_scalar($operator['last_run_at'] ?? null) ? (string) $operator['last_run_at'] : '',
+                'processed' => max(0, (int) ($operator['last_batch_processed'] ?? 0)),
+                'queue_processed' => max(0, (int) ($operator['last_batch_queue_processed'] ?? 0)),
+                'backfill_processed' => max(0, (int) ($operator['last_batch_backfill_processed'] ?? 0)),
+                'stale_processed' => max(0, (int) ($operator['last_batch_stale_processed'] ?? 0)),
+                'failures' => max(0, (int) ($operator['last_batch_failures'] ?? 0)),
+                'stopped_by_budget' => !empty($operator['last_stopped_by_budget']),
+                'skipped_locked' => !empty($operator['last_skipped_locked']),
+            ],
+        ];
+    }
+
+    /**
+     * @return array<int,mixed>
+     */
+    private static function support_snapshot_current_request_diagnostics(): array
+    {
+        $rows = [];
+        foreach (self::debug_traces() as $trace) {
+            $rows[] = self::support_snapshot_redact_value($trace);
+            if (count($rows) >= self::SUPPORT_SNAPSHOT_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<string,mixed> $operator
+     * @return string[]
+     */
+    private static function support_snapshot_advice(array $operator): array
+    {
+        $advice = [];
+        if (($operator['schema_status'] ?? '') !== 'current') {
+            $advice[] = 'Review the Health schema controls before running indexing work.';
+        }
+        if (!empty($operator['lock_active']) && is_scalar($operator['lock_advice'] ?? null)) {
+            $advice[] = (string) $operator['lock_advice'];
+        }
+
+        $schedule = is_array($operator['queue_processor_schedule'] ?? null) ? $operator['queue_processor_schedule'] : [];
+        if (is_scalar($schedule['advice'] ?? null) && (string) $schedule['advice'] !== '') {
+            $advice[] = (string) $schedule['advice'];
+        }
+
+        $runner = is_array($operator['cron_runner'] ?? null) ? $operator['cron_runner'] : [];
+        if (is_scalar($runner['advice'] ?? null) && (string) $runner['advice'] !== '') {
+            $advice[] = (string) $runner['advice'];
+        }
+
+        if (!empty($operator['stale_debt_active'])) {
+            $advice[] = 'Stale index debt is active; continue bounded Health indexing batches or let WP-Cron process the queue.';
+        } elseif (max(0, (int) ($operator['remaining_count'] ?? 0)) > 0 || max(0, (int) ($operator['pending_queue_count'] ?? 0)) > 0) {
+            $advice[] = 'Indexing work remains; continue bounded Health indexing batches or verify the queue processor is running.';
+        }
+
+        if (max(0, (int) ($operator['last_batch_failures'] ?? 0)) > 0) {
+            $advice[] = 'The latest batch recorded failures; review the redacted latest batch diagnostics before retrying.';
+        }
+
+        $provider = is_array($operator['search_provider_compatibility'] ?? null) ? $operator['search_provider_compatibility'] : [];
+        if (is_scalar($provider['recommendation'] ?? null) && (string) $provider['recommendation'] !== '') {
+            $advice[] = (string) $provider['recommendation'];
+        }
+
+        $language = is_array($operator['language_pack_status'] ?? null) ? $operator['language_pack_status'] : [];
+        if (is_scalar($language['recommendation'] ?? null) && (string) $language['recommendation'] !== '') {
+            $advice[] = (string) $language['recommendation'];
+        }
+
+        if ($advice === []) {
+            $advice[] = 'No immediate action is indicated by the current read-only Health diagnostics.';
+        }
+
+        $bounded = [];
+        foreach ($advice as $item) {
+            $item = self::support_snapshot_redact_string($item, 240);
+            if ($item === '' || in_array($item, $bounded, true)) {
+                continue;
+            }
+            $bounded[] = $item;
+            if (count($bounded) >= self::SUPPORT_SNAPSHOT_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return $bounded;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function support_snapshot_array_section(mixed $value): array
+    {
+        $value = self::support_snapshot_redact_value($value);
+
+        return is_array($value) ? $value : [];
+    }
+
+    private static function support_snapshot_redact_value(mixed $value, int $depth = 0, string $key = ''): mixed
+    {
+        if ($value === null || is_bool($value) || is_int($value) || is_float($value)) {
+            return $value;
+        }
+        if (is_scalar($value)) {
+            return self::support_snapshot_redact_string((string) $value, self::SUPPORT_SNAPSHOT_MAX_JSON_BYTES, $key);
+        }
+        if (!is_array($value)) {
+            return self::debug_truncate_text(get_debug_type($value), 80);
+        }
+        if ($depth >= self::SUPPORT_SNAPSHOT_MAX_DEPTH) {
+            return '[truncated]';
+        }
+
+        $is_list = self::debug_is_list($value);
+        $limit = $is_list ? self::SUPPORT_SNAPSHOT_MAX_LIST_ITEMS : self::SUPPORT_SNAPSHOT_MAX_ASSOC_ITEMS;
+        $redacted = [];
+        foreach ($value as $item_key => $item) {
+            if (count($redacted) >= $limit) {
+                $redacted[$is_list ? count($redacted) : '_truncated'] = true;
+                break;
+            }
+            if ($is_list) {
+                $redacted[] = self::support_snapshot_redact_value($item, $depth + 1);
+                continue;
+            }
+            if (!is_scalar($item_key)) {
+                continue;
+            }
+            $safe_key = self::support_snapshot_redact_key((string) $item_key);
+            $redacted[$safe_key] = self::support_snapshot_redact_value($item, $depth + 1, $safe_key);
+        }
+
+        return $redacted;
+    }
+
+    private static function support_snapshot_redact_key(string $key): string
+    {
+        $key = self::debug_truncate_text($key, 80);
+        $key = preg_replace('#[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.php#i', '[plugin]', $key) ?? $key;
+
+        return $key;
+    }
+
+    private static function support_snapshot_redact_string(string $value, int $max_bytes = 240, string $key = ''): string
+    {
+        $key_lc = strtolower($key);
+        if ($key_lc !== '' && preg_match('/(?:token|secret|password|passwd|credential|api[_-]?key|authorization|cookie|nonce)/i', $key_lc) === 1) {
+            return '[redacted]';
+        }
+
+        $value = self::sanitize_index_failure_text($value, $max_bytes);
+        $value = preg_replace('#(?:^|[\s({\[])(?:/[^/\s]+){2,}(?:/[^/\s),;\]}]+)?#', ' [path]', $value) ?? $value;
+        $value = preg_replace('#[A-Za-z]:\\\\(?:[^\\\\\s]+\\\\)*[^\\\\\s]+#', '[path]', $value) ?? $value;
+        $value = preg_replace('#[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.php#i', '[plugin]', $value) ?? $value;
+        $value = preg_replace('/\bBearer\s+[A-Za-z0-9._~+\/=-]+/i', 'Bearer [redacted]', $value) ?? $value;
+        $value = preg_replace('/\b(?:token|secret|password|passwd|credential|api[_-]?key|authorization|cookie)\s*[:=]\s*[^\s,;&]+/i', '[redacted]', $value) ?? $value;
+        $value = preg_replace('/\b(?:sk_live|sk_test|xox[baprs]-|AKIA)[A-Za-z0-9._-]+/i', '[redacted]', $value) ?? $value;
+        $value = preg_replace('/\bdo-not-expose[A-Za-z0-9._-]*\b/i', '[redacted]', $value) ?? $value;
+        $value = self::debug_truncate_text($value, min($max_bytes, self::SUPPORT_SNAPSHOT_MAX_JSON_BYTES));
+
+        return $value;
+    }
+
+    private static function support_snapshot_plugin_header(string $header, string $fallback): string
+    {
+        $path = dirname(__DIR__) . '/indexer.php';
+        $source = is_file($path) ? file_get_contents($path, false, null, 0, 8192) : false;
+        if (!is_string($source) || $source === '') {
+            return $fallback;
+        }
+
+        $quoted = preg_quote($header, '/');
+        if (preg_match('/^\s*\*\s*' . $quoted . ':\s*(.+)$/mi', $source, $matches) !== 1) {
+            return $fallback;
+        }
+
+        $value = self::debug_truncate_text((string) $matches[1], 120);
+
+        return $value !== '' ? $value : $fallback;
+    }
+
+    private static function support_snapshot_wordpress_version(): string
+    {
+        if (function_exists('get_bloginfo')) {
+            $version = self::debug_truncate_text((string) get_bloginfo('version'), 40);
+            if ($version !== '') {
+                return $version;
+            }
+        }
+
+        $version = $GLOBALS['wp_version'] ?? '';
+
+        return is_scalar($version) ? self::debug_truncate_text((string) $version, 40) : '';
+    }
+
+    /**
+     * @param array<string,mixed> $snapshot
+     */
+    private static function json_encode_support_snapshot(array $snapshot): string
+    {
+        try {
+            $json = json_encode($snapshot, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+        } catch (Throwable $e) {
+            $json = false;
+        }
+
+        return is_string($json) && $json !== '' ? $json : '{"schema":"' . self::SUPPORT_SNAPSHOT_SCHEMA . '","error":"Could not encode support snapshot."}';
     }
 
     /**
@@ -3947,6 +4285,7 @@ final class WP_FTS_Plugin
      */
     public static function render_admin_settings_page(?string $forced_tab = null): void
     {
+        self::$admin_health_support_snapshot_visible = false;
         if (!self::can_manage_admin_sandbox()) {
             echo '<div class="wrap">';
             echo '<h1>Full-Text Search</h1>';
@@ -4127,6 +4466,11 @@ final class WP_FTS_Plugin
             return [self::queue_processor_schedule_notice(self::schedule_queue_processor_for_operator())];
         }
 
+        if ($action === self::ADMIN_HEALTH_SUPPORT_SNAPSHOT_ACTION) {
+            self::$admin_health_support_snapshot_visible = true;
+            return [['info', 'Support snapshot generated below. No indexing, schema repair, queue scheduling, searches, or provider API calls were run.']];
+        }
+
         return [['error', 'Unsupported Health action. No changes were made.']];
     }
 
@@ -4135,6 +4479,7 @@ final class WP_FTS_Plugin
         return match ($action) {
             self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION => 'You do not have permission to repair schema tables.',
             self::ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION => 'You do not have permission to schedule the queue processor.',
+            self::ADMIN_HEALTH_SUPPORT_SNAPSHOT_ACTION => 'You do not have permission to generate the support snapshot.',
             default => 'You do not have permission to index content.',
         };
     }
@@ -4144,6 +4489,7 @@ final class WP_FTS_Plugin
         return match ($action) {
             self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION => 'The schema repair action could not be verified. Reload the page and try again.',
             self::ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION => 'The queue schedule action could not be verified. Reload the page and try again.',
+            self::ADMIN_HEALTH_SUPPORT_SNAPSHOT_ACTION => 'The support snapshot action could not be verified. Reload the page and try again.',
             default => 'The indexing action could not be verified. Reload the page and try again.',
         };
     }
@@ -4533,6 +4879,8 @@ final class WP_FTS_Plugin
         echo '.wp-fts-health-copy{max-width:760px;}';
         echo '.wp-fts-health-table{max-width:760px;margin:8px 0 18px;}';
         echo '.wp-fts-health-table th{width:230px;}';
+        echo '.wp-fts-support-snapshot{max-width:980px;}';
+        echo '.wp-fts-support-snapshot textarea{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;min-height:360px;white-space:pre;}';
         echo '.wp-fts-sandbox-compact-controls{display:flex;flex-wrap:wrap;gap:12px 16px;align-items:flex-end;margin:8px 0 10px;}';
         echo '.wp-fts-sandbox-field{display:flex;flex-direction:column;gap:4px;margin:0;}';
         echo '.wp-fts-sandbox-field label,.wp-fts-sandbox-option-label{font-weight:600;}';
@@ -4659,6 +5007,8 @@ final class WP_FTS_Plugin
             self::render_debug_diagnostics_panel('Request diagnostics', false);
         }
 
+        self::render_health_support_snapshot_controls();
+
         echo '<h3>Schema controls</h3>';
         echo '<p class="wp-fts-health-copy">Repair FTS tables and the stored schema version without indexing content.</p>';
         echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">';
@@ -4674,6 +5024,28 @@ final class WP_FTS_Plugin
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_HEALTH_MANUAL_BATCH_ACTION) . '">';
         echo '<p><button type="submit" class="button button-primary">Index the next batch now</button></p>';
         echo '</form>';
+    }
+
+    private static function render_health_support_snapshot_controls(): void
+    {
+        echo '<h3>Support snapshot</h3>';
+        echo '<p class="wp-fts-health-copy">Generate a bounded, redacted JSON snapshot for support handoff. This is read-only and does not run searches, indexing, schema repair, queue scheduling, or provider API calls.</p>';
+        echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">';
+        self::render_health_nonce_field();
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_HEALTH_SUPPORT_SNAPSHOT_ACTION) . '">';
+        echo '<p><button type="submit" class="button">Generate support snapshot</button></p>';
+        echo '</form>';
+
+        if (!self::$admin_health_support_snapshot_visible) {
+            return;
+        }
+
+        echo '<div class="wp-fts-support-snapshot">';
+        echo '<label for="wp-fts-support-snapshot-json" class="screen-reader-text">Support snapshot JSON</label>';
+        echo '<textarea id="wp-fts-support-snapshot-json" class="large-text code" rows="20" readonly="readonly" spellcheck="false">';
+        echo self::esc_textarea(self::support_snapshot_json());
+        echo '</textarea>';
+        echo '</div>';
     }
 
     private static function render_health_status_row(string $label, string $value): void
@@ -6878,6 +7250,7 @@ final class WP_FTS_Plugin
                 self::ADMIN_HEALTH_MANUAL_BATCH_ACTION,
                 self::ADMIN_HEALTH_REPAIR_SCHEMA_ACTION,
                 self::ADMIN_HEALTH_SCHEDULE_QUEUE_ACTION,
+                self::ADMIN_HEALTH_SUPPORT_SNAPSHOT_ACTION,
             ],
             true
         ) ? $action : '';
@@ -14396,6 +14769,15 @@ WHERE p.post_password = ''
         }
 
         return self::esc_attr($value);
+    }
+
+    private static function esc_textarea(string $value): string
+    {
+        if (function_exists('esc_textarea')) {
+            return (string) esc_textarea($value);
+        }
+
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
     }
 
     private static function esc_html_preserving_marks(string $value): string
