@@ -739,8 +739,55 @@ final class WP_FTS_WPCLI_Command
                 'value' => $this->format_cli_value($value),
             ];
         }
+        array_push($rows, ...$this->search_provider_compatibility_status_rows($data));
 
         $this->format_items($format, $rows, ['field', 'value'], false);
+    }
+
+    /**
+     * Add concise human-table rows for the nested status block while preserving
+     * the original nested key for JSON and existing table consumers.
+     *
+     * @param array<string,mixed> $data
+     * @return array<int,array{field:string,value:string}>
+     */
+    private function search_provider_compatibility_status_rows(array $data): array
+    {
+        $compatibility = $data['search_provider_compatibility'] ?? null;
+        if (!is_array($compatibility)) {
+            return [];
+        }
+
+        $providerNames = [];
+        if (isset($compatibility['known_provider_names']) && is_array($compatibility['known_provider_names'])) {
+            foreach ($compatibility['known_provider_names'] as $name) {
+                $bounded = $this->bounded_cli_text($name, 80);
+                if ($bounded !== '') {
+                    $providerNames[] = $bounded;
+                }
+            }
+        }
+
+        $fields = [
+            'search_provider_compatibility_mode' => $compatibility['mode'] ?? '',
+            'search_provider_compatibility_label' => $compatibility['mode_label'] ?? '',
+            'search_provider_compatibility_debug_value' => $compatibility['mode_debug_value'] ?? '',
+            'search_provider_compatibility_public_site_replacement' => $compatibility['public_site_replacement'] ?? '',
+            'search_provider_compatibility_admin_posts_replacement' => $compatibility['admin_posts_replacement'] ?? '',
+            'search_provider_compatibility_known_provider_count' => $compatibility['known_provider_count'] ?? 0,
+            'search_provider_compatibility_known_provider_names' => implode(', ', $providerNames),
+            'search_provider_compatibility_recommendation' => $compatibility['recommendation'] ?? '',
+        ];
+
+        $rows = [];
+        foreach ($fields as $field => $value) {
+            $rows[] = [
+                'field' => $field,
+                'value' => $this->bounded_cli_text($value, 240),
+            ];
+        }
+
+        return $rows;
     }
 
     /**

@@ -29,6 +29,28 @@ caveats operators need to account for.
   intentionally retains index tables and data. It does not create or delete
   posts, demo content, or analyzer/upload/release artifacts.
 
+## Search Provider Compatibility
+
+The provider compatibility setting is an advisory coexistence control, not a
+certification suite for every search plugin. Known-provider detection can report
+families such as Jetpack Search / Jetpack, SearchWP, Relevanssi, and
+ElasticPress from safe activation, option, class, and function signals, but the
+current repository does not include live end-to-end proof for those providers on
+a real site.
+
+Theme and custom `posts_pre_query` integrations that are not recognized as a
+known provider may only appear in diagnostics as generic hook callback labels.
+The hook pipeline view lists registered callbacks around Language FTS without
+calling them. Callbacks registered after the Language FTS priority can be shown
+as later callbacks, but the diagnostic cannot observe those later callbacks as
+final search winners because they have not run yet at the point Language FTS
+records its trace.
+
+Request diagnostics are request-local and bounded. They help explain the current
+admin or debug-enabled request, but they are not persistent conflict logs,
+historical telemetry, or proof that every provider interaction has been
+observed.
+
 ## Content Scope
 
 - Full WP-CLI reindexing and runtime post-save indexing share the same

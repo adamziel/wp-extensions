@@ -7857,6 +7857,22 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
         'is_deleted' => 0,
     ];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        [
+            'replace_frontend_search' => false,
+            'replace_admin_post_search' => true,
+            'search_provider_compatibility' => 'respect_existing',
+        ]
+    );
+    $GLOBALS['wp_fts_test_options']['active_plugins'] = [
+        'searchwp/index.php',
+        'private-search-provider/secret-basename.php',
+    ];
+    $GLOBALS['wp_fts_test_options']['jetpack_active_modules'] = [
+        'search',
+        'raw-provider-payload-must-not-render',
+    ];
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [702];
     $scheduledAt = $now + 120;
     $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
@@ -7923,6 +7939,9 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
             'storage_backend' => 'mysql',
         ],
     ];
+    $optionsBeforeStatus = $GLOBALS['wp_fts_test_options'];
+    $postRowsBeforeStatus = $fake->postRows;
+    $docsBeforeStatus = $fake->docs;
 
     try {
         $command = new WP_FTS_WPCLI_Command();
@@ -7967,6 +7986,25 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same(false, $runner['alternate_wp_cron'] ?? null, 'status JSON should expose the ALTERNATE_WP_CRON state');
     assert_same(true, $runner['pending_work'] ?? null, 'cron runner diagnostics should reuse pending-work context');
     assert_contains('traffic-triggered', (string) ($runner['advice'] ?? ''), 'cron runner advice should explain traffic-triggered cron mode');
+    $compatibility = $payload['search_provider_compatibility'] ?? null;
+    assert_true(is_array($compatibility), 'status JSON should expose search provider compatibility as a bounded object');
+    assert_same('respect_existing', $compatibility['mode'] ?? null, 'status JSON should expose the effective provider compatibility mode');
+    assert_same('Keep another search provider\'s results', $compatibility['mode_label'] ?? null, 'status JSON should expose the human provider compatibility label');
+    assert_same('respect_existing_provider', $compatibility['mode_debug_value'] ?? null, 'status JSON should expose the debug provider compatibility value');
+    assert_same('disabled', $compatibility['public_site_replacement'] ?? null, 'status JSON should expose public-site replacement state');
+    assert_same(false, $compatibility['public_site_replacement_enabled'] ?? null, 'status JSON should expose public-site replacement boolean');
+    assert_same('enabled', $compatibility['admin_posts_replacement'] ?? null, 'status JSON should expose admin Posts replacement state');
+    assert_same(true, $compatibility['admin_posts_replacement_enabled'] ?? null, 'status JSON should expose admin Posts replacement boolean');
+    assert_same(2, $compatibility['known_provider_count'] ?? null, 'status JSON should expose detected known-provider count');
+    assert_same(['Jetpack Search / Jetpack', 'SearchWP'], $compatibility['known_provider_names'] ?? null, 'status JSON should expose bounded known-provider family names');
+    assert_same('Jetpack Search / Jetpack, SearchWP', $compatibility['known_provider_summary'] ?? null, 'status JSON should expose a known-provider summary without basenames');
+    assert_contains('Keep another search provider\'s results is appropriate', (string) ($compatibility['recommendation'] ?? ''), 'status JSON should expose mode-specific provider recommendation');
+    assert_contains('not an end-to-end integration certification', (string) ($compatibility['detection_note'] ?? ''), 'status JSON should expose the advisory-only detection boundary');
+    assert_contains('Jetpack Search / Jetpack, SearchWP', (string) ($compatibility['advisory'] ?? ''), 'status JSON should expose concise provider advisory text');
+    $compatibilityJson = json_encode($compatibility, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    assert_true(!str_contains($compatibilityJson, 'searchwp/index.php'), 'provider compatibility JSON should not expose raw plugin basenames');
+    assert_true(!str_contains($compatibilityJson, 'secret-basename.php'), 'provider compatibility JSON should not expose unknown active plugin basenames');
+    assert_true(!str_contains($compatibilityJson, 'raw-provider-payload-must-not-render'), 'provider compatibility JSON should not expose arbitrary provider option payloads');
     assert_same('active', $payload['lock_state'] ?? null, 'status JSON should report lock state without exposing the token');
     assert_same(true, $payload['lock_active'] ?? null, 'status JSON should report active lock boolean');
     assert_true(is_int($payload['lock_age_seconds'] ?? null), 'status JSON should expose bounded lock age');
@@ -8016,12 +8054,29 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_true(!str_contains(json_encode($diagnostics, JSON_THROW_ON_ERROR), 'SELECT * FROM'), 'status diagnostics should not expose raw SQL');
     assert_contains("queue_processor_schedule\t", $human, 'default status output should include queue processor schedule');
     assert_contains("cron_runner\t", $human, 'default status output should include cron runner diagnostics');
+    assert_contains("search_provider_compatibility\t", $human, 'default status output should preserve the nested provider compatibility row');
+    assert_contains("search_provider_compatibility_mode\trespect_existing", $human, 'default status output should expose provider compatibility mode');
+    assert_contains("search_provider_compatibility_label\tKeep another search provider's results", $human, 'default status output should expose provider compatibility label');
+    assert_contains("search_provider_compatibility_public_site_replacement\tdisabled", $human, 'default status output should expose public-site replacement state');
+    assert_contains("search_provider_compatibility_admin_posts_replacement\tenabled", $human, 'default status output should expose admin Posts replacement state');
+    assert_contains("search_provider_compatibility_known_provider_count\t2", $human, 'default status output should expose known-provider count');
+    assert_contains("search_provider_compatibility_known_provider_names\tJetpack Search / Jetpack, SearchWP", $human, 'default status output should expose bounded known-provider names');
+    assert_contains("search_provider_compatibility_recommendation\tKeep another search provider's results is appropriate", $human, 'default status output should expose provider compatibility recommendation');
+    assert_true(!str_contains($human, 'searchwp/index.php'), 'default status output should not expose raw plugin basenames');
+    assert_true(!str_contains($human, 'secret-basename.php'), 'default status output should not expose unknown active plugin basenames');
+    assert_true(!str_contains($human, 'raw-provider-payload-must-not-render'), 'default status output should not expose arbitrary provider option payloads');
     assert_contains("lock_age_seconds\t", $human, 'default status output should include lock age');
     assert_contains("lock_advice\tAnother index writer is running", $human, 'default status output should include lock advice');
     assert_contains("lock\t", $human, 'default status output should include nested sanitized lock diagnostics');
     assert_same([WP_FTS_Plugin::CRON_HOOK, WP_FTS_Plugin::CRON_HOOK], $GLOBALS['wp_fts_test_next_scheduled_calls'], 'status should inspect the cron schedule without mutating it');
     assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'status should not schedule queue processors while rendering status');
     assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'status should not clear queue processor events while rendering status');
+    assert_same([], $GLOBALS['wp_fts_test_added_options'], 'status should not add options while rendering provider compatibility status');
+    assert_same([], $GLOBALS['wp_fts_test_updated_options'], 'status should not update options while rendering provider compatibility status');
+    assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'status should not delete options while rendering provider compatibility status');
+    assert_same($optionsBeforeStatus, $GLOBALS['wp_fts_test_options'], 'status should leave settings, provider signals, queue, health, and lock options unchanged');
+    assert_same($postRowsBeforeStatus, $fake->postRows, 'status should not mutate source post rows');
+    assert_same($docsBeforeStatus, $fake->docs, 'status should not mutate index document rows');
     assert_same([], $fake->queries, 'status should not run schema repair or storage writes');
     assert_same([702], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'status should leave queue state unchanged');
     assert_same('do-not-expose', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'status should leave lock state unchanged');

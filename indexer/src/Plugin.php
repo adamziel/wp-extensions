@@ -921,6 +921,7 @@ final class WP_FTS_Plugin
             'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
             'queue_processor_schedule' => $queue_processor_schedule,
             'cron_runner' => $cron_runner,
+            'search_provider_compatibility' => self::operator_search_provider_compatibility_status(),
             'lock_state' => $lock['state'],
             'lock_active' => (bool) $lock['active'],
             'lock_mode' => $lock['mode'],
@@ -956,6 +957,68 @@ final class WP_FTS_Plugin
             'indexed_count' => $indexed_count,
             'remaining_count' => $remaining_count,
             'latest_batch_diagnostics' => self::latest_index_batch_diagnostics_from_health($health),
+        ];
+    }
+
+    /**
+     * Return a bounded, read-only search-provider compatibility summary for
+     * operator surfaces. This intentionally uses the existing safe provider
+     * advisory and does not inspect callbacks, invoke provider APIs, run
+     * searches, or expose plugin basenames.
+     *
+     * @return array{
+     *   mode:string,
+     *   mode_label:string,
+     *   mode_debug_value:string,
+     *   public_site_replacement:string,
+     *   public_site_replacement_enabled:bool,
+     *   admin_posts_replacement:string,
+     *   admin_posts_replacement_enabled:bool,
+     *   known_provider_count:int,
+     *   known_provider_names:string[],
+     *   known_provider_summary:string,
+     *   advisory:string,
+     *   recommendation:string,
+     *   detection_note:string
+     * }
+     */
+    private static function operator_search_provider_compatibility_status(): array
+    {
+        $settings = self::settings();
+        $mode = self::sanitize_search_provider_compatibility(
+            $settings['search_provider_compatibility'] ?? null,
+            self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS
+        );
+        $advisory = self::known_search_provider_advisory(array_replace($settings, [
+            'search_provider_compatibility' => $mode,
+        ]));
+        $provider_names = is_array($advisory['provider_names'] ?? null)
+            ? self::debug_normalize_list($advisory['provider_names'])
+            : [];
+        $summary = is_scalar($advisory['summary'] ?? null)
+            ? self::debug_truncate_text((string) $advisory['summary'], self::DEBUG_MAX_TEXT_BYTES)
+            : self::known_search_provider_summary($provider_names);
+        $recommendation = is_scalar($advisory['recommendation'] ?? null)
+            ? self::debug_truncate_text((string) $advisory['recommendation'], 240)
+            : '';
+        $detection_note = is_scalar($advisory['detection_note'] ?? null)
+            ? self::debug_truncate_text((string) $advisory['detection_note'], 240)
+            : '';
+
+        return [
+            'mode' => $mode,
+            'mode_label' => self::search_provider_compatibility_label($mode),
+            'mode_debug_value' => self::search_provider_compatibility_debug_value($mode),
+            'public_site_replacement' => !empty($settings['replace_frontend_search']) ? 'enabled' : 'disabled',
+            'public_site_replacement_enabled' => !empty($settings['replace_frontend_search']),
+            'admin_posts_replacement' => !empty($settings['replace_admin_post_search']) ? 'enabled' : 'disabled',
+            'admin_posts_replacement_enabled' => !empty($settings['replace_admin_post_search']),
+            'known_provider_count' => max(0, (int) ($advisory['detected_count'] ?? count($provider_names))),
+            'known_provider_names' => $provider_names,
+            'known_provider_summary' => $summary,
+            'advisory' => trim($summary . ($recommendation !== '' ? '. ' . $recommendation : '')),
+            'recommendation' => $recommendation,
+            'detection_note' => $detection_note,
         ];
     }
 
