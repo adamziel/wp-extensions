@@ -3396,6 +3396,7 @@ final class WP_FTS_Plugin
                 'lang' => ['required' => false],
                 'mode' => ['required' => false],
                 'limit' => ['required' => false],
+                'explain' => ['required' => false],
             ],
         ]);
     }
@@ -9408,6 +9409,10 @@ JS;
             $search_args['prefix_matching'] = $prefix_matching;
         }
 
+        if (self::rest_explain_requested($request) && self::current_user_can_search_explain()) {
+            return self::search_visible_payload($query, $search_args, true);
+        }
+
         return [
             'results' => self::search($query, $search_args),
         ];
@@ -9420,9 +9425,41 @@ JS;
      */
     public static function search(string $query, array $opts = []): array
     {
+        return self::search_visible_payload($query, $opts, false)['results'];
+    }
+
+    /**
+     * Search the index and include operator-only bounded explain diagnostics.
+     *
+     * Callers without the operator capability receive the normal visible rows
+     * plus a small unavailable marker, never the internal explain payload.
+     *
+     * @return array{results:array<int,array<string,mixed>>,explain?:array<string,mixed>,explain_available?:bool,explain_unavailable_reason?:string}
+     */
+    public static function search_with_explain(string $query, array $opts = []): array
+    {
+        if (!self::current_user_can_search_explain()) {
+            return [
+                'results' => self::search($query, $opts),
+                'explain_available' => false,
+                'explain_unavailable_reason' => 'not_authorized',
+            ];
+        }
+
+        return self::search_visible_payload($query, $opts, true);
+    }
+
+    /**
+     * Search the index and return visible rows, optionally with filtered explain.
+     *
+     * @param array<string,mixed> $opts
+     * @return array{results:array<int,array<string,mixed>>,explain?:array<string,mixed>}
+     */
+    private static function search_visible_payload(string $query, array $opts = [], bool $include_explain = false): array
+    {
         $query = trim($query);
         if ($query === '') {
-            return [];
+            return ['results' => []];
         }
 
         $limit = self::clamp_int($opts['limit'] ?? 10, 1, self::MAX_SEARCH_LIMIT);
@@ -9436,15 +9473,33 @@ JS;
         if (isset($opts['lang']) && is_scalar($opts['lang']) && trim((string) $opts['lang']) !== '') {
             $search_options['lang'] = (string) $opts['lang'];
         }
+        if ($include_explain) {
+            $search_options['include_total'] = true;
+            $search_options['explain'] = true;
+            $search_options['explain_result_matches'] = true;
+        }
 
         $searcher = new WP_FTS_Searcher(self::storage(false), self::runtime_analyzer());
         $visible = [];
+        $explain = [];
+        $explain_rows_by_doc = [];
         $offset = 0;
         $batch_limit = self::visibility_refill_batch_limit($limit);
         while (count($visible) < $limit && $offset < self::VISIBILITY_REFILL_MAX_SCAN) {
             $search_options['limit'] = min($batch_limit, self::VISIBILITY_REFILL_MAX_SCAN - $offset);
             $search_options['offset'] = $offset;
-            $rows = $searcher->search($query, $search_options);
+            $payload = $searcher->search($query, $search_options);
+            if ($include_explain) {
+                $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
+                if (is_array($payload['explain'] ?? null)) {
+                    $explain = $payload['explain'];
+                    foreach (self::search_explain_results_by_doc($payload['explain']['results'] ?? null) as $doc_id => $row) {
+                        $explain_rows_by_doc[$doc_id] = $row;
+                    }
+                }
+            } else {
+                $rows = $payload;
+            }
             if ($rows === []) {
                 break;
             }
@@ -9471,11 +9526,73 @@ JS;
         if (function_exists('apply_filters')) {
             $filtered = apply_filters('wp_fts_search_results', $visible, $query, $opts);
             if (is_array($filtered)) {
-                return $filtered;
+                $visible = $filtered;
             }
         }
 
-        return $visible;
+        $result = ['results' => $visible];
+        if ($include_explain) {
+            $result['explain'] = self::filter_search_explain_for_results($explain, $visible, $explain_rows_by_doc);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param mixed $rows
+     * @return array<int,array<string,mixed>>
+     */
+    private static function search_explain_results_by_doc(mixed $rows): array
+    {
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $by_doc = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $doc_id = max(0, (int) ($row['doc_id'] ?? 0));
+            if ($doc_id > 0) {
+                $by_doc[$doc_id] = $row;
+            }
+        }
+
+        return $by_doc;
+    }
+
+    /**
+     * Keep per-result explain rows aligned to visible returned rows only.
+     *
+     * @param array<string,mixed> $explain
+     * @param array<int,array<string,mixed>> $results
+     * @param array<int,array<string,mixed>> $explain_rows_by_doc
+     * @return array<string,mixed>
+     */
+    private static function filter_search_explain_for_results(array $explain, array $results, array $explain_rows_by_doc): array
+    {
+        $filtered_rows = [];
+        foreach ($results as $result) {
+            if (!is_array($result)) {
+                continue;
+            }
+            $doc_id = max(0, (int) ($result['doc_id'] ?? 0));
+            if ($doc_id <= 0 || !self::can_read_post_result($doc_id) || !isset($explain_rows_by_doc[$doc_id])) {
+                continue;
+            }
+
+            $filtered_rows[] = $explain_rows_by_doc[$doc_id];
+        }
+
+        $explain['results'] = $filtered_rows;
+
+        return $explain;
+    }
+
+    private static function current_user_can_search_explain(): bool
+    {
+        return function_exists('current_user_can') && current_user_can(self::ADMIN_CAPABILITY);
     }
 
     /**
@@ -14011,6 +14128,11 @@ WHERE p.post_password = ''
 
         $mode = strtoupper(trim((string) $mode));
         return in_array($mode, ['OR', 'AND'], true) ? $mode : null;
+    }
+
+    private static function rest_explain_requested(mixed $request): bool
+    {
+        return self::truthy_admin_value(self::request_param($request, 'explain', false));
     }
 
     /**

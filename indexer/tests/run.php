@@ -10200,6 +10200,69 @@ test_case('password-protected published posts are not queued indexed or exposed'
     }
 });
 
+function wp_fts_test_with_rest_explain_index(callable $callback): void
+{
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $public = (object) [
+        'ID' => 231,
+        'post_title' => 'Public explain parity',
+        'post_content' => '<p>parityneedle visible content</p>',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-21 00:00:00',
+    ];
+    $private = (object) [
+        'ID' => 232,
+        'post_title' => 'Private explain parity',
+        'post_content' => '<p>parityneedle hidden content</p>',
+        'post_status' => 'private',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-21 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][231] = $public;
+    $GLOBALS['wp_fts_test_posts'][232] = $private;
+
+    try {
+        $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), WP_FTS_Plugin::runtime_analyzer());
+        $indexer->index_document_fields(231, [
+            ['name' => 'content', 'text' => 'parityneedle visible content', 'boost' => 1.0],
+        ], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 231,
+                'post_type' => 'post',
+                'post_status' => 'publish',
+                'post_date_gmt' => '2026-06-21 00:00:00',
+                'title' => 'Public explain parity',
+                'search_text' => 'parityneedle visible content',
+            ],
+        ]);
+        $indexer->index_document_fields(232, [
+            ['name' => 'content', 'text' => 'parityneedle hidden content', 'boost' => 1.0],
+        ], [
+            'lang' => 'en',
+            'metadata' => [
+                'post_id' => 232,
+                'post_type' => 'post',
+                'post_status' => 'private',
+                'post_date_gmt' => '2026-06-21 00:00:00',
+                'title' => 'Private explain parity',
+                'search_text' => 'parityneedle hidden content',
+            ],
+        ]);
+
+        $callback($fake);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+}
+
 test_case('REST search surface filters private results by capability', function (): void {
     global $wpdb;
 
@@ -10234,6 +10297,7 @@ test_case('REST search surface filters private results by capability', function 
         assert_true(is_callable($route['args']['permission_callback'] ?? null), 'REST search route should have a callable permission callback');
         assert_same(false, $route['args']['args']['q']['required'] ?? null, 'REST q parameter should not block the query alias during route validation');
         assert_same(false, $route['args']['args']['query']['required'] ?? null, 'REST query alias should be optional and validated by the callback');
+        assert_same(false, $route['args']['args']['explain']['required'] ?? null, 'REST explain parameter should be optional and callback-gated');
 
         $indexer = new WP_FTS_Indexer(WP_FTS_Plugin::storage(true), new WP_FTS_Analyzer());
         $indexer->index_post($public);
@@ -10241,12 +10305,17 @@ test_case('REST search surface filters private results by capability', function 
 
         assert_same([201], array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id'), 'public search should hide indexed private posts without read capability');
 
+        $unauthorizedExplain = WP_FTS_Plugin::rest_search(['q' => 'shared', 'limit' => 10, 'explain' => '1']);
+        assert_same(['results'], array_keys($unauthorizedExplain), 'unauthorized REST explain should keep the public results-only shape');
+        assert_same([201], array_column($unauthorizedExplain['results'], 'doc_id'), 'unauthorized REST explain should not leak private rows');
+
         $GLOBALS['wp_fts_test_caps']['read_post'][202] = true;
         $ids = array_column(WP_FTS_Plugin::search('shared', ['limit' => 10]), 'doc_id');
         sort($ids, SORT_NUMERIC);
         assert_same([201, 202], $ids, 'search should include private indexed posts when the visitor can read them');
 
         $response = WP_FTS_Plugin::rest_search(['q' => 'shared', 'limit' => 1]);
+        assert_same(['results'], array_keys($response), 'REST search without explain should keep the results-only response shape');
         assert_same(1, count($response['results']), 'REST search should honor the request limit');
         assert_true(in_array($response['results'][0]['doc_id'], [201, 202], true), 'REST search should return ranked result rows');
 
@@ -10258,6 +10327,61 @@ test_case('REST search surface filters private results by capability', function 
     } finally {
         $wpdb = $oldWpdb;
     }
+});
+
+test_case('REST search explain is operator-gated and filtered to visible rows', function (): void {
+    wp_fts_test_with_rest_explain_index(static function (): void {
+        $public = WP_FTS_Plugin::rest_search(['q' => 'parityneedle', 'limit' => 10, 'explain' => 'yes']);
+        assert_same(['results'], array_keys($public), 'public REST explain requests should not receive diagnostics');
+        assert_same([231], array_column($public['results'], 'doc_id'), 'public REST explain should still filter hidden rows');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $operator = WP_FTS_Plugin::rest_search(['q' => 'parityneedle', 'limit' => 10, 'explain' => '1']);
+        $explain = is_array($operator['explain'] ?? null) ? $operator['explain'] : [];
+
+        assert_same([231], array_column($operator['results'], 'doc_id'), 'operator REST explain should keep normal visibility filtering');
+        assert_true(is_array($explain['query_plan'] ?? null), 'operator REST explain should include query_plan diagnostics');
+        assert_true(is_array($explain['fast_mode'] ?? null), 'operator REST explain should include fast_mode diagnostics');
+        assert_true(is_array($explain['scoring'] ?? null), 'operator REST explain should include scoring diagnostics');
+        assert_same([231], array_column($explain['results'] ?? [], 'doc_id'), 'operator REST explain rows should match returned visible doc IDs');
+        assert_true(is_array($explain['results'][0]['matches'] ?? null), 'operator REST explain should include per-result matches');
+        assert_true(($explain['results'][0]['matches'] ?? []) !== [], 'operator REST explain should include at least one matched term');
+        assert_true(is_array($explain['results'][0]['field_matches'] ?? null), 'operator REST explain should include per-result field matches');
+        assert_true(($explain['results'][0]['field_matches'] ?? []) !== [], 'operator REST explain should include at least one field match');
+    });
+});
+
+test_case('REST search explain returns bounded context for empty visible result sets', function (): void {
+    wp_fts_test_with_rest_explain_index(static function (): void {
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $response = WP_FTS_Plugin::rest_search(['q' => 'missingneedle', 'limit' => 10, 'explain' => true]);
+
+        assert_same([], $response['results'] ?? null, 'empty operator REST explain should return an empty result list');
+        assert_true(is_array($response['explain']['query_plan'] ?? null), 'empty operator REST explain should include query_plan diagnostics');
+        assert_true(is_array($response['explain']['fast_mode'] ?? null), 'empty operator REST explain should include fast_mode diagnostics');
+        assert_true(is_array($response['explain']['scoring'] ?? null), 'empty operator REST explain should include scoring diagnostics');
+        assert_same([], $response['explain']['results'] ?? null, 'empty operator REST explain should include no per-result diagnostics');
+    });
+});
+
+test_case('PHP search_with_explain is operator-gated and mirrors REST explain visibility', function (): void {
+    wp_fts_test_with_rest_explain_index(static function (): void {
+        $unauthorized = WP_FTS_Plugin::search_with_explain('parityneedle', ['limit' => 10]);
+        assert_same([231], array_column($unauthorized['results'], 'doc_id'), 'unauthorized PHP explain helper should keep visible search rows');
+        assert_same(false, $unauthorized['explain_available'] ?? null, 'unauthorized PHP explain helper should report explain unavailable');
+        assert_same('not_authorized', $unauthorized['explain_unavailable_reason'] ?? null, 'unauthorized PHP explain helper should identify authorization gating');
+        assert_true(!array_key_exists('explain', $unauthorized), 'unauthorized PHP explain helper should not expose diagnostics');
+
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $authorized = WP_FTS_Plugin::search_with_explain('parityneedle', ['limit' => 10]);
+        $explain = is_array($authorized['explain'] ?? null) ? $authorized['explain'] : [];
+
+        assert_same([231], array_column($authorized['results'], 'doc_id'), 'authorized PHP explain helper should keep visible search rows');
+        assert_true(is_array($explain['query_plan'] ?? null), 'authorized PHP explain helper should include query_plan diagnostics');
+        assert_true(is_array($explain['scoring'] ?? null), 'authorized PHP explain helper should include scoring diagnostics');
+        assert_same([231], array_column($explain['results'] ?? [], 'doc_id'), 'authorized PHP explain helper should filter explain rows to returned visible doc IDs');
+        assert_true(($explain['results'][0]['field_matches'] ?? []) !== [], 'authorized PHP explain helper should include field matches for returned rows');
+    });
 });
 
 test_case('REST search returns explicit 400 errors for missing query and invalid mode', function (): void {

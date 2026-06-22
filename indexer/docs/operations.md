@@ -285,7 +285,48 @@ diagnostics report whether the boost applied.
 The plugin registers a `wp-fts/v1/search` REST helper and a PHP
 `WP_FTS_Plugin::search()` helper. Both rely on WordPress post visibility checks
 so public results are returned only for readable posts; private results require
-the current user to pass `read_post`.
+the current user to pass `read_post`. By default both helpers return only
+visible ranked rows:
+
+```sh
+curl 'https://example.test/wp-json/wp-fts/v1/search?q=release%20notes'
+```
+
+The default REST response shape is:
+
+```json
+{"results":[{"doc_id":123,"score":1.25}]}
+```
+
+The default PHP helper remains:
+
+```php
+$rows = WP_FTS_Plugin::search('release notes', ['limit' => 10]);
+```
+
+Operators who can `manage_options` can request the same bounded structured
+explain diagnostics used by WP-CLI, Debug Bar/Health, and the Sandbox:
+
+```sh
+curl -H 'X-WP-Nonce: ...' \
+  'https://example.test/wp-json/wp-fts/v1/search?q=release%20notes&explain=1'
+```
+
+Authorized REST explain responses add an `explain` object beside `results`.
+That object contains bounded `query_plan`, `fast_mode`, `scoring`, recency, and
+per-result match diagnostics. Per-result explain rows are filtered to the
+returned visible result IDs. Public or unauthorized `explain=1` requests keep
+the normal `results`-only response and do not expose diagnostics.
+
+PHP callers that need parity can use the explicit opt-in helper:
+
+```php
+$payload = WP_FTS_Plugin::search_with_explain('release notes', ['limit' => 10]);
+```
+
+For callers without `manage_options`, `search_with_explain()` returns normal
+visible `results` with `explain_available` set to `false` and no diagnostic
+payload.
 
 ## Admin Settings And Diagnostics
 

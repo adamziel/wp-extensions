@@ -51,6 +51,11 @@ admin or debug-enabled request, but they are not persistent conflict logs,
 historical telemetry, or proof that every provider interaction has been
 observed.
 
+The public REST search helper remains intentionally minimal. Visitors and
+callers without `manage_options` receive only visible `results`, even if they
+pass `explain=1`; structured explain diagnostics are operator-only and are
+filtered to the visible rows returned in that response.
+
 ## Content Scope
 
 - Full WP-CLI reindexing and runtime post-save indexing share the same
