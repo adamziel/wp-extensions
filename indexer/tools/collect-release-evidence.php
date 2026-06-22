@@ -449,7 +449,8 @@ final class WP_FTS_ReleaseEvidenceCollector
         }
 
         $result = $this->run_raw_command($args, $pluginSource, $timeout);
-        $status = $this->status_from_command_output($result);
+        $lifecycleReport = $this->decode_lifecycle_smoke_report($result['stdout']);
+        $status = $this->status_from_lifecycle_command_output($result, $lifecycleReport);
 
         return [
             'id' => 'docker_disposable_lifecycle_smoke',
@@ -457,13 +458,15 @@ final class WP_FTS_ReleaseEvidenceCollector
             'status' => $status,
             'command' => self::display_command($args, ''),
             'exit_code' => $result['exit'],
-            'summary' => $this->command_summary($status, $result),
+            'summary' => $this->lifecycle_command_summary($status, $result, $lifecycleReport),
             'details' => [
                 'stdout_excerpt' => self::sanitize_text($result['stdout'], self::OUTPUT_EXCERPT_BYTES),
                 'stderr_excerpt' => self::sanitize_text($result['stderr'], self::OUTPUT_EXCERPT_BYTES),
                 'stdout_truncated' => !empty($result['stdout_truncated']),
                 'stderr_truncated' => !empty($result['stderr_truncated']),
                 'timed_out' => !empty($result['timed_out']),
+                'lifecycle_report_schema' => is_array($lifecycleReport) ? ($lifecycleReport['schema'] ?? null) : null,
+                'lifecycle_report_status' => is_array($lifecycleReport) ? ($lifecycleReport['status'] ?? null) : null,
                 'target_policy' => 'direct-install/operator lifecycle evidence only; not public-submission readiness',
                 'multisite_policy' => 'single-site Docker lifecycle proof only; multisite lifecycle proof is explicitly not run by this lane',
             ],
@@ -749,25 +752,101 @@ final class WP_FTS_ReleaseEvidenceCollector
      */
     private function decode_json_object(string $output): ?array
     {
-        $trimmed = trim($output);
-        if ($trimmed === '') {
-            return null;
+        foreach (self::decode_json_objects($output) as $decoded) {
+            return $decoded;
         }
 
-        $start = strpos($trimmed, '{');
-        $end = strrpos($trimmed, '}');
-        if ($start === false || $end === false || $end < $start) {
-            return null;
+        return null;
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function decode_lifecycle_smoke_report(string $output): ?array
+    {
+        foreach (self::decode_json_objects($output) as $decoded) {
+            if (($decoded['schema'] ?? null) === 'wp-fts-disposable-lifecycle-smoke-v1') {
+                return $decoded;
+            }
+            if (($decoded['schema'] ?? null) === 'wp-fts-disposable-lifecycle-wrapper-proof-v1') {
+                return [
+                    'schema' => $decoded['inner_report_schema'] ?? null,
+                    'status' => $decoded['inner_report_status'] ?? null,
+                    'wrapper_proof_schema' => $decoded['schema'],
+                ];
+            }
         }
 
-        $json = substr($trimmed, $start, $end - $start + 1);
-        try {
-            $decoded = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
-        } catch (JsonException) {
-            return null;
+        return null;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private static function decode_json_objects(string $output): array
+    {
+        $objects = [];
+        $length = strlen($output);
+
+        for ($start = 0; $start < $length; $start++) {
+            if ($output[$start] !== '{') {
+                continue;
+            }
+
+            $depth = 0;
+            $inString = false;
+            $escaped = false;
+            for ($position = $start; $position < $length; $position++) {
+                $char = $output[$position];
+                if ($inString) {
+                    if ($escaped) {
+                        $escaped = false;
+                        continue;
+                    }
+                    if ($char === '\\') {
+                        $escaped = true;
+                        continue;
+                    }
+                    if ($char === '"') {
+                        $inString = false;
+                    }
+                    continue;
+                }
+
+                if ($char === '"') {
+                    $inString = true;
+                    continue;
+                }
+                if ($char === '{') {
+                    $depth++;
+                    continue;
+                }
+                if ($char !== '}') {
+                    continue;
+                }
+
+                $depth--;
+                if ($depth !== 0) {
+                    continue;
+                }
+
+                $json = substr($output, $start, $position - $start + 1);
+                try {
+                    $decoded = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
+                } catch (JsonException) {
+                    $start = $position;
+                    break;
+                }
+
+                if (is_array($decoded)) {
+                    $objects[] = $decoded;
+                }
+                $start = $position;
+                break;
+            }
         }
 
-        return is_array($decoded) ? $decoded : null;
+        return $objects;
     }
 
     /**
@@ -787,6 +866,31 @@ final class WP_FTS_ReleaseEvidenceCollector
     }
 
     /**
+     * @param array{exit:int,stdout:string,stderr:string,timed_out?:bool} $result
+     * @param array<string,mixed>|null $lifecycleReport
+     */
+    private function status_from_lifecycle_command_output(array $result, ?array $lifecycleReport): string
+    {
+        $output = ltrim($result['stdout'] . $result['stderr']);
+        if (str_starts_with($output, 'SKIP:')) {
+            return 'skip';
+        }
+        if (!empty($result['timed_out'])) {
+            return 'fail';
+        }
+
+        $reportStatus = is_array($lifecycleReport) ? (string) ($lifecycleReport['status'] ?? '') : '';
+        if ($reportStatus === 'passed') {
+            return $result['exit'] === 0 ? 'pass' : 'fail';
+        }
+        if (in_array($reportStatus, ['skipped', 'skip', 'unavailable'], true)) {
+            return 'skip';
+        }
+
+        return 'fail';
+    }
+
+    /**
      * @param array{stdout:string,stderr:string,timed_out?:bool} $result
      */
     private function command_summary(string $status, array $result): string
@@ -803,6 +907,26 @@ final class WP_FTS_ReleaseEvidenceCollector
         }
 
         return 'Command failed: ' . self::sanitize_text($output, 400);
+    }
+
+    /**
+     * @param array{stdout:string,stderr:string,timed_out?:bool} $result
+     * @param array<string,mixed>|null $lifecycleReport
+     */
+    private function lifecycle_command_summary(string $status, array $result, ?array $lifecycleReport): string
+    {
+        $reportStatus = is_array($lifecycleReport) ? (string) ($lifecycleReport['status'] ?? '') : '';
+        if ($status === 'pass') {
+            return 'Docker lifecycle smoke completed with inner lifecycle report status passed.';
+        }
+        if (in_array($reportStatus, ['skipped', 'skip', 'unavailable'], true)) {
+            return 'Inner lifecycle smoke reported status ' . self::sanitize_text($reportStatus, 80) . '; not treated as lifecycle proof.';
+        }
+        if ($status === 'fail' && $reportStatus === '') {
+            return 'Docker lifecycle smoke did not emit a parseable inner lifecycle report with status passed.';
+        }
+
+        return $this->command_summary($status, $result);
     }
 
     /**

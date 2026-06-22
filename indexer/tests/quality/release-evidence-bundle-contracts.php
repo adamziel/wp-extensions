@@ -193,6 +193,24 @@ function wp_fts_release_evidence_contract_lane_ids(array $report): array
     return $ids;
 }
 
+function wp_fts_release_evidence_contract_lifecycle_output(string $status): string
+{
+    $json = json_encode([
+        'schema' => 'wp-fts-disposable-lifecycle-wrapper-proof-v1',
+        'inner_report_schema' => 'wp-fts-disposable-lifecycle-smoke-v1',
+        'inner_report_status' => $status,
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    if (!is_string($json)) {
+        throw new RuntimeException('Could not encode fake lifecycle report.');
+    }
+
+    return "INFO: Running disposable lifecycle smoke against source-copy plugin\n"
+        . $json . "\n"
+        . ($status === 'passed'
+            ? "PASS: Disposable WordPress lifecycle smoke completed.\nPASS: Running disposable lifecycle smoke against source-copy plugin\n"
+            : "SKIP: Lifecycle preconditions were not met.\nPASS: Running disposable lifecycle smoke against source-copy plugin\n");
+}
+
 function wp_fts_release_evidence_contract_fake_runner(): callable
 {
     return static function (array $command, string $cwd, int $timeout): array {
@@ -267,7 +285,8 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
         if (($command[0] ?? '') === 'tools/run-disposable-lifecycle-smoke.sh') {
             return [
                 'exit' => 0,
-                'stdout' => "PASS: Docker disposable lifecycle smoke completed.\n",
+                'stdout' => wp_fts_release_evidence_contract_lifecycle_output('passed')
+                    . "PASS: Docker disposable lifecycle smoke completed.\n",
                 'stderr' => '',
             ];
         }
@@ -286,9 +305,21 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
  */
 function wp_fts_release_evidence_contract_fake_report(array $options): array
 {
+    return wp_fts_release_evidence_contract_fake_report_with_runner(
+        wp_fts_release_evidence_contract_fake_runner(),
+        $options
+    );
+}
+
+/**
+ * @param array<string,mixed> $options
+ * @return array<string,mixed>
+ */
+function wp_fts_release_evidence_contract_fake_report_with_runner(callable $runner, array $options): array
+{
     $root = dirname(__DIR__, 2);
     $collector = new WP_FTS_ReleaseEvidenceCollector(
-        wp_fts_release_evidence_contract_fake_runner(),
+        $runner,
         wp_fts_release_evidence_contract_clean_env()
     );
 
@@ -392,8 +423,59 @@ test_case('quality release evidence collector runs Docker lifecycle smokes only 
     $optInDetails = is_array($optInLane['details'] ?? null) ? $optInLane['details'] : [];
     wp_fts_release_evidence_contract_same('pass', $optInLane['status'] ?? null, 'Docker lifecycle smoke lane should run through the shell wrapper when opted in');
     wp_fts_release_evidence_contract_same('tools/run-disposable-lifecycle-smoke.sh', $optInLane['command'] ?? null, 'Docker lifecycle lane should report the shell wrapper command');
+    wp_fts_release_evidence_contract_same('passed', $optInDetails['lifecycle_report_status'] ?? null, 'Docker lifecycle lane should require a passed inner lifecycle report');
     wp_fts_release_evidence_contract_contains('not public-submission readiness', (string) ($optInDetails['target_policy'] ?? ''), 'Docker lifecycle lane should keep target policy explicit');
     wp_fts_release_evidence_contract_contains('multisite lifecycle proof is explicitly not run', (string) ($optInDetails['multisite_policy'] ?? ''), 'Docker lifecycle lane should keep multisite boundary explicit');
+});
+
+test_case('quality release evidence collector does not pass Docker lifecycle lane when inner report is skipped', function (): void {
+    $base = wp_fts_release_evidence_contract_fake_runner();
+    $runner = static function (array $command, string $cwd, int $timeout) use ($base): array {
+        if (($command[0] ?? '') === 'tools/run-disposable-lifecycle-smoke.sh') {
+            return [
+                'exit' => 0,
+                'stdout' => wp_fts_release_evidence_contract_lifecycle_output('skipped'),
+                'stderr' => '',
+            ];
+        }
+
+        return $base($command, $cwd, $timeout);
+    };
+
+    $lane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report_with_runner($runner, ['run_docker_lifecycle_smokes' => true]),
+        'docker_disposable_lifecycle_smoke'
+    );
+    $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
+
+    wp_fts_release_evidence_contract_same('skip', $lane['status'] ?? null, 'inner lifecycle skipped report must not become Docker lifecycle pass');
+    wp_fts_release_evidence_contract_same('skipped', $details['lifecycle_report_status'] ?? null, 'collector should record the skipped inner lifecycle report status');
+    wp_fts_release_evidence_contract_contains('not treated as lifecycle proof', (string) ($lane['summary'] ?? ''), 'collector should explain skipped inner lifecycle evidence is not proof');
+});
+
+test_case('quality release evidence collector does not pass Docker lifecycle lane from wrapper PASS text alone', function (): void {
+    $base = wp_fts_release_evidence_contract_fake_runner();
+    $runner = static function (array $command, string $cwd, int $timeout) use ($base): array {
+        if (($command[0] ?? '') === 'tools/run-disposable-lifecycle-smoke.sh') {
+            return [
+                'exit' => 0,
+                'stdout' => "INFO: Running disposable lifecycle smoke against source-copy plugin\nPASS: Running disposable lifecycle smoke against source-copy plugin\nPASS: Docker disposable lifecycle smoke completed.\n",
+                'stderr' => '',
+            ];
+        }
+
+        return $base($command, $cwd, $timeout);
+    };
+
+    $lane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report_with_runner($runner, ['run_docker_lifecycle_smokes' => true]),
+        'docker_disposable_lifecycle_smoke'
+    );
+    $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
+
+    wp_fts_release_evidence_contract_same('fail', $lane['status'] ?? null, 'wrapper PASS text without an inner passed report must not become Docker lifecycle pass');
+    wp_fts_release_evidence_contract_same(null, $details['lifecycle_report_status'] ?? null, 'collector should expose missing inner lifecycle report status');
+    wp_fts_release_evidence_contract_contains('did not emit a parseable inner lifecycle report', (string) ($lane['summary'] ?? ''), 'collector should explain missing inner lifecycle report proof');
 });
 
 test_case('quality release evidence collector captures public-submission blockers as blocked evidence', function (): void {

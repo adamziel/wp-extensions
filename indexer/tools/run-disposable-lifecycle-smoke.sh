@@ -7,6 +7,9 @@ COMPONENT_DIR="${REPO_ROOT}/components/full-text-search"
 SOURCE_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 PROOF_ROOT=""
 COMPOSE_FILE=""
+LIFECYCLE_REPORT_FILE=""
+LIFECYCLE_REPORT_CONTAINER_FILE="/smoke-reports/lifecycle-report.json"
+LIFECYCLE_OUTPUT_FILE=""
 
 skip() {
     printf 'SKIP: %s\n' "$1"
@@ -40,6 +43,51 @@ run_step() {
     printf 'PASS: %s\n' "${label}"
 }
 
+run_lifecycle_step() {
+    local label="$1"
+    shift
+    printf 'INFO: %s\n' "${label}"
+    set +e
+    "$@" >"${LIFECYCLE_OUTPUT_FILE}" 2>&1
+    local command_status=$?
+    set -e
+    if [[ "${command_status}" -ne 0 ]]; then
+        cat "${LIFECYCLE_OUTPUT_FILE}" >&2
+        return "${command_status}"
+    fi
+
+    local report_status
+    if ! report_status="$(php -r '
+$report = json_decode((string) @file_get_contents($argv[1] ?? ""), true);
+if (!is_array($report)) {
+    exit(2);
+}
+if (($report["schema"] ?? "") !== "wp-fts-disposable-lifecycle-smoke-v1") {
+    exit(4);
+}
+$status = $report["status"] ?? "";
+if (!is_string($status) || $status === "") {
+    exit(3);
+}
+echo $status;
+' "${LIFECYCLE_REPORT_FILE}")"; then
+        cat "${LIFECYCLE_OUTPUT_FILE}" >&2
+        printf 'FAIL: Inner lifecycle smoke did not write a parseable lifecycle report.\n' >&2
+        return 1
+    fi
+
+    printf '{"schema":"wp-fts-disposable-lifecycle-wrapper-proof-v1","inner_report_schema":"wp-fts-disposable-lifecycle-smoke-v1","inner_report_status":"%s"}\n' "${report_status}"
+
+    if [[ "${report_status}" != "passed" ]]; then
+        cat "${LIFECYCLE_OUTPUT_FILE}" >&2
+        printf 'FAIL: Inner lifecycle smoke reported status "%s"; expected "passed".\n' "${report_status}" >&2
+        return 1
+    fi
+
+    printf 'INFO: Inner lifecycle smoke output captured %s bytes.\n' "$(wc -c <"${LIFECYCLE_OUTPUT_FILE}" | tr -d ' ')"
+    printf 'PASS: %s\n' "${label}"
+}
+
 require_command php
 require_command tar
 require_command composer
@@ -55,9 +103,12 @@ fi
 
 PROOF_ROOT="$(mktemp -d /tmp/wp-fts-lifecycle-smoke.XXXXXX)"
 COMPOSE_FILE="${PROOF_ROOT}/compose.yaml"
+LIFECYCLE_REPORT_FILE="${PROOF_ROOT}/reports/lifecycle-report.json"
+LIFECYCLE_OUTPUT_FILE="${PROOF_ROOT}/lifecycle-output.txt"
 trap cleanup EXIT INT TERM
 
-mkdir -p "${PROOF_ROOT}/plugin" "${PROOF_ROOT}/components/full-text-search"
+mkdir -p "${PROOF_ROOT}/plugin" "${PROOF_ROOT}/components/full-text-search" "${PROOF_ROOT}/reports"
+chmod 0777 "${PROOF_ROOT}/reports"
 
 (
     cd "${PLUGIN_DIR}"
@@ -139,6 +190,7 @@ services:
     volumes:
       - wp_data:/var/www/html
       - ${PROOF_ROOT}/plugin:/smoke-src:ro
+      - ${PROOF_ROOT}/reports:/smoke-reports
     entrypoint: ["wp"]
 volumes:
   wp_data:
@@ -180,13 +232,14 @@ run_step "Marking disposable WordPress root for guarded lifecycle smoke" \
 
 printf 'INFO: Multisite lifecycle sub-scenario not run; this Docker wrapper records a single-site disposable lifecycle boundary.\n'
 
-run_step "Running disposable lifecycle smoke against source-copy plugin" \
+run_lifecycle_step "Running disposable lifecycle smoke against source-copy plugin" \
     docker compose -f "${COMPOSE_FILE}" run --rm --entrypoint php \
         -e WP_FTS_WP_PATH=/var/www/html \
         -e WP_FTS_WP_CLI=wp \
         -e WP_FTS_WP_URL=http://wordpress:80 \
         -e WP_FTS_LIFECYCLE_SMOKE_ALLOW=1 \
         -e "WP_FTS_SOURCE_SHA=${SOURCE_SHA}" \
-        wpcli /smoke-src/tools/smoke-disposable-wordpress-lifecycle.php
+        wpcli /smoke-src/tools/smoke-disposable-wordpress-lifecycle.php \
+        --report-file="${LIFECYCLE_REPORT_CONTAINER_FILE}"
 
 printf 'PASS: Docker disposable lifecycle smoke completed.\n'

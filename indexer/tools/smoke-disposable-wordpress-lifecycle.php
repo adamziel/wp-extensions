@@ -72,6 +72,15 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
                 $options['help'] = true;
                 continue;
             }
+            $prefix = '--report-file=';
+            if (str_starts_with($arg, $prefix)) {
+                $reportFile = trim(substr($arg, strlen($prefix)));
+                if ($reportFile === '') {
+                    throw new InvalidArgumentException('--report-file requires a path.');
+                }
+                $options['report_file'] = $reportFile;
+                continue;
+            }
 
             throw new InvalidArgumentException("Unknown option: {$arg}");
         }
@@ -88,6 +97,9 @@ final class WP_FTS_DisposableLifecycleSmokeRunner
             '  WP_FTS_WP_PATH=/path/to/disposable-wordpress',
             '  WP_FTS_LIFECYCLE_SMOKE_ALLOW=1',
             '  touch /path/to/disposable-wordpress/' . self::MARKER_FILE,
+            '',
+            'Options:',
+            '  --report-file=PATH  Write the structured lifecycle report to PATH for wrapper verification.',
             '',
             'The target site must already have the indexer plugin source installed but inactive.',
             'Use tools/run-disposable-lifecycle-smoke.sh to create that disposable Docker site automatically.',
@@ -1019,6 +1031,21 @@ function wp_fts_disposable_lifecycle_smoke_write_cli_result(array $result): void
     fwrite(STDOUT, $json . "\nPASS: {$result['message']}\n");
 }
 
+/**
+ * @param array{exit:int,status:string,message:string,report:array<string,mixed>} $result
+ */
+function wp_fts_disposable_lifecycle_smoke_write_report_file(array $result, string $path): void
+{
+    $json = json_encode($result['report'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    if (!is_string($json)) {
+        throw new RuntimeException('Could not encode lifecycle smoke report file.');
+    }
+
+    if (file_put_contents($path, $json . "\n") === false) {
+        throw new RuntimeException('Could not write lifecycle smoke report file.');
+    }
+}
+
 if (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
     try {
         $options = WP_FTS_DisposableLifecycleSmokeRunner::parse_cli_options(array_slice($argv, 1));
@@ -1028,6 +1055,9 @@ if (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''))
         }
 
         $result = (new WP_FTS_DisposableLifecycleSmokeRunner())->run();
+        if (is_string($options['report_file'] ?? null)) {
+            wp_fts_disposable_lifecycle_smoke_write_report_file($result, $options['report_file']);
+        }
         wp_fts_disposable_lifecycle_smoke_write_cli_result($result);
         exit($result['exit']);
     } catch (Throwable $e) {

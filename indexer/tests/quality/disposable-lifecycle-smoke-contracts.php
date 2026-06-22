@@ -139,9 +139,10 @@ function wp_fts_lifecycle_contract_wp_root(string $tmp, bool $withMarker = false
 
 /**
  * @param array<string,string> $env
+ * @param array<int,string> $args
  * @return array{exit:int,stdout:string,stderr:string}
  */
-function wp_fts_lifecycle_contract_run_script(array $env): array
+function wp_fts_lifecycle_contract_run_script(array $env, array $args = []): array
 {
     if (!function_exists('proc_open')) {
         wp_fts_lifecycle_contract_pending('proc_open() is unavailable, so the disposable lifecycle smoke CLI skip contract cannot launch a subprocess.');
@@ -158,7 +159,7 @@ function wp_fts_lifecycle_contract_run_script(array $env): array
         1 => ['pipe', 'w'],
         2 => ['pipe', 'w'],
     ];
-    $process = proc_open([PHP_BINARY, $script], $descriptors, $pipes, dirname(__DIR__, 2), array_merge($baseEnv, $env));
+    $process = proc_open(array_merge([PHP_BINARY, $script], $args), $descriptors, $pipes, dirname(__DIR__, 2), array_merge($baseEnv, $env));
     if (!is_resource($process)) {
         wp_fts_lifecycle_contract_pending('Could not start the disposable lifecycle smoke runner subprocess.');
     }
@@ -315,6 +316,31 @@ test_case('quality disposable lifecycle smoke skips clearly without environment'
     wp_fts_lifecycle_contract_same(0, $result['exit'], 'disposable lifecycle smoke should exit zero for default skip');
     wp_fts_lifecycle_contract_contains('SKIP:', $output, 'default lifecycle smoke skip should be explicit');
     wp_fts_lifecycle_contract_contains('WP_FTS_WP_PATH', $output, 'default lifecycle smoke skip should name WP_FTS_WP_PATH');
+});
+
+test_case('quality disposable lifecycle smoke writes structured report file for skipped preconditions', function (): void {
+    $tmp = wp_fts_lifecycle_contract_temp_dir();
+    try {
+        $reportFile = $tmp . '/lifecycle-report.json';
+        $result = wp_fts_lifecycle_contract_run_script(
+            [
+                WP_FTS_DisposableLifecycleSmokeRunner::WP_PATH_ENV => '',
+                WP_FTS_DisposableLifecycleSmokeRunner::ALLOW_ENV => '',
+                WP_FTS_DisposableLifecycleSmokeRunner::CONFIRM_PATH_ENV => '',
+                WP_FTS_DisposableLifecycleSmokeRunner::WP_CLI_ENV => 'wp-fts-contract-missing-wp-cli',
+            ],
+            ['--report-file=' . $reportFile]
+        );
+        $decoded = json_decode((string) file_get_contents($reportFile), true);
+
+        wp_fts_lifecycle_contract_same(0, $result['exit'], 'skipped lifecycle runner should keep skip-first exit zero');
+        wp_fts_lifecycle_contract_contains('SKIP:', $result['stdout'] . $result['stderr'], 'skipped lifecycle runner should still emit a human-readable SKIP line');
+        wp_fts_lifecycle_contract_true(is_array($decoded), 'lifecycle report file should contain JSON');
+        wp_fts_lifecycle_contract_same('wp-fts-disposable-lifecycle-smoke-v1', $decoded['schema'] ?? null, 'lifecycle report file should use the expected schema');
+        wp_fts_lifecycle_contract_same('skipped', $decoded['status'] ?? null, 'lifecycle report file should record skipped status');
+    } finally {
+        wp_fts_lifecycle_contract_remove_tree($tmp);
+    }
 });
 
 test_case('quality disposable lifecycle smoke skips invalid WordPress path without process launch', function (): void {
@@ -525,6 +551,13 @@ test_case('quality Docker disposable lifecycle wrapper is guarded and disposable
         'composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader',
         'cp -R /smoke-src /var/www/html/wp-content/plugins/indexer',
         'touch /var/www/html/.wp-fts-lifecycle-smoke',
+        '${PROOF_ROOT}/reports:/smoke-reports',
+        'lifecycle-report.json',
+        'lifecycle-output.txt',
+        'wp-fts-disposable-lifecycle-wrapper-proof-v1',
+        'inner_report_status',
+        '--report-file="${LIFECYCLE_REPORT_CONTAINER_FILE}"',
+        'Inner lifecycle smoke reported status',
         'WP_FTS_LIFECYCLE_SMOKE_ALLOW=1',
         'smoke-disposable-wordpress-lifecycle.php',
         'Multisite lifecycle sub-scenario not run',
