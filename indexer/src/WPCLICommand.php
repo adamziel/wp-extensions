@@ -13,6 +13,9 @@ final class WP_FTS_WPCLI_Command
     private const DEFAULT_REINDEX_POST_STATUSES = ['publish', 'draft', 'pending', 'future', 'private'];
     private const EXPLAIN_SUMMARY_MAX_ITEMS = 5;
     private const EXPLAIN_SUMMARY_MAX_BYTES = 800;
+    private const DIAGNOSTIC_BUNDLE_SCHEMA = 'wp-fts-query-diagnostic-bundle-v1';
+    private const DIAGNOSTIC_QUERY_MAX_BYTES = 512;
+    private const DIAGNOSTIC_SUMMARY_MAX_BYTES = 240;
 
     /**
      * Register the `wp fts` command when WP-CLI is loaded.
@@ -148,64 +151,9 @@ final class WP_FTS_WPCLI_Command
     {
         $query = (string) ($args[0] ?? '');
         $format = (string) $this->assoc_arg($assoc_args, ['format'], 'table');
-        $explain = $this->bool_flag_arg($assoc_args, ['explain', 'debug'], false);
         $searcher = new WP_FTS_Searcher($this->storage(), WP_FTS_Plugin::runtime_analyzer());
-        $searchOptions = [
-            'mode' => (string) ($assoc_args['mode'] ?? 'OR'),
-            'limit' => $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10),
-            'offset' => $this->non_negative_int_arg($this->assoc_arg($assoc_args, ['offset'], 0), 0),
-            'include_total' => true,
-            'include_metadata' => true,
-            'include_snippets' => array_key_exists('snippet', $assoc_args) || array_key_exists('snippets', $assoc_args),
-        ];
-        if ($explain) {
-            $searchOptions['explain'] = true;
-        }
-        $langArg = $this->assoc_arg($assoc_args, ['lang', 'language'], null);
-        if ($langArg !== null) {
-            $searchOptions['lang'] = $this->language_arg($langArg);
-        }
-
-        $postStatus = $this->assoc_arg($assoc_args, ['post_status', 'post-status'], null);
-        if ($postStatus !== null) {
-            $searchOptions['post_status'] = $this->csv_arg((string) $postStatus, '');
-        }
-        $postType = $this->assoc_arg($assoc_args, ['post_type', 'post-type'], null);
-        if ($postType !== null) {
-            $searchOptions['post_type'] = $this->csv_arg((string) $postType, '');
-        }
-        $after = $this->assoc_arg($assoc_args, ['after', 'date_after', 'date-after'], null);
-        if ($after !== null) {
-            $searchOptions['date_after'] = (string) $after;
-        }
-        $before = $this->assoc_arg($assoc_args, ['before', 'date_before', 'date-before'], null);
-        if ($before !== null) {
-            $searchOptions['date_before'] = (string) $before;
-        }
-        $recencyBoost = $this->assoc_arg($assoc_args, ['recency_boost', 'recency-boost', 'freshness_boost', 'freshness-boost'], null);
-        if ($recencyBoost !== null) {
-            $searchOptions['recency_boost'] = $recencyBoost;
-        }
-        $recencyStrength = $this->assoc_arg($assoc_args, ['recency_boost_strength', 'recency-boost-strength', 'freshness_boost_strength', 'freshness-boost-strength'], null);
-        if ($recencyStrength !== null) {
-            $searchOptions['recency_boost_strength'] = $recencyStrength;
-        }
-        $recencyHalfLife = $this->assoc_arg($assoc_args, ['recency_boost_half_life_days', 'recency-boost-half-life-days', 'freshness_boost_half_life_days', 'freshness-boost-half-life-days'], null);
-        if ($recencyHalfLife !== null) {
-            $searchOptions['recency_boost_half_life_days'] = $recencyHalfLife;
-        }
-        $prefixMatching = $this->assoc_arg($assoc_args, ['prefix_matching', 'prefix-matching'], null);
-        if ($prefixMatching !== null) {
-            $searchOptions['prefix_matching'] = $this->truthy_cli_value($prefixMatching);
-        }
-        $prefixMinLength = $this->assoc_arg($assoc_args, ['prefix_min_length', 'prefix-min-length'], null);
-        if ($prefixMinLength !== null) {
-            $searchOptions['prefix_min_length'] = WP_FTS_Plugin::sanitize_prefix_min_length($prefixMinLength);
-        }
-        $prefixMaxTerms = $this->assoc_arg($assoc_args, ['prefix_max_terms', 'prefix-max-terms'], null);
-        if ($prefixMaxTerms !== null) {
-            $searchOptions['prefix_max_terms'] = WP_FTS_Plugin::sanitize_prefix_max_terms($prefixMaxTerms);
-        }
+        $searchOptions = $this->search_options_from_cli_args($assoc_args);
+        $explain = !empty($searchOptions['explain']);
 
         /** @var array{total:int,results:array<int,array<string,mixed>>} $payload */
         $payload = $searcher->search($query, $searchOptions);
@@ -238,6 +186,95 @@ final class WP_FTS_WPCLI_Command
                 $this->format_items('table', $summaryRows, ['field', 'value']);
             }
         }
+    }
+
+    /**
+     * Capture a bounded read-only support bundle for one search query.
+     *
+     * ## OPTIONS
+     *
+     * <query>
+     * : Search query. The diagnostic path truncates very long query strings
+     *   before searching to keep the support payload bounded.
+     *
+     * [--mode=<OR|AND>]
+     * : Boolean mode. Default: OR.
+     *
+     * [--limit=<n>]
+     * : Result count. Default: 10.
+     *
+     * [--lang=<language>]
+     * : Query language partition. Defaults to site locale.
+     *
+     * [--post_status=<status>]
+     * : Comma-separated post statuses to include when document metadata is available.
+     *
+     * [--post_type=<type>]
+     * : Comma-separated post types to include when document metadata is available.
+     *
+     * [--after=<date>]
+     * : Include posts on or after a GMT date or datetime.
+     *
+     * [--before=<date>]
+     * : Include posts on or before a GMT date or datetime.
+     *
+     * [--recency_boost=<strength>]
+     * : Add a bounded query-time ranking lift for newer indexed post dates. Use 0 to disable.
+     *
+     * [--recency_boost_half_life_days=<days>]
+     * : Positive half-life in days for the recency lift. Default: searcher default.
+     *
+     * [--prefix_matching]
+     * : Enable word-beginning matching for this CLI search.
+     *
+     * [--prefix_min_length=<n>]
+     * : Minimum analyzed term length before word-beginning expansion. Alias: --prefix-min-length.
+     *
+     * [--prefix_max_terms=<n>]
+     * : Maximum stored terms added per analyzed query candidate. Alias: --prefix-max-terms.
+     *
+     * [--offset=<n>]
+     * : Offset into filtered results for pagination. Default: 0.
+     *
+     * [--snippet]
+     * : Include snippets from bounded extracted text.
+     *
+     * [--format=<format>]
+     * : Output format. Default: json. Table-like formats emit only the summary.
+     *
+     * @param string[] $args First positional argument is the query string.
+     * @param array<string,mixed> $assoc_args Options shared with `wp fts search`.
+     */
+    public function diagnose(array $args, array $assoc_args): void
+    {
+        $rawQuery = (string) ($args[0] ?? '');
+        $normalizedQuery = $this->bounded_cli_text($rawQuery, 0);
+        $query = $this->bounded_cli_text($normalizedQuery, self::DIAGNOSTIC_QUERY_MAX_BYTES);
+        $format = (string) $this->assoc_arg($assoc_args, ['format'], 'json');
+        $searchOptions = $this->search_options_from_cli_args($assoc_args, true);
+        $searcher = new WP_FTS_Searcher($this->storage(false), WP_FTS_Plugin::runtime_analyzer());
+        $operatorStatus = WP_FTS_Plugin::operator_status();
+
+        /** @var array{total:int,limit:int,offset:int,query_lang:string,results:array<int,array<string,mixed>>,explain?:array<string,mixed>} $searchPayload */
+        $searchPayload = $searcher->search($query, $searchOptions);
+        $queryArgs = $this->diagnostic_query_args($searchOptions, $searchPayload);
+        $bundle = [
+            'schema' => self::DIAGNOSTIC_BUNDLE_SCHEMA,
+            'tool' => 'wp fts diagnose',
+            'query' => $query,
+            'query_truncated' => $query !== $normalizedQuery,
+            'query_args' => $queryArgs,
+            'operator_status' => $operatorStatus,
+            'search' => $searchPayload,
+            'summary' => $this->diagnostic_summary($operatorStatus, $searchPayload),
+        ];
+
+        if ($format === 'json') {
+            $this->line($this->json_payload($bundle));
+            return;
+        }
+
+        $this->format_items($format, $this->diagnostic_summary_rows($bundle['summary']), ['field', 'value']);
     }
 
     /**
@@ -964,6 +1001,283 @@ final class WP_FTS_WPCLI_Command
         return $rows;
     }
 
+    /**
+     * Parse the shared `wp fts search` / `wp fts diagnose` query options.
+     *
+     * @param array<string,mixed> $assoc_args
+     * @return array<string,mixed>
+     */
+    private function search_options_from_cli_args(array $assoc_args, bool $forceExplain = false): array
+    {
+        $searchOptions = [
+            'mode' => (string) ($assoc_args['mode'] ?? 'OR'),
+            'limit' => $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10),
+            'offset' => $this->non_negative_int_arg($this->assoc_arg($assoc_args, ['offset'], 0), 0),
+            'include_total' => true,
+            'include_metadata' => true,
+            'include_snippets' => array_key_exists('snippet', $assoc_args) || array_key_exists('snippets', $assoc_args),
+        ];
+        if ($forceExplain || $this->bool_flag_arg($assoc_args, ['explain', 'debug'], false)) {
+            $searchOptions['explain'] = true;
+        }
+        $langArg = $this->assoc_arg($assoc_args, ['lang', 'language'], null);
+        if ($langArg !== null) {
+            $searchOptions['lang'] = $this->language_arg($langArg);
+        }
+
+        $postStatus = $this->assoc_arg($assoc_args, ['post_status', 'post-status'], null);
+        if ($postStatus !== null) {
+            $searchOptions['post_status'] = $this->csv_arg((string) $postStatus, '');
+        }
+        $postType = $this->assoc_arg($assoc_args, ['post_type', 'post-type'], null);
+        if ($postType !== null) {
+            $searchOptions['post_type'] = $this->csv_arg((string) $postType, '');
+        }
+        $after = $this->assoc_arg($assoc_args, ['after', 'date_after', 'date-after'], null);
+        if ($after !== null) {
+            $searchOptions['date_after'] = (string) $after;
+        }
+        $before = $this->assoc_arg($assoc_args, ['before', 'date_before', 'date-before'], null);
+        if ($before !== null) {
+            $searchOptions['date_before'] = (string) $before;
+        }
+        $recencyBoost = $this->assoc_arg($assoc_args, ['recency_boost', 'recency-boost', 'freshness_boost', 'freshness-boost'], null);
+        if ($recencyBoost !== null) {
+            $searchOptions['recency_boost'] = $recencyBoost;
+        }
+        $recencyStrength = $this->assoc_arg($assoc_args, ['recency_boost_strength', 'recency-boost-strength', 'freshness_boost_strength', 'freshness-boost-strength'], null);
+        if ($recencyStrength !== null) {
+            $searchOptions['recency_boost_strength'] = $recencyStrength;
+        }
+        $recencyHalfLife = $this->assoc_arg($assoc_args, ['recency_boost_half_life_days', 'recency-boost-half-life-days', 'freshness_boost_half_life_days', 'freshness-boost-half-life-days'], null);
+        if ($recencyHalfLife !== null) {
+            $searchOptions['recency_boost_half_life_days'] = $recencyHalfLife;
+        }
+        $prefixMatching = $this->assoc_arg($assoc_args, ['prefix_matching', 'prefix-matching'], null);
+        if ($prefixMatching !== null) {
+            $searchOptions['prefix_matching'] = $this->truthy_cli_value($prefixMatching);
+        }
+        $prefixMinLength = $this->assoc_arg($assoc_args, ['prefix_min_length', 'prefix-min-length'], null);
+        if ($prefixMinLength !== null) {
+            $searchOptions['prefix_min_length'] = WP_FTS_Plugin::sanitize_prefix_min_length($prefixMinLength);
+        }
+        $prefixMaxTerms = $this->assoc_arg($assoc_args, ['prefix_max_terms', 'prefix-max-terms'], null);
+        if ($prefixMaxTerms !== null) {
+            $searchOptions['prefix_max_terms'] = WP_FTS_Plugin::sanitize_prefix_max_terms($prefixMaxTerms);
+        }
+
+        return $searchOptions;
+    }
+
+    /**
+     * @param array<string,mixed> $searchOptions
+     * @param array<string,mixed> $searchPayload
+     * @return array<string,mixed>
+     */
+    private function diagnostic_query_args(array $searchOptions, array $searchPayload): array
+    {
+        $queryArgs = [
+            'lang' => is_scalar($searchOptions['lang'] ?? null)
+                ? (string) $searchOptions['lang']
+                : (is_scalar($searchPayload['query_lang'] ?? null) ? (string) $searchPayload['query_lang'] : ''),
+            'mode' => is_scalar($searchOptions['mode'] ?? null) ? (string) $searchOptions['mode'] : 'OR',
+            'limit' => max(1, (int) ($searchOptions['limit'] ?? 10)),
+            'offset' => max(0, (int) ($searchOptions['offset'] ?? 0)),
+            'snippet' => !empty($searchOptions['include_snippets']),
+            'explain' => true,
+        ];
+
+        foreach ([
+            'post_status' => 'post_status',
+            'post_type' => 'post_type',
+            'date_after' => 'after',
+            'date_before' => 'before',
+            'recency_boost' => 'recency_boost',
+            'recency_boost_strength' => 'recency_boost_strength',
+            'recency_boost_half_life_days' => 'recency_boost_half_life_days',
+            'prefix_matching' => 'prefix_matching',
+            'prefix_min_length' => 'prefix_min_length',
+            'prefix_max_terms' => 'prefix_max_terms',
+        ] as $searchKey => $payloadKey) {
+            if (array_key_exists($searchKey, $searchOptions)) {
+                $queryArgs[$payloadKey] = $searchOptions[$searchKey];
+            }
+        }
+
+        return $queryArgs;
+    }
+
+    /**
+     * @param array<string,mixed> $operatorStatus
+     * @param array<string,mixed> $searchPayload
+     * @return array<string,mixed>
+     */
+    private function diagnostic_summary(array $operatorStatus, array $searchPayload): array
+    {
+        $results = is_array($searchPayload['results'] ?? null) ? $searchPayload['results'] : [];
+        $explain = is_array($searchPayload['explain'] ?? null) ? $searchPayload['explain'] : [];
+        $fastMode = is_array($explain['fast_mode'] ?? null) ? $explain['fast_mode'] : [];
+        $scoring = is_array($explain['scoring'] ?? null) ? $explain['scoring'] : [];
+        $compatibility = is_array($operatorStatus['search_provider_compatibility'] ?? null)
+            ? $operatorStatus['search_provider_compatibility']
+            : [];
+        $languagePack = is_array($operatorStatus['language_pack_status'] ?? null)
+            ? $operatorStatus['language_pack_status']
+            : [];
+        $runtimeSupport = is_array($languagePack['runtime_support'] ?? null)
+            ? $languagePack['runtime_support']
+            : [];
+        $schedule = is_array($operatorStatus['queue_processor_schedule'] ?? null)
+            ? $operatorStatus['queue_processor_schedule']
+            : [];
+        $pendingWork = !empty($operatorStatus['has_more'])
+            || max(0, (int) ($operatorStatus['pending_queue_count'] ?? 0)) > 0
+            || max(0, (int) ($operatorStatus['remaining_count'] ?? 0)) > 0
+            || max(0, (int) ($operatorStatus['stale_debt_remaining_count'] ?? 0)) > 0
+            || !empty($schedule['pending_work']);
+        $schemaStatus = is_scalar($operatorStatus['schema_status'] ?? null) ? (string) $operatorStatus['schema_status'] : '';
+
+        return [
+            'returned_count' => count($results),
+            'visible_total' => max(0, (int) ($searchPayload['total'] ?? 0)),
+            'storage_backend' => $this->bounded_cli_text($operatorStatus['storage_backend'] ?? ($explain['storage']['backend'] ?? ''), 80),
+            'schema_status' => $this->bounded_cli_text($schemaStatus, 40),
+            'fast_mode' => [
+                'mode' => $this->bounded_cli_text($fastMode['mode'] ?? '', 40),
+                'source' => $this->bounded_cli_text($fastMode['source'] ?? '', 80),
+                'reason' => $this->bounded_cli_text($fastMode['reason'] ?? '', self::DIAGNOSTIC_SUMMARY_MAX_BYTES),
+            ],
+            'candidate_rows_fetched' => $this->optional_non_negative_int($scoring['candidate_rows_fetched'] ?? null),
+            'candidate_rows_considered' => $this->optional_non_negative_int($scoring['candidate_rows_considered'] ?? null),
+            'candidate_docs_considered' => $this->optional_non_negative_int($scoring['candidate_docs_considered'] ?? null),
+            'candidate_docs_scored' => $this->optional_non_negative_int($scoring['candidate_docs_scored'] ?? null),
+            'matched_languages' => $this->diagnostic_matched_languages($searchPayload),
+            'provider_compatibility' => [
+                'mode' => $this->bounded_cli_text($compatibility['mode'] ?? '', 80),
+                'known_provider_count' => max(0, (int) ($compatibility['known_provider_count'] ?? 0)),
+                'known_provider_summary' => $this->bounded_cli_text($compatibility['known_provider_summary'] ?? '', self::DIAGNOSTIC_SUMMARY_MAX_BYTES),
+            ],
+            'runtime_language_pack_support' => [
+                'status' => $this->bounded_cli_text($runtimeSupport['status'] ?? ($languagePack['runtime_support_status'] ?? ''), 80),
+                'label' => $this->bounded_cli_text($runtimeSupport['label'] ?? ($languagePack['runtime_support_label'] ?? ''), 120),
+                'full' => (bool) ($runtimeSupport['full'] ?? ($languagePack['runtime_support_full'] ?? false)),
+                'reason' => $this->bounded_cli_text($runtimeSupport['reason'] ?? ($languagePack['runtime_support_reason'] ?? ''), self::DIAGNOSTIC_SUMMARY_MAX_BYTES),
+                'matched_language' => $this->bounded_cli_text($runtimeSupport['matched_language'] ?? ($languagePack['matched_runtime_language'] ?? ''), 40),
+            ],
+            'lock_state' => $this->bounded_cli_text($operatorStatus['lock_state'] ?? '', 40),
+            'lock_active' => (bool) ($operatorStatus['lock_active'] ?? false),
+            'index_stale' => $schemaStatus !== 'current' || !empty($operatorStatus['stale_debt_active']),
+            'pending_work' => $pendingWork,
+            'pending_queue_count' => max(0, (int) ($operatorStatus['pending_queue_count'] ?? 0)),
+            'remaining_count' => max(0, (int) ($operatorStatus['remaining_count'] ?? 0)),
+            'stale_debt_active' => (bool) ($operatorStatus['stale_debt_active'] ?? false),
+            'stale_debt_remaining_count' => max(0, (int) ($operatorStatus['stale_debt_remaining_count'] ?? 0)),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     * @return array<int,array{field:string,value:string}>
+     */
+    private function diagnostic_summary_rows(array $summary): array
+    {
+        $fastMode = is_array($summary['fast_mode'] ?? null) ? $summary['fast_mode'] : [];
+        $provider = is_array($summary['provider_compatibility'] ?? null) ? $summary['provider_compatibility'] : [];
+        $languagePack = is_array($summary['runtime_language_pack_support'] ?? null) ? $summary['runtime_language_pack_support'] : [];
+
+        $rows = [
+            'returned_count' => $summary['returned_count'] ?? 0,
+            'visible_total' => $summary['visible_total'] ?? 0,
+            'storage_backend' => $summary['storage_backend'] ?? '',
+            'schema_status' => $summary['schema_status'] ?? '',
+            'fast_mode' => $this->summary_parts([
+                'mode' => $fastMode['mode'] ?? '',
+                'source' => $fastMode['source'] ?? '',
+                'reason' => $fastMode['reason'] ?? '',
+            ]),
+            'scoring' => $this->summary_parts([
+                'candidate_rows_fetched' => $summary['candidate_rows_fetched'] ?? '',
+                'candidate_rows_considered' => $summary['candidate_rows_considered'] ?? '',
+                'candidate_docs_considered' => $summary['candidate_docs_considered'] ?? '',
+                'candidate_docs_scored' => $summary['candidate_docs_scored'] ?? '',
+            ]),
+            'matched_languages' => is_array($summary['matched_languages'] ?? null) ? implode(',', $summary['matched_languages']) : '',
+            'provider_compatibility' => $this->summary_parts([
+                'mode' => $provider['mode'] ?? '',
+                'known_provider_count' => $provider['known_provider_count'] ?? '',
+                'known_provider_summary' => $provider['known_provider_summary'] ?? '',
+            ]),
+            'runtime_language_pack_support' => $this->summary_parts([
+                'status' => $languagePack['status'] ?? '',
+                'label' => $languagePack['label'] ?? '',
+                'full' => $languagePack['full'] ?? false,
+                'matched_language' => $languagePack['matched_language'] ?? '',
+            ]),
+            'lock_state' => $summary['lock_state'] ?? '',
+            'lock_active' => $summary['lock_active'] ?? false,
+            'index_stale' => $summary['index_stale'] ?? false,
+            'pending_work' => $summary['pending_work'] ?? false,
+            'pending_queue_count' => $summary['pending_queue_count'] ?? 0,
+            'remaining_count' => $summary['remaining_count'] ?? 0,
+            'stale_debt_active' => $summary['stale_debt_active'] ?? false,
+            'stale_debt_remaining_count' => $summary['stale_debt_remaining_count'] ?? 0,
+        ];
+
+        $formatted = [];
+        foreach ($rows as $field => $value) {
+            $formatted[] = [
+                'field' => $field,
+                'value' => $this->bounded_cli_text($value, self::DIAGNOSTIC_SUMMARY_MAX_BYTES),
+            ];
+        }
+
+        return $formatted;
+    }
+
+    /**
+     * @param array<string,mixed> $searchPayload
+     * @return string[]
+     */
+    private function diagnostic_matched_languages(array $searchPayload): array
+    {
+        $languages = [];
+        $explain = is_array($searchPayload['explain'] ?? null) ? $searchPayload['explain'] : [];
+        $queryPlan = is_array($explain['query_plan'] ?? null) ? $explain['query_plan'] : [];
+        if (isset($queryPlan['analyzed_languages']) && is_array($queryPlan['analyzed_languages'])) {
+            foreach ($queryPlan['analyzed_languages'] as $language) {
+                $bounded = $this->bounded_cli_text($language, 40);
+                if ($bounded !== '') {
+                    $languages[$bounded] = true;
+                }
+            }
+        }
+
+        $results = is_array($explain['results'] ?? null) ? $explain['results'] : [];
+        foreach ($results as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if (isset($row['matched_languages']) && is_array($row['matched_languages'])) {
+                foreach ($row['matched_languages'] as $language) {
+                    $bounded = $this->bounded_cli_text($language, 40);
+                    if ($bounded !== '') {
+                        $languages[$bounded] = true;
+                    }
+                }
+            }
+            if (count($languages) >= self::EXPLAIN_SUMMARY_MAX_ITEMS) {
+                break;
+            }
+        }
+
+        return array_slice(array_keys($languages), 0, self::EXPLAIN_SUMMARY_MAX_ITEMS);
+    }
+
+    private function optional_non_negative_int(mixed $value): ?int
+    {
+        return is_numeric($value) ? max(0, (int) $value) : null;
+    }
+
     private function explain_storage_summary(mixed $value): string
     {
         if (!is_array($value)) {
@@ -1302,12 +1616,12 @@ LIMIT %d",
     }
 
     /**
-     * Create MySQL storage and ensure required tables exist.
+     * Create MySQL storage, optionally ensuring required tables exist.
      *
      * @return WP_FTS_Storage_Mysql Ready-to-use storage backend.
      * @throws RuntimeException When `$wpdb` is unavailable.
      */
-    private function storage(): WP_FTS_Storage_Mysql
+    private function storage(bool $ensureSchema = true): WP_FTS_Storage_Mysql
     {
         global $wpdb;
 
@@ -1315,7 +1629,7 @@ LIMIT %d",
             throw new RuntimeException('WP-CLI command requires $wpdb.');
         }
 
-        return WP_FTS_Plugin::storage(true);
+        return WP_FTS_Plugin::storage($ensureSchema);
     }
 
     /**
