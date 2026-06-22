@@ -110,7 +110,7 @@ function wp_fts_release_readiness_contract_write_json(string $path, array $data)
     wp_fts_release_readiness_contract_write_file($path, $json . "\n");
 }
 
-function wp_fts_release_readiness_contract_adler32(string $data): int
+function wp_fts_release_readiness_contract_adler32_bytes(string $data): string
 {
     $a = 1;
     $b = 0;
@@ -120,7 +120,7 @@ function wp_fts_release_readiness_contract_adler32(string $data): int
         $b = ($b + $a) % 65521;
     }
 
-    return (($b << 16) | $a) & 0xffffffff;
+    return pack('nn', $b, $a);
 }
 
 function wp_fts_release_readiness_contract_zlib_store(string $data): string
@@ -139,17 +139,12 @@ function wp_fts_release_readiness_contract_zlib_store(string $data): string
         $stream .= $chunk;
     } while ($offset < $length);
 
-    return $stream . pack('N', wp_fts_release_readiness_contract_adler32($data));
+    return $stream . wp_fts_release_readiness_contract_adler32_bytes($data);
 }
 
 function wp_fts_release_readiness_contract_png_chunk(string $type, string $data): string
 {
-    $crc = crc32($type . $data);
-    if ($crc < 0) {
-        $crc += 4294967296;
-    }
-
-    return pack('N', strlen($data)) . $type . $data . pack('N', $crc);
+    return pack('N', strlen($data)) . $type . $data . hash('crc32b', $type . $data, true);
 }
 
 function wp_fts_release_readiness_contract_png_rgb_scanlines(int $width, int $height, string $pattern = 'checker'): string
@@ -224,6 +219,27 @@ function wp_fts_release_readiness_contract_png_first_chunk_data(string $png, str
     }
 
     throw new RuntimeException("Could not find PNG chunk data: {$type}");
+}
+
+function wp_fts_release_readiness_contract_png_first_chunk_crc(string $png, string $type): string
+{
+    $offset = strlen("\x89PNG\r\n\x1a\n");
+    $length = strlen($png);
+    while ($offset + 12 <= $length) {
+        $chunkLength = unpack('Nlength', substr($png, $offset, 4))['length'];
+        $chunkType = substr($png, $offset + 4, 4);
+        $crcOffset = $offset + 8 + $chunkLength;
+        $nextOffset = $crcOffset + 4;
+        if ($nextOffset > $length) {
+            break;
+        }
+        if ($chunkType === $type) {
+            return substr($png, $crcOffset, 4);
+        }
+        $offset = $nextOffset;
+    }
+
+    throw new RuntimeException("Could not find PNG chunk CRC: {$type}");
 }
 
 function wp_fts_release_readiness_contract_png_replace_first_chunk_data(string $png, string $type, string $data): string
@@ -738,6 +754,11 @@ function wp_fts_release_readiness_contract_assert_public_assets_blocked_with_rea
     wp_fts_release_readiness_contract_contains($reason, WP_FTS_ReleaseReadinessChecker::render_json($report), $message . " should report {$reason}");
 }
 
+function wp_fts_release_readiness_contract_bytes_have_high_bit(string $bytes): bool
+{
+    return $bytes !== '' && ord($bytes[0]) >= 0x80;
+}
+
 function wp_fts_release_readiness_contract_public_asset_png_integrity_blocked(): void
 {
     $tmp = wp_fts_release_readiness_contract_temp_dir();
@@ -808,6 +829,66 @@ function wp_fts_release_readiness_contract_public_asset_png_integrity_blocked():
                 $report,
                 (string) $case['reason'],
                 "{$name} public PNG fixture should block public-submission readiness"
+            );
+        }
+    } finally {
+        wp_fts_release_readiness_contract_remove_tree($tmp);
+    }
+}
+
+function wp_fts_release_readiness_contract_public_asset_high_bit_checksums_are_portable(): void
+{
+    $tmp = wp_fts_release_readiness_contract_temp_dir();
+    try {
+        $validBanner = wp_fts_release_readiness_contract_png_fixture(772, 250);
+        $validIcon = wp_fts_release_readiness_contract_png_fixture(128, 128);
+        $idat = wp_fts_release_readiness_contract_png_first_chunk_data($validIcon, 'IDAT');
+
+        wp_fts_release_readiness_contract_true(
+            wp_fts_release_readiness_contract_bytes_have_high_bit(wp_fts_release_readiness_contract_png_first_chunk_crc($validIcon, 'IEND')),
+            'fixture IEND CRC should exercise unsigned 32-bit checksum bytes above PHP_INT_MAX on 32-bit runtimes'
+        );
+        wp_fts_release_readiness_contract_true(
+            wp_fts_release_readiness_contract_bytes_have_high_bit(substr($idat, -4)),
+            'fixture Adler-32 should exercise unsigned 32-bit checksum bytes above PHP_INT_MAX on 32-bit runtimes'
+        );
+
+        $ready = wp_fts_release_readiness_contract_public_asset_report(
+            $tmp . '/high-bit-ready',
+            static function (string $source) use ($validBanner, $validIcon): void {
+                wp_fts_release_readiness_contract_write_public_asset_pair($source, $validBanner, $validIcon);
+            }
+        );
+        wp_fts_release_readiness_contract_same('ready', $ready['status'] ?? null, 'valid public PNG assets with high-bit CRC and Adler bytes should pass readiness');
+
+        $badAdler = $idat;
+        $badAdler[strlen($badAdler) - 1] = chr(ord($badAdler[strlen($badAdler) - 1]) ^ 0xff);
+        $cases = [
+            'corrupt-high-bit-iend-crc' => [
+                'banner' => wp_fts_release_readiness_contract_png_corrupt_chunk_crc($validBanner, 'IEND'),
+                'icon' => $validIcon,
+            ],
+            'corrupt-high-bit-adler32' => [
+                'banner' => $validBanner,
+                'icon' => wp_fts_release_readiness_contract_png_replace_first_chunk_data($validIcon, 'IDAT', $badAdler),
+            ],
+        ];
+
+        foreach ($cases as $name => $case) {
+            $report = wp_fts_release_readiness_contract_public_asset_report(
+                $tmp . '/' . $name,
+                static function (string $source) use ($case): void {
+                    wp_fts_release_readiness_contract_write_public_asset_pair(
+                        $source,
+                        (string) $case['banner'],
+                        (string) $case['icon']
+                    );
+                }
+            );
+            wp_fts_release_readiness_contract_assert_public_assets_blocked_with_reason(
+                $report,
+                'checksum_mismatch',
+                "{$name} public PNG fixture should fail checksum validation"
             );
         }
     } finally {
@@ -1010,6 +1091,12 @@ function wp_fts_release_readiness_contract_cases(): array
             'name' => 'quality release readiness blocks corrupt public PNG checksums and bounded payloads',
             'fn' => static function (): void {
                 wp_fts_release_readiness_contract_public_asset_png_integrity_blocked();
+            },
+        ],
+        [
+            'name' => 'quality release readiness handles high-bit public PNG checksums portably',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_public_asset_high_bit_checksums_are_portable();
             },
         ],
         [

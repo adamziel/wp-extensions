@@ -1115,8 +1115,8 @@ final class WP_FTS_ReleaseReadinessChecker
             }
 
             $chunkData = substr($bytes, $dataOffset, $chunkLength);
-            $actualCrc = unpack('Ncrc', substr($bytes, $dataOffset + $chunkLength, 4))['crc'];
-            if ($actualCrc !== self::png_crc32($chunkType . $chunkData)) {
+            $actualCrc = substr($bytes, $dataOffset + $chunkLength, 4);
+            if ($actualCrc !== self::png_crc32_bytes($chunkType . $chunkData)) {
                 return [
                     'ok' => false,
                     'reason' => 'checksum_mismatch',
@@ -1213,14 +1213,9 @@ final class WP_FTS_ReleaseReadinessChecker
         ];
     }
 
-    private static function png_crc32(string $bytes): int
+    private static function png_crc32_bytes(string $bytes): string
     {
-        $crc = crc32($bytes);
-        if ($crc < 0) {
-            $crc += 4294967296;
-        }
-
-        return $crc;
+        return hash('crc32b', $bytes, true);
     }
 
     /**
@@ -1397,7 +1392,7 @@ final class WP_FTS_ReleaseReadinessChecker
         }
 
         $deflate = substr($stream, 2, -4);
-        $expectedAdler = unpack('Nadler', substr($stream, -4))['adler'];
+        $expectedAdler = substr($stream, -4);
         $offset = 0;
         $length = strlen($deflate);
         $decoded = '';
@@ -1446,7 +1441,7 @@ final class WP_FTS_ReleaseReadinessChecker
                 'reason' => 'malformed_png',
             ];
         }
-        if (self::adler32($decoded) !== $expectedAdler) {
+        if (self::adler32_bytes($decoded) !== $expectedAdler) {
             return [
                 'ok' => false,
                 'reason' => 'checksum_mismatch',
@@ -1459,7 +1454,7 @@ final class WP_FTS_ReleaseReadinessChecker
         ];
     }
 
-    private static function adler32(string $bytes): int
+    private static function adler32_bytes(string $bytes): string
     {
         $a = 1;
         $b = 0;
@@ -1469,7 +1464,7 @@ final class WP_FTS_ReleaseReadinessChecker
             $b = ($b + $a) % 65521;
         }
 
-        return (($b << 16) | $a) & 0xffffffff;
+        return pack('nn', $b, $a);
     }
 
     private static function public_png_decoded_byte_length(int $width, int $height, int $bitDepth, int $colorType): ?int
