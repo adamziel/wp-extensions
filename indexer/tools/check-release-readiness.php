@@ -55,6 +55,9 @@ final class WP_FTS_ReleaseReadinessChecker
     ];
 
     private const PNG_SIGNATURE = "\x89PNG\r\n\x1a\n";
+    private const PNG_MAX_ANCILLARY_BYTES = 262144;
+    private const PNG_MIN_IDAT_BYTES_LIMIT = 262144;
+    private const PNG_MAX_BYTES_PER_PIXEL = 8;
 
     private const REQUIRED_PACKAGE_PATHS = [
         'indexer.php',
@@ -998,7 +1001,7 @@ final class WP_FTS_ReleaseReadinessChecker
      */
     private static function validate_required_public_png_asset(string $path, array $expected): array
     {
-        $metadata = self::read_public_png_metadata($path);
+        $metadata = self::read_public_png_metadata($path, $expected);
         if (($metadata['ok'] ?? false) !== true) {
             return $metadata;
         }
@@ -1026,17 +1029,18 @@ final class WP_FTS_ReleaseReadinessChecker
             ];
         }
 
-        $singleColor = self::public_png_is_single_color($path, $metadata);
-        if ($singleColor === true) {
+        $originality = self::public_png_originality_result($path, $metadata);
+        if (($originality['ok'] ?? false) !== true) {
+            return $details + [
+                'ok' => false,
+                'reason' => (string) ($originality['reason'] ?? 'png_originality_unverified'),
+            ];
+        }
+
+        if (($originality['single_color'] ?? null) === true) {
             return $details + [
                 'ok' => false,
                 'reason' => 'blank_single_color',
-            ];
-        }
-        if ($singleColor === null) {
-            return $details + [
-                'ok' => false,
-                'reason' => 'png_originality_unverified',
             ];
         }
 
@@ -1046,8 +1050,24 @@ final class WP_FTS_ReleaseReadinessChecker
     /**
      * @return array<string,mixed>
      */
-    private static function read_public_png_metadata(string $path): array
+    private static function read_public_png_metadata(string $path, array $expected): array
     {
+        $limits = self::public_png_limits($expected);
+        clearstatcache(true, $path);
+        $fileSize = filesize($path);
+        if (!is_int($fileSize) || $fileSize < 33) {
+            return [
+                'ok' => false,
+                'reason' => 'malformed_png',
+            ];
+        }
+        if ($fileSize > $limits['file_bytes']) {
+            return [
+                'ok' => false,
+                'reason' => 'oversized_payload',
+            ];
+        }
+
         $bytes = file_get_contents($path);
         if (!is_string($bytes) || strlen($bytes) < 33) {
             return [
@@ -1070,16 +1090,24 @@ final class WP_FTS_ReleaseReadinessChecker
         $bitDepth = null;
         $colorType = null;
         $idat = '';
+        $totalIdatBytes = 0;
         $paletteColorCount = null;
         $sawIend = false;
+        $chunkIndex = 0;
 
-        while ($offset + 8 <= $length) {
+        while ($offset + 12 <= $length) {
             $chunkLengthData = substr($bytes, $offset, 4);
             $chunkLength = unpack('Nlength', $chunkLengthData)['length'];
             $chunkType = substr($bytes, $offset + 4, 4);
             $dataOffset = $offset + 8;
             $nextOffset = $dataOffset + $chunkLength + 4;
-            if ($chunkLength < 0 || $nextOffset > $length) {
+            if (!is_int($chunkLength) || $chunkLength < 0 || $nextOffset > $length || !preg_match('/^[A-Za-z]{4}$/', $chunkType)) {
+                return [
+                    'ok' => false,
+                    'reason' => 'malformed_png',
+                ];
+            }
+            if ($chunkIndex === 0 && $chunkType !== 'IHDR') {
                 return [
                     'ok' => false,
                     'reason' => 'malformed_png',
@@ -1087,8 +1115,17 @@ final class WP_FTS_ReleaseReadinessChecker
             }
 
             $chunkData = substr($bytes, $dataOffset, $chunkLength);
+            $actualCrc = unpack('Ncrc', substr($bytes, $dataOffset + $chunkLength, 4))['crc'];
+            if ($actualCrc !== self::png_crc32($chunkType . $chunkData)) {
+                return [
+                    'ok' => false,
+                    'reason' => 'checksum_mismatch',
+                    'chunk_type' => $chunkType,
+                ];
+            }
+
             if ($chunkType === 'IHDR') {
-                if ($chunkLength !== 13) {
+                if ($chunkIndex !== 0 || $chunkLength !== 13) {
                     return [
                         'ok' => false,
                         'reason' => 'malformed_png',
@@ -1106,18 +1143,39 @@ final class WP_FTS_ReleaseReadinessChecker
                     ];
                 }
             } elseif ($chunkType === 'PLTE') {
+                if ($chunkLength === 0 || $chunkLength % 3 !== 0 || $chunkLength > 768) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'malformed_png',
+                    ];
+                }
                 $paletteColorCount = intdiv($chunkLength, 3);
             } elseif ($chunkType === 'IDAT') {
+                $totalIdatBytes += $chunkLength;
+                if ($totalIdatBytes > $limits['idat_bytes']) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'oversized_payload',
+                    ];
+                }
                 $idat .= $chunkData;
             } elseif ($chunkType === 'IEND') {
+                if ($chunkLength !== 0) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'malformed_png',
+                    ];
+                }
                 $sawIend = true;
+                $offset = $nextOffset;
                 break;
             }
 
             $offset = $nextOffset;
+            $chunkIndex++;
         }
 
-        if ($width === null || $height === null || $bitDepth === null || $colorType === null || $idat === '' || !$sawIend) {
+        if ($width === null || $height === null || $bitDepth === null || $colorType === null || $idat === '' || !$sawIend || $offset !== $length) {
             return [
                 'ok' => false,
                 'reason' => 'malformed_png',
@@ -1131,40 +1189,119 @@ final class WP_FTS_ReleaseReadinessChecker
             'bit_depth' => $bitDepth,
             'color_type' => $colorType,
             'idat' => $idat,
+            'max_decoded_bytes' => $limits['decoded_bytes'],
             'palette_color_count' => $paletteColorCount,
         ];
     }
 
     /**
-     * @param array<string,mixed> $metadata
+     * @param array{kind:string,width:int,height:int} $expected
+     * @return array{file_bytes:int,idat_bytes:int,decoded_bytes:int}
      */
-    private static function public_png_is_single_color(string $path, array $metadata): ?bool
+    private static function public_png_limits(array $expected): array
+    {
+        $decodedBytes = $expected['height'] * (1 + ($expected['width'] * self::PNG_MAX_BYTES_PER_PIXEL));
+        $idatBytes = max(
+            self::PNG_MIN_IDAT_BYTES_LIMIT,
+            $decodedBytes + intdiv($decodedBytes, 8) + 65536
+        );
+
+        return [
+            'file_bytes' => $idatBytes + self::PNG_MAX_ANCILLARY_BYTES + 128,
+            'idat_bytes' => $idatBytes,
+            'decoded_bytes' => $decodedBytes,
+        ];
+    }
+
+    private static function png_crc32(string $bytes): int
+    {
+        $crc = crc32($bytes);
+        if ($crc < 0) {
+            $crc += 4294967296;
+        }
+
+        return $crc;
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     * @return array{ok:bool,single_color?:bool,reason?:string}
+     */
+    private static function public_png_originality_result(string $path, array $metadata): array
     {
         if (($metadata['width'] ?? 0) <= 1 || ($metadata['height'] ?? 0) <= 1) {
-            return true;
+            return [
+                'ok' => true,
+                'single_color' => true,
+            ];
         }
 
         if (($metadata['color_type'] ?? null) === 3 && ($metadata['palette_color_count'] ?? 2) <= 1) {
-            return true;
+            return [
+                'ok' => true,
+                'single_color' => true,
+            ];
         }
 
-        $gdResult = self::public_png_gd_is_single_color($path);
-        if ($gdResult !== null) {
-            return $gdResult;
-        }
-
-        $decoded = self::decode_public_png_image_data((string) ($metadata['idat'] ?? ''));
-        if ($decoded === null) {
-            return null;
-        }
-
-        return self::decoded_public_png_is_single_color(
-            $decoded,
+        $expectedDecodedBytes = self::public_png_decoded_byte_length(
             (int) $metadata['width'],
             (int) $metadata['height'],
             (int) $metadata['bit_depth'],
             (int) $metadata['color_type']
         );
+        $decodeFailureReason = null;
+        if ($expectedDecodedBytes !== null && $expectedDecodedBytes <= (int) ($metadata['max_decoded_bytes'] ?? 0)) {
+            $decoded = self::decode_public_png_image_data((string) ($metadata['idat'] ?? ''), $expectedDecodedBytes);
+            if (($decoded['ok'] ?? false) === true) {
+                $decodedBytes = (string) ($decoded['bytes'] ?? '');
+                if (strlen($decodedBytes) !== $expectedDecodedBytes) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'malformed_png',
+                    ];
+                }
+
+                $singleColor = self::decoded_public_png_is_single_color(
+                    $decodedBytes,
+                    (int) $metadata['width'],
+                    (int) $metadata['height'],
+                    (int) $metadata['bit_depth'],
+                    (int) $metadata['color_type']
+                );
+                if ($singleColor === null) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'malformed_png',
+                    ];
+                }
+
+                return [
+                    'ok' => true,
+                    'single_color' => $singleColor,
+                ];
+            }
+
+            $decodeFailureReason = (string) ($decoded['reason'] ?? 'malformed_png');
+            if (function_exists('gzuncompress') || in_array($decodeFailureReason, ['checksum_mismatch', 'oversized_payload'], true)) {
+                return [
+                    'ok' => false,
+                    'reason' => $decodeFailureReason,
+                ];
+            }
+        }
+
+        $gdResult = self::public_png_gd_is_single_color($path);
+        if ($gdResult !== null) {
+            return [
+                'ok' => true,
+                'single_color' => $gdResult,
+            ];
+        }
+
+        return [
+            'ok' => false,
+            'reason' => $decodeFailureReason ?? 'png_originality_unverified',
+        ];
     }
 
     private static function public_png_gd_is_single_color(string $path): ?bool
@@ -1206,29 +1343,61 @@ final class WP_FTS_ReleaseReadinessChecker
         return true;
     }
 
-    private static function decode_public_png_image_data(string $idat): ?string
+    /**
+     * @return array{ok:bool,bytes?:string,reason?:string}
+     */
+    private static function decode_public_png_image_data(string $idat, int $maxDecodedBytes): array
     {
-        if ($idat === '') {
-            return null;
+        if ($idat === '' || $maxDecodedBytes <= 0) {
+            return [
+                'ok' => false,
+                'reason' => 'malformed_png',
+            ];
         }
 
         if (function_exists('gzuncompress')) {
-            $decoded = @gzuncompress($idat);
+            $decoded = @gzuncompress($idat, $maxDecodedBytes + 1);
             if (is_string($decoded)) {
-                return $decoded;
+                if (strlen($decoded) > $maxDecodedBytes) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'oversized_payload',
+                    ];
+                }
+
+                return [
+                    'ok' => true,
+                    'bytes' => $decoded,
+                ];
             }
         }
 
-        return self::decode_zlib_stored_blocks($idat);
+        return self::decode_zlib_stored_blocks($idat, $maxDecodedBytes);
     }
 
-    private static function decode_zlib_stored_blocks(string $stream): ?string
+    /**
+     * @return array{ok:bool,bytes?:string,reason?:string}
+     */
+    private static function decode_zlib_stored_blocks(string $stream, int $maxDecodedBytes): array
     {
         if (strlen($stream) < 6) {
-            return null;
+            return [
+                'ok' => false,
+                'reason' => 'malformed_png',
+            ];
+        }
+
+        $cmf = ord($stream[0]);
+        $flg = ord($stream[1]);
+        if (($cmf & 0x0f) !== 8 || ($cmf >> 4) > 7 || (($cmf * 256 + $flg) % 31) !== 0 || ($flg & 0x20) !== 0) {
+            return [
+                'ok' => false,
+                'reason' => 'malformed_png',
+            ];
         }
 
         $deflate = substr($stream, 2, -4);
+        $expectedAdler = unpack('Nadler', substr($stream, -4))['adler'];
         $offset = 0;
         $length = strlen($deflate);
         $decoded = '';
@@ -1240,7 +1409,10 @@ final class WP_FTS_ReleaseReadinessChecker
             $isFinal = ($header & 1) === 1;
             $blockType = ($header >> 1) & 3;
             if ($blockType !== 0 || $offset + 4 > $length) {
-                return null;
+                return [
+                    'ok' => false,
+                    'reason' => 'malformed_png',
+                ];
             }
 
             $block = unpack('vlength/vnlength', substr($deflate, $offset, 4));
@@ -1248,7 +1420,16 @@ final class WP_FTS_ReleaseReadinessChecker
             $blockLength = (int) $block['length'];
             $blockNLength = (int) $block['nlength'];
             if ((($blockLength ^ 0xffff) & 0xffff) !== $blockNLength || $offset + $blockLength > $length) {
-                return null;
+                return [
+                    'ok' => false,
+                    'reason' => 'malformed_png',
+                ];
+            }
+            if (strlen($decoded) + $blockLength > $maxDecodedBytes) {
+                return [
+                    'ok' => false,
+                    'reason' => 'oversized_payload',
+                ];
             }
 
             $decoded .= substr($deflate, $offset, $blockLength);
@@ -1259,7 +1440,52 @@ final class WP_FTS_ReleaseReadinessChecker
             }
         }
 
-        return $sawFinal ? $decoded : null;
+        if (!$sawFinal || $offset !== $length) {
+            return [
+                'ok' => false,
+                'reason' => 'malformed_png',
+            ];
+        }
+        if (self::adler32($decoded) !== $expectedAdler) {
+            return [
+                'ok' => false,
+                'reason' => 'checksum_mismatch',
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'bytes' => $decoded,
+        ];
+    }
+
+    private static function adler32(string $bytes): int
+    {
+        $a = 1;
+        $b = 0;
+        $length = strlen($bytes);
+        for ($i = 0; $i < $length; $i++) {
+            $a = ($a + ord($bytes[$i])) % 65521;
+            $b = ($b + $a) % 65521;
+        }
+
+        return (($b << 16) | $a) & 0xffffffff;
+    }
+
+    private static function public_png_decoded_byte_length(int $width, int $height, int $bitDepth, int $colorType): ?int
+    {
+        $channels = match ($colorType) {
+            0, 3 => 1,
+            2 => 3,
+            4 => 2,
+            6 => 4,
+            default => null,
+        };
+        if ($channels === null || !in_array($bitDepth, [8, 16], true)) {
+            return null;
+        }
+
+        return $height * (1 + ($width * $channels * intdiv($bitDepth, 8)));
     }
 
     private static function decoded_public_png_is_single_color(
