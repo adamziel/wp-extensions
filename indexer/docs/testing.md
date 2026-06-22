@@ -114,7 +114,9 @@ direct-install ZIP release boundary. It records Git source metadata, keeps the
 direct-install readiness build lane blocked until explicitly opted in, captures
 public-submission blockers as non-target evidence, runs the optional
 WordPress/MySQL lanes only through their existing skip-first guards, and runs
-the PR-safe pure-PHP production-scale benchmark. The JSON statuses are:
+the PR-safe pure-PHP production-scale benchmark, including conservative
+generated-corpus performance budget gates for index and search/read timings.
+The JSON statuses are:
 
 - `pass`: the lane completed and its evidence passed.
 - `skip`: the lane was not configured or was intentionally deferred.
@@ -127,9 +129,10 @@ The report proves the current checkout's release evidence posture for the
 selected release target, disposable WordPress smoke readiness,
 provider-compatibility smoke readiness, real WordPress/MySQL proof availability,
 real MySQL production proof availability, public-submission blockers, and the
-generated-corpus benchmark. It does not create a release ZIP by default, does
-not approve WordPress.org/SVN submission, does not replace a configured
-disposable WordPress/MySQL run, and does not prove live production traffic.
+generated-corpus benchmark's structural and performance-budget gates. It does
+not create a release ZIP by default, does not approve WordPress.org/SVN
+submission, does not replace a configured disposable WordPress/MySQL run, and
+does not prove live MySQL behavior or live production traffic.
 
 Optional write-enabled evidence remains explicit:
 
@@ -442,7 +445,8 @@ false positives; it is not a production relevance-quality claim.
 
 The main harness includes the PR-safe native production-scale benchmark gates.
 Run the benchmark directly when you need the indexed-document, token, postings,
-materialized-row, result-window hydration, and memory-delta counters:
+materialized-row, result-window hydration, memory-delta, and conservative
+index/search timing budget counters:
 
 ```sh
 php tests/production-scale-benchmark.php
@@ -452,9 +456,14 @@ php -n tests/production-scale-benchmark.php
 ```
 
 Both profiles generate deterministic WordPress-shaped documents across title,
-body, excerpt, and content fields. The benchmark is pure-PHP generated evidence
-only: it does not use live MySQL, does not replay production traffic, and does
-not commit generated corpora, caches, logs, or archives.
+body, excerpt, and content fields. The benchmark reports bounded query-check
+and result-window timings, plus pass/fail performance gates for the generated
+corpus. The release evidence collector surfaces those gates in the
+`production_scale_benchmark` lane and fails that required lane when benchmark
+JSON reports a failed duration gate. This is pure-PHP generated evidence only:
+it does not use live MySQL, does not replay production traffic, does not certify
+public-submission readiness, and does not commit generated corpora, caches,
+logs, or archives.
 
 ## Large Search Corpus Generator
 
