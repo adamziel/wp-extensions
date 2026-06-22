@@ -79,6 +79,11 @@ final class WP_FTS_Production_Scale_Benchmark
 
         $queryReports = self::run_query_checks($searcher, $documentCount);
         $windowReports = self::run_result_windows($searcher, $windowLimit);
+        $queryCheckTotalDurationMs = self::sum_duration_ms($queryReports);
+        $queryCheckMaxDurationMs = self::max_duration_ms($queryReports);
+        $resultWindowTotalDurationMs = self::sum_duration_ms($windowReports);
+        $resultWindowMaxDurationMs = self::max_duration_ms($windowReports);
+        $searchReadTotalDurationMs = $queryCheckTotalDurationMs + $resultWindowTotalDurationMs;
         $storageCounters = self::storage_counters($storage);
         $memoryAfter = self::memory_usage();
         $peakAfter = self::memory_peak_usage();
@@ -98,11 +103,17 @@ final class WP_FTS_Production_Scale_Benchmark
             'hydrated_rows_with_metadata' => array_sum(array_map(static fn(array $row): int => (int) $row['metadata_rows'], $windowReports)),
             'hydrated_rows_with_snippets' => array_sum(array_map(static fn(array $row): int => (int) $row['snippet_rows'], $windowReports)),
             'index_duration_ms' => $indexDurationMs,
+            'query_check_total_duration_ms' => $queryCheckTotalDurationMs,
+            'query_check_max_duration_ms' => $queryCheckMaxDurationMs,
+            'result_window_total_duration_ms' => $resultWindowTotalDurationMs,
+            'result_window_max_duration_ms' => $resultWindowMaxDurationMs,
+            'search_read_total_duration_ms' => $searchReadTotalDurationMs,
             'memory_delta_bytes' => $memoryBefore === null || $memoryAfter === null ? null : max(0, $memoryAfter - $memoryBefore),
             'peak_memory_delta_bytes' => $peakBefore === null || $peakAfter === null ? null : max(0, $peakAfter - $peakBefore),
         ]);
 
         $gates = self::evaluate_gates($metrics, self::gates_for($documentCount, $windowLimit));
+        $performanceBudget = self::performance_budget_summary($metrics, $gates);
         $failures = [];
         foreach ($queryReports as $queryReport) {
             if (!$queryReport['passed']) {
@@ -116,6 +127,17 @@ final class WP_FTS_Production_Scale_Benchmark
         }
         foreach ($gates as $gate) {
             if (!$gate['passed']) {
+                if (($gate['category'] ?? '') === 'performance') {
+                    $failures[] = sprintf(
+                        'performance budget gate failed: %s %s %s (actual %s)',
+                        (string) $gate['metric'],
+                        (string) $gate['operator'],
+                        self::format_nullable_int($gate['expected']),
+                        self::format_nullable_int($gate['actual'])
+                    );
+                    continue;
+                }
+
                 $failures[] = 'gate failed: ' . $gate['metric'];
             }
         }
@@ -132,6 +154,7 @@ final class WP_FTS_Production_Scale_Benchmark
             ],
             'metrics' => $metrics,
             'gates' => $gates,
+            'performance_budget' => $performanceBudget,
             'query_checks' => $queryReports,
             'result_windows' => $windowReports,
             'failures' => $failures,
@@ -155,7 +178,7 @@ final class WP_FTS_Production_Scale_Benchmark
                 implode(',', self::string_list($profile['available_profiles'] ?? []))
             ),
             sprintf(
-                'counters: indexed_docs=%d raw_tokens=%d weighted_tokens=%d unique_terms=%d postings=%d materialized_rows=%d hydrated_rows=%d memory_delta=%s peak_delta=%s duration_ms=%d',
+                'counters: indexed_docs=%d raw_tokens=%d weighted_tokens=%d unique_terms=%d postings=%d materialized_rows=%d hydrated_rows=%d memory_delta=%s peak_delta=%s index_ms=%d query_ms=%d window_ms=%d search_read_ms=%d',
                 (int) ($metrics['indexed_documents'] ?? 0),
                 (int) ($metrics['raw_token_occurrences'] ?? 0),
                 (int) ($metrics['weighted_token_instances'] ?? 0),
@@ -165,14 +188,18 @@ final class WP_FTS_Production_Scale_Benchmark
                 (int) ($metrics['hydrated_result_rows'] ?? 0),
                 self::format_nullable_int($metrics['memory_delta_bytes'] ?? null),
                 self::format_nullable_int($metrics['peak_memory_delta_bytes'] ?? null),
-                (int) ($metrics['index_duration_ms'] ?? 0)
+                (int) ($metrics['index_duration_ms'] ?? 0),
+                (int) ($metrics['query_check_total_duration_ms'] ?? 0),
+                (int) ($metrics['result_window_total_duration_ms'] ?? 0),
+                (int) ($metrics['search_read_total_duration_ms'] ?? 0)
             ),
             'gates:',
         ];
 
         foreach (self::array_value($result['gates'] ?? []) as $gate) {
             $lines[] = sprintf(
-                '  %s %s %s: %s (actual %s)',
+                '  [%s] %s %s %s: %s (actual %s)',
+                (string) ($gate['category'] ?? 'structural'),
                 (string) ($gate['metric'] ?? ''),
                 (string) ($gate['operator'] ?? ''),
                 self::format_nullable_int($gate['expected'] ?? null),
@@ -184,12 +211,13 @@ final class WP_FTS_Production_Scale_Benchmark
         $lines[] = 'query_checks:';
         foreach (self::array_value($result['query_checks'] ?? []) as $query) {
             $lines[] = sprintf(
-                '  %s [%s/%s]: expected_top=%d actual_top=%d %s',
+                '  %s [%s/%s]: expected_top=%d actual_top=%d duration_ms=%d %s',
                 (string) ($query['id'] ?? ''),
                 (string) ($query['family'] ?? ''),
                 (string) ($query['mode'] ?? ''),
                 (int) ($query['expected_top_doc_id'] ?? 0),
                 (int) ($query['actual_top_doc_id'] ?? 0),
+                (int) ($query['duration_ms'] ?? 0),
                 !empty($query['passed']) ? 'pass' : 'fail'
             );
         }
@@ -197,12 +225,13 @@ final class WP_FTS_Production_Scale_Benchmark
         $lines[] = 'result_windows:';
         foreach (self::array_value($result['result_windows'] ?? []) as $window) {
             $lines[] = sprintf(
-                '  %s: total=%d hydrated=%d metadata=%d snippets=%d %s',
+                '  %s: total=%d hydrated=%d metadata=%d snippets=%d duration_ms=%d %s',
                 (string) ($window['id'] ?? ''),
                 (int) ($window['total'] ?? 0),
                 (int) ($window['hydrated_rows'] ?? 0),
                 (int) ($window['metadata_rows'] ?? 0),
                 (int) ($window['snippet_rows'] ?? 0),
+                (int) ($window['duration_ms'] ?? 0),
                 !empty($window['passed']) ? 'pass' : 'fail'
             );
         }
@@ -491,11 +520,13 @@ final class WP_FTS_Production_Scale_Benchmark
             if ((int) $check['expected_top_doc_id'] > $documentCount) {
                 continue;
             }
+            $started = microtime(true);
             $rows = $searcher->search((string) $check['query'], [
                 'lang' => 'en',
                 'mode' => (string) $check['mode'],
                 'limit' => 5,
             ]);
+            $durationMs = self::elapsed_ms($started);
             $topDocId = isset($rows[0]['doc_id']) ? (int) $rows[0]['doc_id'] : 0;
             $reports[] = [
                 'id' => $check['id'],
@@ -505,6 +536,7 @@ final class WP_FTS_Production_Scale_Benchmark
                 'expected_top_doc_id' => $check['expected_top_doc_id'],
                 'actual_top_doc_id' => $topDocId,
                 'result_count' => count($rows),
+                'duration_ms' => $durationMs,
                 'passed' => $topDocId === (int) $check['expected_top_doc_id'],
             ];
         }
@@ -519,6 +551,7 @@ final class WP_FTS_Production_Scale_Benchmark
     {
         $windows = [];
         foreach ([0, $windowLimit, $windowLimit * 2] as $offset) {
+            $started = microtime(true);
             $response = $searcher->search('production benchmark generated', [
                 'lang' => 'en',
                 'mode' => 'AND',
@@ -530,6 +563,7 @@ final class WP_FTS_Production_Scale_Benchmark
                 'snippet_length' => 96,
                 'highlight' => true,
             ]);
+            $durationMs = self::elapsed_ms($started);
             $results = isset($response['results']) && is_array($response['results']) ? $response['results'] : [];
             $metadataRows = count(array_filter($results, static fn(array $row): bool => isset($row['title']) && (string) $row['title'] !== ''));
             $snippetRows = count(array_filter($results, static fn(array $row): bool => isset($row['snippet']) && (string) $row['snippet'] !== ''));
@@ -542,6 +576,7 @@ final class WP_FTS_Production_Scale_Benchmark
                 'hydrated_rows' => $hydratedRows,
                 'metadata_rows' => $metadataRows,
                 'snippet_rows' => $snippetRows,
+                'duration_ms' => $durationMs,
                 'passed' => $hydratedRows > 0 && $metadataRows === $hydratedRows && $snippetRows === $hydratedRows,
             ];
         }
@@ -604,33 +639,37 @@ final class WP_FTS_Production_Scale_Benchmark
     }
 
     /**
-     * @return array<string,array{operator:string,expected:int|null}>
+     * @return array<string,array{operator:string,expected:int|null,category:string}>
      */
     private static function gates_for(int $documentCount, int $windowLimit): array
     {
         return [
-            'indexed_documents' => ['operator' => '===', 'expected' => $documentCount],
-            'document_rows' => ['operator' => '===', 'expected' => $documentCount],
-            'document_metadata_rows' => ['operator' => '===', 'expected' => $documentCount],
-            'raw_token_occurrences' => ['operator' => '>=', 'expected' => $documentCount * 26],
-            'weighted_token_instances' => ['operator' => '>=', 'expected' => $documentCount * 32],
-            'unique_terms' => ['operator' => '>=', 'expected' => min(90, max(30, intdiv($documentCount, 3)))],
-            'posting_rows' => ['operator' => '>=', 'expected' => $documentCount * 14],
-            'materialized_rows' => ['operator' => '<=', 'expected' => $documentCount * 180 + 2000],
-            'hydrated_result_rows' => ['operator' => '>=', 'expected' => $windowLimit * 3],
-            'hydrated_rows_with_metadata' => ['operator' => '>=', 'expected' => $windowLimit * 3],
-            'hydrated_rows_with_snippets' => ['operator' => '>=', 'expected' => $windowLimit * 3],
-            'query_checks_passed' => ['operator' => '===', 'expected' => 3],
-            'multi_token_checks_passed' => ['operator' => '>=', 'expected' => 2],
-            'folding_checks_passed' => ['operator' => '>=', 'expected' => 1],
-            'memory_delta_bytes' => ['operator' => '<=', 'expected' => max(64 * 1024 * 1024, $documentCount * 196608)],
+            'indexed_documents' => ['operator' => '===', 'expected' => $documentCount, 'category' => 'structural'],
+            'document_rows' => ['operator' => '===', 'expected' => $documentCount, 'category' => 'structural'],
+            'document_metadata_rows' => ['operator' => '===', 'expected' => $documentCount, 'category' => 'structural'],
+            'raw_token_occurrences' => ['operator' => '>=', 'expected' => $documentCount * 26, 'category' => 'structural'],
+            'weighted_token_instances' => ['operator' => '>=', 'expected' => $documentCount * 32, 'category' => 'structural'],
+            'unique_terms' => ['operator' => '>=', 'expected' => min(90, max(30, intdiv($documentCount, 3))), 'category' => 'structural'],
+            'posting_rows' => ['operator' => '>=', 'expected' => $documentCount * 14, 'category' => 'structural'],
+            'materialized_rows' => ['operator' => '<=', 'expected' => $documentCount * 180 + 2000, 'category' => 'structural'],
+            'hydrated_result_rows' => ['operator' => '>=', 'expected' => $windowLimit * 3, 'category' => 'structural'],
+            'hydrated_rows_with_metadata' => ['operator' => '>=', 'expected' => $windowLimit * 3, 'category' => 'structural'],
+            'hydrated_rows_with_snippets' => ['operator' => '>=', 'expected' => $windowLimit * 3, 'category' => 'structural'],
+            'query_checks_passed' => ['operator' => '===', 'expected' => 3, 'category' => 'structural'],
+            'multi_token_checks_passed' => ['operator' => '>=', 'expected' => 2, 'category' => 'structural'],
+            'folding_checks_passed' => ['operator' => '>=', 'expected' => 1, 'category' => 'structural'],
+            'memory_delta_bytes' => ['operator' => '<=', 'expected' => max(64 * 1024 * 1024, $documentCount * 196608), 'category' => 'structural'],
+            'index_duration_ms' => ['operator' => '<=', 'expected' => self::index_duration_budget_ms($documentCount), 'category' => 'performance'],
+            'query_check_total_duration_ms' => ['operator' => '<=', 'expected' => self::query_check_total_budget_ms($documentCount), 'category' => 'performance'],
+            'result_window_total_duration_ms' => ['operator' => '<=', 'expected' => self::result_window_total_budget_ms($documentCount, $windowLimit), 'category' => 'performance'],
+            'search_read_total_duration_ms' => ['operator' => '<=', 'expected' => self::search_read_total_budget_ms($documentCount, $windowLimit), 'category' => 'performance'],
         ];
     }
 
     /**
      * @param array<string,mixed> $metrics
-     * @param array<string,array{operator:string,expected:int|null}> $gates
-     * @return array<int,array{metric:string,operator:string,expected:int|null,actual:int|null,passed:bool}>
+     * @param array<string,array{operator:string,expected:int|null,category:string}> $gates
+     * @return array<int,array{metric:string,operator:string,expected:int|null,actual:int|null,passed:bool,category:string}>
      */
     private static function evaluate_gates(array $metrics, array $gates): array
     {
@@ -651,10 +690,103 @@ final class WP_FTS_Production_Scale_Benchmark
                 'expected' => $expected,
                 'actual' => $actual,
                 'passed' => $passed,
+                'category' => $gate['category'],
             ];
         }
 
         return $rows;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $rows
+     */
+    private static function sum_duration_ms(array $rows): int
+    {
+        $total = 0;
+        foreach ($rows as $row) {
+            $total += max(0, (int) ($row['duration_ms'] ?? 0));
+        }
+
+        return $total;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $rows
+     */
+    private static function max_duration_ms(array $rows): int
+    {
+        $max = 0;
+        foreach ($rows as $row) {
+            $max = max($max, max(0, (int) ($row['duration_ms'] ?? 0)));
+        }
+
+        return $max;
+    }
+
+    private static function elapsed_ms(float $started): int
+    {
+        return max(0, (int) round((microtime(true) - $started) * 1000));
+    }
+
+    private static function index_duration_budget_ms(int $documentCount): int
+    {
+        return max(15000, $documentCount * 100);
+    }
+
+    private static function query_check_total_budget_ms(int $documentCount): int
+    {
+        return max(3000, $documentCount * 20);
+    }
+
+    private static function result_window_total_budget_ms(int $documentCount, int $windowLimit): int
+    {
+        return max(5000, ($documentCount * 25) + ($windowLimit * 250));
+    }
+
+    private static function search_read_total_budget_ms(int $documentCount, int $windowLimit): int
+    {
+        return self::query_check_total_budget_ms($documentCount)
+            + self::result_window_total_budget_ms($documentCount, $windowLimit);
+    }
+
+    /**
+     * @param array<string,mixed> $metrics
+     * @param array<int,array<string,mixed>> $gates
+     * @return array<string,mixed>
+     */
+    private static function performance_budget_summary(array $metrics, array $gates): array
+    {
+        $passCount = 0;
+        $failCount = 0;
+        $failed = [];
+        foreach ($gates as $gate) {
+            if (($gate['category'] ?? '') !== 'performance') {
+                continue;
+            }
+            if (!empty($gate['passed'])) {
+                $passCount++;
+                continue;
+            }
+
+            $failCount++;
+            $failed[] = (string) ($gate['metric'] ?? '');
+        }
+
+        return [
+            'metrics' => [
+                'index_duration_ms' => $metrics['index_duration_ms'] ?? null,
+                'query_check_total_duration_ms' => $metrics['query_check_total_duration_ms'] ?? null,
+                'query_check_max_duration_ms' => $metrics['query_check_max_duration_ms'] ?? null,
+                'result_window_total_duration_ms' => $metrics['result_window_total_duration_ms'] ?? null,
+                'result_window_max_duration_ms' => $metrics['result_window_max_duration_ms'] ?? null,
+                'search_read_total_duration_ms' => $metrics['search_read_total_duration_ms'] ?? null,
+            ],
+            'gate_counts' => [
+                'pass' => $passCount,
+                'fail' => $failCount,
+            ],
+            'failed_gates' => $failed,
+        ];
     }
 
     private static function positive_int_arg(string $arg, string $prefix): int

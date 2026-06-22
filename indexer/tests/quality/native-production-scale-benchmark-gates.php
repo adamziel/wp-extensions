@@ -23,20 +23,48 @@ test_case('quality native production-scale benchmark gates pass pure-PHP generat
         'posting_rows',
         'materialized_rows',
         'hydrated_result_rows',
+        'index_duration_ms',
+        'query_check_total_duration_ms',
+        'query_check_max_duration_ms',
+        'result_window_total_duration_ms',
+        'result_window_max_duration_ms',
+        'search_read_total_duration_ms',
         'memory_delta_bytes',
     ] as $metric) {
         assert_true(array_key_exists($metric, $metrics), "production-scale benchmark should report {$metric}");
+        if (str_ends_with($metric, '_duration_ms')) {
+            assert_true((int) $metrics[$metric] >= 0, "production-scale benchmark duration should be nonnegative for {$metric}");
+        }
     }
 
+    $performanceGateCount = 0;
     foreach ($result['gates'] as $gate) {
         assert_true((bool) $gate['passed'], 'production-scale benchmark gate should pass: ' . (string) $gate['metric']);
+        assert_true(in_array((string) ($gate['category'] ?? ''), ['structural', 'performance'], true), 'production-scale benchmark gate should classify structural or performance evidence');
+        if (($gate['category'] ?? '') === 'performance') {
+            $performanceGateCount++;
+        }
     }
+    assert_true($performanceGateCount >= 4, 'production-scale benchmark should include explicit performance budget gates');
+
     foreach ($result['query_checks'] as $query) {
         assert_true((bool) $query['passed'], 'production-scale benchmark query should pass: ' . (string) $query['id']);
+        assert_true(array_key_exists('duration_ms', $query), 'production-scale benchmark query checks should report bounded timing evidence');
+        assert_true((int) $query['duration_ms'] >= 0, 'production-scale benchmark query check durations should be nonnegative');
     }
     foreach ($result['result_windows'] as $window) {
         assert_true((bool) $window['passed'], 'production-scale benchmark hydrated result window should pass: ' . (string) $window['id']);
+        assert_true(array_key_exists('duration_ms', $window), 'production-scale benchmark result windows should report bounded timing evidence');
+        assert_true((int) $window['duration_ms'] >= 0, 'production-scale benchmark result window durations should be nonnegative');
     }
+
+    $performanceBudget = is_array($result['performance_budget'] ?? null) ? $result['performance_budget'] : [];
+    $budgetMetrics = is_array($performanceBudget['metrics'] ?? null) ? $performanceBudget['metrics'] : [];
+    $budgetCounts = is_array($performanceBudget['gate_counts'] ?? null) ? $performanceBudget['gate_counts'] : [];
+    assert_true(array_key_exists('search_read_total_duration_ms', $budgetMetrics), 'production-scale benchmark should summarize search/read timing in performance budget evidence');
+    assert_true((int) ($budgetCounts['pass'] ?? 0) >= 4, 'production-scale benchmark should summarize passed performance budget gates');
+    assert_same(0, (int) ($budgetCounts['fail'] ?? -1), 'production-scale benchmark should have no default performance budget failures');
+    assert_same([], $performanceBudget['failed_gates'] ?? null, 'production-scale benchmark should list no failed performance gates by default');
 
     assert_same($profiles['pr-safe']['documents'], (int) $metrics['indexed_documents'], 'PR-safe benchmark should index the configured document count');
     assert_true((int) $metrics['hydrated_result_rows'] >= 24, 'PR-safe benchmark should hydrate bounded result windows');

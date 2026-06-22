@@ -187,15 +187,21 @@ skip/pass/fail evidence for the host-configured disposable WordPress release
 smoke, host-configured provider compatibility smoke, explicitly opted-in Docker
 disposable release/provider smoke, explicitly opted-in Docker disposable
 lifecycle smoke, real WordPress/MySQL integration proof, real MySQL production
-proof, and PR-safe production-scale benchmark. The release/provider Docker lane
-builds a temporary direct-install ZIP and disposable WordPress/MariaDB stack so
-it can replace the host-environment skip with direct-install release/provider
-smoke evidence when Docker is available. The lifecycle Docker lane is
-direct-install/operator lifecycle evidence: it installs a source copy in a
-disposable WordPress/MariaDB stack, proves activation/repair/deactivation and
-uninstall retention boundaries, and does not build a public-submission artifact.
+proof, and PR-safe production-scale benchmark. The benchmark lane is generated
+pure-PHP evidence and includes bounded structural gates plus conservative
+index/search performance-budget gates for the deterministic generated corpus;
+it fails when benchmark JSON reports failed gates. It is not live MySQL proof,
+production-traffic proof, or public-submission certification. The
+release/provider Docker lane builds a temporary direct-install ZIP and
+disposable WordPress/MariaDB stack so it can replace the host-environment skip
+with direct-install release/provider smoke evidence when Docker is available.
+The lifecycle Docker lane is direct-install/operator lifecycle evidence: it
+installs a source copy in a disposable WordPress/MariaDB stack, proves
+activation/repair/deactivation and uninstall retention boundaries, and does not build a public-submission artifact.
 Multisite lifecycle proof is explicitly not run by that lane, and the collector
-records that boundary. The upgrade/multisite Docker lane is direct-install/operator upgrade evidence:
+records that boundary.
+
+The upgrade/multisite Docker lane is direct-install/operator upgrade evidence:
 it requires either `--previous-direct-package=/path/to/previous-wp-fts-indexer.zip`
 or `--previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA`. The ref form is
 for release reviews that need repo-owned evidence without a manually supplied
