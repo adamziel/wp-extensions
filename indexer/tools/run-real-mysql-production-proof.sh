@@ -8,6 +8,27 @@ SOURCE_SHA="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
 PORT="${WP_FTS_HTTP_PORT:-8088}"
 PROOF_ROOT="$(mktemp -d /tmp/wp-fts-mysql-proof.XXXXXX)"
 COMPOSE_FILE="${PROOF_ROOT}/compose.yaml"
+PROOF_HOME="${PROOF_ROOT}/home"
+PROOF_TMPDIR="${PROOF_ROOT}/tmp"
+PROOF_COMPOSER_HOME="${PROOF_ROOT}/composer/home"
+PROOF_COMPOSER_CACHE_DIR="${PROOF_ROOT}/composer/cache"
+PROOF_SAFE_PATH="${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+
+PROOF_TAR_EXCLUDES=(
+    --exclude='./vendor'
+    --exclude='./node_modules'
+    --exclude='./dist'
+    --exclude='./.git'
+    --exclude='./.env'
+    --exclude='*/.env'
+    --exclude='*.pem'
+    --exclude='./auth.json'
+    --exclude='*/auth.json'
+    --exclude='./.composer'
+    --exclude='./.composer/**'
+    --exclude='*/.composer'
+    --exclude='*/.composer/**'
+)
 
 cleanup() {
     local status=$?
@@ -21,47 +42,45 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "${PROOF_ROOT}/plugin"
-(
-    cd "${PLUGIN_DIR}"
-    tar \
-        --exclude='./vendor' \
-        --exclude='./node_modules' \
-        --exclude='./dist' \
-        --exclude='.git' \
-        --exclude='.env' \
-        --exclude='*.pem' \
-        -cf - .
-) | (
-    cd "${PROOF_ROOT}/plugin"
-    tar -xf -
-)
+copy_proof_tree() {
+    local source_dir="$1"
+    local destination_dir="$2"
+
+    mkdir -p "${destination_dir}"
+    (
+        cd "${source_dir}"
+        tar "${PROOF_TAR_EXCLUDES[@]}" -cf - .
+    ) | (
+        cd "${destination_dir}"
+        tar -xf -
+    )
+}
+
+install_proof_composer_dependencies() {
+    mkdir -p "${PROOF_HOME}" "${PROOF_TMPDIR}" "${PROOF_COMPOSER_HOME}" "${PROOF_COMPOSER_CACHE_DIR}"
+
+    # Keep host credential helpers and Composer auth out of the copied-source proof install.
+    (
+        cd "${PROOF_ROOT}/plugin"
+        env -i \
+            PATH="${PROOF_SAFE_PATH}" \
+            HOME="${PROOF_HOME}" \
+            TMPDIR="${PROOF_TMPDIR}" \
+            COMPOSER_HOME="${PROOF_COMPOSER_HOME}" \
+            COMPOSER_CACHE_DIR="${PROOF_COMPOSER_CACHE_DIR}" \
+            composer install --no-interaction --no-dev --optimize-autoloader
+    )
+}
+
+copy_proof_tree "${PLUGIN_DIR}" "${PROOF_ROOT}/plugin"
 
 if [[ ! -d "${COMPONENT_DIR}" ]]; then
     echo "BLOCKED: Missing Composer path repository at ${COMPONENT_DIR}." >&2
     exit 1
 fi
 
-mkdir -p "${PROOF_ROOT}/components/full-text-search"
-(
-    cd "${COMPONENT_DIR}"
-    tar \
-        --exclude='./vendor' \
-        --exclude='./node_modules' \
-        --exclude='./dist' \
-        --exclude='.git' \
-        --exclude='.env' \
-        --exclude='*.pem' \
-        -cf - .
-) | (
-    cd "${PROOF_ROOT}/components/full-text-search"
-    tar -xf -
-)
-
-(
-    cd "${PROOF_ROOT}/plugin"
-    composer install --no-interaction --no-dev --optimize-autoloader
-)
+copy_proof_tree "${COMPONENT_DIR}" "${PROOF_ROOT}/components/full-text-search"
+install_proof_composer_dependencies
 
 cat > "${COMPOSE_FILE}" <<YAML
 services:
