@@ -255,6 +255,8 @@ final class WP_FTS_Plugin
     private const DEBUG_MAX_SQL_QUERIES = 8;
     private const DEBUG_MAX_ASSOC_ITEMS = 16;
     private const DEBUG_MAX_TIMING_PHASES = 16;
+    private const DEBUG_SEARCH_HOOK = 'posts_pre_query';
+    private const DEBUG_MAX_HOOK_CALLBACKS = self::DEBUG_MAX_LIST_ITEMS;
     private const ANALYZER_PACK_STATUS_MATRIX_MAX_ROWS = 64;
     private const FTS_TABLE_SUFFIXES = [
         'fts_terms',
@@ -1449,6 +1451,7 @@ final class WP_FTS_Plugin
             'timings_ms' => [],
             'counts' => self::debug_default_counts(),
             'analyzer_pack_status' => [],
+            'search_hook_pipeline' => [],
             'search_explain' => [],
             'performance_budget' => [],
             'sql_queries' => self::debug_sql_query_initial_summary($sql_capture),
@@ -1917,15 +1920,294 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Summarize registered posts_pre_query callbacks without invoking them.
+     *
+     * @return array<string,mixed>
+     */
+    private static function debug_search_hook_pipeline(): array
+    {
+        $summary = [
+            'hook' => self::DEBUG_SEARCH_HOOK,
+            'fts_priority' => self::SEARCH_REPLACEMENT_PRIORITY,
+            'total_callbacks' => 0,
+            'shown_count' => 0,
+            'counts' => [
+                'before' => 0,
+                'same_priority' => 0,
+                'after' => 0,
+                'unknown' => 0,
+            ],
+            'callbacks' => [],
+            'more' => false,
+            'reason' => '',
+        ];
+
+        try {
+            global $wp_filter;
+            $hook_state = isset($wp_filter) && is_array($wp_filter)
+                ? ($wp_filter[self::DEBUG_SEARCH_HOOK] ?? null)
+                : null;
+        } catch (Throwable $e) {
+            $summary['reason'] = 'Hook state could not be read.';
+
+            return $summary;
+        }
+
+        $callbacks_by_priority = self::debug_hook_callbacks_by_priority($hook_state);
+        if ($callbacks_by_priority === null) {
+            $summary['reason'] = 'No compatible posts_pre_query hook state is available.';
+
+            return $summary;
+        }
+
+        $buckets = [];
+        $order = 0;
+        foreach ($callbacks_by_priority as $priority => $bucket) {
+            $buckets[] = [
+                'priority' => self::debug_hook_priority_value($priority),
+                'raw_priority' => $priority,
+                'bucket' => $bucket,
+                'order' => $order++,
+            ];
+        }
+        usort($buckets, static function (array $left, array $right): int {
+            $left_priority = $left['priority'];
+            $right_priority = $right['priority'];
+            if ($left_priority === null && $right_priority === null) {
+                return $left['order'] <=> $right['order'];
+            }
+            if ($left_priority === null) {
+                return 1;
+            }
+            if ($right_priority === null) {
+                return -1;
+            }
+            if ($left_priority === $right_priority) {
+                return $left['order'] <=> $right['order'];
+            }
+
+            return $left_priority <=> $right_priority;
+        });
+
+        foreach ($buckets as $bucket_info) {
+            $priority = is_int($bucket_info['priority']) ? $bucket_info['priority'] : null;
+            $relation = self::debug_hook_priority_relation($priority);
+            $entries = self::debug_hook_bucket_entries($bucket_info['bucket']);
+            foreach ($entries as $entry) {
+                $summary['total_callbacks']++;
+                $summary['counts'][$relation] = max(0, (int) ($summary['counts'][$relation] ?? 0)) + 1;
+                if (count($summary['callbacks']) >= self::DEBUG_MAX_HOOK_CALLBACKS) {
+                    continue;
+                }
+
+                $summary['callbacks'][] = [
+                    'priority' => $priority ?? 'unknown',
+                    'relation' => $relation,
+                    'label' => self::debug_hook_callback_label(self::debug_hook_callback_from_entry($entry)),
+                ];
+            }
+        }
+
+        $summary['shown_count'] = count($summary['callbacks']);
+        $summary['more'] = $summary['shown_count'] < $summary['total_callbacks'];
+        if ($summary['total_callbacks'] === 0) {
+            $summary['reason'] = 'No posts_pre_query callbacks are registered.';
+        }
+
+        return $summary;
+    }
+
+    /**
+     * @return array<int|string,mixed>|null
+     */
+    private static function debug_hook_callbacks_by_priority(mixed $hook_state): ?array
+    {
+        if ($hook_state === null) {
+            return [];
+        }
+        if (is_array($hook_state)) {
+            return $hook_state;
+        }
+        if (!is_object($hook_state)) {
+            return null;
+        }
+
+        try {
+            $callbacks = $hook_state->callbacks ?? null;
+        } catch (Throwable $e) {
+            return null;
+        }
+
+        return is_array($callbacks) ? $callbacks : null;
+    }
+
+    private static function debug_hook_priority_value(mixed $priority): ?int
+    {
+        if (is_int($priority)) {
+            return $priority;
+        }
+        if (is_string($priority) && preg_match('/^-?[0-9]+$/', $priority) === 1) {
+            return (int) $priority;
+        }
+
+        return null;
+    }
+
+    private static function debug_hook_priority_relation(?int $priority): string
+    {
+        if ($priority === null) {
+            return 'unknown';
+        }
+        if ($priority < self::SEARCH_REPLACEMENT_PRIORITY) {
+            return 'before';
+        }
+        if ($priority === self::SEARCH_REPLACEMENT_PRIORITY) {
+            return 'same_priority';
+        }
+
+        return 'after';
+    }
+
+    /**
+     * @return mixed[]
+     */
+    private static function debug_hook_bucket_entries(mixed $bucket): array
+    {
+        if (!is_array($bucket)) {
+            return [$bucket];
+        }
+
+        return $bucket === [] ? [] : array_values($bucket);
+    }
+
+    private static function debug_hook_callback_from_entry(mixed $entry): mixed
+    {
+        if (is_array($entry) && array_key_exists('function', $entry)) {
+            return $entry['function'];
+        }
+
+        return $entry;
+    }
+
+    private static function debug_hook_callback_label(mixed $callback): string
+    {
+        if ($callback instanceof Closure) {
+            return 'closure';
+        }
+
+        if (is_string($callback)) {
+            return self::debug_hook_string_callback_label($callback);
+        }
+
+        if (is_array($callback)) {
+            $parts = array_values($callback);
+            if (count($parts) !== 2 || !is_scalar($parts[1])) {
+                return 'unknown';
+            }
+
+            $method = self::debug_hook_method_label((string) $parts[1]);
+            if ($method === '') {
+                return 'unknown';
+            }
+
+            if (is_object($parts[0])) {
+                $class = self::debug_hook_class_label(get_class($parts[0]));
+
+                return $class !== '' ? 'method: ' . $class . '::' . $method : 'unknown';
+            }
+
+            if (is_string($parts[0])) {
+                $class = self::debug_hook_class_label($parts[0]);
+
+                return $class !== '' ? 'static: ' . $class . '::' . $method : 'unknown';
+            }
+
+            return 'unknown';
+        }
+
+        if (is_object($callback)) {
+            $class = self::debug_hook_class_label(get_class($callback));
+            if ($class === '') {
+                return 'unknown';
+            }
+
+            return method_exists($callback, '__invoke') ? 'method: ' . $class . '::__invoke' : 'object: ' . $class;
+        }
+
+        return 'unknown';
+    }
+
+    private static function debug_hook_string_callback_label(string $callback): string
+    {
+        $callback = self::debug_truncate_text($callback, 120);
+        if ($callback === '') {
+            return 'unknown';
+        }
+
+        if (str_contains($callback, '::')) {
+            $parts = explode('::', $callback, 2);
+            $class = self::debug_hook_class_label($parts[0] ?? '');
+            $method = self::debug_hook_method_label($parts[1] ?? '');
+
+            return $class !== '' && $method !== '' ? 'static: ' . $class . '::' . $method : 'unknown';
+        }
+
+        $function = self::debug_hook_symbol_label($callback);
+
+        return $function !== '' ? 'function: ' . $function : 'unknown';
+    }
+
+    private static function debug_hook_class_label(string $class): string
+    {
+        $class = self::debug_truncate_text($class, 120);
+        if ($class === '') {
+            return '';
+        }
+        if (str_contains($class, 'class@anonymous')) {
+            return 'anonymous class';
+        }
+
+        return self::debug_hook_symbol_label($class);
+    }
+
+    private static function debug_hook_method_label(string $method): string
+    {
+        $method = self::debug_truncate_text($method, 80);
+
+        return preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $method) === 1 ? $method : '';
+    }
+
+    private static function debug_hook_symbol_label(string $symbol): string
+    {
+        $symbol = self::debug_truncate_text($symbol, 120);
+        if (
+            $symbol === ''
+            || str_contains($symbol, "\0")
+            || str_contains($symbol, '/')
+            || preg_match('/^[A-Za-z]:\\\\/', $symbol) === 1
+        ) {
+            return '';
+        }
+
+        return preg_match('/^\\\\?[A-Za-z_][A-Za-z0-9_]*(?:\\\\[A-Za-z_][A-Za-z0-9_]*)*$/', $symbol) === 1
+            ? ltrim($symbol, '\\')
+            : '';
+    }
+
+    /**
      * @param array<string,mixed> $extra
      * @return array<string,mixed>
      */
     private static function debug_normalize_trace_extra(array $extra): array
     {
         $allowed = [];
-        foreach (['query_lang', 'fallback_languages', 'settings', 'counts', 'timings_ms', 'analyzer_pack_status', 'search_explain', 'notes'] as $key) {
+        $structured_keys = [
+            'search_explain' => true,
+            'search_hook_pipeline' => true,
+        ];
+        foreach (['query_lang', 'fallback_languages', 'settings', 'counts', 'timings_ms', 'analyzer_pack_status', 'search_hook_pipeline', 'search_explain', 'notes'] as $key) {
             if (array_key_exists($key, $extra)) {
-                $allowed[$key] = is_array($extra[$key]) && $key === 'search_explain'
+                $allowed[$key] = is_array($extra[$key]) && isset($structured_keys[$key])
                     ? self::debug_normalize_structured_value($extra[$key])
                     : (is_array($extra[$key]) ? self::debug_normalize_assoc($extra[$key]) : self::debug_truncate_text((string) $extra[$key]));
             }
@@ -2329,6 +2611,7 @@ final class WP_FTS_Plugin
                 self::render_debug_row('Bailout reason', (string) $trace['bailout_reason']);
             }
             self::render_debug_row('Settings', self::debug_assoc_summary($trace['settings'] ?? []));
+            self::render_debug_row('Search hook pipeline', self::debug_search_hook_pipeline_summary($trace['search_hook_pipeline'] ?? []));
             $search_explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
             self::render_debug_row('Storage backend', self::debug_assoc_summary($search_explain['storage'] ?? []));
             self::render_debug_row('Query plan', self::debug_query_plan_summary($search_explain['query_plan'] ?? []));
@@ -2552,6 +2835,58 @@ final class WP_FTS_Plugin
         }
 
         return self::debug_truncate_text(implode('; ', $parts), 800);
+    }
+
+    private static function debug_search_hook_pipeline_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $priority = self::debug_scalar_summary($value['fts_priority'] ?? '');
+        $counts = is_array($value['counts'] ?? null) ? $value['counts'] : [];
+        $parts = [];
+        if ($priority !== '') {
+            $parts[] = 'fts_priority=' . $priority;
+        }
+        foreach (['before', 'same_priority', 'after', 'unknown'] as $relation) {
+            if (array_key_exists($relation, $counts)) {
+                $parts[] = $relation . '=' . max(0, (int) $counts[$relation]);
+            }
+        }
+
+        $callbacks = [];
+        if (isset($value['callbacks']) && is_array($value['callbacks'])) {
+            foreach ($value['callbacks'] as $callback) {
+                if (!is_array($callback)) {
+                    continue;
+                }
+                $callback_priority = self::debug_scalar_summary($callback['priority'] ?? '');
+                $relation = self::debug_scalar_summary($callback['relation'] ?? '');
+                $label = self::debug_scalar_summary($callback['label'] ?? '');
+                $callbacks[] = trim(
+                    ($callback_priority !== '' ? 'p' . $callback_priority . ' ' : '')
+                    . ($relation !== '' ? $relation . ' ' : '')
+                    . ($label !== '' ? $label : 'unknown')
+                );
+                if (count($callbacks) >= self::DEBUG_MAX_HOOK_CALLBACKS) {
+                    break;
+                }
+            }
+        }
+
+        if ($callbacks !== []) {
+            $parts[] = 'callbacks=' . implode(' | ', $callbacks) . (!empty($value['more']) ? ' | ...' : '');
+        } elseif (!empty($value['more'])) {
+            $parts[] = 'callbacks=...';
+        }
+
+        $reason = self::debug_scalar_summary($value['reason'] ?? '');
+        if ($reason !== '') {
+            $parts[] = 'reason=' . $reason;
+        }
+
+        return self::debug_truncate_text(implode(', ', $parts), 800);
     }
 
     private static function debug_query_plan_summary(mixed $value): string
@@ -8582,7 +8917,8 @@ JS;
                     'frontend search',
                     self::frontend_search_query_text($query),
                     self::frontend_search_replacement_bailout_reason($query),
-                    self::debug_effective_settings(self::settings())
+                    self::debug_effective_settings(self::settings()),
+                    ['search_hook_pipeline' => self::debug_search_hook_pipeline()]
                 );
             }
             return $posts;
@@ -8594,23 +8930,26 @@ JS;
                 'frontend search',
                 '',
                 'Empty search query.',
-                self::debug_effective_settings(self::settings())
+                self::debug_effective_settings(self::settings()),
+                ['search_hook_pipeline' => self::debug_search_hook_pipeline()]
             );
             return $posts;
         }
 
         $settings = self::settings();
         if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
-            self::debug_record_bailout(
+            self::debug_record_prior_search_provider_stand_down(
                 'frontend search',
                 $search_query,
-                self::prior_search_provider_result_bailout_reason(),
-                self::debug_effective_settings($settings)
+                $settings,
+                $posts
             );
             return $posts;
         }
 
-        $trace_id = self::debug_start_trace('frontend search', $search_query, self::debug_effective_settings($settings));
+        $trace_id = self::debug_start_trace('frontend search', $search_query, self::debug_effective_settings($settings), [
+            'search_hook_pipeline' => self::debug_search_hook_pipeline(),
+        ]);
         self::debug_record_prior_search_provider_replacement($trace_id, $posts);
         $result = self::frontend_search_result_page($query, $search_query, $trace_id, $settings);
         self::store_frontend_search_query_state(
@@ -8679,7 +9018,8 @@ JS;
                     'admin post search',
                     self::frontend_search_query_text($query),
                     self::admin_post_search_replacement_bailout_reason($query),
-                    self::debug_effective_settings(self::settings())
+                    self::debug_effective_settings(self::settings()),
+                    ['search_hook_pipeline' => self::debug_search_hook_pipeline()]
                 );
             }
             return $posts;
@@ -8691,23 +9031,26 @@ JS;
                 'admin post search',
                 '',
                 'Empty search query.',
-                self::debug_effective_settings(self::settings())
+                self::debug_effective_settings(self::settings()),
+                ['search_hook_pipeline' => self::debug_search_hook_pipeline()]
             );
             return $posts;
         }
 
         $settings = self::settings();
         if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
-            self::debug_record_bailout(
+            self::debug_record_prior_search_provider_stand_down(
                 'admin post search',
                 $search_query,
-                self::prior_search_provider_result_bailout_reason(),
-                self::debug_effective_settings($settings)
+                $settings,
+                $posts
             );
             return $posts;
         }
 
-        $trace_id = self::debug_start_trace('admin post search', $search_query, self::debug_effective_settings($settings));
+        $trace_id = self::debug_start_trace('admin post search', $search_query, self::debug_effective_settings($settings), [
+            'search_hook_pipeline' => self::debug_search_hook_pipeline(),
+        ]);
         self::debug_record_prior_search_provider_replacement($trace_id, $posts);
         $result = self::admin_post_search_result_page($query, $search_query, $trace_id, $settings);
         self::store_admin_post_search_query_state(
@@ -9166,6 +9509,27 @@ JS;
     private static function prior_search_provider_result_bailout_reason(): string
     {
         return 'Another search provider already returned a non-null posts_pre_query result; compatibility mode kept that result.';
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     */
+    private static function debug_record_prior_search_provider_stand_down(string $context, string $search_query, array $settings, mixed $posts): void
+    {
+        $trace_id = self::debug_start_trace($context, $search_query, self::debug_effective_settings($settings), [
+            'search_hook_pipeline' => self::debug_search_hook_pipeline(),
+        ]);
+        if ($trace_id <= 0) {
+            return;
+        }
+
+        $incoming_count = self::prior_search_provider_result_count($posts);
+        self::debug_add_count($trace_id, 'incoming_provider_results', $incoming_count);
+        self::debug_add_notes($trace_id, [
+            'Compatibility mode kept an earlier non-null posts_pre_query result from another search provider.',
+            'Incoming provider result count: ' . $incoming_count . '.',
+        ]);
+        self::debug_finish_trace($trace_id, 'bailed', self::prior_search_provider_result_bailout_reason());
     }
 
     private static function debug_record_prior_search_provider_replacement(int $trace_id, mixed $posts): void

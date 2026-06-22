@@ -3140,6 +3140,36 @@ final class WP_FTS_Test_Query
     }
 }
 
+final class WP_FTS_Test_Search_Provider_Callback
+{
+    public static function static_posts_pre_query(mixed $posts, mixed $query = null): mixed
+    {
+        return $posts;
+    }
+
+    public function object_posts_pre_query(mixed $posts, mixed $query = null): mixed
+    {
+        return $posts;
+    }
+}
+
+function wp_fts_test_prior_posts_pre_query_provider(mixed $posts, mixed $query = null): mixed
+{
+    return $posts;
+}
+
+/**
+ * @param array<int|string,mixed> $callbacks_by_priority
+ */
+function wp_fts_test_set_posts_pre_query_hook_state(array $callbacks_by_priority): void
+{
+    $GLOBALS['wp_filter'] = [
+        'posts_pre_query' => (object) [
+            'callbacks' => $callbacks_by_priority,
+        ],
+    ];
+}
+
 function wp_fts_test_begin_frontend_search_loop(mixed $query): void
 {
     if (is_callable([WP_FTS_Plugin::class, 'begin_frontend_search_loop'])) {
@@ -3158,6 +3188,7 @@ function wp_fts_test_reset_wordpress_fakes(): void
 {
     $GLOBALS['wp_fts_test_actions'] = [];
     $GLOBALS['wp_fts_test_filter_registrations'] = [];
+    $GLOBALS['wp_filter'] = [];
     $GLOBALS['wp_fts_test_activation_hooks'] = [];
     $GLOBALS['wp_fts_test_deactivation_hooks'] = [];
     $GLOBALS['wp_fts_test_uninstall_hooks'] = [];
@@ -3255,6 +3286,20 @@ if (!function_exists('add_filter')) {
         }
         $existing[] = $callback;
         $GLOBALS['wp_fts_test_filters'][$hook_name] = $existing;
+
+        if (!isset($GLOBALS['wp_filter']) || !is_array($GLOBALS['wp_filter'])) {
+            $GLOBALS['wp_filter'] = [];
+        }
+        if (!isset($GLOBALS['wp_filter'][$hook_name]) || !is_object($GLOBALS['wp_filter'][$hook_name])) {
+            $GLOBALS['wp_filter'][$hook_name] = (object) ['callbacks' => []];
+        }
+        if (!isset($GLOBALS['wp_filter'][$hook_name]->callbacks[$priority]) || !is_array($GLOBALS['wp_filter'][$hook_name]->callbacks[$priority])) {
+            $GLOBALS['wp_filter'][$hook_name]->callbacks[$priority] = [];
+        }
+        $GLOBALS['wp_filter'][$hook_name]->callbacks[$priority]['wp_fts_test_' . count($GLOBALS['wp_filter'][$hook_name]->callbacks[$priority])] = [
+            'function' => $callback,
+            'accepted_args' => $accepted_args,
+        ];
 
         return true;
     }
@@ -10529,6 +10574,188 @@ test_case('enabled diagnostics record search provider compatibility stand-down',
     assert_same('respect_existing_provider', $adminSettings['provider_compatibility'] ?? null, 'admin provider compatibility trace should expose the effective mode');
 });
 
+test_case('provider stand-down diagnostics include bounded posts_pre_query hook pipeline', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['search_provider_compatibility' => 'respect_existing']
+    );
+    wp_fts_test_set_posts_pre_query_hook_state([
+        10 => [
+            'prior_provider' => [
+                'function' => 'wp_fts_test_prior_posts_pre_query_provider',
+                'accepted_args' => 2,
+            ],
+        ],
+        WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+            'language_fts' => [
+                'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                'accepted_args' => 2,
+            ],
+        ],
+        1200 => [
+            'late_provider' => [
+                'function' => [WP_FTS_Test_Search_Provider_Callback::class, 'static_posts_pre_query'],
+                'accepted_args' => 2,
+            ],
+        ],
+    ]);
+
+    $incoming = [
+        (object) [
+            'ID' => 846,
+            'post_title' => 'standdown-raw-title-must-not-leak',
+            'provider_payload' => ['token' => 'standdown-provider-secret'],
+        ],
+    ];
+    $query = new WP_FTS_Test_Query([
+        's' => 'standdownhookneedle',
+        'posts_per_page' => 10,
+    ]);
+
+    assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query), 'stand-down diagnostics should not change the prior provider result');
+    $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+    $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
+    assert_same(1, (int) ($counts['incoming_provider_results'] ?? 0), 'stand-down diagnostics should count incoming provider results without logging payloads');
+    $notes = is_array($trace['notes'] ?? null) ? $trace['notes'] : [];
+    assert_true(in_array('Compatibility mode kept an earlier non-null posts_pre_query result from another search provider.', $notes, true), 'stand-down diagnostics should explain that compatibility mode kept the provider response');
+
+    $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
+    assert_same('posts_pre_query', $pipeline['hook'] ?? null, 'hook pipeline diagnostics should identify posts_pre_query');
+    assert_same(WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, (int) ($pipeline['fts_priority'] ?? 0), 'hook pipeline diagnostics should expose Language FTS priority');
+    $pipelineCounts = is_array($pipeline['counts'] ?? null) ? $pipeline['counts'] : [];
+    assert_same(1, (int) ($pipelineCounts['before'] ?? 0), 'hook pipeline should count prior callbacks before FTS');
+    assert_same(1, (int) ($pipelineCounts['same_priority'] ?? 0), 'hook pipeline should count callbacks at the FTS priority');
+    assert_same(1, (int) ($pipelineCounts['after'] ?? 0), 'hook pipeline should count callbacks after FTS');
+    $callbackLabels = json_encode($pipeline['callbacks'] ?? [], JSON_THROW_ON_ERROR);
+    assert_contains('function: wp_fts_test_prior_posts_pre_query_provider', $callbackLabels, 'hook pipeline should label function callbacks safely');
+    assert_contains('static: WP_FTS_Plugin::replace_frontend_search_posts', $callbackLabels, 'hook pipeline should label static FTS callbacks safely');
+
+    $traceJson = json_encode($trace, JSON_THROW_ON_ERROR);
+    assert_true(!str_contains($traceJson, 'standdown-raw-title-must-not-leak'), 'stand-down hook diagnostics should not include incoming post titles');
+    assert_true(!str_contains($traceJson, 'standdown-provider-secret'), 'stand-down hook diagnostics should not include provider payload data');
+    assert_true(!str_contains($traceJson, 'provider_payload'), 'stand-down hook diagnostics should not include provider payload keys');
+});
+
+test_case('search hook pipeline diagnostics tolerate missing and malformed hook state', function (): void {
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['search_provider_compatibility' => 'respect_existing']
+    );
+    $GLOBALS['wp_filter'] = [
+        'posts_pre_query' => (object) [
+            'callbacks' => '<not-a-callback-map>',
+        ],
+    ];
+
+    try {
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [];
+        $incoming = [(object) ['ID' => 847, 'post_title' => 'malformed hook provider result']];
+        $query = new WP_FTS_Test_Query([
+            's' => '<script>hookstate</script>',
+            'posts_per_page' => 10,
+        ]);
+        assert_same($incoming, WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query), 'malformed hook state should not affect stand-down behavior');
+
+        $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
+        assert_same(0, (int) ($pipeline['total_callbacks'] ?? -1), 'malformed hook state should not report callbacks');
+        assert_contains('No compatible posts_pre_query hook state is available', (string) ($pipeline['reason'] ?? ''), 'malformed hook state should record a bounded reason');
+
+        $html = wp_fts_test_capture(static function (): void {
+            WP_FTS_Plugin::render_debug_bar_diagnostics_panel();
+        });
+        assert_contains('Search hook pipeline', $html, 'rendered diagnostics should include the hook pipeline row');
+        assert_contains('fts_priority=' . WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, $html, 'rendered hook pipeline should include FTS priority');
+        assert_contains('&lt;script&gt;hookstate&lt;/script&gt;', $html, 'rendered hook pipeline trace should escape search text');
+        assert_true(!str_contains($html, '<script>hookstate</script>'), 'rendered diagnostics should not emit raw search text HTML');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+    }
+});
+
+test_case('search hook pipeline callback labels are bounded and redacted', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        ['search_provider_compatibility' => 'respect_existing']
+    );
+
+    $provider = new WP_FTS_Test_Search_Provider_Callback();
+    $invokable = new class {
+        public function __invoke(mixed $posts, mixed $query = null): mixed
+        {
+            return $posts;
+        }
+    };
+    wp_fts_test_set_posts_pre_query_hook_state([
+        5 => [
+            'function' => ['function' => 'wp_fts_test_prior_posts_pre_query_provider'],
+            'static_array' => ['function' => [WP_FTS_Test_Search_Provider_Callback::class, 'static_posts_pre_query']],
+            'object_array' => ['function' => [$provider, 'object_posts_pre_query']],
+            'closure' => ['function' => static fn(mixed $posts, mixed $query = null): mixed => $posts],
+            'invokable' => ['function' => $invokable],
+            'path_string' => ['function' => '/srv/www/private/provider.php'],
+            'path_array' => ['function' => ['/srv/www/private/Provider.php', 'posts_pre_query']],
+            'object_payload' => ['function' => (object) ['secret' => 'object-secret-must-not-leak']],
+        ],
+        1200 => [
+            'late_static_string' => ['function' => 'SearchWP\\SomeClass::posts_pre_query'],
+        ],
+        'bad-priority' => [
+            'malformed' => ['function' => ['only-one-part']],
+        ],
+    ]);
+
+    $incoming = [
+        (object) [
+            'ID' => 848,
+            'post_title' => 'label-safety-title-must-not-leak',
+            'provider_payload' => ['secret' => 'label-safety-provider-secret'],
+        ],
+    ];
+    $query = new WP_FTS_Test_Query([
+        's' => 'labelsafetyneedle',
+        'posts_per_page' => 10,
+    ]);
+    WP_FTS_Plugin::replace_frontend_search_posts($incoming, $query);
+
+    $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+    $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
+    assert_same(10, (int) ($pipeline['total_callbacks'] ?? 0), 'hook pipeline should count every inspected callback entry');
+    assert_same(8, (int) ($pipeline['shown_count'] ?? 0), 'hook pipeline should bound visible callback entries');
+    assert_same(true, $pipeline['more'] ?? null, 'hook pipeline should mark when callback entries were omitted');
+    $pipelineCounts = is_array($pipeline['counts'] ?? null) ? $pipeline['counts'] : [];
+    assert_same(8, (int) ($pipelineCounts['before'] ?? 0), 'hook pipeline should count before-priority callbacks');
+    assert_same(1, (int) ($pipelineCounts['after'] ?? 0), 'hook pipeline should count after-priority callbacks');
+    assert_same(1, (int) ($pipelineCounts['unknown'] ?? 0), 'hook pipeline should count callbacks with malformed priority');
+
+    $labels = json_encode($pipeline['callbacks'] ?? [], JSON_THROW_ON_ERROR);
+    assert_contains('function: wp_fts_test_prior_posts_pre_query_provider', $labels, 'function callbacks should be labeled');
+    assert_contains('static: WP_FTS_Test_Search_Provider_Callback::static_posts_pre_query', $labels, 'static method callbacks should be labeled');
+    assert_contains('method: WP_FTS_Test_Search_Provider_Callback::object_posts_pre_query', $labels, 'object method callbacks should be labeled');
+    assert_contains('closure', $labels, 'closure callbacks should be labeled without source locations');
+    assert_contains('method: anonymous class::__invoke', $labels, 'invokable anonymous object callbacks should hide source locations');
+    assert_contains('object: stdClass', $labels, 'non-callable objects should only expose their class');
+    assert_contains('unknown', $labels, 'malformed callback values should be redacted to unknown');
+
+    $traceJson = json_encode($trace, JSON_THROW_ON_ERROR);
+    assert_true(!str_contains($traceJson, '/srv/www/private'), 'hook pipeline should not expose absolute file paths');
+    assert_true(!str_contains($traceJson, 'object-secret-must-not-leak'), 'hook pipeline should not dump object payloads');
+    assert_true(!str_contains($traceJson, 'label-safety-title-must-not-leak'), 'hook pipeline should not include incoming provider titles');
+    assert_true(!str_contains($traceJson, 'label-safety-provider-secret'), 'hook pipeline should not include incoming provider payloads');
+    assert_true(!str_contains($traceJson, 'provider_payload'), 'hook pipeline should not include provider payload keys');
+});
+
 test_case('diagnostics include bounded known-provider summary without provider payloads', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
@@ -10573,6 +10800,20 @@ test_case('enabled diagnostics record search provider compatibility overrides', 
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+    wp_fts_test_set_posts_pre_query_hook_state([
+        20 => [
+            'prior_provider' => [
+                'function' => 'wp_fts_test_prior_posts_pre_query_provider',
+                'accepted_args' => 2,
+            ],
+        ],
+        WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+            'language_fts' => [
+                'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                'accepted_args' => 2,
+            ],
+        ],
+    ]);
 
     $post = (object) [
         'ID' => 842,
@@ -10611,6 +10852,15 @@ test_case('enabled diagnostics record search provider compatibility overrides', 
         assert_true(in_array('Incoming provider result count: 2.', $notes, true), 'frontend provider override diagnostics should expose only a bounded incoming result count');
         $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
         assert_same('prefer_language_fts', $settings['provider_compatibility'] ?? null, 'frontend provider override trace should expose the FTS-wins mode');
+        $pipeline = is_array($trace['search_hook_pipeline'] ?? null) ? $trace['search_hook_pipeline'] : [];
+        $pipelineCounts = is_array($pipeline['counts'] ?? null) ? $pipeline['counts'] : [];
+        assert_same(1, (int) ($pipelineCounts['before'] ?? 0), 'frontend provider override diagnostics should include the prior posts_pre_query callback');
+        assert_same(1, (int) ($pipelineCounts['same_priority'] ?? 0), 'frontend provider override diagnostics should include the FTS priority callback');
+        $callbackLabels = json_encode($pipeline['callbacks'] ?? [], JSON_THROW_ON_ERROR);
+        assert_contains('function: wp_fts_test_prior_posts_pre_query_provider', $callbackLabels, 'frontend provider override diagnostics should label the prior hook callback');
+        $traceJson = json_encode($trace, JSON_THROW_ON_ERROR);
+        assert_true(!str_contains($traceJson, 'Earlier provider result A'), 'frontend provider override diagnostics should not log earlier provider post titles');
+        assert_true(!str_contains($traceJson, 'Earlier provider result B'), 'frontend provider override diagnostics should not log earlier provider post titles');
 
         WP_FTS_Plugin::reset_request_caches();
         $GLOBALS['wp_fts_test_is_admin'] = true;

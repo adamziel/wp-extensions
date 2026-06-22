@@ -191,7 +191,7 @@ content or create sample posts.
 | Search | BM25 scoring supports `OR`/`AND`, `limit`/`offset`, language-aware query analysis, and stored WordPress metadata filters. |
 | Snippets | Search can return snippets from bounded extracted metadata, with HTML-aware highlighting based on analyzed query/document keys rather than literal text only. |
 | Surfaces | WP-CLI is the main operational surface. The plugin also registers a REST search helper, PHP search helper, front-end main-query replacement, eligible wp-admin Posts list replacement, and admin-only Settings > Full-Text Search tabs used by the Playground preview. |
-| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, recency boost status, per-result and field-specific match details, performance-budget status, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
+| Diagnostics | Request-level FTS traces are available to authorized/debug contexts through Debug Bar when installed, or on the Health tab fallback. They include bounded search explain summaries with storage, query surfaces and analyzed terms, fast-mode, scoring, recency boost status, per-result and field-specific match details, performance-budget status, a bounded `posts_pre_query` hook pipeline around Language FTS, and redacted SQL query summaries when the environment already collects `$wpdb->queries`; they are request-local diagnostics rather than persistent logs. |
 
 ## Search Accuracy And Automatic Fast Mode
 
@@ -430,7 +430,9 @@ Current caveats:
   when common providers such as Jetpack Search/Jetpack, SearchWP, Relevanssi, or
   ElasticPress are detected from safe activation/option/class/function signals;
   that advisory does not call provider APIs and is not certification that those
-  products have been tested end to end;
+  products have been tested end to end. Request diagnostics can also show a
+  bounded `posts_pre_query` hook pipeline with callback labels and priorities,
+  without executing callbacks or including provider result payloads;
 - wp-admin Posts list search replacement is enabled for safe main-list searches
   over indexed supported admin post statuses and uses the same provider
   compatibility setting. The `wp_fts_replace_frontend_search` and

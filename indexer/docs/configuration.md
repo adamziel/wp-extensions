@@ -34,9 +34,12 @@ enabled surface; use the `wp_fts_replace_frontend_search` or
 entirely. Request diagnostics include the effective provider compatibility mode
 plus a compact known-provider summary, and record whether Language FTS replaced
 an earlier provider response or bailed out because coexistence mode kept another
-provider's result. Check this setting first when another search plugin, theme
-filter, or custom search code appears to win or lose on an enabled replacement
-surface.
+provider's result. They also include a bounded `posts_pre_query` hook pipeline
+around the Language FTS replacement priority so operators can see callback
+labels before, at, and after Language FTS without executing those callbacks or
+including provider result payloads. Check this setting first when another search
+plugin, theme filter, or custom search code appears to win or lose on an enabled
+replacement surface.
 
 The Health and Settings tabs also show a read-only known-provider advisory for
 common search plugins such as Jetpack Search/Jetpack, SearchWP, Relevanssi, and
@@ -754,6 +757,11 @@ Request diagnostics are enabled for `manage_options` users, `WP_FTS_DEBUG`,
 standard `WP_DEBUG`, or the `wp_fts_debug_enabled` filter. The plugin does not
 enable `SAVEQUERIES`; SQL summaries appear only when the environment already
 provides `$wpdb->queries`.
+
+The Search hook pipeline diagnostic inspects only WordPress hook registration
+state for `posts_pre_query`. It reports bounded callback labels, priorities, and
+before/same/after counts as an advisory debugging aid; it does not call
+third-party provider APIs, scan content, or certify provider compatibility.
 
 Tune the thresholds in `wp-config.php` or an early plugin/bootstrap file before
 the plugin loads:

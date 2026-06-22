@@ -301,6 +301,12 @@ still keep their readable reason so operators can
 distinguish unsupported query shapes, disabled replacement settings, and
 successful FTS ownership without creating diagnostic content.
 
+For front-end and wp-admin Posts search replacement, diagnostics also show a
+bounded `posts_pre_query` hook pipeline around Language FTS: callback labels,
+priorities, before/same/after counts, and the FTS priority. This inspects hook
+registration state only; it does not call third-party provider APIs or include
+provider result payloads.
+
 The same trace includes bounded, redacted SQL query summaries only when the
 environment already collects query data in `$wpdb->queries`, such as a site with
 `SAVEQUERIES` enabled or a compatible debug/test database object. The plugin
