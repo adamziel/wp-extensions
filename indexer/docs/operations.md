@@ -305,6 +305,22 @@ including field-specific matches when field metadata is available. It does not
 mutate the index and should be treated as operational diagnostics, not
 a stored audit history.
 
+When support needs one bounded payload that combines query explain output with
+the surrounding operator state, use the diagnostic bundle:
+
+```sh
+wp fts diagnose "release notes" --lang=en-US --format=json
+```
+
+`wp fts diagnose` is read-only. It does not index content, drain queues, repair
+schema, mutate options, write persistent telemetry, or create log records. The
+JSON bundle includes a schema/tool identifier, the bounded query, effective
+query arguments, `operator_status`, explain-enabled search results, and a
+concise summary with storage, fast-mode, provider-compatibility, language-pack,
+lock, stale-index, pending-work, and result-count signals. Use it for support
+and debugging. It is not persistent telemetry and does not certify public
+submission readiness or third-party search-provider compatibility.
+
 Use a recency boost only when operators want newer posts to receive a small
 query-time ranking lift from indexed `post_date_gmt` metadata:
 
