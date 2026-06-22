@@ -268,22 +268,33 @@ final class WP_FTS_ReleaseReadinessChecker
             }
         }
 
-        try {
+        $buildAndValidate = function () use ($buildOptions, $sourceMetadata, &$checks, &$blockers): void {
+            $lockedBuildOptions = $buildOptions;
+            $lockedBuildOptions['skip_build_lock'] = true;
+
             /** @var array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[]} $build */
-            $build = (new WP_FTS_ReleasePackageBuilder())->build($buildOptions);
+            $build = (new WP_FTS_ReleasePackageBuilder())->build($lockedBuildOptions);
             $this->record($checks, $blockers, 'direct_package_build', 'pass', 'Direct-install ZIP builder completed.', [
                 'zip_path' => self::display_path($build['zip_path']),
                 'sha256' => $build['sha256'],
                 'removed_paths_count' => count($build['removed_paths']),
             ]);
+
+            $stagePlugin = $build['build_dir'] . '/indexer';
+            $this->check_direct_package_directory($stagePlugin, $sourceMetadata, $checks, $blockers);
+            $this->check_release_zip($build['zip_path'], $checks, $blockers);
+        };
+
+        try {
+            if (isset($buildOptions['build_dir'])) {
+                WP_FTS_ReleasePackageBuilder::with_build_lock((string) $buildOptions['build_dir'], $buildAndValidate);
+            } else {
+                $buildAndValidate();
+            }
         } catch (Throwable $e) {
             $this->record($checks, $blockers, 'direct_package_build', 'fail', 'Direct-install ZIP builder failed: ' . $e->getMessage());
             return;
         }
-
-        $stagePlugin = $build['build_dir'] . '/indexer';
-        $this->check_direct_package_directory($stagePlugin, $sourceMetadata, $checks, $blockers);
-        $this->check_release_zip($build['zip_path'], $checks, $blockers);
     }
 
     /**

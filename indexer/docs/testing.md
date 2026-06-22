@@ -40,6 +40,10 @@ php tests/quality/release-readiness-contracts.php
 php -n tests/quality/release-readiness-contracts.php
 ```
 
+When `ZipArchive` is unavailable, the no-extension run reports the ZIP-building
+contract as `[PEND]` and exits cleanly instead of treating the missing extension
+as a fatal error.
+
 Before publishing a direct-install ZIP, run the readiness checker from the
 monorepo root:
 
@@ -49,7 +53,10 @@ php indexer/tools/check-release-readiness.php --target=public-submission
 ```
 
 `direct-install` proves the supported `indexer/` ZIP path and production
-dependency boundary; unchanged default runs must produce identical JSON.
+dependency boundary; unchanged default runs must produce identical JSON. The
+default direct-install build directory is protected by an advisory lock, so
+overlapping readiness runs serialize around staging and validation instead of
+racing on the same temporary package tree.
 `public-submission` is a separate authority gate and is expected to fail on
 current main until WordPress.org-style `readme.txt`, GPL-compatible package
 license evidence, valid directory assets, public redistribution policy, and

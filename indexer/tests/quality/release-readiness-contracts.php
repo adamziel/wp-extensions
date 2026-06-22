@@ -3,6 +3,10 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../tools/check-release-readiness.php';
 
+final class WP_FTS_Release_Readiness_Contract_Pending extends RuntimeException
+{
+}
+
 function wp_fts_release_readiness_contract_true(bool $condition, string $message): void
 {
     if (function_exists('assert_true')) {
@@ -80,7 +84,7 @@ function wp_fts_release_readiness_contract_pending(string $message): void
         mark_pending($message);
     }
 
-    throw new RuntimeException($message);
+    throw new WP_FTS_Release_Readiness_Contract_Pending($message);
 }
 
 function wp_fts_release_readiness_contract_write_file(string $path, string $contents = "fixture\n"): void
@@ -134,6 +138,58 @@ function wp_fts_release_readiness_contract_run_command(array $command, string $c
         'stdout' => $stdout,
         'stderr' => $stderr,
     ];
+}
+
+/**
+ * @param string[] $command
+ * @return array<int,array{exit:int,stdout:string,stderr:string}>
+ */
+function wp_fts_release_readiness_contract_run_concurrent_commands(array $command, string $cwd, int $count): array
+{
+    if (!function_exists('proc_open')) {
+        wp_fts_release_readiness_contract_pending('proc_open() is unavailable, so the concurrent release-readiness CLI contract cannot run.');
+    }
+
+    $processes = [];
+    for ($i = 0; $i < $count; $i++) {
+        $pipes = [];
+        $process = proc_open(
+            $command,
+            [
+                0 => ['pipe', 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ],
+            $pipes,
+            $cwd
+        );
+        if (!is_resource($process)) {
+            throw new RuntimeException('Could not start concurrent command: ' . implode(' ', $command));
+        }
+
+        fclose($pipes[0]);
+        $processes[] = [
+            'process' => $process,
+            'stdout' => $pipes[1],
+            'stderr' => $pipes[2],
+        ];
+    }
+
+    $results = [];
+    foreach ($processes as $item) {
+        $stdout = (string) stream_get_contents($item['stdout']);
+        $stderr = (string) stream_get_contents($item['stderr']);
+        fclose($item['stdout']);
+        fclose($item['stderr']);
+        $exit = proc_close($item['process']);
+        $results[] = [
+            'exit' => is_int($exit) ? $exit : 1,
+            'stdout' => $stdout,
+            'stderr' => $stderr,
+        ];
+    }
+
+    return $results;
 }
 
 /**
@@ -523,6 +579,28 @@ function wp_fts_release_readiness_contract_default_direct_cli_output_is_determin
     wp_fts_release_readiness_contract_same($first['stdout'], $second['stdout'], 'default direct-install readiness CLI JSON output should be deterministic across unchanged runs');
 }
 
+function wp_fts_release_readiness_contract_concurrent_default_direct_cli_output_is_deterministic(): void
+{
+    if (!class_exists('ZipArchive')) {
+        wp_fts_release_readiness_contract_pending('ZipArchive is unavailable; concurrent default direct-install CLI ZIP build is covered in the normal PHP lane.');
+    }
+
+    $root = dirname(__DIR__, 2);
+    $monorepoRoot = dirname($root);
+    $command = [PHP_BINARY, 'indexer/tools/check-release-readiness.php', '--target=direct-install'];
+    $results = wp_fts_release_readiness_contract_run_concurrent_commands($command, $monorepoRoot, 2);
+
+    foreach ($results as $index => $result) {
+        wp_fts_release_readiness_contract_same(0, $result['exit'], "concurrent default direct-install readiness CLI run {$index} should pass");
+        wp_fts_release_readiness_contract_same('', $result['stderr'], "concurrent default direct-install readiness CLI run {$index} should not emit stderr");
+    }
+    wp_fts_release_readiness_contract_same(
+        $results[0]['stdout'],
+        $results[1]['stdout'],
+        'concurrent default direct-install readiness CLI JSON output should be deterministic across unchanged runs'
+    );
+}
+
 function wp_fts_release_readiness_contract_deterministic_output_and_docs(): void
 {
     $tmp = wp_fts_release_readiness_contract_temp_dir();
@@ -553,43 +631,109 @@ function wp_fts_release_readiness_contract_deterministic_output_and_docs(): void
     }
 }
 
+/**
+ * @return array<int,array{name:string,fn:callable():void}>
+ */
+function wp_fts_release_readiness_contract_cases(): array
+{
+    return [
+        [
+            'name' => 'quality release readiness accepts a staged direct-install package',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_direct_ready();
+            },
+        ],
+        [
+            'name' => 'quality release readiness blocks current public submission state',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_current_public_blocked();
+            },
+        ],
+        [
+            'name' => 'quality release readiness reports public metadata and license blockers',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_public_readme_and_license_blockers();
+            },
+        ],
+        [
+            'name' => 'quality release readiness blocks placeholder public-submission artifacts',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_public_placeholder_artifacts_blocked();
+            },
+        ],
+        [
+            'name' => 'quality release readiness accepts complete public-submission evidence fixtures',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_public_complete_fixture_ready();
+            },
+        ],
+        [
+            'name' => 'quality release readiness detects prohibited direct package paths',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_prohibited_package_paths();
+            },
+        ],
+        [
+            'name' => 'quality release readiness detects version mismatches',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_version_mismatch();
+            },
+        ],
+        [
+            'name' => 'quality release readiness default direct-install CLI output is deterministic',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_default_direct_cli_output_is_deterministic();
+            },
+        ],
+        [
+            'name' => 'quality release readiness concurrent default direct-install CLI output is deterministic',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_concurrent_default_direct_cli_output_is_deterministic();
+            },
+        ],
+        [
+            'name' => 'quality release readiness output and docs are deterministic',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_deterministic_output_and_docs();
+            },
+        ],
+    ];
+}
+
+function wp_fts_release_readiness_contract_run_standalone(): void
+{
+    $failures = 0;
+    $pending = 0;
+    $cases = wp_fts_release_readiness_contract_cases();
+
+    foreach ($cases as $case) {
+        try {
+            ($case['fn'])();
+            fwrite(STDOUT, "[PASS] {$case['name']}\n");
+        } catch (WP_FTS_Release_Readiness_Contract_Pending $e) {
+            $pending++;
+            fwrite(STDOUT, "[PEND] {$case['name']}\n{$e->getMessage()}\n");
+        } catch (Throwable $e) {
+            $failures++;
+            fwrite(STDERR, "[FAIL] {$case['name']}\n{$e->getMessage()}\n");
+        }
+    }
+
+    $passed = count($cases) - $failures - $pending;
+    $summary = "{$passed}/" . count($cases) . " release readiness contract tests passed; failures={$failures}; pending={$pending}\n";
+    if ($failures > 0) {
+        fwrite(STDERR, $summary);
+        exit(1);
+    }
+
+    fwrite(STDOUT, $summary);
+    exit(0);
+}
+
 if (function_exists('test_case')) {
-    test_case('quality release readiness accepts a staged direct-install package', function (): void {
-        wp_fts_release_readiness_contract_direct_ready();
-    });
-    test_case('quality release readiness blocks current public submission state', function (): void {
-        wp_fts_release_readiness_contract_current_public_blocked();
-    });
-    test_case('quality release readiness reports public metadata and license blockers', function (): void {
-        wp_fts_release_readiness_contract_public_readme_and_license_blockers();
-    });
-    test_case('quality release readiness blocks placeholder public-submission artifacts', function (): void {
-        wp_fts_release_readiness_contract_public_placeholder_artifacts_blocked();
-    });
-    test_case('quality release readiness accepts complete public-submission evidence fixtures', function (): void {
-        wp_fts_release_readiness_contract_public_complete_fixture_ready();
-    });
-    test_case('quality release readiness detects prohibited direct package paths', function (): void {
-        wp_fts_release_readiness_contract_prohibited_package_paths();
-    });
-    test_case('quality release readiness detects version mismatches', function (): void {
-        wp_fts_release_readiness_contract_version_mismatch();
-    });
-    test_case('quality release readiness default direct-install CLI output is deterministic', function (): void {
-        wp_fts_release_readiness_contract_default_direct_cli_output_is_deterministic();
-    });
-    test_case('quality release readiness output and docs are deterministic', function (): void {
-        wp_fts_release_readiness_contract_deterministic_output_and_docs();
-    });
+    foreach (wp_fts_release_readiness_contract_cases() as $case) {
+        test_case($case['name'], $case['fn']);
+    }
 } elseif (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
-    wp_fts_release_readiness_contract_direct_ready();
-    wp_fts_release_readiness_contract_current_public_blocked();
-    wp_fts_release_readiness_contract_public_readme_and_license_blockers();
-    wp_fts_release_readiness_contract_public_placeholder_artifacts_blocked();
-    wp_fts_release_readiness_contract_public_complete_fixture_ready();
-    wp_fts_release_readiness_contract_prohibited_package_paths();
-    wp_fts_release_readiness_contract_version_mismatch();
-    wp_fts_release_readiness_contract_default_direct_cli_output_is_deterministic();
-    wp_fts_release_readiness_contract_deterministic_output_and_docs();
-    fwrite(STDOUT, "OK: release readiness contracts distinguish direct-install and public-submission gates.\n");
+    wp_fts_release_readiness_contract_run_standalone();
 }

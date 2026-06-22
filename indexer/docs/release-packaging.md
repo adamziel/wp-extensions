@@ -87,7 +87,10 @@ builder, `indexer/` package root, required runtime files, production Composer
 dependencies, prohibited release artifacts, and ZIP boundary. The default
 readiness path uses a stable temporary build directory and normalized ZIP entry
 metadata so two unchanged runs produce identical JSON, including the operator
-evidence for ZIP path and SHA-256. A passing direct-install check means the
+evidence for ZIP path and SHA-256. Runs that share that default build directory
+are serialized with a local advisory lock while staging, ZIP creation, and
+post-build validation are in progress, so overlapping readiness checks cannot
+observe a partially restaged package. A passing direct-install check means the
 project can produce the supported direct ZIP; it does not approve public
 marketplace distribution.
 
@@ -149,7 +152,8 @@ directories such as `vendor/bin`, `test`, `tests`, `Tests`, and `coverage`, then
 prunes staged dotfiles anywhere in the package before ZIP creation. This removes
 nested Composer dependency files such as
 `indexer/vendor/wamania/php-stemmer/.gitignore` before they can enter the
-archive.
+archive. If multiple builds use the same `--build-dir`, they are serialized with
+the same advisory lock used by the readiness gate.
 
 Inspect the archive contents:
 

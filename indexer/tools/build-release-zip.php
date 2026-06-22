@@ -13,6 +13,7 @@ final class WP_FTS_ReleasePackageBuilder
     private const PLUGIN_DIR_NAME = 'indexer';
     private const DEFAULT_ZIP_NAME = 'wp-fts-indexer.zip';
     private const DETERMINISTIC_ZIP_MTIME = 946684800; // 2000-01-01T00:00:00Z.
+    private const BUILD_LOCK_FILE = '.wp-fts-release-build.lock';
     private const VENDOR_DEVELOPMENT_DIRS = ['test', 'tests', 'Tests', 'coverage'];
     private const PROHIBITED_RELATIVE_PATHS = [
         '.cao',
@@ -66,6 +67,50 @@ final class WP_FTS_ReleasePackageBuilder
         $buildDir = (string) ($options['build_dir'] ?? self::default_build_dir());
         $zipPath = (string) ($options['output'] ?? ($buildDir . '/' . self::DEFAULT_ZIP_NAME));
 
+        if (($options['skip_build_lock'] ?? false) === true) {
+            return $this->build_unlocked($pluginSource, $monorepoRoot, $buildDir, $zipPath);
+        }
+
+        return self::with_build_lock(
+            $buildDir,
+            fn(): array => $this->build_unlocked($pluginSource, $monorepoRoot, $buildDir, $zipPath)
+        );
+    }
+
+    /**
+     * @template T
+     * @param callable():T $callback
+     * @return T
+     */
+    public static function with_build_lock(string $buildDir, callable $callback): mixed
+    {
+        self::ensure_directory($buildDir);
+        $lockPath = rtrim($buildDir, '/') . '/' . self::BUILD_LOCK_FILE;
+        $handle = fopen($lockPath, 'c');
+        if (!is_resource($handle)) {
+            throw new RuntimeException("Could not open release build lock: {$lockPath}");
+        }
+
+        try {
+            if (!flock($handle, LOCK_EX)) {
+                throw new RuntimeException("Could not acquire release build lock: {$lockPath}");
+            }
+
+            try {
+                return $callback();
+            } finally {
+                flock($handle, LOCK_UN);
+            }
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    /**
+     * @return array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[]}
+     */
+    private function build_unlocked(string $pluginSource, string $monorepoRoot, string $buildDir, string $zipPath): array
+    {
         self::ensure_directory($buildDir);
 
         $stagePlugin = $buildDir . '/' . self::PLUGIN_DIR_NAME;
