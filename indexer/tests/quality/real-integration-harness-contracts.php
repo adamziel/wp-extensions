@@ -1,6 +1,66 @@
 <?php
 declare(strict_types=1);
 
+if (!function_exists('test_case')) {
+    final class WP_FTS_RealIntegrationContractPending extends RuntimeException
+    {
+    }
+
+    $GLOBALS['wp_fts_real_integration_contract_direct_failures'] = 0;
+    $GLOBALS['wp_fts_real_integration_contract_direct_pending'] = 0;
+
+    function test_case(string $name, callable $fn): void
+    {
+        try {
+            $fn();
+            fwrite(STDOUT, "[PASS] {$name}\n");
+        } catch (WP_FTS_RealIntegrationContractPending $e) {
+            $GLOBALS['wp_fts_real_integration_contract_direct_pending']++;
+            fwrite(STDOUT, "[PEND] {$name}\n{$e->getMessage()}\n");
+        } catch (Throwable $e) {
+            $GLOBALS['wp_fts_real_integration_contract_direct_failures']++;
+            fwrite(STDERR, "[FAIL] {$name}\n{$e->getMessage()}\n");
+        }
+    }
+
+    function assert_true(bool $condition, string $message): void
+    {
+        if (!$condition) {
+            throw new RuntimeException($message);
+        }
+    }
+
+    function assert_same(mixed $expected, mixed $actual, string $message): void
+    {
+        if ($expected !== $actual) {
+            throw new RuntimeException($message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true));
+        }
+    }
+
+    function assert_contains(string $needle, string $haystack, string $message): void
+    {
+        if (!str_contains($haystack, $needle)) {
+            throw new RuntimeException($message . "\nMissing: " . var_export($needle, true));
+        }
+    }
+
+    function mark_pending(string $message): never
+    {
+        throw new WP_FTS_RealIntegrationContractPending($message);
+    }
+
+    register_shutdown_function(static function (): void {
+        $failures = (int) ($GLOBALS['wp_fts_real_integration_contract_direct_failures'] ?? 0);
+        $pending = (int) ($GLOBALS['wp_fts_real_integration_contract_direct_pending'] ?? 0);
+        if ($failures > 0) {
+            fwrite(STDERR, "Real integration harness contract failures={$failures}; pending={$pending}\n");
+            exit(1);
+        }
+
+        fwrite(STDOUT, "OK: real integration harness contracts passed; pending={$pending}.\n");
+    });
+}
+
 test_case('quality real integration harness skips clearly without WordPress configuration', function (): void {
     if (!function_exists('proc_open')) {
         mark_pending('proc_open() is unavailable, so the real integration skip contract cannot launch a subprocess.');
@@ -122,13 +182,54 @@ test_case('quality real mysql proof helper packages the component path repositor
     $script = (string) file_get_contents(dirname(__DIR__, 2) . '/tools/run-real-mysql-production-proof.sh');
 
     assert_contains('COMPONENT_DIR="${REPO_ROOT}/components/full-text-search"', $script, 'proof helper should locate the split FTS component from the monorepo root');
-    assert_contains('mkdir -p "${PROOF_ROOT}/components/full-text-search"', $script, 'proof helper should create the copied component path repository next to the temp plugin');
-    assert_contains('cd "${COMPONENT_DIR}"', $script, 'proof helper should copy from the monorepo component source');
-    assert_contains('cd "${PROOF_ROOT}/components/full-text-search"', $script, 'proof helper should copy the component into the path Composer expects');
+    assert_contains('copy_proof_tree "${PLUGIN_DIR}" "${PROOF_ROOT}/plugin"', $script, 'proof helper should copy the plugin source tree into proof storage');
+    assert_contains('copy_proof_tree "${COMPONENT_DIR}" "${PROOF_ROOT}/components/full-text-search"', $script, 'proof helper should copy the component into the path Composer expects');
 
-    $componentCopy = strpos($script, 'cd "${PROOF_ROOT}/components/full-text-search"');
-    $composerInstall = strpos($script, 'composer install --no-interaction --no-dev --optimize-autoloader');
+    $componentCopy = strpos($script, 'copy_proof_tree "${COMPONENT_DIR}" "${PROOF_ROOT}/components/full-text-search"');
+    $composerInstall = strpos($script, "install_proof_composer_dependencies\n");
     assert_true(is_int($componentCopy) && is_int($composerInstall) && $componentCopy < $composerInstall, 'proof helper should copy the component path repository before composer install');
+});
+
+test_case('quality real mysql proof helper isolates composer install environment', function (): void {
+    $script = (string) file_get_contents(dirname(__DIR__, 2) . '/tools/run-real-mysql-production-proof.sh');
+
+    assert_contains('PROOF_HOME="${PROOF_ROOT}/home"', $script, 'proof helper should keep Composer HOME inside proof storage');
+    assert_contains('PROOF_TMPDIR="${PROOF_ROOT}/tmp"', $script, 'proof helper should keep Composer temp files inside proof storage');
+    assert_contains('PROOF_COMPOSER_HOME="${PROOF_ROOT}/composer/home"', $script, 'proof helper should keep Composer home inside proof storage');
+    assert_contains('PROOF_COMPOSER_CACHE_DIR="${PROOF_ROOT}/composer/cache"', $script, 'proof helper should keep Composer cache inside proof storage');
+    assert_contains('env -i', $script, 'proof helper should run Composer with an empty inherited environment');
+    assert_contains('PATH="${PROOF_SAFE_PATH}"', $script, 'proof helper should pass only a bounded PATH into Composer');
+    assert_contains('HOME="${PROOF_HOME}"', $script, 'proof helper should pass proof-local HOME into Composer');
+    assert_contains('TMPDIR="${PROOF_TMPDIR}"', $script, 'proof helper should pass proof-local TMPDIR into Composer');
+    assert_contains('COMPOSER_HOME="${PROOF_COMPOSER_HOME}"', $script, 'proof helper should pass proof-local COMPOSER_HOME into Composer');
+    assert_contains('COMPOSER_CACHE_DIR="${PROOF_COMPOSER_CACHE_DIR}"', $script, 'proof helper should pass proof-local COMPOSER_CACHE_DIR into Composer');
+
+    $isolatedComposerInstallPattern = '/env -i\s+\\\\\s+PATH="\$\{PROOF_SAFE_PATH\}"\s+\\\\\s+HOME="\$\{PROOF_HOME\}"\s+\\\\\s+TMPDIR="\$\{PROOF_TMPDIR\}"\s+\\\\\s+COMPOSER_HOME="\$\{PROOF_COMPOSER_HOME\}"\s+\\\\\s+COMPOSER_CACHE_DIR="\$\{PROOF_COMPOSER_CACHE_DIR\}"\s+\\\\\s+composer install --no-interaction --no-dev --optimize-autoloader/s';
+    assert_true(preg_match($isolatedComposerInstallPattern, $script) === 1, 'proof helper should keep composer install directly under the isolated env whitelist');
+
+    foreach (['COMPOSER_AUTH', 'GITHUB_TOKEN', 'GH_TOKEN', 'GIT_ASKPASS', 'SSH_AUTH_SOCK'] as $name) {
+        assert_true(preg_match('/\b' . preg_quote($name, '/') . '=/', $script) !== 1, "proof helper should not pass {$name} into Composer");
+        assert_true(!str_contains($script, '${' . $name . '}'), "proof helper should not read {$name} from the parent environment");
+    }
+});
+
+test_case('quality real mysql proof helper excludes composer auth files from copied source trees', function (): void {
+    $script = (string) file_get_contents(dirname(__DIR__, 2) . '/tools/run-real-mysql-production-proof.sh');
+
+    foreach ([
+        "--exclude='./auth.json'",
+        "--exclude='*/auth.json'",
+        "--exclude='./.composer'",
+        "--exclude='./.composer/**'",
+        "--exclude='*/.composer'",
+        "--exclude='*/.composer/**'",
+    ] as $exclude) {
+        assert_contains($exclude, $script, "proof helper copy should exclude {$exclude}");
+    }
+
+    $pluginCopy = strpos($script, 'copy_proof_tree "${PLUGIN_DIR}" "${PROOF_ROOT}/plugin"');
+    $componentCopy = strpos($script, 'copy_proof_tree "${COMPONENT_DIR}" "${PROOF_ROOT}/components/full-text-search"');
+    assert_true(is_int($pluginCopy) && is_int($componentCopy), 'proof helper should use the shared auth-excluding copy path for plugin and component trees');
 });
 
 test_case('quality real mysql harness source tracks current six-table row-postings schema', function (): void {
