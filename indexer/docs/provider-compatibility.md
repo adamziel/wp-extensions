@@ -61,6 +61,18 @@ php tools/smoke-search-provider-compatibility.php
 composer test:smoke:provider-compatibility
 ```
 
+The release evidence collector includes this smoke as the
+`provider_compatibility_smoke` lane:
+
+```sh
+php tools/collect-release-evidence.php
+```
+
+Without a disposable WordPress root, that lane reports `skip` in the evidence
+bundle. With the same disposable-site guard variables below, the delegated smoke
+can produce `pass` or `fail` evidence while the collector still redacts and
+bounds command output.
+
 To run it against a disposable WordPress root, configure WP-CLI and explicitly
 confirm that writes are allowed:
 

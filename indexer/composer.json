@@ -33,6 +33,7 @@
     "test:integration:mysql-proof": "php tests/integration/real-mysql-production-proof.php",
     "test:integration:concurrent": "php tests/integration/concurrent-indexing.php",
     "test:smoke:provider-compatibility": "php tools/smoke-search-provider-compatibility.php",
-    "test:smoke:release": "php tools/smoke-disposable-wordpress-release.php"
+    "test:smoke:release": "php tools/smoke-disposable-wordpress-release.php",
+    "release:evidence": "php tools/collect-release-evidence.php"
   }
 }

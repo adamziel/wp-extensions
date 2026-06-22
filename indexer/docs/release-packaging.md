@@ -113,6 +113,37 @@ marker. To pass, it must record an approved WordPress.org/public-submission
 target, non-placeholder approver, review date, and explicit approved checks for
 readme, license, assets, and public-submission authority.
 
+## Release Evidence Bundle
+
+The release evidence collector gives release reviewers one sanitized JSON bundle
+for the current checkout:
+
+```sh
+php indexer/tools/collect-release-evidence.php
+```
+
+The default bundle is safe to run before release assets exist. It does not build
+or write a direct-install ZIP by default; that lane is reported as `skip` with
+an explicit artifact policy. It does run the public-submission readiness target
+and records the current blockers as `blocked` evidence rather than treating them
+as a collector failure. It also records skip/pass/fail evidence for the
+disposable WordPress release smoke, provider compatibility smoke, real
+WordPress/MySQL integration proof, real MySQL production proof, and PR-safe
+production-scale benchmark.
+
+Use direct-install opt-ins only when a review intentionally wants artifact
+staging evidence:
+
+```sh
+php indexer/tools/collect-release-evidence.php --run-direct-install-readiness
+php indexer/tools/collect-release-evidence.php --direct-package-dir=/path/to/staged/indexer
+```
+
+The bundle does not modify WordPress.org/SVN state, tags, or release assets, and
+it is not public-submission approval. The current public-submission blockers are
+expected until product policy, package assets, license/readme metadata, and
+authority evidence are completed.
+
 ## Composer Dependency Handling
 
 The source tree tracks `composer.json` and `composer.lock`, and ignores
