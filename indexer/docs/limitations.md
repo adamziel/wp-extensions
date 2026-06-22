@@ -41,10 +41,13 @@ a real site.
 Theme and custom `posts_pre_query` integrations that are not recognized as a
 known provider may only appear in diagnostics as generic hook callback labels.
 The hook pipeline view lists registered callbacks around Language FTS without
-calling them. Callbacks registered after the Language FTS priority can be shown
-as later callbacks, but the diagnostic cannot observe those later callbacks as
-final search winners because they have not run yet at the point Language FTS
-records its trace.
+calling them. For traced front-end and wp-admin Posts searches, a separate
+read-only late observer records bounded final ownership after later
+`posts_pre_query` callbacks have had a chance to run. It can show whether
+Language FTS survived, a later callback changed the FTS result, or coexistence
+mode respected an earlier provider result. If diagnostics are disabled, the
+trace is missing, or the final value cannot be safely compared, final ownership
+is reported as unavailable instead of guessing.
 
 Request diagnostics are request-local and bounded. They help explain the current
 admin or debug-enabled request, but they are not persistent conflict logs,

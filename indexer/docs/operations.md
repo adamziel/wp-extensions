@@ -379,7 +379,14 @@ For front-end and wp-admin Posts search replacement, diagnostics also show a
 bounded `posts_pre_query` hook pipeline around Language FTS: callback labels,
 priorities, before/same/after counts, and the FTS priority. This inspects hook
 registration state only; it does not call third-party provider APIs or include
-provider result payloads.
+provider result payloads. A read-only late observer also records request-local
+final ownership for traced searches after later `posts_pre_query` callbacks run.
+It returns the incoming posts unchanged and stores only bounded status, counts,
+post ID samples, and compact hashes so operators can see whether Language FTS
+survived, a later callback changed the FTS output, the null search path was
+replaced by FTS, or coexistence mode respected an earlier provider result. This
+evidence is not persistent telemetry and does not certify Jetpack, SearchWP,
+Relevanssi, ElasticPress, or custom providers end to end.
 
 The same trace includes bounded, redacted SQL query summaries only when the
 environment already collects query data in `$wpdb->queries`, such as a site with

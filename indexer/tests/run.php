@@ -3170,6 +3170,26 @@ function wp_fts_test_set_posts_pre_query_hook_state(array $callbacks_by_priority
     ];
 }
 
+/**
+ * @param array<int,array<string,array{function:mixed,accepted_args?:int}>> $callbacks_by_priority
+ */
+function wp_fts_test_set_posts_pre_query_filter_pipeline(array $callbacks_by_priority): void
+{
+    wp_fts_test_set_posts_pre_query_hook_state($callbacks_by_priority);
+    ksort($callbacks_by_priority, SORT_NUMERIC);
+
+    $callbacks = [];
+    foreach ($callbacks_by_priority as $bucket) {
+        foreach ($bucket as $entry) {
+            if (is_array($entry) && array_key_exists('function', $entry)) {
+                $callbacks[] = $entry['function'];
+            }
+        }
+    }
+
+    $GLOBALS['wp_fts_test_filters']['posts_pre_query'] = $callbacks;
+}
+
 function wp_fts_test_begin_frontend_search_loop(mixed $query): void
 {
     if (is_callable([WP_FTS_Plugin::class, 'begin_frontend_search_loop'])) {
@@ -4490,7 +4510,7 @@ PHP;
 
     $filterHooks = array_column($GLOBALS['wp_fts_test_filter_registrations'], 'hook');
     sort($filterHooks, SORT_STRING);
-    assert_same(['debug_bar_panels', 'found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'render_block', 'the_content', 'the_excerpt', 'the_title', 'wpmu_drop_tables'], $filterHooks, 'bootstrap should register front-end, admin, diagnostics, and multisite cleanup filters');
+    assert_same(['debug_bar_panels', 'found_posts', 'found_posts', 'get_the_excerpt', 'posts_pre_query', 'posts_pre_query', 'posts_pre_query', 'render_block', 'the_content', 'the_excerpt', 'the_title', 'wpmu_drop_tables'], $filterHooks, 'bootstrap should register front-end, admin, diagnostics, and multisite cleanup filters');
 
     $siteLifecycleAction = null;
     foreach ($GLOBALS['wp_fts_test_actions'] as $action) {
@@ -4533,6 +4553,7 @@ PHP;
         if (is_string($method) && in_array($method, [
             'filter_admin_post_search_found_posts',
             'filter_frontend_search_found_posts',
+            'observe_final_search_posts',
             'replace_admin_post_search_posts',
             'replace_frontend_search_posts',
         ], true)) {
@@ -4547,9 +4568,10 @@ PHP;
     assert_same([
         'filter_admin_post_search_found_posts' => ['hook' => 'found_posts', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
         'filter_frontend_search_found_posts' => ['hook' => 'found_posts', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
+        'observe_final_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY, 'accepted_args' => 2],
         'replace_admin_post_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
         'replace_frontend_search_posts' => ['hook' => 'posts_pre_query', 'priority' => WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 'accepted_args' => 2],
-    ], $searchFilterPriorities, 'search replacement filters should run late enough to override normal posts_pre_query providers');
+    ], $searchFilterPriorities, 'search replacement filters should run late enough to override normal posts_pre_query providers and observe final ownership');
     assert_same([], WP_CLI::$commands, 'web bootstrap should not register WP-CLI unless WP_CLI is active');
 });
 
@@ -11298,6 +11320,349 @@ test_case('enabled diagnostics record search provider compatibility overrides', 
         assert_same(1, (int) ($adminCounts['prior_provider_responses_replaced'] ?? 0), 'admin provider override diagnostics should count the replaced provider response');
         $adminNotes = is_array($adminTrace['notes'] ?? null) ? $adminTrace['notes'] : [];
         assert_true(in_array('FTS replaced an earlier non-null posts_pre_query result from another search provider.', $adminNotes, true), 'admin provider override diagnostics should explain that FTS replaced an earlier provider response');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('final ownership diagnostics report later provider changes to Language FTS output', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $post = (object) [
+        'ID' => 861,
+        'post_title' => 'Final owner FTS rank',
+        'post_content' => '<p>finalchangelanguageneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-16 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][861] = $post;
+
+    try {
+        wp_fts_test_index_saved_post(861, $post, true);
+
+        $laterProviderResult = [
+            (object) [
+                'ID' => 862,
+                'post_title' => 'later-provider-title-must-not-leak',
+                'provider_payload' => ['secret' => 'later-provider-secret-must-not-leak'],
+            ],
+        ];
+        wp_fts_test_set_posts_pre_query_filter_pipeline([
+            WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                'language_fts' => [
+                    'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+            1200 => [
+                'later_provider' => [
+                    'function' => static fn(mixed $posts, mixed $query = null): array => $laterProviderResult,
+                    'accepted_args' => 2,
+                ],
+            ],
+            WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
+                'final_observer' => [
+                    'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+        ]);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'finalchangelanguageneedle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = apply_filters('posts_pre_query', null, $query);
+
+        assert_same([862], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'later provider should remain able to replace Language FTS posts');
+        $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
+        assert_same('later_provider_changed_fts', $ownership['status'] ?? null, 'final ownership should report a later provider change');
+        assert_same('later_provider', $ownership['owner'] ?? null, 'final ownership should attribute the final result to a later provider');
+        assert_same(true, $ownership['observed'] ?? null, 'final ownership should record that the late observer ran');
+        assert_same([861], $ownership['expected_post_ids'] ?? null, 'final ownership should expose only bounded expected FTS post IDs');
+        assert_same([862], $ownership['final_post_ids'] ?? null, 'final ownership should expose only bounded final post IDs');
+
+        $traceJson = json_encode($trace, JSON_THROW_ON_ERROR);
+        assert_true(!str_contains($traceJson, 'later-provider-title-must-not-leak'), 'final ownership should not log later provider post titles');
+        assert_true(!str_contains($traceJson, 'later-provider-secret-must-not-leak'), 'final ownership should not log later provider payloads');
+        assert_true(!str_contains($traceJson, 'provider_payload'), 'final ownership should not log provider payload keys');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('final ownership diagnostics report Language FTS survival after later callbacks', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $post = (object) [
+        'ID' => 864,
+        'post_title' => 'Final owner survived rank',
+        'post_content' => '<p>finalsurvivelanguageneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-16 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][864] = $post;
+
+    try {
+        wp_fts_test_index_saved_post(864, $post, true);
+
+        wp_fts_test_set_posts_pre_query_filter_pipeline([
+            20 => [
+                'prior_provider' => [
+                    'function' => static fn(mixed $posts, mixed $query = null): array => [
+                        (object) ['ID' => 863, 'post_title' => 'prior-provider-title-must-not-leak'],
+                    ],
+                    'accepted_args' => 2,
+                ],
+            ],
+            WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                'language_fts' => [
+                    'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+            1200 => [
+                'preserving_later_provider' => [
+                    'function' => static fn(mixed $posts, mixed $query = null): mixed => $posts,
+                    'accepted_args' => 2,
+                ],
+            ],
+            WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
+                'final_observer' => [
+                    'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+        ]);
+
+        $query = new WP_FTS_Test_Query([
+            's' => 'finalsurvivelanguageneedle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = apply_filters('posts_pre_query', null, $query);
+
+        assert_same([864], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'preserving later callback should not change Language FTS posts');
+        $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
+        assert_same('language_fts_survived', $ownership['status'] ?? null, 'final ownership should report that Language FTS survived later callbacks');
+        assert_same('language_fts', $ownership['owner'] ?? null, 'final ownership should attribute the result to Language FTS');
+        assert_same('language_fts_replaced_prior_provider', $ownership['origin'] ?? null, 'final ownership should record that Language FTS replaced an earlier provider result');
+        assert_same([864], $ownership['expected_post_ids'] ?? null, 'final ownership should keep expected FTS post IDs bounded');
+        assert_same([864], $ownership['final_post_ids'] ?? null, 'final ownership should keep final post IDs bounded');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('final ownership diagnostics report null-path replacement and respected provider stand-down', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $post = (object) [
+        'ID' => 865,
+        'post_title' => 'Final owner null path rank',
+        'post_content' => '<p>finalnullpathneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-16 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][865] = $post;
+
+    try {
+        wp_fts_test_index_saved_post(865, $post, true);
+
+        wp_fts_test_set_posts_pre_query_filter_pipeline([
+            WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                'language_fts' => [
+                    'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+            WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
+                'final_observer' => [
+                    'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+        ]);
+        $query = new WP_FTS_Test_Query([
+            's' => 'finalnullpathneedle',
+            'posts_per_page' => 10,
+        ]);
+        $posts = apply_filters('posts_pre_query', null, $query);
+
+        assert_same([865], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $posts), 'Language FTS should still replace the null search path');
+        $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
+        assert_same('language_fts_replaced_null', $ownership['status'] ?? null, 'final ownership should report null-path replacement');
+        assert_same('language_fts', $ownership['owner'] ?? null, 'null-path final ownership should belong to Language FTS');
+
+        $html = wp_fts_test_capture(static function (): void {
+            WP_FTS_Plugin::render_debug_bar_diagnostics_panel();
+        });
+        assert_contains('Search final ownership', $html, 'rendered diagnostics should include the final ownership row');
+        assert_contains('language_fts_replaced_null', $html, 'rendered diagnostics should include the final ownership status');
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+            WP_FTS_Plugin::default_settings(),
+            ['search_provider_compatibility' => 'respect_existing']
+        );
+        wp_fts_test_set_posts_pre_query_filter_pipeline([
+            20 => [
+                'prior_provider' => [
+                    'function' => static fn(mixed $posts, mixed $query = null): array => [
+                        (object) ['ID' => 866, 'post_title' => 'respected-provider-title-must-not-leak'],
+                    ],
+                    'accepted_args' => 2,
+                ],
+            ],
+            WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                'language_fts' => [
+                    'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+            WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
+                'final_observer' => [
+                    'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+        ]);
+        $respectQuery = new WP_FTS_Test_Query([
+            's' => 'finalnullpathneedle',
+            'posts_per_page' => 10,
+        ]);
+        $respected = apply_filters('posts_pre_query', null, $respectQuery);
+
+        assert_same([866], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $respected), 'coexistence mode should still preserve the earlier provider result');
+        $respectTrace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $respectOwnership = is_array($respectTrace['search_final_ownership'] ?? null) ? $respectTrace['search_final_ownership'] : [];
+        assert_same('earlier_provider_respected', $respectOwnership['status'] ?? null, 'final ownership should report respected earlier providers');
+        assert_same('earlier_provider', $respectOwnership['owner'] ?? null, 'final ownership should attribute respected results to the earlier provider');
+        assert_same([866], $respectOwnership['final_post_ids'] ?? null, 'respected provider diagnostics should expose only bounded final post IDs');
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('final ownership observer is read-only hidden when diagnostics are disabled and covers admin search', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+
+    $incoming = [(object) ['ID' => 868, 'post_title' => 'observer read-only result']];
+    $query = new WP_FTS_Test_Query([
+        's' => 'readonlyfinalownerneedle',
+        'posts_per_page' => 10,
+    ]);
+    assert_same($incoming, WP_FTS_Plugin::observe_final_search_posts($incoming, $query), 'late final ownership observer should return posts unchanged');
+
+    $frontPost = (object) [
+        'ID' => 869,
+        'post_title' => 'Final owner disabled rank',
+        'post_content' => '<p>disabledfinalownerneedle appears in indexed content.</p>',
+        'post_excerpt' => '',
+        'post_status' => 'publish',
+        'post_type' => 'post',
+        'post_date_gmt' => '2026-06-16 00:00:00',
+    ];
+    $GLOBALS['wp_fts_test_posts'][869] = $frontPost;
+
+    try {
+        wp_fts_test_index_saved_post(869, $frontPost, true);
+        wp_fts_test_set_posts_pre_query_filter_pipeline([
+            WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                'language_fts' => [
+                    'function' => [WP_FTS_Plugin::class, 'replace_frontend_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+            WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
+                'final_observer' => [
+                    'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+        ]);
+        $disabledQuery = new WP_FTS_Test_Query([
+            's' => 'disabledfinalownerneedle',
+            'posts_per_page' => 10,
+        ]);
+        $disabledPosts = apply_filters('posts_pre_query', null, $disabledQuery);
+
+        assert_same([869], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $disabledPosts), 'final observer should not alter normal visitor front-end search behavior');
+        assert_same([], WP_FTS_Plugin::debug_traces(), 'normal visitor requests should not collect final ownership diagnostics when debug gates are closed');
+
+        WP_FTS_Plugin::reset_request_caches();
+        $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => $context === 'admin post search';
+        $GLOBALS['wp_fts_test_is_admin'] = true;
+        $GLOBALS['pagenow'] = 'edit.php';
+        $adminPost = (object) [
+            'ID' => 867,
+            'post_title' => 'Final owner admin rank',
+            'post_content' => '<p>adminfinalownerneedle appears in indexed content.</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-16 00:00:00',
+        ];
+        $GLOBALS['wp_fts_test_posts'][867] = $adminPost;
+        wp_fts_test_index_saved_post(867, $adminPost, true);
+        wp_fts_test_set_posts_pre_query_filter_pipeline([
+            WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY => [
+                'language_fts_admin' => [
+                    'function' => [WP_FTS_Plugin::class, 'replace_admin_post_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+            WP_FTS_Plugin::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY => [
+                'final_observer' => [
+                    'function' => [WP_FTS_Plugin::class, 'observe_final_search_posts'],
+                    'accepted_args' => 2,
+                ],
+            ],
+        ]);
+        $adminQuery = new WP_FTS_Test_Query([
+            's' => 'adminfinalownerneedle',
+            'posts_per_page' => 10,
+            'post_type' => 'post',
+            'post_status' => 'publish',
+        ]);
+        $adminPosts = apply_filters('posts_pre_query', null, $adminQuery);
+
+        assert_same([867], array_map(static fn(object $resultPost): int => (int) $resultPost->ID, $adminPosts), 'final observer should not alter admin Posts search behavior');
+        $adminTrace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $adminOwnership = is_array($adminTrace['search_final_ownership'] ?? null) ? $adminTrace['search_final_ownership'] : [];
+        assert_same('language_fts_replaced_null', $adminOwnership['status'] ?? null, 'admin final ownership should report Language FTS null-path replacement');
+        assert_same('admin post search', $adminTrace['context'] ?? null, 'admin final ownership trace should keep the admin context');
     } finally {
         $wpdb = $oldWpdb;
     }

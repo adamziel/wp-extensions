@@ -30,6 +30,7 @@ final class WP_FTS_Plugin
     public const DEBUG_ENABLED_FILTER = 'wp_fts_debug_enabled';
     public const SEARCH_PERFORMANCE_BUDGET_FILTER = 'wp_fts_search_performance_budget';
     public const SEARCH_REPLACEMENT_PRIORITY = 999;
+    public const SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY = PHP_INT_MAX;
     public const LANGUAGE_META_KEY = '_wp_fts_index_language';
     public const DEFAULT_BATCH_SIZE = 25;
     public const DEFAULT_CRON_INDEX_BATCH_SIZE = 20;
@@ -258,6 +259,7 @@ final class WP_FTS_Plugin
     private const DEBUG_MAX_ASSOC_ITEMS = 16;
     private const DEBUG_MAX_TIMING_PHASES = 16;
     private const DEBUG_SEARCH_HOOK = 'posts_pre_query';
+    private const DEBUG_SEARCH_FINAL_OWNERSHIP_QUERY_VAR = 'wp_fts_search_final_ownership_trace_id';
     private const DEBUG_MAX_HOOK_CALLBACKS = self::DEBUG_MAX_LIST_ITEMS;
     private const ANALYZER_PACK_STATUS_MATRIX_MAX_ROWS = 64;
     private const FTS_TABLE_SUFFIXES = [
@@ -299,6 +301,11 @@ final class WP_FTS_Plugin
     private static array $debug_sql_query_starts = [];
 
     /**
+     * @var array<int,array<string,mixed>>
+     */
+    private static array $search_final_ownership_state = [];
+
+    /**
      * @var array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}>|null
      */
     private static ?array $runtime_analyzer_pack_statuses_cache = null;
@@ -324,6 +331,7 @@ final class WP_FTS_Plugin
         self::$debug_traces = [];
         self::$debug_next_trace_id = 1;
         self::$debug_sql_query_starts = [];
+        self::$search_final_ownership_state = [];
     }
 
     /**
@@ -355,6 +363,7 @@ final class WP_FTS_Plugin
         if (function_exists('add_filter')) {
             add_filter('posts_pre_query', [self::class, 'replace_frontend_search_posts'], self::SEARCH_REPLACEMENT_PRIORITY, 2);
             add_filter('posts_pre_query', [self::class, 'replace_admin_post_search_posts'], self::SEARCH_REPLACEMENT_PRIORITY, 2);
+            add_filter('posts_pre_query', [self::class, 'observe_final_search_posts'], self::SEARCH_FINAL_OWNERSHIP_OBSERVER_PRIORITY, 2);
             add_filter('found_posts', [self::class, 'filter_frontend_search_found_posts'], self::SEARCH_REPLACEMENT_PRIORITY, 2);
             add_filter('found_posts', [self::class, 'filter_admin_post_search_found_posts'], self::SEARCH_REPLACEMENT_PRIORITY, 2);
             add_filter('get_the_excerpt', [self::class, 'frontend_search_excerpt'], 10, 2);
@@ -1791,6 +1800,7 @@ final class WP_FTS_Plugin
             'counts' => self::debug_default_counts(),
             'analyzer_pack_status' => [],
             'search_hook_pipeline' => [],
+            'search_final_ownership' => self::debug_search_final_ownership_unavailable('Final posts_pre_query ownership has not been observed yet.'),
             'search_explain' => [],
             'performance_budget' => [],
             'sql_queries' => self::debug_sql_query_initial_summary($sql_capture),
@@ -2236,6 +2246,348 @@ final class WP_FTS_Plugin
     }
 
     /**
+     * Remember the bounded value signature that Language FTS expects the late
+     * posts_pre_query observer to see for this query.
+     */
+    private static function debug_remember_search_final_ownership(mixed $query, int $trace_id, string $origin, mixed $expected_posts): void
+    {
+        if ($trace_id <= 0 || !isset(self::$debug_traces[$trace_id])) {
+            return;
+        }
+
+        $query_key = self::query_object_key($query);
+        if ($query_key <= 0) {
+            self::$debug_traces[$trace_id]['search_final_ownership'] = self::debug_search_final_ownership_unavailable(
+                'Final ownership cannot be observed because the query object is unavailable.'
+            );
+            return;
+        }
+
+        $expected_signature = self::debug_search_result_signature($expected_posts);
+        $origin = self::debug_truncate_text($origin, 80);
+        self::$search_final_ownership_state[$query_key] = [
+            'trace_id' => $trace_id,
+            'origin' => $origin,
+            'expected_signature' => $expected_signature,
+        ];
+        self::set_query_var($query, self::DEBUG_SEARCH_FINAL_OWNERSHIP_QUERY_VAR, $trace_id);
+        self::$debug_traces[$trace_id]['search_final_ownership'] = self::debug_search_final_ownership_pending($origin, $expected_signature);
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function debug_search_final_ownership_pending(string $origin, array $expected_signature): array
+    {
+        return self::debug_search_final_ownership_row(
+            'unavailable',
+            'unknown',
+            false,
+            $origin,
+            $expected_signature,
+            null,
+            'Final posts_pre_query observer has not run yet.'
+        );
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function debug_search_final_ownership_unavailable(string $reason, bool $observed = false): array
+    {
+        return self::debug_search_final_ownership_row(
+            'unavailable',
+            'unknown',
+            $observed,
+            'unknown',
+            null,
+            null,
+            $reason
+        );
+    }
+
+    /**
+     * @param array<string,mixed>|null $expected_signature
+     * @param array<string,mixed>|null $final_signature
+     * @return array<string,mixed>
+     */
+    private static function debug_search_final_ownership_row(
+        string $status,
+        string $owner,
+        bool $observed,
+        string $origin,
+        ?array $expected_signature,
+        ?array $final_signature,
+        string $reason
+    ): array {
+        $row = [
+            'status' => self::debug_truncate_text($status, 80),
+            'owner' => self::debug_truncate_text($owner, 80),
+            'observed' => $observed,
+            'origin' => self::debug_truncate_text($origin, 80),
+            'reason' => self::debug_truncate_text($reason, 240),
+        ];
+
+        if ($expected_signature !== null) {
+            $row['expected_kind'] = (string) ($expected_signature['kind'] ?? 'unknown');
+            $row['expected_count'] = max(0, (int) ($expected_signature['count'] ?? 0));
+            $row['expected_post_ids'] = self::debug_post_id_sample($expected_signature['post_ids'] ?? []);
+            $row['expected_hash'] = self::debug_hash_prefix((string) ($expected_signature['hash'] ?? ''));
+        }
+
+        if ($final_signature !== null) {
+            $row['final_kind'] = (string) ($final_signature['kind'] ?? 'unknown');
+            $row['final_count'] = max(0, (int) ($final_signature['count'] ?? 0));
+            $row['final_post_ids'] = self::debug_post_id_sample($final_signature['post_ids'] ?? []);
+            $row['final_hash'] = self::debug_hash_prefix((string) ($final_signature['hash'] ?? ''));
+        }
+
+        return $row;
+    }
+
+    /**
+     * @return int[]
+     */
+    private static function debug_post_id_sample(mixed $ids): array
+    {
+        if (!is_array($ids)) {
+            return [];
+        }
+
+        $sample = [];
+        foreach ($ids as $id) {
+            if (!is_numeric($id)) {
+                continue;
+            }
+            $post_id = max(0, (int) $id);
+            if ($post_id > 0) {
+                $sample[] = $post_id;
+            }
+            if (count($sample) >= self::DEBUG_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return $sample;
+    }
+
+    private static function debug_hash_prefix(string $hash): string
+    {
+        return preg_match('/^[a-f0-9]{8,}$/i', $hash) === 1 ? substr(strtolower($hash), 0, 16) : '';
+    }
+
+    /**
+     * @return array{kind:string,count:int,post_ids:int[],hash:string,comparable:bool,reason:string}
+     */
+    private static function debug_search_result_signature(mixed $posts): array
+    {
+        if ($posts === null) {
+            return [
+                'kind' => 'null',
+                'count' => 0,
+                'post_ids' => [],
+                'hash' => sha1('null'),
+                'comparable' => true,
+                'reason' => '',
+            ];
+        }
+
+        if (!is_array($posts)) {
+            return [
+                'kind' => self::debug_truncate_text(get_debug_type($posts), 80),
+                'count' => is_countable($posts) ? max(0, count($posts)) : 1,
+                'post_ids' => [],
+                'hash' => sha1('unavailable:' . get_debug_type($posts)),
+                'comparable' => false,
+                'reason' => 'posts_pre_query returned a non-array, non-null value that cannot be safely compared.',
+            ];
+        }
+
+        $parts = ['array', 'count:' . count($posts)];
+        $post_ids = [];
+        $comparable = true;
+        foreach (array_values($posts) as $item) {
+            $post_id = self::debug_search_result_post_id($item);
+            if ($post_id > 0) {
+                $post_ids[] = $post_id;
+                $parts[] = 'id:' . $post_id;
+            } else {
+                $parts[] = 'id:0';
+            }
+
+            if (is_object($item)) {
+                $parts[] = 'object:' . spl_object_id($item);
+            } elseif (is_array($item)) {
+                $parts[] = 'array:' . count($item);
+                if ($post_id <= 0) {
+                    $comparable = false;
+                }
+            } elseif (is_scalar($item)) {
+                $parts[] = 'scalar:' . get_debug_type($item);
+                if ($post_id <= 0) {
+                    $comparable = false;
+                }
+            } else {
+                $parts[] = 'type:' . get_debug_type($item);
+                $comparable = false;
+            }
+        }
+
+        return [
+            'kind' => 'array',
+            'count' => count($posts),
+            'post_ids' => array_slice($post_ids, 0, self::DEBUG_MAX_LIST_ITEMS),
+            'hash' => sha1(implode('|', $parts)),
+            'comparable' => $comparable,
+            'reason' => $comparable ? '' : 'posts_pre_query result items were not all identifiable by post ID or object identity.',
+        ];
+    }
+
+    private static function debug_search_result_post_id(mixed $item): int
+    {
+        if (is_array($item)) {
+            foreach (['ID', 'id', 'post_id', 'doc_id'] as $key) {
+                if (isset($item[$key]) && is_numeric($item[$key])) {
+                    return max(0, (int) $item[$key]);
+                }
+            }
+
+            return 0;
+        }
+
+        return self::post_id_from_value($item);
+    }
+
+    /**
+     * Read-only late posts_pre_query observer used only for diagnostics.
+     */
+    public static function observe_final_search_posts(mixed $posts, mixed $query): mixed
+    {
+        self::debug_observe_search_final_ownership($posts, $query);
+
+        return $posts;
+    }
+
+    private static function debug_observe_search_final_ownership(mixed $posts, mixed $query): void
+    {
+        $query_key = self::query_object_key($query);
+        if ($query_key <= 0) {
+            return;
+        }
+
+        $state = self::$search_final_ownership_state[$query_key] ?? null;
+        if (!is_array($state)) {
+            $trace_id = self::query_var($query, self::DEBUG_SEARCH_FINAL_OWNERSHIP_QUERY_VAR, 0);
+            $trace_id = is_numeric($trace_id) ? (int) $trace_id : 0;
+            if ($trace_id > 0 && isset(self::$debug_traces[$trace_id])) {
+                self::$debug_traces[$trace_id]['search_final_ownership'] = self::debug_search_final_ownership_unavailable(
+                    'Final observer ran, but the request-local ownership trace state is unavailable.',
+                    true
+                );
+            }
+            return;
+        }
+
+        $trace_id = is_numeric($state['trace_id'] ?? null) ? (int) $state['trace_id'] : 0;
+        if ($trace_id <= 0 || !isset(self::$debug_traces[$trace_id])) {
+            unset(self::$search_final_ownership_state[$query_key]);
+            return;
+        }
+
+        $expected_signature = is_array($state['expected_signature'] ?? null)
+            ? $state['expected_signature']
+            : self::debug_search_result_signature(null);
+        $final_signature = self::debug_search_result_signature($posts);
+        $origin = is_scalar($state['origin'] ?? null) ? (string) $state['origin'] : 'unknown';
+        self::$debug_traces[$trace_id]['search_final_ownership'] = self::debug_search_final_ownership_observed(
+            $origin,
+            $expected_signature,
+            $final_signature
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $expected_signature
+     * @param array<string,mixed> $final_signature
+     * @return array<string,mixed>
+     */
+    private static function debug_search_final_ownership_observed(string $origin, array $expected_signature, array $final_signature): array
+    {
+        if (empty($expected_signature['comparable']) || empty($final_signature['comparable'])) {
+            $reason = (string) ($expected_signature['reason'] ?? '');
+            if ($reason === '') {
+                $reason = (string) ($final_signature['reason'] ?? 'Final result could not be safely compared.');
+            }
+
+            return self::debug_search_final_ownership_row(
+                'unavailable',
+                'unknown',
+                true,
+                $origin,
+                $expected_signature,
+                $final_signature,
+                $reason
+            );
+        }
+
+        $matches = (string) ($expected_signature['hash'] ?? '') !== ''
+            && (string) ($expected_signature['hash'] ?? '') === (string) ($final_signature['hash'] ?? '');
+        if (!$matches) {
+            $changed_respected_provider = $origin === 'earlier_provider_respected';
+            $status = $changed_respected_provider
+                ? 'later_provider_changed_respected_provider'
+                : 'later_provider_changed_fts';
+            $reason = $changed_respected_provider
+                ? 'A later posts_pre_query callback changed the provider result after compatibility mode stood down.'
+                : 'A later posts_pre_query callback changed the final result after Language FTS recorded its trace.';
+
+            return self::debug_search_final_ownership_row(
+                $status,
+                'later_provider',
+                true,
+                $origin,
+                $expected_signature,
+                $final_signature,
+                $reason
+            );
+        }
+
+        if ($origin === 'earlier_provider_respected') {
+            return self::debug_search_final_ownership_row(
+                'earlier_provider_respected',
+                'earlier_provider',
+                true,
+                $origin,
+                $expected_signature,
+                $final_signature,
+                'Compatibility mode respected an earlier non-null provider result through the final observer.'
+            );
+        }
+
+        if ($origin === 'language_fts_from_null') {
+            return self::debug_search_final_ownership_row(
+                'language_fts_replaced_null',
+                'language_fts',
+                true,
+                $origin,
+                $expected_signature,
+                $final_signature,
+                'Language FTS replaced the original null posts_pre_query path and survived the final observer.'
+            );
+        }
+
+        return self::debug_search_final_ownership_row(
+            'language_fts_survived',
+            'language_fts',
+            true,
+            $origin,
+            $expected_signature,
+            $final_signature,
+            'Language FTS output survived later posts_pre_query callbacks.'
+        );
+    }
+
+    /**
      * @return array<string,int>
      */
     private static function debug_default_counts(): array
@@ -2543,8 +2895,9 @@ final class WP_FTS_Plugin
         $structured_keys = [
             'search_explain' => true,
             'search_hook_pipeline' => true,
+            'search_final_ownership' => true,
         ];
-        foreach (['query_lang', 'fallback_languages', 'settings', 'counts', 'timings_ms', 'analyzer_pack_status', 'search_hook_pipeline', 'search_explain', 'notes'] as $key) {
+        foreach (['query_lang', 'fallback_languages', 'settings', 'counts', 'timings_ms', 'analyzer_pack_status', 'search_hook_pipeline', 'search_final_ownership', 'search_explain', 'notes'] as $key) {
             if (array_key_exists($key, $extra)) {
                 $allowed[$key] = is_array($extra[$key]) && isset($structured_keys[$key])
                     ? self::debug_normalize_structured_value($extra[$key])
@@ -2951,6 +3304,7 @@ final class WP_FTS_Plugin
             }
             self::render_debug_row('Settings', self::debug_assoc_summary($trace['settings'] ?? []));
             self::render_debug_row('Search hook pipeline', self::debug_search_hook_pipeline_summary($trace['search_hook_pipeline'] ?? []));
+            self::render_debug_row('Search final ownership', self::debug_search_final_ownership_summary($trace['search_final_ownership'] ?? []));
             $search_explain = is_array($trace['search_explain'] ?? null) ? $trace['search_explain'] : [];
             self::render_debug_row('Storage backend', self::debug_assoc_summary($search_explain['storage'] ?? []));
             self::render_debug_row('Query plan', self::debug_query_plan_summary($search_explain['query_plan'] ?? []));
@@ -3218,6 +3572,52 @@ final class WP_FTS_Plugin
             $parts[] = 'callbacks=' . implode(' | ', $callbacks) . (!empty($value['more']) ? ' | ...' : '');
         } elseif (!empty($value['more'])) {
             $parts[] = 'callbacks=...';
+        }
+
+        $reason = self::debug_scalar_summary($value['reason'] ?? '');
+        if ($reason !== '') {
+            $parts[] = 'reason=' . $reason;
+        }
+
+        return self::debug_truncate_text(implode(', ', $parts), 800);
+    }
+
+    private static function debug_search_final_ownership_summary(mixed $value): string
+    {
+        if (!is_array($value)) {
+            return '';
+        }
+
+        $parts = [];
+        foreach (['status', 'owner', 'origin'] as $key) {
+            $summary = self::debug_scalar_summary($value[$key] ?? '');
+            if ($summary !== '') {
+                $parts[] = $key . '=' . $summary;
+            }
+        }
+
+        if (array_key_exists('observed', $value)) {
+            $parts[] = 'observed=' . (!empty($value['observed']) ? 'true' : 'false');
+        }
+
+        foreach (['expected_count', 'final_count'] as $key) {
+            if (array_key_exists($key, $value)) {
+                $parts[] = $key . '=' . max(0, (int) $value[$key]);
+            }
+        }
+
+        foreach (['expected_post_ids', 'final_post_ids'] as $key) {
+            $ids = self::debug_list_summary($value[$key] ?? []);
+            if ($ids !== '') {
+                $parts[] = $key . '=' . $ids;
+            }
+        }
+
+        foreach (['expected_hash', 'final_hash'] as $key) {
+            $hash = self::debug_scalar_summary($value[$key] ?? '');
+            if ($hash !== '') {
+                $parts[] = $key . '=' . $hash;
+            }
         }
 
         $reason = self::debug_scalar_summary($value['reason'] ?? '');
@@ -9710,12 +10110,13 @@ JS;
 
         $settings = self::settings();
         if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
-            self::debug_record_prior_search_provider_stand_down(
+            $trace_id = self::debug_record_prior_search_provider_stand_down(
                 'frontend search',
                 $search_query,
                 $settings,
                 $posts
             );
+            self::debug_remember_search_final_ownership($query, $trace_id, 'earlier_provider_respected', $posts);
             return $posts;
         }
 
@@ -9732,6 +10133,12 @@ JS;
             $result['snippets'],
             $result['titles'],
             $trace_id
+        );
+        self::debug_remember_search_final_ownership(
+            $query,
+            $trace_id,
+            $posts === null ? 'language_fts_from_null' : 'language_fts_replaced_prior_provider',
+            $result['posts']
         );
 
         return $result['posts'];
@@ -9811,12 +10218,13 @@ JS;
 
         $settings = self::settings();
         if (self::should_preserve_prior_search_provider_result($posts, $settings)) {
-            self::debug_record_prior_search_provider_stand_down(
+            $trace_id = self::debug_record_prior_search_provider_stand_down(
                 'admin post search',
                 $search_query,
                 $settings,
                 $posts
             );
+            self::debug_remember_search_final_ownership($query, $trace_id, 'earlier_provider_respected', $posts);
             return $posts;
         }
 
@@ -9831,6 +10239,12 @@ JS;
             $result['limit'],
             $result['query_lang'],
             $trace_id
+        );
+        self::debug_remember_search_final_ownership(
+            $query,
+            $trace_id,
+            $posts === null ? 'language_fts_from_null' : 'language_fts_replaced_prior_provider',
+            $result['posts']
         );
 
         return $result['posts'];
@@ -10286,13 +10700,13 @@ JS;
     /**
      * @param array<string,mixed> $settings
      */
-    private static function debug_record_prior_search_provider_stand_down(string $context, string $search_query, array $settings, mixed $posts): void
+    private static function debug_record_prior_search_provider_stand_down(string $context, string $search_query, array $settings, mixed $posts): int
     {
         $trace_id = self::debug_start_trace($context, $search_query, self::debug_effective_settings($settings), [
             'search_hook_pipeline' => self::debug_search_hook_pipeline(),
         ]);
         if ($trace_id <= 0) {
-            return;
+            return 0;
         }
 
         $incoming_count = self::prior_search_provider_result_count($posts);
@@ -10302,6 +10716,8 @@ JS;
             'Incoming provider result count: ' . $incoming_count . '.',
         ]);
         self::debug_finish_trace($trace_id, 'bailed', self::prior_search_provider_result_bailout_reason());
+
+        return $trace_id;
     }
 
     private static function debug_record_prior_search_provider_replacement(int $trace_id, mixed $posts): void
