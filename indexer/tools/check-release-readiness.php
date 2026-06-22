@@ -41,6 +41,21 @@ final class WP_FTS_ReleaseReadinessChecker
         'public_submission_authority',
     ];
 
+    private const PUBLIC_SUBMISSION_REQUIRED_PNG_ASSETS = [
+        'assets/banner-772x250.png' => [
+            'kind' => 'banner',
+            'width' => 772,
+            'height' => 250,
+        ],
+        'assets/icon-128x128.png' => [
+            'kind' => 'icon',
+            'width' => 128,
+            'height' => 128,
+        ],
+    ];
+
+    private const PNG_SIGNATURE = "\x89PNG\r\n\x1a\n";
+
     private const REQUIRED_PACKAGE_PATHS = [
         'indexer.php',
         'composer.json',
@@ -434,39 +449,36 @@ final class WP_FTS_ReleaseReadinessChecker
         $assetFiles = $this->public_asset_files($pluginSource);
         $recognized = [];
         $invalid = [];
-        $hasBanner = false;
-        $hasIcon = false;
+        $missingKinds = [];
 
-        foreach ($assetFiles as $relativePath) {
-            $kind = self::public_asset_kind($relativePath);
-            if ($kind === null) {
+        foreach (self::PUBLIC_SUBMISSION_REQUIRED_PNG_ASSETS as $relativePath => $expected) {
+            $path = $pluginSource . '/' . $relativePath;
+            if (!is_file($path)) {
+                $missingKinds[] = $expected['kind'];
                 continue;
             }
 
-            if (!self::public_asset_has_valid_signature($pluginSource . '/' . $relativePath, $relativePath)) {
-                $invalid[] = $relativePath;
+            $validation = self::validate_required_public_png_asset($path, $expected);
+            if (($validation['ok'] ?? false) !== true) {
+                $failure = ['path' => $relativePath];
+                foreach ($validation as $key => $value) {
+                    if ($key !== 'ok') {
+                        $failure[$key] = $value;
+                    }
+                }
+                $invalid[] = $failure;
                 continue;
             }
 
             $recognized[] = $relativePath;
-            if ($kind === 'banner') {
-                $hasBanner = true;
-            }
-            if ($kind === 'icon') {
-                $hasIcon = true;
-            }
         }
 
         sort($recognized, SORT_STRING);
-        sort($invalid, SORT_STRING);
-
-        $missingKinds = [];
-        if (!$hasBanner) {
-            $missingKinds[] = 'banner';
-        }
-        if (!$hasIcon) {
-            $missingKinds[] = 'icon';
-        }
+        usort(
+            $invalid,
+            static fn(array $a, array $b): int => strcmp((string) ($a['path'] ?? ''), (string) ($b['path'] ?? ''))
+        );
+        sort($missingKinds, SORT_STRING);
 
         $assetsOk = $missingKinds === [] && $invalid === [];
         $details = [
@@ -486,8 +498,8 @@ final class WP_FTS_ReleaseReadinessChecker
             'package_public_assets',
             $assetsOk ? 'pass' : 'fail',
             $assetsOk
-                ? 'Public-submission asset directory contains valid WordPress.org-style banner and icon assets.'
-                : 'Public-submission assets must include valid WordPress.org-style banner and icon image files.',
+                ? 'Public-submission asset directory contains valid WordPress.org-style PNG banner and icon assets.'
+                : 'Public-submission assets must include non-placeholder PNG banner and icon image files with exact WordPress.org dimensions.',
             $details
         );
     }
@@ -978,6 +990,380 @@ final class WP_FTS_ReleaseReadinessChecker
         sort($files, SORT_STRING);
 
         return $files;
+    }
+
+    /**
+     * @param array{kind:string,width:int,height:int} $expected
+     * @return array<string,mixed>
+     */
+    private static function validate_required_public_png_asset(string $path, array $expected): array
+    {
+        $metadata = self::read_public_png_metadata($path);
+        if (($metadata['ok'] ?? false) !== true) {
+            return $metadata;
+        }
+
+        $actualWidth = (int) $metadata['width'];
+        $actualHeight = (int) $metadata['height'];
+        $details = [
+            'width' => $actualWidth,
+            'height' => $actualHeight,
+            'expected_width' => $expected['width'],
+            'expected_height' => $expected['height'],
+        ];
+
+        if ($actualWidth <= 1 || $actualHeight <= 1) {
+            return $details + [
+                'ok' => false,
+                'reason' => 'trivial_dimensions',
+            ];
+        }
+
+        if ($actualWidth !== $expected['width'] || $actualHeight !== $expected['height']) {
+            return $details + [
+                'ok' => false,
+                'reason' => 'wrong_dimensions',
+            ];
+        }
+
+        $singleColor = self::public_png_is_single_color($path, $metadata);
+        if ($singleColor === true) {
+            return $details + [
+                'ok' => false,
+                'reason' => 'blank_single_color',
+            ];
+        }
+        if ($singleColor === null) {
+            return $details + [
+                'ok' => false,
+                'reason' => 'png_originality_unverified',
+            ];
+        }
+
+        return $details + ['ok' => true];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private static function read_public_png_metadata(string $path): array
+    {
+        $bytes = file_get_contents($path);
+        if (!is_string($bytes) || strlen($bytes) < 33) {
+            return [
+                'ok' => false,
+                'reason' => 'malformed_png',
+            ];
+        }
+
+        if (!str_starts_with($bytes, self::PNG_SIGNATURE)) {
+            return [
+                'ok' => false,
+                'reason' => 'malformed_png',
+            ];
+        }
+
+        $length = strlen($bytes);
+        $offset = strlen(self::PNG_SIGNATURE);
+        $width = null;
+        $height = null;
+        $bitDepth = null;
+        $colorType = null;
+        $idat = '';
+        $paletteColorCount = null;
+        $sawIend = false;
+
+        while ($offset + 8 <= $length) {
+            $chunkLengthData = substr($bytes, $offset, 4);
+            $chunkLength = unpack('Nlength', $chunkLengthData)['length'];
+            $chunkType = substr($bytes, $offset + 4, 4);
+            $dataOffset = $offset + 8;
+            $nextOffset = $dataOffset + $chunkLength + 4;
+            if ($chunkLength < 0 || $nextOffset > $length) {
+                return [
+                    'ok' => false,
+                    'reason' => 'malformed_png',
+                ];
+            }
+
+            $chunkData = substr($bytes, $dataOffset, $chunkLength);
+            if ($chunkType === 'IHDR') {
+                if ($chunkLength !== 13) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'malformed_png',
+                    ];
+                }
+                $header = unpack('Nwidth/Nheight/Cbit_depth/Ccolor_type/Ccompression/Cfilter/Cinterlace', $chunkData);
+                $width = (int) $header['width'];
+                $height = (int) $header['height'];
+                $bitDepth = (int) $header['bit_depth'];
+                $colorType = (int) $header['color_type'];
+                if ($width <= 0 || $height <= 0 || $header['compression'] !== 0 || $header['filter'] !== 0 || $header['interlace'] !== 0) {
+                    return [
+                        'ok' => false,
+                        'reason' => 'malformed_png',
+                    ];
+                }
+            } elseif ($chunkType === 'PLTE') {
+                $paletteColorCount = intdiv($chunkLength, 3);
+            } elseif ($chunkType === 'IDAT') {
+                $idat .= $chunkData;
+            } elseif ($chunkType === 'IEND') {
+                $sawIend = true;
+                break;
+            }
+
+            $offset = $nextOffset;
+        }
+
+        if ($width === null || $height === null || $bitDepth === null || $colorType === null || $idat === '' || !$sawIend) {
+            return [
+                'ok' => false,
+                'reason' => 'malformed_png',
+            ];
+        }
+
+        return [
+            'ok' => true,
+            'width' => $width,
+            'height' => $height,
+            'bit_depth' => $bitDepth,
+            'color_type' => $colorType,
+            'idat' => $idat,
+            'palette_color_count' => $paletteColorCount,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $metadata
+     */
+    private static function public_png_is_single_color(string $path, array $metadata): ?bool
+    {
+        if (($metadata['width'] ?? 0) <= 1 || ($metadata['height'] ?? 0) <= 1) {
+            return true;
+        }
+
+        if (($metadata['color_type'] ?? null) === 3 && ($metadata['palette_color_count'] ?? 2) <= 1) {
+            return true;
+        }
+
+        $gdResult = self::public_png_gd_is_single_color($path);
+        if ($gdResult !== null) {
+            return $gdResult;
+        }
+
+        $decoded = self::decode_public_png_image_data((string) ($metadata['idat'] ?? ''));
+        if ($decoded === null) {
+            return null;
+        }
+
+        return self::decoded_public_png_is_single_color(
+            $decoded,
+            (int) $metadata['width'],
+            (int) $metadata['height'],
+            (int) $metadata['bit_depth'],
+            (int) $metadata['color_type']
+        );
+    }
+
+    private static function public_png_gd_is_single_color(string $path): ?bool
+    {
+        if (!function_exists('imagecreatefrompng') || !function_exists('imagesx') || !function_exists('imagesy') || !function_exists('imagecolorat')) {
+            return null;
+        }
+
+        $image = @imagecreatefrompng($path);
+        if (!is_object($image) && !is_resource($image)) {
+            return null;
+        }
+
+        $width = imagesx($image);
+        $height = imagesy($image);
+        if ($width <= 0 || $height <= 0) {
+            if (function_exists('imagedestroy')) {
+                imagedestroy($image);
+            }
+            return null;
+        }
+
+        $first = imagecolorat($image, 0, 0);
+        for ($y = 0; $y < $height; $y++) {
+            for ($x = 0; $x < $width; $x++) {
+                if (imagecolorat($image, $x, $y) !== $first) {
+                    if (function_exists('imagedestroy')) {
+                        imagedestroy($image);
+                    }
+                    return false;
+                }
+            }
+        }
+
+        if (function_exists('imagedestroy')) {
+            imagedestroy($image);
+        }
+
+        return true;
+    }
+
+    private static function decode_public_png_image_data(string $idat): ?string
+    {
+        if ($idat === '') {
+            return null;
+        }
+
+        if (function_exists('gzuncompress')) {
+            $decoded = @gzuncompress($idat);
+            if (is_string($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return self::decode_zlib_stored_blocks($idat);
+    }
+
+    private static function decode_zlib_stored_blocks(string $stream): ?string
+    {
+        if (strlen($stream) < 6) {
+            return null;
+        }
+
+        $deflate = substr($stream, 2, -4);
+        $offset = 0;
+        $length = strlen($deflate);
+        $decoded = '';
+        $sawFinal = false;
+
+        while ($offset < $length) {
+            $header = ord($deflate[$offset]);
+            $offset++;
+            $isFinal = ($header & 1) === 1;
+            $blockType = ($header >> 1) & 3;
+            if ($blockType !== 0 || $offset + 4 > $length) {
+                return null;
+            }
+
+            $block = unpack('vlength/vnlength', substr($deflate, $offset, 4));
+            $offset += 4;
+            $blockLength = (int) $block['length'];
+            $blockNLength = (int) $block['nlength'];
+            if ((($blockLength ^ 0xffff) & 0xffff) !== $blockNLength || $offset + $blockLength > $length) {
+                return null;
+            }
+
+            $decoded .= substr($deflate, $offset, $blockLength);
+            $offset += $blockLength;
+            if ($isFinal) {
+                $sawFinal = true;
+                break;
+            }
+        }
+
+        return $sawFinal ? $decoded : null;
+    }
+
+    private static function decoded_public_png_is_single_color(
+        string $decoded,
+        int $width,
+        int $height,
+        int $bitDepth,
+        int $colorType
+    ): ?bool {
+        $channels = match ($colorType) {
+            0, 3 => 1,
+            2 => 3,
+            4 => 2,
+            6 => 4,
+            default => null,
+        };
+        if ($channels === null || !in_array($bitDepth, [8, 16], true)) {
+            return null;
+        }
+
+        $bitsPerPixel = $channels * $bitDepth;
+        $bytesPerPixel = intdiv($bitsPerPixel, 8);
+        $scanlineLength = $width * $bytesPerPixel;
+        $filterByteWidth = max(1, $bytesPerPixel);
+        $offset = 0;
+        $previous = str_repeat("\0", $scanlineLength);
+        $firstPixel = null;
+
+        for ($y = 0; $y < $height; $y++) {
+            if ($offset + 1 + $scanlineLength > strlen($decoded)) {
+                return null;
+            }
+
+            $filter = ord($decoded[$offset]);
+            $offset++;
+            $raw = substr($decoded, $offset, $scanlineLength);
+            $offset += $scanlineLength;
+            $scanline = self::unfilter_png_scanline($filter, $raw, $previous, $filterByteWidth);
+            if ($scanline === null) {
+                return null;
+            }
+
+            for ($x = 0; $x < $width; $x++) {
+                $pixel = substr($scanline, $x * $bytesPerPixel, $bytesPerPixel);
+                if ($firstPixel === null) {
+                    $firstPixel = $pixel;
+                    continue;
+                }
+                if ($pixel !== $firstPixel) {
+                    return false;
+                }
+            }
+
+            $previous = $scanline;
+        }
+
+        return true;
+    }
+
+    private static function unfilter_png_scanline(int $filter, string $raw, string $previous, int $bytesPerPixel): ?string
+    {
+        if ($filter === 0) {
+            return $raw;
+        }
+
+        $length = strlen($raw);
+        $out = '';
+        for ($i = 0; $i < $length; $i++) {
+            $x = ord($raw[$i]);
+            $left = $i >= $bytesPerPixel ? ord($out[$i - $bytesPerPixel]) : 0;
+            $up = ord($previous[$i] ?? "\0");
+            $upLeft = $i >= $bytesPerPixel ? ord($previous[$i - $bytesPerPixel] ?? "\0") : 0;
+
+            $value = match ($filter) {
+                1 => $x + $left,
+                2 => $x + $up,
+                3 => $x + intdiv($left + $up, 2),
+                4 => $x + self::png_paeth_predictor($left, $up, $upLeft),
+                default => null,
+            };
+            if ($value === null) {
+                return null;
+            }
+            $out .= chr($value & 0xff);
+        }
+
+        return $out;
+    }
+
+    private static function png_paeth_predictor(int $left, int $up, int $upLeft): int
+    {
+        $estimate = $left + $up - $upLeft;
+        $leftDistance = abs($estimate - $left);
+        $upDistance = abs($estimate - $up);
+        $upLeftDistance = abs($estimate - $upLeft);
+
+        if ($leftDistance <= $upDistance && $leftDistance <= $upLeftDistance) {
+            return $left;
+        }
+        if ($upDistance <= $upLeftDistance) {
+            return $up;
+        }
+
+        return $upLeft;
     }
 
     /**

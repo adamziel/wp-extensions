@@ -85,6 +85,12 @@ current main until WordPress.org-style `readme.txt`, GPL-compatible package
 license evidence, valid directory assets, public redistribution policy, and
 public-submission authority evidence are supplied and reviewed.
 
+The public asset contracts cover the required WordPress.org-style PNGs:
+`assets/banner-772x250.png` must be exactly 772 by 250 pixels and
+`assets/icon-128x128.png` must be exactly 128 by 128 pixels. The focused
+release-readiness tests reject malformed or non-PNG files with those names,
+1x1 fixtures, wrong dimensions, and blank single-color placeholder images.
+
 ## Release Evidence Bundle
 
 Use the release evidence collector when a release review needs one sanitized

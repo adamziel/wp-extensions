@@ -110,6 +110,74 @@ function wp_fts_release_readiness_contract_write_json(string $path, array $data)
     wp_fts_release_readiness_contract_write_file($path, $json . "\n");
 }
 
+function wp_fts_release_readiness_contract_adler32(string $data): int
+{
+    $a = 1;
+    $b = 0;
+    $length = strlen($data);
+    for ($i = 0; $i < $length; $i++) {
+        $a = ($a + ord($data[$i])) % 65521;
+        $b = ($b + $a) % 65521;
+    }
+
+    return (($b << 16) | $a) & 0xffffffff;
+}
+
+function wp_fts_release_readiness_contract_zlib_store(string $data): string
+{
+    $stream = "\x78\x01";
+    $offset = 0;
+    $length = strlen($data);
+    do {
+        $chunk = substr($data, $offset, 65535);
+        $offset += strlen($chunk);
+        $final = $offset >= $length;
+        $chunkLength = strlen($chunk);
+        $stream .= chr($final ? 1 : 0);
+        $stream .= pack('v', $chunkLength);
+        $stream .= pack('v', (~$chunkLength) & 0xffff);
+        $stream .= $chunk;
+    } while ($offset < $length);
+
+    return $stream . pack('N', wp_fts_release_readiness_contract_adler32($data));
+}
+
+function wp_fts_release_readiness_contract_png_chunk(string $type, string $data): string
+{
+    $crc = crc32($type . $data);
+    if ($crc < 0) {
+        $crc += 4294967296;
+    }
+
+    return pack('N', strlen($data)) . $type . $data . pack('N', $crc);
+}
+
+function wp_fts_release_readiness_contract_png_fixture(int $width, int $height, string $pattern = 'checker'): string
+{
+    $raw = '';
+    for ($y = 0; $y < $height; $y++) {
+        $raw .= "\0";
+        for ($x = 0; $x < $width; $x++) {
+            if ($pattern === 'blank') {
+                $raw .= "\x40\x40\x40";
+                continue;
+            }
+
+            $toggle = (($x >> 4) + ($y >> 4)) % 2;
+            $raw .= $toggle === 0
+                ? chr(32 + ($x % 64)) . chr(96 + ($y % 64)) . "\xd0"
+                : "\xd8" . chr(48 + ($y % 96)) . chr(64 + ($x % 96));
+        }
+    }
+
+    $header = pack('NNCCCCC', $width, $height, 8, 2, 0, 0, 0);
+
+    return "\x89PNG\r\n\x1a\n"
+        . wp_fts_release_readiness_contract_png_chunk('IHDR', $header)
+        . wp_fts_release_readiness_contract_png_chunk('IDAT', wp_fts_release_readiness_contract_zlib_store($raw))
+        . wp_fts_release_readiness_contract_png_chunk('IEND', '');
+}
+
 /**
  * @param string[] $command
  * @return array{exit:int,stdout:string,stderr:string}
@@ -253,9 +321,14 @@ function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $op
     }
 
     if (($options['public_assets'] ?? false) === true) {
-        $png = (string) base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', true);
-        wp_fts_release_readiness_contract_write_file($source . '/assets/banner-772x250.png', $png);
-        wp_fts_release_readiness_contract_write_file($source . '/assets/icon-128x128.png', $png);
+        wp_fts_release_readiness_contract_write_file(
+            $source . '/assets/banner-772x250.png',
+            wp_fts_release_readiness_contract_png_fixture(772, 250)
+        );
+        wp_fts_release_readiness_contract_write_file(
+            $source . '/assets/icon-128x128.png',
+            wp_fts_release_readiness_contract_png_fixture(128, 128)
+        );
     }
 
     $docs = ($options['public_docs_ready'] ?? false) === true
@@ -476,6 +549,106 @@ function wp_fts_release_readiness_contract_public_placeholder_artifacts_blocked(
     }
 }
 
+/**
+ * @param callable(string):void $writeAssets
+ * @return array<string,mixed>
+ */
+function wp_fts_release_readiness_contract_public_asset_report(string $tmp, callable $writeAssets): array
+{
+    $source = wp_fts_release_readiness_contract_source_fixture($tmp, [
+        'license' => 'GPL-2.0-or-later',
+        'readme' => true,
+        'license_file' => true,
+        'public_docs_ready' => true,
+        'public_evidence' => true,
+    ]);
+    $writeAssets($source);
+
+    return (new WP_FTS_ReleaseReadinessChecker())->check([
+        'target' => 'public-submission',
+        'plugin_src' => $source,
+        'monorepo_root' => dirname($source),
+    ]);
+}
+
+function wp_fts_release_readiness_contract_public_asset_dimensions_and_placeholders_blocked(): void
+{
+    $tmp = wp_fts_release_readiness_contract_temp_dir();
+    try {
+        $onePixel = wp_fts_release_readiness_contract_public_asset_report(
+            $tmp . '/one-pixel',
+            static function (string $source): void {
+                wp_fts_release_readiness_contract_write_file(
+                    $source . '/assets/banner-772x250.png',
+                    wp_fts_release_readiness_contract_png_fixture(1, 1)
+                );
+                wp_fts_release_readiness_contract_write_file(
+                    $source . '/assets/icon-128x128.png',
+                    wp_fts_release_readiness_contract_png_fixture(1, 1)
+                );
+            }
+        );
+        wp_fts_release_readiness_contract_true(
+            in_array('package_public_assets', wp_fts_release_readiness_contract_blocker_ids($onePixel), true),
+            '1x1 public asset placeholders should block public-submission readiness'
+        );
+        wp_fts_release_readiness_contract_contains('trivial_dimensions', WP_FTS_ReleaseReadinessChecker::render_json($onePixel), '1x1 assets should be reported as trivial dimensions');
+
+        $blank = wp_fts_release_readiness_contract_public_asset_report(
+            $tmp . '/blank',
+            static function (string $source): void {
+                wp_fts_release_readiness_contract_write_file(
+                    $source . '/assets/banner-772x250.png',
+                    wp_fts_release_readiness_contract_png_fixture(772, 250, 'blank')
+                );
+                wp_fts_release_readiness_contract_write_file(
+                    $source . '/assets/icon-128x128.png',
+                    wp_fts_release_readiness_contract_png_fixture(128, 128, 'blank')
+                );
+            }
+        );
+        wp_fts_release_readiness_contract_true(
+            in_array('package_public_assets', wp_fts_release_readiness_contract_blocker_ids($blank), true),
+            'blank single-color public assets should block public-submission readiness'
+        );
+        wp_fts_release_readiness_contract_contains('blank_single_color', WP_FTS_ReleaseReadinessChecker::render_json($blank), 'blank assets should be reported as single-color placeholders');
+
+        $wrongSize = wp_fts_release_readiness_contract_public_asset_report(
+            $tmp . '/wrong-size',
+            static function (string $source): void {
+                wp_fts_release_readiness_contract_write_file(
+                    $source . '/assets/banner-772x250.png',
+                    wp_fts_release_readiness_contract_png_fixture(771, 250)
+                );
+                wp_fts_release_readiness_contract_write_file(
+                    $source . '/assets/icon-128x128.png',
+                    wp_fts_release_readiness_contract_png_fixture(128, 128)
+                );
+            }
+        );
+        wp_fts_release_readiness_contract_true(
+            in_array('package_public_assets', wp_fts_release_readiness_contract_blocker_ids($wrongSize), true),
+            'wrong-size public assets should block public-submission readiness'
+        );
+        wp_fts_release_readiness_contract_contains('wrong_dimensions', WP_FTS_ReleaseReadinessChecker::render_json($wrongSize), 'wrong-size assets should report exact dimension failures');
+
+        $malformed = wp_fts_release_readiness_contract_public_asset_report(
+            $tmp . '/malformed',
+            static function (string $source): void {
+                wp_fts_release_readiness_contract_write_file($source . '/assets/banner-772x250.png', "not a png\n");
+                wp_fts_release_readiness_contract_write_file($source . '/assets/icon-128x128.png', "also not a png\n");
+            }
+        );
+        wp_fts_release_readiness_contract_true(
+            in_array('package_public_assets', wp_fts_release_readiness_contract_blocker_ids($malformed), true),
+            'malformed files with expected public asset names should block public-submission readiness'
+        );
+        wp_fts_release_readiness_contract_contains('malformed_png', WP_FTS_ReleaseReadinessChecker::render_json($malformed), 'malformed asset files should report PNG parse failures');
+    } finally {
+        wp_fts_release_readiness_contract_remove_tree($tmp);
+    }
+}
+
 function wp_fts_release_readiness_contract_public_complete_fixture_ready(): void
 {
     $tmp = wp_fts_release_readiness_contract_temp_dir();
@@ -659,6 +832,12 @@ function wp_fts_release_readiness_contract_cases(): array
             'name' => 'quality release readiness blocks placeholder public-submission artifacts',
             'fn' => static function (): void {
                 wp_fts_release_readiness_contract_public_placeholder_artifacts_blocked();
+            },
+        ],
+        [
+            'name' => 'quality release readiness blocks invalid public asset dimensions and placeholders',
+            'fn' => static function (): void {
+                wp_fts_release_readiness_contract_public_asset_dimensions_and_placeholders_blocked();
             },
         ],
         [

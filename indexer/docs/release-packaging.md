@@ -108,6 +108,12 @@ checker must continue to report those blockers until the project intentionally
 supplies and verifies the WordPress.org-style metadata/assets/license evidence
 needed for public submission.
 
+The public-submission asset check requires the exact PNG files
+`assets/banner-772x250.png` and `assets/icon-128x128.png`. The banner must be
+exactly 772 by 250 pixels and the icon must be exactly 128 by 128 pixels. Files
+with those names are rejected when they are malformed, not PNGs, 1x1 or
+wrong-size placeholders, or blank single-color images.
+
 The public-submission authority evidence file is intentionally not a placeholder
 marker. To pass, it must record an approved WordPress.org/public-submission
 target, non-placeholder approver, review date, and explicit approved checks for
