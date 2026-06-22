@@ -43,7 +43,8 @@ composer test:provider-compatibility
 ```
 
 The optional live/disposable smoke exits with `SKIP:` and status 0 when no
-WordPress path is configured:
+WordPress path is configured. It is not a broad version-by-version certification
+of third-party providers:
 
 ```sh
 php tools/smoke-search-provider-compatibility.php
@@ -51,7 +52,13 @@ composer test:smoke:provider-compatibility
 ```
 
 See [`docs/provider-compatibility.md`](provider-compatibility.md) for the
-certification boundary and disposable-site configuration.
+provider interference matrix, certification boundary, and disposable-site
+configuration. The matrix covers repo-owned provider-family simulations for a
+theme/custom earlier provider in `respect_existing` mode, a SearchWP-shaped
+earlier provider in `prefer_fts` mode, a Relevanssi-shaped later provider, and
+Jetpack Search / Jetpack plus ElasticPress advisory signals. It is not a broad
+version-by-version certification of those providers, themes, or custom
+callbacks.
 
 ## Release Readiness
 
@@ -213,8 +220,10 @@ This differs from the host-provided WordPress root smoke: operators do not need
 to provide `WP_FTS_WP_PATH`, host WP-CLI, or a host database, and the wrapper
 sets the inner write guards only for its disposable container root. It is still
 optional release evidence, not a public-submission approval, not a
-WordPress.org/SVN packaging step, and not a broad third-party provider plugin
-matrix.
+WordPress.org/SVN packaging step, and not a broad version-by-version
+certification of third-party provider plugins. The provider smoke evidence is
+the same repo-owned provider-family simulations described in the provider
+interference matrix documentation.
 
 The release evidence collector records this Docker lane as skipped by default.
 Run it only when Docker image pulls and the local daemon are available:

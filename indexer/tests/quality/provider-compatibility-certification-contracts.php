@@ -69,6 +69,8 @@ if (!function_exists('test_case')) {
     exit(wp_fts_provider_compatibility_contract_direct());
 }
 
+require_once dirname(__DIR__) . '/integration/provider-compatibility-wordpress.php';
+
 if (!function_exists('wp_fts_provider_certification_post_ids')) {
     /**
      * @return int[]
@@ -527,6 +529,162 @@ test_case('provider compatibility certification bounds known labels and keeps cu
     );
 });
 
+test_case('provider compatibility certification exposes a bounded provider interference matrix contract', function (): void {
+    $definitions = wp_fts_provider_compatibility_wordpress_matrix_definitions();
+    $scenarioIds = array_map(
+        static fn(array $scenario): string => (string) ($scenario['scenario_id'] ?? ''),
+        $definitions
+    );
+
+    assert_same(
+        [
+            'theme_custom_earlier_respect_existing',
+            'searchwp_shaped_earlier_prefer_fts',
+            'relevanssi_shaped_later_provider',
+            'jetpack_elasticpress_advisory_signals',
+        ],
+        $scenarioIds,
+        'provider interference matrix should expose stable scenario IDs'
+    );
+
+    $encodedDefinitions = json_encode($definitions, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    foreach ([
+        'Theme/custom',
+        'SearchWP',
+        'Relevanssi',
+        'Jetpack Search / Jetpack',
+        'ElasticPress',
+        'respect_existing',
+        'prefer_fts',
+        'repo-owned SearchWP-shaped posts_pre_query callback',
+        'repo-owned Relevanssi-shaped later posts_pre_query callback',
+        'bounded active plugin signal',
+        'Jetpack active module option signal',
+    ] as $needle) {
+        assert_contains($needle, $encodedDefinitions, "provider interference matrix definitions should include {$needle}");
+    }
+
+    wp_fts_provider_certification_assert_redacted(
+        $encodedDefinitions,
+        [
+            'jetpack/jetpack.php',
+            'elasticpress/elasticpress.php',
+            'secret-basename.php',
+            'raw-provider-option-payload-must-not-leak',
+            'provider_payload',
+            '.env',
+            '~/.ssh',
+            'BEGIN PRIVATE KEY',
+        ],
+        'provider interference matrix definitions'
+    );
+});
+
+test_case('provider compatibility certification matrix evidence is structured and redacted', function (): void {
+    $searchwp = wp_fts_provider_compatibility_wordpress_build_scenario_evidence(
+        [
+            'scenario_id' => 'searchwp_shaped_earlier_prefer_fts',
+            'simulated_provider_family_labels' => ['SearchWP'],
+            'simulated_signal_labels' => ['repo-owned SearchWP-shaped posts_pre_query callback'],
+            'compatibility_mode' => 'prefer_fts',
+        ],
+        [(object) ['ID' => 912, 'post_title' => 'FTS result title']],
+        [
+            'status' => 'ran',
+            'counts' => [
+                'incoming_provider_results' => 2,
+                'prior_provider_responses_replaced' => 1,
+            ],
+            'settings' => [
+                'known_search_providers' => 'none',
+                'known_search_provider_count' => 0,
+                'raw_provider_payload' => 'provider-secret-must-not-leak',
+            ],
+            'search_final_ownership' => [
+                'status' => 'language_fts_survived',
+                'owner' => 'language_fts',
+                'origin' => 'language_fts_replaced_prior_provider',
+                'expected_count' => 1,
+                'final_count' => 1,
+                'expected_post_ids' => [912],
+                'final_post_ids' => [912],
+                'expected_hash' => '1234567890abcdef',
+                'final_hash' => '1234567890abcdef',
+                'raw' => '-----BEGIN PRIVATE KEY-----',
+            ],
+        ]
+    );
+
+    assert_same(true, $searchwp['passed'] ?? null, 'SearchWP-shaped matrix evidence fixture should pass');
+    assert_same('searchwp_shaped_earlier_prefer_fts', $searchwp['scenario_id'] ?? null, 'matrix evidence should keep the scenario ID');
+    assert_same(['SearchWP'], $searchwp['simulated_provider_family_labels'] ?? null, 'matrix evidence should expose bounded simulated family labels');
+    assert_same('prefer_fts', $searchwp['compatibility_mode'] ?? null, 'matrix evidence should expose compatibility mode');
+    $trace = is_array($searchwp['trace'] ?? null) ? $searchwp['trace'] : [];
+    assert_same(2, (int) ($trace['incoming_provider_results'] ?? 0), 'matrix evidence should expose incoming provider result count');
+    assert_same(1, (int) ($trace['prior_provider_responses_replaced'] ?? 0), 'matrix evidence should expose prior replacement count');
+    $ownership = is_array($searchwp['final_ownership'] ?? null) ? $searchwp['final_ownership'] : [];
+    assert_same('language_fts_survived', $ownership['status'] ?? null, 'matrix evidence should expose final ownership status');
+    assert_same([912], $ownership['final_post_ids'] ?? null, 'matrix evidence should expose bounded final IDs');
+
+    wp_fts_provider_certification_assert_redacted(
+        json_encode($searchwp, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+        [
+            'FTS result title',
+            'raw_provider_payload',
+            'provider-secret-must-not-leak',
+            'BEGIN PRIVATE KEY',
+        ],
+        'SearchWP-shaped matrix evidence'
+    );
+
+    $advisory = wp_fts_provider_compatibility_wordpress_build_scenario_evidence(
+        [
+            'scenario_id' => 'jetpack_elasticpress_advisory_signals',
+            'simulated_provider_family_labels' => ['Jetpack Search / Jetpack', 'ElasticPress'],
+            'simulated_signal_labels' => ['bounded active plugin signal', 'Jetpack active module option signal'],
+            'compatibility_mode' => 'prefer_fts',
+        ],
+        [(object) ['ID' => 913, 'post_title' => 'advisory result title']],
+        [
+            'status' => 'ran',
+            'counts' => [
+                'incoming_provider_results' => 0,
+                'prior_provider_responses_replaced' => 0,
+            ],
+            'settings' => [
+                'known_search_providers' => 'Jetpack Search / Jetpack, ElasticPress',
+                'known_search_provider_count' => 2,
+                'active_plugins' => ['jetpack/jetpack.php', 'elasticpress/elasticpress.php'],
+            ],
+            'search_final_ownership' => [
+                'status' => 'language_fts_survived',
+                'owner' => 'language_fts',
+                'origin' => 'language_fts',
+                'expected_count' => 1,
+                'final_count' => 1,
+                'expected_post_ids' => [913],
+                'final_post_ids' => [913],
+                'expected_hash' => 'abcdef1234567890',
+                'final_hash' => 'abcdef1234567890',
+            ],
+        ]
+    );
+
+    assert_same(true, $advisory['passed'] ?? null, 'Jetpack/ElasticPress advisory matrix evidence fixture should pass');
+    $advisoryTrace = is_array($advisory['trace'] ?? null) ? $advisory['trace'] : [];
+    assert_same(
+        ['Jetpack Search / Jetpack', 'ElasticPress'],
+        $advisoryTrace['known_provider_family_labels'] ?? null,
+        'advisory matrix evidence should expose bounded known-provider labels'
+    );
+    assert_same(2, (int) ($advisoryTrace['known_provider_family_count'] ?? 0), 'advisory matrix evidence should expose bounded known-provider count');
+    wp_fts_provider_certification_assert_redacted(
+        json_encode($advisory, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+        ['jetpack/jetpack.php', 'elasticpress/elasticpress.php', 'advisory result title'],
+        'Jetpack/ElasticPress matrix evidence'
+    );
+});
+
 test_case('provider compatibility certification smoke and documentation are discoverable', function (): void {
     $root = dirname(__DIR__, 2);
     $doc = (string) file_get_contents($root . '/docs/provider-compatibility.md');
@@ -547,9 +705,20 @@ test_case('provider compatibility certification smoke and documentation are disc
     assert_contains('php tests/quality/provider-compatibility-certification-contracts.php', $doc, 'provider compatibility docs should document the deterministic contract command');
     assert_contains('php tools/smoke-search-provider-compatibility.php', $doc, 'provider compatibility docs should document the smoke command');
     assert_contains('Jetpack Search / Jetpack, SearchWP, Relevanssi, and ElasticPress', $doc, 'provider compatibility docs should name bounded advisory labels');
+    assert_contains('Provider Interference Matrix', $doc, 'provider compatibility docs should name the matrix');
+    assert_contains('repo-owned provider-family simulations', $doc, 'provider compatibility docs should explain simulation scope');
+    assert_contains('not a broad version-by-version certification', $doc, 'provider compatibility docs should preserve the certification boundary');
     assert_contains('not persistent telemetry', $doc, 'provider compatibility docs should state the request-local telemetry boundary');
     assert_contains('No third-party provider APIs are called by wp fts status', $doc, 'provider compatibility docs should state status/advisory provider API boundaries');
     assert_contains('Provider Compatibility Evidence', $testing, 'testing docs should link the provider compatibility evidence lane');
+    assert_contains('provider interference matrix', $testing, 'testing docs should mention the provider interference matrix');
+
+    $smokeSource = (string) file_get_contents($root . '/tests/integration/provider-compatibility-wordpress.php');
+    assert_contains(
+        'exit(wp_fts_provider_compatibility_wordpress_main());',
+        $smokeSource,
+        'provider compatibility smoke WP-CLI eval should invoke the inside smoke runner'
+    );
 
     $result = wp_fts_provider_certification_run_process(
         [PHP_BINARY, $root . '/tools/smoke-search-provider-compatibility.php'],

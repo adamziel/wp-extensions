@@ -8,7 +8,7 @@ declare(strict_types=1);
  * disposable WordPress root is configured and explicitly approved.
  */
 
-const WP_FTS_PROVIDER_COMPATIBILITY_REPORT_SCHEMA = 'wp-fts-provider-compatibility-smoke-v1';
+const WP_FTS_PROVIDER_COMPATIBILITY_REPORT_SCHEMA = 'wp-fts-provider-interference-matrix-smoke-v1';
 const WP_FTS_PROVIDER_COMPATIBILITY_ALLOW_ENV = 'WP_FTS_PROVIDER_COMPATIBILITY_ALLOW';
 const WP_FTS_PROVIDER_COMPATIBILITY_CONFIRM_PATH_ENV = 'WP_FTS_PROVIDER_COMPATIBILITY_CONFIRM_PATH';
 const WP_FTS_PROVIDER_COMPATIBILITY_INSIDE_ENV = 'WP_FTS_PROVIDER_COMPATIBILITY_INSIDE';
@@ -71,8 +71,10 @@ function wp_fts_provider_compatibility_wordpress_shell(): int
         );
     }
 
+    $eval = 'try { require ' . var_export(__FILE__, true)
+        . '; exit(wp_fts_provider_compatibility_wordpress_main()); } catch (Throwable $e) { fwrite(STDERR, "FAIL: " . $e->getMessage() . "\n"); exit(1); }';
     $result = wp_fts_provider_compatibility_wordpress_process(
-        array_merge($baseCommand, ['eval', 'require ' . var_export(__FILE__, true) . ';']),
+        array_merge($baseCommand, ['eval', $eval]),
         [WP_FTS_PROVIDER_COMPATIBILITY_INSIDE_ENV => '1']
     );
 
@@ -93,7 +95,11 @@ function wp_fts_provider_compatibility_wordpress_inside(): void
     }
 
     WP_FTS_Plugin::register_hooks();
-    $oldSettings = function_exists('get_option') ? get_option(WP_FTS_Plugin::SETTINGS_OPTION, null) : null;
+    $oldOptions = wp_fts_provider_compatibility_wordpress_snapshot_options([
+        WP_FTS_Plugin::SETTINGS_OPTION,
+        'active_plugins',
+        'jetpack_active_modules',
+    ]);
     $postId = 0;
 
     try {
@@ -102,27 +108,45 @@ function wp_fts_provider_compatibility_wordpress_inside(): void
         WP_FTS_Plugin::handle_post_save($postId, get_post($postId), true);
         WP_FTS_Plugin::process_queue(10);
 
+        $matrix = wp_fts_provider_compatibility_wordpress_run_matrix($postId);
+        $failed = array_values(array_filter(
+            $matrix['scenarios'],
+            static fn(array $scenario): bool => ($scenario['passed'] ?? false) !== true
+        ));
+        if ($failed !== []) {
+            $failedSummaries = array_map(
+                static function (array $scenario): string {
+                    $trace = is_array($scenario['trace'] ?? null) ? $scenario['trace'] : [];
+                    $ownership = is_array($scenario['final_ownership'] ?? null) ? $scenario['final_ownership'] : [];
+                    $labels = is_array($trace['known_provider_family_labels'] ?? null)
+                        ? implode('|', wp_fts_provider_compatibility_wordpress_bounded_string_list($trace['known_provider_family_labels']))
+                        : '';
+
+                    return (is_string($scenario['scenario_id'] ?? null) ? $scenario['scenario_id'] : 'unknown')
+                        . '[trace=' . (is_scalar($trace['status'] ?? null) ? (string) $trace['status'] : '')
+                        . ',owner=' . (is_scalar($ownership['owner'] ?? null) ? (string) $ownership['owner'] : '')
+                        . ',status=' . (is_scalar($ownership['status'] ?? null) ? (string) $ownership['status'] : '')
+                        . ',known=' . $labels . ']';
+                },
+                $failed
+            );
+            throw new RuntimeException('Provider interference matrix failed: ' . implode(', ', $failedSummaries));
+        }
+
         $evidence = [
             'schema' => WP_FTS_PROVIDER_COMPATIBILITY_REPORT_SCHEMA,
             'status' => 'passed',
-            'generic_earlier_provider' => wp_fts_provider_compatibility_wordpress_scenario(
-                'respect_existing',
-                'providercertliveearlier',
-                [(object) ['ID' => 700001], (object) ['ID' => 700002]],
-                static fn(mixed $posts, mixed $query = null): mixed => $posts
-            ),
-            'generic_prefer_fts' => wp_fts_provider_compatibility_wordpress_scenario(
-                'prefer_fts',
-                'providercertlivefixture',
-                [(object) ['ID' => 700003]],
-                static fn(mixed $posts, mixed $query = null): mixed => $posts
-            ),
-            'generic_later_provider' => wp_fts_provider_compatibility_wordpress_scenario(
-                'prefer_fts',
-                'providercertlivefixture',
-                null,
-                static fn(mixed $posts, mixed $query = null): array => [(object) ['ID' => 700004]]
-            ),
+            'certification_boundary' => 'repo-owned provider-family simulations; not live third-party plugin certification',
+            'provider_interference_matrix' => $matrix,
+            'safety' => [
+                'skip_first' => true,
+                'requires_wp_path' => WP_FTS_PROVIDER_COMPATIBILITY_WP_PATH_ENV,
+                'requires_allow' => WP_FTS_PROVIDER_COMPATIBILITY_ALLOW_ENV . '=1',
+                'requires_marker_or_confirm_path' => WP_FTS_PROVIDER_COMPATIBILITY_MARKER_FILE,
+                'external_plugin_downloads' => false,
+                'third_party_service_calls' => false,
+                'raw_provider_payloads_in_report' => false,
+            ],
         ];
 
         echo "PASS: provider compatibility WordPress smoke completed\n";
@@ -131,13 +155,7 @@ function wp_fts_provider_compatibility_wordpress_inside(): void
         if ($postId > 0 && function_exists('wp_delete_post')) {
             wp_delete_post($postId, true);
         }
-        if (function_exists('delete_option') && function_exists('update_option')) {
-            if ($oldSettings === null || $oldSettings === false) {
-                delete_option(WP_FTS_Plugin::SETTINGS_OPTION);
-            } else {
-                update_option(WP_FTS_Plugin::SETTINGS_OPTION, $oldSettings, false);
-            }
-        }
+        wp_fts_provider_compatibility_wordpress_restore_options($oldOptions);
         WP_FTS_Plugin::reset_request_caches();
     }
 }
@@ -148,7 +166,7 @@ function wp_fts_provider_compatibility_wordpress_create_fixture_post(): int
         'post_type' => 'post',
         'post_status' => 'publish',
         'post_title' => 'Provider compatibility smoke fixture',
-        'post_content' => '<p>providercertlivefixture providercertliveearlier deterministic smoke text.</p>',
+        'post_content' => '<p>providercertmatrixcustom providercertmatrixsearchwp providercertmatrixrelevanssi providercertmatrixadvisory deterministic smoke text.</p>',
     ], true);
 
     if (is_wp_error($postId)) {
@@ -168,13 +186,132 @@ function wp_fts_provider_compatibility_wordpress_create_fixture_post(): int
 }
 
 /**
- * @param array<int,object>|null $earlierResult
+ * @return array<int,array<string,mixed>>
+ */
+function wp_fts_provider_compatibility_wordpress_matrix_definitions(): array
+{
+    return [
+        [
+            'scenario_id' => 'theme_custom_earlier_respect_existing',
+            'simulated_provider_family_labels' => ['Theme/custom'],
+            'simulated_signal_labels' => ['theme posts_pre_query callback', 'custom posts_pre_query callback'],
+            'compatibility_mode' => 'respect_existing',
+            'needle' => 'providercertmatrixcustom',
+        ],
+        [
+            'scenario_id' => 'searchwp_shaped_earlier_prefer_fts',
+            'simulated_provider_family_labels' => ['SearchWP'],
+            'simulated_signal_labels' => ['repo-owned SearchWP-shaped posts_pre_query callback'],
+            'compatibility_mode' => 'prefer_fts',
+            'needle' => 'providercertmatrixsearchwp',
+        ],
+        [
+            'scenario_id' => 'relevanssi_shaped_later_provider',
+            'simulated_provider_family_labels' => ['Relevanssi'],
+            'simulated_signal_labels' => ['repo-owned Relevanssi-shaped later posts_pre_query callback'],
+            'compatibility_mode' => 'prefer_fts',
+            'needle' => 'providercertmatrixrelevanssi',
+        ],
+        [
+            'scenario_id' => 'jetpack_elasticpress_advisory_signals',
+            'simulated_provider_family_labels' => ['Jetpack Search / Jetpack', 'ElasticPress'],
+            'simulated_signal_labels' => ['bounded active plugin signal', 'Jetpack active module option signal'],
+            'compatibility_mode' => 'prefer_fts',
+            'needle' => 'providercertmatrixadvisory',
+        ],
+    ];
+}
+
+/**
+ * @return array{scenario_count:int,scenarios:array<int,array<string,mixed>>}
+ */
+function wp_fts_provider_compatibility_wordpress_run_matrix(int $fixturePostId): array
+{
+    $scenarios = [];
+    foreach (wp_fts_provider_compatibility_wordpress_matrix_definitions() as $definition) {
+        $scenarioId = (string) $definition['scenario_id'];
+        if ($scenarioId === 'theme_custom_earlier_respect_existing') {
+            $GLOBALS['wp_fts_provider_compatibility_theme_custom_posts'] = [
+                (object) ['ID' => 700001, 'post_title' => 'raw custom provider title .env'],
+                (object) ['ID' => 700002, 'post_title' => 'raw custom provider title BEGIN PRIVATE KEY'],
+            ];
+            $scenarios[] = wp_fts_provider_compatibility_wordpress_scenario(
+                $definition,
+                null,
+                'wp_fts_provider_compatibility_theme_custom_earlier_provider',
+                static fn(mixed $posts, mixed $query = null): mixed => $posts
+            );
+            unset($GLOBALS['wp_fts_provider_compatibility_theme_custom_posts']);
+            continue;
+        }
+
+        if ($scenarioId === 'searchwp_shaped_earlier_prefer_fts') {
+            WP_FTS_Provider_Compatibility_SearchWP_Shaped_Callback::$posts = [
+                (object) ['ID' => 700003, 'post_title' => 'SearchWP private provider title'],
+                (object) ['ID' => 700005, 'post_title' => 'SearchWP raw provider payload title'],
+            ];
+            $scenarios[] = wp_fts_provider_compatibility_wordpress_scenario(
+                $definition,
+                null,
+                [WP_FTS_Provider_Compatibility_SearchWP_Shaped_Callback::class, 'posts_pre_query'],
+                static fn(mixed $posts, mixed $query = null): mixed => $posts
+            );
+            WP_FTS_Provider_Compatibility_SearchWP_Shaped_Callback::$posts = [];
+            continue;
+        }
+
+        if ($scenarioId === 'relevanssi_shaped_later_provider') {
+            WP_FTS_Provider_Compatibility_Relevanssi_Shaped_Callback::$posts = [
+                (object) ['ID' => 700004, 'post_title' => 'Relevanssi private provider title'],
+                (object) ['ID' => 700006, 'post_title' => 'Relevanssi raw provider payload title'],
+            ];
+            $scenarios[] = wp_fts_provider_compatibility_wordpress_scenario(
+                $definition,
+                null,
+                null,
+                [WP_FTS_Provider_Compatibility_Relevanssi_Shaped_Callback::class, 'posts_pre_query']
+            );
+            WP_FTS_Provider_Compatibility_Relevanssi_Shaped_Callback::$posts = [];
+            continue;
+        }
+
+        if ($scenarioId === 'jetpack_elasticpress_advisory_signals') {
+            $scenarios[] = wp_fts_provider_compatibility_wordpress_scenario(
+                $definition,
+                'wp_fts_provider_compatibility_wordpress_apply_advisory_signal_simulation',
+                null,
+                static fn(mixed $posts, mixed $query = null): mixed => $posts
+            );
+            continue;
+        }
+
+        $scenarios[] = [
+            'scenario_id' => $scenarioId,
+            'passed' => false,
+            'failure' => 'unknown scenario',
+        ];
+    }
+
+    return [
+        'scenario_count' => count($scenarios),
+        'scenarios' => $scenarios,
+    ];
+}
+
+/**
+ * @param array<string,mixed> $definition
  * @return array<string,mixed>
  */
-function wp_fts_provider_compatibility_wordpress_scenario(string $mode, string $needle, ?array $earlierResult, callable $laterProvider): array
+function wp_fts_provider_compatibility_wordpress_scenario(
+    array $definition,
+    ?callable $configureSignals,
+    ?callable $earlierProvider,
+    callable $laterProvider
+): array
 {
-    $oldHookExists = isset($GLOBALS['wp_filter']) && is_array($GLOBALS['wp_filter']) && array_key_exists('posts_pre_query', $GLOBALS['wp_filter']);
-    $oldHook = $oldHookExists ? $GLOBALS['wp_filter']['posts_pre_query'] : null;
+    $mode = (string) ($definition['compatibility_mode'] ?? 'prefer_fts');
+    $needle = (string) ($definition['needle'] ?? '');
+    $oldHooks = wp_fts_provider_compatibility_wordpress_snapshot_hooks(['posts_pre_query', 'wp_fts_debug_enabled']);
     $settings = WP_FTS_Plugin::default_settings();
     $settings['search_provider_compatibility'] = $mode;
     update_option(WP_FTS_Plugin::SETTINGS_OPTION, $settings, false);
@@ -183,10 +320,14 @@ function wp_fts_provider_compatibility_wordpress_scenario(string $mode, string $
     try {
         if (function_exists('remove_all_filters')) {
             remove_all_filters('posts_pre_query');
+            remove_all_filters('wp_fts_debug_enabled');
+        }
+        if ($configureSignals !== null) {
+            $configureSignals();
         }
         add_filter('wp_fts_debug_enabled', static fn(mixed $enabled, string $context): bool => true, 10, 2);
-        if ($earlierResult !== null) {
-            add_filter('posts_pre_query', static fn(mixed $posts, mixed $query = null): array => $earlierResult, 20, 2);
+        if ($earlierProvider !== null) {
+            add_filter('posts_pre_query', $earlierProvider, 20, 2);
         }
         add_filter('posts_pre_query', [WP_FTS_Plugin::class, 'replace_frontend_search_posts'], WP_FTS_Plugin::SEARCH_REPLACEMENT_PRIORITY, 2);
         add_filter('posts_pre_query', $laterProvider, 1200, 2);
@@ -198,26 +339,214 @@ function wp_fts_provider_compatibility_wordpress_scenario(string $mode, string $
         ]);
         $posts = apply_filters('posts_pre_query', null, $query);
         $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
-        $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
 
-        return [
-            'mode' => $mode,
-            'result_ids' => wp_fts_provider_compatibility_wordpress_post_ids($posts),
-            'trace_status' => is_scalar($trace['status'] ?? null) ? (string) $trace['status'] : '',
-            'incoming_provider_results' => (int) (($trace['counts']['incoming_provider_results'] ?? 0)),
-            'prior_provider_responses_replaced' => (int) (($trace['counts']['prior_provider_responses_replaced'] ?? 0)),
-            'final_ownership_status' => is_scalar($ownership['status'] ?? null) ? (string) $ownership['status'] : '',
-            'final_owner' => is_scalar($ownership['owner'] ?? null) ? (string) $ownership['owner'] : '',
-            'final_post_ids' => is_array($ownership['final_post_ids'] ?? null) ? array_values($ownership['final_post_ids']) : [],
-            'known_provider_summary' => is_scalar($trace['settings']['known_search_providers'] ?? null) ? (string) $trace['settings']['known_search_providers'] : '',
-        ];
+        return wp_fts_provider_compatibility_wordpress_build_scenario_evidence($definition, $posts, is_array($trace) ? $trace : []);
     } finally {
-        if ($oldHookExists) {
-            $GLOBALS['wp_filter']['posts_pre_query'] = $oldHook;
-        } elseif (isset($GLOBALS['wp_filter']) && is_array($GLOBALS['wp_filter'])) {
-            unset($GLOBALS['wp_filter']['posts_pre_query']);
+        wp_fts_provider_compatibility_wordpress_restore_hooks($oldHooks);
+    }
+}
+
+/**
+ * @param array<string,mixed> $definition
+ * @param array<string,mixed> $trace
+ * @return array<string,mixed>
+ */
+function wp_fts_provider_compatibility_wordpress_build_scenario_evidence(array $definition, mixed $posts, array $trace): array
+{
+    $counts = is_array($trace['counts'] ?? null) ? $trace['counts'] : [];
+    $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
+    $settings = is_array($trace['settings'] ?? null) ? $trace['settings'] : [];
+    $knownProviderLabels = wp_fts_provider_compatibility_wordpress_known_provider_labels_from_trace($settings);
+
+    $evidence = [
+        'scenario_id' => is_string($definition['scenario_id'] ?? null) ? $definition['scenario_id'] : 'unknown',
+        'simulated_provider_family_labels' => wp_fts_provider_compatibility_wordpress_bounded_string_list($definition['simulated_provider_family_labels'] ?? []),
+        'simulated_signal_labels' => wp_fts_provider_compatibility_wordpress_bounded_string_list($definition['simulated_signal_labels'] ?? []),
+        'compatibility_mode' => is_string($definition['compatibility_mode'] ?? null) ? $definition['compatibility_mode'] : '',
+        'result_ids' => wp_fts_provider_compatibility_wordpress_bounded_int_list(wp_fts_provider_compatibility_wordpress_post_ids($posts)),
+        'trace' => [
+            'status' => is_scalar($trace['status'] ?? null) ? (string) $trace['status'] : '',
+            'incoming_provider_results' => (int) ($counts['incoming_provider_results'] ?? 0),
+            'prior_provider_responses_replaced' => (int) ($counts['prior_provider_responses_replaced'] ?? 0),
+            'known_provider_family_labels' => $knownProviderLabels,
+            'known_provider_family_count' => max(0, (int) ($settings['known_search_provider_count'] ?? count($knownProviderLabels))),
+        ],
+        'final_ownership' => [
+            'status' => is_scalar($ownership['status'] ?? null) ? (string) $ownership['status'] : '',
+            'owner' => is_scalar($ownership['owner'] ?? null) ? (string) $ownership['owner'] : '',
+            'origin' => is_scalar($ownership['origin'] ?? null) ? (string) $ownership['origin'] : '',
+            'expected_count' => (int) ($ownership['expected_count'] ?? 0),
+            'final_count' => (int) ($ownership['final_count'] ?? 0),
+            'expected_post_ids' => wp_fts_provider_compatibility_wordpress_bounded_int_list($ownership['expected_post_ids'] ?? []),
+            'final_post_ids' => wp_fts_provider_compatibility_wordpress_bounded_int_list($ownership['final_post_ids'] ?? []),
+            'expected_hash' => is_scalar($ownership['expected_hash'] ?? null) ? (string) $ownership['expected_hash'] : '',
+            'final_hash' => is_scalar($ownership['final_hash'] ?? null) ? (string) $ownership['final_hash'] : '',
+        ],
+    ];
+    $evidence['redaction_passed'] = wp_fts_provider_compatibility_wordpress_evidence_redaction_passed($evidence);
+    $evidence['passed'] = $evidence['redaction_passed'] && wp_fts_provider_compatibility_wordpress_scenario_passed($evidence);
+
+    return $evidence;
+}
+
+/**
+ * @param array<string,mixed> $evidence
+ */
+function wp_fts_provider_compatibility_wordpress_scenario_passed(array $evidence): bool
+{
+    $scenarioId = (string) ($evidence['scenario_id'] ?? '');
+    $trace = is_array($evidence['trace'] ?? null) ? $evidence['trace'] : [];
+    $ownership = is_array($evidence['final_ownership'] ?? null) ? $evidence['final_ownership'] : [];
+    $resultIds = is_array($evidence['result_ids'] ?? null) ? array_values($evidence['result_ids']) : [];
+
+    if ($scenarioId === 'theme_custom_earlier_respect_existing') {
+        return $evidence['compatibility_mode'] === 'respect_existing'
+            && $trace['status'] === 'bailed'
+            && (int) ($trace['incoming_provider_results'] ?? 0) === 2
+            && (int) ($trace['prior_provider_responses_replaced'] ?? -1) === 0
+            && $ownership['status'] === 'earlier_provider_respected'
+            && $ownership['owner'] === 'earlier_provider'
+            && $resultIds === [700001, 700002];
+    }
+
+    if ($scenarioId === 'searchwp_shaped_earlier_prefer_fts') {
+        return $evidence['compatibility_mode'] === 'prefer_fts'
+            && $trace['status'] === 'ran'
+            && (int) ($trace['incoming_provider_results'] ?? 0) === 2
+            && (int) ($trace['prior_provider_responses_replaced'] ?? 0) === 1
+            && $ownership['status'] === 'language_fts_survived'
+            && $ownership['owner'] === 'language_fts'
+            && $ownership['origin'] === 'language_fts_replaced_prior_provider'
+            && $resultIds !== []
+            && $resultIds !== [700003, 700005];
+    }
+
+    if ($scenarioId === 'relevanssi_shaped_later_provider') {
+        return $evidence['compatibility_mode'] === 'prefer_fts'
+            && $trace['status'] === 'ran'
+            && $ownership['status'] === 'later_provider_changed_fts'
+            && $ownership['owner'] === 'later_provider'
+            && $resultIds === [700004, 700006];
+    }
+
+    if ($scenarioId === 'jetpack_elasticpress_advisory_signals') {
+        $knownLabels = is_array($trace['known_provider_family_labels'] ?? null) ? $trace['known_provider_family_labels'] : [];
+
+        return $evidence['compatibility_mode'] === 'prefer_fts'
+            && $trace['status'] === 'ran'
+            && in_array('Jetpack Search / Jetpack', $knownLabels, true)
+            && in_array('ElasticPress', $knownLabels, true)
+            && (int) ($trace['known_provider_family_count'] ?? 0) === 2
+            && in_array($ownership['status'] ?? null, ['language_fts_survived', 'language_fts_replaced_null'], true)
+            && $ownership['owner'] === 'language_fts'
+            && $resultIds !== [];
+    }
+
+    return false;
+}
+
+/**
+ * @param array<string,mixed> $settings
+ * @return string[]
+ */
+function wp_fts_provider_compatibility_wordpress_known_provider_labels_from_trace(array $settings): array
+{
+    $summary = is_scalar($settings['known_search_providers'] ?? null) ? trim((string) $settings['known_search_providers']) : '';
+    if ($summary === '' || strtolower($summary) === 'none') {
+        return [];
+    }
+
+    return wp_fts_provider_compatibility_wordpress_bounded_string_list(explode(', ', $summary));
+}
+
+/**
+ * @param mixed $values
+ * @return string[]
+ */
+function wp_fts_provider_compatibility_wordpress_bounded_string_list(mixed $values): array
+{
+    if (!is_array($values)) {
+        return [];
+    }
+
+    $bounded = [];
+    foreach ($values as $value) {
+        if (!is_scalar($value)) {
+            continue;
+        }
+        $value = trim((string) $value);
+        if ($value === '') {
+            continue;
+        }
+        $bounded[] = substr($value, 0, 80);
+        if (count($bounded) >= 8) {
+            break;
         }
     }
+
+    return array_values(array_unique($bounded));
+}
+
+/**
+ * @param mixed $values
+ * @return int[]
+ */
+function wp_fts_provider_compatibility_wordpress_bounded_int_list(mixed $values): array
+{
+    if (!is_array($values)) {
+        return [];
+    }
+
+    $bounded = [];
+    foreach ($values as $value) {
+        if (is_numeric($value)) {
+            $bounded[] = (int) $value;
+        }
+        if (count($bounded) >= 10) {
+            break;
+        }
+    }
+
+    return $bounded;
+}
+
+/**
+ * @param array<string,mixed> $evidence
+ */
+function wp_fts_provider_compatibility_wordpress_evidence_redaction_passed(array $evidence): bool
+{
+    $json = json_encode($evidence, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (!is_string($json)) {
+        return false;
+    }
+
+    foreach (wp_fts_provider_compatibility_wordpress_forbidden_report_fragments() as $forbidden) {
+        if ($forbidden !== '' && str_contains($json, $forbidden)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * @return string[]
+ */
+function wp_fts_provider_compatibility_wordpress_forbidden_report_fragments(): array
+{
+    return [
+        'jetpack/jetpack.php',
+        'elasticpress/elasticpress.php',
+        'secret-basename.php',
+        'raw-provider-option-payload-must-not-leak',
+        'provider_payload',
+        'private provider title',
+        'raw provider payload',
+        '.env',
+        '~/.ssh',
+        'BEGIN PRIVATE KEY',
+        'BEGIN RSA PRIVATE KEY',
+    ];
 }
 
 /**
@@ -237,6 +566,124 @@ function wp_fts_provider_compatibility_wordpress_post_ids(mixed $posts): array
     }
 
     return $ids;
+}
+
+/**
+ * @param string[] $optionNames
+ * @return array<string,mixed>
+ */
+function wp_fts_provider_compatibility_wordpress_snapshot_options(array $optionNames): array
+{
+    $snapshots = [];
+    if (!function_exists('get_option')) {
+        return $snapshots;
+    }
+
+    foreach ($optionNames as $optionName) {
+        $snapshots[$optionName] = get_option($optionName, null);
+    }
+
+    return $snapshots;
+}
+
+/**
+ * @param array<string,mixed> $snapshots
+ */
+function wp_fts_provider_compatibility_wordpress_restore_options(array $snapshots): void
+{
+    if (!function_exists('delete_option') || !function_exists('update_option')) {
+        return;
+    }
+
+    foreach ($snapshots as $optionName => $value) {
+        if ($value === null || $value === false) {
+            delete_option($optionName);
+            continue;
+        }
+        update_option($optionName, $value, false);
+    }
+}
+
+function wp_fts_provider_compatibility_wordpress_apply_advisory_signal_simulation(): void
+{
+    update_option('active_plugins', [
+        'jetpack/jetpack.php',
+        'elasticpress/elasticpress.php',
+        'private-search-provider/secret-basename.php',
+    ], false);
+    update_option('jetpack_active_modules', [
+        'search',
+        'raw-provider-option-payload-must-not-leak',
+    ], false);
+}
+
+/**
+ * @param string[] $hookNames
+ * @return array<string,array{exists:bool,value:mixed}>
+ */
+function wp_fts_provider_compatibility_wordpress_snapshot_hooks(array $hookNames): array
+{
+    $snapshots = [];
+    foreach ($hookNames as $hookName) {
+        $exists = isset($GLOBALS['wp_filter']) && is_array($GLOBALS['wp_filter']) && array_key_exists($hookName, $GLOBALS['wp_filter']);
+        $snapshots[$hookName] = [
+            'exists' => $exists,
+            'value' => $exists ? $GLOBALS['wp_filter'][$hookName] : null,
+        ];
+    }
+
+    return $snapshots;
+}
+
+/**
+ * @param array<string,array{exists:bool,value:mixed}> $snapshots
+ */
+function wp_fts_provider_compatibility_wordpress_restore_hooks(array $snapshots): void
+{
+    if (!isset($GLOBALS['wp_filter']) || !is_array($GLOBALS['wp_filter'])) {
+        $GLOBALS['wp_filter'] = [];
+    }
+
+    foreach ($snapshots as $hookName => $snapshot) {
+        if (($snapshot['exists'] ?? false) === true) {
+            $GLOBALS['wp_filter'][$hookName] = $snapshot['value'] ?? null;
+            continue;
+        }
+        unset($GLOBALS['wp_filter'][$hookName]);
+    }
+}
+
+function wp_fts_provider_compatibility_theme_custom_earlier_provider(mixed $posts, mixed $query = null): array
+{
+    $providerPosts = $GLOBALS['wp_fts_provider_compatibility_theme_custom_posts'] ?? [];
+
+    return is_array($providerPosts) ? $providerPosts : [];
+}
+
+if (!class_exists('WP_FTS_Provider_Compatibility_SearchWP_Shaped_Callback')) {
+    final class WP_FTS_Provider_Compatibility_SearchWP_Shaped_Callback
+    {
+        /** @var array<int,object> */
+        public static array $posts = [];
+
+        public static function posts_pre_query(mixed $posts, mixed $query = null): array
+        {
+            return self::$posts;
+        }
+    }
+}
+
+if (!class_exists('WP_FTS_Provider_Compatibility_Relevanssi_Shaped_Callback')) {
+    final class WP_FTS_Provider_Compatibility_Relevanssi_Shaped_Callback
+    {
+        /** @var array<int,object> */
+        public static array $posts = [];
+
+        public static function posts_pre_query(mixed $posts, mixed $query = null): array
+        {
+            return self::$posts;
+        }
+    }
 }
 
 function wp_fts_provider_compatibility_wordpress_disposable_confirmed(string $wpPath): bool

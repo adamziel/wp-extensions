@@ -525,6 +525,9 @@ test_case('quality disposable release smoke docs and composer command are operat
         'composer test:smoke:release-provider:docker',
         '--run-docker-disposable-smokes',
         'host-provided WordPress root',
+        'provider interference matrix',
+        'repo-owned provider-family simulations',
+        'not a broad version-by-version certification',
     ] as $needle) {
         wp_fts_disposable_smoke_contract_contains($needle, $docs, "testing docs should mention {$needle}");
     }
