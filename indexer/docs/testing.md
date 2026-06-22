@@ -30,6 +30,29 @@ php -n tests/run.php
 
 This verifies the fallback paths used when optional extensions are missing.
 
+## Provider Compatibility Evidence
+
+Run the deterministic provider compatibility contract directly when changing
+search-provider precedence controls, `posts_pre_query` diagnostics, known
+provider advisory labels, or provider compatibility documentation:
+
+```sh
+php tests/quality/provider-compatibility-certification-contracts.php
+php -n tests/quality/provider-compatibility-certification-contracts.php
+composer test:provider-compatibility
+```
+
+The optional live/disposable smoke exits with `SKIP:` and status 0 when no
+WordPress path is configured:
+
+```sh
+php tools/smoke-search-provider-compatibility.php
+composer test:smoke:provider-compatibility
+```
+
+See [`docs/provider-compatibility.md`](provider-compatibility.md) for the
+certification boundary and disposable-site configuration.
+
 ## Release Readiness
 
 Run the release-readiness contracts directly when changing packaging,

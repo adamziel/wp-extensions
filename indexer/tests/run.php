@@ -193,6 +193,18 @@ function wp_fts_run_registered_tests_and_exit(): void
 {
     global $tests;
 
+    $filter = getenv('WP_FTS_TEST_FILTER');
+    if (is_string($filter) && $filter !== '') {
+        $tests = array_values(array_filter(
+            $tests,
+            static fn(array $test): bool => str_contains((string) ($test['name'] ?? ''), $filter)
+        ));
+        if ($tests === []) {
+            fwrite(STDERR, "[FAIL] test filter\nNo tests matched WP_FTS_TEST_FILTER=" . var_export($filter, true) . ".\n");
+            exit(1);
+        }
+    }
+
     $failures = 0;
     $pending = 0;
     $start = microtime(true);
