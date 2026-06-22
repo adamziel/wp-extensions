@@ -266,10 +266,11 @@ wp fts search "release notes" --lang=en-US --explain --format=json
 ```
 
 The explain payload includes the analyzed query plan, prefix and fast-mode
-state, scoring counts, recency boost details, storage metadata availability,
-and bounded per-result match details, including field-specific matches when
-field metadata is available. It does not mutate the index and should be treated
-as operational diagnostics, not persistent logging.
+state, a bounded fast-mode decision reason, scoring counts, recency boost
+details, storage metadata availability, and bounded per-result match details,
+including field-specific matches when field metadata is available. It does not
+mutate the index and should be treated as operational diagnostics, not
+a stored audit history.
 
 Use a recency boost only when operators want newer posts to receive a small
 query-time ranking lift from indexed `post_date_gmt` metadata:
@@ -364,10 +365,11 @@ request and are capped; they are not persistent logs or historical telemetry.
 Successful front-end and wp-admin Posts replacements include an explain summary
 when diagnostics are active. The trace identifies the storage backend, analyzed
 query languages, query surfaces with analyzed storage terms/keys, prefix
-expansion count, fast-mode source and cap, candidate rows/docs scored, exact
-versus approximate totals, performance-budget status, and bounded per-result
-match reasons for the returned page. The Performance budget row compares the
-existing trace timings against the configured total and `storage/search`
+expansion count, fast-mode source, reason, and cap, candidate rows/docs scored,
+exact versus approximate totals, performance-budget status, and bounded
+per-result match reasons for the returned page. The Performance budget row
+compares the existing trace timings against the configured total and
+`storage/search`
 thresholds, then reports `within_budget`, `over_budget`, `disabled`, or
 `unavailable` with the crossed phases when a budget is exceeded. Bailout traces
 without timing data are reported as unavailable rather than fast. Bailout traces

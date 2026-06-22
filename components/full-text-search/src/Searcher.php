@@ -20,6 +20,7 @@ final class WP_FTS_Searcher
     private const EXPLAIN_MAX_FIELD_MATCHES_PER_RESULT = 6;
     private const EXPLAIN_MAX_TERMS_PER_FIELD = 6;
     private const EXPLAIN_MAX_TEXT_BYTES = 96;
+    private const EXPLAIN_MAX_REASON_BYTES = 240;
     private const DEFAULT_RECENCY_BOOST_STRENGTH = 0.25;
     private const MAX_RECENCY_BOOST_STRENGTH = 2.0;
     private const DEFAULT_RECENCY_BOOST_HALF_LIFE_DAYS = 30.0;
@@ -107,6 +108,7 @@ final class WP_FTS_Searcher
                     'estimated_candidates' => null,
                     'threshold' => null,
                     'candidate_cap' => null,
+                    'reason' => 'Empty query had no analyzed terms, so exact scoring was retained.',
                 ], $this->empty_score_stats(), $this->empty_recency_boost_stats($recencyBoost), [], 0, true)
                 : null;
 
@@ -855,17 +857,21 @@ final class WP_FTS_Searcher
                 'estimated_candidates' => null,
                 'threshold' => null,
                 'candidate_cap' => null,
+                'reason' => $this->fast_mode_reason('forced_exact', null, null, null),
             ];
         }
 
         $fastTopK = $this->explicit_fast_top_k_value($opts);
         if ($fastTopK !== null) {
+            $candidateCap = $this->resolved_fast_candidate_cap($opts, $minimumCandidates, $fastTopK);
+
             return [
                 'mode' => 'approximate',
                 'source' => 'explicit_option',
                 'estimated_candidates' => null,
                 'threshold' => null,
-                'candidate_cap' => $this->resolved_fast_candidate_cap($opts, $minimumCandidates, $fastTopK),
+                'candidate_cap' => $candidateCap,
+                'reason' => $this->fast_mode_reason('explicit_option', null, null, $candidateCap),
             ];
         }
 
@@ -876,6 +882,7 @@ final class WP_FTS_Searcher
                 'estimated_candidates' => null,
                 'threshold' => null,
                 'candidate_cap' => null,
+                'reason' => $this->fast_mode_reason('disabled_constant', null, null, null),
             ];
         }
 
@@ -888,16 +895,50 @@ final class WP_FTS_Searcher
                 'estimated_candidates' => $estimatedCandidates,
                 'threshold' => $threshold,
                 'candidate_cap' => null,
+                'reason' => $this->fast_mode_reason('no_threshold_crossing', $estimatedCandidates, $threshold, null),
             ];
         }
+
+        $candidateCap = $this->resolved_fast_candidate_cap($opts, $minimumCandidates, null);
 
         return [
             'mode' => 'approximate',
             'source' => 'auto_threshold',
             'estimated_candidates' => $estimatedCandidates,
             'threshold' => $threshold,
-            'candidate_cap' => $this->resolved_fast_candidate_cap($opts, $minimumCandidates, null),
+            'candidate_cap' => $candidateCap,
+            'reason' => $this->fast_mode_reason('auto_threshold', $estimatedCandidates, $threshold, $candidateCap),
         ];
+    }
+
+    private function fast_mode_reason(string $source, ?int $estimatedCandidates, ?int $threshold, ?int $candidateCap): string
+    {
+        if ($source === 'forced_exact') {
+            return 'Exact scoring was explicitly requested, so approximate top-K was disabled.';
+        }
+        if ($source === 'explicit_option') {
+            return sprintf('Approximate fast top-K was explicitly requested, so the active candidate cap is %d.', max(1, (int) $candidateCap));
+        }
+        if ($source === 'disabled_constant') {
+            return 'Automatic fast mode is disabled by configuration, so exact scoring was retained.';
+        }
+        if ($source === 'no_threshold_crossing') {
+            return sprintf(
+                'Estimated candidates %d did not exceed threshold %d, so exact scoring was retained.',
+                max(0, (int) $estimatedCandidates),
+                max(0, (int) $threshold)
+            );
+        }
+        if ($source === 'auto_threshold') {
+            return sprintf(
+                'Estimated candidates %d exceeded threshold %d, so approximate top-K used cap %d.',
+                max(0, (int) $estimatedCandidates),
+                max(0, (int) $threshold),
+                max(1, (int) $candidateCap)
+            );
+        }
+
+        return 'Fast-mode decision used the default exact scoring path.';
     }
 
     /**
@@ -1875,7 +1916,7 @@ final class WP_FTS_Searcher
 
     /**
      * @param array{groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,pre_prefix_groups:array<int,array<int,array{key:string,lang:string,term:string,rank:int,source?:string,surface?:string}>>,prefix_matching:bool,prefix_added_terms:int,prefix_min_length:int,prefix_max_terms:int} $queryPlan
-     * @param array{mode:string,source:string,estimated_candidates:?int,threshold:?int,candidate_cap:?int} $fastMode
+     * @param array{mode:string,source:string,estimated_candidates:?int,threshold:?int,candidate_cap:?int,reason?:string} $fastMode
      * @param array<string,int> $scoreStats
      * @param array{enabled:bool,strength:float,half_life_days:float,now_gmt:string,documents_considered:int,documents_applied:int,metadata_unavailable:bool,missing_or_invalid_dates:int} $recencyStats
      * @param array<int,array<string,mixed>> $resultExplain
@@ -1905,6 +1946,15 @@ final class WP_FTS_Searcher
                 'estimated_candidates' => $fastMode['estimated_candidates'],
                 'threshold' => $fastMode['threshold'],
                 'candidate_cap' => $fastMode['candidate_cap'],
+                'reason' => $this->bounded_explain_text(
+                    (string) ($fastMode['reason'] ?? $this->fast_mode_reason(
+                        (string) $fastMode['source'],
+                        $fastMode['estimated_candidates'],
+                        $fastMode['threshold'],
+                        $fastMode['candidate_cap']
+                    )),
+                    self::EXPLAIN_MAX_REASON_BYTES
+                ),
             ],
             'scoring' => [
                 'candidate_rows_fetched' => max(0, (int) ($scoreStats['candidate_rows_fetched'] ?? 0)),

@@ -10649,6 +10649,7 @@ test_case('enabled diagnostics record frontend search timings counts language se
         assert_same('no_threshold_crossing', $fastMode['source'] ?? null, 'frontend diagnostics should record the fast-mode decision source');
         assert_true((int) ($fastMode['estimated_candidates'] ?? 0) >= 2, 'frontend diagnostics should include estimated candidate count when auto fast mode probes');
         assert_true((int) ($fastMode['threshold'] ?? 0) > 0, 'frontend diagnostics should include the auto fast-mode threshold');
+        assert_contains('exact scoring was retained', (string) ($fastMode['reason'] ?? ''), 'frontend diagnostics should include the fast-mode decision reason');
 
         $scoring = is_array($explain['scoring'] ?? null) ? $explain['scoring'] : [];
         assert_true((int) ($scoring['candidate_rows_fetched'] ?? 0) >= 2, 'frontend diagnostics should include fetched candidate row shape');
@@ -10788,6 +10789,8 @@ test_case('enabled diagnostics record auto fast mode threshold and cap decisions
         assert_same(2001, (int) ($fastMode['estimated_candidates'] ?? 0), 'auto fast diagnostics should expose the capped threshold-crossing estimate');
         assert_same(2000, (int) ($fastMode['threshold'] ?? 0), 'auto fast diagnostics should expose the active threshold');
         assert_same(1000, (int) ($fastMode['candidate_cap'] ?? 0), 'auto fast diagnostics should expose the active candidate cap');
+        assert_contains('exceeded threshold', (string) ($fastMode['reason'] ?? ''), 'auto fast diagnostics should explain the threshold crossing');
+        assert_contains('cap 1000', (string) ($fastMode['reason'] ?? ''), 'auto fast diagnostics should explain the active cap');
         $scoring = is_array($explain['scoring'] ?? null) ? $explain['scoring'] : [];
         assert_same('approximate', $scoring['total_accuracy'] ?? null, 'auto fast diagnostics should mark totals approximate');
         assert_same(1000, (int) ($scoring['candidate_docs_scored'] ?? 0), 'auto fast diagnostics should expose capped scored documents');
@@ -17460,6 +17463,67 @@ test_case('search auto fast mode switches above threshold and explicit exact dis
     assert_same(2001, $explicitExact['results'][0]['doc_id'] ?? null, 'explicit exact search should keep the strongest late candidate');
 });
 
+test_case('search explain fast mode includes bounded decision reasons', function (): void {
+    [$smallSearcher] = single_term_search_fixture(2, 2);
+    $exact = $smallSearcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'explain' => true,
+    ]);
+    $exactFastMode = is_array($exact['explain']['fast_mode'] ?? null) ? $exact['explain']['fast_mode'] : [];
+    $exactReason = (string) ($exactFastMode['reason'] ?? '');
+
+    assert_same('no_threshold_crossing', $exactFastMode['source'] ?? null, 'exact auto explain should identify no threshold crossing');
+    assert_contains('did not exceed threshold', $exactReason, 'exact auto explain reason should describe the threshold decision');
+    assert_contains('exact scoring was retained', $exactReason, 'exact auto explain reason should identify exact scoring retention');
+    assert_true(strlen($exactReason) <= 240, 'exact auto explain reason should stay bounded');
+
+    $explicit = $smallSearcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'explain' => true,
+        'fast_top_k' => true,
+        'candidate_cap' => 3,
+    ]);
+    $explicitFastMode = is_array($explicit['explain']['fast_mode'] ?? null) ? $explicit['explain']['fast_mode'] : [];
+    $explicitReason = (string) ($explicitFastMode['reason'] ?? '');
+
+    assert_same('explicit_option', $explicitFastMode['source'] ?? null, 'explicit approximate explain should identify the explicit option source');
+    assert_contains('explicitly requested', $explicitReason, 'explicit approximate reason should identify the explicit request');
+    assert_contains('candidate cap is 3', $explicitReason, 'explicit approximate reason should identify the active cap');
+
+    [$broadSearcher] = single_term_search_fixture(2001, 2001);
+    $auto = $broadSearcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'explain' => true,
+    ]);
+    $autoFastMode = is_array($auto['explain']['fast_mode'] ?? null) ? $auto['explain']['fast_mode'] : [];
+    $autoReason = (string) ($autoFastMode['reason'] ?? '');
+
+    assert_same('auto_threshold', $autoFastMode['source'] ?? null, 'auto approximate explain should identify threshold crossing');
+    assert_contains('exceeded threshold', $autoReason, 'auto approximate reason should describe the threshold crossing');
+    assert_contains('cap 1000', $autoReason, 'auto approximate reason should identify the active cap');
+    assert_true(strlen($autoReason) <= 240, 'auto approximate explain reason should stay bounded');
+
+    $forcedExact = $broadSearcher->search('needle', [
+        'lang' => 'en',
+        'limit' => 1,
+        'include_total' => true,
+        'explain' => true,
+        'fast_top_k' => false,
+    ]);
+    $forcedFastMode = is_array($forcedExact['explain']['fast_mode'] ?? null) ? $forcedExact['explain']['fast_mode'] : [];
+    $forcedReason = (string) ($forcedFastMode['reason'] ?? '');
+
+    assert_same('forced_exact', $forcedFastMode['source'] ?? null, 'forced exact explain should identify the exact override');
+    assert_contains('Exact scoring was explicitly requested', $forcedReason, 'forced exact reason should identify the exact override');
+    assert_contains('approximate top-K was disabled', $forcedReason, 'forced exact reason should identify approximate top-K disablement');
+});
+
 test_case('search auto fast mode applies metadata filters before threshold switch when probed', function (): void {
     [$searcher] = single_term_search_fixture(
         2001,
@@ -18416,6 +18480,7 @@ test_case('wp cli search explain json includes structured diagnostics and per-re
         assert_true(is_array($explain['fast_mode'] ?? null), 'CLI explain JSON should include fast_mode diagnostics');
         assert_true(is_array($explain['scoring'] ?? null), 'CLI explain JSON should include scoring diagnostics');
         assert_same('OR', $explain['query_plan']['match_mode'] ?? null, 'CLI explain JSON should expose the effective match mode');
+        assert_contains('exact scoring was retained', (string) ($explain['fast_mode']['reason'] ?? ''), 'CLI explain JSON should expose the fast-mode decision reason');
         assert_same('exact', $explain['scoring']['total_accuracy'] ?? null, 'small CLI explain search should report exact totals');
         assert_true(is_array($explain['results'][0]['matches'] ?? null), 'CLI explain JSON should include per-result match rows');
         assert_true(($explain['results'][0]['matches'] ?? []) !== [], 'CLI explain JSON should include at least one matched term for the indexed result');
@@ -18450,10 +18515,12 @@ test_case('wp cli search explain table output is bounded and human-readable', fu
 
         assert_contains('match_mode=OR', $rowsByField['query_plan'] ?? '', 'table explain should summarize query planning');
         assert_contains('mode=', $rowsByField['fast_mode'] ?? '', 'table explain should summarize fast mode');
+        assert_contains('reason=', $rowsByField['fast_mode'] ?? '', 'table explain should summarize the fast-mode reason');
         assert_contains('candidate_docs_scored=', $rowsByField['scoring'] ?? '', 'table explain should summarize scoring');
         assert_contains('doc 1=', $rowsByField['result_matches'] ?? '', 'table explain should summarize per-result matches');
         assert_contains('content(', $rowsByField['field_matches'] ?? '', 'table explain should summarize field-specific matches');
         assert_true(!str_contains($rowsByField['query_plan'] ?? '', '[{'), 'table explain should not dump nested arrays into cells');
+        assert_true(!str_contains($rowsByField['fast_mode'] ?? '', '[{'), 'table explain fast-mode summary should not dump nested arrays into cells');
     });
 });
 

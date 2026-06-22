@@ -1028,6 +1028,7 @@ final class WP_FTS_WPCLI_Command
             'estimated_candidates' => $value['estimated_candidates'] ?? '',
             'threshold' => $value['threshold'] ?? '',
             'candidate_cap' => $value['candidate_cap'] ?? '',
+            'reason' => $value['reason'] ?? '',
         ]);
     }
 

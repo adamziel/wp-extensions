@@ -231,8 +231,9 @@ approximate top-K mode for that search.
 When diagnostics are active, the Debug Bar panel or Health-tab fallback shows
 which path was used for the current request: exact, explicit approximate, auto
 threshold, forced exact, disabled by constant, or no threshold crossing. The
-same trace reports the candidate estimate, threshold, candidate cap, and whether
-the result total is exact or approximate.
+same trace reports a bounded human-readable fast-mode reason, the candidate
+estimate, threshold, candidate cap, and whether the result total is exact or
+approximate.
 
 Those traces also show a Performance budget row for completed search timing
 data. By default, total search time is compared with a `100ms` budget and the

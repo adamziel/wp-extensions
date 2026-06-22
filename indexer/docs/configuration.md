@@ -746,6 +746,10 @@ mode caps scored candidates at 1000 by default, which improves latency but can
 change recall, ranking, and total counts. Programmatic callers can force exact
 scoring with `exact_top_k`, `exact`, or an explicit false `fast_top_k`; explicit
 `fast_top_k`/`approximate_top_k` still enables approximate mode directly.
+Explain/debug diagnostics include a bounded `fast_mode.reason` string that
+states whether exact scoring was forced or retained, an explicit approximate
+request was used, automatic fast mode was disabled, or the automatic threshold
+was crossed with the active candidate cap.
 
 The automatic policy can be tuned in `wp-config.php` before the plugin loads:
 
