@@ -18437,6 +18437,100 @@ function wp_fts_test_with_cli_search_index(callable $callback): mixed
     }
 }
 
+/**
+ * Seed operator context around the CLI search fixture and clear mutation logs so
+ * `wp fts diagnose` read-only assertions only observe the command under test.
+ *
+ * @return array<string,mixed>
+ */
+function wp_fts_test_prepare_cli_diagnose_operator_context(WP_FTS_Test_WPDB $fake): array
+{
+    $now = time();
+    $fake->postRows = [
+        wp_fts_test_backfill_post(1, 'post', 'publish', 'CLI diagnostics needle'),
+        wp_fts_test_backfill_post(2, 'page', 'publish', 'CLI reference needle'),
+        wp_fts_test_backfill_post(3, 'post', 'publish', 'CLI pending work'),
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        [
+            'index_post_types' => ['post', 'page'],
+            'search_provider_compatibility' => 'respect_existing',
+            'replace_frontend_search' => false,
+            'replace_admin_post_search' => true,
+        ]
+    );
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [3];
+    $GLOBALS['wp_fts_test_options']['active_plugins'] = [
+        'searchwp/index.php',
+        'private-search-provider/secret-basename.php',
+    ];
+    $GLOBALS['wp_fts_test_options']['jetpack_active_modules'] = [
+        'search',
+        'raw-provider-payload-must-not-render',
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION] = [
+        'token' => 'diagnose-token-must-not-render',
+        'mode' => 'wp-cli-reindex',
+        'started_at' => $now - 10,
+        'expires_at' => $now + 290,
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
+        'last_batch_processed' => 2,
+        'last_batch_queue_processed' => 1,
+        'last_batch_backfill_processed' => 1,
+        'has_more' => true,
+        'last_indexed_post_id' => 2,
+        'last_indexed_post_title' => 'CLI reference needle',
+        'last_indexed_at' => '2026-06-20 10:00:00',
+        'last_skipped_locked' => false,
+        'last_stopped_by_budget' => false,
+        'last_mode' => 'manual',
+        'last_run_at' => '2026-06-20 10:01:00',
+        'last_batch_failures' => 0,
+        'accepted_index_profile_hash' => str_repeat('b', 40),
+        'stale_debt_active' => true,
+        'stale_debt_reasons' => ['field_boosts_changed'],
+        'stale_debt_created_at' => '2026-06-20 09:55:00',
+        'stale_debt_updated_at' => '2026-06-20 09:59:00',
+        'stale_debt_remaining_count' => 1,
+        'latest_batch_diagnostics' => [
+            'schema' => 'wp-fts-index-batch-diagnostics-v1',
+            'trigger' => 'manual',
+            'source' => 'wp-cli',
+            'status' => 'success',
+            'started_at' => '2026-06-20 10:00:00',
+            'finished_at' => '2026-06-20 10:01:00',
+            'processed' => 2,
+            'queue_processed' => 1,
+            'backfill_processed' => 1,
+            'schema_status' => 'current',
+            'schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+            'expected_schema_version' => WP_FTS_Plugin::SCHEMA_VERSION,
+            'storage_backend' => 'mysql',
+        ],
+    ];
+
+    $GLOBALS['wp_fts_test_added_options'] = [];
+    $GLOBALS['wp_fts_test_updated_options'] = [];
+    $GLOBALS['wp_fts_test_deleted_options'] = [];
+    $GLOBALS['wp_fts_test_schedule_calls'] = [];
+    $GLOBALS['wp_fts_test_cleared_hooks'] = [];
+    $fake->queries = [];
+
+    return [
+        'options' => $GLOBALS['wp_fts_test_options'],
+        'docs' => $fake->docs,
+        'terms' => $fake->terms,
+        'postings' => $fake->postings,
+        'docLengths' => $fake->docLengths,
+        'docMeta' => $fake->docMeta,
+        'meta' => $fake->meta,
+        'postRows' => $fake->postRows,
+        'posts' => $GLOBALS['wp_fts_test_posts'],
+    ];
+}
+
 test_case('wp cli search default table output remains compatible', function (): void {
     wp_fts_test_with_cli_search_index(static function (): void {
         $GLOBALS['wp_fts_quality_cli_format_items'] = [];
@@ -18552,6 +18646,167 @@ test_case('wp cli search explain json remains valid for empty result sets', func
         assert_true(is_array($payload['explain']['query_plan'] ?? null), 'empty CLI explain JSON should still include query_plan diagnostics');
         assert_true(is_array($payload['explain']['fast_mode'] ?? null), 'empty CLI explain JSON should still include fast_mode diagnostics');
         assert_true(is_array($payload['explain']['scoring'] ?? null), 'empty CLI explain JSON should still include scoring diagnostics');
+    });
+});
+
+test_case('wp cli diagnose format json emits support bundle with status and explain context', function (): void {
+    wp_fts_test_with_cli_search_index(static function (WP_FTS_Test_WPDB $fake): void {
+        wp_fts_test_prepare_cli_diagnose_operator_context($fake);
+
+        $raw = wp_fts_test_capture_cli(static function (): void {
+            (new WP_FTS_WPCLI_Command())->diagnose(['needle'], [
+                'lang' => 'en',
+                'limit' => '1',
+                'format' => 'json',
+            ]);
+        });
+        $bundle = wp_fts_test_decode_cli_json_object($raw);
+
+        assert_same('wp-fts-query-diagnostic-bundle-v1', $bundle['schema'] ?? null, 'CLI diagnose JSON should expose a stable bundle schema');
+        assert_same('wp fts diagnose', $bundle['tool'] ?? null, 'CLI diagnose JSON should identify the WP-CLI tool');
+        assert_same('needle', $bundle['query'] ?? null, 'CLI diagnose JSON should include the bounded query string');
+        assert_true(is_array($bundle['query_args'] ?? null), 'CLI diagnose JSON should include effective query args');
+        assert_true(is_array($bundle['operator_status'] ?? null), 'CLI diagnose JSON should include operator status context');
+        assert_true(is_array($bundle['search'] ?? null), 'CLI diagnose JSON should include the explain-enabled search payload');
+        assert_true(is_array($bundle['summary'] ?? null), 'CLI diagnose JSON should include a support summary');
+
+        $status = $bundle['operator_status'];
+        assert_same('current', $status['schema_status'] ?? null, 'diagnose operator status should include schema state');
+        assert_same('mysql', $status['storage_backend'] ?? null, 'diagnose operator status should include storage backend');
+        assert_true(is_array($status['queue_processor_schedule'] ?? null), 'diagnose operator status should include queue schedule diagnostics');
+        assert_true(is_array($status['cron_runner'] ?? null), 'diagnose operator status should include cron runner diagnostics');
+        assert_true(is_array($status['search_provider_compatibility'] ?? null), 'diagnose operator status should include provider compatibility context');
+        assert_true(is_array($status['language_pack_status'] ?? null), 'diagnose operator status should include language-pack context');
+        assert_true(is_array($status['latest_batch_diagnostics'] ?? null), 'diagnose operator status should include latest batch diagnostics');
+
+        $search = $bundle['search'];
+        assert_same(2, $search['total'] ?? null, 'diagnose search payload should expose visible total');
+        assert_same(1, count($search['results'] ?? []), 'diagnose search payload should honor the requested limit');
+        assert_true(is_array($search['explain'] ?? null), 'diagnose search payload should force explain diagnostics');
+        assert_true(is_array($search['explain']['query_plan'] ?? null), 'diagnose explain should include query plan diagnostics');
+        assert_true(is_array($search['explain']['fast_mode'] ?? null), 'diagnose explain should include fast-mode diagnostics');
+        assert_true(is_array($search['explain']['scoring'] ?? null), 'diagnose explain should include scoring diagnostics');
+        assert_true(is_array($search['explain']['results'] ?? null), 'diagnose explain should include per-result explain rows');
+
+        $summary = $bundle['summary'];
+        assert_same(1, $summary['returned_count'] ?? null, 'diagnose summary should include returned count');
+        assert_same(2, $summary['visible_total'] ?? null, 'diagnose summary should include visible total');
+        assert_same('mysql', $summary['storage_backend'] ?? null, 'diagnose summary should include storage backend');
+        assert_same('exact', $summary['fast_mode']['mode'] ?? null, 'diagnose summary should include fast-mode mode');
+        assert_contains('exact scoring was retained', (string) ($summary['fast_mode']['reason'] ?? ''), 'diagnose summary should include fast-mode reason');
+        assert_true(is_int($summary['candidate_rows_fetched'] ?? null), 'diagnose summary should include candidate row diagnostics');
+        assert_true(is_int($summary['candidate_docs_scored'] ?? null), 'diagnose summary should include candidate doc diagnostics');
+        assert_true(in_array('en', $summary['matched_languages'] ?? [], true), 'diagnose summary should include matched languages');
+        assert_same('respect_existing', $summary['provider_compatibility']['mode'] ?? null, 'diagnose summary should include provider compatibility mode');
+        assert_contains('SearchWP', (string) ($summary['provider_compatibility']['known_provider_summary'] ?? ''), 'diagnose summary should include known provider summary');
+        assert_true(is_string($summary['runtime_language_pack_support']['status'] ?? null), 'diagnose summary should include runtime language-pack support');
+        assert_same('active', $summary['lock_state'] ?? null, 'diagnose summary should include lock state');
+        assert_same(true, $summary['lock_active'] ?? null, 'diagnose summary should include lock active state');
+        assert_same(true, $summary['index_stale'] ?? null, 'diagnose summary should report stale index context');
+        assert_same(true, $summary['pending_work'] ?? null, 'diagnose summary should report pending work context');
+    });
+});
+
+test_case('wp cli diagnose reuses search query options in args and search payload', function (): void {
+    wp_fts_test_with_cli_search_index(static function (WP_FTS_Test_WPDB $fake): void {
+        wp_fts_test_prepare_cli_diagnose_operator_context($fake);
+
+        $raw = wp_fts_test_capture_cli(static function (): void {
+            (new WP_FTS_WPCLI_Command())->diagnose(['needle'], [
+                'lang' => 'en',
+                'mode' => 'AND',
+                'limit' => '1',
+                'offset' => '1',
+                'post_status' => 'publish',
+                'post_type' => 'post,page',
+                'after' => '2026-06-18',
+                'before' => '2026-06-19 23:59:59',
+                'recency_boost' => '0.5',
+                'recency_boost_half_life_days' => '7',
+                'prefix_matching' => '1',
+                'prefix_min_length' => '3',
+                'prefix_max_terms' => '2',
+                'snippet' => true,
+                'format' => 'json',
+            ]);
+        });
+        $bundle = wp_fts_test_decode_cli_json_object($raw);
+        $queryArgs = $bundle['query_args'] ?? [];
+        $search = $bundle['search'] ?? [];
+        $explain = is_array($search['explain'] ?? null) ? $search['explain'] : [];
+        $plan = is_array($explain['query_plan'] ?? null) ? $explain['query_plan'] : [];
+        $recency = is_array($explain['recency_boost'] ?? null) ? $explain['recency_boost'] : [];
+
+        assert_same('en', $queryArgs['lang'] ?? null, 'diagnose query args should reuse --lang parsing');
+        assert_same('AND', $queryArgs['mode'] ?? null, 'diagnose query args should reuse --mode parsing');
+        assert_same(1, $queryArgs['limit'] ?? null, 'diagnose query args should reuse --limit parsing');
+        assert_same(1, $queryArgs['offset'] ?? null, 'diagnose query args should reuse --offset parsing');
+        assert_same(['publish'], $queryArgs['post_status'] ?? null, 'diagnose query args should reuse --post_status parsing');
+        assert_same(['post', 'page'], $queryArgs['post_type'] ?? null, 'diagnose query args should reuse --post_type parsing');
+        assert_same('2026-06-18', $queryArgs['after'] ?? null, 'diagnose query args should reuse --after parsing');
+        assert_same('2026-06-19 23:59:59', $queryArgs['before'] ?? null, 'diagnose query args should reuse --before parsing');
+        assert_same('0.5', $queryArgs['recency_boost'] ?? null, 'diagnose query args should reuse recency boost parsing');
+        assert_same('7', $queryArgs['recency_boost_half_life_days'] ?? null, 'diagnose query args should reuse recency half-life parsing');
+        assert_same(true, $queryArgs['prefix_matching'] ?? null, 'diagnose query args should reuse prefix matching parsing');
+        assert_same(3, $queryArgs['prefix_min_length'] ?? null, 'diagnose query args should reuse prefix minimum parsing');
+        assert_same(2, $queryArgs['prefix_max_terms'] ?? null, 'diagnose query args should reuse prefix maximum parsing');
+        assert_same(true, $queryArgs['snippet'] ?? null, 'diagnose query args should reuse snippet parsing');
+        assert_same(true, $queryArgs['explain'] ?? null, 'diagnose query args should report forced explain');
+
+        assert_same(1, $search['limit'] ?? null, 'diagnose search payload should receive limit');
+        assert_same(1, $search['offset'] ?? null, 'diagnose search payload should receive offset');
+        assert_same('en', $search['query_lang'] ?? null, 'diagnose search payload should receive language');
+        assert_same(1, count($search['results'] ?? []), 'diagnose search payload should return the requested page size');
+        assert_true(array_key_exists('snippet', $search['results'][0] ?? []), 'diagnose search payload should receive snippet option');
+        assert_same('AND', $plan['match_mode'] ?? null, 'diagnose explain should receive match mode');
+        assert_same('enabled', $plan['prefix_matching'] ?? null, 'diagnose explain should receive prefix matching controls');
+        assert_same(3, $plan['prefix_min_length'] ?? null, 'diagnose explain should receive prefix minimum length');
+        assert_same(2, $plan['prefix_max_terms'] ?? null, 'diagnose explain should receive prefix max terms');
+        assert_same(true, $recency['enabled'] ?? null, 'diagnose explain should receive recency boost option');
+        assert_same(0.5, $recency['strength'] ?? null, 'diagnose explain should receive recency boost strength');
+        assert_same(7, $recency['half_life_days'] ?? null, 'diagnose explain should receive recency half-life option');
+    });
+});
+
+test_case('wp cli diagnose is read only and omits sensitive diagnostic fields', function (): void {
+    wp_fts_test_with_cli_search_index(static function (WP_FTS_Test_WPDB $fake): void {
+        $before = wp_fts_test_prepare_cli_diagnose_operator_context($fake);
+
+        $raw = wp_fts_test_capture_cli(static function (): void {
+            (new WP_FTS_WPCLI_Command())->diagnose([str_repeat('needle ', 120)], [
+                'lang' => 'en',
+                'limit' => '1',
+                'format' => 'json',
+            ]);
+        });
+        $bundle = wp_fts_test_decode_cli_json_object($raw);
+        $encoded = json_encode($bundle, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+        assert_same('wp-fts-query-diagnostic-bundle-v1', $bundle['schema'] ?? null, 'diagnose read-only test should still emit the bundle');
+        assert_true(strlen((string) ($bundle['query'] ?? '')) <= 515, 'diagnose should bound very long query strings');
+        assert_true(!str_contains($encoded, 'diagnose-token-must-not-render'), 'diagnose JSON should not expose lock tokens');
+        assert_true(!str_contains($encoded, 'searchwp/index.php'), 'diagnose JSON should not expose raw provider basenames');
+        assert_true(!str_contains($encoded, 'secret-basename.php'), 'diagnose JSON should not expose unknown provider basenames');
+        assert_true(!str_contains($encoded, 'raw-provider-payload-must-not-render'), 'diagnose JSON should not expose arbitrary provider option payloads');
+        assert_true(!str_contains($encoded, 'SELECT * FROM'), 'diagnose JSON should not expose raw SQL text');
+        assert_true(!str_contains($encoded, 'raw_sql'), 'diagnose JSON should not expose raw SQL fields');
+
+        assert_same([], $GLOBALS['wp_fts_test_added_options'], 'diagnose should not add options');
+        assert_same([], $GLOBALS['wp_fts_test_updated_options'], 'diagnose should not update options');
+        assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'diagnose should not delete options');
+        assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'diagnose should not schedule queue processors');
+        assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'diagnose should not clear scheduled queue processors');
+        assert_same($before['options'], $GLOBALS['wp_fts_test_options'], 'diagnose should leave options, queue, health, and lock payload unchanged');
+        assert_same($before['docs'], $fake->docs, 'diagnose should not create or mutate index docs');
+        assert_same($before['terms'], $fake->terms, 'diagnose should not write terms');
+        assert_same($before['postings'], $fake->postings, 'diagnose should not write postings');
+        assert_same($before['docLengths'], $fake->docLengths, 'diagnose should not write doc lengths');
+        assert_same($before['docMeta'], $fake->docMeta, 'diagnose should not write doc metadata');
+        assert_same($before['meta'], $fake->meta, 'diagnose should not write index meta');
+        assert_same($before['postRows'], $fake->postRows, 'diagnose should not mutate source post rows');
+        assert_same($before['posts'], $GLOBALS['wp_fts_test_posts'], 'diagnose should not create or mutate WordPress posts');
+        assert_same([], $fake->queries, 'diagnose should not run schema repair, indexing, reset, delete, or other storage writes');
+        assert_same('diagnose-token-must-not-render', $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_LOCK_OPTION]['token'] ?? null, 'diagnose should leave the original lock token stored but unrendered');
     });
 });
 
