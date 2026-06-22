@@ -7261,6 +7261,9 @@ test_case('admin sandbox progressive render defers snippets and debug terms', fu
         assert_contains('Progressive Sandbox Content', $html, 'initial sandbox render should keep the result row visible');
         assert_contains('data-wp-fts-detail="snippet"', $html, 'initial sandbox render should mark snippet cells for async loading');
         assert_contains('Loading excerpt...', $html, 'initial sandbox render should show an excerpt placeholder');
+        assert_contains('<th scope="col">Why matched</th>', $html, 'initial sandbox render should include a why-matched column');
+        assert_contains('data-wp-fts-detail="explanation"', $html, 'initial sandbox render should mark why-matched cells for async loading');
+        assert_contains('Loading why matched...', $html, 'initial sandbox render should show a why-matched placeholder');
         assert_contains('<th scope="col">Indexed terms</th>', $html, 'explicit debug mode should add an indexed terms column');
         assert_contains('Loading indexed terms...', $html, 'explicit debug mode should defer indexed terms behind a placeholder');
         assert_contains('wp_fts_sandbox_details_nonce', $html, 'initial sandbox render should expose a nonce for async detail loading');
@@ -7372,6 +7375,117 @@ test_case('admin sandbox detail ajax returns sanitized snippets and explicit deb
         );
         assert_true($matchingTerms !== [], 'explicit debug detail AJAX should return stored English terms for the visible row');
         assert_same(false, $termRows['915']['indexed_terms_more'] ?? null, 'short explicit debug term list should not report overflow');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin sandbox detail ajax returns bounded why matched explanations', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $settings = WP_FTS_Plugin::default_settings();
+    $settings['field_boosts'] = array_replace(
+        is_array($settings['field_boosts'] ?? null) ? $settings['field_boosts'] : [],
+        [
+            'title' => 7.0,
+            'content' => 1.25,
+        ]
+    );
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = $settings;
+
+    try {
+        $requestedPost = (object) [
+            'ID' => 916,
+            'post_title' => 'titleneedle Operator <script>UnsafeTitle</script>',
+            'post_content' => '<p>bodyneedle safe body text.</p><script>UNSAFE_HIDDEN_BODY_MARKER</script><img src=x onerror="alert(1)">',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-12 00:00:00',
+        ];
+        $unrequestedPost = (object) [
+            'ID' => 917,
+            'post_title' => 'Unrequested Sandbox Match',
+            'post_content' => '<p>titleneedle bodyneedle also matches.</p>',
+            'post_excerpt' => '',
+            'post_status' => 'publish',
+            'post_type' => 'post',
+            'post_date_gmt' => '2026-06-12 00:00:00',
+        ];
+        foreach ([$requestedPost, $unrequestedPost] as $post) {
+            $GLOBALS['wp_fts_test_posts'][(int) $post->ID] = $post;
+            update_post_meta((int) $post->ID, WP_FTS_Plugin::LANGUAGE_META_KEY, 'en');
+            wp_fts_test_index_saved_post((int) $post->ID, $post, true);
+        }
+
+        $request = [
+            'wp_fts_sandbox_details_nonce' => wp_create_nonce('wp_fts_sandbox_result_details'),
+            'wp_fts_sandbox_post_ids' => '916,999999',
+            'wp_fts_sandbox_query' => 'titleneedle bodyneedle',
+            'wp_fts_sandbox_lang' => 'en',
+            'wp_fts_sandbox_search' => '1',
+            'wp_fts_sandbox_mode' => 'OR',
+            'wp_fts_sandbox_limit' => '10',
+            'wp_fts_sandbox_snippet_length' => '180',
+            'wp_fts_sandbox_highlight' => '1',
+            'wp_fts_sandbox_prefix_matching' => '0',
+            'wp_fts_sandbox_language_fallback' => '0',
+            'wp_fts_sandbox_post_type' => ['post'],
+            'wp_fts_sandbox_post_status' => ['publish'],
+        ];
+
+        $detail = wp_fts_test_capture_sandbox_details_ajax($request);
+        assert_same(true, $detail['payload']['success'] ?? null, 'detail AJAX should authorize and return a success payload for explanations');
+        $rows = $detail['payload']['data']['rows'] ?? [];
+        assert_true(isset($rows['916']), 'detail AJAX should return the requested visible result explanation row');
+        assert_true(!isset($rows['917']), 'detail AJAX should omit visible results that were not requested');
+        assert_true(!isset($rows['999999']), 'detail AJAX should omit requested IDs that are not in the current result set');
+        assert_true(!array_key_exists('indexed_terms', $rows['916']), 'why-matched details should be returned without enabling indexed-term debug mode');
+
+        $explanation = $rows['916']['match_explanation'] ?? null;
+        assert_true(is_array($explanation), 'detail AJAX should include a structured match explanation');
+        $terms = is_array($explanation['terms'] ?? null) ? $explanation['terms'] : [];
+        $fields = is_array($explanation['fields'] ?? null) ? $explanation['fields'] : [];
+        assert_true($terms !== [], 'match explanation should include matched query terms');
+        assert_true(count($terms) <= 6, 'match explanation terms should stay bounded');
+        assert_true($fields !== [], 'match explanation should include matching field families');
+        assert_true(count($fields) <= 6, 'match explanation fields should stay bounded');
+
+        $termLabels = strtolower(implode(' ', array_map(
+            static fn(mixed $term): string => is_array($term) ? (string) ($term['label'] ?? '') : '',
+            $terms
+        )));
+        assert_contains('titleneedle', $termLabels, 'match explanation should include the matched title query term');
+        assert_contains('bodyneedle', $termLabels, 'match explanation should include the matched content query term');
+
+        $fieldsByName = [];
+        foreach ($fields as $field) {
+            if (is_array($field) && is_scalar($field['field'] ?? null)) {
+                $fieldsByName[(string) $field['field']] = $field;
+            }
+        }
+        assert_true(isset($fieldsByName['title']), 'match explanation should identify title field matches');
+        assert_true(isset($fieldsByName['content']), 'match explanation should identify content field matches');
+        assert_float_near(7.0, (float) ($fieldsByName['title']['weight'] ?? -1), 'title match explanation should include the active title weight');
+        assert_float_near(1.25, (float) ($fieldsByName['content']['weight'] ?? -1), 'content match explanation should include the active content weight');
+        assert_true((int) ($fieldsByName['title']['match_count'] ?? 0) >= 1, 'title match explanation should include a hit count');
+        assert_true((float) ($fieldsByName['content']['weighted_match_count'] ?? 0.0) > 0.0, 'content match explanation should include weighted hit evidence');
+        assert_same(true, $fieldsByName['title']['score_subtotal_approximate'] ?? null, 'field score subtotal should report when it is approximate');
+
+        $encodedExplanation = json_encode($explanation, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        assert_true(is_string($encodedExplanation), 'match explanation should be JSON encodable');
+        assert_true(!str_contains($encodedExplanation, '<script'), 'match explanation JSON should not expose script markup from indexed content');
+        assert_true(!str_contains($encodedExplanation, 'onerror'), 'match explanation JSON should not expose unsafe attributes from indexed content');
+        assert_true(!str_contains($encodedExplanation, 'UNSAFE_HIDDEN_BODY_MARKER'), 'match explanation JSON should not expose hidden unsafe post body text');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;

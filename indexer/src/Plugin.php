@@ -105,6 +105,8 @@ final class WP_FTS_Plugin
     private const POST_LANGUAGE_NONCE_ACTION = 'wp_fts_post_language';
     private const POST_LANGUAGE_NONCE_FIELD = 'wp_fts_post_language_nonce';
     private const SANDBOX_INDEXED_TERMS_LIMIT = 24;
+    private const SANDBOX_MATCH_EXPLANATION_TERMS_LIMIT = 6;
+    private const SANDBOX_MATCH_EXPLANATION_FIELDS_LIMIT = 6;
     private const SANDBOX_INDEXED_POSTS_PER_PAGE = 10;
     private const SETTINGS_SNIPPET_MIN = 40;
     private const SETTINGS_SNIPPET_MAX = 500;
@@ -6320,10 +6322,200 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<string,mixed> $controls
-     * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array{post_id:int,title:string,score:float,language:string,snippet:string}>}
+     * @return array{terms:array<int,array<string,mixed>>,terms_more:bool,fields:array<int,array<string,mixed>>,fields_more:bool,matched_languages:string[]}
      */
-    private static function sandbox_search_results(string $query, string $selected_language, array $controls = [], bool $include_snippets = false): array
+    private static function empty_sandbox_match_explanation(): array
+    {
+        return [
+            'terms' => [],
+            'terms_more' => false,
+            'fields' => [],
+            'fields_more' => false,
+            'matched_languages' => [],
+        ];
+    }
+
+    /**
+     * @param mixed $value
+     * @return array<int,array<string,mixed>>
+     */
+    private static function sandbox_explain_results_by_doc(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $rows = [];
+        foreach ($value as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $doc_id = max(0, (int) ($row['doc_id'] ?? 0));
+            if ($doc_id <= 0) {
+                continue;
+            }
+            $rows[$doc_id] = self::sandbox_match_explanation_from_explain_row($row);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     * @return array{terms:array<int,array<string,mixed>>,terms_more:bool,fields:array<int,array<string,mixed>>,fields_more:bool,matched_languages:string[]}
+     */
+    private static function sandbox_match_explanation_from_explain_row(array $row): array
+    {
+        $explanation = self::empty_sandbox_match_explanation();
+        $matches = is_array($row['matches'] ?? null) ? $row['matches'] : [];
+        $field_matches = is_array($row['field_matches'] ?? null) ? $row['field_matches'] : [];
+        $explanation['terms'] = self::sandbox_match_explanation_terms(
+            $matches,
+            self::SANDBOX_MATCH_EXPLANATION_TERMS_LIMIT
+        );
+        $explanation['terms_more'] = !empty($row['matches_more']) || count($matches) > self::SANDBOX_MATCH_EXPLANATION_TERMS_LIMIT;
+        $explanation['fields'] = self::sandbox_match_explanation_fields(
+            $field_matches
+        );
+        $explanation['fields_more'] = !empty($row['field_matches_more']) || count($field_matches) > self::SANDBOX_MATCH_EXPLANATION_FIELDS_LIMIT;
+
+        if (isset($row['matched_languages']) && is_array($row['matched_languages'])) {
+            $languages = [];
+            foreach ($row['matched_languages'] as $language) {
+                if (!is_scalar($language)) {
+                    continue;
+                }
+                $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language);
+                if ($language !== '') {
+                    $languages[$language] = true;
+                }
+                if (count($languages) >= self::SANDBOX_MATCH_EXPLANATION_TERMS_LIMIT) {
+                    break;
+                }
+            }
+            $explanation['matched_languages'] = array_keys($languages);
+        }
+
+        return $explanation;
+    }
+
+    /**
+     * @param array<int,mixed> $terms
+     * @return array<int,array<string,mixed>>
+     */
+    private static function sandbox_match_explanation_terms(array $terms, int $limit): array
+    {
+        $rows = [];
+        foreach ($terms as $term) {
+            if (!is_array($term)) {
+                continue;
+            }
+            $rows[] = self::sandbox_match_explanation_term($term);
+            if (count($rows) >= $limit) {
+                break;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<int,mixed> $fields
+     * @return array<int,array<string,mixed>>
+     */
+    private static function sandbox_match_explanation_fields(array $fields): array
+    {
+        $rows = [];
+        foreach ($fields as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+
+            $field_key = self::sanitize_key(self::sandbox_explain_text($field['field'] ?? '', 80));
+            $label = self::sandbox_field_family_label($field_key);
+            $rows[] = [
+                'field' => $field_key,
+                'label' => $label !== '' ? $label : self::sandbox_explain_text($field['field'] ?? 'Field', 80),
+                'weight' => self::sandbox_explain_float($field['weight'] ?? 0.0, 6),
+                'match_count' => max(0, (int) ($field['match_count'] ?? 0)),
+                'weighted_match_count' => self::sandbox_explain_float($field['weighted_match_count'] ?? 0.0, 6),
+                'score_subtotal' => self::sandbox_explain_float($field['score_subtotal'] ?? 0.0, 12),
+                'score_subtotal_approximate' => !empty($field['score_subtotal_approximate']),
+                'terms' => self::sandbox_match_explanation_terms(
+                    is_array($field['terms'] ?? null) ? $field['terms'] : [],
+                    self::SANDBOX_MATCH_EXPLANATION_TERMS_LIMIT
+                ),
+                'terms_more' => !empty($field['terms_more']),
+            ];
+            if (count($rows) >= self::SANDBOX_MATCH_EXPLANATION_FIELDS_LIMIT) {
+                break;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param array<string,mixed> $term
+     * @return array<string,mixed>
+     */
+    private static function sandbox_match_explanation_term(array $term): array
+    {
+        $key = self::sandbox_explain_text($term['key'] ?? '', 120);
+        $surface = self::sandbox_explain_text($term['surface'] ?? '', 120);
+        $analyzed = self::sandbox_explain_text($term['term'] ?? '', 120);
+        $language = WP_FTS_TermNamespace::canonicalize_lang(self::sandbox_explain_text($term['lang'] ?? '', 20));
+        $rank_class = self::sanitize_key(self::sandbox_explain_text($term['rank_class'] ?? '', 40));
+
+        $text = $analyzed !== '' ? $analyzed : $key;
+        if ($surface !== '' && $analyzed !== '' && $surface !== $analyzed) {
+            $text = $surface . ' -> ' . $analyzed;
+        } elseif ($surface !== '') {
+            $text = $surface;
+        }
+
+        return [
+            'key' => $key,
+            'term' => $analyzed,
+            'surface' => $surface,
+            'lang' => $language,
+            'rank_class' => $rank_class,
+            'label' => trim(($language !== '' ? $language . ':' : '') . $text . ($rank_class !== '' ? ' ' . $rank_class : '')),
+        ];
+    }
+
+    private static function sandbox_explain_text(mixed $value, int $max_bytes = 120): string
+    {
+        if (!is_scalar($value)) {
+            return '';
+        }
+
+        return self::debug_truncate_text(self::sanitize_text((string) $value), $max_bytes);
+    }
+
+    private static function sandbox_explain_float(mixed $value, int $precision): float
+    {
+        if (!is_numeric($value)) {
+            return 0.0;
+        }
+
+        return round(max(0.0, (float) $value), max(0, min(12, $precision)));
+    }
+
+    private static function sandbox_field_family_label(string $field): string
+    {
+        if (isset(self::FIELD_BOOST_LABELS[$field]['label'])) {
+            return (string) self::FIELD_BOOST_LABELS[$field]['label'];
+        }
+
+        return $field !== '' ? ucwords(str_replace(['_', '-'], ' ', $field)) : '';
+    }
+
+    /**
+     * @param array<string,mixed> $controls
+     * @return array{requested_lang:string,query_lang:string,total:int,results:array<int,array<string,mixed>>}
+     */
+    private static function sandbox_search_results(string $query, string $selected_language, array $controls = [], bool $include_snippets = false, bool $include_explanations = false): array
     {
         $trace_started = microtime(true);
         $settings = self::settings();
@@ -6349,8 +6541,8 @@ final class WP_FTS_Plugin
             'highlight' => (bool) ($controls['highlight'] ?? $settings['highlight']),
             'prefix_matching' => (bool) ($controls['prefix_matching'] ?? $settings['prefix_matching']),
             'snippet_length' => self::clamp_int($controls['snippet_length'] ?? $settings['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
-            'explain' => $trace_id > 0,
-            'explain_result_matches' => $include_snippets,
+            'explain' => $include_explanations || $trace_id > 0,
+            'explain_result_matches' => $include_explanations || $include_snippets,
         ] + self::searcher_prefix_threshold_options($settings, $controls) + self::searcher_recency_boost_options($controls + $settings);
         foreach (['post_types' => 'post_type', 'post_statuses' => 'post_status'] as $control_key => $search_key) {
             if (isset($controls[$control_key]) && is_array($controls[$control_key]) && $controls[$control_key] !== []) {
@@ -6401,6 +6593,10 @@ final class WP_FTS_Plugin
                 $payload = $searcher->search($query, $search_options);
                 self::debug_add_timing($trace_id, 'storage/search', $search_started);
                 self::debug_set_search_explain($trace_id, $payload['explain'] ?? null);
+                $payload_explain = is_array($payload['explain'] ?? null) ? $payload['explain'] : [];
+                $explain_rows_by_doc = $include_explanations
+                    ? self::sandbox_explain_results_by_doc($payload_explain['results'] ?? null)
+                    : [];
                 $rows = is_array($payload['results'] ?? null) ? $payload['results'] : [];
                 self::debug_add_count($trace_id, 'search_batches');
                 self::debug_add_count($trace_id, 'candidate_rows', count($rows));
@@ -6431,7 +6627,11 @@ final class WP_FTS_Plugin
                     if ($include_snippets && isset($row['snippet']) && is_scalar($row['snippet']) && trim((string) $row['snippet']) !== '') {
                         self::debug_add_count($trace_id, 'snippets_generated');
                     }
-                    $visible[] = self::sandbox_result_row($row, $storage, $post_id);
+                    $visible_row = self::sandbox_result_row($row, $storage, $post_id);
+                    if ($include_explanations) {
+                        $visible_row['match_explanation'] = $explain_rows_by_doc[$post_id] ?? self::empty_sandbox_match_explanation();
+                    }
+                    $visible[] = $visible_row;
                     if (count($visible) >= $limit) {
                         break;
                     }
@@ -7927,7 +8127,7 @@ final class WP_FTS_Plugin
         echo ' data-date-after="' . self::esc_attr((string) ($controls['date_after'] ?? '')) . '"';
         echo ' data-date-before="' . self::esc_attr((string) ($controls['date_before'] ?? '')) . '"';
         echo ' data-show-indexed-terms="' . self::esc_attr($show_indexed_terms ? '1' : '0') . '">';
-        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Score</th><th scope="col">Language</th><th scope="col">Search result excerpt</th>';
+        echo '<thead><tr><th scope="col">Post ID</th><th scope="col">Title</th><th scope="col">Score</th><th scope="col">Language</th><th scope="col">Search result excerpt</th><th scope="col">Why matched</th>';
         if ($show_indexed_terms) {
             echo '<th scope="col">Indexed terms</th>';
         }
@@ -7942,6 +8142,9 @@ final class WP_FTS_Plugin
             echo '<td><code>' . self::esc_html($row['language']) . '</code></td>';
             echo '<td class="wp-fts-sandbox-detail-cell wp-fts-sandbox-snippet-cell wp-fts-sandbox-detail-pending" data-wp-fts-detail="snippet" data-post-id="' . self::esc_attr((string) $post_id) . '">';
             echo '<span class="spinner is-active" aria-hidden="true"></span> <span class="description">Loading excerpt...</span>';
+            echo '</td>';
+            echo '<td class="wp-fts-sandbox-detail-cell wp-fts-sandbox-explanation-cell wp-fts-sandbox-detail-pending" data-wp-fts-detail="explanation" data-post-id="' . self::esc_attr((string) $post_id) . '">';
+            echo '<span class="spinner is-active" aria-hidden="true"></span> <span class="description">Loading why matched...</span>';
             echo '</td>';
             if ($show_indexed_terms) {
                 echo '<td class="wp-fts-sandbox-detail-cell wp-fts-sandbox-terms-cell wp-fts-sandbox-detail-pending" data-wp-fts-detail="terms" data-post-id="' . self::esc_attr((string) $post_id) . '">';
@@ -7967,8 +8170,9 @@ final class WP_FTS_Plugin
     }
 
     var snippetCells = Array.prototype.slice.call(table.querySelectorAll('[data-wp-fts-detail="snippet"]'));
+    var explanationCells = Array.prototype.slice.call(table.querySelectorAll('[data-wp-fts-detail="explanation"]'));
     var termCells = Array.prototype.slice.call(table.querySelectorAll('[data-wp-fts-detail="terms"]'));
-    var detailCells = snippetCells.concat(termCells);
+    var detailCells = snippetCells.concat(explanationCells, termCells);
     if (detailCells.length === 0) {
         return;
     }
@@ -8006,6 +8210,107 @@ final class WP_FTS_Plugin
         detailCells.forEach(function(cell) {
             setCellMessage(cell, message, 'wp-fts-sandbox-detail-error');
         });
+    }
+
+    function scalarText(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        return String(value);
+    }
+
+    function numericText(value) {
+        var number = Number(value);
+        if (!Number.isFinite(number)) {
+            return '';
+        }
+        return Number.isInteger(number) ? String(number) : String(Math.round(number * 1000000) / 1000000);
+    }
+
+    function termLabel(term) {
+        if (!term || typeof term !== 'object') {
+            return '';
+        }
+        return scalarText(term.label || term.term || term.surface || term.key);
+    }
+
+    function renderExplanation(cell, explanation) {
+        cell.classList.remove('wp-fts-sandbox-detail-pending');
+        cell.classList.add('wp-fts-sandbox-match-explanation');
+        cell.textContent = '';
+
+        if (!explanation || typeof explanation !== 'object') {
+            setCellMessage(cell, 'Could not load match explanation.', 'wp-fts-sandbox-detail-error');
+            return;
+        }
+
+        var terms = Array.isArray(explanation.terms) ? explanation.terms : [];
+        var fields = Array.isArray(explanation.fields) ? explanation.fields : [];
+        if (terms.length === 0 && fields.length === 0) {
+            var empty = document.createElement('span');
+            empty.className = 'description';
+            empty.textContent = 'No match details available.';
+            cell.appendChild(empty);
+            return;
+        }
+
+        if (terms.length > 0) {
+            var termLine = document.createElement('div');
+            var termLabels = terms.map(termLabel).filter(function(label) {
+                return label !== '';
+            });
+            termLine.textContent = 'Matched terms: ' + termLabels.join(', ') + (explanation.terms_more ? ', ...' : '');
+            cell.appendChild(termLine);
+        }
+
+        fields.forEach(function(field) {
+            if (!field || typeof field !== 'object') {
+                return;
+            }
+
+            var parts = [];
+            var label = scalarText(field.label || field.field || 'Field');
+            var weight = numericText(field.weight);
+            var hits = numericText(field.match_count);
+            var weightedHits = numericText(field.weighted_match_count);
+            var score = numericText(field.score_subtotal);
+            if (weight !== '') {
+                parts.push('weight ' + weight);
+            }
+            if (hits !== '') {
+                parts.push('hits ' + hits);
+            }
+            if (weightedHits !== '') {
+                parts.push('weighted hits ' + weightedHits);
+            }
+            if (score !== '') {
+                parts.push((field.score_subtotal_approximate ? 'approx. score ' : 'score ') + score);
+            }
+
+            var fieldLine = document.createElement('div');
+            fieldLine.textContent = label + (parts.length > 0 ? ': ' + parts.join(', ') : '');
+            cell.appendChild(fieldLine);
+
+            var fieldTerms = Array.isArray(field.terms) ? field.terms : [];
+            if (fieldTerms.length > 0) {
+                var fieldTermLabels = fieldTerms.map(termLabel).filter(function(term) {
+                    return term !== '';
+                });
+                if (fieldTermLabels.length > 0) {
+                    var fieldTermLine = document.createElement('div');
+                    fieldTermLine.className = 'description';
+                    fieldTermLine.textContent = 'Field terms: ' + fieldTermLabels.join(', ') + (field.terms_more ? ', ...' : '');
+                    cell.appendChild(fieldTermLine);
+                }
+            }
+        });
+
+        if (explanation.fields_more) {
+            var more = document.createElement('div');
+            more.className = 'description';
+            more.textContent = 'More matching fields omitted.';
+            cell.appendChild(more);
+        }
     }
 
     var formData = new FormData();
@@ -8052,6 +8357,16 @@ final class WP_FTS_Plugin
                 return;
             }
             cell.innerHTML = row.snippet_html || '<span class="description">No excerpt available.</span>';
+        });
+
+        explanationCells.forEach(function(cell) {
+            var postId = cell.getAttribute('data-post-id') || '';
+            var row = rows[postId] || null;
+            if (!row) {
+                setCellMessage(cell, 'Could not load match explanation.', 'wp-fts-sandbox-detail-error');
+                return;
+            }
+            renderExplanation(cell, row.match_explanation || null);
         });
 
         termCells.forEach(function(cell) {
@@ -8572,7 +8887,7 @@ JS;
         $requested = array_fill_keys($post_ids, true);
         $storage = self::storage(false);
         $details = [];
-        $results = self::sandbox_search_results($query, $selected_language, $controls, true);
+        $results = self::sandbox_search_results($query, $selected_language, $controls, true, true);
 
         foreach ($results['results'] as $row) {
             $post_id = max(0, (int) ($row['post_id'] ?? 0));
@@ -8582,6 +8897,9 @@ JS;
 
             $detail = [
                 'snippet_html' => self::sanitize_frontend_snippet_html((string) ($row['snippet'] ?? '')),
+                'match_explanation' => is_array($row['match_explanation'] ?? null)
+                    ? $row['match_explanation']
+                    : self::empty_sandbox_match_explanation(),
             ];
 
             if ($include_indexed_terms) {
