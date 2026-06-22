@@ -74,6 +74,20 @@ third-party provider search APIs, invoke provider callbacks, run searches,
 mutate options, drain the queue, write index tables, or expose raw plugin
 basenames/provider payloads.
 
+Status also includes `language_pack_status`, a read-only runtime analyzer-pack
+summary for automation and support. JSON output preserves the nested object with
+the current site language, runtime support label/reason, matched base runtime
+language when a locale such as `en-US` is covered by `en`, fallback-language
+state, gzip/runtime-pack availability, bounded active runtime pack summaries,
+bounded fallback/unsupported/license-blocked language summaries, and an operator
+recommendation. Table output keeps the nested row and adds concise flattened
+rows such as `language_pack_site_language`,
+`language_pack_runtime_support`, `language_pack_active_runtime_languages`,
+`language_pack_gzip_status`, and `language_pack_recommendation`. This status is
+advisory only: it does not install analyzer packs, change analyzer options,
+create posts or demo content, drain queues, run indexing, or reindex existing
+content.
+
 To create or repair the schema and index content, run:
 
 ```sh

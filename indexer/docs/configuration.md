@@ -398,6 +398,16 @@ searches after content is reindexed. Custom pack paths remain option/filter
 configuration; the admin UI does not accept arbitrary filesystem paths, install
 external data, or create sample content.
 
+`wp fts status` reports the same runtime analyzer-pack posture through a
+read-only `language_pack_status` block. Use `wp fts status --format=json` for
+automation that needs the current site language, fallback-language state,
+matched base runtime language, gzip/runtime-pack availability, active runtime
+pack summaries, unsupported or license-blocked language guidance, and the
+recommended next action. The status block does not install packs, change
+analyzer options, create content, run indexing, or reindex existing content; use
+the analyzer-pack controls or the documented option/filter configuration, then
+reindex when analyzer behavior changes.
+
 `lemma_packs_by_lang` wins over `lemmatizer_packs_by_lang` for the same
 language. The legacy `polish_lemma_pack` / `polish_lemmatizer_pack` aliases map
 to `pl` when no explicit Polish entry is present. Explicit `false`, `null`,

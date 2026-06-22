@@ -922,6 +922,7 @@ final class WP_FTS_Plugin
             'queue_processor_schedule' => $queue_processor_schedule,
             'cron_runner' => $cron_runner,
             'search_provider_compatibility' => self::operator_search_provider_compatibility_status(),
+            'language_pack_status' => self::operator_language_pack_status(),
             'lock_state' => $lock['state'],
             'lock_active' => (bool) $lock['active'],
             'lock_mode' => $lock['mode'],
@@ -1020,6 +1021,279 @@ final class WP_FTS_Plugin
             'recommendation' => $recommendation,
             'detection_note' => $detection_note,
         ];
+    }
+
+    /**
+     * Return bounded, read-only runtime analyzer-pack status for operators.
+     *
+     * @return array<string,mixed>
+     */
+    private static function operator_language_pack_status(): array
+    {
+        $settings = self::settings();
+        $site_language = WP_FTS_TermNamespace::canonicalize_lang(self::site_language(), WP_FTS_TermNamespace::DEFAULT_LANG);
+        $top_language_config = self::top_language_pack_config_by_language();
+        $runtime_support = self::language_support_details($site_language, false);
+        $runtime_support_label = self::analyzer_pack_status_matrix_support_label($site_language, $runtime_support, $top_language_config);
+        $runtime_support_status = self::operator_language_pack_support_status($runtime_support_label, $runtime_support);
+        $raw_matched_language = trim((string) ($runtime_support['matched_language'] ?? ''));
+        $matched_language = $raw_matched_language !== ''
+            ? WP_FTS_TermNamespace::canonicalize_lang($raw_matched_language, WP_FTS_TermNamespace::DEFAULT_LANG)
+            : '';
+        $fallback_languages = self::site_fallback_languages();
+        $fallback_language_labels = self::operator_language_pack_language_labels($fallback_languages);
+        $runtime_statuses = self::runtime_analyzer_pack_statuses();
+        $active_statuses = [];
+        foreach ($runtime_statuses as $status) {
+            if (($status['status'] ?? '') === 'active') {
+                $active_statuses[] = $status;
+            }
+        }
+        $active_runtime_packs = self::operator_language_pack_active_runtime_pack_summaries($active_statuses);
+        $control_manifests = self::bundled_runtime_lemma_pack_control_manifests();
+        $gzip_available = WP_FTS_AnalyzerPackValidator::gzip_available();
+        $matrix_rows = self::analyzer_pack_status_matrix_rows();
+        $site_action = isset($matrix_rows[0]['action']) && is_scalar($matrix_rows[0]['action'])
+            ? (string) $matrix_rows[0]['action']
+            : '';
+        $recommendation = self::operator_language_pack_recommendation(
+            $runtime_support_label,
+            $site_action,
+            $gzip_available,
+            count($control_manifests)
+        );
+
+        return [
+            'site_language' => $site_language,
+            'site_language_label' => self::sandbox_language_display($site_language),
+            'runtime_support_status' => $runtime_support_status,
+            'runtime_support_label' => $runtime_support_label,
+            'runtime_support_full' => (bool) ($runtime_support['full'] ?? false),
+            'runtime_support_reason' => self::debug_truncate_text((string) ($runtime_support['reason'] ?? ''), 240),
+            'runtime_support' => [
+                'status' => $runtime_support_status,
+                'label' => $runtime_support_label,
+                'full' => (bool) ($runtime_support['full'] ?? false),
+                'reason' => self::debug_truncate_text((string) ($runtime_support['reason'] ?? ''), 240),
+                'matched_language' => $matched_language,
+                'matched_language_label' => $matched_language !== '' ? self::sandbox_language_display($matched_language) : '',
+            ],
+            'matched_runtime_language' => $matched_language,
+            'matched_runtime_language_label' => $matched_language !== '' ? self::sandbox_language_display($matched_language) : '',
+            'language_fallback_enabled' => !empty($settings['language_fallback']),
+            'fallback_languages' => $fallback_languages,
+            'fallback_language_labels' => $fallback_language_labels,
+            'fallback_summary' => self::operator_language_pack_fallback_summary($fallback_language_labels, !empty($settings['language_fallback'])),
+            'gzip_available' => $gzip_available,
+            'gzip_status' => $gzip_available ? 'available' : 'missing',
+            'runtime_pack_availability' => self::operator_language_pack_runtime_availability_summary($gzip_available, count($control_manifests)),
+            'bundled_runtime_pack_count' => count($control_manifests),
+            'active_runtime_pack_count' => count($active_statuses),
+            'active_runtime_packs' => $active_runtime_packs,
+            'active_runtime_languages' => self::operator_language_pack_active_runtime_language_summaries($active_runtime_packs),
+            'unsupported_language_summaries' => self::operator_language_pack_issue_summaries($matrix_rows),
+            'recommendation' => $recommendation,
+            'status_note' => 'Read-only advisory status. It does not install analyzer packs, change analyzer options, create content, run indexing, or reindex existing content.',
+        ];
+    }
+
+    /**
+     * @param array{label:string,full:bool,reason:string,matched_language:string} $support
+     */
+    private static function operator_language_pack_support_status(string $support_label, array $support): string
+    {
+        if (!empty($support['full'])) {
+            return 'full';
+        }
+        if ($support_label === 'Tokenizer-only support' || ($support['label'] ?? '') === 'Tokenizer pack') {
+            return 'tokenizer';
+        }
+        if (($support['label'] ?? '') === 'Fixture morphology') {
+            return 'fixture';
+        }
+
+        return 'fallback';
+    }
+
+    /**
+     * @param string[] $languages
+     * @return string[]
+     */
+    private static function operator_language_pack_language_labels(array $languages): array
+    {
+        $labels = [];
+        foreach ($languages as $language) {
+            if (!is_scalar($language)) {
+                continue;
+            }
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) $language, WP_FTS_TermNamespace::DEFAULT_LANG);
+            if ($language === '') {
+                continue;
+            }
+            $labels[] = self::sandbox_language_display($language);
+            if (count($labels) >= self::DEBUG_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return array_values(array_unique($labels));
+    }
+
+    /**
+     * @param string[] $fallback_language_labels
+     */
+    private static function operator_language_pack_fallback_summary(array $fallback_language_labels, bool $fallback_enabled): string
+    {
+        if ($fallback_language_labels === []) {
+            return $fallback_enabled ? 'Enabled; no fallback languages detected.' : 'Disabled; no fallback languages detected.';
+        }
+
+        return ($fallback_enabled ? 'Enabled' : 'Disabled') . ': ' . implode(', ', $fallback_language_labels);
+    }
+
+    private static function operator_language_pack_runtime_availability_summary(bool $gzip_available, int $bundled_pack_count): string
+    {
+        if ($bundled_pack_count <= 0) {
+            return 'No bundled opt-in runtime analyzer packs were found in this plugin install.';
+        }
+        if (!$gzip_available) {
+            return 'PHP gzip stream support is unavailable; bundled gzip-sharded runtime packs cannot be enabled until zlib/gzip support is installed.';
+        }
+
+        return 'PHP gzip stream support is available; bundled gzip-sharded runtime packs can be enabled from the analyzer-pack controls or configured externally.';
+    }
+
+    /**
+     * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $active_statuses
+     * @return array<int,array{language:string,language_label:string,kind:string,pack_id:string,fixture_only:bool,scope:string,summary:string}>
+     */
+    private static function operator_language_pack_active_runtime_pack_summaries(array $active_statuses): array
+    {
+        $summaries = [];
+        foreach ($active_statuses as $status) {
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) ($status['language'] ?? ''), WP_FTS_TermNamespace::DEFAULT_LANG);
+            if ($language === '') {
+                continue;
+            }
+            $kind = self::debug_truncate_text((string) ($status['kind'] ?? 'pack'), 40);
+            $pack_id = self::debug_truncate_text((string) ($status['pack_id'] ?? ''), 80);
+            $fixture_only = !empty($status['fixture_only']);
+            $scope = $fixture_only ? 'fixture' : 'full local pack';
+            $summary = self::sandbox_language_display($language) . ' ' . $kind . ' - ' . $scope;
+            if ($pack_id !== '') {
+                $summary .= ' (' . $pack_id . ')';
+            }
+
+            $summaries[] = [
+                'language' => $language,
+                'language_label' => self::sandbox_language_display($language),
+                'kind' => $kind,
+                'pack_id' => $pack_id,
+                'fixture_only' => $fixture_only,
+                'scope' => $scope,
+                'summary' => self::debug_truncate_text($summary, 160),
+            ];
+            if (count($summaries) >= self::DEBUG_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return $summaries;
+    }
+
+    /**
+     * @param array<int,array{language:string,language_label:string,kind:string,pack_id:string,fixture_only:bool,scope:string,summary:string}> $active_runtime_packs
+     * @return string[]
+     */
+    private static function operator_language_pack_active_runtime_language_summaries(array $active_runtime_packs): array
+    {
+        $summaries = [];
+        foreach ($active_runtime_packs as $pack) {
+            $summary = is_scalar($pack['summary'] ?? null) ? (string) $pack['summary'] : '';
+            if ($summary !== '') {
+                $summaries[] = self::debug_truncate_text($summary, 160);
+            }
+        }
+
+        return $summaries;
+    }
+
+    /**
+     * @param array<int,array{language_label:string,runtime_support:string,runtime_pack:string,sandbox_support:string,requirements:string,action:string}> $matrix_rows
+     * @return array<int,array{language_label:string,runtime_support:string,runtime_pack:string,requirements:string,action:string}>
+     */
+    private static function operator_language_pack_issue_summaries(array $matrix_rows): array
+    {
+        $site_summary = [];
+        $license_summaries = [];
+        $other_summaries = [];
+        foreach ($matrix_rows as $index => $row) {
+            if (!self::operator_language_pack_matrix_row_needs_attention($row)) {
+                continue;
+            }
+
+            $summary = [
+                'language_label' => self::debug_truncate_text((string) ($row['language_label'] ?? ''), 80),
+                'runtime_support' => self::debug_truncate_text((string) ($row['runtime_support'] ?? ''), 80),
+                'runtime_pack' => self::debug_truncate_text((string) ($row['runtime_pack'] ?? ''), 180),
+                'requirements' => self::debug_truncate_text((string) ($row['requirements'] ?? ''), 180),
+                'action' => self::debug_truncate_text((string) ($row['action'] ?? ''), 180),
+            ];
+            if ($index === 0) {
+                $site_summary[] = $summary;
+                continue;
+            }
+
+            $row_text = strtolower($summary['runtime_pack'] . ' ' . $summary['requirements'] . ' ' . $summary['action']);
+            if (str_contains($row_text, 'license')) {
+                $license_summaries[] = $summary;
+                continue;
+            }
+
+            $other_summaries[] = $summary;
+        }
+
+        return array_slice(array_merge($site_summary, $license_summaries, $other_summaries), 0, self::DEBUG_MAX_LIST_ITEMS);
+    }
+
+    /**
+     * @param array<string,mixed> $row
+     */
+    private static function operator_language_pack_matrix_row_needs_attention(array $row): bool
+    {
+        $runtime_support = (string) ($row['runtime_support'] ?? '');
+        if ($runtime_support !== 'Full morphology') {
+            return true;
+        }
+
+        $summary = strtolower(
+            (string) ($row['runtime_pack'] ?? '') . ' ' .
+            (string) ($row['requirements'] ?? '') . ' ' .
+            (string) ($row['action'] ?? '')
+        );
+        foreach (['license', 'unsupported', 'missing', 'fallback', 'blocked', 'disabled', 'ignored', 'fixture', 'tokenizer'] as $needle) {
+            if (str_contains($summary, $needle)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function operator_language_pack_recommendation(string $runtime_support_label, string $site_action, bool $gzip_available, int $bundled_pack_count): string
+    {
+        $site_action = self::debug_truncate_text($site_action, 200);
+        if ($site_action !== '') {
+            return $site_action . ' Status is advisory only; run a reindex after analyzer-pack changes.';
+        }
+        if ($bundled_pack_count > 0 && !$gzip_available) {
+            return 'Install or enable PHP zlib/gzip support before using bundled gzip analyzer packs, or configure an external pack and reindex existing content.';
+        }
+        if ($runtime_support_label === 'Full morphology') {
+            return 'Runtime morphology is available for the site language. Reindex existing content after analyzer-pack changes.';
+        }
+
+        return 'Configure an external analyzer pack, or accept conservative fallback. Reindex existing content after analyzer-pack changes.';
     }
 
     /**

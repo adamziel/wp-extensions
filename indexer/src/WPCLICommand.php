@@ -740,6 +740,7 @@ final class WP_FTS_WPCLI_Command
             ];
         }
         array_push($rows, ...$this->search_provider_compatibility_status_rows($data));
+        array_push($rows, ...$this->language_pack_status_rows($data));
 
         $this->format_items($format, $rows, ['field', 'value'], false);
     }
@@ -777,6 +778,63 @@ final class WP_FTS_WPCLI_Command
             'search_provider_compatibility_known_provider_count' => $compatibility['known_provider_count'] ?? 0,
             'search_provider_compatibility_known_provider_names' => implode(', ', $providerNames),
             'search_provider_compatibility_recommendation' => $compatibility['recommendation'] ?? '',
+        ];
+
+        $rows = [];
+        foreach ($fields as $field => $value) {
+            $rows[] = [
+                'field' => $field,
+                'value' => $this->bounded_cli_text($value, 240),
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Add concise human-table rows for the nested language-pack status block
+     * while preserving the original nested row for JSON and existing consumers.
+     *
+     * @param array<string,mixed> $data
+     * @return array<int,array{field:string,value:string}>
+     */
+    private function language_pack_status_rows(array $data): array
+    {
+        $status = $data['language_pack_status'] ?? null;
+        if (!is_array($status)) {
+            return [];
+        }
+
+        $activeLanguages = [];
+        if (isset($status['active_runtime_languages']) && is_array($status['active_runtime_languages'])) {
+            foreach ($status['active_runtime_languages'] as $summary) {
+                $bounded = $this->bounded_cli_text($summary, 120);
+                if ($bounded !== '') {
+                    $activeLanguages[] = $bounded;
+                }
+            }
+        }
+
+        $runtimeSupport = $this->bounded_cli_text($status['runtime_support_label'] ?? '', 120);
+        $matchedLanguage = $this->bounded_cli_text($status['matched_runtime_language_label'] ?? '', 80);
+        if ($matchedLanguage !== '') {
+            $runtimeSupport = trim($runtimeSupport . ' via ' . $matchedLanguage);
+        }
+
+        $gzipStatus = $this->bounded_cli_text($status['gzip_status'] ?? '', 40);
+        $availability = $this->bounded_cli_text($status['runtime_pack_availability'] ?? '', 180);
+        if ($availability !== '') {
+            $gzipStatus = trim($gzipStatus . ': ' . $availability);
+        }
+
+        $fields = [
+            'language_pack_site_language' => $status['site_language_label'] ?? $status['site_language'] ?? '',
+            'language_pack_runtime_support' => $runtimeSupport,
+            'language_pack_fallback_languages' => $status['fallback_summary'] ?? '',
+            'language_pack_active_runtime_pack_count' => $status['active_runtime_pack_count'] ?? 0,
+            'language_pack_active_runtime_languages' => implode(', ', $activeLanguages),
+            'language_pack_gzip_status' => $gzipStatus,
+            'language_pack_recommendation' => $status['recommendation'] ?? '',
         ];
 
         $rows = [];

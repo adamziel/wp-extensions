@@ -8083,6 +8083,126 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same(1, count($fake->docs), 'status should not index additional content');
 });
 
+test_case('operator status reports unsupported language pack fallback without mutating state', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_locale'] = 'qaa';
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'lemma_packs_by_lang' => [
+            'qaa' => '/tmp/private/status-secret-manifest.json',
+        ],
+    ];
+    $optionsBefore = $GLOBALS['wp_fts_test_options'];
+    $docsBefore = $fake->docs;
+
+    try {
+        $status = WP_FTS_Plugin::operator_status();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $languagePack = $status['language_pack_status'] ?? null;
+    assert_true(is_array($languagePack), 'operator status should expose language pack status as a bounded object');
+    assert_same('qaa', $languagePack['site_language'] ?? null, 'language pack status should expose the current site language');
+    assert_same('QAA (qaa)', $languagePack['site_language_label'] ?? null, 'language pack status should expose a human site-language label');
+    assert_same('fallback', $languagePack['runtime_support_status'] ?? null, 'unsupported site language should report fallback runtime support');
+    assert_same('Conservative fallback', $languagePack['runtime_support_label'] ?? null, 'unsupported site language should report the existing fallback support label');
+    assert_contains('No active analyzer pack covers this language', (string) ($languagePack['runtime_support_reason'] ?? ''), 'unsupported site language should explain why fallback is used');
+    assert_same('', $languagePack['matched_runtime_language'] ?? null, 'unsupported site language should not invent a matched runtime language');
+    assert_same(true, $languagePack['language_fallback_enabled'] ?? null, 'language pack status should expose language fallback setting state');
+    assert_same(['QAA (qaa)'], $languagePack['fallback_language_labels'] ?? null, 'unsupported base language should report the bounded fallback language list');
+    assert_true(is_array($languagePack['unsupported_language_summaries'] ?? null), 'language pack status should include bounded fallback/license summaries');
+    assert_true(count($languagePack['unsupported_language_summaries']) <= 8, 'language pack fallback/license summaries should stay bounded');
+    assert_contains('Urdu (ur)', json_encode($languagePack['unsupported_language_summaries'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), 'bounded language pack summaries should retain license-blocked language guidance');
+    assert_contains('Configure an external pack, or accept conservative fallback', (string) ($languagePack['recommendation'] ?? ''), 'unsupported site language should guide operators without promising nonexistent controls');
+    assert_true(!str_contains((string) ($languagePack['recommendation'] ?? ''), 'Enable the bundled pack'), 'unsupported site language should not promise a bundled-pack control');
+    $encoded = json_encode($languagePack, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    assert_true(!str_contains($encoded, '/tmp/private'), 'language pack status should not expose manifest paths');
+    assert_true(!str_contains($encoded, 'status-secret-manifest'), 'language pack status should not expose unsafe path basenames from invalid options');
+    assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'language pack status should not mutate analyzer pack options');
+    assert_same($docsBefore, $fake->docs, 'language pack status should not index content');
+    assert_same([], $fake->terms, 'language pack status should not write terms');
+    assert_same([], $fake->queries, 'language pack status should not run schema repair or storage writes');
+});
+
+test_case('wp-cli status reports language pack base locale coverage through active runtime pack', function (): void {
+    global $wpdb;
+
+    $packDir = temp_directory_path('status_en_base_pack');
+
+    try {
+        $manifest = write_synthetic_full_analyzer_pack($packDir, 3, 1, 'en', 'en-synthetic-status-pack');
+        $oldWpdb = $wpdb ?? null;
+        $fake = new WP_FTS_Test_WPDB();
+        $wpdb = $fake;
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_locale'] = 'en_US';
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'lemmatizer_packs_by_lang' => [
+                'en' => $manifest,
+            ],
+        ];
+        $optionsBefore = $GLOBALS['wp_fts_test_options'];
+
+        try {
+            $command = new WP_FTS_WPCLI_Command();
+            $human = wp_fts_test_capture_cli(static function () use ($command): void {
+                $command->status([], []);
+            });
+            $raw = wp_fts_test_capture_cli(static function () use ($command): void {
+                $command->status([], ['format' => 'json']);
+            });
+            $payload = wp_fts_test_decode_cli_json_object($raw);
+        } finally {
+            $wpdb = $oldWpdb;
+        }
+
+        $languagePack = $payload['language_pack_status'] ?? null;
+        assert_true(is_array($languagePack), 'status JSON should preserve the nested language pack status block');
+        assert_same('en-US', $languagePack['site_language'] ?? null, 'language pack status should expose canonical locale language');
+        assert_same('English (en-US)', $languagePack['site_language_label'] ?? null, 'language pack status should expose locale label');
+        assert_same('full', $languagePack['runtime_support_status'] ?? null, 'en-US should report full support through the active base English pack');
+        assert_same('Full morphology', $languagePack['runtime_support_label'] ?? null, 'en-US should preserve the runtime support label');
+        assert_same('en', $languagePack['matched_runtime_language'] ?? null, 'en-US should report the matched base runtime language');
+        assert_same('English (en)', $languagePack['matched_runtime_language_label'] ?? null, 'en-US should report the matched base runtime language label');
+        assert_contains('English morphology is available through the active base-language analyzer pack English (en)', (string) ($languagePack['runtime_support_reason'] ?? ''), 'en-US should explain base-language analyzer coverage');
+        assert_contains('English (en-US)', (string) ($languagePack['fallback_summary'] ?? ''), 'language pack status should summarize locale fallback languages');
+        assert_contains('English (en)', (string) ($languagePack['fallback_summary'] ?? ''), 'language pack status should summarize base fallback language');
+        assert_true(($languagePack['active_runtime_pack_count'] ?? 0) >= 1, 'language pack status should count active runtime packs');
+        assert_true(is_array($languagePack['active_runtime_packs'] ?? null), 'language pack status should expose bounded active runtime pack summaries');
+        assert_true(count($languagePack['active_runtime_packs']) <= 8, 'active runtime pack summaries should be bounded');
+        assert_contains('en-synthetic-status-pack', json_encode($languagePack['active_runtime_packs'], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR), 'active runtime pack summaries should expose safe pack ids');
+        assert_true(is_bool($languagePack['gzip_available'] ?? null), 'language pack status should expose gzip availability as a boolean');
+        assert_true(in_array($languagePack['gzip_status'] ?? null, ['available', 'missing'], true), 'language pack status should expose concise gzip status');
+        assert_contains('Read-only advisory status', (string) ($languagePack['status_note'] ?? ''), 'language pack status should make read-only scope explicit');
+        assert_contains("language_pack_status\t", $human, 'default status output should preserve the nested language pack row');
+        assert_contains("language_pack_site_language\tEnglish (en-US)", $human, 'default status output should expose flattened site language');
+        assert_contains("language_pack_runtime_support\tFull morphology via English (en)", $human, 'default status output should expose flattened runtime support');
+        assert_contains("language_pack_fallback_languages\tEnabled: English (en-US), English (en)", $human, 'default status output should expose flattened fallback languages');
+        assert_contains("language_pack_active_runtime_pack_count\t", $human, 'default status output should expose active runtime pack count');
+        assert_contains("language_pack_active_runtime_languages\t", $human, 'default status output should expose active runtime language summaries');
+        assert_contains("language_pack_gzip_status\t", $human, 'default status output should expose gzip/runtime status');
+        assert_contains("language_pack_recommendation\t", $human, 'default status output should expose language-pack recommendation');
+        $encodedPayload = json_encode($languagePack, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        assert_true(!str_contains($encodedPayload, $packDir), 'language pack status should not expose local pack directories');
+        assert_true(!str_contains($encodedPayload, $manifest), 'language pack status should not expose manifest paths');
+        assert_true(!str_contains($human, $packDir), 'default status output should not expose local pack directories');
+        assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'wp-cli status should not mutate analyzer pack options while rendering language-pack status');
+        assert_same([], $fake->docs, 'wp-cli status should not create index documents while rendering language-pack status');
+        assert_same([], $fake->terms, 'wp-cli status should not write terms while rendering language-pack status');
+        assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'wp-cli status should not schedule work while rendering language-pack status');
+    } finally {
+        remove_directory_tree($packDir);
+        wp_fts_test_reset_wordpress_fakes();
+    }
+});
+
 test_case('wp-cli status reports expired lock diagnostics without exposing token data', function (): void {
     global $wpdb;
 
