@@ -55,6 +55,8 @@ Do not ship:
 - `review-artifacts/`;
 - `tests/`;
 - `goal.md`;
+- Composer auth files such as `indexer/auth.json` and
+  `indexer/.composer/auth.json`;
 - `resources/sources/` raw upstream source submodules such as Jieba and
   UniMorph checkouts;
 - generated preview/archive files such as `playground/indexer-preview.zip`;
@@ -201,8 +203,12 @@ ZIP: the collector resolves the local ref/SHA without fetching, rejects the
 current target commit, verifies release-build tooling and the committed
 Composer lockfile at that ref, archives only the package source paths into
 temporary storage, and builds the previous ZIP with isolated Composer
-home/auth, an existing local Composer package cache when available, and network
-access disabled. The lane then builds the current ZIP in temporary storage,
+home/auth, an existing local Composer package cache when available, network
+access disabled, and credential-capable environment variables scrubbed before
+the historical builder or nested Composer process can inherit them. Historical
+refs containing Composer auth files such as `indexer/auth.json` or
+`indexer/.composer/auth.json` are rejected before checkout/archive. The lane then
+builds the current ZIP in temporary storage,
 installs the previous package in a disposable WordPress/MariaDB stack, upgrades
 to the current package, checks schema version/status after upgrade, repair
 idempotence after upgrade, search continuity for generated fixture content,
@@ -248,10 +254,12 @@ php indexer/tools/build-release-zip.php \
 
 The builder stages `indexer/` through `.distignore`, copies the local
 `components/full-text-search` package for Composer's path repository, runs
-`composer install --no-dev --optimize-autoloader`, removes vendor development
-directories such as `vendor/bin`, `test`, `tests`, `Tests`, and `coverage`, then
-prunes staged dotfiles anywhere in the package before ZIP creation. This removes
-nested Composer dependency files such as
+`composer install --no-dev --optimize-autoloader` with a scrubbed Composer
+environment, removes vendor development directories such as `vendor/bin`,
+`test`, `tests`, `Tests`, and `coverage`. The builder prunes staged dotfiles anywhere in the package before ZIP creation,
+and refuses staged Composer auth files such as `indexer/auth.json` or
+`indexer/.composer/auth.json` before dependency installation so Composer cannot
+read source-tree credentials. This removes nested Composer dependency files such as
 `indexer/vendor/wamania/php-stemmer/.gitignore` before they can enter the
 archive. If multiple builds use the same `--build-dir`, they are serialized with
 the same advisory lock used by the readiness gate.
@@ -267,9 +275,10 @@ The listing should include `indexer/resources/analyzer-packs/`,
 include `.cao`, root `indexer/tests/`, dependency-internal vendor tests such as
 `indexer/vendor/wp-php-toolkit/full-text-search/tests/*`, `indexer/vendor/bin/`,
 dependency dotfiles such as `indexer/vendor/wamania/php-stemmer/.gitignore`,
-`review-artifacts`, `resources/sources`, or the nested
+Composer auth files such as `indexer/auth.json` or
+`indexer/.composer/auth.json`, `review-artifacts`, `resources/sources`, or the nested
 `playground/indexer-preview.zip` preview archive. The builder fails before ZIP
-creation if the staged package still contains prohibited dotfiles, root tests,
+creation if the staged package still contains Composer auth files, prohibited dotfiles, root tests,
 review artifacts, raw source checkouts, vendor binaries, or vendor test/coverage
 fixtures.
 

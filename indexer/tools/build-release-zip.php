@@ -25,6 +25,8 @@ final class WP_FTS_ReleasePackageBuilder
         'resources/sources',
         'review-artifacts',
         'tests',
+        'auth.json',
+        '.composer',
         'vendor/bin',
     ];
 
@@ -143,6 +145,14 @@ final class WP_FTS_ReleasePackageBuilder
             self::trailing_slash($componentStage),
         ]);
 
+        $composerAuthPaths = self::find_composer_auth_package_paths($stagePlugin);
+        if ($composerAuthPaths !== []) {
+            throw new RuntimeException(
+                "Staged package contains Composer auth files before dependency installation:\n" . implode("\n", $composerAuthPaths)
+            );
+        }
+
+        $composerEnv = self::composer_install_environment(self::current_environment(), $buildDir);
         self::run_command([
             'composer',
             'install',
@@ -150,7 +160,7 @@ final class WP_FTS_ReleasePackageBuilder
             '--optimize-autoloader',
             '--no-interaction',
             "--working-dir={$stagePlugin}",
-        ]);
+        ], $composerEnv);
 
         $removedPaths = self::prune_staged_package($stagePlugin);
         $prohibitedPaths = self::find_prohibited_package_paths($stagePlugin);
@@ -222,6 +232,16 @@ final class WP_FTS_ReleasePackageBuilder
             RecursiveIteratorIterator::CHILD_FIRST
         );
         foreach ($iterator as $item) {
+            $relativePath = self::relative_path($stagePlugin, $item->getPathname());
+            if (self::is_composer_auth_relative_path($relativePath)) {
+                $path = $item->getPathname();
+                if (file_exists($path) || is_link($path)) {
+                    $removed[] = self::package_path($relativePath);
+                    self::remove_path($path);
+                }
+                continue;
+            }
+
             $basename = $item->getBasename();
             if ($basename === '' || $basename[0] !== '.') {
                 continue;
@@ -232,7 +252,7 @@ final class WP_FTS_ReleasePackageBuilder
                 continue;
             }
 
-            $removed[] = self::package_path(self::relative_path($stagePlugin, $path));
+            $removed[] = self::package_path($relativePath);
             self::remove_path($path);
         }
 
@@ -267,6 +287,10 @@ final class WP_FTS_ReleasePackageBuilder
                     $prohibited[] = self::package_path($relativePath);
                     continue 2;
                 }
+            }
+            if (self::is_composer_auth_relative_path($relativePath)) {
+                $prohibited[] = self::package_path($relativePath);
+                continue;
             }
 
             if (str_starts_with($relativePath, 'vendor/')) {
@@ -422,16 +446,17 @@ final class WP_FTS_ReleasePackageBuilder
 
     /**
      * @param array<int,string> $command
+     * @param array<string,string>|null $env
      * @return array{exit:int,stdout:string,stderr:string}
      */
-    private static function run_command(array $command): array
+    private static function run_command(array $command, ?array $env = null): array
     {
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
-        $process = proc_open($command, $descriptors, $pipes);
+        $process = proc_open($command, $descriptors, $pipes, null, $env);
         if (!is_resource($process)) {
             throw new RuntimeException('Could not start command: ' . self::format_command($command));
         }
@@ -460,6 +485,142 @@ final class WP_FTS_ReleasePackageBuilder
             'stdout' => $stdout,
             'stderr' => $stderr,
         ];
+    }
+
+    /**
+     * @param array<string,string> $env
+     * @return array<string,string>
+     */
+    public static function composer_install_environment(array $env, string $buildDir): array
+    {
+        $composerHome = (string) ($env['COMPOSER_HOME'] ?? '');
+        if ($composerHome === '') {
+            $composerHome = rtrim($buildDir, '/') . '/composer-home';
+        }
+        self::ensure_directory($composerHome);
+
+        $composerCacheDir = (string) ($env['COMPOSER_CACHE_DIR'] ?? '');
+        if ($composerCacheDir === '') {
+            $composerCacheDir = rtrim($buildDir, '/') . '/composer-cache';
+        }
+        self::ensure_directory($composerCacheDir);
+
+        return self::scrub_process_environment($env, [
+            'COMPOSER_HOME' => $composerHome,
+            'COMPOSER_CACHE_DIR' => $composerCacheDir,
+        ]);
+    }
+
+    /**
+     * @param array<string,string> $env
+     * @param array<string,string> $overrides
+     * @return array<string,string>
+     */
+    private static function scrub_process_environment(array $env, array $overrides = []): array
+    {
+        $safe = [];
+        foreach ($env as $key => $value) {
+            if (!is_string($key) || !is_scalar($value) || !self::is_safe_process_environment_key($key)) {
+                continue;
+            }
+            $safe[$key] = (string) $value;
+        }
+
+        foreach ($overrides as $key => $value) {
+            if (!self::is_safe_process_environment_key($key)) {
+                continue;
+            }
+            $safe[$key] = $value;
+        }
+
+        ksort($safe, SORT_STRING);
+
+        return $safe;
+    }
+
+    private static function is_safe_process_environment_key(string $key): bool
+    {
+        $upper = strtoupper($key);
+        if (str_starts_with($upper, 'GIT_') || str_starts_with($upper, 'SSH_')) {
+            return false;
+        }
+        if (preg_match('/(?:TOKEN|SECRET|PASSWORD|PASS(?:PHRASE)?|CREDENTIAL|AUTH|COOKIE|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY)/i', $key) === 1) {
+            return false;
+        }
+
+        return in_array($upper, [
+            'COMPOSER_HOME',
+            'COMPOSER_CACHE_DIR',
+            'COMPOSER_DISABLE_NETWORK',
+            'PATH',
+            'TEMP',
+            'TMP',
+            'TMPDIR',
+            'LANG',
+            'LC_ALL',
+            'LC_CTYPE',
+            'SYSTEMROOT',
+            'WINDIR',
+            'COMSPEC',
+            'PATHEXT',
+        ], true);
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private static function current_environment(): array
+    {
+        $env = getenv();
+        if (!is_array($env)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($env as $key => $value) {
+            if (is_string($key) && is_scalar($value)) {
+                $normalized[$key] = (string) $value;
+            }
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function find_composer_auth_package_paths(string $stagePlugin): array
+    {
+        $stagePlugin = self::existing_directory($stagePlugin, 'staged plugin');
+        $paths = [];
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($stagePlugin, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+
+        foreach ($iterator as $item) {
+            $relativePath = self::relative_path($stagePlugin, $item->getPathname());
+            if (self::is_composer_auth_relative_path($relativePath)) {
+                $paths[] = self::package_path($relativePath);
+            }
+        }
+
+        $paths = array_values(array_unique($paths));
+        sort($paths, SORT_STRING);
+
+        return $paths;
+    }
+
+    private static function is_composer_auth_relative_path(string $relativePath): bool
+    {
+        $relativePath = strtolower(ltrim(str_replace('\\', '/', $relativePath), '/'));
+        if ($relativePath === '') {
+            return false;
+        }
+
+        return basename($relativePath) === 'auth.json'
+            || $relativePath === '.composer'
+            || str_starts_with($relativePath, '.composer/');
     }
 
     /**

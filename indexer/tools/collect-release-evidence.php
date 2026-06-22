@@ -827,11 +827,15 @@ final class WP_FTS_ReleaseEvidenceCollector
             }
 
             $zipPath = $tempRoot . '/previous-wp-fts-indexer.zip';
+            $buildEnv = self::previous_package_build_environment(
+                $this->env,
+                $tempRoot . '/composer-home',
+                $composerCacheDir
+            );
             $buildCommand = [
                 'env',
-                'COMPOSER_HOME=' . $tempRoot . '/composer-home',
-                'COMPOSER_CACHE_DIR=' . $composerCacheDir,
-                'COMPOSER_DISABLE_NETWORK=1',
+                '-i',
+                ...self::environment_assignments($buildEnv),
                 PHP_BINARY,
                 $checkoutRoot . '/indexer/tools/build-release-zip.php',
                 '--plugin-src=' . $checkoutRoot . '/indexer',
@@ -1751,8 +1755,11 @@ final class WP_FTS_ReleaseEvidenceCollector
 
             $basename = basename($path);
             if ($basename === '.env'
+                || strtolower($basename) === 'auth.json'
                 || str_ends_with(strtolower($basename), '.pem')
                 || str_ends_with(strtolower($basename), '.key')
+                || str_contains($path, '/.composer/')
+                || str_starts_with($path, '.composer/')
                 || str_contains($path, '/.ssh/')
                 || str_starts_with($path, '.ssh/')
             ) {
@@ -1825,6 +1832,88 @@ final class WP_FTS_ReleaseEvidenceCollector
         return $basename !== '.env'
             && !str_ends_with($basename, '.pem')
             && !str_ends_with($basename, '.key');
+    }
+
+    /**
+     * @param array<string,string> $env
+     * @return array<string,string>
+     */
+    private static function previous_package_build_environment(array $env, string $composerHome, string $composerCacheDir): array
+    {
+        return self::scrub_process_environment($env, [
+            'COMPOSER_HOME' => $composerHome,
+            'COMPOSER_CACHE_DIR' => $composerCacheDir,
+            'COMPOSER_DISABLE_NETWORK' => '1',
+        ]);
+    }
+
+    /**
+     * @param array<string,string> $env
+     * @param array<string,string> $overrides
+     * @return array<string,string>
+     */
+    private static function scrub_process_environment(array $env, array $overrides = []): array
+    {
+        $safe = [];
+        foreach ($env as $key => $value) {
+            if (!is_string($key) || !is_scalar($value) || !self::is_safe_process_environment_key($key)) {
+                continue;
+            }
+            $safe[$key] = (string) $value;
+        }
+
+        foreach ($overrides as $key => $value) {
+            if (!self::is_safe_process_environment_key($key)) {
+                continue;
+            }
+            $safe[$key] = $value;
+        }
+
+        ksort($safe, SORT_STRING);
+
+        return $safe;
+    }
+
+    private static function is_safe_process_environment_key(string $key): bool
+    {
+        $upper = strtoupper($key);
+        if (str_starts_with($upper, 'GIT_') || str_starts_with($upper, 'SSH_')) {
+            return false;
+        }
+        if (preg_match('/(?:TOKEN|SECRET|PASSWORD|PASS(?:PHRASE)?|CREDENTIAL|AUTH|COOKIE|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY)/i', $key) === 1) {
+            return false;
+        }
+
+        return in_array($upper, [
+            'COMPOSER_HOME',
+            'COMPOSER_CACHE_DIR',
+            'COMPOSER_DISABLE_NETWORK',
+            'PATH',
+            'TEMP',
+            'TMP',
+            'TMPDIR',
+            'LANG',
+            'LC_ALL',
+            'LC_CTYPE',
+            'SYSTEMROOT',
+            'WINDIR',
+            'COMSPEC',
+            'PATHEXT',
+        ], true);
+    }
+
+    /**
+     * @param array<string,string> $env
+     * @return array<int,string>
+     */
+    private static function environment_assignments(array $env): array
+    {
+        $assignments = [];
+        foreach ($env as $key => $value) {
+            $assignments[] = $key . '=' . $value;
+        }
+
+        return $assignments;
     }
 
     private static function ensure_directory(string $path): void

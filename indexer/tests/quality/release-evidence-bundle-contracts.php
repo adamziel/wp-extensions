@@ -378,6 +378,12 @@ function wp_fts_release_evidence_contract_previous_ref_runner(string $mode = 'pa
                 if ($mode === 'secret-path') {
                     $paths[] = 'indexer/.env';
                 }
+                if ($mode === 'composer-auth-root') {
+                    $paths[] = 'indexer/auth.json';
+                }
+                if ($mode === 'composer-auth-home') {
+                    $paths[] = 'indexer/.composer/auth.json';
+                }
 
                 return ['exit' => 0, 'stdout' => implode("\n", $paths) . "\n", 'stderr' => ''];
             }
@@ -447,14 +453,15 @@ function wp_fts_release_evidence_contract_fake_report(array $options): array
 
 /**
  * @param array<string,mixed> $options
+ * @param array<string,string>|null $env
  * @return array<string,mixed>
  */
-function wp_fts_release_evidence_contract_fake_report_with_runner(callable $runner, array $options): array
+function wp_fts_release_evidence_contract_fake_report_with_runner(callable $runner, array $options, ?array $env = null): array
 {
     $root = dirname(__DIR__, 2);
     $collector = new WP_FTS_ReleaseEvidenceCollector(
         $runner,
-        wp_fts_release_evidence_contract_clean_env()
+        $env ?? wp_fts_release_evidence_contract_clean_env()
     );
 
     return $collector->collect(array_merge([
@@ -693,16 +700,91 @@ test_case('quality release evidence collector runs Docker upgrade with a generat
     wp_fts_release_evidence_contract_same('passed', $details['upgrade_evidence_status'] ?? null, 'collector should record passed upgrade evidence');
     wp_fts_release_evidence_contract_same('not_run', $details['multisite_evidence_status'] ?? null, 'collector should preserve the multisite not-run boundary');
 
-    $sawNetworkDisabledBuild = false;
+    $buildCommands = [];
     foreach ($observed as $command) {
         if (($command[0] ?? '') !== 'env') {
             continue;
         }
-        $sawNetworkDisabledBuild = in_array('COMPOSER_DISABLE_NETWORK=1', $command, true)
-            && count(array_filter($command, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_HOME='))) === 1
-            && count(array_filter($command, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_CACHE_DIR='))) === 1;
+        $buildCommands[] = $command;
     }
-    wp_fts_release_evidence_contract_true($sawNetworkDisabledBuild, 'generated previous package build should isolate Composer and disable network access');
+    wp_fts_release_evidence_contract_same(1, count($buildCommands), 'generated previous package build should launch one isolated env command');
+
+    $buildCommand = $buildCommands[0];
+    wp_fts_release_evidence_contract_same('-i', $buildCommand[1] ?? null, 'generated previous package build should clear inherited process environment');
+    wp_fts_release_evidence_contract_true(in_array('COMPOSER_DISABLE_NETWORK=1', $buildCommand, true), 'generated previous package build should disable Composer network access');
+    wp_fts_release_evidence_contract_same(1, count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_HOME='))), 'generated previous package build should pass one isolated Composer home');
+    wp_fts_release_evidence_contract_same(1, count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_CACHE_DIR='))), 'generated previous package build should pass one isolated Composer cache');
+
+    foreach (['COMPOSER_AUTH=', 'GITHUB_TOKEN=', 'GH_TOKEN=', 'GIT_ASKPASS=', 'SSH_AUTH_SOCK=', 'WP_FTS_SECRET_TOKEN='] as $blockedPrefix) {
+        wp_fts_release_evidence_contract_true(
+            count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, $blockedPrefix))) === 0,
+            "generated previous package builder environment should not include {$blockedPrefix}"
+        );
+    }
+});
+
+test_case('quality release evidence collector scrubs dummy credentials from generated previous package build environment', function (): void {
+    $observed = [];
+    wp_fts_release_evidence_contract_fake_report_with_runner(
+        wp_fts_release_evidence_contract_previous_ref_runner('pass', $observed),
+        [
+            'run_docker_upgrade_multisite_smoke' => true,
+            'previous_direct_package_ref' => 'refs/tags/previous-release',
+        ],
+        array_merge(wp_fts_release_evidence_contract_clean_env(), [
+            'COMPOSER_AUTH' => 'review-dummy-token',
+            'GITHUB_TOKEN' => 'review-dummy-token',
+            'GH_TOKEN' => 'review-dummy-token',
+            'GIT_ASKPASS' => '/tmp/review-dummy-askpass',
+            'SSH_AUTH_SOCK' => '/tmp/review-dummy-ssh-agent.sock',
+            'WP_FTS_SECRET_TOKEN' => 'review-dummy-token',
+            'PATH' => (string) getenv('PATH'),
+        ])
+    );
+
+    $buildCommands = array_values(array_filter(
+        $observed,
+        static fn(array $command): bool => ($command[0] ?? '') === 'env'
+    ));
+    wp_fts_release_evidence_contract_same(1, count($buildCommands), 'credential probe should observe one generated previous package build command');
+
+    $buildCommand = $buildCommands[0];
+    wp_fts_release_evidence_contract_same('-i', $buildCommand[1] ?? null, 'credential probe build should clear inherited process environment');
+    foreach (['COMPOSER_AUTH=', 'GITHUB_TOKEN=', 'GH_TOKEN=', 'GIT_ASKPASS=', 'SSH_AUTH_SOCK=', 'WP_FTS_SECRET_TOKEN='] as $blockedPrefix) {
+        wp_fts_release_evidence_contract_true(
+            count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, $blockedPrefix))) === 0,
+            "credential probe should not pass {$blockedPrefix} to the historical builder or its nested Composer process"
+        );
+    }
+    wp_fts_release_evidence_contract_true(in_array('COMPOSER_DISABLE_NETWORK=1', $buildCommand, true), 'credential probe should preserve Composer network disablement');
+    wp_fts_release_evidence_contract_true(count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_HOME='))) === 1, 'credential probe should preserve isolated Composer home');
+    wp_fts_release_evidence_contract_true(count(array_filter($buildCommand, static fn(string $arg): bool => str_starts_with($arg, 'COMPOSER_CACHE_DIR='))) === 1, 'credential probe should preserve isolated Composer cache');
+});
+
+test_case('quality release evidence collector rejects previous refs with Composer auth files before build', function (): void {
+    foreach (['composer-auth-root' => 'indexer/auth.json', 'composer-auth-home' => 'indexer/.composer/auth.json'] as $mode => $path) {
+        $observed = [];
+        $lane = wp_fts_release_evidence_contract_lane(
+            wp_fts_release_evidence_contract_fake_report_with_runner(
+                wp_fts_release_evidence_contract_previous_ref_runner($mode, $observed),
+                [
+                    'run_docker_upgrade_multisite_smoke' => true,
+                    'previous_direct_package_ref' => 'refs/tags/previous-release',
+                ]
+            ),
+            'docker_disposable_upgrade_multisite_smoke'
+        );
+        $details = is_array($lane['details'] ?? null) ? $lane['details'] : [];
+
+        wp_fts_release_evidence_contract_same('unavailable', $lane['status'] ?? null, "{$path} should make generated previous package unavailable");
+        wp_fts_release_evidence_contract_same('previous_ref_contains_secret_like_paths', $details['previous_package_policy'] ?? null, "{$path} should be rejected as a secret-like source path");
+        foreach ($observed as $command) {
+            wp_fts_release_evidence_contract_true(
+                ($command[0] ?? '') !== 'env',
+                "{$path} should stop before launching the historical release builder"
+            );
+        }
+    }
 });
 
 test_case('quality release evidence collector reports generated previous package build prerequisites as unavailable', function (): void {

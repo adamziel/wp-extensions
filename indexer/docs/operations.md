@@ -146,8 +146,11 @@ path resolves only local history, rejects the current target commit, requires
 the release builder and Composer lockfile at the previous ref, archives package
 source paths into temporary storage, and runs the previous ZIP build with
 isolated Composer home/auth, an existing local Composer package cache when
-available, and network access disabled before invoking the Docker upgrade
-wrapper.
+available, network access disabled, and credential-capable environment variables
+scrubbed before the historical builder or nested Composer process can inherit
+them. Previous refs containing Composer auth files such as `indexer/auth.json`
+or `indexer/.composer/auth.json` are rejected before checkout/archive, so the
+Docker upgrade wrapper is not invoked for those refs.
 
 ## Reindex Strategy
 

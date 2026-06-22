@@ -337,8 +337,11 @@ ref/SHA without fetching, rejects the current target commit, requires the
 previous ref to contain the release ZIP builder and Composer lockfile, archives
 only package source paths into temporary storage, and builds the previous ZIP
 with isolated Composer home/auth, an existing local Composer package cache when
-available, and network access disabled. Missing Docker, Docker Compose, or
-daemon access remains a wrapper `SKIP:` and is recorded by the collector as
+available, network access disabled, and credential-capable environment variables
+scrubbed before the historical builder or nested Composer process can inherit
+them. Previous refs containing Composer auth files such as `indexer/auth.json`
+or `indexer/.composer/auth.json` are rejected before checkout/archive. Missing
+Docker, Docker Compose, or daemon access remains a wrapper `SKIP:` and is recorded by the collector as
 non-pass/unavailable because no disposable runtime proof was possible.
 Multisite runtime proof is not claimed by this lane; the current wrapper records
 an explicit `not_run` multisite boundary instead of treating single-site upgrade

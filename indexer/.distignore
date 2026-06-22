@@ -8,6 +8,9 @@ review-artifacts
 *.tmp
 *.log
 __pycache__
+auth.json
+.composer
+.composer/**
 tests
 goal.md
 resources/sources
