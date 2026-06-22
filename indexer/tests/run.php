@@ -11668,6 +11668,168 @@ test_case('final ownership observer is read-only hidden when diagnostics are dis
     }
 });
 
+test_case('final ownership request state is consumed after successful observer execution', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+    $rememberOwnership = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_remember_search_final_ownership');
+    $rememberOwnership->setAccessible(true);
+    $ownershipState = new ReflectionProperty(WP_FTS_Plugin::class, 'search_final_ownership_state');
+    $ownershipState->setAccessible(true);
+    $plugin = new ReflectionClass(WP_FTS_Plugin::class);
+    $queryVarConstant = $plugin->getReflectionConstant('DEBUG_SEARCH_FINAL_OWNERSHIP_QUERY_VAR');
+    assert_true($queryVarConstant !== false, 'final ownership query var should be reflectable for state cleanup coverage');
+    $queryVar = (string) $queryVarConstant->getValue();
+
+    try {
+        $traceId = (int) $startTrace->invoke(null, 'frontend search', 'final ownership cleanup needle');
+        $query = new WP_FTS_Test_Query(['s' => 'final ownership cleanup needle']);
+        $expectedPosts = [(object) ['ID' => 901]];
+        $rememberOwnership->invoke(null, $query, $traceId, 'language_fts_from_null', $expectedPosts);
+
+        $queryKey = spl_object_id($query);
+        $state = $ownershipState->getValue();
+        assert_true(is_array($state) && array_key_exists($queryKey, $state), 'final ownership state should exist before the late observer runs');
+
+        $returned = WP_FTS_Plugin::observe_final_search_posts($expectedPosts, $query);
+        assert_same($expectedPosts, $returned, 'late final ownership observer should return posts unchanged while consuming state');
+
+        $state = $ownershipState->getValue();
+        assert_true(is_array($state) && !array_key_exists($queryKey, $state), 'final ownership state should be removed after a successful observer run');
+        assert_same(0, $query->query_vars[$queryVar] ?? null, 'consumed final ownership query marker should be cleared');
+
+        $trace = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $ownership = is_array($trace['search_final_ownership'] ?? null) ? $trace['search_final_ownership'] : [];
+        assert_same('language_fts_replaced_null', $ownership['status'] ?? null, 'successful observer should keep the observed ownership diagnostic');
+        assert_same(true, $ownership['observed'] ?? null, 'successful observer should mark final ownership as observed');
+
+        WP_FTS_Plugin::observe_final_search_posts([(object) ['ID' => 902]], $query);
+        $traceAfterRepeat = WP_FTS_Plugin::debug_traces()[0] ?? [];
+        $ownershipAfterRepeat = is_array($traceAfterRepeat['search_final_ownership'] ?? null) ? $traceAfterRepeat['search_final_ownership'] : [];
+        assert_same('language_fts_replaced_null', $ownershipAfterRepeat['status'] ?? null, 'a repeated observer call should not clobber consumed final ownership diagnostics');
+    } finally {
+        WP_FTS_Plugin::reset_request_caches();
+    }
+});
+
+test_case('final ownership request state is removed for missing trace rows', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $ownershipState = new ReflectionProperty(WP_FTS_Plugin::class, 'search_final_ownership_state');
+    $ownershipState->setAccessible(true);
+    $plugin = new ReflectionClass(WP_FTS_Plugin::class);
+    $queryVarConstant = $plugin->getReflectionConstant('DEBUG_SEARCH_FINAL_OWNERSHIP_QUERY_VAR');
+    assert_true($queryVarConstant !== false, 'final ownership query var should be reflectable for invalid trace cleanup coverage');
+    $queryVar = (string) $queryVarConstant->getValue();
+
+    try {
+        $query = new WP_FTS_Test_Query(['s' => 'missing final ownership trace', $queryVar => 404]);
+        $queryKey = spl_object_id($query);
+        $ownershipState->setValue(null, [
+            $queryKey => [
+                'trace_id' => 404,
+                'origin' => 'language_fts_from_null',
+                'expected_signature' => [
+                    'kind' => 'array',
+                    'count' => 1,
+                    'post_ids' => [903],
+                    'hash' => sha1('missing-trace-fixture'),
+                    'comparable' => true,
+                    'reason' => '',
+                ],
+            ],
+        ]);
+
+        $posts = [(object) ['ID' => 903]];
+        assert_same($posts, WP_FTS_Plugin::observe_final_search_posts($posts, $query), 'missing-trace cleanup should keep the observer read-only');
+
+        $state = $ownershipState->getValue();
+        assert_true(is_array($state) && !array_key_exists($queryKey, $state), 'missing-trace final ownership state should be removed');
+        assert_same(0, $query->query_vars[$queryVar] ?? null, 'missing-trace final ownership query marker should be cleared');
+        assert_same([], WP_FTS_Plugin::debug_traces(), 'missing-trace cleanup should not create or mutate diagnostics');
+    } finally {
+        WP_FTS_Plugin::reset_request_caches();
+    }
+});
+
+test_case('final ownership request state is bounded with debug trace eviction', function (): void {
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_filters'][WP_FTS_Plugin::DEBUG_ENABLED_FILTER] = static fn(mixed $enabled, string $context): bool => true;
+
+    $plugin = new ReflectionClass(WP_FTS_Plugin::class);
+    $maxTracesConstant = $plugin->getReflectionConstant('DEBUG_MAX_TRACES');
+    assert_true($maxTracesConstant !== false, 'debug trace cap should be reflectable for final ownership eviction coverage');
+    $maxTraces = (int) $maxTracesConstant->getValue();
+    $queryVarConstant = $plugin->getReflectionConstant('DEBUG_SEARCH_FINAL_OWNERSHIP_QUERY_VAR');
+    assert_true($queryVarConstant !== false, 'final ownership query var should be reflectable for stale key coverage');
+    $queryVar = (string) $queryVarConstant->getValue();
+
+    $startTrace = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_start_trace');
+    $startTrace->setAccessible(true);
+    $rememberOwnership = new ReflectionMethod(WP_FTS_Plugin::class, 'debug_remember_search_final_ownership');
+    $rememberOwnership->setAccessible(true);
+    $ownershipState = new ReflectionProperty(WP_FTS_Plugin::class, 'search_final_ownership_state');
+    $ownershipState->setAccessible(true);
+
+    try {
+        $traceIds = [];
+        $queryKeys = [];
+        $queries = [];
+        for ($index = 0; $index < $maxTraces + 2; $index++) {
+            $traceId = (int) $startTrace->invoke(null, 'frontend search', 'final ownership eviction ' . $index);
+            $query = new WP_FTS_Test_Query(['s' => 'final ownership eviction ' . $index]);
+            $queries[] = $query;
+            $traceIds[] = $traceId;
+            $queryKeys[] = spl_object_id($query);
+            $rememberOwnership->invoke(null, $query, $traceId, 'language_fts_from_null', [(object) ['ID' => 910 + $index]]);
+        }
+
+        $liveTraceIds = [];
+        foreach (WP_FTS_Plugin::debug_traces() as $trace) {
+            $liveTraceIds[] = (int) ($trace['id'] ?? 0);
+        }
+
+        $state = $ownershipState->getValue();
+        assert_true(is_array($state), 'final ownership state should remain inspectable after trace eviction');
+        assert_same($maxTraces, count($state), 'final ownership state should not grow past the debug trace cap');
+        assert_true(!array_key_exists($queryKeys[0], $state), 'final ownership state for the first evicted trace should be removed');
+        assert_true(!array_key_exists($queryKeys[1], $state), 'final ownership state for the second evicted trace should be removed');
+        foreach ($state as $row) {
+            $stateTraceId = is_array($row) && is_numeric($row['trace_id'] ?? null) ? (int) $row['trace_id'] : 0;
+            assert_true(in_array($stateTraceId, $liveTraceIds, true), 'final ownership state should only reference live debug traces after eviction');
+        }
+
+        $staleQuery = new WP_FTS_Test_Query(['s' => 'stale reused final ownership key', $queryVar => $traceIds[0]]);
+        $staleQueryKey = spl_object_id($staleQuery);
+        $state[$staleQueryKey] = [
+            'trace_id' => $traceIds[0],
+            'origin' => 'language_fts_from_null',
+            'expected_signature' => [
+                'kind' => 'array',
+                'count' => 1,
+                'post_ids' => [999],
+                'hash' => sha1('stale-evicted-trace-fixture'),
+                'comparable' => true,
+                'reason' => '',
+            ],
+        ];
+        $ownershipState->setValue(null, $state);
+        $tracesBeforeStaleObserver = json_encode(WP_FTS_Plugin::debug_traces(), JSON_THROW_ON_ERROR);
+        $stalePosts = [(object) ['ID' => 999]];
+
+        assert_same($stalePosts, WP_FTS_Plugin::observe_final_search_posts($stalePosts, $staleQuery), 'stale evicted trace cleanup should keep the observer read-only');
+
+        $stateAfterStaleObserver = $ownershipState->getValue();
+        assert_true(is_array($stateAfterStaleObserver) && !array_key_exists($staleQueryKey, $stateAfterStaleObserver), 'stale reused-key state for an evicted trace should be removed');
+        assert_same($tracesBeforeStaleObserver, json_encode(WP_FTS_Plugin::debug_traces(), JSON_THROW_ON_ERROR), 'stale reused-key state should not attach old ownership diagnostics to a live trace');
+
+        unset($queries);
+    } finally {
+        WP_FTS_Plugin::reset_request_caches();
+    }
+});
+
 test_case('front-end search replacement avoids admin REST cron secondary and disabled queries', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $query = new WP_FTS_Test_Query(['s' => 'guardneedle', 'posts_per_page' => 10]);

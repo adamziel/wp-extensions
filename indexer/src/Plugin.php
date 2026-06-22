@@ -1781,7 +1781,11 @@ final class WP_FTS_Plugin
 
         while (count(self::$debug_traces) >= self::DEBUG_MAX_TRACES) {
             $evicted_id = array_key_first(self::$debug_traces);
+            if ($evicted_id === null) {
+                break;
+            }
             unset(self::$debug_traces[$evicted_id], self::$debug_sql_query_starts[$evicted_id]);
+            self::debug_forget_search_final_ownership_trace((int) $evicted_id);
         }
 
         $id = self::$debug_next_trace_id++;
@@ -1808,6 +1812,33 @@ final class WP_FTS_Plugin
         ], self::debug_normalize_trace_extra($extra));
 
         return $id;
+    }
+
+    private static function debug_forget_search_final_ownership_trace(int $trace_id): void
+    {
+        if ($trace_id <= 0 || self::$search_final_ownership_state === []) {
+            return;
+        }
+
+        foreach (self::$search_final_ownership_state as $query_key => $state) {
+            $state_trace_id = is_array($state) && is_numeric($state['trace_id'] ?? null)
+                ? (int) $state['trace_id']
+                : 0;
+            if ($state_trace_id === $trace_id) {
+                unset(self::$search_final_ownership_state[$query_key]);
+            }
+        }
+    }
+
+    private static function debug_forget_search_final_ownership_query(int $query_key, mixed $query = null): void
+    {
+        if ($query_key > 0) {
+            unset(self::$search_final_ownership_state[$query_key]);
+        }
+
+        if (is_object($query)) {
+            self::set_query_var($query, self::DEBUG_SEARCH_FINAL_OWNERSHIP_QUERY_VAR, 0);
+        }
     }
 
     /**
@@ -2490,7 +2521,7 @@ final class WP_FTS_Plugin
 
         $trace_id = is_numeric($state['trace_id'] ?? null) ? (int) $state['trace_id'] : 0;
         if ($trace_id <= 0 || !isset(self::$debug_traces[$trace_id])) {
-            unset(self::$search_final_ownership_state[$query_key]);
+            self::debug_forget_search_final_ownership_query($query_key, $query);
             return;
         }
 
@@ -2504,6 +2535,7 @@ final class WP_FTS_Plugin
             $expected_signature,
             $final_signature
         );
+        self::debug_forget_search_final_ownership_query($query_key, $query);
     }
 
     /**
