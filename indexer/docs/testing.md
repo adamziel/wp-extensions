@@ -131,6 +131,9 @@ php tools/collect-release-evidence.php \
 php tools/collect-release-evidence.php \
   --release-target=direct-install \
   --direct-package-dir=/path/to/staged/indexer
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-disposable-smokes
 WP_FTS_EVIDENCE_RUN_REAL_WORDPRESS_MYSQL=1 php tools/collect-release-evidence.php
 ```
 
@@ -186,6 +189,41 @@ Do not set `WP_FTS_DISPOSABLE_SMOKE_ALLOW=1` for production or shared staging
 data. The smoke is an operator-facing release/package proof; it does not
 replace the normal PHP harness, the Playground SQLite smoke, or the optional
 real WordPress/MySQL integration and production-path proofs.
+
+## Docker Disposable Release/Provider Smoke
+
+Use the Docker-backed wrapper when a release review needs direct-install
+release smoke and provider-compatibility smoke evidence but no host-provided
+WordPress root is configured:
+
+```sh
+tools/run-disposable-release-provider-smoke.sh
+composer test:smoke:release-provider:docker
+```
+
+The wrapper builds the direct-install ZIP in temporary storage, starts
+disposable WordPress and MariaDB containers, installs WordPress, creates the
+existing smoke marker files, runs `tools/smoke-disposable-wordpress-release.php`
+against the ZIP, deactivates that installed release, and then runs
+`tools/smoke-search-provider-compatibility.php` against the same disposable
+WordPress database. It destroys the Docker containers, volume, temporary source
+copy, temporary release ZIP, and compose file on success and failure.
+
+This differs from the host-provided WordPress root smoke: operators do not need
+to provide `WP_FTS_WP_PATH`, host WP-CLI, or a host database, and the wrapper
+sets the inner write guards only for its disposable container root. It is still
+optional release evidence, not a public-submission approval, not a
+WordPress.org/SVN packaging step, and not a broad third-party provider plugin
+matrix.
+
+The release evidence collector records this Docker lane as skipped by default.
+Run it only when Docker image pulls and the local daemon are available:
+
+```sh
+php tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-disposable-smokes
+```
 
 ## Analyzer Language Quality
 

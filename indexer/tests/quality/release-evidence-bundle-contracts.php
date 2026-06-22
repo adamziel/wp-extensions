@@ -255,6 +255,13 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
                 'stderr' => '',
             ];
         }
+        if (($command[0] ?? '') === 'tools/run-disposable-release-provider-smoke.sh') {
+            return [
+                'exit' => 0,
+                'stdout' => "PASS: Docker disposable release/provider smoke completed.\n",
+                'stderr' => '',
+            ];
+        }
 
         return [
             'exit' => 0,
@@ -300,6 +307,7 @@ test_case('quality release evidence collector default report has stable schema a
     $expectedLanes = [
         'direct_install_readiness',
         'disposable_wordpress_release_smoke',
+        'docker_disposable_release_provider_smoke',
         'production_scale_benchmark',
         'provider_compatibility_smoke',
         'public_submission_readiness',
@@ -325,6 +333,7 @@ test_case('quality release evidence collector reports expected default skips and
 
     wp_fts_release_evidence_contract_same('blocked', wp_fts_release_evidence_contract_lane($report, 'direct_install_readiness')['status'] ?? null, 'required direct-install readiness should block by default until artifact-producing readiness is explicitly opted in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'disposable_wordpress_release_smoke')['status'] ?? null, 'disposable smoke should skip without WordPress config');
+    wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'docker_disposable_release_provider_smoke')['status'] ?? null, 'Docker disposable smokes should require explicit collector opt-in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'provider_compatibility_smoke')['status'] ?? null, 'provider smoke should skip without WordPress config');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'real_wordpress_mysql_integration')['status'] ?? null, 'real WordPress/MySQL integration should require collector opt-in');
     wp_fts_release_evidence_contract_same('skip', wp_fts_release_evidence_contract_lane($report, 'real_mysql_production_proof')['status'] ?? null, 'real MySQL proof should skip without WordPress config');
@@ -332,7 +341,26 @@ test_case('quality release evidence collector reports expected default skips and
 
     $counts = $report['summary']['status_counts'] ?? [];
     wp_fts_release_evidence_contract_same(2, $counts['blocked'] ?? null, 'default direct-install evidence should have required direct-install and non-target public-submission blocked lanes');
-    wp_fts_release_evidence_contract_true(($counts['skip'] ?? 0) >= 4, 'default evidence should record optional lanes as skips');
+    wp_fts_release_evidence_contract_true(($counts['skip'] ?? 0) >= 5, 'default evidence should record optional lanes as skips');
+});
+
+test_case('quality release evidence collector runs Docker disposable smokes only with explicit opt-in', function (): void {
+    $defaultLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report([]),
+        'docker_disposable_release_provider_smoke'
+    );
+    $defaultDetails = is_array($defaultLane['details'] ?? null) ? $defaultLane['details'] : [];
+    wp_fts_release_evidence_contract_same('skip', $defaultLane['status'] ?? null, 'Docker disposable smoke lane should skip without explicit opt-in');
+    wp_fts_release_evidence_contract_same('--run-docker-disposable-smokes', $defaultDetails['enable_with'] ?? null, 'Docker lane should document its collector opt-in flag');
+
+    $optInLane = wp_fts_release_evidence_contract_lane(
+        wp_fts_release_evidence_contract_fake_report(['run_docker_disposable_smokes' => true]),
+        'docker_disposable_release_provider_smoke'
+    );
+    $optInDetails = is_array($optInLane['details'] ?? null) ? $optInLane['details'] : [];
+    wp_fts_release_evidence_contract_same('pass', $optInLane['status'] ?? null, 'Docker disposable smoke lane should run through the shell wrapper when opted in');
+    wp_fts_release_evidence_contract_same('tools/run-disposable-release-provider-smoke.sh', $optInLane['command'] ?? null, 'Docker lane should report the shell wrapper command');
+    wp_fts_release_evidence_contract_contains('direct-install and provider smoke evidence only', (string) ($optInDetails['target_policy'] ?? ''), 'Docker lane should keep target policy explicit');
 });
 
 test_case('quality release evidence collector captures public-submission blockers as blocked evidence', function (): void {

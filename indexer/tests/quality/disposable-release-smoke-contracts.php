@@ -40,6 +40,13 @@ function wp_fts_disposable_smoke_contract_contains(string $needle, string $hayst
     }
 }
 
+function wp_fts_disposable_smoke_contract_not_contains(string $needle, string $haystack, string $message): void
+{
+    if (str_contains($haystack, $needle)) {
+        throw new RuntimeException($message . "\nUnexpected: " . var_export($needle, true));
+    }
+}
+
 function wp_fts_disposable_smoke_contract_true(bool $condition, string $message): void
 {
     if (function_exists('assert_true')) {
@@ -297,7 +304,7 @@ test_case('quality disposable release smoke builds bounded WP-CLI command sequen
                 if (str_contains($joined, 'post create')) {
                     return ['exit' => 0, 'stdout' => "123\n", 'stderr' => ''];
                 }
-                if (str_contains($joined, 'fts process-batch')) {
+                if (str_contains($joined, 'fts process_batch')) {
                     return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json(['processed' => 1, 'queue_processed' => 1]), 'stderr' => ''];
                 }
                 if (str_contains($joined, 'fts search')) {
@@ -343,11 +350,11 @@ test_case('quality disposable release smoke builds bounded WP-CLI command sequen
             wp_fts_disposable_smoke_contract_true(in_array('--format=json', $command, true), "wp fts {$subcommand} should request JSON evidence");
         }
 
-        $batch = wp_fts_disposable_smoke_contract_find_command($commands, 'fts', 'process-batch');
+        $batch = wp_fts_disposable_smoke_contract_find_command($commands, 'fts', 'process_batch');
         wp_fts_disposable_smoke_contract_true(is_array($batch), 'smoke should run one bounded indexing batch');
-        wp_fts_disposable_smoke_contract_true(in_array('--batch_size=1', $batch, true), 'process-batch should be batch bounded');
-        wp_fts_disposable_smoke_contract_true(in_array('--time_budget=5', $batch, true), 'process-batch should be time bounded');
-        wp_fts_disposable_smoke_contract_true(in_array('--format=json', $batch, true), 'process-batch should emit JSON evidence');
+        wp_fts_disposable_smoke_contract_true(in_array('--batch_size=1', $batch, true), 'process_batch should be batch bounded');
+        wp_fts_disposable_smoke_contract_true(in_array('--time_budget=5', $batch, true), 'process_batch should be time bounded');
+        wp_fts_disposable_smoke_contract_true(in_array('--format=json', $batch, true), 'process_batch should emit JSON evidence');
     } finally {
         wp_fts_disposable_smoke_contract_remove_tree($tmp);
     }
@@ -393,7 +400,7 @@ test_case('quality disposable release smoke sanitizes successful JSON evidence',
                 if (str_contains($joined, 'post create')) {
                     return ['exit' => 0, 'stdout' => "123\n", 'stderr' => ''];
                 }
-                if (str_contains($joined, 'fts process-batch')) {
+                if (str_contains($joined, 'fts process_batch')) {
                     return ['exit' => 0, 'stdout' => wp_fts_disposable_smoke_contract_json([
                         'processed' => 1,
                         'debug' => $rawPasswordAssignment . ' ' . $rawLocalPath,
@@ -498,6 +505,11 @@ test_case('quality disposable release smoke docs and composer command are operat
         $composer['scripts']['test:smoke:release'] ?? null,
         'composer should expose the disposable release smoke runner'
     );
+    wp_fts_disposable_smoke_contract_same(
+        'tools/run-disposable-release-provider-smoke.sh',
+        $composer['scripts']['test:smoke:release-provider:docker'] ?? null,
+        'composer should expose the Docker release/provider smoke wrapper'
+    );
 
     foreach ([
         'Disposable Release Smoke',
@@ -508,7 +520,66 @@ test_case('quality disposable release smoke docs and composer command are operat
         'exits with `SKIP:`',
         'does not',
         'normal PHP harness',
+        'Docker Disposable Release/Provider Smoke',
+        'tools/run-disposable-release-provider-smoke.sh',
+        'composer test:smoke:release-provider:docker',
+        '--run-docker-disposable-smokes',
+        'host-provided WordPress root',
     ] as $needle) {
         wp_fts_disposable_smoke_contract_contains($needle, $docs, "testing docs should mention {$needle}");
     }
+});
+
+test_case('quality Docker disposable release/provider wrapper is guarded and disposable-only', function (): void {
+    $root = dirname(__DIR__, 2);
+    $script = (string) file_get_contents($root . '/tools/run-disposable-release-provider-smoke.sh');
+
+    foreach ([
+        'set -euo pipefail',
+        'docker compose version',
+        'docker info',
+        'SKIP:',
+        'mktemp -d /tmp/wp-fts-release-provider-smoke.',
+        'trap cleanup EXIT INT TERM',
+        'docker compose -f "${COMPOSE_FILE}" down -v',
+        'rm -rf "${PROOF_ROOT}"',
+        'MARIADB_DATABASE: wpfts_release_smoke',
+        'MARIADB_USER: wpfts_release_smoke',
+        'MARIADB_PASSWORD: wpfts_release_smoke_dev_only',
+        'MARIADB_ROOT_PASSWORD: wpfts_release_smoke_root_dev_only',
+        'WORDPRESS_DB_PASSWORD: wpfts_release_smoke_dev_only',
+        '${PROOF_ROOT}/plugin:/smoke-src:ro',
+        '${PROOF_ROOT}/release:/release:ro',
+        'tools/build-release-zip.php',
+        '/release/wp-fts-indexer.zip',
+        'touch /var/www/html/.wp-fts-disposable-smoke /var/www/html/.wp-fts-provider-compatibility-smoke',
+        'WP_FTS_DISPOSABLE_SMOKE_ALLOW=1',
+        'smoke-disposable-wordpress-release.php',
+        'plugin deactivate indexer --path=/var/www/html',
+        'WP_FTS_PROVIDER_COMPATIBILITY_ALLOW=1',
+        'smoke-search-provider-compatibility.php',
+        'PASS: Docker disposable release/provider smoke completed.',
+    ] as $needle) {
+        wp_fts_disposable_smoke_contract_contains($needle, $script, "Docker wrapper should contain {$needle}");
+    }
+
+    foreach ([
+        '--env-file',
+        'source .env',
+        'AWS_',
+        'MYSQL_PASSWORD=${',
+        'WORDPRESS_DB_PASSWORD=${',
+        'MARIADB_PASSWORD=${',
+    ] as $needle) {
+        wp_fts_disposable_smoke_contract_not_contains($needle, $script, "Docker wrapper should not consume host secret-like configuration {$needle}");
+    }
+
+    $releaseSmoke = strpos($script, 'smoke-disposable-wordpress-release.php');
+    $deactivate = strpos($script, 'plugin deactivate indexer --path=/var/www/html');
+    $providerSmoke = strpos($script, 'smoke-search-provider-compatibility.php');
+    wp_fts_disposable_smoke_contract_true(
+        is_int($releaseSmoke) && is_int($deactivate) && is_int($providerSmoke)
+            && $releaseSmoke < $deactivate && $deactivate < $providerSmoke,
+        'Docker wrapper should run the release ZIP smoke, deactivate the installed release, then run provider compatibility smoke'
+    );
 });

@@ -228,7 +228,7 @@ final class WP_FTS_DisposableReleaseSmokeRunner
                 'process bounded index batch',
                 array_merge($baseCommand, [
                     'fts',
-                    'process-batch',
+                    'process_batch',
                     '--batch_size=' . self::INDEX_BATCH_SIZE,
                     '--time_budget=' . self::INDEX_TIME_BUDGET,
                     '--format=json',

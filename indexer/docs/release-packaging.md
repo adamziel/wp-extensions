@@ -155,6 +155,9 @@ php indexer/tools/collect-release-evidence.php \
 php indexer/tools/collect-release-evidence.php \
   --release-target=direct-install \
   --direct-package-dir=/path/to/staged/indexer
+php indexer/tools/collect-release-evidence.php \
+  --release-target=direct-install \
+  --run-docker-disposable-smokes
 ```
 
 Use the public-submission target only for WordPress.org/SVN or other public
@@ -167,12 +170,15 @@ php indexer/tools/collect-release-evidence.php --release-target=public-submissio
 That target remains `blocked` on current main until the real
 public-submission artifacts, license/readme metadata, public redistribution
 policy, and authority evidence are supplied. The bundle also records
-skip/pass/fail evidence for the disposable WordPress release smoke, provider
-compatibility smoke, real WordPress/MySQL integration proof, real MySQL
-production proof, and PR-safe production-scale benchmark. It does not modify
-WordPress.org/SVN state, tags, public assets, package readme/license files, or
-authority evidence, and a direct-install `pass` is not public-submission
-approval.
+skip/pass/fail evidence for the host-configured disposable WordPress release
+smoke, host-configured provider compatibility smoke, explicitly opted-in Docker
+disposable release/provider smoke, real WordPress/MySQL integration proof, real
+MySQL production proof, and PR-safe production-scale benchmark. The Docker lane
+builds a temporary direct-install ZIP and disposable WordPress/MariaDB stack so
+it can replace the host-environment skip with direct-install release/provider
+smoke evidence when Docker is available. It does not modify WordPress.org/SVN
+state, tags, public assets, package readme/license files, or authority evidence,
+and a direct-install `pass` is not public-submission approval.
 
 ## Composer Dependency Handling
 

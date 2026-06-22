@@ -66,6 +66,10 @@ final class WP_FTS_ReleaseEvidenceCollector
                 $options['run_real_wordpress_mysql'] = true;
                 continue;
             }
+            if ($arg === '--run-docker-disposable-smokes') {
+                $options['run_docker_disposable_smokes'] = true;
+                continue;
+            }
 
             foreach (['format', 'release-target', 'plugin-src', 'monorepo-root', 'direct-package-dir', 'timeout'] as $name) {
                 $prefix = "--{$name}=";
@@ -108,6 +112,7 @@ final class WP_FTS_ReleaseEvidenceCollector
             '  --direct-package-dir=PATH        Validate an already staged direct-install package.',
             '  --run-direct-install-readiness   Allow direct-install readiness to build/stage artifacts.',
             '  --run-real-wordpress-mysql       Allow the real WordPress/MySQL integration lane.',
+            '  --run-docker-disposable-smokes   Run Docker-backed release/provider smokes in a disposable stack.',
             '  -h, --help                       Show this help.',
             '',
         ]);
@@ -155,6 +160,7 @@ final class WP_FTS_ReleaseEvidenceCollector
                 $pluginSource,
                 $timeout
             ),
+            $this->docker_disposable_smoke_lane($pluginSource, $timeout, $options),
             $this->real_wordpress_mysql_lane($pluginSource, $timeout, $options),
             $this->optional_command_lane(
                 'real_mysql_production_proof',
@@ -371,6 +377,51 @@ final class WP_FTS_ReleaseEvidenceCollector
      * @param array<string,mixed> $options
      * @return array<string,mixed>
      */
+    private function docker_disposable_smoke_lane(string $pluginSource, int $timeout, array $options): array
+    {
+        $args = ['tools/run-disposable-release-provider-smoke.sh'];
+        if (empty($options['run_docker_disposable_smokes'])) {
+            return [
+                'id' => 'docker_disposable_release_provider_smoke',
+                'label' => 'Docker disposable release/provider smoke',
+                'status' => 'skip',
+                'command' => self::display_command($args, ''),
+                'summary' => 'Skipped by default because this lane starts disposable WordPress/MariaDB containers and runs write-enabled smokes.',
+                'details' => [
+                    'artifact_policy' => 'requires_explicit_collector_opt_in',
+                    'enable_with' => '--run-docker-disposable-smokes',
+                    'target_policy' => 'direct-install and provider smoke evidence only; public-submission readiness remains non-target evidence',
+                ],
+                'required' => false,
+            ];
+        }
+
+        $result = $this->run_raw_command($args, $pluginSource, $timeout);
+        $status = $this->status_from_command_output($result);
+
+        return [
+            'id' => 'docker_disposable_release_provider_smoke',
+            'label' => 'Docker disposable release/provider smoke',
+            'status' => $status,
+            'command' => self::display_command($args, ''),
+            'exit_code' => $result['exit'],
+            'summary' => $this->command_summary($status, $result),
+            'details' => [
+                'stdout_excerpt' => self::sanitize_text($result['stdout'], self::OUTPUT_EXCERPT_BYTES),
+                'stderr_excerpt' => self::sanitize_text($result['stderr'], self::OUTPUT_EXCERPT_BYTES),
+                'stdout_truncated' => !empty($result['stdout_truncated']),
+                'stderr_truncated' => !empty($result['stderr_truncated']),
+                'timed_out' => !empty($result['timed_out']),
+                'target_policy' => 'direct-install and provider smoke evidence only; public-submission readiness remains non-target evidence',
+            ],
+            'required' => false,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     * @return array<string,mixed>
+     */
     private function real_wordpress_mysql_lane(string $pluginSource, int $timeout, array $options): array
     {
         $optedIn = !empty($options['run_real_wordpress_mysql'])
@@ -508,6 +559,23 @@ final class WP_FTS_ReleaseEvidenceCollector
         }
 
         $command = array_merge([PHP_BINARY], $scriptAndArgs);
+
+        return ($this->processRunner)($command, $cwd, $timeout);
+    }
+
+    /**
+     * @param array<int,string> $command
+     * @return array{exit:int,stdout:string,stderr:string,timed_out?:bool,stdout_truncated?:bool,stderr_truncated?:bool}
+     */
+    private function run_raw_command(array $command, string $cwd, int $timeout): array
+    {
+        if (!function_exists('proc_open')) {
+            return [
+                'exit' => 0,
+                'stdout' => 'SKIP: proc_open() is unavailable; cannot launch subprocess.',
+                'stderr' => '',
+            ];
+        }
 
         return ($this->processRunner)($command, $cwd, $timeout);
     }
@@ -850,9 +918,9 @@ final class WP_FTS_ReleaseEvidenceCollector
     /**
      * @param array<int,string> $scriptAndArgs
      */
-    private static function display_command(array $scriptAndArgs): string
+    private static function display_command(array $scriptAndArgs, string $prefix = 'php'): string
     {
-        $parts = ['php'];
+        $parts = $prefix === '' ? [] : [$prefix];
         foreach ($scriptAndArgs as $arg) {
             if (str_starts_with($arg, '--package-dir=')) {
                 $parts[] = '--package-dir=[path]';
