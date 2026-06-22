@@ -553,6 +553,18 @@ test_case('quality Docker disposable release/provider wrapper is guarded and dis
         'WORDPRESS_DB_PASSWORD: wpfts_release_smoke_dev_only',
         '${PROOF_ROOT}/plugin:/smoke-src:ro',
         '${PROOF_ROOT}/release:/release:ro',
+        'run_source_copy_composer_install()',
+        'local composer_home="${PROOF_ROOT}/composer-home"',
+        'local composer_cache_dir="${PROOF_ROOT}/composer-cache"',
+        'local composer_tmp_dir="${PROOF_ROOT}/composer-tmp"',
+        'local -a composer_env=(',
+        '        -i',
+        '"PATH=${composer_path}"',
+        '"TMPDIR=${composer_tmp_dir}"',
+        '"COMPOSER_HOME=${composer_home}"',
+        '"COMPOSER_CACHE_DIR=${composer_cache_dir}"',
+        'env "${composer_env[@]}" composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader',
+        "run_step \"Installing source-copy Composer production dependencies\" \\\n    run_source_copy_composer_install",
         'tools/build-release-zip.php',
         '/release/wp-fts-indexer.zip',
         'touch /var/www/html/.wp-fts-disposable-smoke /var/www/html/.wp-fts-provider-compatibility-smoke',
@@ -564,6 +576,20 @@ test_case('quality Docker disposable release/provider wrapper is guarded and dis
         'PASS: Docker disposable release/provider smoke completed.',
     ] as $needle) {
         wp_fts_disposable_smoke_contract_contains($needle, $script, "Docker wrapper should contain {$needle}");
+    }
+
+    wp_fts_disposable_smoke_contract_same(
+        1,
+        substr_count($script, 'composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader'),
+        'Docker wrapper should keep the source-copy Composer install behind the isolated helper only'
+    );
+
+    foreach (['COMPOSER_AUTH=', 'GITHUB_TOKEN=', 'GH_TOKEN=', 'GIT_ASKPASS=', 'SSH_AUTH_SOCK=', 'WP_FTS_SECRET_TOKEN='] as $blockedPrefix) {
+        wp_fts_disposable_smoke_contract_not_contains(
+            $blockedPrefix,
+            $script,
+            "Docker wrapper should not pass ambient credential-capable {$blockedPrefix} into Composer"
+        );
     }
 
     foreach ([
