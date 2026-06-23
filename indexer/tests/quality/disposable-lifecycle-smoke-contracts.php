@@ -577,6 +577,23 @@ test_case('quality Docker disposable lifecycle wrapper is guarded and disposable
         wp_fts_lifecycle_contract_contains($needle, $script, "Docker lifecycle wrapper should contain {$needle}");
     }
 
+    foreach ([
+        "--exclude='./auth.json'",
+        "--exclude='*/auth.json'",
+        "--exclude='./.composer'",
+        "--exclude='./.composer/**'",
+        "--exclude='*/.composer'",
+        "--exclude='*/.composer/**'",
+    ] as $needle) {
+        wp_fts_lifecycle_contract_contains($needle, $script, "Docker lifecycle wrapper source-copy tar should exclude {$needle}");
+    }
+
+    wp_fts_lifecycle_contract_same(
+        2,
+        substr_count($script, 'tar "${SOURCE_COPY_TAR_EXCLUDES[@]}" -cf - .'),
+        'Docker lifecycle wrapper should apply the auth-excluding tar boundary to both plugin and component source copies'
+    );
+
     wp_fts_lifecycle_contract_same(
         1,
         substr_count($script, 'composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader'),

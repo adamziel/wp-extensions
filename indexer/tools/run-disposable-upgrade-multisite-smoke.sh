@@ -11,6 +11,22 @@ UPGRADE_REPORT_FILE=""
 UPGRADE_REPORT_CONTAINER_FILE="/smoke-reports/upgrade-report.json"
 UPGRADE_OUTPUT_FILE=""
 PREVIOUS_PACKAGE="${WP_FTS_PREVIOUS_DIRECT_PACKAGE:-}"
+SOURCE_COPY_TAR_EXCLUDES=(
+    --exclude='./vendor'
+    --exclude='./node_modules'
+    --exclude='./dist'
+    --exclude='.git'
+    --exclude='./.env'
+    --exclude='*/.env'
+    --exclude='*.pem'
+    --exclude='*.key'
+    --exclude='./auth.json'
+    --exclude='*/auth.json'
+    --exclude='./.composer'
+    --exclude='./.composer/**'
+    --exclude='*/.composer'
+    --exclude='*/.composer/**'
+)
 
 skip() {
     printf 'SKIP: %s\n' "$1"
@@ -191,16 +207,7 @@ cp "${PREVIOUS_PACKAGE}" "${PROOF_ROOT}/release/previous-wp-fts-indexer.zip"
 
 (
     cd "${PLUGIN_DIR}"
-    tar \
-        --exclude='./vendor' \
-        --exclude='./node_modules' \
-        --exclude='./dist' \
-        --exclude='.git' \
-        --exclude='./.env' \
-        --exclude='*/.env' \
-        --exclude='*.pem' \
-        --exclude='*.key' \
-        -cf - .
+    tar "${SOURCE_COPY_TAR_EXCLUDES[@]}" -cf - .
 ) | (
     cd "${PROOF_ROOT}/plugin"
     tar -xf -
@@ -208,16 +215,7 @@ cp "${PREVIOUS_PACKAGE}" "${PROOF_ROOT}/release/previous-wp-fts-indexer.zip"
 
 (
     cd "${COMPONENT_DIR}"
-    tar \
-        --exclude='./vendor' \
-        --exclude='./node_modules' \
-        --exclude='./dist' \
-        --exclude='.git' \
-        --exclude='./.env' \
-        --exclude='*/.env' \
-        --exclude='*.pem' \
-        --exclude='*.key' \
-        -cf - .
+    tar "${SOURCE_COPY_TAR_EXCLUDES[@]}" -cf - .
 ) | (
     cd "${PROOF_ROOT}/components/full-text-search"
     tar -xf -

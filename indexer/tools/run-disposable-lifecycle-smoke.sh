@@ -10,6 +10,21 @@ COMPOSE_FILE=""
 LIFECYCLE_REPORT_FILE=""
 LIFECYCLE_REPORT_CONTAINER_FILE="/smoke-reports/lifecycle-report.json"
 LIFECYCLE_OUTPUT_FILE=""
+SOURCE_COPY_TAR_EXCLUDES=(
+    --exclude='./vendor'
+    --exclude='./node_modules'
+    --exclude='./dist'
+    --exclude='.git'
+    --exclude='./.env'
+    --exclude='*/.env'
+    --exclude='*.pem'
+    --exclude='./auth.json'
+    --exclude='*/auth.json'
+    --exclude='./.composer'
+    --exclude='./.composer/**'
+    --exclude='*/.composer'
+    --exclude='*/.composer/**'
+)
 
 skip() {
     printf 'SKIP: %s\n' "$1"
@@ -140,15 +155,7 @@ chmod 0777 "${PROOF_ROOT}/reports"
 
 (
     cd "${PLUGIN_DIR}"
-    tar \
-        --exclude='./vendor' \
-        --exclude='./node_modules' \
-        --exclude='./dist' \
-        --exclude='.git' \
-        --exclude='./.env' \
-        --exclude='*/.env' \
-        --exclude='*.pem' \
-        -cf - .
+    tar "${SOURCE_COPY_TAR_EXCLUDES[@]}" -cf - .
 ) | (
     cd "${PROOF_ROOT}/plugin"
     tar -xf -
@@ -156,15 +163,7 @@ chmod 0777 "${PROOF_ROOT}/reports"
 
 (
     cd "${COMPONENT_DIR}"
-    tar \
-        --exclude='./vendor' \
-        --exclude='./node_modules' \
-        --exclude='./dist' \
-        --exclude='.git' \
-        --exclude='./.env' \
-        --exclude='*/.env' \
-        --exclude='*.pem' \
-        -cf - .
+    tar "${SOURCE_COPY_TAR_EXCLUDES[@]}" -cf - .
 ) | (
     cd "${PROOF_ROOT}/components/full-text-search"
     tar -xf -

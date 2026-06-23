@@ -9,6 +9,21 @@ REQUESTED_PORT="${WP_FTS_HTTP_PORT:-8088}"
 PROOF_ROOT=""
 COMPOSE_FILE=""
 PORT=""
+SOURCE_COPY_TAR_EXCLUDES=(
+    --exclude='./vendor'
+    --exclude='./node_modules'
+    --exclude='./dist'
+    --exclude='.git'
+    --exclude='./.env'
+    --exclude='*/.env'
+    --exclude='*.pem'
+    --exclude='./auth.json'
+    --exclude='*/auth.json'
+    --exclude='./.composer'
+    --exclude='./.composer/**'
+    --exclude='*/.composer'
+    --exclude='*/.composer/**'
+)
 
 skip() {
     printf 'SKIP: %s\n' "$1"
@@ -126,15 +141,7 @@ mkdir -p "${PROOF_ROOT}/plugin" "${PROOF_ROOT}/components/full-text-search" "${P
 
 (
     cd "${PLUGIN_DIR}"
-    tar \
-        --exclude='./vendor' \
-        --exclude='./node_modules' \
-        --exclude='./dist' \
-        --exclude='.git' \
-        --exclude='./.env' \
-        --exclude='*/.env' \
-        --exclude='*.pem' \
-        -cf - .
+    tar "${SOURCE_COPY_TAR_EXCLUDES[@]}" -cf - .
 ) | (
     cd "${PROOF_ROOT}/plugin"
     tar -xf -
@@ -142,15 +149,7 @@ mkdir -p "${PROOF_ROOT}/plugin" "${PROOF_ROOT}/components/full-text-search" "${P
 
 (
     cd "${COMPONENT_DIR}"
-    tar \
-        --exclude='./vendor' \
-        --exclude='./node_modules' \
-        --exclude='./dist' \
-        --exclude='.git' \
-        --exclude='./.env' \
-        --exclude='*/.env' \
-        --exclude='*.pem' \
-        -cf - .
+    tar "${SOURCE_COPY_TAR_EXCLUDES[@]}" -cf - .
 ) | (
     cd "${PROOF_ROOT}/components/full-text-search"
     tar -xf -
