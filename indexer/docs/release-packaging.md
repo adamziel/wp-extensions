@@ -215,13 +215,16 @@ the historical builder or nested Composer process can inherit them. Historical
 refs containing Composer auth files such as `indexer/auth.json` or
 `indexer/.composer/auth.json` are rejected before checkout/archive. The lane then
 builds the current ZIP in temporary storage,
-installs the previous package in a disposable WordPress/MariaDB stack, upgrades
-to the current package, checks schema version/status after upgrade, repair
-idempotence after upgrade, search continuity for generated fixture content,
-queue health after upgrade, and cleanup of generated fixtures and temporary
-resources. Missing or invalid previous packages/refs are `unavailable`, not
-passes. Multisite runtime proof is not claimed unless the lane reports a real
-multisite runtime pass; the current lane records an explicit boundary instead.
+installs the previous package in a disposable WordPress/MariaDB multisite
+network, upgrades to the current package, checks schema version/status after
+upgrade, repair idempotence after upgrade, search continuity for generated
+fixture content, queue health after upgrade, network-activates the current
+package, creates an additional site, proves that site's FTS table prefix/schema,
+repair/status, indexing/search, queue processing, and site-deletion table
+discovery, then cleans up generated fixtures and temporary resources. Missing or
+invalid previous packages/refs are `unavailable`, not passes. A passing wrapper
+report must include `multisite_evidence.status` as `passed`; unavailable Docker
+runtime evidence remains a non-pass boundary.
 These lanes do not modify WordPress.org/SVN state, tags, public assets, package
 readme/license files, or authority evidence, and a direct-install `pass` does
 not approve public-submission readiness.

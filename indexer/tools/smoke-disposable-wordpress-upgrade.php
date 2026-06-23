@@ -310,6 +310,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
                 array_merge($baseCommand, ['fts', 'status', '--format=json']),
                 $report
             );
+            $multisiteEvidence = $this->run_multisite_runtime_proof($baseCommand, $token, $report);
 
             $cleanupFailure = $this->cleanup($baseCommand, $createdPostIds, $report);
             $createdPostIds = [];
@@ -337,6 +338,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
                 'queue_processed' => max(0, (int) ($queueIndexing['queue_processed'] ?? $queueIndexing['processed'] ?? 0)),
                 'pending_after_process' => max(0, (int) ($statusAfterQueueProcess['pending_queue_count'] ?? 0)),
             ];
+            $report['multisite_evidence'] = $multisiteEvidence;
             $report['content_mutation_evidence'] = [
                 'guard_post_id' => $guardPostId,
                 'indexed_fixture_post_id' => $indexedPostId,
@@ -355,7 +357,7 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
                 'activation_upgrade_repair_content_mutation_bounded_to_fixtures' => true,
                 'cleanup_fixture_content' => true,
                 'public_submission_artifacts_created' => false,
-                'multisite_runtime_proof' => false,
+                'multisite_runtime_proof' => ($multisiteEvidence['status'] ?? null) === 'passed',
             ];
 
             return $this->result('passed', 'Disposable WordPress upgrade smoke completed.', $report);
@@ -728,6 +730,252 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
     }
 
     /**
+     * Prove multisite runtime behavior only when the disposable WordPress root
+     * is actually multisite. Single-site callers keep the explicit boundary.
+     *
+     * @param array<int,string> $baseCommand
+     * @param array<string,mixed> $report
+     * @return array<string,mixed>
+     */
+    private function run_multisite_runtime_proof(array $baseCommand, string $token, array &$report): array
+    {
+        $availability = $this->require_json_success(
+            'inspect multisite runtime availability',
+            array_merge($baseCommand, ['eval', self::multisite_availability_eval_code()]),
+            $report
+        );
+        if (empty($availability['is_multisite'])) {
+            return self::multisite_boundary();
+        }
+
+        $mainUrl = $this->main_site_url($availability);
+        $slug = 'wpfts-ms-' . strtolower(substr(preg_replace('/[^a-z0-9]/i', '', $token), -10));
+        if ($slug === 'wpfts-ms-') {
+            $slug .= substr(hash('sha256', $token), 0, 10);
+        }
+
+        $siteId = 0;
+        $subsiteUrl = rtrim($mainUrl, '/') . '/' . $slug . '/';
+        $subsiteCommand = self::base_command_with_url($baseCommand, $subsiteUrl);
+        $subsitePostId = 0;
+        $cleanupFailure = null;
+
+        try {
+            $this->require_success(
+                'network activate current package for multisite runtime proof',
+                array_merge($baseCommand, ['plugin', 'activate', self::PLUGIN_SLUG, '--network']),
+                $report
+            );
+
+            $mainInspection = $this->inspect_site('multisite_main_after_network_activation', $baseCommand, [], $report);
+            $this->assert_multisite_context($mainInspection, 'main multisite context should be active');
+            $this->assert_all_tables_exist($mainInspection, 'main multisite site should have all FTS tables');
+
+            $createdSite = $this->require_success(
+                'create disposable multisite blog fixture',
+                array_merge($baseCommand, [
+                    'site',
+                    'create',
+                    '--slug=' . $slug,
+                    '--title=WP FTS multisite smoke ' . $token,
+                    '--email=admin@example.test',
+                    '--porcelain',
+                ]),
+                $report
+            );
+            $siteId = (int) trim($createdSite['stdout']);
+            if ($siteId <= 0) {
+                throw new RuntimeException('Disposable multisite blog creation did not return a positive site id.');
+            }
+
+            $subsiteAfterCreation = $this->inspect_site('multisite_subsite_after_creation', $subsiteCommand, [], $report);
+            $this->assert_multisite_context($subsiteAfterCreation, 'new multisite blog context should be active');
+            $this->assert_all_tables_exist($subsiteAfterCreation, 'new multisite blog initialization should create all FTS tables');
+            $this->assert_distinct_site_prefixes($mainInspection, $subsiteAfterCreation);
+
+            $repair = $this->require_json_success(
+                'repair schema on disposable multisite blog',
+                array_merge($subsiteCommand, ['fts', 'repair', '--format=json']),
+                $report
+            );
+            $statusAfterRepair = $this->require_json_success(
+                'status after disposable multisite blog repair',
+                array_merge($subsiteCommand, ['fts', 'status', '--format=json']),
+                $report
+            );
+            $this->assert_schema_current($repair, 'multisite subsite repair');
+            $this->assert_schema_current($statusAfterRepair, 'multisite subsite status after repair');
+
+            $subsitePostId = $this->create_post(
+                $subsiteCommand,
+                'WP FTS multisite indexed fixture ' . $token,
+                'wp fts multisite indexed fixture runtime proof ' . $token,
+                $report
+            );
+            $statusBeforeProcess = $this->require_json_success(
+                'status before disposable multisite queue process',
+                array_merge($subsiteCommand, ['fts', 'status', '--format=json']),
+                $report
+            );
+            $queueIndexing = $this->require_json_success(
+                'process disposable multisite queue fixture batch',
+                array_merge($subsiteCommand, ['fts', 'process_batch', '--batch_size=1', '--time_budget=5', '--format=json']),
+                $report
+            );
+            $this->assert_processed_at_least_one($queueIndexing, 'multisite subsite fixture indexing');
+            $statusAfterProcess = $this->require_json_success(
+                'status after disposable multisite queue process',
+                array_merge($subsiteCommand, ['fts', 'status', '--format=json']),
+                $report
+            );
+            $search = $this->require_json_success(
+                'search disposable multisite fixture token',
+                array_merge($subsiteCommand, ['fts', 'search', $token, '--post_type=post', '--post_status=publish', '--limit=5', '--format=json']),
+                $report
+            );
+            if (!$this->search_payload_contains_post($search, $subsitePostId)) {
+                throw new RuntimeException('Multisite subsite search JSON did not include the disposable fixture post.');
+            }
+
+            $subsiteAfterIndexing = $this->inspect_site('multisite_subsite_after_indexing', $subsiteCommand, [$subsitePostId], $report);
+            $this->assert_all_tables_exist($subsiteAfterIndexing, 'multisite subsite should retain all FTS tables after indexing');
+            $deletionFilter = $this->require_json_success(
+                'prove multisite deletion table discovery',
+                array_merge($baseCommand, ['eval', self::multisite_deletion_filter_eval_code($siteId)]),
+                $report
+            );
+            if (empty($deletionFilter['contains_all_fts_tables'])) {
+                throw new RuntimeException('Multisite site-deletion table discovery did not include all six FTS tables for the target blog.');
+            }
+
+            return [
+                'status' => 'passed',
+                'activation_scope' => 'network_active_current_package_for_runtime_proof',
+                'main_site' => $this->compact_payload($mainInspection),
+                'subsite_after_creation' => $this->compact_payload($subsiteAfterCreation),
+                'subsite_after_indexing' => $this->compact_payload($subsiteAfterIndexing),
+                'repair' => $this->compact_payload($repair),
+                'status_after_repair' => $this->compact_payload($statusAfterRepair),
+                'queue' => [
+                    'pending_before_process' => max(0, (int) ($statusBeforeProcess['pending_queue_count'] ?? 0)),
+                    'queue_processed' => max(0, (int) ($queueIndexing['queue_processed'] ?? $queueIndexing['processed'] ?? 0)),
+                    'pending_after_process' => max(0, (int) ($statusAfterProcess['pending_queue_count'] ?? 0)),
+                ],
+                'search' => [
+                    'matched_post_id' => $subsitePostId,
+                    'result_count' => $this->search_result_count($search),
+                ],
+                'site_deletion_table_discovery' => $this->compact_payload($deletionFilter),
+            ];
+        } finally {
+            if ($subsitePostId > 0) {
+                $deleted = $this->run_process(
+                    'delete disposable multisite post fixture',
+                    array_merge($subsiteCommand, ['post', 'delete', (string) $subsitePostId, '--force']),
+                    [],
+                    $report,
+                    true
+                );
+                if ($deleted['exit'] !== 0) {
+                    $cleanupFailure ??= new RuntimeException($this->failed_command_message('delete disposable multisite post fixture', $deleted));
+                }
+
+                $this->run_process(
+                    'tombstone disposable multisite fixture document',
+                    array_merge($subsiteCommand, ['fts', 'delete', (string) $subsitePostId]),
+                    [],
+                    $report,
+                    true
+                );
+            }
+
+            if ($siteId > 0) {
+                $deletedSite = $this->run_process(
+                    'delete disposable multisite blog fixture',
+                    array_merge($baseCommand, ['site', 'delete', (string) $siteId, '--yes']),
+                    [],
+                    $report,
+                    true
+                );
+                if ($deletedSite['exit'] !== 0) {
+                    $cleanupFailure ??= new RuntimeException($this->failed_command_message('delete disposable multisite blog fixture', $deletedSite));
+                }
+            }
+
+            if ($cleanupFailure !== null) {
+                throw $cleanupFailure;
+            }
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $availability
+     */
+    private function main_site_url(array $availability): string
+    {
+        $mainUrl = is_string($availability['main_site_url'] ?? null)
+            ? trim((string) $availability['main_site_url'])
+            : '';
+        if ($mainUrl !== '') {
+            return $mainUrl;
+        }
+
+        $envUrl = trim($this->env_value(self::WP_URL_ENV));
+        if ($envUrl !== '') {
+            return $envUrl;
+        }
+
+        throw new RuntimeException('Multisite runtime proof could not resolve the main site URL.');
+    }
+
+    /**
+     * @param array<int,string> $baseCommand
+     * @return array<int,string>
+     */
+    private static function base_command_with_url(array $baseCommand, string $url): array
+    {
+        $command = [];
+        foreach ($baseCommand as $arg) {
+            if (str_starts_with($arg, '--url=')) {
+                continue;
+            }
+            $command[] = $arg;
+        }
+        $command[] = '--url=' . $url;
+
+        return $command;
+    }
+
+    /**
+     * @param array<string,mixed> $inspection
+     */
+    private function assert_multisite_context(array $inspection, string $message): void
+    {
+        if (empty($inspection['is_multisite'])) {
+            throw new RuntimeException($message . ' WordPress did not report multisite.');
+        }
+        if ((int) ($inspection['blog_id'] ?? 0) <= 0) {
+            throw new RuntimeException($message . ' Missing current blog id.');
+        }
+        if ((string) ($inspection['table_prefix'] ?? '') === '') {
+            throw new RuntimeException($message . ' Missing current table prefix.');
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $main
+     * @param array<string,mixed> $subsite
+     */
+    private function assert_distinct_site_prefixes(array $main, array $subsite): void
+    {
+        $mainPrefix = (string) ($main['table_prefix'] ?? '');
+        $subsitePrefix = (string) ($subsite['table_prefix'] ?? '');
+        if ($mainPrefix === '' || $subsitePrefix === '' || $mainPrefix === $subsitePrefix) {
+            throw new RuntimeException('Multisite runtime proof did not observe distinct main-site and subsite table prefixes.');
+        }
+    }
+
+    /**
      * @return array<string,string>
      */
     private static function multisite_boundary(): array
@@ -736,6 +984,54 @@ final class WP_FTS_DisposableUpgradeSmokeRunner
             'status' => 'not_run',
             'reason' => 'The current upgrade wrapper installs a single-site disposable WordPress root. Multisite upgrade lifecycle proof is intentionally recorded as a not-run boundary until a dedicated disposable multisite topology is added.',
         ];
+    }
+
+    private static function multisite_availability_eval_code(): string
+    {
+        return <<<'PHP'
+global $wpdb;
+$payload = [
+    'schema' => 'wp-fts-multisite-runtime-availability-v1',
+    'is_multisite' => function_exists('is_multisite') ? (bool) is_multisite() : false,
+    'current_blog_id' => function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 0,
+    'table_prefix' => isset($wpdb->prefix) ? (string) $wpdb->prefix : '',
+    'main_site_url' => function_exists('network_home_url') ? (string) network_home_url('/') : (function_exists('home_url') ? (string) home_url('/') : ''),
+];
+echo wp_json_encode($payload);
+PHP;
+    }
+
+    private static function multisite_deletion_filter_eval_code(int $siteId): string
+    {
+        $siteId = max(0, $siteId);
+        $siteIdLiteral = var_export($siteId, true);
+        $suffixesLiteral = var_export(self::FTS_TABLE_SUFFIXES, true);
+
+        return <<<PHP
+global \$wpdb;
+\$site_id = {$siteIdLiteral};
+\$suffixes = {$suffixesLiteral};
+\$prefix = \$site_id > 0 && method_exists(\$wpdb, 'get_blog_prefix') ? (string) \$wpdb->get_blog_prefix(\$site_id) : '';
+\$expected = [];
+foreach (\$suffixes as \$suffix) {
+    \$expected[] = \$prefix . \$suffix;
+}
+\$site = function_exists('get_site') ? get_site(\$site_id) : \$site_id;
+\$tables = function_exists('apply_filters') ? apply_filters('wpmu_drop_tables', ['wp_posts'], \$site ?: \$site_id) : ['wp_posts'];
+\$tables = array_values(array_unique(array_map('strval', is_array(\$tables) ? \$tables : [])));
+\$missing = array_values(array_diff(\$expected, \$tables));
+\$payload = [
+    'schema' => 'wp-fts-multisite-deletion-table-discovery-v1',
+    'site_id' => \$site_id,
+    'table_prefix' => \$prefix,
+    'expected_fts_tables' => \$expected,
+    'tables' => \$tables,
+    'contains_all_fts_tables' => \$prefix !== '' && \$missing === [],
+    'missing_fts_tables' => \$missing,
+    'destructive_delete_run' => false,
+];
+echo wp_json_encode(\$payload);
+PHP;
     }
 
     /**
@@ -802,6 +1098,8 @@ foreach (\$tracked_post_ids as \$post_id) {
 \$payload = [
     'phase' => \$phase,
     'is_multisite' => function_exists('is_multisite') ? (bool) is_multisite() : false,
+    'blog_id' => function_exists('get_current_blog_id') ? (int) get_current_blog_id() : 0,
+    'site_url' => function_exists('home_url') ? (string) home_url('/') : '',
     'table_prefix' => \$prefix,
     'fts_tables' => \$tables,
     'fts_row_counts' => \$row_counts,

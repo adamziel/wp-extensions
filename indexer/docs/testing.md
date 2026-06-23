@@ -316,9 +316,12 @@ runs `tools/smoke-disposable-wordpress-upgrade.php`. The inner runner installs
 and activates the previous package, creates disposable fixture content, indexes
 and searches that fixture, installs the current package over it, verifies schema
 version/status after upgrade, runs repair twice for repair idempotence after
-upgrade, checks search continuity and queue health after upgrade, and deletes
-the generated fixture posts before the wrapper destroys containers, volumes,
-temporary roots, temporary ZIPs, and reports.
+upgrade, checks search continuity and queue health after upgrade, then proves
+multisite runtime behavior by network-activating the current package, creating an additional site, checking that site's FTS table prefix/schema, repair/status,
+indexing/search, queue processing, and site-deletion table discovery. The inner
+runner deletes the generated fixture posts and the disposable subsite before the
+wrapper destroys containers, volumes, temporary roots, temporary ZIPs, and
+reports.
 
 The release evidence collector records this Docker upgrade/multisite lane as
 skipped by default:
@@ -345,10 +348,10 @@ scrubbed before the historical builder or nested Composer process can inherit
 them. Previous refs containing Composer auth files such as `indexer/auth.json`
 or `indexer/.composer/auth.json` are rejected before checkout/archive. Missing
 Docker, Docker Compose, or daemon access remains a wrapper `SKIP:` and is recorded by the collector as
-non-pass/unavailable because no disposable runtime proof was possible.
-Multisite runtime proof is not claimed by this lane; the current wrapper records
-an explicit `not_run` multisite boundary instead of treating single-site upgrade
-evidence as network evidence. This is direct-install/operator evidence only and
+non-pass/unavailable because no disposable runtime proof was possible. A passing
+wrapper report must include `multisite_evidence.status` as `passed`; a missing
+previous package, invalid previous ref, or unavailable Docker runtime is not
+treated as network evidence. This is direct-install/operator evidence only and
 is not public-submission readiness.
 
 ## Analyzer Language Quality

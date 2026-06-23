@@ -44,7 +44,8 @@ Usage: tools/run-disposable-upgrade-multisite-smoke.sh --previous-package=/path/
 
 Builds the current direct-install ZIP in temporary storage, installs a supplied
 previous direct-install ZIP into a disposable Docker WordPress/MariaDB stack,
-upgrades it to the current ZIP, and records explicit multisite boundary evidence.
+upgrades it to the current ZIP, and records runtime multisite evidence from the
+same disposable stack.
 TXT
 }
 
@@ -258,6 +259,8 @@ services:
       WORDPRESS_DB_NAME: wpfts_upgrade_smoke
       WORDPRESS_DB_USER: wpfts_upgrade_smoke
       WORDPRESS_DB_PASSWORD: wpfts_upgrade_smoke_dev_only
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_ALLOW_MULTISITE', true);
     volumes:
       - wp_data:/var/www/html
   wpcli:
@@ -299,10 +302,10 @@ if [[ "${wp_config_ready}" != "1" ]]; then
     exit 1
 fi
 
-run_step "Installing disposable WordPress site" \
-    docker compose -f "${COMPOSE_FILE}" run --rm wpcli core install \
+run_step "Installing disposable WordPress multisite network" \
+    docker compose -f "${COMPOSE_FILE}" run --rm wpcli core multisite-install \
         --path=/var/www/html \
-        --url="http://wordpress:80" \
+        --url="http://wordpress" \
         --title="WP FTS Upgrade Smoke" \
         --admin_user=admin \
         --admin_password="wpfts_upgrade_smoke_admin_only" \
@@ -313,13 +316,11 @@ run_step "Marking disposable WordPress root for guarded upgrade smoke" \
     docker compose -f "${COMPOSE_FILE}" run --rm --entrypoint sh wpcli -lc \
         'touch /var/www/html/.wp-fts-upgrade-smoke'
 
-printf 'INFO: Multisite runtime sub-scenario not run; this Docker wrapper records an explicit multisite boundary.\n'
-
 run_upgrade_step "Running disposable upgrade smoke from previous package to current package" \
     docker compose -f "${COMPOSE_FILE}" run --rm --entrypoint php \
         -e WP_FTS_WP_PATH=/var/www/html \
         -e WP_FTS_WP_CLI=wp \
-        -e WP_FTS_WP_URL=http://wordpress:80 \
+        -e WP_FTS_WP_URL=http://wordpress \
         -e WP_FTS_UPGRADE_SMOKE_ALLOW=1 \
         -e "WP_FTS_SOURCE_SHA=${SOURCE_SHA}" \
         -e WP_FTS_PREVIOUS_RELEASE_ZIP=/release/previous-wp-fts-indexer.zip \

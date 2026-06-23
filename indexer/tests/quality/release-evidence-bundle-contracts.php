@@ -216,7 +216,7 @@ function wp_fts_release_evidence_contract_lifecycle_output(string $status): stri
             : "SKIP: Lifecycle preconditions were not met.\nPASS: Running disposable lifecycle smoke against source-copy plugin\n");
 }
 
-function wp_fts_release_evidence_contract_upgrade_output(string $status, string $multisiteStatus = 'not_run'): string
+function wp_fts_release_evidence_contract_upgrade_output(string $status, string $multisiteStatus = 'passed'): string
 {
     $json = json_encode([
         'schema' => 'wp-fts-disposable-upgrade-multisite-wrapper-proof-v1',
@@ -354,7 +354,7 @@ function wp_fts_release_evidence_contract_fake_runner(): callable
         if (($command[0] ?? '') === 'tools/run-disposable-upgrade-multisite-smoke.sh') {
             return [
                 'exit' => 0,
-                'stdout' => wp_fts_release_evidence_contract_upgrade_output('passed', 'not_run'),
+                'stdout' => wp_fts_release_evidence_contract_upgrade_output('passed', 'passed'),
                 'stderr' => '',
             ];
         }
@@ -466,7 +466,7 @@ function wp_fts_release_evidence_contract_previous_ref_runner(string $mode = 'pa
         if (($command[0] ?? '') === 'tools/run-disposable-upgrade-multisite-smoke.sh') {
             return [
                 'exit' => 0,
-                'stdout' => wp_fts_release_evidence_contract_upgrade_output('passed', 'not_run'),
+                'stdout' => wp_fts_release_evidence_contract_upgrade_output('passed', 'passed'),
                 'stderr' => '',
             ];
         }
@@ -759,7 +759,7 @@ test_case('quality release evidence collector runs Docker upgrade/multisite smok
         wp_fts_release_evidence_contract_same('tools/run-disposable-upgrade-multisite-smoke.sh --previous-package=[path]', $optInLane['command'] ?? null, 'Docker upgrade/multisite lane should redact the previous package path');
         wp_fts_release_evidence_contract_same('passed', $optInDetails['upgrade_report_status'] ?? null, 'collector should require a passed inner upgrade report');
         wp_fts_release_evidence_contract_same('passed', $optInDetails['upgrade_evidence_status'] ?? null, 'collector should record passed upgrade evidence');
-        wp_fts_release_evidence_contract_same('not_run', $optInDetails['multisite_evidence_status'] ?? null, 'collector should record explicit multisite boundary when runtime multisite proof is not run');
+        wp_fts_release_evidence_contract_same('passed', $optInDetails['multisite_evidence_status'] ?? null, 'collector should record passed runtime multisite proof from the wrapper report');
     } finally {
         if (is_file($zip)) {
             unlink($zip);
@@ -826,7 +826,7 @@ test_case('quality release evidence collector runs Docker upgrade with a generat
     wp_fts_release_evidence_contract_same('built_by_upgrade_wrapper_from_current_checkout', $details['current_package_policy'] ?? null, 'collector should record that the current package is built by the wrapper');
     wp_fts_release_evidence_contract_same('passed', $details['upgrade_report_status'] ?? null, 'collector should require a passed inner upgrade report');
     wp_fts_release_evidence_contract_same('passed', $details['upgrade_evidence_status'] ?? null, 'collector should record passed upgrade evidence');
-    wp_fts_release_evidence_contract_same('not_run', $details['multisite_evidence_status'] ?? null, 'collector should preserve the multisite not-run boundary');
+    wp_fts_release_evidence_contract_same('passed', $details['multisite_evidence_status'] ?? null, 'collector should preserve passed runtime multisite proof from the wrapper report');
 
     $buildCommands = [];
     foreach ($observed as $command) {

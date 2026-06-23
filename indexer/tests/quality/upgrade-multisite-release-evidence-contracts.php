@@ -228,6 +228,9 @@ function wp_fts_upgrade_contract_inspection_payload(string $phase): array
 {
     $tables = [];
     $counts = [];
+    $isSubsite = str_contains($phase, 'subsite');
+    $isMultisite = str_starts_with($phase, 'multisite_');
+    $prefix = $isSubsite ? 'wp_7_' : 'wp_';
     foreach ([
         'fts_terms',
         'fts_postings',
@@ -237,10 +240,10 @@ function wp_fts_upgrade_contract_inspection_payload(string $phase): array
         'fts_meta',
     ] as $suffix) {
         $tables[$suffix] = [
-            'name' => 'wp_' . $suffix,
+            'name' => $prefix . $suffix,
             'exists' => $phase !== 'before_previous_activation',
         ];
-        $counts[$suffix] = in_array($phase, ['before_current_upgrade', 'after_current_upgrade', 'after_repeated_repair'], true) ? 1 : 0;
+        $counts[$suffix] = in_array($phase, ['before_current_upgrade', 'after_current_upgrade', 'after_repeated_repair', 'multisite_subsite_after_indexing'], true) ? 1 : 0;
     }
 
     $tracked = [
@@ -260,8 +263,10 @@ function wp_fts_upgrade_contract_inspection_payload(string $phase): array
 
     return [
         'phase' => $phase,
-        'is_multisite' => false,
-        'table_prefix' => 'wp_',
+        'is_multisite' => $isMultisite,
+        'blog_id' => $isSubsite ? 7 : 1,
+        'site_url' => $isSubsite ? 'http://example.test/wpfts-ms-fixture/' : 'http://example.test/',
+        'table_prefix' => $prefix,
         'fts_tables' => $tables,
         'fts_row_counts' => $counts,
         'options' => [
@@ -277,6 +282,42 @@ function wp_fts_upgrade_contract_inspection_payload(string $phase): array
             'post_page_count' => in_array($phase, ['before_current_upgrade', 'after_current_upgrade', 'after_repeated_repair'], true) ? 2 : 1,
         ],
         'tracked_posts' => $tracked,
+    ];
+}
+
+function wp_fts_upgrade_contract_multisite_availability_payload(): array
+{
+    return [
+        'schema' => 'wp-fts-multisite-runtime-availability-v1',
+        'is_multisite' => true,
+        'current_blog_id' => 1,
+        'table_prefix' => 'wp_',
+        'main_site_url' => 'http://example.test/',
+    ];
+}
+
+function wp_fts_upgrade_contract_multisite_deletion_filter_payload(): array
+{
+    $tables = ['wp_posts'];
+    foreach ([
+        'fts_terms',
+        'fts_postings',
+        'fts_docs',
+        'fts_doc_lengths',
+        'fts_docmeta',
+        'fts_meta',
+    ] as $suffix) {
+        $tables[] = 'wp_7_' . $suffix;
+    }
+
+    return [
+        'schema' => 'wp-fts-multisite-deletion-table-discovery-v1',
+        'site_id' => 7,
+        'table_prefix' => 'wp_7_',
+        'tables' => $tables,
+        'contains_all_fts_tables' => true,
+        'missing_fts_tables' => [],
+        'destructive_delete_run' => false,
     ];
 }
 
@@ -390,7 +431,7 @@ test_case('quality disposable upgrade smoke requires write opt-in marker and pac
 test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI command sequence', function (): void {
     $tmp = wp_fts_upgrade_contract_temp_dir();
     $commands = [];
-    $createdPostIds = [101, 202, 303];
+    $createdPostIds = [101, 202, 303, 404];
     try {
         $wpRoot = wp_fts_upgrade_contract_wp_root($tmp, true);
         $previousZip = $tmp . '/previous.zip';
@@ -415,6 +456,15 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
                 if (str_contains($joined, "\nplugin\ninstall\n{$currentZip}")) {
                     return ['exit' => 0, 'stdout' => 'Current plugin installed.', 'stderr' => ''];
                 }
+                if (str_contains($joined, "\nplugin\nactivate\nindexer") && str_contains($joined, "\n--network")) {
+                    return ['exit' => 0, 'stdout' => 'Plugin network activated.', 'stderr' => ''];
+                }
+                if (str_contains($joined, "\nsite\ncreate")) {
+                    return ['exit' => 0, 'stdout' => "7\n", 'stderr' => ''];
+                }
+                if (str_contains($joined, "\nsite\ndelete")) {
+                    return ['exit' => 0, 'stdout' => 'Deleted site 7.', 'stderr' => ''];
+                }
                 if (str_contains($joined, "\nfts\nstatus")) {
                     return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json(wp_fts_upgrade_contract_status_payload(str_contains($joined, 'before upgraded queue') ? 1 : 0)), 'stderr' => ''];
                 }
@@ -429,10 +479,11 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
                     ]), 'stderr' => ''];
                 }
                 if (str_contains($joined, "\nfts\nsearch")) {
+                    $postId = str_contains($joined, "--url=http://example.test/wpfts-ms-") ? 404 : 202;
                     return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json([
                         'total' => 1,
                         'results' => [
-                            ['post_id' => 202, 'doc_id' => 202, 'title' => 'WP FTS upgrade indexed fixture'],
+                            ['post_id' => $postId, 'doc_id' => $postId, 'title' => 'WP FTS upgrade indexed fixture'],
                         ],
                     ]), 'stderr' => ''];
                 }
@@ -443,7 +494,13 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
                     return ['exit' => 0, 'stdout' => 'Deleted document.', 'stderr' => ''];
                 }
                 if (str_contains($joined, "\neval\n")) {
-                    foreach (['before_previous_activation', 'after_previous_activation', 'before_current_upgrade', 'after_current_upgrade', 'after_repeated_repair'] as $phase) {
+                    if (str_contains($joined, 'wp-fts-multisite-runtime-availability-v1')) {
+                        return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json(wp_fts_upgrade_contract_multisite_availability_payload()), 'stderr' => ''];
+                    }
+                    if (str_contains($joined, 'wp-fts-multisite-deletion-table-discovery-v1')) {
+                        return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json(wp_fts_upgrade_contract_multisite_deletion_filter_payload()), 'stderr' => ''];
+                    }
+                    foreach (['before_previous_activation', 'after_previous_activation', 'before_current_upgrade', 'after_current_upgrade', 'after_repeated_repair', 'multisite_main_after_network_activation', 'multisite_subsite_after_creation', 'multisite_subsite_after_indexing'] as $phase) {
                         if (str_contains($joined, "\$phase = '{$phase}'")) {
                             return ['exit' => 0, 'stdout' => wp_fts_upgrade_contract_json(wp_fts_upgrade_contract_inspection_payload($phase)), 'stderr' => ''];
                         }
@@ -474,6 +531,30 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
                 "upgrade smoke should run wp {$first} {$second}"
             );
         }
+        wp_fts_upgrade_contract_true(
+            is_array(wp_fts_upgrade_contract_find_command($commands, 'plugin', 'activate')),
+            'upgrade smoke should network-activate the current plugin for multisite proof'
+        );
+        wp_fts_upgrade_contract_true(
+            is_array(wp_fts_upgrade_contract_find_command($commands, 'site', 'create')),
+            'upgrade smoke should create a disposable multisite blog'
+        );
+        wp_fts_upgrade_contract_true(
+            is_array(wp_fts_upgrade_contract_find_command($commands, 'site', 'delete')),
+            'upgrade smoke should delete the disposable multisite blog during cleanup'
+        );
+        wp_fts_upgrade_contract_true(
+            count(array_filter($commands, static function (array $command): bool {
+                foreach ($command as $arg) {
+                    if (str_starts_with($arg, '--url=http://example.test/wpfts-ms-')) {
+                        return true;
+                    }
+                }
+
+                return false;
+            })) > 0,
+            'upgrade smoke should target the disposable subsite with --url'
+        );
         $repairs = 0;
         foreach ($commands as $command) {
             if (str_contains(implode("\n", $command), "\nfts\nrepair")) {
@@ -481,7 +562,7 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
                 wp_fts_upgrade_contract_true(in_array('--format=json', $command, true), 'wp fts repair should request JSON evidence');
             }
         }
-        wp_fts_upgrade_contract_same(2, $repairs, 'upgrade smoke should prove repair idempotence with two repairs');
+        wp_fts_upgrade_contract_same(3, $repairs, 'upgrade smoke should prove two upgrade repairs plus one multisite subsite repair');
 
         $encodedReport = wp_fts_upgrade_contract_json($result['report']);
         foreach ([
@@ -491,10 +572,14 @@ test_case('quality disposable upgrade smoke builds bounded upgrade WP-CLI comman
             'queue_health_after_upgrade',
             'activation_upgrade_repair_content_mutation_bounded_to_fixtures',
             'public_submission_artifacts_created',
-            'not_run',
+            'multisite_runtime_proof',
+            'site_deletion_table_discovery',
+            'network_active_current_package_for_runtime_proof',
         ] as $needle) {
             wp_fts_upgrade_contract_contains($needle, $encodedReport, "upgrade report should contain {$needle}");
         }
+        wp_fts_upgrade_contract_same('passed', $result['report']['multisite_evidence']['status'] ?? null, 'fake disposable upgrade command sequence should pass multisite proof');
+        wp_fts_upgrade_contract_same(true, $result['report']['covered_behaviors']['multisite_runtime_proof'] ?? null, 'covered behaviors should mark runtime multisite proof only after pass');
     } finally {
         wp_fts_upgrade_contract_remove_tree($tmp);
     }
@@ -521,6 +606,8 @@ test_case('quality Docker disposable upgrade/multisite wrapper is guarded and di
         'MARIADB_PASSWORD: wpfts_upgrade_smoke_dev_only',
         'MARIADB_ROOT_PASSWORD: wpfts_upgrade_smoke_root_dev_only',
         'WORDPRESS_DB_PASSWORD: wpfts_upgrade_smoke_dev_only',
+        'WORDPRESS_CONFIG_EXTRA: |',
+        "define('WP_ALLOW_MULTISITE', true);",
         '${PROOF_ROOT}/plugin:/smoke-src:ro',
         '${PROOF_ROOT}/release:/release:ro',
         '${PROOF_ROOT}/reports:/smoke-reports',
@@ -536,6 +623,8 @@ test_case('quality Docker disposable upgrade/multisite wrapper is guarded and di
         '"COMPOSER_CACHE_DIR=${composer_cache_dir}"',
         'env "${composer_env[@]}" composer install --working-dir="${PROOF_ROOT}/plugin" --no-interaction --no-dev --optimize-autoloader',
         "run_step \"Installing source-copy Composer production dependencies\" \\\n    run_source_copy_composer_install",
+        'core multisite-install',
+        '--url="http://wordpress"',
         'touch /var/www/html/.wp-fts-upgrade-smoke',
         'upgrade-report.json',
         'upgrade-output.txt',
@@ -547,7 +636,6 @@ test_case('quality Docker disposable upgrade/multisite wrapper is guarded and di
         'WP_FTS_PREVIOUS_RELEASE_ZIP=/release/previous-wp-fts-indexer.zip',
         'WP_FTS_CURRENT_RELEASE_ZIP=/release/current-wp-fts-indexer.zip',
         'smoke-disposable-wordpress-upgrade.php',
-        'Multisite runtime sub-scenario not run',
         'PASS: Docker disposable upgrade/multisite smoke completed.',
     ] as $needle) {
         wp_fts_upgrade_contract_contains($needle, $script, "Docker upgrade wrapper should contain {$needle}");
@@ -625,7 +713,8 @@ test_case('quality upgrade/multisite docs and composer command are operator-faci
         'A missing previous package or previous local ref is reported as `unavailable`',
         'isolated Composer home/auth',
         'network access disabled',
-        'Multisite runtime proof is not claimed by this lane',
+        'creating an additional site',
+        'multisite_evidence.status',
     ] as $needle) {
         wp_fts_upgrade_contract_contains($needle, $testingDocs, "testing docs should mention {$needle}");
     }
@@ -636,9 +725,10 @@ test_case('quality upgrade/multisite docs and composer command are operator-faci
         '--previous-direct-package-ref=REF',
         'isolated Composer home/auth',
         'network access disabled',
-        'repair idempotence after upgrade',
+        'repair idempotence',
         'queue health after upgrade',
-        'Multisite runtime proof is not claimed',
+        'multisite network',
+        'site-deletion table discovery',
     ] as $needle) {
         wp_fts_upgrade_contract_contains($needle, $operationsDocs, "operations docs should mention {$needle}");
     }
@@ -648,7 +738,8 @@ test_case('quality upgrade/multisite docs and composer command are operator-faci
         '--previous-direct-package=/path/to/previous-wp-fts-indexer.zip',
         '--previous-direct-package-ref=PREVIOUS_LOCAL_REF_OR_SHA',
         'direct-install/operator upgrade evidence',
-        'Missing or invalid previous packages/refs are `unavailable`',
+        'invalid previous packages/refs are `unavailable`',
+        'multisite_evidence.status',
         'access disabled',
         'public-submission readiness',
     ] as $needle) {
