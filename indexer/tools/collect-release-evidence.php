@@ -1563,7 +1563,8 @@ final class WP_FTS_ReleaseEvidenceCollector
 
         $reportStatus = is_array($upgradeReport) ? (string) ($upgradeReport['status'] ?? '') : '';
         if ($reportStatus === 'passed') {
-            return $result['exit'] === 0 ? 'pass' : 'fail';
+            $multisiteStatus = is_array($upgradeReport) ? (string) ($upgradeReport['multisite_evidence_status'] ?? '') : '';
+            return $result['exit'] === 0 && $multisiteStatus === 'passed' ? 'pass' : 'fail';
         }
         if (in_array($reportStatus, ['skipped', 'skip', 'unavailable', 'not_run'], true)) {
             return 'unavailable';
@@ -1626,12 +1627,15 @@ final class WP_FTS_ReleaseEvidenceCollector
         $reportStatus = is_array($upgradeReport) ? (string) ($upgradeReport['status'] ?? '') : '';
         $multisiteStatus = is_array($upgradeReport) ? (string) ($upgradeReport['multisite_evidence_status'] ?? '') : '';
         if ($status === 'pass') {
-            return $multisiteStatus === 'passed'
-                ? 'Docker upgrade/multisite smoke completed with upgrade and multisite runtime evidence.'
-                : 'Docker upgrade smoke completed; multisite evidence is recorded as an explicit boundary, not as runtime proof.';
+            return 'Docker upgrade/multisite smoke completed with upgrade and multisite runtime evidence.';
         }
         if (in_array($reportStatus, ['skipped', 'skip', 'unavailable', 'not_run'], true)) {
             return 'Upgrade/multisite smoke reported status ' . self::sanitize_text($reportStatus, 80) . '; not treated as upgrade proof.';
+        }
+        if ($status === 'fail' && $reportStatus === 'passed' && $multisiteStatus !== 'passed') {
+            return 'Docker upgrade/multisite smoke reported upgrade status passed but multisite evidence status '
+                . self::sanitize_text($multisiteStatus !== '' ? $multisiteStatus : 'missing', 80)
+                . '; not treated as multisite runtime proof.';
         }
         if ($status === 'fail' && $reportStatus === '') {
             return 'Docker upgrade/multisite smoke did not emit a parseable inner upgrade report with status passed.';

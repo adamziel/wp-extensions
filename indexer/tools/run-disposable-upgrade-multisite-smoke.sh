@@ -43,8 +43,8 @@ usage() {
 Usage: tools/run-disposable-upgrade-multisite-smoke.sh --previous-package=/path/to/previous.zip
 
 Builds the current direct-install ZIP in temporary storage, installs a supplied
-previous direct-install ZIP into a disposable Docker WordPress/MariaDB stack,
-upgrades it to the current ZIP, and records explicit multisite boundary evidence.
+previous direct-install ZIP into a disposable Docker WordPress/MariaDB multisite
+stack, upgrades it to the current ZIP, and records real multisite runtime evidence.
 TXT
 }
 
@@ -166,6 +166,17 @@ echo is_array($report) && is_string($report["status"] ?? null) ? $report["status
     if [[ "${report_status}" != "passed" ]]; then
         cat "${UPGRADE_OUTPUT_FILE}" >&2
         printf 'FAIL: Inner upgrade smoke reported status "%s"; expected "passed".\n' "${report_status}" >&2
+        return 1
+    fi
+
+    local multisite_status
+    multisite_status="$(php -r '
+$report = json_decode((string) @file_get_contents($argv[1] ?? ""), true);
+echo is_array($report) && is_string($report["multisite_evidence"]["status"] ?? null) ? $report["multisite_evidence"]["status"] : "";
+' "${UPGRADE_REPORT_FILE}")"
+    if [[ "${multisite_status}" != "passed" ]]; then
+        cat "${UPGRADE_OUTPUT_FILE}" >&2
+        printf 'FAIL: Inner upgrade smoke reported multisite_evidence.status "%s"; expected "passed".\n' "${multisite_status}" >&2
         return 1
     fi
 
@@ -299,10 +310,10 @@ if [[ "${wp_config_ready}" != "1" ]]; then
     exit 1
 fi
 
-run_step "Installing disposable WordPress site" \
-    docker compose -f "${COMPOSE_FILE}" run --rm wpcli core install \
+run_step "Installing disposable WordPress multisite network" \
+    docker compose -f "${COMPOSE_FILE}" run --rm wpcli core multisite-install \
         --path=/var/www/html \
-        --url="http://wordpress:80" \
+        --url="http://wordpress" \
         --title="WP FTS Upgrade Smoke" \
         --admin_user=admin \
         --admin_password="wpfts_upgrade_smoke_admin_only" \
@@ -313,14 +324,13 @@ run_step "Marking disposable WordPress root for guarded upgrade smoke" \
     docker compose -f "${COMPOSE_FILE}" run --rm --entrypoint sh wpcli -lc \
         'touch /var/www/html/.wp-fts-upgrade-smoke'
 
-printf 'INFO: Multisite runtime sub-scenario not run; this Docker wrapper records an explicit multisite boundary.\n'
-
 run_upgrade_step "Running disposable upgrade smoke from previous package to current package" \
     docker compose -f "${COMPOSE_FILE}" run --rm --entrypoint php \
         -e WP_FTS_WP_PATH=/var/www/html \
         -e WP_FTS_WP_CLI=wp \
-        -e WP_FTS_WP_URL=http://wordpress:80 \
+        -e WP_FTS_WP_URL=http://wordpress \
         -e WP_FTS_UPGRADE_SMOKE_ALLOW=1 \
+        -e WP_FTS_UPGRADE_SMOKE_NETWORK_ACTIVATE=1 \
         -e "WP_FTS_SOURCE_SHA=${SOURCE_SHA}" \
         -e WP_FTS_PREVIOUS_RELEASE_ZIP=/release/previous-wp-fts-indexer.zip \
         -e WP_FTS_CURRENT_RELEASE_ZIP=/release/current-wp-fts-indexer.zip \

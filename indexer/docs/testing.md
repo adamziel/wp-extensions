@@ -311,14 +311,19 @@ composer test:smoke:upgrade-multisite:docker -- --previous-package=/path/to/prev
 
 The wrapper copies the supplied previous ZIP into temporary storage, builds the
 current direct-install ZIP in temporary storage, starts disposable WordPress and
-MariaDB containers, marks the WordPress root with `.wp-fts-upgrade-smoke`, and
-runs `tools/smoke-disposable-wordpress-upgrade.php`. The inner runner installs
-and activates the previous package, creates disposable fixture content, indexes
-and searches that fixture, installs the current package over it, verifies schema
-version/status after upgrade, runs repair twice for repair idempotence after
-upgrade, checks search continuity and queue health after upgrade, and deletes
-the generated fixture posts before the wrapper destroys containers, volumes,
-temporary roots, temporary ZIPs, and reports.
+MariaDB containers, installs WordPress as a multisite network, marks the
+WordPress root with `.wp-fts-upgrade-smoke`, and runs
+`tools/smoke-disposable-wordpress-upgrade.php`. The inner runner
+network-activates the previous package, creates disposable fixture content,
+indexes and searches that fixture, installs the current package over it,
+verifies schema version/status after upgrade, runs repair twice for repair
+idempotence after upgrade, checks search continuity and queue health after
+upgrade, creates an additional disposable site, proves that non-main site's six
+`fts_*` tables use the subsite table prefix, proves subsite
+indexing/search/queue/repair behavior, proves the WordPress deletion-table
+filter contributes the target site's FTS tables, and deletes generated fixture
+posts before the wrapper destroys containers, volumes, temporary roots,
+temporary ZIPs, and reports.
 
 The release evidence collector records this Docker upgrade/multisite lane as
 skipped by default:
@@ -344,12 +349,12 @@ available, network access disabled, and credential-capable environment variables
 scrubbed before the historical builder or nested Composer process can inherit
 them. Previous refs containing Composer auth files such as `indexer/auth.json`
 or `indexer/.composer/auth.json` are rejected before checkout/archive. Missing
-Docker, Docker Compose, or daemon access remains a wrapper `SKIP:` and is recorded by the collector as
-non-pass/unavailable because no disposable runtime proof was possible.
-Multisite runtime proof is not claimed by this lane; the current wrapper records
-an explicit `not_run` multisite boundary instead of treating single-site upgrade
-evidence as network evidence. This is direct-install/operator evidence only and
-is not public-submission readiness.
+Docker, Docker Compose, or daemon access remains a wrapper `SKIP:` and is
+recorded by the collector as non-pass/unavailable because no disposable runtime
+proof was possible. The collector only passes the lane when the decoded wrapper
+proof includes `multisite_evidence_status` as `passed`; an upgrade-only report
+without multisite runtime evidence is not a pass. This is
+direct-install/operator evidence only and is not public-submission readiness.
 
 ## Analyzer Language Quality
 
