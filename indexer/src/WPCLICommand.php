@@ -294,6 +294,115 @@ final class WP_FTS_WPCLI_Command
     }
 
     /**
+     * Show bounded failed-item recovery records.
+     *
+     * ## OPTIONS
+     *
+     * [--post_id=<id>]
+     * : Inspect one failed post record. Alias: --post-id.
+     *
+     * [--limit=<n>]
+     * : Maximum recent records to include. Default: 10.
+     *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * @param string[] $args Positional arguments; unused.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function failed_items(array $args, array $assoc_args): void
+    {
+        $postId = $this->non_negative_int_arg($this->assoc_arg($assoc_args, ['post_id', 'post-id'], 0), 0);
+        $limit = $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10);
+
+        $this->output_assoc(WP_FTS_Plugin::failure_recovery_status($limit, $postId), $assoc_args);
+    }
+
+    /**
+     * Mark failed items retryable and enqueue them for a later bounded pass.
+     *
+     * ## OPTIONS
+     *
+     * [<post_id>]
+     * : Failed post ID to retry.
+     *
+     * [--all]
+     * : Retry a bounded set of recent failed records when no post ID is supplied.
+     *
+     * [--limit=<n>]
+     * : Maximum records to retry with --all. Default: 10.
+     *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * @param string[] $args Optional first positional argument is the post id.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function retry_failed_item(array $args, array $assoc_args): void
+    {
+        $postId = isset($args[0]) ? $this->non_negative_int_arg($args[0], 0) : 0;
+        $all = $this->bool_flag_arg($assoc_args, ['all'], false);
+        $limit = $all ? $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10) : 1;
+        if ($postId <= 0 && !$all) {
+            $this->output_assoc([
+                'schema' => 'wp-fts-failure-recovery-v1',
+                'action' => 'retry',
+                'status' => 'post_id_required',
+                'matched_count' => 0,
+                'updated_count' => 0,
+                'queued_count' => 0,
+                'items' => [],
+                'message' => 'Pass a failed post ID or --all with a bounded --limit.',
+            ], $assoc_args);
+            return;
+        }
+
+        $this->output_assoc(WP_FTS_Plugin::retry_failed_item_recovery($postId, $limit), $assoc_args);
+    }
+
+    /**
+     * Clear failed-item recovery metadata without deleting content or index rows.
+     *
+     * ## OPTIONS
+     *
+     * [<post_id>]
+     * : Failed post ID whose recovery metadata should be cleared.
+     *
+     * [--all]
+     * : Clear a bounded set of recent failed records when no post ID is supplied.
+     *
+     * [--limit=<n>]
+     * : Maximum records to clear with --all. Default: 10.
+     *
+     * [--format=<format>]
+     * : Output format. Default: table. Supports json for automation.
+     *
+     * @param string[] $args Optional first positional argument is the post id.
+     * @param array<string,mixed> $assoc_args WP-CLI options.
+     */
+    public function clear_failed_item(array $args, array $assoc_args): void
+    {
+        $postId = isset($args[0]) ? $this->non_negative_int_arg($args[0], 0) : 0;
+        $all = $this->bool_flag_arg($assoc_args, ['all'], false);
+        $limit = $all ? $this->positive_int_arg($this->assoc_arg($assoc_args, ['limit'], 10), 10) : 1;
+        if ($postId <= 0 && !$all) {
+            $this->output_assoc([
+                'schema' => 'wp-fts-failure-recovery-v1',
+                'action' => 'clear',
+                'status' => 'post_id_required',
+                'matched_count' => 0,
+                'updated_count' => 0,
+                'queued_count' => 0,
+                'items' => [],
+                'message' => 'Pass a failed post ID or --all with a bounded --limit.',
+            ], $assoc_args);
+            return;
+        }
+
+        $this->output_assoc(WP_FTS_Plugin::clear_failed_item_recovery($postId, $limit), $assoc_args);
+    }
+
+    /**
      * Schedule the background queue processor when pending work exists.
      *
      * This only restores the future WP-Cron event. It does not process, index,

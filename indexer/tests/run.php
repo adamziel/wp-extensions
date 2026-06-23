@@ -9481,6 +9481,219 @@ test_case('manual backfill failure records error, continues, and later clean bat
     assert_same('', $cleanHealth['last_error'], 'later clean batch should clear stale error details');
 });
 
+test_case('failed item recovery history is bounded sanitized and durable across batches', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+
+    try {
+        for ($i = 0; $i < 25; $i++) {
+            $postId = 1000 + $i;
+            $GLOBALS['wp_fts_test_posts'][$postId] = wp_fts_test_backfill_post($postId, 'post', 'publish', 'Recovery <b>Failure</b> ' . $i);
+            $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [$postId];
+            $fake->failDocWriteErrors[$postId] = "history failure {$i} SELECT * FROM wp_users WHERE user_pass = 'secret'\n#0 trace token=must-not-render";
+
+            WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1, 'source' => 'history-test']);
+        }
+
+        $history = WP_FTS_Plugin::failure_recovery_status(25);
+        $encoded = json_encode($history, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+        $goodPost = wp_fts_test_backfill_post(2000, 'post', 'publish', 'Recovery Clean Batch');
+        $GLOBALS['wp_fts_test_posts'][2000] = $goodPost;
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [2000];
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1, 'source' => 'history-clean']);
+        $afterClean = WP_FTS_Plugin::failure_recovery_status(25);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('wp-fts-failure-recovery-v1', $history['schema'] ?? null, 'failure recovery should expose a stable schema');
+    assert_true(($history['total_count'] ?? 0) > 0 && ($history['total_count'] ?? 0) <= 20, 'failure recovery history should be bounded by item count and byte size');
+    assert_true(count($history['recent_items'] ?? []) > 0 && count($history['recent_items'] ?? []) <= ($history['total_count'] ?? 0), 'failure recovery status should clamp requested limits to the bounded history size and byte budget');
+    assert_same(1024, $history['recent_items'][0]['post_id'] ?? null, 'failure recovery should keep newest failures first');
+    assert_true(!in_array(1000, array_column($history['recent_items'] ?? [], 'post_id'), true), 'failure recovery should discard oldest records past the bound');
+    assert_same('backoff', $history['recent_items'][0]['status'] ?? null, 'first failures should enter bounded backoff');
+    assert_same(1, $history['recent_items'][0]['failure_count'] ?? null, 'failure recovery should count item failures');
+    assert_same(1, $history['recent_items'][0]['attempt_count'] ?? null, 'failure recovery should count item attempts');
+    assert_true(strlen($encoded) <= ($history['bytes_limit'] ?? 0), 'failure recovery JSON should remain byte bounded');
+    assert_true(!str_contains($encoded, 'SELECT * FROM'), 'failure recovery should not store raw SQL');
+    assert_true(!str_contains($encoded, '#0'), 'failure recovery should not store stack traces');
+    assert_true(!str_contains($encoded, 'must-not-render'), 'failure recovery should redact secret-looking values');
+    assert_true(!str_contains($encoded, '<b>'), 'failure recovery should sanitize titles');
+    assert_same($history['total_count'] ?? null, $afterClean['total_count'] ?? null, 'clean later batches should not erase unrelated durable failure history');
+    assert_true(isset($fake->docs[2000]), 'clean durability check should still index unrelated queued work');
+});
+
+test_case('repeated failed items quarantine and do not starve unrelated automatic work', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $bad = wp_fts_test_backfill_post(2101, 'post', 'publish', 'Repeated Bad');
+    $GLOBALS['wp_fts_test_posts'][2101] = $bad;
+    $fake->postRows = [
+        $bad,
+        wp_fts_test_backfill_post(2102, 'post', 'publish', 'Unrelated Good One'),
+        wp_fts_test_backfill_post(2103, 'post', 'publish', 'Unrelated Good Two'),
+    ];
+    $fake->failDocWriteErrors[2101] = "repeated failure INSERT INTO wp_fts_docs VALUES secret=must-not-render\n#0 stack";
+
+    try {
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [2101];
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        WP_FTS_Plugin::retry_failed_item_recovery(2101, 1);
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        WP_FTS_Plugin::retry_failed_item_recovery(2101, 1);
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+
+        $quarantined = WP_FTS_Plugin::failure_recovery_status(10, 2101);
+        $afterQuarantine = WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 2]);
+        $health = WP_FTS_Plugin::search_health();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same(3, $fake->failedDocWriteAttempts[2101] ?? 0, 'repeated failure setup should attempt the bad item three times');
+    assert_same(1, $quarantined['quarantined_count'] ?? null, 'third repeated failure should quarantine the item');
+    assert_same('quarantined', $quarantined['recent_items'][0]['status'] ?? null, 'quarantined item should be visible in recovery status');
+    assert_same(3, $quarantined['recent_items'][0]['failure_count'] ?? null, 'quarantined item should keep the failure count');
+    assert_same(2, $afterQuarantine['processed'] ?? null, 'automatic processing should continue unrelated backfill work after quarantine');
+    assert_same(2, $afterQuarantine['backfill_processed'] ?? null, 'unrelated backfill rows should use the available batch capacity');
+    assert_same(1, $afterQuarantine['failure_recovery_skipped'] ?? null, 'automatic processing should report the skipped quarantined row');
+    assert_same(3, $fake->failedDocWriteAttempts[2101] ?? 0, 'quarantined item should not be retried indefinitely by automatic backfill');
+    assert_true(!isset($fake->docs[2101]), 'quarantined item should not be marked indexed');
+    assert_true(isset($fake->docs[2102], $fake->docs[2103]), 'unrelated items should be indexed while the bad item remains quarantined');
+    assert_same(false, $health['has_more'] ?? null, 'quarantined-only remaining work should not look like ordinary automatic backlog');
+});
+
+test_case('wp-cli failed item recovery controls emit stable json and only mutate intended metadata or queue state', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_posts'][3101] = wp_fts_test_backfill_post(3101, 'post', 'publish', 'CLI Failed Recovery');
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [3101];
+    $fake->failDocWriteErrors[3101] = "cli failure DELETE FROM wp_users token=must-not-render\n#0 stack";
+
+    try {
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        $command = new WP_FTS_WPCLI_Command();
+
+        $listRaw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->failed_items([], ['format' => 'json']);
+        });
+        $list = wp_fts_test_decode_cli_json_object($listRaw);
+        $listJson = json_encode($list, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+
+        $retryRaw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->retry_failed_item([3101], ['format' => 'json']);
+        });
+        $retry = wp_fts_test_decode_cli_json_object($retryRaw);
+        $docsAfterRetry = $fake->docs;
+        $attemptsAfterRetry = $fake->failedDocWriteAttempts[3101] ?? 0;
+        $queueAfterRetry = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [];
+
+        $clearRaw = wp_fts_test_capture_cli(static function () use ($command): void {
+            $command->clear_failed_item([3101], ['format' => 'json']);
+        });
+        $clear = wp_fts_test_decode_cli_json_object($clearRaw);
+        $afterClear = WP_FTS_Plugin::failure_recovery_status();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_same('wp-fts-failure-recovery-v1', $list['schema'] ?? null, 'failed-items JSON should expose stable schema');
+    assert_same(1, $list['total_count'] ?? null, 'failed-items JSON should expose record count');
+    assert_same(3101, $list['recent_items'][0]['post_id'] ?? null, 'failed-items JSON should expose the failed post id');
+    assert_true(!str_contains($listJson, 'DELETE FROM'), 'failed-items JSON should not expose raw SQL');
+    assert_true(!str_contains($listJson, '#0'), 'failed-items JSON should not expose stack traces');
+    assert_true(!str_contains($listJson, 'must-not-render'), 'failed-items JSON should redact secret-looking values');
+
+    assert_same('retry', $retry['action'] ?? null, 'retry JSON should identify the action');
+    assert_same('retryable', $retry['status'] ?? null, 'retry JSON should report retryable status');
+    assert_same(1, $retry['matched_count'] ?? null, 'retry JSON should report the selected record');
+    assert_same(1, $retry['queued_count'] ?? null, 'retry should enqueue the selected failed item');
+    assert_same([3101], $queueAfterRetry, 'retry should only change queue state by adding the selected post');
+    assert_same([], $docsAfterRetry, 'retry should not index content directly');
+    assert_same(1, $attemptsAfterRetry, 'retry should not attempt indexing in the retry command');
+
+    assert_same('clear', $clear['action'] ?? null, 'clear JSON should identify the action');
+    assert_same('cleared', $clear['status'] ?? null, 'clear JSON should report cleared status');
+    assert_same(1, $clear['matched_count'] ?? null, 'clear JSON should report the selected record');
+    assert_same(0, $afterClear['total_count'] ?? null, 'clear should remove failed-item recovery metadata');
+    assert_same([3101], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'clear should not remove existing queued retry state');
+    assert_same([], $fake->docs, 'clear should not delete or create indexed rows');
+});
+
+test_case('failure recovery status and health rendering are read only and redacted', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
+        'failure_history' => [
+            [
+                'post_id' => 4101,
+                'title' => 'Health <b>Failure</b>',
+                'status' => 'quarantined',
+                'failure_count' => 3,
+                'attempt_count' => 3,
+                'first_failed_at' => '2026-06-20 10:00:00',
+                'last_failed_at' => '2026-06-20 10:10:00',
+                'mode' => 'cron',
+                'source' => 'cron',
+                'error_class' => 'RuntimeException',
+                'error_message' => "SELECT * FROM wp_users\n#0 stack token=must-not-render",
+                'error_summary' => "RuntimeException: SELECT * FROM wp_users\n#0 stack token=must-not-render",
+            ],
+        ],
+    ];
+    $optionsBefore = $GLOBALS['wp_fts_test_options'];
+
+    try {
+        $status = WP_FTS_Plugin::operator_status();
+        $html = wp_fts_test_capture_admin_settings_tab('health');
+        $encodedStatus = json_encode($status['failure_recovery'] ?? [], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $recovery = is_array($status['failure_recovery'] ?? null) ? $status['failure_recovery'] : [];
+    assert_same('wp-fts-failure-recovery-v1', $recovery['schema'] ?? null, 'operator status should expose failure recovery schema');
+    assert_same(1, $recovery['total_count'] ?? null, 'operator status should expose failure recovery count');
+    assert_same(1, $recovery['quarantined_count'] ?? null, 'operator status should expose quarantined count');
+    assert_same('Health Failure (ID 4101)', $recovery['recent_items'][0]['label'] ?? null, 'operator status should expose bounded sanitized item labels');
+    assert_contains('Quarantined failed items require explicit operator retry', (string) ($recovery['advice'] ?? ''), 'operator status should expose recovery advice');
+    assert_contains('<h3>Failure recovery</h3>', $html, 'Health tab should render failure recovery visibility');
+    assert_contains('<th scope="row">Failed item history</th><td>1 tracked (0 retryable, 0 waiting, 1 quarantined)</td>', $html, 'Health tab should render failure recovery counts');
+    assert_contains('Health Failure (ID 4101) [quarantined]', $html, 'Health tab should render recent failed item labels');
+    assert_true(!str_contains($encodedStatus . $html, 'SELECT * FROM'), 'failure recovery status and health should not expose raw SQL');
+    assert_true(!str_contains($encodedStatus . $html, '#0'), 'failure recovery status and health should not expose stack traces');
+    assert_true(!str_contains($encodedStatus . $html, 'must-not-render'), 'failure recovery status and health should redact secret-looking values');
+    assert_same([], $GLOBALS['wp_fts_test_added_options'], 'read-only failure recovery status should not add options');
+    assert_same([], $GLOBALS['wp_fts_test_updated_options'], 'read-only failure recovery status should not update options');
+    assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'read-only failure recovery status should not delete options');
+    assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'read-only failure recovery status should not schedule queue work');
+    assert_same([], $fake->docs, 'read-only failure recovery status should not index content');
+    assert_same([], $fake->queries, 'read-only failure recovery status should not write index storage');
+    assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'read-only failure recovery status should leave stored options unchanged');
+});
+
 test_case('scheduled indexing cron backfills only the default batch and reschedules remaining work', function (): void {
     global $wpdb;
 

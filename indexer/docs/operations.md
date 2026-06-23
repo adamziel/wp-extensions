@@ -39,6 +39,13 @@ stale batch count. Stale debt means index-time configuration changed after the
 last accepted profile, so existing rows may need to be rewritten even when
 "Remaining to index" is `0`.
 
+Status also includes `failure_recovery`, a bounded read-only history of recent
+item-level indexing failures. The records include sanitized post IDs, bounded
+titles/labels, first/latest failure timestamps, attempt counts, source/mode,
+redacted error summaries, and retry state. The history is capped by item count
+and JSON byte size; it does not store post bodies, raw SQL, stack traces,
+secrets, or unbounded option payloads.
+
 Status also includes `queue_processor_schedule`, a read-only view of the
 `wp_fts_process_index_queue` WP-Cron event. `scheduled` means WordPress has a
 queue processor event waiting and reports the next UTC run time and delay.
@@ -243,10 +250,11 @@ The command requires `--yes`. Without confirmation it reports
 `confirmation_required` and does not mutate FTS storage or plugin options. With
 confirmation it clears the plugin-owned FTS documents, postings, document
 lengths, document metadata, term rows, collection metadata, pending queue, stale
-debt, and stale failure/latest-batch state. It preserves WordPress posts, post
-meta, terms, unrelated options, plugin settings, analyzer-pack options, schema
-version, and the existing `fts_*` table contract. It does not change uninstall
-behavior; uninstall remains conservative and data-retaining.
+debt, failed-item recovery metadata, and stale failure/latest-batch state. It
+preserves WordPress posts, post meta, terms, unrelated options, plugin settings,
+analyzer-pack options, schema version, and the existing `fts_*` table contract.
+It does not change uninstall behavior; uninstall remains conservative and
+data-retaining.
 
 If another index writer holds the shared lock, reset reports `skipped_locked`
 and leaves storage, queue, stale debt, failure state, and the lock untouched.
@@ -499,11 +507,35 @@ and `stale_debt_active` as false if you intentionally want to catch up through
 bounded operator steps.
 
 If `wp fts status` reports `last_batch_failures` greater than zero, inspect the
-bounded failure fields (`last_failed_post_id`, `last_failed_post_title`,
-`last_failed_at`, and `last_error`). Fix the underlying post or environment
-problem, then run `wp fts process-batch` again or use a scoped `wp fts reindex`
-for the affected post type/status. Failure messages are intentionally concise
-and do not include stack traces or raw SQL.
+bounded latest-failure fields (`last_failed_post_id`, `last_failed_post_title`,
+`last_failed_at`, and `last_error`) and the durable recovery list:
+
+```sh
+wp fts failed-items
+wp fts failed-items --format=json
+wp fts failed-items --post_id=123 --format=json
+```
+
+Failed items enter conservative backoff first. After repeated failures they are
+quarantined, and automatic queue, backfill, and stale-debt passes skip them so
+unrelated indexing can continue. Fix the underlying post or environment problem
+before retrying. Retry marks selected recovery records retryable and queues them
+for a later bounded pass; it does not index content directly:
+
+```sh
+wp fts retry-failed-item 123 --format=json
+wp fts process-batch --batch_size=25 --time_budget=20
+```
+
+Clearing removes only failure-recovery metadata. It does not delete WordPress
+content, remove indexed rows, or clear an already queued retry:
+
+```sh
+wp fts clear-failed-item 123 --format=json
+```
+
+For bulk operator recovery, use `--all --limit=<n>` with a small limit. Failure
+messages are intentionally concise and do not include stack traces or raw SQL.
 
 If collection metadata or snippet metadata looks wrong, run:
 

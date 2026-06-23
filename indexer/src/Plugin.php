@@ -52,6 +52,13 @@ final class WP_FTS_Plugin
     private const MAX_INDEX_FAILURE_ERROR_BYTES = 240;
     private const MAX_INDEX_DIAGNOSTIC_TEXT_BYTES = 160;
     private const MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES = 120;
+    private const FAILURE_RECOVERY_SCHEMA = 'wp-fts-failure-recovery-v1';
+    private const FAILURE_RECOVERY_MAX_ITEMS = 20;
+    private const FAILURE_RECOVERY_RECENT_ITEMS = 10;
+    private const FAILURE_RECOVERY_MAX_JSON_BYTES = 8192;
+    private const FAILURE_RECOVERY_QUARANTINE_AFTER = 3;
+    private const FAILURE_RECOVERY_BASE_BACKOFF_SECONDS = 300;
+    private const FAILURE_RECOVERY_MAX_BACKOFF_SECONDS = 3600;
     private const SUPPORT_SNAPSHOT_SCHEMA = 'wp-fts-support-snapshot-v1';
     private const SUPPORT_SNAPSHOT_MAX_JSON_BYTES = 32768;
     private const SUPPORT_SNAPSHOT_MAX_DEPTH = 6;
@@ -743,6 +750,7 @@ final class WP_FTS_Plugin
         if ($old_status !== $new_status) {
             self::tombstone_post($post_id);
             self::remove_from_queue([$post_id]);
+            self::clear_failed_item_recovery_metadata([$post_id]);
         }
     }
 
@@ -757,6 +765,7 @@ final class WP_FTS_Plugin
 
         self::tombstone_post($post_id);
         self::remove_from_queue([$post_id]);
+        self::clear_failed_item_recovery_metadata([$post_id]);
     }
 
     /**
@@ -777,11 +786,17 @@ final class WP_FTS_Plugin
         $processed = 0;
 
         foreach ($batch as $post_id) {
+            if (self::failure_recovery_post_blocked($post_id)) {
+                continue;
+            }
+
             $post = self::post_object($post_id);
             if ($post !== null && self::is_indexable_post($post)) {
                 self::index_post($post, [], self::runtime_analyzer());
+                self::clear_failed_item_recovery_metadata([$post_id]);
             } else {
                 self::tombstone_post($post_id);
+                self::clear_failed_item_recovery_metadata([$post_id]);
             }
             $processed++;
         }
@@ -890,7 +905,7 @@ final class WP_FTS_Plugin
         $state = array_replace($state, self::index_debt_state($state));
         $pending_queue_count = count(self::pending_queue());
         $stale_remaining_count = self::count_stale_debt_remaining_content($state);
-        $has_more = (bool) ($state['has_more'] ?? false);
+        $has_more = false;
         if ($pending_queue_count > 0) {
             $has_more = true;
         } elseif (self::has_eligible_unindexed_content()) {
@@ -920,7 +935,8 @@ final class WP_FTS_Plugin
         $eligible_count = self::count_eligible_content();
         $indexed_count = self::count_indexed_eligible_content();
         $remaining_count = max(0, $eligible_count - $indexed_count);
-        $queue_processor_schedule = self::queue_processor_schedule_status($health, $remaining_count);
+        $automatic_remaining_count = self::has_eligible_unindexed_content() ? $remaining_count : 0;
+        $queue_processor_schedule = self::queue_processor_schedule_status($health, $automatic_remaining_count);
         $cron_runner = self::cron_runner_status($queue_processor_schedule);
         $last_indexed_post_id = max(0, (int) ($health['last_indexed_post_id'] ?? 0));
         $last_indexed_title = is_scalar($health['last_indexed_post_title'] ?? null)
@@ -950,6 +966,7 @@ final class WP_FTS_Plugin
             'ranking_tuning' => self::operator_ranking_tuning_status($settings, $health, $stale_debt_reasons),
             'search_provider_compatibility' => self::operator_search_provider_compatibility_status(),
             'language_pack_status' => self::operator_language_pack_status(),
+            'failure_recovery' => self::failure_recovery_status(),
             'lock_state' => $lock['state'],
             'lock_active' => (bool) $lock['active'],
             'lock_mode' => $lock['mode'],
@@ -986,6 +1003,104 @@ final class WP_FTS_Plugin
             'remaining_count' => $remaining_count,
             'latest_batch_diagnostics' => self::latest_index_batch_diagnostics_from_health($health),
         ];
+    }
+
+    /**
+     * Return bounded failed-item recovery state without mutating queues or index data.
+     *
+     * @return array<string,mixed>
+     */
+    public static function failure_recovery_status(int $limit = self::FAILURE_RECOVERY_RECENT_ITEMS, int $post_id = 0): array
+    {
+        $limit = self::clamp_int($limit, 1, self::FAILURE_RECOVERY_MAX_ITEMS);
+        $post_id = max(0, $post_id);
+        $records = self::failure_recovery_records_for_display(self::index_health_state()['failure_history'] ?? []);
+        if ($post_id > 0) {
+            $records = array_values(array_filter(
+                $records,
+                static fn(array $record): bool => (int) ($record['post_id'] ?? 0) === $post_id
+            ));
+        }
+
+        $summary = self::failure_recovery_record_summary($records);
+        $summary['schema'] = self::FAILURE_RECOVERY_SCHEMA;
+        $summary['history_limit'] = self::FAILURE_RECOVERY_MAX_ITEMS;
+        $summary['bytes_limit'] = self::FAILURE_RECOVERY_MAX_JSON_BYTES;
+        $summary['quarantine_after_attempts'] = self::FAILURE_RECOVERY_QUARANTINE_AFTER;
+        $summary['recent_items'] = self::bound_failure_recovery_status_items(array_slice($records, 0, $limit), $summary);
+        $summary['advice'] = self::failure_recovery_advice($summary);
+
+        return $summary;
+    }
+
+    /**
+     * Mark failed items retryable and enqueue them for a later bounded processor pass.
+     *
+     * @return array<string,mixed>
+     */
+    public static function retry_failed_item_recovery(int $post_id = 0, int $limit = 1): array
+    {
+        $selection = self::select_failure_recovery_records_for_action($post_id, $limit);
+        if ($selection === []) {
+            return self::failure_recovery_action_result('retry', 'no_match', [], 0, 'No matching failed item recovery record was found.');
+        }
+
+        $state = self::index_health_state();
+        $records = self::failure_recovery_records_by_post_id($state['failure_history'] ?? []);
+        $updated = [];
+        foreach ($selection as $record) {
+            $id = max(0, (int) ($record['post_id'] ?? 0));
+            if ($id <= 0 || !isset($records[$id])) {
+                continue;
+            }
+
+            $records[$id]['status'] = 'retryable';
+            $records[$id]['next_retry_at'] = '';
+            $updated[] = $records[$id];
+        }
+
+        if ($updated === []) {
+            return self::failure_recovery_action_result('retry', 'no_match', [], 0, 'No matching failed item recovery record was found.');
+        }
+
+        $state['failure_history'] = self::bound_failure_recovery_records(array_values($records));
+        self::set_option(self::INDEX_HEALTH_OPTION, $state);
+
+        $queued = 0;
+        foreach ($updated as $record) {
+            $id = max(0, (int) ($record['post_id'] ?? 0));
+            if ($id <= 0) {
+                continue;
+            }
+            self::queue_post($id);
+            $queued++;
+        }
+
+        return self::failure_recovery_action_result('retry', 'retryable', $updated, $queued, 'Selected failed items were marked retryable and queued for a later bounded indexing pass.');
+    }
+
+    /**
+     * Clear only failed-item recovery metadata for selected records.
+     *
+     * @return array<string,mixed>
+     */
+    public static function clear_failed_item_recovery(int $post_id = 0, int $limit = 1): array
+    {
+        $selection = self::select_failure_recovery_records_for_action($post_id, $limit);
+        if ($selection === []) {
+            return self::failure_recovery_action_result('clear', 'no_match', [], 0, 'No matching failed item recovery record was found.');
+        }
+
+        $ids = [];
+        foreach ($selection as $record) {
+            $id = max(0, (int) ($record['post_id'] ?? 0));
+            if ($id > 0) {
+                $ids[] = $id;
+            }
+        }
+        self::clear_failed_item_recovery_metadata($ids);
+
+        return self::failure_recovery_action_result('clear', 'cleared', $selection, 0, 'Selected failed item recovery metadata was cleared. WordPress posts and indexed rows were not modified.');
     }
 
     /**
@@ -1192,6 +1307,7 @@ final class WP_FTS_Plugin
             'queue_processor_schedule' => self::support_snapshot_array_section($operator['queue_processor_schedule'] ?? []),
             'cron_runner' => self::support_snapshot_array_section($operator['cron_runner'] ?? []),
             'lock' => self::support_snapshot_array_section($operator['lock'] ?? []),
+            'failure_recovery' => self::support_snapshot_array_section($operator['failure_recovery'] ?? []),
             'stale_debt' => [
                 'active' => !empty($operator['stale_debt_active']),
                 'reasons' => self::support_snapshot_redact_value($operator['stale_debt_reasons'] ?? []),
@@ -1260,6 +1376,10 @@ final class WP_FTS_Plugin
 
         if (max(0, (int) ($operator['last_batch_failures'] ?? 0)) > 0) {
             $advice[] = 'The latest batch recorded failures; review the redacted latest batch diagnostics before retrying.';
+        }
+        $failure_recovery = is_array($operator['failure_recovery'] ?? null) ? $operator['failure_recovery'] : [];
+        if (max(0, (int) ($failure_recovery['quarantined_count'] ?? 0)) > 0) {
+            $advice[] = 'Some failed indexing items are quarantined; inspect `wp fts failed-items --format=json` and use an explicit retry or clear command after investigation.';
         }
 
         $provider = is_array($operator['search_provider_compatibility'] ?? null) ? $operator['search_provider_compatibility'] : [];
@@ -2063,6 +2183,7 @@ final class WP_FTS_Plugin
             'pending_queue_cleared' => $queue_before,
             'stale_debt_cleared' => (bool) ($health_before['stale_debt_active'] ?? false),
             'last_batch_failures_cleared' => max(0, (int) ($health_before['last_batch_failures'] ?? 0)),
+            'failure_recovery_records_cleared' => count(self::sanitize_failure_recovery_records($health_before['failure_history'] ?? [])),
             'wordpress_posts_deleted' => 0,
             'settings_preserved' => true,
             'analyzer_options_preserved' => true,
@@ -5097,6 +5218,16 @@ final class WP_FTS_Plugin
         self::render_health_status_row('Debt updated', self::lock_time_summary($health['stale_debt_updated_at'] ?? ''));
         echo '</tbody></table>';
 
+        $failure_recovery = self::failure_recovery_status();
+        echo '<h3>Failure recovery</h3>';
+        echo '<table class="widefat striped wp-fts-health-table"><tbody>';
+        self::render_health_status_row('Failed item history', self::failure_recovery_count_summary($failure_recovery));
+        self::render_health_status_row('Recent failed items', self::failure_recovery_recent_items_summary($failure_recovery));
+        self::render_health_status_row('Oldest failure', self::lock_time_summary($failure_recovery['oldest_failed_at'] ?? ''));
+        self::render_health_status_row('Newest failure', self::lock_time_summary($failure_recovery['newest_failed_at'] ?? ''));
+        self::render_health_status_row('Recovery advice', self::sanitize_index_failure_text($failure_recovery['advice'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES, false));
+        echo '</tbody></table>';
+
         echo '<h3>Latest batch</h3>';
         echo '<table class="widefat striped wp-fts-health-table"><tbody>';
         self::render_health_status_row('Last indexed content', self::last_indexed_content_summary($health));
@@ -5529,6 +5660,53 @@ final class WP_FTS_Plugin
         }
 
         return implode('; ', $parts);
+    }
+
+    /**
+     * @param array<string,mixed> $recovery
+     */
+    private static function failure_recovery_count_summary(array $recovery): string
+    {
+        $total = max(0, (int) ($recovery['total_count'] ?? 0));
+        if ($total <= 0) {
+            return 'No failed item recovery records.';
+        }
+
+        return sprintf(
+            '%d tracked (%d retryable, %d waiting, %d quarantined)',
+            $total,
+            max(0, (int) ($recovery['retryable_count'] ?? 0)),
+            max(0, (int) ($recovery['backoff_count'] ?? 0)),
+            max(0, (int) ($recovery['quarantined_count'] ?? 0))
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $recovery
+     */
+    private static function failure_recovery_recent_items_summary(array $recovery): string
+    {
+        $items = is_array($recovery['recent_items'] ?? null) ? $recovery['recent_items'] : [];
+        if ($items === []) {
+            return 'No recent failed items.';
+        }
+
+        $parts = [];
+        foreach (array_slice($items, 0, 5) as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $label = self::sanitize_index_diagnostic_text($item['label'] ?? '', 180, false);
+            $status = self::sanitize_failure_recovery_status($item['status'] ?? '') ?: 'retryable';
+            if ($label !== '') {
+                $parts[] = $label . ' [' . $status . ']';
+            }
+        }
+
+        return $parts !== []
+            ? self::sanitize_index_diagnostic_text(implode('; ', $parts), 600, false)
+            : 'No recent failed items.';
     }
 
     /**
@@ -12729,12 +12907,13 @@ JS;
         try {
             $budget = self::index_resource_budget($mode, $opts);
             $analyzer = self::runtime_analyzer();
-            $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer);
+            $block_backoff = $mode === 'cron';
+            $failed_queue_ids = self::process_queue_for_index_batch($batch_size, $budget, $summary, $analyzer, $block_backoff);
 
             $remaining_capacity = self::remaining_index_batch_capacity($batch_size, $summary);
             $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
             if ($remaining_capacity > 0 && $stop_reason === '') {
-                self::process_backfill_for_index_batch($remaining_capacity, $budget, $summary, $analyzer, $failed_queue_ids);
+                self::process_backfill_for_index_batch($remaining_capacity, $budget, $summary, $analyzer, $failed_queue_ids, $block_backoff);
             } elseif ($remaining_capacity > 0) {
                 self::remember_index_batch_stop($summary, $stop_reason);
             }
@@ -12742,7 +12921,7 @@ JS;
             $remaining_capacity = self::remaining_index_batch_capacity($batch_size, $summary);
             $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
             if ($remaining_capacity > 0 && $stop_reason === '') {
-                self::process_stale_debt_for_index_batch($remaining_capacity, $budget, $summary, $analyzer);
+                self::process_stale_debt_for_index_batch($remaining_capacity, $budget, $summary, $analyzer, $block_backoff);
             } elseif (self::stale_index_debt_active()) {
                 $summary['has_more'] = true;
                 if ($remaining_capacity > 0 && $stop_reason !== '') {
@@ -12837,6 +13016,9 @@ JS;
             'error_message' => '',
             'reschedule_decision' => '',
             'stop_reason' => '',
+            'failure_records' => [],
+            'resolved_failure_post_ids' => [],
+            'failure_recovery_skipped' => 0,
         ];
     }
 
@@ -12927,7 +13109,7 @@ JS;
      * @param array<string,mixed> $summary
      * @return int[] Failed queue IDs recorded and intentionally skipped for the rest of this batch.
      */
-    private static function process_queue_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): array
+    private static function process_queue_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer, bool $block_backoff = true): array
     {
         $queue = self::pending_queue();
         if ($queue === [] || $limit <= 0) {
@@ -12938,6 +13120,7 @@ JS;
         $remaining = array_slice($queue, count($claimed));
         $processed_ids = [];
         $failed_ids = [];
+        $skipped_ids = [];
         $index = 0;
 
         for ($index = 0, $count = count($claimed); $index < $count; $index++) {
@@ -12948,6 +13131,12 @@ JS;
             }
 
             $post_id = (int) $claimed[$index];
+            if (self::failure_recovery_post_blocked($post_id, null, $block_backoff)) {
+                $skipped_ids[] = $post_id;
+                $summary['failure_recovery_skipped'] = max(0, (int) ($summary['failure_recovery_skipped'] ?? 0)) + 1;
+                continue;
+            }
+
             $post = self::post_object($post_id);
             try {
                 if ($post !== null && self::is_indexable_post($post)) {
@@ -12955,6 +13144,7 @@ JS;
                     self::remember_indexed_post_in_summary($summary, $post);
                 } else {
                     self::tombstone_post($post_id);
+                    self::remember_resolved_failure_post_in_summary($summary, $post_id);
                 }
 
                 $processed_ids[] = $post_id;
@@ -12967,12 +13157,12 @@ JS;
         }
 
         $unprocessed_claimed = array_slice($claimed, $index);
-        $queue = self::finish_queue_batch(array_merge($processed_ids, $failed_ids), array_merge($unprocessed_claimed, $remaining));
+        $queue = self::finish_queue_batch(array_merge($processed_ids, $failed_ids, $skipped_ids), array_merge($unprocessed_claimed, $remaining));
         if ($queue !== []) {
             $summary['has_more'] = true;
         }
 
-        return $failed_ids;
+        return array_merge($failed_ids, $skipped_ids);
     }
 
     /**
@@ -12980,7 +13170,7 @@ JS;
      * @param array<string,mixed> $summary
      * @param int[] $skip_post_ids
      */
-    private static function process_backfill_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer, array $skip_post_ids = []): void
+    private static function process_backfill_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer, array $skip_post_ids = [], bool $block_backoff = true): void
     {
         if ($limit <= 0) {
             return;
@@ -12993,14 +13183,26 @@ JS;
                 $skip[$post_id] = true;
             }
         }
+        $blocked_for_recovery = array_fill_keys(self::failure_recovery_blocked_post_ids(null, $block_backoff), true);
+        foreach (array_keys($blocked_for_recovery) as $post_id) {
+            $skip[$post_id] = true;
+        }
 
         $rows = self::select_eligible_unindexed_posts($limit + count($skip) + 1);
         $summary['backfill_scanned'] = (int) ($summary['backfill_scanned'] ?? 0) + count($rows);
         if ($skip !== []) {
-            $rows = array_values(array_filter(
-                $rows,
-                static fn(object $post): bool => !isset($skip[(int) ($post->ID ?? 0)])
-            ));
+            $filtered = [];
+            foreach ($rows as $post) {
+                $post_id = (int) ($post->ID ?? 0);
+                if (isset($skip[$post_id])) {
+                    if (isset($blocked_for_recovery[$post_id])) {
+                        $summary['failure_recovery_skipped'] = max(0, (int) ($summary['failure_recovery_skipped'] ?? 0)) + 1;
+                    }
+                    continue;
+                }
+                $filtered[] = $post;
+            }
+            $rows = $filtered;
         }
         if ($rows === []) {
             return;
@@ -13023,6 +13225,7 @@ JS;
                     self::remember_indexed_post_in_summary($summary, $post);
                 } elseif ($post_id > 0) {
                     self::tombstone_post($post_id);
+                    self::remember_resolved_failure_post_in_summary($summary, $post_id);
                 }
 
                 $processed_rows++;
@@ -13055,7 +13258,7 @@ JS;
      * @param array<string,mixed> $budget
      * @param array<string,mixed> $summary
      */
-    private static function process_stale_debt_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer): void
+    private static function process_stale_debt_for_index_batch(int $limit, array $budget, array &$summary, WP_FTS_Analyzer $analyzer, bool $block_backoff = true): void
     {
         if ($limit <= 0) {
             return;
@@ -13081,17 +13284,35 @@ JS;
         $summary['stale_debt_processed_after'] = $processed_before;
         $summary['stale_debt_processing_profile_hash'] = $profile_hash;
 
-        $rows = self::select_stale_debt_posts_after_cursor($cursor, $limit + 1);
+        $blocked_post_ids = self::failure_recovery_blocked_post_ids(null, $block_backoff);
+        $blocked = array_fill_keys($blocked_post_ids, true);
+        $rows = self::select_stale_debt_posts_after_cursor($cursor, $limit + count($blocked_post_ids) + 1);
         $summary['stale_scanned'] = max(0, (int) ($summary['stale_scanned'] ?? 0)) + count($rows);
         if ($rows === []) {
             self::remember_stale_debt_completion($summary, $profile_hash);
             return;
         }
 
-        $work = array_slice($rows, 0, $limit);
+        $work = [];
+        $blocked_rows = 0;
+        foreach ($rows as $row) {
+            $post_id = isset($row->ID) ? (int) $row->ID : 0;
+            if ($post_id > 0 && isset($blocked[$post_id])) {
+                $blocked_rows++;
+                $last_cursor = max($cursor, $post_id);
+                $summary['failure_recovery_skipped'] = max(0, (int) ($summary['failure_recovery_skipped'] ?? 0)) + 1;
+                continue;
+            }
+
+            $work[] = $row;
+            if (count($work) >= $limit) {
+                break;
+            }
+        }
+
         $summary['stale_queued'] = max(0, (int) ($summary['stale_queued'] ?? 0)) + count($work);
         $processed_rows = 0;
-        $last_cursor = $cursor;
+        $last_cursor ??= $cursor;
 
         foreach ($work as $post) {
             $stop_reason = self::index_resource_budget_stop_reason($budget, (int) $summary['processed']);
@@ -13107,6 +13328,7 @@ JS;
                     self::remember_indexed_post_in_summary($summary, $post);
                 } elseif ($post_id > 0) {
                     self::tombstone_post($post_id);
+                    self::remember_resolved_failure_post_in_summary($summary, $post_id);
                 }
 
                 if ($post_id > 0) {
@@ -13125,7 +13347,7 @@ JS;
         $summary['stale_debt_cursor_after'] = $last_cursor;
         $summary['stale_debt_processed_after'] = $processed_before + max(0, (int) ($summary['stale_processed'] ?? 0));
 
-        if (count($rows) > $processed_rows) {
+        if (count($rows) > ($processed_rows + $blocked_rows)) {
             $summary['has_more'] = true;
         }
 
@@ -13409,7 +13631,16 @@ WHERE p.post_password = ''
 
     private static function has_eligible_unindexed_content(): bool
     {
-        return self::select_eligible_unindexed_posts(1) !== [];
+        $blocked = array_fill_keys(self::failure_recovery_blocked_post_ids(), true);
+        $rows = self::select_eligible_unindexed_posts(1 + count($blocked));
+        foreach ($rows as $row) {
+            $post_id = isset($row->ID) ? (int) $row->ID : 0;
+            if ($post_id > 0 && !isset($blocked[$post_id])) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function stale_index_debt_active(): bool
@@ -13481,6 +13712,22 @@ WHERE p.post_password = ''
         $summary['last_indexed_post_id'] = $post_id;
         $summary['last_indexed_post_title'] = isset($post->post_title) && is_scalar($post->post_title) ? (string) $post->post_title : '';
         $summary['last_indexed_at'] = self::current_gmt_datetime();
+        self::remember_resolved_failure_post_in_summary($summary, $post_id);
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function remember_resolved_failure_post_in_summary(array &$summary, int $post_id): void
+    {
+        if ($post_id <= 0) {
+            return;
+        }
+
+        if (!isset($summary['resolved_failure_post_ids']) || !is_array($summary['resolved_failure_post_ids'])) {
+            $summary['resolved_failure_post_ids'] = [];
+        }
+        $summary['resolved_failure_post_ids'][] = $post_id;
     }
 
     /**
@@ -13497,6 +13744,12 @@ WHERE p.post_password = ''
         $summary['last_error_message'] = self::sanitize_index_failure_text($error->getMessage(), self::MAX_INDEX_FAILURE_ERROR_BYTES);
         $summary['error_class'] = $summary['last_error_class'];
         $summary['error_message'] = $summary['last_error_message'];
+        if ($post_id > 0) {
+            if (!isset($summary['failure_records']) || !is_array($summary['failure_records'])) {
+                $summary['failure_records'] = [];
+            }
+            $summary['failure_records'][] = self::failure_recovery_event_from_failure($summary, $post_id, $post, $error);
+        }
     }
 
     /**
@@ -13619,6 +13872,9 @@ WHERE p.post_password = ''
         if ($redact_sql) {
             $text = preg_replace('/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|REPLACE)\b.*$/is', '$1 statement', (string) $text);
         }
+        $text = preg_replace('/\bBearer\s+[A-Za-z0-9._~+\/=-]+/i', 'Bearer [redacted]', (string) $text);
+        $text = preg_replace('/\b(?:token|secret|password|passwd|credential|api[_-]?key|authorization|cookie)\s*[:=]\s*[^\s,;&]+/i', '[redacted]', (string) $text);
+        $text = preg_replace('/\b(?:sk_live|sk_test|xox[baprs]-|AKIA)[A-Za-z0-9._-]+/i', '[redacted]', (string) $text);
         $text = preg_replace('/\s+/', ' ', self::sanitize_text((string) $text));
 
         return WP_FTS_Utf8::truncate_bytes(trim((string) $text), max(0, $max_bytes));
@@ -13665,6 +13921,504 @@ WHERE p.post_password = ''
         }
 
         return self::sanitize_index_failure_text($value, 32, false);
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     * @return array<string,mixed>
+     */
+    private static function failure_recovery_event_from_failure(array $summary, int $post_id, ?object $post, Throwable $error): array
+    {
+        $failed_at = is_scalar($summary['last_failed_at'] ?? null) && (string) $summary['last_failed_at'] !== ''
+            ? (string) $summary['last_failed_at']
+            : self::current_gmt_datetime();
+
+        return [
+            'post_id' => max(0, $post_id),
+            'title' => self::failure_post_title($post_id, $post),
+            'failed_at' => self::sanitize_index_timestamp($failed_at),
+            'mode' => self::sanitize_index_diagnostic_text($summary['mode'] ?? '', 40, false),
+            'source' => self::sanitize_index_diagnostic_text($summary['source'] ?? '', 60, false),
+            'error_class' => self::sanitize_index_diagnostic_text(get_class($error), self::MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES, false),
+            'error_message' => self::sanitize_index_failure_text($error->getMessage(), self::MAX_INDEX_FAILURE_ERROR_BYTES),
+            'error_summary' => self::index_failure_error_summary($error),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $state
+     * @param array<string,mixed> $summary
+     */
+    private static function apply_failure_recovery_summary(array &$state, array $summary): void
+    {
+        $records = self::failure_recovery_records_by_post_id($state['failure_history'] ?? []);
+
+        $resolved = [];
+        if (isset($summary['resolved_failure_post_ids']) && is_array($summary['resolved_failure_post_ids'])) {
+            foreach ($summary['resolved_failure_post_ids'] as $post_id) {
+                $post_id = (int) $post_id;
+                if ($post_id > 0) {
+                    $resolved[$post_id] = true;
+                }
+            }
+        }
+        foreach (array_keys($resolved) as $post_id) {
+            unset($records[$post_id]);
+        }
+
+        $events = isset($summary['failure_records']) && is_array($summary['failure_records'])
+            ? $summary['failure_records']
+            : [];
+        foreach ($events as $event) {
+            if (!is_array($event)) {
+                continue;
+            }
+
+            $post_id = max(0, (int) ($event['post_id'] ?? 0));
+            if ($post_id <= 0) {
+                continue;
+            }
+
+            $existing = $records[$post_id] ?? [];
+            $failed_at = self::sanitize_index_timestamp($event['failed_at'] ?? self::current_gmt_datetime());
+            if ($failed_at === '') {
+                $failed_at = self::current_gmt_datetime();
+            }
+
+            $failure_count = max(0, (int) ($existing['failure_count'] ?? 0)) + 1;
+            $status = $failure_count >= self::FAILURE_RECOVERY_QUARANTINE_AFTER ? 'quarantined' : 'backoff';
+            $title = self::sanitize_index_failure_text($event['title'] ?? ($existing['title'] ?? ''), self::MAX_INDEX_FAILURE_TITLE_BYTES, false);
+
+            $records[$post_id] = [
+                'post_id' => $post_id,
+                'title' => $title,
+                'label' => self::failure_recovery_item_label($post_id, $title),
+                'status' => $status,
+                'failure_count' => $failure_count,
+                'attempt_count' => max(0, (int) ($existing['attempt_count'] ?? 0)) + 1,
+                'first_failed_at' => self::sanitize_index_timestamp($existing['first_failed_at'] ?? '') ?: $failed_at,
+                'last_failed_at' => $failed_at,
+                'next_retry_at' => $status === 'backoff' ? self::failure_recovery_next_retry_at($failure_count) : '',
+                'mode' => self::sanitize_index_diagnostic_text($event['mode'] ?? '', 40, false),
+                'source' => self::sanitize_index_diagnostic_text($event['source'] ?? '', 60, false),
+                'error_class' => self::sanitize_index_diagnostic_text($event['error_class'] ?? '', self::MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES, false),
+                'error_message' => self::sanitize_index_failure_text($event['error_message'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES),
+                'error_summary' => self::sanitize_index_failure_text($event['error_summary'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES),
+            ];
+        }
+
+        $state['failure_history'] = self::bound_failure_recovery_records(array_values($records));
+    }
+
+    /**
+     * @return int[]
+     */
+    private static function failure_recovery_blocked_post_ids(?int $now = null, bool $include_backoff = true): array
+    {
+        $ids = [];
+        foreach (self::index_health_state()['failure_history'] ?? [] as $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+
+            $status = self::failure_recovery_effective_status($record, $now);
+            if ($status === 'quarantined' || ($include_backoff && $status === 'backoff')) {
+                $post_id = max(0, (int) ($record['post_id'] ?? 0));
+                if ($post_id > 0) {
+                    $ids[] = $post_id;
+                }
+            }
+        }
+
+        return array_values(array_unique($ids));
+    }
+
+    private static function failure_recovery_post_blocked(int $post_id, ?int $now = null, bool $include_backoff = true): bool
+    {
+        if ($post_id <= 0) {
+            return false;
+        }
+
+        foreach (self::failure_recovery_blocked_post_ids($now, $include_backoff) as $blocked_post_id) {
+            if ($blocked_post_id === $post_id) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private static function sanitize_failure_recovery_records(mixed $raw): array
+    {
+        $items = is_array($raw) ? $raw : [];
+        $records = [];
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $post_id = max(0, (int) ($item['post_id'] ?? 0));
+            if ($post_id <= 0) {
+                continue;
+            }
+
+            $title = self::sanitize_index_failure_text($item['title'] ?? '', self::MAX_INDEX_FAILURE_TITLE_BYTES, false);
+            $failure_count = max(0, (int) ($item['failure_count'] ?? 0));
+            $attempt_count = max($failure_count, (int) ($item['attempt_count'] ?? $failure_count));
+            $status = self::sanitize_failure_recovery_status($item['status'] ?? '');
+            if ($status === '') {
+                $status = $failure_count >= self::FAILURE_RECOVERY_QUARANTINE_AFTER ? 'quarantined' : 'retryable';
+            }
+
+            $records[] = [
+                'post_id' => $post_id,
+                'title' => $title,
+                'label' => self::failure_recovery_item_label($post_id, $title),
+                'status' => $status,
+                'failure_count' => $failure_count,
+                'attempt_count' => max(0, $attempt_count),
+                'first_failed_at' => self::sanitize_index_timestamp($item['first_failed_at'] ?? ''),
+                'last_failed_at' => self::sanitize_index_timestamp($item['last_failed_at'] ?? ''),
+                'next_retry_at' => self::sanitize_index_timestamp($item['next_retry_at'] ?? ''),
+                'mode' => self::sanitize_index_diagnostic_text($item['mode'] ?? '', 40, false),
+                'source' => self::sanitize_index_diagnostic_text($item['source'] ?? '', 60, false),
+                'error_class' => self::sanitize_index_diagnostic_text($item['error_class'] ?? '', self::MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES, false),
+                'error_message' => self::sanitize_index_failure_text($item['error_message'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES),
+                'error_summary' => self::sanitize_index_failure_text($item['error_summary'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES),
+            ];
+        }
+
+        return self::bound_failure_recovery_records($records);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $records
+     * @return array<int,array<string,mixed>>
+     */
+    private static function bound_failure_recovery_records(array $records): array
+    {
+        $by_post = [];
+        foreach ($records as $record) {
+            $post_id = max(0, (int) ($record['post_id'] ?? 0));
+            if ($post_id <= 0) {
+                continue;
+            }
+            $by_post[$post_id] = self::sanitize_failure_recovery_record($record);
+        }
+
+        $bounded = array_values($by_post);
+        usort($bounded, static function (array $a, array $b): int {
+            $last = strcmp((string) ($b['last_failed_at'] ?? ''), (string) ($a['last_failed_at'] ?? ''));
+            if ($last !== 0) {
+                return $last;
+            }
+
+            return (int) ($b['post_id'] ?? 0) <=> (int) ($a['post_id'] ?? 0);
+        });
+        $bounded = array_slice($bounded, 0, self::FAILURE_RECOVERY_MAX_ITEMS);
+
+        while ($bounded !== []) {
+            $json = function_exists('wp_json_encode')
+                ? wp_json_encode($bounded, JSON_UNESCAPED_SLASHES)
+                : json_encode($bounded, JSON_UNESCAPED_SLASHES);
+            if (is_string($json) && strlen($json) <= self::FAILURE_RECOVERY_MAX_JSON_BYTES) {
+                break;
+            }
+            array_pop($bounded);
+        }
+
+        return $bounded;
+    }
+
+    /**
+     * @param array<string,mixed> $record
+     * @return array<string,mixed>
+     */
+    private static function sanitize_failure_recovery_record(array $record): array
+    {
+        $post_id = max(0, (int) ($record['post_id'] ?? 0));
+        $title = self::sanitize_index_failure_text($record['title'] ?? '', self::MAX_INDEX_FAILURE_TITLE_BYTES, false);
+
+        return [
+            'post_id' => $post_id,
+            'title' => $title,
+            'label' => self::failure_recovery_item_label($post_id, $title),
+            'status' => self::sanitize_failure_recovery_status($record['status'] ?? '') ?: 'retryable',
+            'failure_count' => max(0, (int) ($record['failure_count'] ?? 0)),
+            'attempt_count' => max(0, (int) ($record['attempt_count'] ?? 0)),
+            'first_failed_at' => self::sanitize_index_timestamp($record['first_failed_at'] ?? ''),
+            'last_failed_at' => self::sanitize_index_timestamp($record['last_failed_at'] ?? ''),
+            'next_retry_at' => self::sanitize_index_timestamp($record['next_retry_at'] ?? ''),
+            'mode' => self::sanitize_index_diagnostic_text($record['mode'] ?? '', 40, false),
+            'source' => self::sanitize_index_diagnostic_text($record['source'] ?? '', 60, false),
+            'error_class' => self::sanitize_index_diagnostic_text($record['error_class'] ?? '', self::MAX_INDEX_DIAGNOSTIC_ERROR_CLASS_BYTES, false),
+            'error_message' => self::sanitize_index_failure_text($record['error_message'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES),
+            'error_summary' => self::sanitize_index_failure_text($record['error_summary'] ?? '', self::MAX_INDEX_FAILURE_ERROR_BYTES),
+        ];
+    }
+
+    private static function sanitize_failure_recovery_status(mixed $value): string
+    {
+        $status = is_scalar($value) ? self::sanitize_key((string) $value) : '';
+
+        return in_array($status, ['retryable', 'backoff', 'quarantined'], true) ? $status : '';
+    }
+
+    private static function failure_recovery_item_label(int $post_id, string $title): string
+    {
+        if ($post_id <= 0) {
+            return '';
+        }
+
+        $label = trim(($title !== '' ? $title : '(untitled)') . ' (ID ' . $post_id . ')');
+
+        return self::sanitize_index_diagnostic_text($label, 180, false);
+    }
+
+    private static function failure_recovery_next_retry_at(int $failure_count): string
+    {
+        $exponent = max(0, min(10, $failure_count - 1));
+        $delay = min(self::FAILURE_RECOVERY_MAX_BACKOFF_SECONDS, self::FAILURE_RECOVERY_BASE_BACKOFF_SECONDS * (2 ** $exponent));
+
+        return gmdate('Y-m-d H:i:s', time() + $delay);
+    }
+
+    /**
+     * @param array<string,mixed> $record
+     */
+    private static function failure_recovery_effective_status(array $record, ?int $now = null): string
+    {
+        $status = self::sanitize_failure_recovery_status($record['status'] ?? '');
+        if ($status === 'retryable') {
+            return 'retryable';
+        }
+        if ($status === 'quarantined') {
+            return 'quarantined';
+        }
+        if ($status === 'backoff') {
+            $retry_at = self::failure_recovery_retry_timestamp($record['next_retry_at'] ?? '');
+            if ($retry_at !== null && $retry_at > ($now ?? time())) {
+                return 'backoff';
+            }
+
+            return 'retryable';
+        }
+
+        return max(0, (int) ($record['failure_count'] ?? 0)) >= self::FAILURE_RECOVERY_QUARANTINE_AFTER
+            ? 'quarantined'
+            : 'retryable';
+    }
+
+    private static function failure_recovery_retry_timestamp(mixed $value): ?int
+    {
+        if (!is_scalar($value) || trim((string) $value) === '') {
+            return null;
+        }
+
+        $timestamp = strtotime((string) $value . ' UTC');
+
+        return $timestamp === false ? null : $timestamp;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private static function failure_recovery_records_for_display(mixed $raw): array
+    {
+        $now = time();
+        $records = [];
+        foreach (self::sanitize_failure_recovery_records($raw) as $record) {
+            $record['status'] = self::failure_recovery_effective_status($record, $now);
+            $retry_at = self::failure_recovery_retry_timestamp($record['next_retry_at'] ?? '');
+            $record['retry_after_seconds'] = $record['status'] === 'backoff' && $retry_at !== null
+                ? max(0, $retry_at - $now)
+                : null;
+            $records[] = $record;
+        }
+
+        return $records;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private static function failure_recovery_records_by_post_id(mixed $raw): array
+    {
+        $records = [];
+        foreach (self::sanitize_failure_recovery_records($raw) as $record) {
+            $post_id = max(0, (int) ($record['post_id'] ?? 0));
+            if ($post_id > 0) {
+                $records[$post_id] = $record;
+            }
+        }
+
+        return $records;
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $records
+     * @return array<string,mixed>
+     */
+    private static function failure_recovery_record_summary(array $records): array
+    {
+        $retryable = 0;
+        $backoff = 0;
+        $quarantined = 0;
+        $oldest = '';
+        $newest = '';
+        foreach ($records as $record) {
+            $status = self::sanitize_failure_recovery_status($record['status'] ?? '');
+            if ($status === 'retryable') {
+                $retryable++;
+            } elseif ($status === 'backoff') {
+                $backoff++;
+            } elseif ($status === 'quarantined') {
+                $quarantined++;
+            }
+
+            $first = self::sanitize_index_timestamp($record['first_failed_at'] ?? '');
+            $last = self::sanitize_index_timestamp($record['last_failed_at'] ?? '');
+            if ($first !== '' && ($oldest === '' || strcmp($first, $oldest) < 0)) {
+                $oldest = $first;
+            }
+            if ($last !== '' && ($newest === '' || strcmp($last, $newest) > 0)) {
+                $newest = $last;
+            }
+        }
+
+        return [
+            'total_count' => count($records),
+            'retryable_count' => $retryable,
+            'backoff_count' => $backoff,
+            'quarantined_count' => $quarantined,
+            'oldest_failed_at' => $oldest,
+            'newest_failed_at' => $newest,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $summary
+     */
+    private static function failure_recovery_advice(array $summary): string
+    {
+        if (max(0, (int) ($summary['quarantined_count'] ?? 0)) > 0) {
+            return 'Quarantined failed items require explicit operator retry or clearing. Automatic queue, backfill, and stale-debt passes skip them so unrelated indexing can continue.';
+        }
+        if (max(0, (int) ($summary['backoff_count'] ?? 0)) > 0) {
+            return 'Some failed items are in backoff and will not be retried automatically until their next retry time. Use WP-CLI retry only after the underlying issue is fixed.';
+        }
+        if (max(0, (int) ($summary['retryable_count'] ?? 0)) > 0) {
+            return 'Failed items are retryable. Use `wp fts retry-failed-item <post_id>` or let bounded automatic indexing retry eligible items.';
+        }
+        return 'No failed item recovery records are active.';
+    }
+
+    /**
+     * Keep the public status payload under the same byte budget advertised for
+     * operator automation while preserving newest-first ordering.
+     *
+     * @param array<int,array<string,mixed>> $items
+     * @param array<string,mixed> $summary
+     * @return array<int,array<string,mixed>>
+     */
+    private static function bound_failure_recovery_status_items(array $items, array $summary): array
+    {
+        $bounded = array_values($items);
+        while ($bounded !== []) {
+            $probe = $summary;
+            $probe['recent_items'] = $bounded;
+            $probe['advice'] = self::failure_recovery_advice($probe);
+            $json = function_exists('wp_json_encode')
+                ? wp_json_encode($probe, JSON_UNESCAPED_SLASHES)
+                : json_encode($probe, JSON_UNESCAPED_SLASHES);
+            if (is_string($json) && strlen($json) <= self::FAILURE_RECOVERY_MAX_JSON_BYTES) {
+                break;
+            }
+            array_pop($bounded);
+        }
+
+        return $bounded;
+    }
+
+    /**
+     * @return array<int,array<string,mixed>>
+     */
+    private static function select_failure_recovery_records_for_action(int $post_id, int $limit): array
+    {
+        $limit = self::clamp_int($limit, 1, self::FAILURE_RECOVERY_MAX_ITEMS);
+        $post_id = max(0, $post_id);
+        $records = self::failure_recovery_records_for_display(self::index_health_state()['failure_history'] ?? []);
+        if ($post_id > 0) {
+            foreach ($records as $record) {
+                if ((int) ($record['post_id'] ?? 0) === $post_id) {
+                    return [$record];
+                }
+            }
+
+            return [];
+        }
+
+        return array_slice($records, 0, $limit);
+    }
+
+    /**
+     * @param int[] $post_ids
+     */
+    private static function clear_failed_item_recovery_metadata(array $post_ids): void
+    {
+        $remove = [];
+        foreach ($post_ids as $post_id) {
+            $post_id = (int) $post_id;
+            if ($post_id > 0) {
+                $remove[$post_id] = true;
+            }
+        }
+        if ($remove === []) {
+            return;
+        }
+
+        $state = self::index_health_state();
+        $records = [];
+        $changed = false;
+        foreach (self::sanitize_failure_recovery_records($state['failure_history'] ?? []) as $record) {
+            $post_id = max(0, (int) ($record['post_id'] ?? 0));
+            if ($post_id > 0 && isset($remove[$post_id])) {
+                $changed = true;
+                continue;
+            }
+            $records[] = $record;
+        }
+
+        if (!$changed) {
+            return;
+        }
+
+        $state['failure_history'] = self::bound_failure_recovery_records($records);
+        self::set_option(self::INDEX_HEALTH_OPTION, $state);
+    }
+
+    /**
+     * @param array<int,array<string,mixed>> $items
+     * @return array<string,mixed>
+     */
+    private static function failure_recovery_action_result(string $action, string $status, array $items, int $queued, string $message): array
+    {
+        $display_items = self::failure_recovery_records_for_display($items);
+
+        return [
+            'schema' => self::FAILURE_RECOVERY_SCHEMA,
+            'action' => self::sanitize_index_diagnostic_text($action, 40, false),
+            'status' => self::sanitize_index_diagnostic_text($status, 40, false),
+            'matched_count' => count($display_items),
+            'updated_count' => $status === 'no_match' ? 0 : count($display_items),
+            'queued_count' => max(0, $queued),
+            'items' => $display_items,
+            'pending_queue_count' => count(self::pending_queue()),
+            'message' => self::sanitize_index_failure_text($message, self::MAX_INDEX_FAILURE_ERROR_BYTES, false),
+        ];
     }
 
     /**
@@ -13964,6 +14718,7 @@ WHERE p.post_password = ''
         $state['stale_debt_cursor_post_id'] = max(0, (int) ($state['stale_debt_cursor_post_id'] ?? 0));
         $state['stale_debt_processed_count'] = max(0, (int) ($state['stale_debt_processed_count'] ?? 0));
         $state['stale_debt_remaining_count'] = max(0, (int) ($state['stale_debt_remaining_count'] ?? 0));
+        $state['failure_history'] = self::sanitize_failure_recovery_records($state['failure_history'] ?? []);
 
         return $state;
     }
@@ -14002,6 +14757,7 @@ WHERE p.post_password = ''
             'stale_debt_cursor_post_id' => 0,
             'stale_debt_processed_count' => 0,
             'stale_debt_remaining_count' => 0,
+            'failure_history' => [],
         ];
     }
 
@@ -14068,6 +14824,7 @@ WHERE p.post_password = ''
         if (!empty($state['stale_debt_active'])) {
             self::update_stale_debt_health_state($state, $summary, $current_profile_hash);
         }
+        self::apply_failure_recovery_summary($state, $summary);
 
         self::set_option(self::INDEX_HEALTH_OPTION, $state);
     }
