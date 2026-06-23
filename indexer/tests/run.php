@@ -7872,6 +7872,199 @@ test_case('multisite site deletion table discovery appends per-site FTS tables a
     assert_true(!str_contains(implode("\n", $fake->queries), 'DROP TABLE'), 'site deletion table discovery should not execute destructive SQL');
 });
 
+test_case('operator status ranking tuning reports default settings', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+
+    try {
+        $status = WP_FTS_Plugin::operator_status();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $ranking = $status['ranking_tuning'] ?? null;
+    assert_true(is_array($ranking), 'operator status should expose ranking_tuning as a structured block');
+    assert_same('wp-fts-ranking-tuning-v1', $ranking['schema'] ?? null, 'ranking tuning should expose its stable schema string');
+    assert_same('OR', $ranking['match_mode'] ?? null, 'ranking tuning should expose the default match mode');
+    assert_same(true, $ranking['prefix_matching'] ?? null, 'ranking tuning should expose default prefix matching state');
+    assert_same(4, $ranking['prefix_min_length'] ?? null, 'ranking tuning should expose default prefix minimum length');
+    assert_same(64, $ranking['prefix_max_terms'] ?? null, 'ranking tuning should expose default prefix expansion cap');
+    assert_same(WP_FTS_Plugin::default_settings()['field_boosts'], $ranking['field_boosts'] ?? null, 'ranking tuning should expose sanitized default field boosts in settings order');
+    assert_same('title=5, content=1, excerpt=2, terms=1.5, custom_fields=1, rendered=1', $ranking['field_boost_summary'] ?? null, 'ranking tuning should expose the default field boost summary');
+    $recency = is_array($ranking['recency_boost'] ?? null) ? $ranking['recency_boost'] : [];
+    assert_same(false, $recency['enabled'] ?? null, 'ranking tuning should report default recency boost as disabled');
+    assert_same(0.0, $recency['strength'] ?? null, 'ranking tuning should expose the default recency strength');
+    assert_same(30.0, $recency['half_life_days'] ?? null, 'ranking tuning should expose the default recency half-life');
+    assert_same('Disabled', $recency['summary'] ?? null, 'ranking tuning should summarize default recency as disabled');
+    assert_same(true, $ranking['language_fallback_enabled'] ?? null, 'ranking tuning should expose default language fallback state');
+    assert_same(['post', 'page'], $ranking['indexed_post_types'] ?? null, 'ranking tuning should expose default indexed post types');
+    assert_same(10, $ranking['result_limit'] ?? null, 'ranking tuning should expose default result limit');
+    assert_same(180, $ranking['snippet_length'] ?? null, 'ranking tuning should expose default snippet length');
+    assert_same(true, $ranking['highlight_enabled'] ?? null, 'ranking tuning should expose default highlight state');
+    assert_same(true, $ranking['frontend_replacement_enabled'] ?? null, 'ranking tuning should expose default public replacement state');
+    assert_same(true, $ranking['admin_posts_replacement_enabled'] ?? null, 'ranking tuning should expose default admin Posts replacement state');
+    assert_same('prefer_fts', $ranking['search_provider_compatibility'] ?? null, 'ranking tuning should expose default provider compatibility mode');
+    assert_same(['indexed_post_types', 'field_boosts'], $ranking['index_time_settings'] ?? null, 'ranking tuning should identify index-time settings');
+    assert_true(in_array('recency_boost', $ranking['query_time_settings'] ?? [], true), 'ranking tuning should identify recency as query-time tuning');
+    assert_same(false, $ranking['stale_debt_active'] ?? null, 'ranking tuning should report inactive stale debt by default');
+    assert_same([], $ranking['stale_debt_reasons'] ?? null, 'ranking tuning should expose no stale debt reasons by default');
+    assert_contains('Read-only ranking tuning visibility', (string) ($ranking['advice'] ?? ''), 'ranking tuning default advice should explain read-only visibility');
+});
+
+test_case('operator status ranking tuning reflects sanitized customized settings', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_post_types']['product'] = (object) ['public' => true, 'exclude_from_search' => false];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = [
+        'index_post_types' => ['product', 'post', 'secret', 'product', ['not-scalar'], 'page'],
+        'replace_frontend_search' => '0',
+        'replace_admin_post_search' => '0',
+        'search_provider_compatibility' => 'respect_existing',
+        'highlight' => '0',
+        'snippet_length' => '1',
+        'match_mode' => 'AND',
+        'prefix_matching' => '0',
+        'prefix_min_length' => '1',
+        'prefix_max_terms' => '9999',
+        'result_limit' => '999',
+        'language_fallback' => '0',
+        'field_boosts' => [
+            'title' => '101',
+            'content' => '-3',
+            'excerpt' => '0.25',
+            'terms' => 'not-a-number',
+            'custom_fields' => '0.01',
+            'rendered' => '2.345',
+        ],
+        'recency_boost_strength' => '99',
+        'recency_boost_half_life_days' => '99999',
+    ];
+
+    try {
+        $status = WP_FTS_Plugin::operator_status();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $ranking = is_array($status['ranking_tuning'] ?? null) ? $status['ranking_tuning'] : [];
+    assert_same('AND', $ranking['match_mode'] ?? null, 'ranking tuning should expose sanitized custom match mode');
+    assert_same(false, $ranking['prefix_matching'] ?? null, 'ranking tuning should expose disabled prefix matching');
+    assert_same(2, $ranking['prefix_min_length'] ?? null, 'ranking tuning should clamp too-short prefix minimum length');
+    assert_same(256, $ranking['prefix_max_terms'] ?? null, 'ranking tuning should clamp too-large prefix max terms');
+    assert_same([
+        'title' => 100.0,
+        'content' => 1.0,
+        'excerpt' => 0.25,
+        'terms' => 1.5,
+        'custom_fields' => 0.01,
+        'rendered' => 2.345,
+    ], $ranking['field_boosts'] ?? null, 'ranking tuning should expose sanitized custom field boosts in settings order');
+    assert_same('title=100, content=1, excerpt=0.25, terms=1.5, custom_fields=0.01, rendered=2.35', $ranking['field_boost_summary'] ?? null, 'ranking tuning should summarize sanitized custom boosts');
+    $recency = is_array($ranking['recency_boost'] ?? null) ? $ranking['recency_boost'] : [];
+    assert_same(true, $recency['enabled'] ?? null, 'ranking tuning should report positive recency strength as enabled');
+    assert_same(2.0, $recency['strength'] ?? null, 'ranking tuning should clamp recency strength');
+    assert_same(3650.0, $recency['half_life_days'] ?? null, 'ranking tuning should clamp recency half-life');
+    assert_same('Enabled, strength 2, half-life 3650 days', $recency['summary'] ?? null, 'ranking tuning should summarize sanitized recency settings');
+    assert_same(false, $ranking['language_fallback_enabled'] ?? null, 'ranking tuning should expose disabled language fallback');
+    assert_same(['page', 'post', 'product'], $ranking['indexed_post_types'] ?? null, 'ranking tuning should expose bounded deduplicated scalar indexed post types');
+    assert_same(50, $ranking['result_limit'] ?? null, 'ranking tuning should clamp result limit');
+    assert_same(40, $ranking['snippet_length'] ?? null, 'ranking tuning should clamp snippet length');
+    assert_same(false, $ranking['highlight_enabled'] ?? null, 'ranking tuning should expose disabled highlighting');
+    assert_same(false, $ranking['frontend_replacement_enabled'] ?? null, 'ranking tuning should expose disabled public replacement');
+    assert_same(false, $ranking['admin_posts_replacement_enabled'] ?? null, 'ranking tuning should expose disabled admin Posts replacement');
+    assert_same('respect_existing', $ranking['search_provider_compatibility'] ?? null, 'ranking tuning should expose sanitized provider compatibility mode');
+});
+
+test_case('operator status ranking tuning reports stale debt advice and reasons', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
+        'stale_debt_active' => true,
+        'stale_debt_reasons' => ['field_boosts_changed', 'unknown_reason', 'indexed_scope_changed', 'field_boosts_changed'],
+    ];
+
+    try {
+        $status = WP_FTS_Plugin::operator_status();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    $ranking = is_array($status['ranking_tuning'] ?? null) ? $status['ranking_tuning'] : [];
+    assert_same(true, $ranking['stale_debt_active'] ?? null, 'ranking tuning should mirror active stale debt state');
+    assert_same(['field_boosts_changed', 'indexed_scope_changed'], $ranking['stale_debt_reasons'] ?? null, 'ranking tuning should expose sanitized stale debt reasons');
+    assert_contains('Stale reindex debt is active', (string) ($ranking['advice'] ?? ''), 'ranking tuning stale-debt advice should name stale reindex debt');
+    assert_contains('read-only', (string) ($ranking['advice'] ?? ''), 'ranking tuning stale-debt advice should keep the read-only boundary explicit');
+});
+
+test_case('operator status ranking tuning remains read only', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $fake->postRows = [
+        wp_fts_test_backfill_post(721, 'post', 'publish', 'Ranking Status Indexed'),
+        wp_fts_test_backfill_post(722, 'post', 'publish', 'Ranking Status Queued'),
+    ];
+    $fake->docs[721] = [
+        'lang' => 'en',
+        'doc_len' => 3,
+        'content_hash' => 'ranking-status-hash',
+        'is_deleted' => 0,
+    ];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SCHEMA_VERSION_OPTION] = WP_FTS_Plugin::SCHEMA_VERSION;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [722];
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::INDEX_HEALTH_OPTION] = [
+        'stale_debt_active' => true,
+        'stale_debt_reasons' => ['field_boosts_changed'],
+    ];
+    $GLOBALS['wp_fts_test_scheduled'][WP_FTS_Plugin::CRON_HOOK] = [
+        'timestamp' => time() + 120,
+        'hook' => WP_FTS_Plugin::CRON_HOOK,
+    ];
+    $optionsBefore = $GLOBALS['wp_fts_test_options'];
+    $scheduledBefore = $GLOBALS['wp_fts_test_scheduled'];
+    $postRowsBefore = $fake->postRows;
+    $docsBefore = $fake->docs;
+
+    try {
+        $status = WP_FTS_Plugin::operator_status();
+    } finally {
+        $wpdb = $oldWpdb;
+    }
+
+    assert_true(is_array($status['ranking_tuning'] ?? null), 'read-only status should still expose ranking tuning block');
+    assert_same([WP_FTS_Plugin::CRON_HOOK], $GLOBALS['wp_fts_test_next_scheduled_calls'], 'ranking tuning status should only inspect the existing cron schedule through operator status');
+    assert_same([], $GLOBALS['wp_fts_test_schedule_calls'], 'ranking tuning status should not schedule queue processors');
+    assert_same([], $GLOBALS['wp_fts_test_cleared_hooks'], 'ranking tuning status should not clear scheduled queue processors');
+    assert_same([], $GLOBALS['wp_fts_test_added_options'], 'ranking tuning status should not add plugin options');
+    assert_same([], $GLOBALS['wp_fts_test_updated_options'], 'ranking tuning status should not update plugin options');
+    assert_same([], $GLOBALS['wp_fts_test_deleted_options'], 'ranking tuning status should not delete plugin options');
+    assert_same($optionsBefore, $GLOBALS['wp_fts_test_options'], 'ranking tuning status should leave settings, queue, and health options unchanged');
+    assert_same($scheduledBefore, $GLOBALS['wp_fts_test_scheduled'], 'ranking tuning status should leave scheduled cron state unchanged');
+    assert_same($postRowsBefore, $fake->postRows, 'ranking tuning status should not mutate source post rows');
+    assert_same($docsBefore, $fake->docs, 'ranking tuning status should not index or mutate documents');
+    assert_same([], $fake->terms, 'ranking tuning status should not write FTS terms');
+    assert_same([], $fake->queries, 'ranking tuning status should not run schema repair or storage writes');
+    assert_same([722], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? null, 'ranking tuning status should not drain queued content');
+});
+
 test_case('wp-cli status reports lifecycle state without mutating index data', function (): void {
     global $wpdb;
 
@@ -8020,6 +8213,16 @@ test_case('wp-cli status reports lifecycle state without mutating index data', f
     assert_same(false, $runner['alternate_wp_cron'] ?? null, 'status JSON should expose the ALTERNATE_WP_CRON state');
     assert_same(true, $runner['pending_work'] ?? null, 'cron runner diagnostics should reuse pending-work context');
     assert_contains('traffic-triggered', (string) ($runner['advice'] ?? ''), 'cron runner advice should explain traffic-triggered cron mode');
+    $ranking = $payload['ranking_tuning'] ?? null;
+    assert_true(is_array($ranking), 'status JSON should preserve the nested ranking tuning block');
+    assert_same('wp-fts-ranking-tuning-v1', $ranking['schema'] ?? null, 'status JSON ranking tuning should expose schema');
+    assert_same('OR', $ranking['match_mode'] ?? null, 'status JSON ranking tuning should expose effective match mode');
+    assert_same('respect_existing', $ranking['search_provider_compatibility'] ?? null, 'status JSON ranking tuning should expose provider compatibility mode');
+    assert_same(false, $ranking['frontend_replacement_enabled'] ?? null, 'status JSON ranking tuning should expose frontend replacement state');
+    assert_same(true, $ranking['admin_posts_replacement_enabled'] ?? null, 'status JSON ranking tuning should expose admin Posts replacement state');
+    assert_same(true, $ranking['stale_debt_active'] ?? null, 'status JSON ranking tuning should expose stale-debt state');
+    assert_same(['analyzer_options_changed', 'field_boosts_changed'], $ranking['stale_debt_reasons'] ?? null, 'status JSON ranking tuning should expose sanitized stale-debt reasons');
+    assert_contains('Stale reindex debt is active', (string) ($ranking['advice'] ?? ''), 'status JSON ranking tuning should expose stale-debt advice');
     $compatibility = $payload['search_provider_compatibility'] ?? null;
     assert_true(is_array($compatibility), 'status JSON should expose search provider compatibility as a bounded object');
     assert_same('respect_existing', $compatibility['mode'] ?? null, 'status JSON should expose the effective provider compatibility mode');

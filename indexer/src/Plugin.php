@@ -61,6 +61,7 @@ final class WP_FTS_Plugin
     private const SUPPORT_SNAPSHOT_PLUGIN_VERSION = '0.1.9';
     private const INDEX_PROFILE_SCHEMA = 'wp-fts-index-profile-v1';
     private const INDEX_PROFILE_INDEXER_SIGNATURE = 'wp-fts-indexer-v2';
+    private const RANKING_TUNING_SCHEMA = 'wp-fts-ranking-tuning-v1';
     private const STALE_DEBT_REASON_LABELS = [
         'analyzer_options_changed' => 'Analyzer options changed',
         'field_boosts_changed' => 'Field ranking weights changed',
@@ -926,6 +927,7 @@ final class WP_FTS_Plugin
             ? (string) $health['last_indexed_post_title']
             : '';
         $stale_debt_reasons = self::sanitize_stale_debt_reasons($health['stale_debt_reasons'] ?? []);
+        $settings = self::settings();
 
         return [
             'schema_status' => $schema['status'],
@@ -945,6 +947,7 @@ final class WP_FTS_Plugin
             'pending_queue_count' => max(0, (int) ($health['pending_queue_count'] ?? 0)),
             'queue_processor_schedule' => $queue_processor_schedule,
             'cron_runner' => $cron_runner,
+            'ranking_tuning' => self::operator_ranking_tuning_status($settings, $health, $stale_debt_reasons),
             'search_provider_compatibility' => self::operator_search_provider_compatibility_status(),
             'language_pack_status' => self::operator_language_pack_status(),
             'lock_state' => $lock['state'],
@@ -983,6 +986,107 @@ final class WP_FTS_Plugin
             'remaining_count' => $remaining_count,
             'latest_batch_diagnostics' => self::latest_index_batch_diagnostics_from_health($health),
         ];
+    }
+
+    /**
+     * Return the effective ranking/search tuning settings without touching
+     * analyzer, searcher, schema repair, queues, or index data.
+     *
+     * @param array<string,mixed> $settings
+     * @param array<string,mixed> $health
+     * @param string[] $stale_debt_reasons
+     * @return array<string,mixed>
+     */
+    private static function operator_ranking_tuning_status(array $settings, array $health, array $stale_debt_reasons): array
+    {
+        $field_boosts = self::settings_field_boosts($settings['field_boosts'] ?? []);
+        $recency_strength = self::sanitize_recency_boost_strength($settings['recency_boost_strength'] ?? 0.0);
+        $recency_half_life = self::sanitize_recency_boost_half_life($settings['recency_boost_half_life_days'] ?? self::RECENCY_BOOST_HALF_LIFE_DEFAULT);
+        $stale_debt_active = !empty($health['stale_debt_active']);
+
+        return [
+            'schema' => self::RANKING_TUNING_SCHEMA,
+            'match_mode' => is_scalar($settings['match_mode'] ?? null) ? (string) $settings['match_mode'] : self::DEFAULT_SETTINGS['match_mode'],
+            'prefix_matching' => !empty($settings['prefix_matching']),
+            'prefix_min_length' => self::sanitize_prefix_min_length($settings['prefix_min_length'] ?? self::PREFIX_MIN_LENGTH_DEFAULT),
+            'prefix_max_terms' => self::sanitize_prefix_max_terms($settings['prefix_max_terms'] ?? self::PREFIX_MAX_TERMS_DEFAULT),
+            'field_boosts' => $field_boosts,
+            'field_boost_summary' => self::field_boost_summary($field_boosts),
+            'recency_boost' => [
+                'enabled' => $recency_strength > 0.0,
+                'strength' => $recency_strength,
+                'half_life_days' => $recency_half_life,
+                'summary' => self::recency_boost_summary([
+                    'recency_boost_strength' => $recency_strength,
+                    'recency_boost_half_life_days' => $recency_half_life,
+                ]),
+            ],
+            'language_fallback_enabled' => !empty($settings['language_fallback']),
+            'indexed_post_types' => self::operator_indexed_post_types($settings),
+            'result_limit' => self::clamp_int($settings['result_limit'] ?? self::DEFAULT_SETTINGS['result_limit'], 1, self::MAX_SEARCH_LIMIT),
+            'snippet_length' => self::clamp_int($settings['snippet_length'] ?? self::DEFAULT_SETTINGS['snippet_length'], self::SETTINGS_SNIPPET_MIN, self::SETTINGS_SNIPPET_MAX),
+            'highlight_enabled' => !empty($settings['highlight']),
+            'frontend_replacement_enabled' => !empty($settings['replace_frontend_search']),
+            'admin_posts_replacement_enabled' => !empty($settings['replace_admin_post_search']),
+            'search_provider_compatibility' => self::sanitize_search_provider_compatibility(
+                $settings['search_provider_compatibility'] ?? null,
+                self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS
+            ),
+            'index_time_settings' => [
+                'indexed_post_types',
+                'field_boosts',
+            ],
+            'query_time_settings' => [
+                'match_mode',
+                'prefix_matching',
+                'prefix_min_length',
+                'prefix_max_terms',
+                'recency_boost',
+                'language_fallback',
+                'result_limit',
+                'snippet_length',
+                'highlight',
+                'frontend_replacement',
+                'admin_posts_replacement',
+                'search_provider_compatibility',
+            ],
+            'stale_debt_active' => $stale_debt_active,
+            'stale_debt_reasons' => $stale_debt_reasons,
+            'advice' => self::operator_ranking_tuning_advice($stale_debt_active),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $settings
+     * @return string[]
+     */
+    private static function operator_indexed_post_types(array $settings): array
+    {
+        $allowed = array_fill_keys(self::settings_post_type_choices(), true);
+        $post_types = [];
+        foreach (is_array($settings['index_post_types'] ?? null) ? $settings['index_post_types'] : [] as $post_type) {
+            if (!is_scalar($post_type)) {
+                continue;
+            }
+            $post_type = self::sanitize_key((string) $post_type);
+            if ($post_type !== '' && isset($allowed[$post_type])) {
+                $post_types[$post_type] = true;
+            }
+            if (count($post_types) >= self::DEBUG_MAX_LIST_ITEMS) {
+                break;
+            }
+        }
+
+        return array_keys($post_types);
+    }
+
+    private static function operator_ranking_tuning_advice(bool $stale_debt_active): string
+    {
+        if ($stale_debt_active) {
+            return 'Stale reindex debt is active; index-time ranking settings may not be fully reflected until bounded reindexing catches up. This status block is read-only and does not process or schedule work.';
+        }
+
+        return 'Read-only ranking tuning visibility only; this status block does not run searches, process indexing work, schedule queues, repair schema, or write options.';
     }
 
     /**
