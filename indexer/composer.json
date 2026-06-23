@@ -1,8 +1,8 @@
 {
   "name": "local/wp-pure-php-fts",
-  "description": "Pure-PHP HTML-aware full-text search engine for WordPress.",
+  "description": "Local full-text search for WordPress with multilingual analysis and diagnostics.",
   "type": "wordpress-plugin",
-  "license": "proprietary",
+  "license": "GPL-2.0-or-later",
   "require": {
     "php": ">=8.1",
     "wp-php-toolkit/full-text-search": "^0.1"

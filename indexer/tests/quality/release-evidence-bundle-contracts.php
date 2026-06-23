@@ -1078,7 +1078,7 @@ test_case('quality release evidence collector captures public-submission blocker
 
     wp_fts_release_evidence_contract_same('blocked', $lane['status'] ?? null, 'public-submission readiness should be blocked on current main');
     wp_fts_release_evidence_contract_same('non_target', $details['target_role'] ?? null, 'default direct-install evidence should label public-submission as non-target evidence');
-    foreach (['composer_public_license', 'package_license_file', 'package_public_assets', 'package_readme_txt', 'public_submission_authority_evidence'] as $id) {
+    foreach (['package_license_file', 'package_public_assets', 'public_submission_authority_evidence'] as $id) {
         wp_fts_release_evidence_contract_true(in_array($id, $blockers, true), "public-submission evidence should include blocker {$id}");
     }
     wp_fts_release_evidence_contract_true(($details['readiness_status'] ?? null) !== 'ready', 'public-submission blockers must not be reported as pass');

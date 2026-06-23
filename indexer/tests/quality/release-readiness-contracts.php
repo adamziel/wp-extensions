@@ -354,7 +354,7 @@ function wp_fts_release_readiness_contract_run_concurrent_commands(array $comman
 }
 
 /**
- * @param array{version?:string,license?:string,composer_version?:string,readme?:bool,license_file?:bool,public_assets?:bool,public_docs_ready?:bool,public_evidence?:bool} $options
+ * @param array{version?:string,license?:string,composer_version?:string,readme?:bool,readme_faq_heading?:string,license_file?:bool,public_assets?:bool,public_docs_ready?:bool,public_evidence?:bool} $options
  */
 function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $options = []): string
 {
@@ -378,6 +378,7 @@ function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $op
     wp_fts_release_readiness_contract_write_file($source . '/tools/build-release-zip.php', "<?php\n// Fixture builder presence marker.\n");
 
     if (($options['readme'] ?? false) === true) {
+        $faqHeading = (string) ($options['readme_faq_heading'] ?? 'FAQ');
         wp_fts_release_readiness_contract_write_file(
             $source . '/readme.txt',
             implode("\n", [
@@ -397,7 +398,7 @@ function wp_fts_release_readiness_contract_source_fixture(string $tmp, array $op
                 '== Installation ==',
                 'Upload the plugin directory, activate it, and run a small indexing smoke check.',
                 '',
-                '== FAQ ==',
+                "== {$faqHeading} ==",
                 '= Does this fixture include public metadata? =',
                 'Yes. The fixture carries enough public metadata to exercise the readiness gate.',
                 '',
@@ -544,7 +545,7 @@ function wp_fts_release_readiness_contract_current_public_blocked(): void
     $ids = wp_fts_release_readiness_contract_blocker_ids($report);
 
     wp_fts_release_readiness_contract_same('blocked', $report['status'] ?? null, 'current package should not pass public-submission readiness');
-    foreach (['composer_public_license', 'docs_public_submission_blocker', 'package_license_file', 'package_public_assets', 'package_readme_txt', 'public_submission_authority_evidence'] as $id) {
+    foreach (['docs_public_submission_blocker', 'package_license_file', 'package_public_assets', 'public_submission_authority_evidence'] as $id) {
         wp_fts_release_readiness_contract_true(in_array($id, $ids, true), "current package should report public-submission blocker {$id}");
     }
 }
@@ -903,6 +904,7 @@ function wp_fts_release_readiness_contract_public_complete_fixture_ready(): void
         $source = wp_fts_release_readiness_contract_source_fixture($tmp, [
             'license' => 'GPL-2.0-or-later',
             'readme' => true,
+            'readme_faq_heading' => 'Frequently Asked Questions',
             'license_file' => true,
             'public_assets' => true,
             'public_docs_ready' => true,

@@ -34,6 +34,13 @@ final class WP_FTS_ReleaseReadinessChecker
         'Changelog',
     ];
 
+    private const PUBLIC_README_SECTION_ALIASES = [
+        'FAQ' => [
+            'FAQ',
+            'Frequently Asked Questions',
+        ],
+    ];
+
     private const PUBLIC_SUBMISSION_REQUIRED_EVIDENCE_CHECKS = [
         'readme',
         'license',
@@ -1604,19 +1611,33 @@ final class WP_FTS_ReleaseReadinessChecker
 
     private static function readme_section_has_reviewable_content(string $readme, string $section): bool
     {
-        $pattern = '/^==\s*' . preg_quote($section, '/') . '\s*==\s*$'
-            . '(.*?)'
-            . '(?=^==\s*.+?\s*==\s*$|\z)/ims';
-        if (preg_match($pattern, $readme, $matches) !== 1) {
-            return false;
+        foreach (self::readme_section_titles($section) as $title) {
+            $pattern = '/^==\s*' . preg_quote($title, '/') . '\s*==\s*$'
+                . '(.*?)'
+                . '(?=^==\s*.+?\s*==\s*$|\z)/ims';
+            if (preg_match($pattern, $readme, $matches) !== 1) {
+                continue;
+            }
+
+            $contents = trim(strip_tags((string) $matches[1]));
+            if (self::contains_placeholder_marker($contents)) {
+                continue;
+            }
+
+            if (strlen($contents) >= 20) {
+                return true;
+            }
         }
 
-        $contents = trim(strip_tags((string) $matches[1]));
-        if (self::contains_placeholder_marker($contents)) {
-            return false;
-        }
+        return false;
+    }
 
-        return strlen($contents) >= 20;
+    /**
+     * @return array<int,string>
+     */
+    private static function readme_section_titles(string $section): array
+    {
+        return self::PUBLIC_README_SECTION_ALIASES[$section] ?? [$section];
     }
 
     private static function public_asset_kind(string $relativePath): ?string

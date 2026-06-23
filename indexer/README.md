@@ -1,11 +1,20 @@
-# Pure PHP FTS Indexer
+# Language FTS
 
 [![Try in Playground](https://github.com/WordPress/action-wp-playground-pr-preview/raw/main/assets/playground-preview-button.svg)](https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/blueprint.json)
 
-Pure PHP FTS Indexer is an experimental WordPress plugin that builds a custom
-full-text index for WordPress posts. It indexes post content into derived FTS
-tables, keeps those tables current from WordPress post lifecycle hooks, and can
-be managed or queried with WP-CLI.
+Language FTS is a WordPress plugin that builds a local full-text search index
+for WordPress content. It stores derived index data in WordPress database
+tables, keeps that data current through bounded WordPress lifecycle and queue
+workflows, and exposes practical admin, WP-CLI, REST/search, and diagnostic
+surfaces for understanding how search behaves on a site.
+
+It is intended for careful evaluation and controlled rollout. Try it in
+Playground or staging first, check results with your own content, keep backups
+and a rollback path, and monitor indexing, cron, database load, and search
+quality before enabling search replacement for visitors. Feedback is welcome on
+a best-effort basis, with priority for safety issues, install or activation
+failures, data/index corruption risks, fatal errors, security reports, and
+clear reproducible bugs.
 
 The plugin is now a thin WordPress adapter around the reusable
 `wp-php-toolkit/full-text-search` Composer component in
@@ -13,13 +22,15 @@ The plugin is now a thin WordPress adapter around the reusable
 engine; this plugin owns WordPress hooks, post extraction, MySQL storage, admin
 UI, WP-CLI, REST/search integration, and Playground packaging.
 
-The Playground preview opens the admin-only Settings > Full-Text Search
-Sandbox tab. The sandbox searches content already present in the full-text
-index and never creates demo posts or hidden sample content. It shows indexed
-posts with pagination, lets you run language-aware searches, and indexes new or
-updated published posts when they are saved. Playground is useful for trying
-the workflow quickly; production validation still needs a real WordPress/MySQL
-environment.
+The Playground preview installs this `indexer/` plugin directly from the GitHub
+repository with a `git:directory` Blueprint resource and opens the admin-only
+Settings > Full-Text Search Sandbox tab. The sandbox searches content already
+present in the full-text index and never creates demo posts or hidden sample
+content. It shows indexed posts with pagination, lets you run language-aware
+searches, and indexes new or updated published posts when they are saved.
+Playground is useful for trying the workflow quickly; production suitability
+still depends on the site, host, database, cron, cache, content, traffic, and
+plugin/theme mix.
 
 The plugin does not use MySQL `FULLTEXT`, replaces normal front-end main-query
 search and eligible wp-admin Posts list searches with ranked FTS results by
@@ -415,10 +426,11 @@ wp fts optimize
 
 ## Current Caveats
 
-This branch is suitable for development and hardening work, not unattended large
-production rollout. Validate schema creation, write throughput, batch sizes,
-language choices, metadata filters, backups, and restore behavior in the target
-environment before using it for production search.
+Language FTS should be evaluated in the target environment before it is used for
+visitor-facing search. Validate schema creation, write throughput, batch sizes,
+language choices, metadata filters, backups, restore behavior, cron behavior,
+database load, and interactions with the site's theme and plugins before
+enabling it on live traffic.
 
 Current caveats:
 

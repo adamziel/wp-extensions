@@ -1,8 +1,8 @@
 {
   "$schema": "https://playground.wordpress.net/blueprint-schema.json",
   "meta": {
-    "title": "Pure PHP FTS Indexer Preview",
-    "description": "Installs and activates the Pure PHP FTS Indexer plugin and opens the Settings > Full-Text Search sandbox.",
+    "title": "Language FTS Preview",
+    "description": "Installs and activates Language FTS from the indexer/ directory and opens the Settings > Full-Text Search sandbox.",
     "author": "adamziel"
   },
   "preferredVersions": {
@@ -12,14 +12,17 @@
   "landingPage": "/wp-admin/options-general.php?page=wp-fts-settings&tab=sandbox",
   "login": true,
   "siteOptions": {
-    "blogname": "Pure PHP FTS Indexer Preview"
+    "blogname": "Language FTS Preview"
   },
   "steps": [
     {
       "step": "installPlugin",
       "pluginData": {
-        "resource": "url",
-        "url": "https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/indexer-preview.zip?v=20260620-release-package-truth-pass-v1"
+        "resource": "git:directory",
+        "url": "https://github.com/adamziel/wp-extensions",
+        "path": "indexer",
+        "ref": "main",
+        "refType": "branch"
       },
       "options": {
         "activate": true,

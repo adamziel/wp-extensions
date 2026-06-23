@@ -1,9 +1,15 @@
 <?php
 /**
- * Plugin Name: Pure PHP FTS Indexer
- * Description: HTML-aware pure-PHP full-text search engine for WordPress.
+ * Plugin Name: Language FTS
+ * Description: Local full-text search for WordPress with multilingual analysis, WP-CLI tools, and operator diagnostics.
  * Version: 0.1.9
+ * Requires at least: 6.5
  * Requires PHP: 8.1
+ * Author: adamziel
+ * Author URI: https://github.com/adamziel
+ * License: GPL-2.0-or-later
+ * License URI: https://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain: language-fts
  */
 
 declare(strict_types=1);

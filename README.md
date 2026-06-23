@@ -2,17 +2,21 @@
 
 Small WordPress extensions and experiments.
 
-## Pure PHP FTS Indexer
+## Language FTS
 
-`indexer/` is the active WordPress full-text search plugin. It builds and
-maintains derived FTS tables for WordPress posts, exposes WP-CLI and admin
-search surfaces, and includes the language-aware sandbox used for Playground
-previews.
+`indexer/` is the active WordPress full-text search plugin. Language FTS builds
+a local search index for WordPress content, adds multilingual analysis where the
+configured analyzers support it, and gives site operators practical admin,
+WP-CLI, and diagnostic tools for understanding search behavior.
 
 [![Try in Playground](https://github.com/WordPress/action-wp-playground-pr-preview/raw/main/assets/playground-preview-button.svg)](https://playground.wordpress.net/?blueprint-url=https://raw.githubusercontent.com/adamziel/wp-extensions/main/indexer/playground/blueprint.json)
 
-The Playground preview installs the packaged plugin and opens
-`Settings > Full-Text Search` on the Sandbox tab.
+The Playground preview installs the `indexer/` plugin directly from this GitHub
+repository and opens `Settings > Full-Text Search` on the Sandbox tab. It is a
+quick way to inspect the workflow, not a promise that every host, database,
+cache, provider, language, or traffic pattern has been validated. Evaluate on
+staging, keep backups and a rollback path, and use the status tools with your
+own content.
 
 See [indexer/README.md](indexer/README.md) for setup, architecture,
 language/analyzer notes, and development checks.
