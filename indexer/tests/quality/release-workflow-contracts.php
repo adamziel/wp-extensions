@@ -25,6 +25,54 @@ function wp_fts_release_workflow_contract_true(bool $condition, string $message)
     }
 }
 
+/**
+ * @return list<string>
+ */
+function wp_fts_release_workflow_contract_job_env_lines(string $workflow, string $jobName): array
+{
+    $lines = explode("\n", $workflow);
+    $inJobs = false;
+    $inJob = false;
+    $inEnv = false;
+    $envLines = [];
+
+    foreach ($lines as $line) {
+        $line = rtrim($line, "\r");
+
+        if (!$inJobs) {
+            $inJobs = ($line === 'jobs:');
+            continue;
+        }
+
+        if (!$inJob) {
+            $inJob = ($line === "  {$jobName}:");
+            continue;
+        }
+
+        if (!$inEnv) {
+            if ($line === '    env:') {
+                $inEnv = true;
+                continue;
+            }
+
+            if ($line !== '' && str_starts_with($line, '  ') && !str_starts_with($line, '    ')) {
+                break;
+            }
+
+            continue;
+        }
+
+        if ($line === '' || str_starts_with($line, '      ')) {
+            $envLines[] = $line;
+            continue;
+        }
+
+        break;
+    }
+
+    return $envLines;
+}
+
 function wp_fts_release_workflow_contract_run(): void
 {
     $repoRoot = dirname(__DIR__, 3);
@@ -78,6 +126,7 @@ function wp_fts_release_workflow_contract_run(): void
         '--clobber',
         'release create "$RELEASE_TAG"',
         'gh api --method PATCH',
+        'BUILD_ROOT="${RUNNER_TEMP:?}/language-fts-build"',
     ] as $needle) {
         wp_fts_release_workflow_contract_contains(
             $needle,
@@ -97,6 +146,16 @@ function wp_fts_release_workflow_contract_run(): void
             "Language FTS release workflow should not contain {$forbidden}"
         );
     }
+
+    $releaseJobEnv = implode("\n", wp_fts_release_workflow_contract_job_env_lines($workflow, 'release'));
+    wp_fts_release_workflow_contract_true(
+        $releaseJobEnv !== '',
+        'Language FTS release workflow should expose release job-level env for context guard'
+    );
+    wp_fts_release_workflow_contract_true(
+        !str_contains($releaseJobEnv, '${{ runner.'),
+        'Language FTS release workflow should not use runner context in release job-level env'
+    );
 
     foreach ([
         '.github/workflows/release-language-fts.yml',

@@ -35,7 +35,6 @@ jobs:
 
     env:
       DIST_DIR: dist/language-fts
-      BUILD_ROOT: ${{ runner.temp }}/language-fts-build
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       RELEASE_TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
       RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
@@ -88,6 +87,8 @@ jobs:
       - name: Build release assets
         run: |
           set -euo pipefail
+
+          BUILD_ROOT="${RUNNER_TEMP:?}/language-fts-build"
 
           rm -rf "$DIST_DIR" "$BUILD_ROOT"
           mkdir -p "$DIST_DIR" "$BUILD_ROOT"
