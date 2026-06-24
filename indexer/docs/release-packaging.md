@@ -71,6 +71,65 @@ WordPress.org submission, approval, endorsement, hosted asset, SVN commit, tag,
 GitHub release, or upload.
 This profile is not a WordPress.org submission.
 
+## GitHub Release Workflow
+
+Language FTS release assets are built by the manual/tag workflow in
+`.github/workflows/release-language-fts.yml`. The workflow validates the
+release packaging contracts, builds every release-channel asset, inspects the
+ZIP contents for license-policy violations, writes release notes, writes
+`SHA256SUMS.txt`, and then creates or updates a GitHub release with the
+generated files.
+
+Recommended release tags use the `language-fts-v*` prefix:
+
+- `language-fts-v0.1.10` for a normal release;
+- `language-fts-v0.1.10-rc1` for a prerelease;
+- `language-fts-v0.1.9-test` for a disposable release test.
+
+To run the workflow from GitHub:
+
+1. Open GitHub Actions.
+2. Select **Release Language FTS**.
+3. Choose **Run workflow**.
+4. Enter the release `tag`.
+5. Leave `target_ref` blank to release the selected workflow branch/ref, or set
+   it to a branch name, tag, or commit SHA.
+6. Leave `draft` enabled for review builds. Disable it only when intentionally
+   publishing a public release.
+7. Enable `prerelease` only for release candidates or test releases.
+
+The workflow also runs on pushed tags that match `language-fts-v*`. Tag-push
+runs use the pushed tag name, build from that tag, and default to a non-draft
+release. The workflow does not move existing tags, does not force-push tags,
+and does not maintain a moving `latest` tag.
+
+The workflow publishes these release assets:
+
+- `language-fts-core.zip`;
+- `language-fts-wporg-compatible.zip`;
+- `language-fts-full.zip`;
+- `language-fts-extended-language-packs.zip`;
+- `language-fts-release-evidence.json`;
+- `SHA256SUMS.txt`.
+
+Use `language-fts-core.zip` for the smallest GPL-compatible direct-install
+plugin package. Use `language-fts-wporg-compatible.zip` when reviewing the
+WordPress.org-compatible package boundary; it is not WordPress.org approval.
+Use `language-fts-full.zip` only when the separately licensed CC BY-SA UniMorph
+packs are acceptable. Use `language-fts-extended-language-packs.zip` only when
+you want optional extra packs outside the core plugin package, and review the
+bundle notices before use.
+
+An empty manual draft named `language-fts-v0.1.9` may exist at
+`https://github.com/adamziel/wp-extensions/releases/tag/untagged-ddb06656129684895c65`.
+Do not publish it accidentally. If it is still present when a real Language FTS
+release is prepared, either delete and recreate it through the GitHub UI with a
+real `language-fts-v*` tag, or run this workflow with the intended tag so it can
+create or update the release and upload the generated assets.
+
+This workflow does not submit to WordPress.org, does not commit to SVN, and
+does not make `wporg-compatible` approved by WordPress.org.
+
 ## Files That Ship
 
 Ship:

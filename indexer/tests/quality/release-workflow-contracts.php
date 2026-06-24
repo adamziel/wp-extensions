@@ -1,0 +1,136 @@
+<?php
+declare(strict_types=1);
+
+function wp_fts_release_workflow_contract_contains(string $needle, string $haystack, string $message): void
+{
+    if (function_exists('assert_contains')) {
+        assert_contains($needle, $haystack, $message);
+        return;
+    }
+
+    if (!str_contains($haystack, $needle)) {
+        throw new RuntimeException($message);
+    }
+}
+
+function wp_fts_release_workflow_contract_true(bool $condition, string $message): void
+{
+    if (function_exists('assert_true')) {
+        assert_true($condition, $message);
+        return;
+    }
+
+    if (!$condition) {
+        throw new RuntimeException($message);
+    }
+}
+
+function wp_fts_release_workflow_contract_run(): void
+{
+    $repoRoot = dirname(__DIR__, 3);
+    $pluginRoot = dirname(__DIR__, 2);
+    $workflowPath = $repoRoot . '/.github/workflows/release-language-fts.yml';
+    $docsPath = $pluginRoot . '/docs/release-packaging.md';
+
+    wp_fts_release_workflow_contract_true(is_file($workflowPath), 'Language FTS release workflow should exist');
+
+    $workflow = (string) file_get_contents($workflowPath);
+    $docs = (string) file_get_contents($docsPath);
+
+    foreach ([
+        'name: Release Language FTS',
+        'workflow_dispatch:',
+        'tag:',
+        'target_ref:',
+        'draft:',
+        'prerelease:',
+        'push:',
+        "- 'language-fts-v*'",
+        'permissions:',
+        'contents: write',
+        'actions/checkout@v4',
+        'submodules: false',
+        'shivammathur/setup-php@v2',
+        "php-version: '8.3'",
+        'extensions: zip',
+        'composer config cache-files-dir',
+        'php -l indexer/tools/release-channel-policy.php',
+        'php indexer/tests/quality/release-packaging-contracts.php',
+        'php indexer/tools/build-release-zip.php',
+        '--profile=core',
+        '--profile=wporg-compatible',
+        '--profile=github-full',
+        'php indexer/tools/build-language-pack-bundle.php',
+        '--profile=extended-language-packs',
+        'language-fts-core.zip',
+        'language-fts-wporg-compatible.zip',
+        'language-fts-full.zip',
+        'language-fts-extended-language-packs.zip',
+        'language-fts-release-evidence.json',
+        'SHA256SUMS.txt',
+        'te-unimorph-tel-551f60f5f434',
+        'en-unimorph-eng-66e0e9e8e2dc',
+        'pl-polimorf-20180722-full-playground',
+        'MIXED-LICENSE-NOTICE.txt',
+        'No WordPress.org submission',
+        'gh release view',
+        'gh release upload',
+        '--clobber',
+        'release create "$RELEASE_TAG"',
+        'gh api --method PATCH',
+    ] as $needle) {
+        wp_fts_release_workflow_contract_contains(
+            $needle,
+            $workflow,
+            "Language FTS release workflow should contain {$needle}"
+        );
+    }
+
+    foreach ([
+        'git tag -f',
+        'git push --force',
+        'markdown-editor-latest',
+        'language-fts-latest',
+    ] as $forbidden) {
+        wp_fts_release_workflow_contract_true(
+            !str_contains($workflow, $forbidden),
+            "Language FTS release workflow should not contain {$forbidden}"
+        );
+    }
+
+    foreach ([
+        '.github/workflows/release-language-fts.yml',
+        'Release Language FTS',
+        'language-fts-v0.1.10',
+        'language-fts-v0.1.10-rc1',
+        'language-fts-v0.1.9-test',
+        'language-fts-core.zip',
+        'language-fts-wporg-compatible.zip',
+        'language-fts-full.zip',
+        'language-fts-extended-language-packs.zip',
+        'language-fts-release-evidence.json',
+        'SHA256SUMS.txt',
+        'language-fts-v0.1.9',
+        'https://github.com/adamziel/wp-extensions/releases/tag/untagged-ddb06656129684895c65',
+        'does not move existing tags',
+        'does not force-push tags',
+        'does not maintain a moving `latest` tag',
+        'This workflow does not submit to WordPress.org',
+        'does not make `wporg-compatible` approved by WordPress.org',
+    ] as $needle) {
+        wp_fts_release_workflow_contract_contains(
+            $needle,
+            $docs,
+            "release packaging docs should document {$needle}"
+        );
+    }
+}
+
+if (function_exists('test_case')) {
+    test_case('quality release workflow defines Language FTS assets and safeguards', function (): void {
+        wp_fts_release_workflow_contract_run();
+    });
+} elseif (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
+    wp_fts_release_workflow_contract_run();
+    fwrite(STDOUT, "OK: Language FTS release workflow contract is documented and guarded.\n");
+}

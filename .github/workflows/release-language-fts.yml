@@ -1,0 +1,267 @@
+name: Release Language FTS
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example language-fts-v0.1.10 or language-fts-v0.1.9-test
+        required: true
+        type: string
+      target_ref:
+        description: Git ref or SHA to release. Leave blank to use the workflow run ref.
+        required: false
+        default: ''
+        type: string
+      draft:
+        description: Create or update the release as a draft.
+        required: false
+        default: true
+        type: boolean
+      prerelease:
+        description: Mark the release as a prerelease.
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'language-fts-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      DIST_DIR: dist/language-fts
+      BUILD_ROOT: ${{ runner.temp }}/language-fts-build
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+      RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+      RELEASE_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+
+    steps:
+      - name: Check release inputs
+        run: |
+          case "$RELEASE_TAG" in
+            language-fts-v*) ;;
+            *)
+              echo "Release tag must start with language-fts-v: $RELEASE_TAG" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.ref }}
+          submodules: false
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: zip
+          coverage: none
+
+      - name: Locate Composer cache
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('indexer/composer.lock', 'components/full-text-search/composer.lock') }}
+          restore-keys: |
+            composer-${{ runner.os }}-
+
+      - name: Validate release tooling
+        run: |
+          php -l indexer/tools/release-channel-policy.php
+          php -l indexer/tools/build-release-zip.php
+          php -l indexer/tools/build-language-pack-bundle.php
+          php -l indexer/tools/collect-release-evidence.php
+          php indexer/tests/quality/release-packaging-contracts.php
+
+      - name: Build release assets
+        run: |
+          set -euo pipefail
+
+          rm -rf "$DIST_DIR" "$BUILD_ROOT"
+          mkdir -p "$DIST_DIR" "$BUILD_ROOT"
+
+          php indexer/tools/build-release-zip.php \
+            --profile=core \
+            --build-dir="$BUILD_ROOT/core" \
+            --output="$DIST_DIR/language-fts-core.zip"
+
+          php indexer/tools/build-release-zip.php \
+            --profile=wporg-compatible \
+            --build-dir="$BUILD_ROOT/wporg-compatible" \
+            --output="$DIST_DIR/language-fts-wporg-compatible.zip"
+
+          php indexer/tools/build-release-zip.php \
+            --profile=github-full \
+            --build-dir="$BUILD_ROOT/github-full" \
+            --output="$DIST_DIR/language-fts-full.zip"
+
+          php indexer/tools/build-language-pack-bundle.php \
+            --profile=extended-language-packs \
+            --build-dir="$BUILD_ROOT/extended-language-packs" \
+            --output="$DIST_DIR/language-fts-extended-language-packs.zip"
+
+          php indexer/tools/collect-release-evidence.php \
+            --release-target=direct-install \
+            --direct-package-dir="$BUILD_ROOT/core/indexer" \
+            > "$DIST_DIR/language-fts-release-evidence.json"
+
+          (
+            cd "$DIST_DIR"
+            sha256sum \
+              language-fts-core.zip \
+              language-fts-wporg-compatible.zip \
+              language-fts-full.zip \
+              language-fts-extended-language-packs.zip \
+              language-fts-release-evidence.json \
+              > SHA256SUMS.txt
+          )
+
+      - name: Inspect release assets
+        run: |
+          php <<'PHP'
+          <?php
+          declare(strict_types=1);
+
+          $dist = getenv('DIST_DIR') ?: 'dist/language-fts';
+          $assets = [
+              'core' => $dist . '/language-fts-core.zip',
+              'wporg' => $dist . '/language-fts-wporg-compatible.zip',
+              'full' => $dist . '/language-fts-full.zip',
+              'extended' => $dist . '/language-fts-extended-language-packs.zip',
+          ];
+
+          $zipNames = static function (string $path): array {
+              $zip = new ZipArchive();
+              $opened = $zip->open($path);
+              if ($opened !== true) {
+                  throw new RuntimeException("Could not open {$path}: {$opened}");
+              }
+              $names = [];
+              for ($i = 0; $i < $zip->numFiles; $i++) {
+                  $names[] = (string) $zip->getNameIndex($i);
+              }
+              $zip->close();
+              sort($names, SORT_STRING);
+
+              return $names;
+          };
+
+          $hasPrefix = static function (array $names, string $prefix): bool {
+              foreach ($names as $name) {
+                  if (str_starts_with($name, $prefix)) {
+                      return true;
+                  }
+              }
+
+              return false;
+          };
+
+          $assert = static function (bool $condition, string $message): void {
+              if (! $condition) {
+                  throw new RuntimeException($message);
+              }
+          };
+
+          $core = $zipNames($assets['core']);
+          $wporg = $zipNames($assets['wporg']);
+          $full = $zipNames($assets['full']);
+          $extended = $zipNames($assets['extended']);
+
+          foreach ([$core, $wporg] as $names) {
+              $assert($hasPrefix($names, 'indexer/resources/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Core/WP.org-compatible ZIP must include the BSD Polish pack.');
+              $assert(! $hasPrefix($names, 'indexer/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'Core/WP.org-compatible ZIP must exclude CC BY-SA UniMorph packs.');
+              $assert(! $hasPrefix($names, 'indexer/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'Core/WP.org-compatible ZIP must exclude unknown-license packs.');
+          }
+
+          $assert($hasPrefix($full, 'indexer/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'GitHub full ZIP must include CC BY-SA UniMorph packs.');
+          $assert(! $hasPrefix($full, 'indexer/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'GitHub full ZIP must exclude unknown-license packs.');
+          $assert(in_array('indexer/MIXED-LICENSE-NOTICE.txt', $full, true), 'GitHub full ZIP must include mixed-license notice.');
+
+          $assert($hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'Extended bundle must include CC BY-SA UniMorph packs.');
+          $assert(! $hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'Extended bundle must exclude unknown-license packs.');
+          $assert(! $hasPrefix($extended, 'language-fts-extended-language-packs/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Extended bundle must exclude the BSD Polish core pack.');
+
+          foreach (['manifest.json', 'NOTICE.txt', 'LICENSES.md'] as $file) {
+              $assert(in_array('language-fts-extended-language-packs/' . $file, $extended, true), "Extended bundle must include {$file}.");
+          }
+
+          foreach (['manifest.json', 'NOTICE.txt', 'PROVENANCE.md', 'SOURCE.lock.json'] as $file) {
+              $assert(in_array('language-fts-extended-language-packs/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/' . $file, $extended, true), "Extended UniMorph packs must include {$file}.");
+          }
+          PHP
+
+      - name: Write release notes
+        run: |
+          cat > "$DIST_DIR/release-notes.md" <<NOTES
+          # Language FTS ${RELEASE_TAG}
+
+          This release contains the Language FTS WordPress plugin packages and optional analyzer-pack bundle.
+
+          ## Assets
+
+          - language-fts-core.zip: installable plugin ZIP with GPL-compatible package contents only.
+          - language-fts-wporg-compatible.zip: installable plugin ZIP using the same GPL-compatible package boundary. This is not a WordPress.org submission or approval.
+          - language-fts-full.zip: installable GitHub/full plugin ZIP with separately licensed CC BY-SA UniMorph analyzer packs and notices.
+          - language-fts-extended-language-packs.zip: optional separately licensed CC BY-SA UniMorph analyzer-pack bundle. Review notices and provenance before use.
+          - language-fts-release-evidence.json: release evidence for the packaged checkout.
+          - SHA256SUMS.txt: SHA-256 checksums for release assets.
+
+          ## Download Guidance
+
+          Use language-fts-core.zip for the smallest GPL-compatible plugin package, or language-fts-wporg-compatible.zip when reviewing the WordPress.org-compatible package boundary. Use language-fts-full.zip only when the separately licensed CC BY-SA packs are acceptable for your distribution. Download language-fts-extended-language-packs.zip only if you want optional extra packs outside the core plugin package.
+
+          No WordPress.org submission, SVN commit, or WordPress.org approval is performed by this workflow.
+          NOTES
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          ASSETS=(
+            "$DIST_DIR/language-fts-core.zip"
+            "$DIST_DIR/language-fts-wporg-compatible.zip"
+            "$DIST_DIR/language-fts-full.zip"
+            "$DIST_DIR/language-fts-extended-language-packs.zip"
+            "$DIST_DIR/language-fts-release-evidence.json"
+            "$DIST_DIR/SHA256SUMS.txt"
+          )
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -F draft="$RELEASE_DRAFT" \
+              -F prerelease="$RELEASE_PRERELEASE" \
+              -f name="Language FTS ${RELEASE_TAG}" \
+              -f body="$(cat "$DIST_DIR/release-notes.md")" \
+              >/dev/null
+            gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber
+          else
+            create_args=(
+              release create "$RELEASE_TAG"
+              "${ASSETS[@]}"
+              --target "$RELEASE_TARGET_REF"
+              --title "Language FTS ${RELEASE_TAG}"
+              --notes-file "$DIST_DIR/release-notes.md"
+            )
+            if [ "$RELEASE_DRAFT" = "true" ]; then
+              create_args+=(--draft)
+            fi
+            if [ "$RELEASE_PRERELEASE" = "true" ]; then
+              create_args+=(--prerelease)
+            fi
+            gh "${create_args[@]}"
+          fi
