@@ -5071,6 +5071,11 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('name="wp_fts_sandbox_date_before"', $html, 'sandbox page should expose date-before filter');
     assert_contains('Analyzer packs', $analyzerHtml, 'analyzer packs tab should be reachable from the settings page');
     assert_contains('Runtime packs affect real site searches', $analyzerHtml, 'analyzer packs tab should explain runtime versus sandbox scope');
+    assert_contains('Download extended language packs', $analyzerHtml, 'analyzer packs tab should link to separately distributed extended packs');
+    assert_contains('https://github.com/adamziel/wp-extensions/releases', $analyzerHtml, 'analyzer packs tab should use the stable GitHub Releases URL for extended packs');
+    assert_contains('Optional extended language packs are separately licensed and not bundled with the core/WordPress.org-compatible package', $analyzerHtml, 'analyzer packs tab should keep extended pack license and bundle boundaries explicit');
+    assert_contains('This plugin will not download or install them automatically', $analyzerHtml, 'analyzer packs tab should not imply automatic installation of extended packs');
+    assert_contains('WordPress.org does not host or endorse them', $analyzerHtml, 'analyzer packs tab should not imply WordPress.org hosting or endorsement for extended packs');
     assert_contains('Polish (pl)', $analyzerHtml, 'analyzer pack status should include the bundled Polish pack');
     assert_contains('<td>Active</td>', $analyzerHtml, 'analyzer pack status should identify active packs');
     if (WP_FTS_AnalyzerPackValidator::gzip_available()) {

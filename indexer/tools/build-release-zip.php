@@ -1,12 +1,15 @@
 <?php
 declare(strict_types=1);
 
+require_once __DIR__ . '/release-channel-policy.php';
+
 /**
  * Builds the direct-install WordPress plugin ZIP for the Indexer package.
  *
  * The build stages the plugin through .distignore, installs production Composer
  * dependencies, prunes development artifacts from the staged tree, validates
- * the package boundary, then writes a ZIP rooted at indexer/.
+ * the package boundary and analyzer-pack release profile, then writes a ZIP
+ * rooted at indexer/.
  */
 final class WP_FTS_ReleasePackageBuilder
 {
@@ -43,7 +46,7 @@ final class WP_FTS_ReleasePackageBuilder
                 continue;
             }
 
-            foreach (['plugin-src', 'monorepo-root', 'build-dir', 'output'] as $name) {
+            foreach (['plugin-src', 'monorepo-root', 'build-dir', 'output', 'profile'] as $name) {
                 $prefix = "--{$name}=";
                 if (str_starts_with($arg, $prefix)) {
                     $key = str_replace('-', '_', $name);
@@ -60,7 +63,7 @@ final class WP_FTS_ReleasePackageBuilder
 
     /**
      * @param array<string,mixed> $options
-     * @return array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[]}
+     * @return array<string,mixed>
      */
     public function build(array $options = []): array
     {
@@ -68,14 +71,15 @@ final class WP_FTS_ReleasePackageBuilder
         $monorepoRoot = self::existing_directory((string) ($options['monorepo_root'] ?? dirname($pluginSource)), 'monorepo root');
         $buildDir = (string) ($options['build_dir'] ?? self::default_build_dir());
         $zipPath = (string) ($options['output'] ?? ($buildDir . '/' . self::DEFAULT_ZIP_NAME));
+        $profile = WP_FTS_ReleaseChannelPolicy::normalize_plugin_profile((string) ($options['profile'] ?? WP_FTS_ReleaseChannelPolicy::PROFILE_CORE));
 
         if (($options['skip_build_lock'] ?? false) === true) {
-            return $this->build_unlocked($pluginSource, $monorepoRoot, $buildDir, $zipPath);
+            return $this->build_unlocked($pluginSource, $monorepoRoot, $buildDir, $zipPath, $profile);
         }
 
         return self::with_build_lock(
             $buildDir,
-            fn(): array => $this->build_unlocked($pluginSource, $monorepoRoot, $buildDir, $zipPath)
+            fn(): array => $this->build_unlocked($pluginSource, $monorepoRoot, $buildDir, $zipPath, $profile)
         );
     }
 
@@ -109,9 +113,9 @@ final class WP_FTS_ReleasePackageBuilder
     }
 
     /**
-     * @return array{build_dir:string,zip_path:string,sha256:string,removed_paths:string[],prohibited_paths:string[]}
+     * @return array<string,mixed>
      */
-    private function build_unlocked(string $pluginSource, string $monorepoRoot, string $buildDir, string $zipPath): array
+    private function build_unlocked(string $pluginSource, string $monorepoRoot, string $buildDir, string $zipPath, string $profile): array
     {
         self::ensure_directory($buildDir);
 
@@ -163,6 +167,10 @@ final class WP_FTS_ReleasePackageBuilder
         ], $composerEnv);
 
         $removedPaths = self::prune_staged_package($stagePlugin);
+        $analyzerPackPolicy = WP_FTS_ReleaseChannelPolicy::apply_plugin_profile($stagePlugin, $profile);
+        $removedPaths = array_values(array_unique(array_merge($removedPaths, $analyzerPackPolicy['removed_paths'])));
+        sort($removedPaths, SORT_STRING);
+
         $prohibitedPaths = self::find_prohibited_package_paths($stagePlugin);
         if ($prohibitedPaths !== []) {
             throw new RuntimeException(
@@ -177,11 +185,13 @@ final class WP_FTS_ReleasePackageBuilder
         }
 
         return [
+            'profile' => $profile,
             'build_dir' => $buildDir,
             'zip_path' => $zipPath,
             'sha256' => $sha256,
             'removed_paths' => $removedPaths,
             'prohibited_paths' => $prohibitedPaths,
+            'analyzer_pack_policy' => $analyzerPackPolicy,
         ];
     }
 
@@ -363,6 +373,7 @@ final class WP_FTS_ReleasePackageBuilder
             'Options:',
             '  --build-dir=PATH       Directory used for staging and default ZIP output.',
             '  --output=PATH          Final ZIP path. Defaults to BUILD/wp-fts-indexer.zip.',
+            '  --profile=PROFILE      core, wporg-compatible, or github-full. Defaults to core.',
             '  --plugin-src=PATH      Plugin source directory. Defaults to this script parent.',
             '  --monorepo-root=PATH   Monorepo root. Defaults to the plugin source parent.',
             '  -h, --help             Show this help.',
@@ -664,11 +675,13 @@ if (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? ''))
         $result = (new WP_FTS_ReleasePackageBuilder())->build($options);
         fwrite(STDOUT, json_encode([
             'status' => 'ok',
+            'profile' => $result['profile'],
             'build_dir' => $result['build_dir'],
             'zip_path' => $result['zip_path'],
             'sha256' => $result['sha256'],
             'removed_paths' => $result['removed_paths'],
             'prohibited_paths' => $result['prohibited_paths'],
+            'analyzer_pack_policy' => $result['analyzer_pack_policy'],
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
     } catch (Throwable $e) {
         fwrite(STDERR, "Release package build failed: {$e->getMessage()}\n");

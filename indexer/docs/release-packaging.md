@@ -29,6 +29,48 @@ plugin headers only at the plugin root and one directory level below
 `wp-content/plugins`; a nested monorepo checkout can leave `indexer/indexer.php`
 undiscovered.
 
+## Release Channels
+
+Release artifacts are split by license channel:
+
+- `language-fts-core.zip` or `language-fts-wporg-compatible.zip`: an
+  installable plugin ZIP that carries GPL-compatible code and analyzer-pack
+  data only. This profile excludes CC BY-SA UniMorph packs,
+  unknown-license packs, raw upstream source submodules, fixtures, local build
+  artifacts, and credentials. The BSD-2-Clause Polish PoliMorf runtime pack is
+  allowed in this channel.
+- `language-fts-full.zip`: an installable GitHub/full plugin ZIP. This profile
+  may include CC BY-SA UniMorph packs with their notices, provenance, source
+  locks, manifests, and runtime shards. Unknown-license packs still remain
+  blocked.
+- `language-fts-extended-language-packs.zip`: a separate optional language-pack
+  bundle for CC BY-SA UniMorph packs. It is not an installable plugin ZIP and
+  is not bundled with the core/WordPress.org-compatible package. It includes a
+  top-level `manifest.json`, `NOTICE.txt`, `LICENSES.md`, each pack manifest,
+  each pack notice, `PROVENANCE.md`, `SOURCE.lock.json`, and runtime shards.
+- `language-fts-release-evidence.json`: machine-readable release evidence for
+  the reviewed checkout and selected release target.
+
+The analyzer-pack release policy is intentionally fail-closed. Packs with
+`upstream-license-not-declared`, missing SPDX identifiers, fixture-only
+metadata, or source-only/raw-submodule status are excluded from every
+distributable artifact. The policy is checked by packaging tests and by the
+builders before ZIP creation.
+
+| Analyzer pack class | Core / WP.org-compatible ZIP | GitHub full ZIP | Extended pack bundle |
+| --- | --- | --- | --- |
+| Plugin PHP, docs, tools, production Composer dependencies | Included | Included | Not included |
+| BSD-2-Clause Polish PoliMorf runtime pack | Included | Included | Excluded |
+| CC BY-SA UniMorph runtime packs | Excluded | Included with notices and provenance | Included with notices and provenance |
+| `upstream-license-not-declared` packs | Excluded | Excluded | Excluded |
+| Fixture-only packs | Excluded | Excluded | Excluded |
+| Raw upstream sources under `resources/sources/` | Excluded | Excluded | Excluded |
+
+`wporg-compatible` describes a local packaging profile only, not a
+WordPress.org submission, approval, endorsement, hosted asset, SVN commit, tag,
+GitHub release, or upload.
+This profile is not a WordPress.org submission.
+
 ## Files That Ship
 
 Ship:
@@ -40,8 +82,9 @@ Ship:
 - `README.md`;
 - `docs/*.md`;
 - `playground/*.json` and `playground/sqlite-smoke.php`;
-- `resources/analyzer-packs/` runtime manifests, notices, provenance, and
-  runtime shards that the plugin can validate locally;
+- profile-allowed `resources/analyzer-packs/` runtime manifests, notices,
+  provenance, source locks, and runtime shards that the plugin can validate
+  locally;
 - `tools/` importer, validator, audit, and external-pack helper scripts;
 - runtime Composer dependencies under `vendor/`, including
   `wp-php-toolkit/full-text-search`, for release archives.
@@ -249,15 +292,26 @@ when Composer vendor files are present. A standalone plugin ZIP must include
 vendor files because the adjacent monorepo component will not exist inside
 `wp-content/plugins/indexer`.
 
-## Build A ZIP
+## Build Release Artifacts
 
 Run from the monorepo checkout:
 
 ```sh
 BUILD="$(mktemp -d)"
+BUILD_FULL="$(mktemp -d)"
+BUILD_PACKS="$(mktemp -d)"
 php indexer/tools/build-release-zip.php \
+  --profile=core \
   --build-dir="$BUILD" \
-  --output="$BUILD/wp-fts-indexer.zip"
+  --output="$BUILD/language-fts-core.zip"
+php indexer/tools/build-release-zip.php \
+  --profile=github-full \
+  --build-dir="$BUILD_FULL" \
+  --output="$BUILD_FULL/language-fts-full.zip"
+php indexer/tools/build-language-pack-bundle.php \
+  --profile=extended-language-packs \
+  --build-dir="$BUILD_PACKS" \
+  --output="$BUILD_PACKS/language-fts-extended-language-packs.zip"
 ```
 
 The builder stages `indexer/` through `.distignore`, copies the local
@@ -265,6 +319,7 @@ The builder stages `indexer/` through `.distignore`, copies the local
 `composer install --no-dev --optimize-autoloader` with a scrubbed Composer
 environment, removes vendor development directories such as `vendor/bin`,
 `test`, `tests`, `Tests`, and `coverage`. The builder prunes staged dotfiles anywhere in the package before ZIP creation,
+applies the selected analyzer-pack release profile,
 and refuses staged Composer auth files such as `indexer/auth.json` or
 `indexer/.composer/auth.json` before dependency installation so Composer cannot
 read source-tree credentials. This removes nested Composer dependency files such as
@@ -275,17 +330,19 @@ the same advisory lock used by the readiness gate.
 Inspect the archive contents:
 
 ```sh
-php -r '$z=new ZipArchive(); $z->open($argv[1]); for ($i=0; $i<$z->numFiles; $i++) { echo $z->getNameIndex($i), PHP_EOL; }' "$BUILD/wp-fts-indexer.zip" | sed -n '1,120p'
+php -r '$z=new ZipArchive(); $z->open($argv[1]); for ($i=0; $i<$z->numFiles; $i++) { echo $z->getNameIndex($i), PHP_EOL; }' "$BUILD/language-fts-core.zip" | sed -n '1,120p'
 ```
 
-The listing should include `indexer/resources/analyzer-packs/`,
-`indexer/tools/`, and production `indexer/vendor/` dependencies. It should not
-include `.cao`, root `indexer/tests/`, dependency-internal vendor tests such as
+The core listing should include `indexer/resources/analyzer-packs/`,
+`indexer/tools/`, production `indexer/vendor/` dependencies, and
+`indexer/RELEASE-CHANNEL.txt`. It should not include CC BY-SA UniMorph pack
+directories, unknown-license pack directories, `.cao`, root `indexer/tests/`,
+dependency-internal vendor tests such as
 `indexer/vendor/wp-php-toolkit/full-text-search/tests/*`, `indexer/vendor/bin/`,
 dependency dotfiles such as `indexer/vendor/wamania/php-stemmer/.gitignore`,
 Composer auth files such as `indexer/auth.json` or
-`indexer/.composer/auth.json`, `review-artifacts`, `resources/sources`, or the nested
-`playground/indexer-preview.zip` preview archive. The builder fails before ZIP
+`indexer/.composer/auth.json`, `review-artifacts`, `resources/sources`, or the
+nested `playground/indexer-preview.zip` preview archive. The builder fails before ZIP
 creation if the staged package still contains Composer auth files, prohibited dotfiles, root tests,
 review artifacts, raw source checkouts, vendor binaries, or vendor test/coverage
 fixtures.
@@ -293,7 +350,7 @@ fixtures.
 Install the archive into a disposable WordPress site:
 
 ```sh
-wp plugin install "$BUILD/wp-fts-indexer.zip" --activate
+wp plugin install "$BUILD/language-fts-core.zip" --activate
 wp fts search "__schema_probe__" --limit=1
 ```
 
@@ -310,12 +367,16 @@ The schema probe should succeed even before any content is indexed.
 5. Run `php indexer/tools/check-release-readiness.php --target=public-submission`
    and treat the current blockers as expected unless the release explicitly
    includes a completed public-submission authority pass.
-6. Build the release ZIP with `php indexer/tools/build-release-zip.php`.
-7. Inspect the ZIP for unexpected `.cao`, dotfiles, root `tests/`,
+6. Build the core/WP.org-compatible ZIP, GitHub full ZIP, and extended language
+   pack bundle in temporary directories.
+7. Inspect the ZIPs for the release-channel license matrix: CC BY-SA UniMorph
+   packs absent from core/WP.org-compatible, present in full/extended, and
+   unknown-license packs absent everywhere.
+8. Inspect the ZIPs for unexpected `.cao`, dotfiles, root `tests/`,
    dependency-internal vendor tests or coverage fixtures, or local cache files.
-8. Install the ZIP in a disposable WordPress site.
-9. Activate the plugin, run the schema probe, run a small reindex, and run one
+9. Install the core or full plugin ZIP in a disposable WordPress site.
+10. Activate the plugin, run the schema probe, run a small reindex, and run one
    search.
-10. Record the commit SHA, archive name, dependency versions, readiness target
+11. Record the commit SHA, archive names, dependency versions, readiness target
    results, and test results in
    the release notes.

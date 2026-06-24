@@ -92,6 +92,7 @@ final class WP_FTS_Plugin
     private const ADMIN_ANALYZER_ACTION_FIELD = 'wp_fts_analyzer_packs_action';
     private const ADMIN_ANALYZER_SAVE_BUNDLED_ACTION = 'save_bundled_runtime_packs';
     private const ADMIN_ANALYZER_LANGUAGE_FIELD = 'wp_fts_bundled_runtime_lemma_packs';
+    private const EXTENDED_LANGUAGE_PACKS_RELEASE_URL = 'https://github.com/adamziel/wp-extensions/releases';
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
@@ -6341,12 +6342,22 @@ final class WP_FTS_Plugin
     {
         echo '<h2>Analyzer packs</h2>';
         echo '<p>Analyzer packs add language-specific tokenization or word-form matching. Runtime packs affect real site searches; sandbox packs are bundled so Sandbox searches have realistic language behavior.</p>';
+        self::render_extended_language_packs_download_link();
         self::render_analyzer_pack_status_matrix();
         self::render_bundled_runtime_lemma_pack_controls();
         echo '<h3>Runtime analyzer packs</h3>';
         self::render_analyzer_pack_statuses(self::runtime_analyzer_pack_statuses());
         echo '<h3>Sandbox analyzer packs</h3>';
         self::render_analyzer_pack_statuses(self::sandbox_demo_analyzer_pack_statuses());
+    }
+
+    private static function render_extended_language_packs_download_link(): void
+    {
+        echo '<div class="notice notice-info inline">';
+        echo '<p><strong>Extended language packs</strong></p>';
+        echo '<p>Optional extended language packs are separately licensed and not bundled with the core/WordPress.org-compatible package. Review their notices before use. This plugin will not download or install them automatically, and WordPress.org does not host or endorse them.</p>';
+        echo '<p><a class="button" href="' . esc_url(self::EXTENDED_LANGUAGE_PACKS_RELEASE_URL) . '" target="_blank" rel="noopener noreferrer">Download extended language packs</a></p>';
+        echo '</div>';
     }
 
     /**

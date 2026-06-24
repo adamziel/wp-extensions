@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../../tools/build-release-zip.php';
+require_once __DIR__ . '/../../tools/build-language-pack-bundle.php';
 
 function wp_fts_release_packaging_contract_contains(string $needle, string $haystack, string $message): void
 {
@@ -37,6 +38,21 @@ function wp_fts_release_packaging_contract_same(mixed $expected, mixed $actual, 
     if ($expected !== $actual) {
         throw new RuntimeException($message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true));
     }
+}
+
+/**
+ * @param list<array<string,mixed>> $rows
+ * @return array<string,mixed>
+ */
+function wp_fts_release_packaging_contract_row_by_prefix(array $rows, string $prefix): array
+{
+    foreach ($rows as $row) {
+        if (str_starts_with((string) $row['pack_id'], $prefix)) {
+            return $row;
+        }
+    }
+
+    throw new RuntimeException("Could not find analyzer pack row with prefix {$prefix}");
 }
 
 function wp_fts_release_packaging_contract_temp_dir(): string
@@ -129,6 +145,17 @@ function wp_fts_release_packaging_contract_run(): void
         'Composer auth files such as',
         'indexer/auth.json',
         'indexer/.composer/auth.json',
+        'language-fts-core.zip',
+        'language-fts-wporg-compatible.zip',
+        'language-fts-full.zip',
+        'language-fts-extended-language-packs.zip',
+        'language-fts-release-evidence.json',
+        'CC BY-SA UniMorph runtime packs',
+        'upstream-license-not-declared',
+        'BSD-2-Clause Polish PoliMorf runtime pack',
+        'php indexer/tools/build-language-pack-bundle.php',
+        '--profile=github-full',
+        'not a WordPress.org submission',
     ] as $needle) {
         wp_fts_release_packaging_contract_contains(
             $needle,
@@ -226,6 +253,85 @@ function wp_fts_release_packaging_contract_prune_run(): void
     }
 }
 
+function wp_fts_release_packaging_contract_release_channel_policy_run(): void
+{
+    $root = dirname(__DIR__, 2);
+    $rows = WP_FTS_ReleaseChannelPolicy::analyzer_pack_rows($root);
+    wp_fts_release_packaging_contract_true($rows !== [], 'release channel policy should find committed analyzer-pack manifests');
+
+    $english = wp_fts_release_packaging_contract_row_by_prefix($rows, 'en-unimorph-');
+    wp_fts_release_packaging_contract_same('CC-BY-SA-3.0', $english['license_spdx'], 'English UniMorph pack should remain classified as CC BY-SA');
+    wp_fts_release_packaging_contract_true(
+        !WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_CORE, $english),
+        'core release profile should exclude CC BY-SA UniMorph packs'
+    );
+    wp_fts_release_packaging_contract_true(
+        !WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_WPORG_COMPATIBLE, $english),
+        'WP.org-compatible release profile should exclude CC BY-SA UniMorph packs'
+    );
+    wp_fts_release_packaging_contract_true(
+        WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_GITHUB_FULL, $english),
+        'GitHub full release profile should include CC BY-SA UniMorph packs'
+    );
+    wp_fts_release_packaging_contract_true(
+        WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_EXTENDED_LANGUAGE_PACKS, $english),
+        'extended language-pack bundle should include CC BY-SA UniMorph packs'
+    );
+
+    $polish = wp_fts_release_packaging_contract_row_by_prefix($rows, 'pl-polimorf-');
+    wp_fts_release_packaging_contract_same('BSD-2-Clause', $polish['license_spdx'], 'Polish PoliMorf runtime pack should remain BSD-2-Clause');
+    wp_fts_release_packaging_contract_true(
+        WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_CORE, $polish),
+        'core release profile should allow the BSD-2-Clause Polish pack'
+    );
+    wp_fts_release_packaging_contract_true(
+        WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_WPORG_COMPATIBLE, $polish),
+        'WP.org-compatible release profile should allow the BSD-2-Clause Polish pack'
+    );
+    wp_fts_release_packaging_contract_true(
+        WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_GITHUB_FULL, $polish),
+        'GitHub full release profile should allow the BSD-2-Clause Polish pack'
+    );
+    wp_fts_release_packaging_contract_true(
+        !WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_EXTENDED_LANGUAGE_PACKS, $polish),
+        'extended language-pack bundle should contain only separately licensed CC BY-SA packs, not the core Polish pack'
+    );
+
+    $unknown = wp_fts_release_packaging_contract_row_by_prefix($rows, 'te-unimorph-');
+    wp_fts_release_packaging_contract_same('upstream-license-not-declared', $unknown['license_spdx'], 'Telugu pack should remain license-blocked until upstream license evidence exists');
+    foreach (WP_FTS_ReleaseChannelPolicy::profiles() as $profile) {
+        wp_fts_release_packaging_contract_true(
+            !WP_FTS_ReleaseChannelPolicy::profile_allows_row($profile, $unknown),
+            "unknown-license analyzer packs should be excluded from {$profile}"
+        );
+    }
+
+    $ccBySaRows = array_values(array_filter($rows, static fn(array $row): bool => str_starts_with((string) $row['license_spdx'], 'CC-BY-SA-')));
+    wp_fts_release_packaging_contract_true($ccBySaRows !== [], 'release policy should classify at least one CC BY-SA analyzer pack');
+    foreach ($ccBySaRows as $row) {
+        wp_fts_release_packaging_contract_true(
+            !WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_CORE, $row),
+            "core profile should exclude CC BY-SA pack {$row['pack_id']}"
+        );
+        wp_fts_release_packaging_contract_true(
+            WP_FTS_ReleaseChannelPolicy::profile_allows_row(WP_FTS_ReleaseChannelPolicy::PROFILE_EXTENDED_LANGUAGE_PACKS, $row),
+            "extended bundle should include CC BY-SA pack {$row['pack_id']}"
+        );
+    }
+
+    foreach ($rows as $row) {
+        if ($row['license_class'] !== 'fixture-only') {
+            continue;
+        }
+        foreach (WP_FTS_ReleaseChannelPolicy::profiles() as $profile) {
+            wp_fts_release_packaging_contract_true(
+                !WP_FTS_ReleaseChannelPolicy::profile_allows_row($profile, $row),
+                "fixture-only analyzer pack {$row['pack_id']} should be excluded from {$profile}"
+            );
+        }
+    }
+}
+
 function wp_fts_release_packaging_contract_composer_env_run(): void
 {
     $tmp = wp_fts_release_packaging_contract_temp_dir();
@@ -269,9 +375,13 @@ if (function_exists('test_case')) {
     test_case('quality release packaging scrubs nested Composer environment', function (): void {
         wp_fts_release_packaging_contract_composer_env_run();
     });
+    test_case('quality release packaging enforces mixed-license channel policy', function (): void {
+        wp_fts_release_packaging_contract_release_channel_policy_run();
+    });
 } elseif (PHP_SAPI === 'cli' && realpath((string) ($_SERVER['SCRIPT_FILENAME'] ?? '')) === __FILE__) {
     wp_fts_release_packaging_contract_run();
     wp_fts_release_packaging_contract_prune_run();
     wp_fts_release_packaging_contract_composer_env_run();
-    fwrite(STDOUT, "OK: release packaging contract prunes dependency dotfiles, auth files, and vendor tests.\n");
+    wp_fts_release_packaging_contract_release_channel_policy_run();
+    fwrite(STDOUT, "OK: release packaging contract prunes dependency dotfiles, auth files, vendor tests, and mixed-license channel violations.\n");
 }
