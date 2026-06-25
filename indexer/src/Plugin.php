@@ -1661,6 +1661,7 @@ final class WP_FTS_Plugin
         return [
             'site_language' => $site_language,
             'site_language_label' => self::sandbox_language_display($site_language),
+            'built_in_support_summary' => self::operator_language_pack_built_in_support_summary($site_language),
             'runtime_support_status' => $runtime_support_status,
             'runtime_support_label' => $runtime_support_label,
             'runtime_support_full' => (bool) ($runtime_support['full'] ?? false),
@@ -1700,6 +1701,9 @@ final class WP_FTS_Plugin
         if (!empty($support['full'])) {
             return 'full';
         }
+        if (str_starts_with($support_label, 'Built-in')) {
+            return 'built_in';
+        }
         if ($support_label === 'Tokenizer-only support' || ($support['label'] ?? '') === 'Tokenizer pack') {
             return 'tokenizer';
         }
@@ -1708,6 +1712,20 @@ final class WP_FTS_Plugin
         }
 
         return 'fallback';
+    }
+
+    private static function operator_language_pack_built_in_support_summary(string $language): string
+    {
+        $built_in = self::built_in_language_support_details($language);
+        if ($built_in === null) {
+            return 'No built-in morphology is available for this site language; exact-word fallback remains active.';
+        }
+
+        $matched = is_scalar($built_in['matched_language'] ?? null) ? (string) $built_in['matched_language'] : '';
+        $label = is_scalar($built_in['label'] ?? null) ? (string) $built_in['label'] : 'Built-in support';
+        $language_label = $matched !== '' ? self::sandbox_language_display($matched) : self::sandbox_language_display($language);
+
+        return $label . ' for ' . $language_label . '.';
     }
 
     /**
@@ -1857,6 +1875,9 @@ final class WP_FTS_Plugin
     private static function operator_language_pack_matrix_row_needs_attention(array $row): bool
     {
         $runtime_support = (string) ($row['runtime_support'] ?? '');
+        if (str_starts_with($runtime_support, 'Built-in')) {
+            return false;
+        }
         if ($runtime_support !== 'Full morphology') {
             return true;
         }
@@ -1886,6 +1907,9 @@ final class WP_FTS_Plugin
         }
         if ($runtime_support_label === 'Full morphology') {
             return 'Runtime morphology is available for the site language. Reindex existing content after analyzer-pack changes.';
+        }
+        if (str_starts_with($runtime_support_label, 'Built-in')) {
+            return 'Built-in language support is active for the site language. Enable optional packs only for languages that need stronger word-form matching, then reindex existing content.';
         }
 
         return 'Configure an external analyzer pack, or accept conservative fallback. Reindex existing content after analyzer-pack changes.';
@@ -5729,6 +5753,13 @@ final class WP_FTS_Plugin
         echo '.wp-fts-dashboard-table tr:first-child th,.wp-fts-dashboard-table tr:first-child td{border-top:0;}';
         echo '.wp-fts-dashboard-table th{width:42%;font-weight:600;color:#1d2327;}';
         echo '.wp-fts-dashboard-note{color:#50575e;margin:10px 0 0;}';
+        echo '.wp-fts-dashboard-pack-choices{border:0;margin:12px 0 0;padding:0;}';
+        echo '.wp-fts-dashboard-pack-choices legend{font-weight:600;margin:0 0 6px;padding:0;}';
+        echo '.wp-fts-dashboard-pack-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:7px 12px;margin:8px 0 12px;}';
+        echo '.wp-fts-dashboard-pack-choice{display:flex;gap:6px;align-items:flex-start;min-width:0;}';
+        echo '.wp-fts-dashboard-pack-choice input{margin-top:2px;}';
+        echo '.wp-fts-dashboard-pack-choice span{min-width:0;overflow-wrap:anywhere;}';
+        echo '.wp-fts-dashboard-pack-choice .description{display:block;}';
         echo '.wp-fts-health-copy{max-width:760px;}';
         echo '.wp-fts-health-table{max-width:760px;margin:8px 0 18px;}';
         echo '.wp-fts-health-table th{width:230px;}';
@@ -5753,7 +5784,7 @@ final class WP_FTS_Plugin
         echo '.wp-fts-debug-table{margin:8px 0 14px;}';
         echo '.wp-fts-debug-table th{width:190px;}';
         echo '@media (max-width:782px){.wp-fts-dashboard-band-header{display:block}.wp-fts-dashboard-metrics{grid-template-columns:repeat(2,minmax(0,1fr));}.wp-fts-dashboard-metric:nth-child(2n){border-right:0}.wp-fts-dashboard-grid{grid-template-columns:1fr}.wp-fts-dashboard-progress-copy{display:block}.wp-fts-dashboard-table th{width:38%;}}';
-        echo '@media (max-width:600px){.wp-fts-dashboard-metrics{grid-template-columns:1fr}.wp-fts-dashboard-metric{border-right:0;border-bottom:1px solid #dcdcde}.wp-fts-dashboard-metric:last-child{border-bottom:0}.wp-fts-dashboard-actions{display:block}.wp-fts-dashboard-actions .button{margin:0 0 8px}.wp-fts-dashboard-table th,.wp-fts-dashboard-table td{display:block;width:auto;padding:7px 0}.wp-fts-dashboard-table td{padding-top:0}.wp-fts-health-table th{width:auto}.wp-fts-sandbox-compact-controls{display:block}.wp-fts-sandbox-field{margin:0 0 10px}.wp-fts-sandbox-field input[type=search]{min-width:0;width:100%;}}';
+        echo '@media (max-width:600px){.wp-fts-dashboard-metrics{grid-template-columns:1fr}.wp-fts-dashboard-metric{border-right:0;border-bottom:1px solid #dcdcde}.wp-fts-dashboard-metric:last-child{border-bottom:0}.wp-fts-dashboard-actions{display:block}.wp-fts-dashboard-actions .button{margin:0 0 8px}.wp-fts-dashboard-table th,.wp-fts-dashboard-table td{display:block;width:auto;padding:7px 0}.wp-fts-dashboard-table td{padding-top:0}.wp-fts-dashboard-pack-grid{grid-template-columns:1fr}.wp-fts-health-table th{width:auto}.wp-fts-sandbox-compact-controls{display:block}.wp-fts-sandbox-field{margin:0 0 10px}.wp-fts-sandbox-field input[type=search]{min-width:0;width:100%;}}';
         echo '</style>';
     }
 
@@ -5960,20 +5991,21 @@ final class WP_FTS_Plugin
         echo '<table class="wp-fts-dashboard-table"><tbody>';
         self::render_dashboard_table_row('Site language', is_scalar($language['site_language_label'] ?? null) ? (string) $language['site_language_label'] : self::sandbox_language_display(self::site_language()));
         self::render_dashboard_table_row('Runtime support', is_scalar($language['runtime_support_label'] ?? null) ? (string) $language['runtime_support_label'] : 'Unknown');
-        self::render_dashboard_table_row('Active packs', self::dashboard_number($activeCount));
-        self::render_dashboard_table_row('Available bundled packs', self::dashboard_number($bundledCount));
+        self::render_dashboard_table_row('Built-in support', is_scalar($language['built_in_support_summary'] ?? null) ? (string) $language['built_in_support_summary'] : self::operator_language_pack_built_in_support_summary(self::site_language()));
+        self::render_dashboard_table_row('Optional packs enabled', self::dashboard_number($activeCount));
+        self::render_dashboard_table_row('Selectable bundled packs', self::dashboard_number($bundledCount));
         self::render_dashboard_table_row('Fallback languages', is_scalar($language['fallback_summary'] ?? null) ? (string) $language['fallback_summary'] : 'Not available');
         echo '</tbody></table>';
 
         $activeLanguages = is_array($language['active_runtime_languages'] ?? null) ? $language['active_runtime_languages'] : [];
         if ($activeLanguages !== []) {
-            echo '<p class="wp-fts-dashboard-note">' . self::esc_html('Active: ' . implode('; ', array_slice(array_map('strval', $activeLanguages), 0, self::DEBUG_MAX_LIST_ITEMS))) . '</p>';
+            echo '<p class="wp-fts-dashboard-note">' . self::esc_html('Optional packs enabled: ' . implode('; ', array_slice(array_map('strval', $activeLanguages), 0, self::DEBUG_MAX_LIST_ITEMS))) . '</p>';
         } else {
-            echo '<p class="wp-fts-dashboard-note">No optional runtime language packs are active yet. Built-in stemmers and conservative fallback still work.</p>';
+            echo '<p class="wp-fts-dashboard-note">No optional runtime language packs are enabled yet. Built-in stemming and exact-word fallback still work.</p>';
         }
 
-        if ($bundledCount > $activeCount && $gzipAvailable) {
-            self::render_dashboard_enable_bundled_packs_form();
+        if ($bundledCount > 0 && $gzipAvailable) {
+            self::render_dashboard_bundled_pack_choices_form();
         } elseif ($bundledCount <= 0) {
             self::render_dashboard_fetch_extended_packs_form();
         } elseif (!$gzipAvailable) {
@@ -5984,22 +6016,76 @@ final class WP_FTS_Plugin
         echo '</section>';
     }
 
-    private static function render_dashboard_enable_bundled_packs_form(): void
+    private static function render_dashboard_bundled_pack_choices_form(): void
     {
         $manifests = self::bundled_runtime_lemma_pack_control_manifests();
         if ($manifests === []) {
             return;
         }
+        $rows = self::dashboard_bundled_pack_choice_rows(self::bundled_runtime_lemma_pack_control_rows($manifests));
 
         echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_DASHBOARD_TAB)) . '">';
         self::render_analyzer_nonce_field();
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) . '">';
-        foreach (array_keys($manifests) as $language) {
-            echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_LANGUAGE_FIELD) . '[]" value="' . self::esc_attr($language) . '">';
+        echo '<fieldset class="wp-fts-dashboard-pack-choices">';
+        echo '<legend>Choose optional bundled packs</legend>';
+        echo '<div class="wp-fts-dashboard-pack-grid">';
+        foreach ($rows as $row) {
+            echo '<label class="wp-fts-dashboard-pack-choice">';
+            if ($row['editable']) {
+                echo '<input type="checkbox" name="' . self::esc_attr(self::ADMIN_ANALYZER_LANGUAGE_FIELD) . '[]" value="' . self::esc_attr($row['language']) . '"' . ($row['enabled'] ? ' checked="checked"' : '') . '>';
+            } else {
+                echo '<input type="checkbox" disabled="disabled"' . ($row['enabled'] ? ' checked="checked"' : '') . '>';
+            }
+            echo '<span>' . self::esc_html(self::sandbox_language_display($row['language']));
+            echo '<span class="description">' . self::esc_html($row['enabled'] ? 'Enabled' : ($row['editable'] ? 'Available' : 'External')) . '</span>';
+            echo '</span>';
+            echo '</label>';
         }
-        echo '<p><button type="submit" class="button button-primary">Enable bundled language packs</button></p>';
-        echo '<p class="wp-fts-dashboard-note">After changing analyzer packs, reindex existing content so stored terms use the new analyzers.</p>';
+        echo '</div>';
+        echo '</fieldset>';
+        echo '<p><button type="submit" class="button button-primary">Save selected packs</button></p>';
+        echo '<p class="wp-fts-dashboard-note">Enable only the languages you want to enhance. Reindex existing content after changing optional packs.</p>';
         echo '</form>';
+    }
+
+    /**
+     * @param array<int,array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}> $rows
+     * @return array<int,array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}>
+     */
+    private static function dashboard_bundled_pack_choice_rows(array $rows): array
+    {
+        $site_language = WP_FTS_TermNamespace::canonicalize_lang(self::site_language(), WP_FTS_TermNamespace::DEFAULT_LANG);
+        $site_base = self::base_language($site_language);
+
+        usort($rows, static function (array $a, array $b) use ($site_language, $site_base): int {
+            $rank = static function (array $row) use ($site_language, $site_base): int {
+                $language = WP_FTS_TermNamespace::canonicalize_lang((string) ($row['language'] ?? ''), WP_FTS_TermNamespace::DEFAULT_LANG);
+                if (!empty($row['enabled'])) {
+                    return 0;
+                }
+                if ($language === $site_language || ($site_base !== '' && $language === $site_base)) {
+                    return 1;
+                }
+                if ($language === 'en') {
+                    return 2;
+                }
+                if ($language === 'pl') {
+                    return 3;
+                }
+
+                return 10;
+            };
+
+            $rankCompare = $rank($a) <=> $rank($b);
+            if ($rankCompare !== 0) {
+                return $rankCompare;
+            }
+
+            return strcmp((string) ($a['language'] ?? ''), (string) ($b['language'] ?? ''));
+        });
+
+        return $rows;
     }
 
     private static function render_dashboard_fetch_extended_packs_form(): void
@@ -9588,9 +9674,7 @@ final class WP_FTS_Plugin
      */
     private static function bundled_runtime_lemma_packs_by_lang(): array
     {
-        return [
-            'pl' => self::sandbox_polish_lemmatizer_pack(),
-        ];
+        return [];
     }
 
     /**
@@ -9606,7 +9690,9 @@ final class WP_FTS_Plugin
      */
     private static function bundled_sandbox_demo_lemma_packs_by_lang(): array
     {
-        $packs = self::bundled_runtime_lemma_packs_by_lang();
+        $packs = [
+            'pl' => self::sandbox_polish_lemmatizer_pack(),
+        ];
         if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
             $packs = array_replace(
                 $packs,
@@ -9639,6 +9725,13 @@ final class WP_FTS_Plugin
         return true;
     }
 
+    private static function bundled_polish_runtime_lemma_pack_manifest(): ?string
+    {
+        $manifestPath = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+
+        return is_file($manifestPath) ? $manifestPath : null;
+    }
+
     private static function default_lemma_pack_manifest_for_language(string $language): ?string
     {
         $parts = explode('-', str_replace('_', '-', $language));
@@ -9658,6 +9751,10 @@ final class WP_FTS_Plugin
     private static function bundled_runtime_lemma_pack_control_manifests(): array
     {
         $manifests = WP_FTS_AnalyzerPackValidator::bundled_unimorph_top_language_pack_manifests();
+        $polishManifest = self::bundled_polish_runtime_lemma_pack_manifest();
+        if ($polishManifest !== null) {
+            $manifests['pl'] = $polishManifest;
+        }
         foreach ($manifests as $language => $manifestPath) {
             if (!is_string($manifestPath) || !is_file($manifestPath)) {
                 unset($manifests[$language]);
@@ -10233,6 +10330,12 @@ final class WP_FTS_Plugin
         if ($controlRow !== null && !$gzipAvailable) {
             return 'PHP gzip stream support is required before bundled gzip packs can be enabled.';
         }
+        if (str_starts_with($runtimeSupportLabel, 'Built-in') && $controlRow !== null && !empty($controlRow['editable'])) {
+            return 'Built-in support is available without this optional pack; PHP gzip stream support is available if you enable it.';
+        }
+        if (str_starts_with($runtimeSupportLabel, 'Built-in')) {
+            return 'Built-in support is available without an optional pack.';
+        }
         if ($controlRow !== null && !empty($controlRow['editable'])) {
             return 'PHP gzip stream support is available for bundled packs.';
         }
@@ -10261,6 +10364,15 @@ final class WP_FTS_Plugin
         if ($controlRow !== null && !$gzipAvailable) {
             return 'Install or enable PHP zlib/gzip support, then enable the bundled pack and reindex existing content.';
         }
+        if (str_starts_with($runtimeSupportLabel, 'Built-in') && $controlRow !== null && !empty($controlRow['enabled'])) {
+            return 'Keep the optional pack enabled only if you want lemma-backed matching; reindex existing content after changes.';
+        }
+        if (str_starts_with($runtimeSupportLabel, 'Built-in') && $controlRow !== null) {
+            return 'Built-in support is already active; optionally enable this pack for stronger word-form matching, then reindex.';
+        }
+        if (str_starts_with($runtimeSupportLabel, 'Built-in')) {
+            return 'Keep built-in support, or configure an optional pack only if this language needs stronger word-form matching.';
+        }
         if ($controlRow !== null && !empty($controlRow['enabled'])) {
             return 'Reindex existing content after enabling or changing analyzer packs.';
         }
@@ -10282,11 +10394,11 @@ final class WP_FTS_Plugin
 
     private static function render_bundled_runtime_lemma_pack_controls(): void
     {
-        echo '<h3>Bundled runtime lemma packs</h3>';
-        echo '<p>Enable bundled lemma packs for real site searches. Bundled packs affect real site searches after the content is reindexed. Custom pack paths can still be configured with the <code>' . self::esc_html(self::ANALYZER_OPTIONS_OPTION) . '</code> option or filter. This page does not install external data or create sample content.</p>';
+        echo '<h3>Selectable bundled runtime lemma packs</h3>';
+        echo '<p>Choose which bundled lemma packs should affect real site searches. It is valid to enable only the languages your site needs, such as English and Polish. Custom pack paths can still be configured with the <code>' . self::esc_html(self::ANALYZER_OPTIONS_OPTION) . '</code> option or filter. This page does not install external data or create sample content.</p>';
 
         if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
-            echo '<p class="description">Bundled UniMorph packs are gzip-compressed, but this PHP runtime does not provide gzip stream support. They cannot be enabled for real site searches on this server.</p>';
+            echo '<p class="description">Bundled packs are gzip-compressed, but this PHP runtime does not provide gzip stream support. They cannot be enabled for real site searches on this server.</p>';
             return;
         }
 
@@ -10321,7 +10433,7 @@ final class WP_FTS_Plugin
             echo '</tr>';
         }
         echo '</tbody></table>';
-        echo '<p><button type="submit" class="button button-primary">Save bundled pack choices</button></p>';
+        echo '<p><button type="submit" class="button button-primary">Save selected packs</button></p>';
         echo '</form>';
     }
 
@@ -11031,12 +11143,46 @@ JS;
             ];
         }
 
+        $built_in = self::built_in_language_support_details($language);
+        if ($built_in !== null) {
+            return self::$language_support_details_cache[$cache_key] = $built_in;
+        }
+
         return self::$language_support_details_cache[$cache_key] = [
             'label' => 'Conservative fallback',
             'full' => false,
             'reason' => 'No active analyzer pack covers this language. Exact-word search and conservative fallback will be used until an analyzer pack is installed or generated with the pack tooling and configured for this language.',
             'matched_language' => '',
         ];
+    }
+
+    /**
+     * @return array{label:string,full:bool,reason:string,matched_language:string}|null
+     */
+    private static function built_in_language_support_details(string $language): ?array
+    {
+        $language = WP_FTS_TermNamespace::canonicalize_lang($language, WP_FTS_TermNamespace::DEFAULT_LANG);
+        $base = self::base_language($language);
+
+        if ($base === 'en') {
+            return [
+                'label' => 'Built-in English stemming',
+                'full' => false,
+                'reason' => 'English stemming and spelling normalization are built in. An optional English lemma pack can add broader word-form matching when explicitly enabled.',
+                'matched_language' => 'en',
+            ];
+        }
+
+        if (in_array($base, ['ar', 'es', 'fr', 'hi', 'id', 'pt'], true)) {
+            return [
+                'label' => 'Built-in stemming',
+                'full' => false,
+                'reason' => 'A built-in verified stemmer is available for this language. Optional lemma packs can add broader word-form matching when explicitly enabled.',
+                'matched_language' => $base,
+            ];
+        }
+
+        return null;
     }
 
     private static function language_support_reason(string $language, string $matched_language, string $support): string
@@ -11078,6 +11224,17 @@ JS;
                     )
                 ) . '</p>';
             }
+            return;
+        }
+
+        if (str_starts_with((string) ($runtime_support['label'] ?? ''), 'Built-in')) {
+            echo '<p class="description wp-fts-language-status">' . self::esc_html(
+                sprintf(
+                    'Current site language %s uses %s. Optional analyzer packs can be enabled only for the languages that need stronger word-form matching.',
+                    self::sandbox_language_display($language),
+                    strtolower((string) $runtime_support['label'])
+                )
+            ) . '</p>';
             return;
         }
 
