@@ -241,15 +241,38 @@ jobs:
             "$DIST_DIR/SHA256SUMS.txt"
           )
 
+          upload_existing_release_asset() {
+            local asset_path="$1"
+            local asset_name
+            local asset_ids
+
+            asset_name="$(basename "$asset_path")"
+            asset_ids="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
+              --jq ".[] | select(.name == \"${asset_name}\") | .id")"
+
+            for asset_id in $asset_ids; do
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >/dev/null
+            done
+
+            gh api --method POST "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset_name}" \
+              -H "Content-Type: application/octet-stream" \
+              --input "$asset_path" \
+              >/dev/null
+          }
+
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.id')"
+            release_id="$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')"
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -f tag_name="$RELEASE_TAG" \
+              -f target_commitish="$RELEASE_TARGET_REF" \
               -F draft="$RELEASE_DRAFT" \
               -F prerelease="$RELEASE_PRERELEASE" \
               -f name="Language FTS ${RELEASE_TAG}" \
               -f body="$(cat "$DIST_DIR/release-notes.md")" \
               >/dev/null
-            gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --clobber
+            for asset in "${ASSETS[@]}"; do
+              upload_existing_release_asset "$asset"
+            done
           else
             create_args=(
               release create "$RELEASE_TAG"

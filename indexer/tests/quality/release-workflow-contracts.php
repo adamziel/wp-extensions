@@ -122,10 +122,15 @@ function wp_fts_release_workflow_contract_run(): void
         'MIXED-LICENSE-NOTICE.txt',
         'No WordPress.org submission',
         'gh release view',
-        'gh release upload',
-        '--clobber',
+        'gh release view "$RELEASE_TAG" --json databaseId',
+        'repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets',
+        'repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}',
+        'uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset_name}',
+        'target_commitish="$RELEASE_TARGET_REF"',
         'release create "$RELEASE_TAG"',
         'gh api --method PATCH',
+        'gh api --method DELETE',
+        'gh api --method POST',
         'BUILD_ROOT="${RUNNER_TEMP:?}/language-fts-build"',
     ] as $needle) {
         wp_fts_release_workflow_contract_contains(
