@@ -5351,6 +5351,7 @@ test_case('default dashboard summarizes index progress search behavior and langu
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_locale'] = 'en_US';
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
         WP_FTS_Plugin::default_settings(),
         [
@@ -5394,21 +5395,26 @@ test_case('default dashboard summarizes index progress search behavior and langu
     assert_contains('<th scope="row">Provider mode</th><td>Prefer Language FTS</td>', $html, 'dashboard should show provider compatibility mode');
     assert_contains('<th scope="row">Term matching</th><td>Match any word</td>', $html, 'dashboard should show matching behavior');
     assert_contains('<h3 id="wp-fts-dashboard-packs-heading">Language packs</h3>', $html, 'dashboard should show language-pack status');
+    assert_contains('<th scope="row">Language pack mode</th><td>Automatic</td>', $html, 'dashboard should show automatic language-pack mode by default');
     assert_contains('<th scope="row">Built-in support</th><td>Built-in English stemming', $html, 'dashboard should separate built-in support from optional packs');
-    assert_contains('<th scope="row">Optional packs enabled</th><td>', $html, 'dashboard should show optional language-pack count');
     assert_contains('<th scope="row">Selectable bundled packs</th><td>', $html, 'dashboard should show selectable bundled language-pack count');
     assert_contains('Review analyzer pack details', $html, 'dashboard should link to analyzer-pack details');
     if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
-        assert_contains('Choose optional bundled packs', $html, 'dashboard should offer selective bundled pack controls when gzip support is available');
+        assert_contains('<th scope="row">Runtime support</th><td>Full morphology</td>', $html, 'dashboard should show automatic site-language pack runtime support when gzip-backed packs are available');
+        assert_contains('<th scope="row">Runtime packs active</th><td>1</td>', $html, 'dashboard should show automatic active language-pack count when gzip-backed packs are available');
+        assert_contains('Language pack mode', $html, 'dashboard should expose automatic/manual language-pack mode when gzip support is available');
+        assert_contains('Manual pack selection', $html, 'dashboard should offer selective manual pack controls when gzip support is available');
+        assert_contains('name="wp_fts_bundled_runtime_lemma_pack_mode" value="automatic" checked="checked"', $html, 'dashboard should select automatic mode by default');
         assert_contains('value="en"', $html, 'dashboard bundled pack choices should include English');
         assert_contains('value="pl"', $html, 'dashboard bundled pack choices should include Polish');
-        assert_true(preg_match('/value="en"[^>]*checked="checked"/', $html) === 1, 'dashboard should preselect the first-run recommended English pack for an English site');
+        assert_true(preg_match('/value="en"[^>]*checked="checked"/', $html) === 1, 'dashboard should show the automatic English pack as active for an English site');
         assert_true(preg_match('/value="pl"[^>]*checked="checked"/', $html) !== 1, 'dashboard should not preselect unrelated bundled packs on an English site');
-        assert_contains('Recommended packs are preselected for this site language. They are not active until you save them.', $html, 'dashboard should distinguish recommended pack selections from active runtime packs');
-        assert_contains('<span class="description">Recommended</span>', $html, 'dashboard should label first-run recommended packs separately from enabled packs');
-        assert_contains('Save selected packs', $html, 'dashboard should save explicit pack selections instead of enabling every bundled pack');
+        assert_contains('<span class="description">Automatic</span>', $html, 'dashboard should label automatic site-language packs separately from manual packs');
+        assert_contains('Save language-pack mode', $html, 'dashboard should save automatic/manual mode instead of only a checkbox list');
         assert_true(!str_contains($html, 'Enable bundled language packs'), 'dashboard should not offer an all-or-nothing bundled-pack action');
     } else {
+        assert_contains('<th scope="row">Runtime support</th><td>Built-in English stemming</td>', $html, 'dashboard should keep built-in runtime support when gzip-backed packs are unavailable');
+        assert_contains('<th scope="row">Runtime packs active</th><td>0</td>', $html, 'dashboard should not count gzip-backed packs as active without gzip support');
         assert_contains('PHP gzip support is required before bundled language packs can be enabled.', $html, 'dashboard should explain missing gzip support instead of offering a broken action');
     }
     assert_true(!str_contains($html, '<h2>Search health</h2>'), 'default dashboard should not render the full Health diagnostics panel');
@@ -5423,14 +5429,15 @@ test_case('dashboard respects explicitly saved empty optional language-pack sele
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
     $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'bundled_runtime_lemma_pack_mode' => 'manual',
         'lemmatizer_packs_by_lang' => [],
     ];
 
     $html = wp_fts_test_capture_admin_settings_tab(null);
 
-    assert_contains('Choose optional bundled packs', $html, 'dashboard should still render bundled pack controls after an explicit empty save');
+    assert_contains('Manual pack selection', $html, 'dashboard should still render bundled pack controls after an explicit manual empty save');
+    assert_contains('name="wp_fts_bundled_runtime_lemma_pack_mode" value="manual" checked="checked"', $html, 'dashboard should preserve explicit manual mode');
     assert_true(preg_match('/value="en"[^>]*checked="checked"/', $html) !== 1, 'dashboard should not re-preselect English after the operator explicitly saved no optional packs');
-    assert_true(!str_contains($html, 'Recommended packs are preselected for this site language'), 'dashboard should not show first-run recommendation copy after an explicit empty analyzer option exists');
     assert_contains('<span class="description">Available</span>', $html, 'dashboard should show unselected bundled packs as available after an explicit empty save');
 });
 
@@ -6461,6 +6468,10 @@ test_case('settings page distinguishes built-in en-US support from optional sand
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
     $GLOBALS['wp_fts_test_locale'] = 'en_US';
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'bundled_runtime_lemma_pack_mode' => 'manual',
+        'lemmatizer_packs_by_lang' => [],
+    ];
 
     $settingsHtml = wp_fts_test_capture_admin_settings_tab('settings');
     $analyzerHtml = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
@@ -6508,29 +6519,32 @@ test_case('health tab renders stale reindex debt separately from remaining count
 test_case('admin analyzer packs tab renders bundled runtime pack controls when gzip is available', function (): void {
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_locale'] = 'en_US';
 
     $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
 
     assert_contains('Analyzer pack status matrix', $html, 'analyzer packs tab should include the read-only status matrix');
-    assert_contains('Selectable bundled runtime lemma packs', $html, 'analyzer packs tab should include the bundled runtime control section');
+    assert_contains('Bundled runtime lemma packs', $html, 'analyzer packs tab should include the bundled runtime control section');
+    assert_contains('Automatic mode uses bundled lemma packs for the WordPress site language and fallback languages.', $html, 'analyzer controls should explain automatic mode');
     assert_contains('Custom pack paths can still be configured with the', $html, 'analyzer controls should keep custom paths out of the form');
     assert_contains('This page does not install external data or create sample content.', $html, 'analyzer controls should state the bounded side effects');
     assert_contains('Urdu (ur)', $html, 'status matrix should include the license-blocked Urdu lane');
     assert_contains('License-blocked; no bundled runtime pack is offered.', $html, 'status matrix should identify license-blocked bundled support');
     if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
-        assert_contains('Available to enable. Bundled pack: en-unimorph-eng-66e0e9e8e2dc.', $html, 'matrix should show bundled English as available before it is enabled');
+        assert_contains('Enabled automatically for the site language or fallback language. Bundled pack: en-unimorph-eng-66e0e9e8e2dc.', $html, 'matrix should show bundled English as automatically enabled for an English site');
         assert_contains('Available to enable. Bundled pack: pl-polimorf-20180722-full-playground.', $html, 'matrix should show bundled Polish as available before it is enabled');
-        assert_contains('Built-in support is already active; optionally enable this pack for stronger word-form matching, then reindex.', $html, 'matrix should present English packs as optional enhancements over built-in support');
+        assert_contains('Automatic mode is using this pack because it matches the site language or fallback language.', $html, 'matrix should present English packs as automatic site-language support');
         assert_contains('Enable the bundled pack, save, then reindex existing content.', $html, 'matrix should guide non-built-in available bundled packs toward enable-and-reindex');
+        assert_contains('name="wp_fts_bundled_runtime_lemma_pack_mode" value="automatic" checked="checked"', $html, 'eligible bundled runtime controls should default to automatic mode');
         assert_contains('name="wp_fts_bundled_runtime_lemma_packs[]"', $html, 'eligible bundled runtime packs should render checkbox controls');
         assert_contains('English (en)', $html, 'eligible bundled runtime controls should include English');
         assert_contains('Polish (pl)', $html, 'eligible bundled runtime controls should include Polish');
-        assert_true(preg_match('/value="en"[^>]*checked="checked"/', $html) === 1, 'eligible bundled runtime controls should preselect the first-run recommended English pack');
+        assert_true(preg_match('/value="en"[^>]*checked="checked"/', $html) === 1, 'eligible bundled runtime controls should show the automatic English pack as active');
         assert_true(preg_match('/value="pl"[^>]*checked="checked"/', $html) !== 1, 'eligible bundled runtime controls should leave unrelated Polish optional until selected');
-        assert_contains('Recommended</label>', $html, 'eligible bundled runtime controls should label first-run recommendations without calling them enabled');
+        assert_contains('Automatic</label>', $html, 'eligible bundled runtime controls should label automatic packs without calling them manually enabled');
         assert_contains('en-unimorph-eng-66e0e9e8e2dc', $html, 'eligible bundled runtime controls should expose the bundled English pack id');
         assert_contains('pl-polimorf-20180722-full-playground', $html, 'eligible bundled runtime controls should expose the bundled Polish pack id');
-        assert_contains('Save selected packs', $html, 'eligible bundled runtime controls should render a bounded save button');
+        assert_contains('Save language-pack mode', $html, 'eligible bundled runtime controls should render a bounded save button');
         assert_true(!str_contains($html, 'name="wp_fts_bundled_runtime_manifest_path"'), 'analyzer controls should not expose arbitrary manifest path inputs');
     } else {
         assert_contains('Bundled pack available but blocked by missing PHP gzip support: en-unimorph-eng-66e0e9e8e2dc.', $html, 'matrix should show why bundled gzip packs are unavailable');
@@ -6565,6 +6579,7 @@ test_case('admin analyzer pack status matrix reports bundled enabled external an
 
     $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
 
+    assert_contains('name="wp_fts_bundled_runtime_lemma_pack_mode" value="manual" checked="checked"', $html, 'legacy stored bundled selections should be treated as manual mode');
     assert_contains('Enabled from the bundled manifest. Bundled pack: en-unimorph-eng-66e0e9e8e2dc.', $html, 'matrix should report enabled bundled runtime packs');
     assert_contains('Configured outside this UI by the stored analyzer option. Bundled pack: bn-unimorph-ben-55a44fa60e9b.', $html, 'matrix should report custom stored pack state');
     assert_contains('Configured outside this UI by the analyzer options filter. Bundled pack: de-unimorph-deu-d226d2112d34.', $html, 'matrix should report filter-controlled pack state');
@@ -6591,6 +6606,7 @@ test_case('admin analyzer pack save enables selected bundled runtime packs witho
         $_POST = [
             'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
             'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_pack_mode' => 'manual',
             'wp_fts_bundled_runtime_lemma_packs' => ['pl', 'en', 'unknown-language'],
         ];
 
@@ -6607,6 +6623,7 @@ test_case('admin analyzer pack save enables selected bundled runtime packs witho
 
         assert_contains('Bundled analyzer pack settings saved. Reindex existing content', $html, 'successful bundled pack save should tell operators to reindex content');
         assert_contains('Analyzer pack status matrix', $html, 'save response should still render the read-only status matrix');
+        assert_same('manual', $stored['bundled_runtime_lemma_pack_mode'] ?? null, 'saving selected bundled packs should persist manual mode');
         assert_same($polishManifest, $stored['lemmatizer_packs_by_lang']['pl'] ?? null, 'saving Polish should persist the bundled Polish manifest path');
         assert_same($manifests['en'], $stored['lemmatizer_packs_by_lang']['en'] ?? null, 'saving English should persist the bundled English manifest path');
         assert_true(!array_key_exists('bn', $stored['lemmatizer_packs_by_lang'] ?? []), 'unselected Bengali should not be enabled by a targeted Polish and English save');
@@ -6622,6 +6639,60 @@ test_case('admin analyzer pack save enables selected bundled runtime packs witho
         assert_same([451, 452], $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] ?? [], 'saving bundled analyzer packs should not drain the indexing queue');
         assert_same([], $GLOBALS['wp_fts_test_posts'], 'saving bundled analyzer packs should not create posts');
         assert_same([], $fake->terms, 'saving bundled analyzer packs should not write FTS terms');
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin analyzer pack save switches to automatic mode and ignores manual checkbox noise', function (): void {
+    if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_true(true, 'gzip is unavailable, so automatic bundled runtime analyzer save coverage is skipped.');
+        return;
+    }
+
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+
+    try {
+        $manifests = bundled_unimorph_top_language_pack_manifests();
+        $polishManifest = WP_FTS_AnalyzerPackValidator::default_polish_playground_full_manifest();
+        wp_fts_test_reset_wordpress_fakes();
+        $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+        $GLOBALS['wp_fts_test_locale'] = 'en_US';
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+            'bundled_runtime_lemma_pack_mode' => 'manual',
+            'lemmatizer_packs_by_lang' => [
+                'en' => $manifests['en'],
+                'pl' => $polishManifest,
+            ],
+        ];
+        $_GET = [];
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
+            'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_pack_mode' => 'automatic',
+            'wp_fts_bundled_runtime_lemma_packs' => ['en', 'pl'],
+        ];
+
+        $html = wp_fts_test_capture_admin_settings_tab('analyzer-packs');
+        $stored = $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] ?? [];
+
+        assert_contains('Bundled analyzer pack settings saved. Reindex existing content', $html, 'switching bundled pack mode should save through the analyzer-pack form');
+        assert_same('automatic', $stored['bundled_runtime_lemma_pack_mode'] ?? null, 'saving automatic mode should persist automatic mode');
+        assert_true(!array_key_exists('en', $stored['lemmatizer_packs_by_lang'] ?? []), 'automatic mode should remove exact bundled English entries from manual storage');
+        assert_true(!array_key_exists('pl', $stored['lemmatizer_packs_by_lang'] ?? []), 'automatic mode should ignore checked unrelated manual languages');
+        $runtimeOptions = WP_FTS_Plugin::runtime_analyzer_options();
+        assert_same($manifests['en'], $runtimeOptions['lemmatizer_packs_by_lang']['en'] ?? null, 'automatic mode should activate the English site-language pack at runtime');
+        assert_true(!array_key_exists('pl', $runtimeOptions['lemmatizer_packs_by_lang'] ?? []), 'automatic mode should not activate unrelated checked manual packs at runtime');
+        assert_contains('Enabled automatically for the site language or fallback language.', $html, 'automatic mode should label runtime-selected packs as automatic');
+        assert_same([], $fake->terms, 'switching bundled analyzer mode should not write FTS terms');
     } finally {
         $_GET = $oldGet;
         $_POST = $oldPost;
@@ -6695,6 +6766,7 @@ test_case('admin analyzer pack save removes only exact bundled manifest entries 
         $_POST = [
             'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
             'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_pack_mode' => 'manual',
             'wp_fts_bundled_runtime_lemma_packs' => ['bn', 'fr'],
         ];
 
@@ -6734,6 +6806,7 @@ test_case('admin analyzer pack save respects filter-controlled languages', funct
         $_POST = [
             'wp_fts_analyzer_packs_action' => 'save_bundled_runtime_packs',
             'wp_fts_analyzer_packs_nonce' => wp_create_nonce('wp_fts_analyzer_packs_admin_action'),
+            'wp_fts_bundled_runtime_lemma_pack_mode' => 'manual',
             'wp_fts_bundled_runtime_lemma_packs' => ['en'],
         ];
 
@@ -6901,6 +6974,10 @@ test_case('sandbox language fallback uses current site language dynamically', fu
     $wpdb = $fake;
     wp_fts_test_reset_wordpress_fakes();
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ANALYZER_OPTIONS_OPTION] = [
+        'bundled_runtime_lemma_pack_mode' => 'manual',
+        'lemmatizer_packs_by_lang' => [],
+    ];
 
     $english = (object) [
         'ID' => 611,

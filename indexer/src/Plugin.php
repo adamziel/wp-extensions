@@ -99,7 +99,15 @@ final class WP_FTS_Plugin
     private const ADMIN_ANALYZER_ACTION_FIELD = 'wp_fts_analyzer_packs_action';
     private const ADMIN_ANALYZER_SAVE_BUNDLED_ACTION = 'save_bundled_runtime_packs';
     private const ADMIN_ANALYZER_FETCH_EXTENDED_ACTION = 'fetch_extended_language_packs';
+    private const ADMIN_ANALYZER_MODE_FIELD = 'wp_fts_bundled_runtime_lemma_pack_mode';
     private const ADMIN_ANALYZER_LANGUAGE_FIELD = 'wp_fts_bundled_runtime_lemma_packs';
+    private const BUNDLED_RUNTIME_LEMMA_PACK_MODE_OPTION = 'bundled_runtime_lemma_pack_mode';
+    private const BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC = 'automatic';
+    private const BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL = 'manual';
+    private const BUNDLED_RUNTIME_LEMMA_PACK_MODES = [
+        self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC,
+        self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL,
+    ];
     private const EXTENDED_LANGUAGE_PACKS_RELEASE_URL = 'https://github.com/adamziel/wp-extensions/releases';
     private const EXTENDED_LANGUAGE_PACKS_RELEASE_MANIFEST_SCHEMA = 'language-fts-language-pack-release-manifest-v1';
     private const EXTENDED_LANGUAGE_PACKS_ASSET_NAME = 'language-fts-extended-language-packs.zip';
@@ -1646,6 +1654,7 @@ final class WP_FTS_Plugin
         }
         $active_runtime_packs = self::operator_language_pack_active_runtime_pack_summaries($active_statuses);
         $control_manifests = self::bundled_runtime_lemma_pack_control_manifests();
+        $pack_mode = self::current_bundled_runtime_lemma_pack_mode();
         $gzip_available = WP_FTS_AnalyzerPackValidator::gzip_available();
         $matrix_rows = self::analyzer_pack_status_matrix_rows();
         $site_action = isset($matrix_rows[0]['action']) && is_scalar($matrix_rows[0]['action'])
@@ -1661,6 +1670,8 @@ final class WP_FTS_Plugin
         return [
             'site_language' => $site_language,
             'site_language_label' => self::sandbox_language_display($site_language),
+            'bundled_runtime_pack_mode' => $pack_mode,
+            'bundled_runtime_pack_mode_label' => self::bundled_runtime_lemma_pack_mode_label($pack_mode),
             'built_in_support_summary' => self::operator_language_pack_built_in_support_summary($site_language),
             'runtime_support_status' => $runtime_support_status,
             'runtime_support_label' => $runtime_support_label,
@@ -4965,9 +4976,11 @@ final class WP_FTS_Plugin
             return [['info', 'No bundled runtime lemma packs were found. Analyzer options were not changed.']];
         }
 
+        $selectedLanguages = self::selected_bundled_runtime_lemma_pack_languages($manifests);
         $previousProfile = self::current_index_profile();
         self::save_bundled_runtime_lemma_pack_selection(
-            self::selected_bundled_runtime_lemma_pack_languages($manifests),
+            self::submitted_bundled_runtime_lemma_pack_mode($selectedLanguages),
+            $selectedLanguages,
             $manifests
         );
         $currentProfile = self::current_index_profile();
@@ -4995,7 +5008,11 @@ final class WP_FTS_Plugin
                 return ['warning', 'Downloaded the language-pack bundle, but no valid analyzer-pack manifests were found. Analyzer options were not changed.'];
             }
 
-            self::save_bundled_runtime_lemma_pack_selection(array_keys($manifests), $manifests);
+            self::save_bundled_runtime_lemma_pack_selection(
+                self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC,
+                array_keys($manifests),
+                $manifests
+            );
             $currentProfile = self::current_index_profile();
             $reasons = self::index_profile_change_reasons($previousProfile, $currentProfile);
             if ($reasons !== []) {
@@ -5005,7 +5022,7 @@ final class WP_FTS_Plugin
             return [
                 'success',
                 sprintf(
-                    'Downloaded and enabled %d language %s from GitHub Releases. Reindex existing content for analyzer changes to affect already-indexed posts.',
+                    'Downloaded %d language %s from GitHub Releases. Automatic mode will use matching languages when they are relevant to the site. Reindex existing content for analyzer changes to affect already-indexed posts.',
                     count($manifests),
                     count($manifests) === 1 ? 'pack' : 'packs'
                 ),
@@ -5755,6 +5772,8 @@ final class WP_FTS_Plugin
         echo '.wp-fts-dashboard-note{color:#50575e;margin:10px 0 0;}';
         echo '.wp-fts-dashboard-pack-choices{border:0;margin:12px 0 0;padding:0;}';
         echo '.wp-fts-dashboard-pack-choices legend{font-weight:600;margin:0 0 6px;padding:0;}';
+        echo '.wp-fts-dashboard-pack-mode{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0 10px;}';
+        echo '.wp-fts-dashboard-pack-mode label{display:inline-flex;align-items:center;gap:4px;}';
         echo '.wp-fts-dashboard-pack-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:7px 12px;margin:8px 0 12px;}';
         echo '.wp-fts-dashboard-pack-choice{display:flex;gap:6px;align-items:flex-start;min-width:0;}';
         echo '.wp-fts-dashboard-pack-choice input{margin-top:2px;}';
@@ -5990,18 +6009,19 @@ final class WP_FTS_Plugin
         echo '<h3 id="wp-fts-dashboard-packs-heading">Language packs</h3>';
         echo '<table class="wp-fts-dashboard-table"><tbody>';
         self::render_dashboard_table_row('Site language', is_scalar($language['site_language_label'] ?? null) ? (string) $language['site_language_label'] : self::sandbox_language_display(self::site_language()));
+        self::render_dashboard_table_row('Language pack mode', is_scalar($language['bundled_runtime_pack_mode_label'] ?? null) ? (string) $language['bundled_runtime_pack_mode_label'] : self::bundled_runtime_lemma_pack_mode_label(self::current_bundled_runtime_lemma_pack_mode()));
         self::render_dashboard_table_row('Runtime support', is_scalar($language['runtime_support_label'] ?? null) ? (string) $language['runtime_support_label'] : 'Unknown');
         self::render_dashboard_table_row('Built-in support', is_scalar($language['built_in_support_summary'] ?? null) ? (string) $language['built_in_support_summary'] : self::operator_language_pack_built_in_support_summary(self::site_language()));
-        self::render_dashboard_table_row('Optional packs enabled', self::dashboard_number($activeCount));
+        self::render_dashboard_table_row('Runtime packs active', self::dashboard_number($activeCount));
         self::render_dashboard_table_row('Selectable bundled packs', self::dashboard_number($bundledCount));
         self::render_dashboard_table_row('Fallback languages', is_scalar($language['fallback_summary'] ?? null) ? (string) $language['fallback_summary'] : 'Not available');
         echo '</tbody></table>';
 
         $activeLanguages = is_array($language['active_runtime_languages'] ?? null) ? $language['active_runtime_languages'] : [];
         if ($activeLanguages !== []) {
-            echo '<p class="wp-fts-dashboard-note">' . self::esc_html('Optional packs enabled: ' . implode('; ', array_slice(array_map('strval', $activeLanguages), 0, self::DEBUG_MAX_LIST_ITEMS))) . '</p>';
+            echo '<p class="wp-fts-dashboard-note">' . self::esc_html('Runtime packs active: ' . implode('; ', array_slice(array_map('strval', $activeLanguages), 0, self::DEBUG_MAX_LIST_ITEMS))) . '</p>';
         } else {
-            echo '<p class="wp-fts-dashboard-note">No optional runtime language packs are enabled yet. Built-in stemming and exact-word fallback still work.</p>';
+            echo '<p class="wp-fts-dashboard-note">No runtime language packs are active yet. Built-in stemming and exact-word fallback still work.</p>';
         }
 
         if ($bundledCount > 0 && $gzipAvailable) {
@@ -6023,22 +6043,14 @@ final class WP_FTS_Plugin
             return;
         }
         $rows = self::dashboard_bundled_pack_choice_rows(self::bundled_runtime_lemma_pack_control_rows($manifests));
-        $hasRecommendedSelection = false;
-        foreach ($rows as $row) {
-            if (!empty($row['selected']) && empty($row['enabled'])) {
-                $hasRecommendedSelection = true;
-                break;
-            }
-        }
+        $mode = self::current_bundled_runtime_lemma_pack_mode();
 
         echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_DASHBOARD_TAB)) . '">';
         self::render_analyzer_nonce_field();
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) . '">';
+        self::render_bundled_runtime_lemma_pack_mode_controls($mode, 'wp-fts-dashboard-pack-choices');
         echo '<fieldset class="wp-fts-dashboard-pack-choices">';
-        echo '<legend>Choose optional bundled packs</legend>';
-        if ($hasRecommendedSelection) {
-            echo '<p class="wp-fts-dashboard-note">Recommended packs are preselected for this site language. They are not active until you save them.</p>';
-        }
+        echo '<legend>Manual pack selection</legend>';
         echo '<div class="wp-fts-dashboard-pack-grid">';
         foreach ($rows as $row) {
             echo '<label class="wp-fts-dashboard-pack-choice">';
@@ -6054,14 +6066,34 @@ final class WP_FTS_Plugin
         }
         echo '</div>';
         echo '</fieldset>';
-        echo '<p><button type="submit" class="button button-primary">Save selected packs</button></p>';
-        echo '<p class="wp-fts-dashboard-note">Enable only the languages you want to enhance. Reindex existing content after changing optional packs.</p>';
+        echo '<p><button type="submit" class="button button-primary">Save language-pack mode</button></p>';
+        echo '<p class="wp-fts-dashboard-note">Automatic uses bundled packs for the WordPress site language and fallback languages. Manual uses only the checked languages. Reindex existing content after changing mode or manual selections.</p>';
         echo '</form>';
     }
 
+    private static function render_bundled_runtime_lemma_pack_mode_controls(string $mode, string $class_name = ''): void
+    {
+        $mode = self::sanitize_bundled_runtime_lemma_pack_mode($mode, self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC);
+        $class = trim($class_name);
+        echo '<fieldset' . ($class !== '' ? ' class="' . self::esc_attr($class) . '"' : '') . '>';
+        echo '<legend>Language pack mode</legend>';
+        echo '<div class="wp-fts-dashboard-pack-mode">';
+        foreach ([
+            self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC => 'Automatic',
+            self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL => 'Manual',
+        ] as $value => $label) {
+            echo '<label>';
+            echo '<input type="radio" name="' . self::esc_attr(self::ADMIN_ANALYZER_MODE_FIELD) . '" value="' . self::esc_attr($value) . '"' . ($mode === $value ? ' checked="checked"' : '') . '> ';
+            echo self::esc_html($label);
+            echo '</label>';
+        }
+        echo '</div>';
+        echo '</fieldset>';
+    }
+
     /**
-     * @param array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,recommended:bool,editable:bool,status:string}> $rows
-     * @return array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,recommended:bool,editable:bool,status:string}>
+     * @param array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool,status:string}> $rows
+     * @return array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool,status:string}>
      */
     private static function dashboard_bundled_pack_choice_rows(array $rows): array
     {
@@ -6102,10 +6134,13 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array{enabled:bool,selected:bool,recommended:bool,editable:bool} $row
+     * @param array{enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool} $row
      */
     private static function bundled_runtime_lemma_pack_choice_state_label(array $row): string
     {
+        if (!empty($row['automatic'])) {
+            return 'Automatic';
+        }
         if (!empty($row['enabled'])) {
             return 'Enabled';
         }
@@ -6122,7 +6157,7 @@ final class WP_FTS_Plugin
         self::render_analyzer_nonce_field();
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_FETCH_EXTENDED_ACTION) . '">';
         echo '<p><button type="submit" class="button button-primary">Download language packs from GitHub</button></p>';
-        echo '<p class="wp-fts-dashboard-note">Downloads the signed GitHub Releases manifest, verifies the language-pack ZIP hash and size, installs packs under uploads, and enables matching languages where no custom pack is configured.</p>';
+        echo '<p class="wp-fts-dashboard-note">Downloads the signed GitHub Releases manifest, verifies the language-pack ZIP hash and size, installs packs under uploads, and lets automatic mode use matching languages where no custom pack is configured.</p>';
         echo '</form>';
     }
 
@@ -7352,7 +7387,7 @@ final class WP_FTS_Plugin
     {
         echo '<div class="notice notice-info inline">';
         echo '<p><strong>Extended language packs</strong></p>';
-        echo '<p>Optional extended language packs are separately licensed and not bundled with the core package. Review their notices before use. The Dashboard can verify a signed GitHub Releases manifest, install packs under uploads, and enable matching languages where no custom pack is configured. WordPress.org does not host or endorse them.</p>';
+        echo '<p>Optional extended language packs are separately licensed and not bundled with the core package. Review their notices before use. The Dashboard can verify a signed GitHub Releases manifest, install packs under uploads, and let automatic mode use matching languages where no custom pack is configured. WordPress.org does not host or endorse them.</p>';
         echo '<p><a class="button" href="' . esc_url(self::EXTENDED_LANGUAGE_PACKS_RELEASE_URL) . '" target="_blank" rel="noopener noreferrer">Download extended language packs</a></p>';
         echo '</div>';
     }
@@ -9228,10 +9263,12 @@ final class WP_FTS_Plugin
      * @param array<string,string> $bundledManifests
      * @return array<string,mixed> Stored analyzer option value after the bounded merge.
      */
-    private static function save_bundled_runtime_lemma_pack_selection(array $selectedLanguages, array $bundledManifests): array
+    private static function save_bundled_runtime_lemma_pack_selection(string $mode, array $selectedLanguages, array $bundledManifests): array
     {
         $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
         $options = is_array($stored) ? $stored : [];
+        $mode = self::sanitize_bundled_runtime_lemma_pack_mode($mode, self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL);
+        $options[self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_OPTION] = $mode;
         $selected = array_fill_keys($selectedLanguages, true);
         $filterControlled = self::filter_controlled_runtime_lemma_pack_languages();
 
@@ -9240,7 +9277,7 @@ final class WP_FTS_Plugin
                 continue;
             }
 
-            if (isset($selected[$language])) {
+            if ($mode === self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL && isset($selected[$language])) {
                 if (!isset($options['lemmatizer_packs_by_lang']) || !is_array($options['lemmatizer_packs_by_lang'])) {
                     $options['lemmatizer_packs_by_lang'] = [];
                 }
@@ -9702,7 +9739,33 @@ final class WP_FTS_Plugin
      */
     private static function bundled_runtime_lemma_packs_by_lang(): array
     {
-        return [];
+        if (
+            self::current_bundled_runtime_lemma_pack_mode() !== self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC
+            || !WP_FTS_AnalyzerPackValidator::gzip_available()
+        ) {
+            return [];
+        }
+
+        return self::automatic_bundled_runtime_lemma_packs_by_lang(
+            self::bundled_runtime_lemma_pack_control_manifests()
+        );
+    }
+
+    /**
+     * @param array<string,string> $manifests
+     * @return array<string,string>
+     */
+    private static function automatic_bundled_runtime_lemma_packs_by_lang(array $manifests): array
+    {
+        $packs = [];
+        foreach (self::recommended_bundled_runtime_lemma_pack_languages($manifests) as $language => $_recommended) {
+            if (isset($manifests[$language])) {
+                $packs[$language] = $manifests[$language];
+            }
+        }
+        ksort($packs, SORT_STRING);
+
+        return $packs;
     }
 
     /**
@@ -9792,6 +9855,86 @@ final class WP_FTS_Plugin
         ksort($manifests, SORT_STRING);
 
         return $manifests;
+    }
+
+    private static function current_bundled_runtime_lemma_pack_mode(): string
+    {
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
+        $options = is_array($stored) ? $stored : [];
+
+        return self::bundled_runtime_lemma_pack_mode_from_options($options);
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     */
+    private static function bundled_runtime_lemma_pack_mode_from_options(array $options): string
+    {
+        if (!array_key_exists(self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_OPTION, $options)) {
+            return self::analyzer_options_have_exact_bundled_runtime_lemma_pack_entries($options)
+                ? self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL
+                : self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC;
+        }
+
+        return self::sanitize_bundled_runtime_lemma_pack_mode(
+            $options[self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_OPTION],
+            self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $options
+     */
+    private static function analyzer_options_have_exact_bundled_runtime_lemma_pack_entries(array $options): bool
+    {
+        $manifests = self::bundled_runtime_lemma_pack_control_manifests();
+        if ($manifests === []) {
+            return false;
+        }
+
+        $packs = self::runtime_lemma_pack_options_by_language($options);
+        foreach ($manifests as $language => $manifestPath) {
+            if (
+                isset($packs[$language])
+                && self::lemma_pack_option_points_to_manifest($packs[$language], $manifestPath)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param string[] $selectedLanguages
+     */
+    private static function submitted_bundled_runtime_lemma_pack_mode(array $selectedLanguages): string
+    {
+        if (!array_key_exists(self::ADMIN_ANALYZER_MODE_FIELD, $_POST)) {
+            return $selectedLanguages !== []
+                ? self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL
+                : self::current_bundled_runtime_lemma_pack_mode();
+        }
+
+        return self::sanitize_bundled_runtime_lemma_pack_mode(
+            self::request_text_value($_POST, self::ADMIN_ANALYZER_MODE_FIELD, 40),
+            self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL
+        );
+    }
+
+    private static function sanitize_bundled_runtime_lemma_pack_mode(mixed $mode, string $default): string
+    {
+        $default = in_array($default, self::BUNDLED_RUNTIME_LEMMA_PACK_MODES, true)
+            ? $default
+            : self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC;
+        $mode = is_scalar($mode) ? self::sanitize_key((string) $mode) : '';
+
+        return in_array($mode, self::BUNDLED_RUNTIME_LEMMA_PACK_MODES, true) ? $mode : $default;
+    }
+
+    private static function bundled_runtime_lemma_pack_mode_label(string $mode): string
+    {
+        return $mode === self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_MANUAL ? 'Manual' : 'Automatic';
     }
 
     /**
@@ -10240,8 +10383,8 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array<int,array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}> $controlRows
-     * @return array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null
+     * @param array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool,status:string}> $controlRows
+     * @return array{language:string,pack_id:string,enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool,status:string}|null
      */
     private static function analyzer_pack_status_matrix_control_row_for_language(string $language, array $controlRows): ?array
     {
@@ -10284,7 +10427,7 @@ final class WP_FTS_Plugin
 
     /**
      * @param array<int,array{language:string,kind:string,status:string,pack_id:string,fixture_only:bool,reason:string}> $statuses
-     * @param array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null $controlRow
+     * @param array{language:string,pack_id:string,enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool,status:string}|null $controlRow
      * @param array<string,mixed> $languageConfig
      */
     private static function analyzer_pack_status_matrix_runtime_pack_summary(string $language, array $statuses, ?array $controlRow, array $languageConfig, bool $gzipAvailable): string
@@ -10344,7 +10487,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null $controlRow
+     * @param array{language:string,pack_id:string,enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool,status:string}|null $controlRow
      * @param array<string,mixed> $languageConfig
      */
     private static function analyzer_pack_status_matrix_requirements(string $runtimeSupportLabel, ?array $controlRow, array $languageConfig, bool $gzipAvailable): string
@@ -10357,6 +10500,9 @@ final class WP_FTS_Plugin
         }
         if ($controlRow !== null && !$gzipAvailable) {
             return 'PHP gzip stream support is required before bundled gzip packs can be enabled.';
+        }
+        if ($controlRow !== null && !empty($controlRow['automatic'])) {
+            return 'Automatic mode is using the relevant bundled pack; PHP gzip stream support is available.';
         }
         if (str_starts_with($runtimeSupportLabel, 'Built-in') && $controlRow !== null && !empty($controlRow['editable'])) {
             return 'Built-in support is available without this optional pack; PHP gzip stream support is available if you enable it.';
@@ -10378,7 +10524,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * @param array{language:string,pack_id:string,enabled:bool,editable:bool,status:string}|null $controlRow
+     * @param array{language:string,pack_id:string,enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool,status:string}|null $controlRow
      * @param array<string,mixed> $languageConfig
      */
     private static function analyzer_pack_status_matrix_action(string $runtimeSupportLabel, ?array $controlRow, array $languageConfig, bool $gzipAvailable): string
@@ -10391,6 +10537,9 @@ final class WP_FTS_Plugin
         }
         if ($controlRow !== null && !$gzipAvailable) {
             return 'Install or enable PHP zlib/gzip support, then enable the bundled pack and reindex existing content.';
+        }
+        if ($controlRow !== null && !empty($controlRow['automatic'])) {
+            return 'Automatic mode is using this pack because it matches the site language or fallback language. Reindex existing content after analyzer-pack changes.';
         }
         if (str_starts_with($runtimeSupportLabel, 'Built-in') && $controlRow !== null && !empty($controlRow['enabled'])) {
             return 'Keep the optional pack enabled only if you want lemma-backed matching; reindex existing content after changes.';
@@ -10422,8 +10571,8 @@ final class WP_FTS_Plugin
 
     private static function render_bundled_runtime_lemma_pack_controls(): void
     {
-        echo '<h3>Selectable bundled runtime lemma packs</h3>';
-        echo '<p>Choose which bundled lemma packs should affect real site searches. It is valid to enable only the languages your site needs, such as English and Polish. Custom pack paths can still be configured with the <code>' . self::esc_html(self::ANALYZER_OPTIONS_OPTION) . '</code> option or filter. This page does not install external data or create sample content.</p>';
+        echo '<h3>Bundled runtime lemma packs</h3>';
+        echo '<p>Automatic mode uses bundled lemma packs for the WordPress site language and fallback languages. Switch to manual to choose exactly which bundled packs affect real site searches. Custom pack paths can still be configured with the <code>' . self::esc_html(self::ANALYZER_OPTIONS_OPTION) . '</code> option or filter. This page does not install external data or create sample content.</p>';
 
         if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
             echo '<p class="description">Bundled packs are gzip-compressed, but this PHP runtime does not provide gzip stream support. They cannot be enabled for real site searches on this server.</p>';
@@ -10440,6 +10589,7 @@ final class WP_FTS_Plugin
         echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_ANALYZER_TAB)) . '">';
         self::render_analyzer_nonce_field();
         echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) . '">';
+        self::render_bundled_runtime_lemma_pack_mode_controls(self::current_bundled_runtime_lemma_pack_mode());
         echo '<table class="widefat striped">';
         echo '<thead><tr><th scope="col">Enable</th><th scope="col">Language</th><th scope="col">Bundled pack</th><th scope="col">Configuration</th></tr></thead>';
         echo '<tbody>';
@@ -10461,27 +10611,28 @@ final class WP_FTS_Plugin
             echo '</tr>';
         }
         echo '</tbody></table>';
-        echo '<p><button type="submit" class="button button-primary">Save selected packs</button></p>';
+        echo '<p><button type="submit" class="button button-primary">Save language-pack mode</button></p>';
         echo '</form>';
     }
 
     /**
      * @param array<string,string> $manifests
-     * @return array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,recommended:bool,editable:bool,status:string}>
+     * @return array<int,array{language:string,pack_id:string,enabled:bool,selected:bool,automatic:bool,recommended:bool,editable:bool,status:string}>
      */
     private static function bundled_runtime_lemma_pack_control_rows(array $manifests): array
     {
-        $missingOption = new stdClass();
-        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, $missingOption);
-        $hasStoredOptions = $stored !== $missingOption;
+        $stored = self::get_option(self::ANALYZER_OPTIONS_OPTION, []);
         $storedOptions = is_array($stored) ? $stored : [];
+        $mode = self::bundled_runtime_lemma_pack_mode_from_options($storedOptions);
         $beforeFilter = self::raw_analyzer_options_before_filter(
             self::bundled_runtime_lemma_packs_by_lang(),
             self::bundled_runtime_segmenter_packs_by_lang()
         );
         $beforePacks = self::runtime_lemma_pack_options_by_language($beforeFilter);
         $filterControlled = self::filter_controlled_runtime_lemma_pack_languages();
-        $recommendedLanguages = self::recommended_bundled_runtime_lemma_pack_languages($manifests);
+        $automaticLanguages = $mode === self::BUNDLED_RUNTIME_LEMMA_PACK_MODE_AUTOMATIC
+            ? self::automatic_bundled_runtime_lemma_packs_by_lang($manifests)
+            : [];
         $rows = [];
 
         foreach ($manifests as $language => $manifestPath) {
@@ -10489,12 +10640,15 @@ final class WP_FTS_Plugin
             $customStored = self::stored_runtime_lemma_pack_has_custom_value($storedOptions, $language, $manifestPath);
             $enabled = isset($beforePacks[$language]) && self::lemma_pack_option_points_to_manifest($beforePacks[$language], $manifestPath);
             $editable = !$customStored && !isset($filterControlled[$language]);
-            $recommended = !$hasStoredOptions && $editable && !$enabled && isset($recommendedLanguages[$language]);
+            $automatic = $enabled && isset($automaticLanguages[$language]) && $editable;
+            $recommended = false;
             $selected = $enabled || $recommended;
             if (isset($filterControlled[$language])) {
                 $status = 'Configured outside this UI by the analyzer options filter.';
             } elseif ($customStored) {
                 $status = 'Configured outside this UI by the stored analyzer option.';
+            } elseif ($automatic) {
+                $status = 'Enabled automatically for the site language or fallback language.';
             } elseif ($enabled) {
                 $status = 'Enabled from the bundled manifest.';
             } else {
@@ -10506,6 +10660,7 @@ final class WP_FTS_Plugin
                 'pack_id' => $packId,
                 'enabled' => $enabled,
                 'selected' => $selected,
+                'automatic' => $automatic,
                 'recommended' => $recommended,
                 'editable' => $editable,
                 'status' => $status,
@@ -10535,7 +10690,7 @@ final class WP_FTS_Plugin
             $recommended[$language] = true;
         };
 
-        foreach (self::site_fallback_languages() as $language) {
+        foreach (self::automatic_site_fallback_languages() as $language) {
             $add($language);
             $base = self::base_language($language);
             if ($base !== '') {
@@ -11347,6 +11502,25 @@ JS;
         return WP_FTS_TermNamespace::default_language();
     }
 
+    private static function explicit_site_language(): string
+    {
+        if (function_exists('get_locale')) {
+            $locale = get_locale();
+            if (is_scalar($locale) && trim((string) $locale) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $locale, WP_FTS_TermNamespace::DEFAULT_LANG);
+            }
+        }
+
+        if (function_exists('get_bloginfo')) {
+            $language = get_bloginfo('language');
+            if (is_scalar($language) && trim((string) $language) !== '') {
+                return WP_FTS_TermNamespace::canonicalize_lang((string) $language, WP_FTS_TermNamespace::DEFAULT_LANG);
+            }
+        }
+
+        return '';
+    }
+
     /**
      * Create a WordPress HTML processor for the framework-neutral analyzer.
      */
@@ -11384,6 +11558,28 @@ JS;
     private static function site_fallback_languages(): array
     {
         $site_language = WP_FTS_TermNamespace::canonicalize_lang(self::site_language(), WP_FTS_TermNamespace::DEFAULT_LANG);
+        return self::fallback_languages_for_site_language($site_language);
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function automatic_site_fallback_languages(): array
+    {
+        $site_language = self::explicit_site_language();
+        if ($site_language === '') {
+            return [];
+        }
+
+        return self::fallback_languages_for_site_language($site_language);
+    }
+
+    /**
+     * @return string[]
+     */
+    private static function fallback_languages_for_site_language(string $site_language): array
+    {
+        $site_language = WP_FTS_TermNamespace::canonicalize_lang($site_language, WP_FTS_TermNamespace::DEFAULT_LANG);
         $languages = [$site_language];
         $base_language = self::base_language($site_language);
         if ($base_language !== '' && !in_array($base_language, $languages, true)) {
