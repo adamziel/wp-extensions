@@ -293,7 +293,7 @@ test_case('admin health support snapshot POST requires capability and nonce befo
         $docsBefore = $fake->docs;
         $termsBefore = $fake->terms;
 
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'health'];
         $_POST = [
             'wp_fts_health_action' => 'support_snapshot',
             'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
@@ -341,7 +341,7 @@ test_case('admin health support snapshot POST exposes copyable JSON without muta
         $docsBefore = $fake->docs;
         $termsBefore = $fake->terms;
 
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'health'];
         $_POST = [
             'wp_fts_health_action' => 'support_snapshot',
             'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),

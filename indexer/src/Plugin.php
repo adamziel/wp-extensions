@@ -91,14 +91,18 @@ final class WP_FTS_Plugin
     private const ADMIN_ANALYZER_NONCE_FIELD = 'wp_fts_analyzer_packs_nonce';
     private const ADMIN_ANALYZER_ACTION_FIELD = 'wp_fts_analyzer_packs_action';
     private const ADMIN_ANALYZER_SAVE_BUNDLED_ACTION = 'save_bundled_runtime_packs';
+    private const ADMIN_ANALYZER_FETCH_EXTENDED_ACTION = 'fetch_extended_language_packs';
     private const ADMIN_ANALYZER_LANGUAGE_FIELD = 'wp_fts_bundled_runtime_lemma_packs';
     private const EXTENDED_LANGUAGE_PACKS_RELEASE_URL = 'https://github.com/adamziel/wp-extensions/releases';
+    private const EXTENDED_LANGUAGE_PACKS_DOWNLOAD_URL = 'https://github.com/adamziel/wp-extensions/releases/latest/download/language-fts-extended-language-packs.zip';
+    private const EXTENDED_LANGUAGE_PACKS_INSTALL_SUBDIR = 'language-fts/analyzer-packs';
     private const ADMIN_QUERY_FIELD = 'wp_fts_sandbox_query';
     private const ADMIN_LANG_FIELD = 'wp_fts_sandbox_lang';
     private const ADMIN_SEARCH_FIELD = 'wp_fts_sandbox_search';
     private const ADMIN_POSTS_PAGE_FIELD = 'wp_fts_sandbox_posts_page';
     private const ADMIN_SHOW_INDEXED_TERMS_FIELD = 'wp_fts_sandbox_show_indexed_terms';
     private const ADMIN_TAB_FIELD = 'tab';
+    private const ADMIN_DASHBOARD_TAB = 'dashboard';
     private const ADMIN_HEALTH_TAB = 'health';
     private const ADMIN_SETTINGS_TAB = 'settings';
     private const ADMIN_SANDBOX_TAB = 'sandbox';
@@ -463,7 +467,7 @@ final class WP_FTS_Plugin
     }
 
     /**
-     * Redirect a safely activated admin to the Health tab once after install.
+     * Redirect a safely activated admin to the Dashboard once after install.
      */
     public static function maybe_redirect_after_activation(): void
     {
@@ -476,7 +480,7 @@ final class WP_FTS_Plugin
         }
 
         self::delete_option(self::ACTIVATION_REDIRECT_OPTION);
-        $url = self::admin_page_url(self::ADMIN_HEALTH_TAB);
+        $url = self::admin_page_url(self::ADMIN_DASHBOARD_TAB);
 
         if (function_exists('wp_safe_redirect')) {
             wp_safe_redirect($url);
@@ -4541,7 +4545,9 @@ final class WP_FTS_Plugin
         }
         self::render_legacy_sandbox_demo_cleanup_affordance($tab);
 
-        if ($tab === self::ADMIN_HEALTH_TAB) {
+        if ($tab === self::ADMIN_DASHBOARD_TAB) {
+            self::render_dashboard_tab();
+        } elseif ($tab === self::ADMIN_HEALTH_TAB) {
             self::render_health_tab();
         } elseif ($tab === self::ADMIN_SANDBOX_TAB) {
             self::render_admin_sandbox_tab();
@@ -4617,11 +4623,12 @@ final class WP_FTS_Plugin
     private static function admin_tabs(): array
     {
         return [
-            self::ADMIN_HEALTH_TAB => 'Health',
+            self::ADMIN_DASHBOARD_TAB => 'Dashboard',
             self::ADMIN_SETTINGS_TAB => 'Settings',
             self::ADMIN_SANDBOX_TAB => 'Sandbox',
             self::ADMIN_INDEXED_TAB => 'Indexed content',
             self::ADMIN_ANALYZER_TAB => 'Analyzer packs',
+            self::ADMIN_HEALTH_TAB => 'Health',
         ];
     }
 
@@ -4634,7 +4641,7 @@ final class WP_FTS_Plugin
     {
         $tab = self::sanitize_key($tab);
 
-        return array_key_exists($tab, self::admin_tabs()) ? $tab : self::ADMIN_HEALTH_TAB;
+        return array_key_exists($tab, self::admin_tabs()) ? $tab : self::ADMIN_DASHBOARD_TAB;
     }
 
     private static function render_admin_tabs(string $current_tab): void
@@ -4897,7 +4904,12 @@ final class WP_FTS_Plugin
             return [['error', 'The analyzer-pack action could not be verified. Reload the page and try again.']];
         }
 
-        if (self::analyzer_post_action() !== self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) {
+        $action = self::analyzer_post_action();
+        if ($action === self::ADMIN_ANALYZER_FETCH_EXTENDED_ACTION) {
+            return [self::install_extended_language_packs_from_github_notice()];
+        }
+
+        if ($action !== self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) {
             return [['error', 'Unsupported analyzer-pack action. No changes were made.']];
         }
 
@@ -4922,6 +4934,318 @@ final class WP_FTS_Plugin
         }
 
         return [['success', 'Bundled analyzer pack settings saved. Reindex existing content for analyzer changes to affect already-indexed posts.']];
+    }
+
+    /**
+     * @return array{0:string,1:string}
+     */
+    private static function install_extended_language_packs_from_github_notice(): array
+    {
+        if (!WP_FTS_AnalyzerPackValidator::gzip_available()) {
+            return ['warning', 'Language packs use gzip runtime shards. Enable PHP zlib/gzip support before downloading and enabling them.'];
+        }
+
+        try {
+            $previousProfile = self::current_index_profile();
+            $manifests = self::download_extended_language_pack_manifests();
+            if ($manifests === []) {
+                return ['warning', 'Downloaded the language-pack bundle, but no valid analyzer-pack manifests were found. Analyzer options were not changed.'];
+            }
+
+            self::save_bundled_runtime_lemma_pack_selection(array_keys($manifests), $manifests);
+            $currentProfile = self::current_index_profile();
+            $reasons = self::index_profile_change_reasons($previousProfile, $currentProfile);
+            if ($reasons !== []) {
+                self::mark_stale_index_debt($reasons, $previousProfile, $currentProfile);
+            }
+
+            return [
+                'success',
+                sprintf(
+                    'Downloaded and enabled %d language %s from GitHub Releases. Reindex existing content for analyzer changes to affect already-indexed posts.',
+                    count($manifests),
+                    count($manifests) === 1 ? 'pack' : 'packs'
+                ),
+            ];
+        } catch (Throwable $e) {
+            return ['error', 'Could not download language packs from GitHub Releases: ' . self::bounded_admin_error_message($e)];
+        }
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private static function download_extended_language_pack_manifests(): array
+    {
+        self::load_wordpress_file_helpers();
+        if (!function_exists('download_url')) {
+            throw new RuntimeException('WordPress download helpers are unavailable.');
+        }
+        if (!class_exists('ZipArchive')) {
+            throw new RuntimeException('The PHP ZipArchive extension is required to install the language-pack ZIP.');
+        }
+
+        $download = download_url(self::EXTENDED_LANGUAGE_PACKS_DOWNLOAD_URL, 300);
+        $wpError = self::wp_error_message($download);
+        if ($wpError !== null) {
+            throw new RuntimeException($wpError);
+        }
+        if (!is_string($download) || $download === '' || !is_file($download)) {
+            throw new RuntimeException('The language-pack download did not produce a local ZIP file.');
+        }
+
+        $extractRoot = self::create_temporary_directory('wp-fts-language-packs-');
+        try {
+            self::extract_extended_language_pack_zip($download, $extractRoot);
+            $sourceRoot = $extractRoot . DIRECTORY_SEPARATOR . 'language-fts-extended-language-packs' . DIRECTORY_SEPARATOR . 'analyzer-packs';
+            if (!is_dir($sourceRoot)) {
+                throw new RuntimeException('The downloaded ZIP does not contain analyzer packs.');
+            }
+
+            $installRoot = self::extended_language_pack_install_root();
+            $manifests = self::install_extracted_language_pack_manifests($sourceRoot, $installRoot);
+        } finally {
+            if (is_file($download)) {
+                @unlink($download);
+            }
+            self::remove_local_tree($extractRoot);
+        }
+
+        return $manifests;
+    }
+
+    private static function load_wordpress_file_helpers(): void
+    {
+        if (!defined('ABSPATH')) {
+            return;
+        }
+
+        $file = rtrim((string) ABSPATH, '/\\') . '/wp-admin/includes/file.php';
+        if (is_file($file)) {
+            require_once $file;
+        }
+    }
+
+    private static function wp_error_message(mixed $value): ?string
+    {
+        if (function_exists('is_wp_error') && is_wp_error($value)) {
+            return is_object($value) && method_exists($value, 'get_error_message')
+                ? (string) $value->get_error_message()
+                : 'WordPress reported an unknown error.';
+        }
+
+        return null;
+    }
+
+    private static function create_temporary_directory(string $prefix): string
+    {
+        $base = function_exists('get_temp_dir') ? (string) get_temp_dir() : sys_get_temp_dir();
+        $base = rtrim($base, '/\\');
+        $suffix = function_exists('wp_generate_uuid4') ? (string) wp_generate_uuid4() : str_replace('.', '', uniqid('', true));
+        $path = $base . DIRECTORY_SEPARATOR . $prefix . $suffix;
+        self::ensure_local_directory($path);
+
+        return $path;
+    }
+
+    private static function extended_language_pack_install_root(): string
+    {
+        if (!function_exists('wp_upload_dir')) {
+            throw new RuntimeException('WordPress uploads directory helpers are unavailable.');
+        }
+
+        $uploads = wp_upload_dir(null, false);
+        if (!is_array($uploads)) {
+            throw new RuntimeException('Could not resolve the uploads directory.');
+        }
+        $error = is_scalar($uploads['error'] ?? null) ? trim((string) $uploads['error']) : '';
+        if ($error !== '') {
+            throw new RuntimeException($error);
+        }
+        $basedir = is_scalar($uploads['basedir'] ?? null) ? trim((string) $uploads['basedir']) : '';
+        if ($basedir === '') {
+            throw new RuntimeException('The uploads directory path is empty.');
+        }
+
+        $root = rtrim($basedir, '/\\') . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, self::EXTENDED_LANGUAGE_PACKS_INSTALL_SUBDIR);
+        self::ensure_local_directory($root);
+
+        return $root;
+    }
+
+    private static function ensure_local_directory(string $path): void
+    {
+        if (is_dir($path)) {
+            return;
+        }
+        if (function_exists('wp_mkdir_p')) {
+            if (!wp_mkdir_p($path) && !is_dir($path)) {
+                throw new RuntimeException('Could not create directory: ' . $path);
+            }
+            return;
+        }
+        if (!mkdir($path, 0775, true) && !is_dir($path)) {
+            throw new RuntimeException('Could not create directory: ' . $path);
+        }
+    }
+
+    private static function extract_extended_language_pack_zip(string $zipPath, string $extractRoot): void
+    {
+        $zip = new ZipArchive();
+        if ($zip->open($zipPath) !== true) {
+            throw new RuntimeException('Could not open the downloaded language-pack ZIP.');
+        }
+
+        try {
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $entry = (string) $zip->getNameIndex($i);
+                $entry = str_replace('\\', '/', $entry);
+                if (!self::safe_zip_entry_name($entry)) {
+                    throw new RuntimeException('The language-pack ZIP contains an unsafe path.');
+                }
+                if (!str_starts_with($entry, 'language-fts-extended-language-packs/analyzer-packs/')) {
+                    continue;
+                }
+
+                $target = $extractRoot . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $entry);
+                if (str_ends_with($entry, '/')) {
+                    self::ensure_local_directory($target);
+                    continue;
+                }
+
+                self::ensure_local_directory(dirname($target));
+                $stream = $zip->getStream($entry);
+                if (!is_resource($stream)) {
+                    throw new RuntimeException('Could not read a language-pack ZIP entry.');
+                }
+                $targetStream = fopen($target, 'wb');
+                if (!is_resource($targetStream)) {
+                    fclose($stream);
+                    throw new RuntimeException('Could not create a language-pack ZIP entry.');
+                }
+                try {
+                    if (stream_copy_to_stream($stream, $targetStream) === false) {
+                        throw new RuntimeException('Could not extract a language-pack ZIP entry.');
+                    }
+                } finally {
+                    fclose($targetStream);
+                    fclose($stream);
+                }
+            }
+        } finally {
+            $zip->close();
+        }
+    }
+
+    private static function safe_zip_entry_name(string $entry): bool
+    {
+        if ($entry === '' || str_contains($entry, "\0") || str_starts_with($entry, '/')) {
+            return false;
+        }
+
+        foreach (explode('/', $entry) as $part) {
+            if ($part === '..') {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private static function install_extracted_language_pack_manifests(string $sourceRoot, string $installRoot): array
+    {
+        $paths = glob($sourceRoot . DIRECTORY_SEPARATOR . '*' . DIRECTORY_SEPARATOR . 'manifest.json');
+        if (!is_array($paths)) {
+            return [];
+        }
+
+        $validator = new WP_FTS_AnalyzerPackValidator();
+        $manifests = [];
+        foreach ($paths as $sourceManifest) {
+            if (!is_string($sourceManifest) || !is_file($sourceManifest)) {
+                continue;
+            }
+
+            $sourcePackDir = dirname($sourceManifest);
+            $packId = basename($sourcePackDir);
+            if (!preg_match('/^[A-Za-z0-9._-]+$/', $packId)) {
+                continue;
+            }
+
+            $targetPackDir = $installRoot . DIRECTORY_SEPARATOR . $packId;
+            self::copy_local_tree($sourcePackDir, $targetPackDir);
+            $targetManifest = $targetPackDir . DIRECTORY_SEPARATOR . 'manifest.json';
+            $result = $validator->validate_metadata($targetManifest, true);
+            $manifest = is_array($result['manifest'] ?? null) ? $result['manifest'] : [];
+            $language = WP_FTS_TermNamespace::canonicalize_lang((string) ($manifest['language'] ?? $manifest['lang'] ?? ''));
+            if ($language === '' || !empty($manifest['fixture_only'])) {
+                continue;
+            }
+
+            $manifests[$language] = $targetManifest;
+        }
+
+        ksort($manifests, SORT_STRING);
+
+        return $manifests;
+    }
+
+    private static function copy_local_tree(string $source, string $target): void
+    {
+        if (!is_dir($source)) {
+            throw new RuntimeException('Language-pack source directory is missing.');
+        }
+
+        self::ensure_local_directory($target);
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($source, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+
+        foreach ($iterator as $item) {
+            if (!$item instanceof SplFileInfo) {
+                continue;
+            }
+            $relative = substr($item->getPathname(), strlen(rtrim($source, DIRECTORY_SEPARATOR)) + 1);
+            if (!is_string($relative) || $relative === '') {
+                continue;
+            }
+            $destination = $target . DIRECTORY_SEPARATOR . $relative;
+            if ($item->isDir()) {
+                self::ensure_local_directory($destination);
+                continue;
+            }
+            self::ensure_local_directory(dirname($destination));
+            if (!copy($item->getPathname(), $destination)) {
+                throw new RuntimeException('Could not copy a language-pack file.');
+            }
+        }
+    }
+
+    private static function remove_local_tree(string $path): void
+    {
+        if (!is_dir($path)) {
+            return;
+        }
+
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($iterator as $item) {
+            if (!$item instanceof SplFileInfo) {
+                continue;
+            }
+            if ($item->isDir() && !$item->isLink()) {
+                @rmdir($item->getPathname());
+            } else {
+                @unlink($item->getPathname());
+            }
+        }
+        @rmdir($path);
     }
 
     private static function render_legacy_sandbox_demo_cleanup_affordance(string $tab): void
@@ -5102,6 +5426,29 @@ final class WP_FTS_Plugin
         echo '<style>';
         echo '.wp-fts-admin-summary,.wp-fts-language-status{max-width:980px;margin:6px 0 10px;color:#50575e;}';
         echo '.wp-fts-language-status{margin-top:8px;}';
+        echo '.wp-fts-dashboard-lede{max-width:860px;color:#50575e;}';
+        echo '.wp-fts-dashboard-band{max-width:1080px;background:#fff;border:1px solid #dcdcde;margin:14px 0 16px;}';
+        echo '.wp-fts-dashboard-band-header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;padding:16px 18px;border-bottom:1px solid #dcdcde;}';
+        echo '.wp-fts-dashboard-band-header h2{margin:0;font-size:1.35em;}';
+        echo '.wp-fts-dashboard-band-status{margin:2px 0 0;color:#50575e;}';
+        echo '.wp-fts-dashboard-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-bottom:1px solid #dcdcde;}';
+        echo '.wp-fts-dashboard-metric{padding:14px 18px;border-right:1px solid #dcdcde;min-width:0;}';
+        echo '.wp-fts-dashboard-metric:last-child{border-right:0;}';
+        echo '.wp-fts-dashboard-metric-label{display:block;color:#646970;font-size:12px;text-transform:uppercase;letter-spacing:.02em;}';
+        echo '.wp-fts-dashboard-metric-value{display:block;margin-top:3px;font-size:24px;line-height:1.25;font-weight:600;color:#1d2327;}';
+        echo '.wp-fts-dashboard-progress{padding:14px 18px;}';
+        echo '.wp-fts-dashboard-progress-track{height:10px;background:#f0f0f1;border-radius:999px;overflow:hidden;}';
+        echo '.wp-fts-dashboard-progress-bar{display:block;height:100%;background:#2271b1;}';
+        echo '.wp-fts-dashboard-progress-copy{display:flex;justify-content:space-between;gap:12px;margin-top:8px;color:#50575e;}';
+        echo '.wp-fts-dashboard-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 18px 16px;}';
+        echo '.wp-fts-dashboard-grid{max-width:1080px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 18px;}';
+        echo '.wp-fts-dashboard-panel{background:#fff;border:1px solid #dcdcde;padding:16px 18px;}';
+        echo '.wp-fts-dashboard-panel h3{margin:0 0 10px;}';
+        echo '.wp-fts-dashboard-table{width:100%;border-collapse:collapse;}';
+        echo '.wp-fts-dashboard-table th,.wp-fts-dashboard-table td{padding:8px 0;border-top:1px solid #f0f0f1;text-align:left;vertical-align:top;}';
+        echo '.wp-fts-dashboard-table tr:first-child th,.wp-fts-dashboard-table tr:first-child td{border-top:0;}';
+        echo '.wp-fts-dashboard-table th{width:42%;font-weight:600;color:#1d2327;}';
+        echo '.wp-fts-dashboard-note{color:#50575e;margin:10px 0 0;}';
         echo '.wp-fts-health-copy{max-width:760px;}';
         echo '.wp-fts-health-table{max-width:760px;margin:8px 0 18px;}';
         echo '.wp-fts-health-table th{width:230px;}';
@@ -5125,13 +5472,269 @@ final class WP_FTS_Plugin
         echo '.wp-fts-debug-trace summary{cursor:pointer;font-weight:600;}';
         echo '.wp-fts-debug-table{margin:8px 0 14px;}';
         echo '.wp-fts-debug-table th{width:190px;}';
-        echo '@media (max-width:600px){.wp-fts-health-table th{width:auto}.wp-fts-sandbox-compact-controls{display:block}.wp-fts-sandbox-field{margin:0 0 10px}.wp-fts-sandbox-field input[type=search]{min-width:0;width:100%;}}';
+        echo '@media (max-width:782px){.wp-fts-dashboard-band-header{display:block}.wp-fts-dashboard-metrics{grid-template-columns:repeat(2,minmax(0,1fr));}.wp-fts-dashboard-metric:nth-child(2n){border-right:0}.wp-fts-dashboard-grid{grid-template-columns:1fr}.wp-fts-dashboard-progress-copy{display:block}.wp-fts-dashboard-table th{width:38%;}}';
+        echo '@media (max-width:600px){.wp-fts-dashboard-metrics{grid-template-columns:1fr}.wp-fts-dashboard-metric{border-right:0;border-bottom:1px solid #dcdcde}.wp-fts-dashboard-metric:last-child{border-bottom:0}.wp-fts-dashboard-actions{display:block}.wp-fts-dashboard-actions .button{margin:0 0 8px}.wp-fts-dashboard-table th,.wp-fts-dashboard-table td{display:block;width:auto;padding:7px 0}.wp-fts-dashboard-table td{padding-top:0}.wp-fts-health-table th{width:auto}.wp-fts-sandbox-compact-controls{display:block}.wp-fts-sandbox-field{margin:0 0 10px}.wp-fts-sandbox-field input[type=search]{min-width:0;width:100%;}}';
         echo '</style>';
     }
 
     private static function render_admin_orientation(): void
     {
         echo '<p class="description wp-fts-admin-summary"><strong>What this does:</strong> Full-text search (FTS) builds its own searchable index for site content. Analyzer packs add language-specific word-form matching when available.</p>';
+    }
+
+    private static function render_dashboard_tab(): void
+    {
+        try {
+            $status = self::operator_status();
+        } catch (Throwable $e) {
+            self::render_sandbox_notice('error', 'Could not read search dashboard status: ' . self::bounded_admin_error_message($e));
+            $status = [
+                'eligible_count' => 0,
+                'indexed_count' => 0,
+                'remaining_count' => 0,
+                'pending_queue_count' => count(self::pending_queue()),
+                'ranking_tuning' => self::operator_ranking_tuning_status(self::settings(), [], []),
+                'search_provider_compatibility' => self::operator_search_provider_compatibility_status(),
+                'language_pack_status' => [],
+                'last_batch_processed' => 0,
+                'last_run_at' => '',
+            ];
+        }
+
+        $eligible = max(0, (int) ($status['eligible_count'] ?? 0));
+        $indexed = min($eligible, max(0, (int) ($status['indexed_count'] ?? 0)));
+        $remaining = max(0, (int) ($status['remaining_count'] ?? 0));
+        $pending = max(0, (int) ($status['pending_queue_count'] ?? 0));
+        $progress = self::dashboard_index_progress_percent($eligible, $indexed);
+        $language = is_array($status['language_pack_status'] ?? null) ? $status['language_pack_status'] : [];
+        $ranking = is_array($status['ranking_tuning'] ?? null) ? $status['ranking_tuning'] : [];
+        $provider = is_array($status['search_provider_compatibility'] ?? null) ? $status['search_provider_compatibility'] : [];
+
+        echo '<section class="wp-fts-dashboard-band" aria-labelledby="wp-fts-dashboard-heading">';
+        echo '<div class="wp-fts-dashboard-band-header">';
+        echo '<div>';
+        echo '<h2 id="wp-fts-dashboard-heading">Dashboard</h2>';
+        echo '<p class="wp-fts-dashboard-band-status">' . self::esc_html(self::dashboard_index_state_label($eligible, $remaining, $pending, $status)) . '</p>';
+        echo '</div>';
+        echo '<a class="button" href="' . self::esc_url(self::admin_page_url(self::ADMIN_HEALTH_TAB)) . '">Open Health diagnostics</a>';
+        echo '</div>';
+
+        echo '<div class="wp-fts-dashboard-metrics" aria-label="Index coverage">';
+        self::render_dashboard_metric('Eligible content', self::dashboard_number($eligible));
+        self::render_dashboard_metric('Indexed', self::dashboard_number($indexed));
+        self::render_dashboard_metric('Left to index', self::dashboard_number($remaining));
+        self::render_dashboard_metric('Queued updates', self::dashboard_number($pending));
+        echo '</div>';
+
+        echo '<div class="wp-fts-dashboard-progress">';
+        echo '<div class="wp-fts-dashboard-progress-track" role="progressbar" aria-label="Indexed content coverage" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' . self::esc_attr((string) (int) round($progress)) . '">';
+        echo '<span class="wp-fts-dashboard-progress-bar" style="width:' . self::esc_attr(self::dashboard_percent_style($progress)) . '"></span>';
+        echo '</div>';
+        echo '<div class="wp-fts-dashboard-progress-copy">';
+        echo '<span>' . self::esc_html(self::dashboard_percent_label($progress) . ' indexed') . '</span>';
+        echo '<span>' . self::esc_html(self::dashboard_last_batch_summary($status)) . '</span>';
+        echo '</div>';
+        echo '</div>';
+
+        echo '<div class="wp-fts-dashboard-actions">';
+        self::render_dashboard_index_action($remaining, $pending, $status);
+        echo '<a class="button" href="' . self::esc_url(self::admin_page_url(self::ADMIN_SANDBOX_TAB)) . '">Test a search</a>';
+        echo '<a class="button" href="' . self::esc_url(self::admin_page_url(self::ADMIN_SETTINGS_TAB)) . '">Tune search settings</a>';
+        echo '</div>';
+        echo '</section>';
+
+        echo '<div class="wp-fts-dashboard-grid">';
+        self::render_dashboard_search_panel($ranking, $provider);
+        self::render_dashboard_language_pack_panel($language);
+        echo '</div>';
+    }
+
+    private static function render_dashboard_metric(string $label, string $value): void
+    {
+        echo '<div class="wp-fts-dashboard-metric">';
+        echo '<span class="wp-fts-dashboard-metric-label">' . self::esc_html($label) . '</span>';
+        echo '<span class="wp-fts-dashboard-metric-value">' . self::esc_html($value) . '</span>';
+        echo '</div>';
+    }
+
+    /**
+     * @param array<string,mixed> $status
+     */
+    private static function dashboard_index_state_label(int $eligible, int $remaining, int $pending, array $status): string
+    {
+        if (max(0, (int) ($status['last_batch_failures'] ?? 0)) > 0) {
+            return 'Indexing needs attention: the latest batch recorded failures.';
+        }
+        if (!empty($status['lock_active'])) {
+            return 'Indexing is currently running.';
+        }
+        if ($eligible <= 0) {
+            return 'No eligible content is selected for indexing.';
+        }
+        if ($remaining <= 0 && $pending <= 0 && empty($status['stale_debt_active'])) {
+            return 'The search index is caught up for the current settings.';
+        }
+        if (!empty($status['stale_debt_active'])) {
+            return 'Analyzer or ranking changes require existing content to be reindexed.';
+        }
+
+        return 'Indexing work remains; background batches can continue or you can run one now.';
+    }
+
+    private static function dashboard_index_progress_percent(int $eligible, int $indexed): float
+    {
+        if ($eligible <= 0) {
+            return 0.0;
+        }
+
+        return max(0.0, min(100.0, ($indexed / $eligible) * 100.0));
+    }
+
+    private static function dashboard_percent_style(float $progress): string
+    {
+        return rtrim(rtrim(number_format(max(0.0, min(100.0, $progress)), 2, '.', ''), '0'), '.') . '%';
+    }
+
+    private static function dashboard_percent_label(float $progress): string
+    {
+        return rtrim(rtrim(number_format(max(0.0, min(100.0, $progress)), 1, '.', ''), '0'), '.') . '%';
+    }
+
+    private static function dashboard_number(int $count): string
+    {
+        return function_exists('number_format_i18n') ? (string) number_format_i18n($count) : number_format($count);
+    }
+
+    /**
+     * @param array<string,mixed> $status
+     */
+    private static function dashboard_last_batch_summary(array $status): string
+    {
+        $processed = max(0, (int) ($status['last_batch_processed'] ?? 0));
+        $lastRun = is_scalar($status['last_run_at'] ?? null) ? trim((string) $status['last_run_at']) : '';
+        if ($lastRun === '') {
+            return 'No indexing batch has run yet.';
+        }
+
+        return sprintf(
+            'Last batch: %d %s at %s UTC.',
+            $processed,
+            self::item_count_label($processed),
+            self::debug_truncate_text($lastRun, 32)
+        );
+    }
+
+    /**
+     * @param array<string,mixed> $status
+     */
+    private static function render_dashboard_index_action(int $remaining, int $pending, array $status): void
+    {
+        $hasWork = $remaining > 0 || $pending > 0 || !empty($status['stale_debt_active']) || !empty($status['has_more']);
+        if (!$hasWork) {
+            echo '<span class="wp-fts-dashboard-note">No manual indexing action is needed right now.</span>';
+            return;
+        }
+
+        echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_DASHBOARD_TAB)) . '">';
+        self::render_health_nonce_field();
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_HEALTH_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_HEALTH_MANUAL_BATCH_ACTION) . '">';
+        echo '<button type="submit" class="button button-primary">Index the next batch now</button>';
+        echo '</form>';
+    }
+
+    /**
+     * @param array<string,mixed> $ranking
+     * @param array<string,mixed> $provider
+     */
+    private static function render_dashboard_search_panel(array $ranking, array $provider): void
+    {
+        $matchMode = strtoupper(is_scalar($ranking['match_mode'] ?? null) ? (string) $ranking['match_mode'] : self::DEFAULT_SETTINGS['match_mode']);
+        $providerSummary = is_scalar($provider['known_provider_summary'] ?? null) ? (string) $provider['known_provider_summary'] : '';
+
+        echo '<section class="wp-fts-dashboard-panel" aria-labelledby="wp-fts-dashboard-search-heading">';
+        echo '<h3 id="wp-fts-dashboard-search-heading">Search behavior</h3>';
+        echo '<table class="wp-fts-dashboard-table"><tbody>';
+        self::render_dashboard_table_row('Public site search', !empty($ranking['frontend_replacement_enabled']) ? 'Enabled' : 'Disabled');
+        self::render_dashboard_table_row('wp-admin search', !empty($ranking['admin_posts_replacement_enabled']) ? 'Enabled' : 'Disabled');
+        self::render_dashboard_table_row('Provider mode', self::search_provider_compatibility_label((string) ($ranking['search_provider_compatibility'] ?? self::SEARCH_PROVIDER_COMPATIBILITY_PREFER_FTS)));
+        self::render_dashboard_table_row('Known providers', $providerSummary !== '' ? $providerSummary : 'No known search provider detected');
+        self::render_dashboard_table_row('Term matching', $matchMode === 'AND' ? 'Require every word' : 'Match any word');
+        self::render_dashboard_table_row('Word beginnings', !empty($ranking['prefix_matching']) ? 'Enabled' : 'Disabled');
+        self::render_dashboard_table_row('Results per page', (string) max(1, (int) ($ranking['result_limit'] ?? self::DEFAULT_SETTINGS['result_limit'])));
+        self::render_dashboard_table_row('Search excerpts', (!empty($ranking['highlight_enabled']) ? 'Highlighted' : 'Plain') . ', ' . max(self::SETTINGS_SNIPPET_MIN, (int) ($ranking['snippet_length'] ?? self::DEFAULT_SETTINGS['snippet_length'])) . ' chars');
+        echo '</tbody></table>';
+        echo '</section>';
+    }
+
+    /**
+     * @param array<string,mixed> $language
+     */
+    private static function render_dashboard_language_pack_panel(array $language): void
+    {
+        $activeCount = max(0, (int) ($language['active_runtime_pack_count'] ?? 0));
+        $bundledCount = max(0, (int) ($language['bundled_runtime_pack_count'] ?? 0));
+        $gzipAvailable = !empty($language['gzip_available']);
+
+        echo '<section class="wp-fts-dashboard-panel" aria-labelledby="wp-fts-dashboard-packs-heading">';
+        echo '<h3 id="wp-fts-dashboard-packs-heading">Language packs</h3>';
+        echo '<table class="wp-fts-dashboard-table"><tbody>';
+        self::render_dashboard_table_row('Site language', is_scalar($language['site_language_label'] ?? null) ? (string) $language['site_language_label'] : self::sandbox_language_display(self::site_language()));
+        self::render_dashboard_table_row('Runtime support', is_scalar($language['runtime_support_label'] ?? null) ? (string) $language['runtime_support_label'] : 'Unknown');
+        self::render_dashboard_table_row('Active packs', self::dashboard_number($activeCount));
+        self::render_dashboard_table_row('Available bundled packs', self::dashboard_number($bundledCount));
+        self::render_dashboard_table_row('Fallback languages', is_scalar($language['fallback_summary'] ?? null) ? (string) $language['fallback_summary'] : 'Not available');
+        echo '</tbody></table>';
+
+        $activeLanguages = is_array($language['active_runtime_languages'] ?? null) ? $language['active_runtime_languages'] : [];
+        if ($activeLanguages !== []) {
+            echo '<p class="wp-fts-dashboard-note">' . self::esc_html('Active: ' . implode('; ', array_slice(array_map('strval', $activeLanguages), 0, self::DEBUG_MAX_LIST_ITEMS))) . '</p>';
+        } else {
+            echo '<p class="wp-fts-dashboard-note">No optional runtime language packs are active yet. Built-in stemmers and conservative fallback still work.</p>';
+        }
+
+        if ($bundledCount > $activeCount && $gzipAvailable) {
+            self::render_dashboard_enable_bundled_packs_form();
+        } elseif ($bundledCount <= 0) {
+            self::render_dashboard_fetch_extended_packs_form();
+        } elseif (!$gzipAvailable) {
+            echo '<p class="wp-fts-dashboard-note">PHP gzip support is required before bundled language packs can be enabled.</p>';
+        }
+
+        echo '<p class="wp-fts-dashboard-note"><a href="' . self::esc_url(self::admin_page_url(self::ADMIN_ANALYZER_TAB)) . '">Review analyzer pack details</a></p>';
+        echo '</section>';
+    }
+
+    private static function render_dashboard_enable_bundled_packs_form(): void
+    {
+        $manifests = self::bundled_runtime_lemma_pack_control_manifests();
+        if ($manifests === []) {
+            return;
+        }
+
+        echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_DASHBOARD_TAB)) . '">';
+        self::render_analyzer_nonce_field();
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION) . '">';
+        foreach (array_keys($manifests) as $language) {
+            echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_LANGUAGE_FIELD) . '[]" value="' . self::esc_attr($language) . '">';
+        }
+        echo '<p><button type="submit" class="button button-primary">Enable bundled language packs</button></p>';
+        echo '<p class="wp-fts-dashboard-note">After changing analyzer packs, reindex existing content so stored terms use the new analyzers.</p>';
+        echo '</form>';
+    }
+
+    private static function render_dashboard_fetch_extended_packs_form(): void
+    {
+        echo '<form method="post" action="' . self::esc_url(self::admin_page_url(self::ADMIN_DASHBOARD_TAB)) . '">';
+        self::render_analyzer_nonce_field();
+        echo '<input type="hidden" name="' . self::esc_attr(self::ADMIN_ANALYZER_ACTION_FIELD) . '" value="' . self::esc_attr(self::ADMIN_ANALYZER_FETCH_EXTENDED_ACTION) . '">';
+        echo '<p><button type="submit" class="button button-primary">Download language packs from GitHub</button></p>';
+        echo '<p class="wp-fts-dashboard-note">Downloads the fixed extended language-pack release asset, installs packs under uploads, and enables matching languages where no custom pack is configured.</p>';
+        echo '</form>';
+    }
+
+    private static function render_dashboard_table_row(string $label, string $value): void
+    {
+        echo '<tr><th scope="row">' . self::esc_html($label) . '</th><td>' . self::esc_html($value) . '</td></tr>';
     }
 
     private static function render_health_tab(): void
@@ -6355,7 +6958,7 @@ final class WP_FTS_Plugin
     {
         echo '<div class="notice notice-info inline">';
         echo '<p><strong>Extended language packs</strong></p>';
-        echo '<p>Optional extended language packs are separately licensed and not bundled with the core/WordPress.org-compatible package. Review their notices before use. This plugin will not download or install them automatically, and WordPress.org does not host or endorse them.</p>';
+        echo '<p>Optional extended language packs are separately licensed and not bundled with the core package. Review their notices before use. The Dashboard can download the GitHub Releases bundle on request, install packs under uploads, and enable matching languages where no custom pack is configured. WordPress.org does not host or endorse them.</p>';
         echo '<p><a class="button" href="' . esc_url(self::EXTENDED_LANGUAGE_PACKS_RELEASE_URL) . '" target="_blank" rel="noopener noreferrer">Download extended language packs</a></p>';
         echo '</div>';
     }
@@ -7568,7 +8171,14 @@ final class WP_FTS_Plugin
     {
         $action = self::sanitize_key(self::request_text_value($_POST, self::ADMIN_ANALYZER_ACTION_FIELD, 60));
 
-        return $action === self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION ? $action : '';
+        return in_array(
+            $action,
+            [
+                self::ADMIN_ANALYZER_SAVE_BUNDLED_ACTION,
+                self::ADMIN_ANALYZER_FETCH_EXTENDED_ACTION,
+            ],
+            true
+        ) ? $action : '';
     }
 
     private static function analyzer_post_action_submitted(): bool
@@ -10414,11 +11024,11 @@ JS;
         return function_exists('wp_create_nonce') ? (string) wp_create_nonce($action) : '';
     }
 
-    private static function admin_page_url(string $tab = self::ADMIN_HEALTH_TAB): string
+    private static function admin_page_url(string $tab = self::ADMIN_DASHBOARD_TAB): string
     {
         $params = ['page' => self::ADMIN_PAGE_SLUG];
         $tab = self::sanitize_admin_tab($tab);
-        if ($tab !== self::ADMIN_HEALTH_TAB) {
+        if ($tab !== self::ADMIN_DASHBOARD_TAB) {
             $params[self::ADMIN_TAB_FIELD] = $tab;
         }
 

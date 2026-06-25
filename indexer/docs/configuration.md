@@ -1,7 +1,9 @@
 # Configuration
 
-Settings > Full-Text Search provides the operator-facing Health, Settings,
-Sandbox, Indexed content, and Analyzer packs tabs. The Settings tab controls
+Settings > Full-Text Search provides the operator-facing Dashboard, Settings,
+Sandbox, Indexed content, Analyzer packs, and Health tabs. The Dashboard is the
+default landing surface for index progress, search behavior, and language-pack
+next actions. The Settings tab controls
 indexed post types, automatic indexing, front-end and wp-admin Posts search
 replacement, search-provider compatibility, result limits, snippets,
 highlighting, prefix matching and thresholds, field ranking weights, optional
@@ -395,8 +397,11 @@ For bundled UniMorph packs shipped with the plugin, Settings > Full-Text Search
 > Analyzer packs provides a bounded checkbox UI that stores exact bundled
 manifest paths in `wp_fts_analyzer_options`. Bundled packs affect real site
 searches after content is reindexed. Custom pack paths remain option/filter
-configuration; the admin UI does not accept arbitrary filesystem paths, install
-external data, or create sample content.
+configuration; the admin UI does not accept arbitrary filesystem paths or
+create sample content. If the install does not include bundled extended packs,
+the Dashboard can download the fixed extended language-pack bundle from GitHub
+Releases on request, extract analyzer packs under uploads, and store the
+installed manifest paths.
 
 `wp fts status` reports the same runtime analyzer-pack posture through a
 read-only `language_pack_status` block. Use `wp fts status --format=json` for

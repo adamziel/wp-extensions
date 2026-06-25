@@ -4955,7 +4955,7 @@ test_case('authorized admin sandbox render includes search form and creates no p
 
     assert_contains('Full-Text Search', $html, 'sandbox tab should render inside the Full-Text Search settings page');
     assert_contains('nav-tab-active', $html, 'settings page should render WordPress-style tabs');
-    foreach (['Health', 'Settings', 'Sandbox', 'Indexed content', 'Analyzer packs'] as $tabLabel) {
+    foreach (['Dashboard', 'Settings', 'Sandbox', 'Indexed content', 'Analyzer packs', 'Health'] as $tabLabel) {
         assert_contains($tabLabel, $html, "settings tabs should include {$tabLabel}");
     }
     assert_contains('Full-text search (FTS) builds its own searchable index', $html, 'admin page should define full-text search before showing controls');
@@ -5073,8 +5073,9 @@ test_case('authorized admin sandbox render includes search form and creates no p
     assert_contains('Runtime packs affect real site searches', $analyzerHtml, 'analyzer packs tab should explain runtime versus sandbox scope');
     assert_contains('Download extended language packs', $analyzerHtml, 'analyzer packs tab should link to separately distributed extended packs');
     assert_contains('https://github.com/adamziel/wp-extensions/releases', $analyzerHtml, 'analyzer packs tab should use the stable GitHub Releases URL for extended packs');
-    assert_contains('Optional extended language packs are separately licensed and not bundled with the core/WordPress.org-compatible package', $analyzerHtml, 'analyzer packs tab should keep extended pack license and bundle boundaries explicit');
-    assert_contains('This plugin will not download or install them automatically', $analyzerHtml, 'analyzer packs tab should not imply automatic installation of extended packs');
+    assert_contains('Optional extended language packs are separately licensed and not bundled with the core package', $analyzerHtml, 'analyzer packs tab should keep extended pack license and bundle boundaries explicit');
+    assert_contains('The Dashboard can download the GitHub Releases bundle on request', $analyzerHtml, 'analyzer packs tab should point operators to the explicit dashboard download action');
+    assert_contains('install packs under uploads', $analyzerHtml, 'analyzer packs tab should explain where downloaded packs are installed');
     assert_contains('WordPress.org does not host or endorse them', $analyzerHtml, 'analyzer packs tab should not imply WordPress.org hosting or endorsement for extended packs');
     assert_contains('Polish (pl)', $analyzerHtml, 'analyzer pack status should include the bundled Polish pack');
     assert_contains('<td>Active</td>', $analyzerHtml, 'analyzer pack status should identify active packs');
@@ -5111,7 +5112,7 @@ test_case('known search provider advisory renders neutral Health and Settings ou
     $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
 
     try {
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'health'];
         $_POST = [];
         $healthHtml = wp_fts_test_capture_admin_settings_tab('health');
         $settingsHtml = wp_fts_test_capture_admin_settings_tab('settings');
@@ -5181,7 +5182,7 @@ test_case('known search provider recommendations differ by compatibility mode', 
     assert_true((string) ($prefer['recommendation'] ?? '') !== (string) ($respect['recommendation'] ?? ''), 'provider recommendations should differ between compatibility modes');
 });
 
-test_case('admin settings route defaults to Health and direct tab URLs render selected panels', function (): void {
+test_case('admin settings route defaults to Dashboard and direct tab URLs render selected panels', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -5196,10 +5197,10 @@ test_case('admin settings route defaults to Health and direct tab URLs render se
         $_POST = [];
         $settingsCallback = wp_fts_test_registered_admin_settings_callback();
         $routes = [
-            'health' => [
+            'dashboard' => [
                 'url' => '/wp-admin/options-general.php?page=wp-fts-settings',
-                'label' => 'Health',
-                'heading' => '<h2>Search health</h2>',
+                'label' => 'Dashboard',
+                'heading' => '<h2 id="wp-fts-dashboard-heading">Dashboard</h2>',
             ],
             'settings' => [
                 'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=settings',
@@ -5221,14 +5222,19 @@ test_case('admin settings route defaults to Health and direct tab URLs render se
                 'label' => 'Analyzer packs',
                 'heading' => '<h2>Analyzer packs</h2>',
             ],
+            'health' => [
+                'url' => '/wp-admin/options-general.php?page=wp-fts-settings&tab=health',
+                'label' => 'Health',
+                'heading' => '<h2>Search health</h2>',
+            ],
         ];
         $htmlByTab = [];
         foreach ($routes as $tab => $route) {
             $parsed = wp_fts_test_parse_admin_route($route['url']);
             assert_same('/wp-admin/options-general.php', $parsed['path'], "{$tab} route should target General Settings");
             assert_same(WP_FTS_Plugin::ADMIN_PAGE_SLUG, (string) ($parsed['params']['page'] ?? ''), "{$tab} route should keep the FTS page slug separate");
-            if ($tab === 'health') {
-                assert_true(!isset($parsed['params']['tab']), 'health route should use the base plugin settings URL');
+            if ($tab === 'dashboard') {
+                assert_true(!isset($parsed['params']['tab']), 'dashboard route should use the base plugin settings URL');
             } else {
                 assert_same($tab, (string) ($parsed['params']['tab'] ?? ''), "{$tab} route should keep the selected tab separate");
             }
@@ -5242,20 +5248,25 @@ test_case('admin settings route defaults to Health and direct tab URLs render se
         $wpdb = $oldWpdb;
     }
 
-    $healthHtml = $htmlByTab['health'];
+    $dashboardHtml = $htmlByTab['dashboard'];
     $settingsHtml = $htmlByTab['settings'];
     $sandboxHtml = $htmlByTab['sandbox'];
     $indexedHtml = $htmlByTab['indexed-content'];
     $analyzerHtml = $htmlByTab['analyzer-packs'];
+    $healthHtml = $htmlByTab['health'];
 
-    assert_contains('href="/wp-admin/options-general.php?page=wp-fts-settings"', $healthHtml, 'health tab link should target the base settings page URL');
-    assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=settings', $healthHtml, 'tab links should target the explicit settings tab URL');
+    assert_contains('href="/wp-admin/options-general.php?page=wp-fts-settings"', $dashboardHtml, 'dashboard tab link should target the base settings page URL');
+    assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=settings', $dashboardHtml, 'tab links should target the explicit settings tab URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=sandbox', $sandboxHtml, 'tab links should target the sandbox tab URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=indexed-content', $sandboxHtml, 'tab links should target the indexed-content tab URL');
     assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=analyzer-packs', $sandboxHtml, 'tab links should target the analyzer-packs tab URL');
-    assert_contains('aria-current="page">Health</a>', $healthHtml, 'base settings URL should render Health as active');
-    assert_contains('<h2>Search health</h2>', $healthHtml, 'base settings URL should render the Health panel');
-    assert_true(!str_contains($healthHtml, '<h2>Settings</h2>'), 'base settings URL should not render the Settings panel');
+    assert_contains('/wp-admin/options-general.php?page=wp-fts-settings&amp;tab=health', $sandboxHtml, 'tab links should target the explicit Health tab URL');
+    assert_true(strpos($dashboardHtml, '>Dashboard</a>') < strpos($dashboardHtml, '>Settings</a>'), 'Dashboard should be the first settings tab');
+    assert_true(strpos($dashboardHtml, '>Health</a>') > strpos($dashboardHtml, '>Analyzer packs</a>'), 'Health should be the last settings tab');
+    assert_contains('aria-current="page">Dashboard</a>', $dashboardHtml, 'base settings URL should render Dashboard as active');
+    assert_contains('<h2 id="wp-fts-dashboard-heading">Dashboard</h2>', $dashboardHtml, 'base settings URL should render the Dashboard panel');
+    assert_true(!str_contains($dashboardHtml, '<h2>Search health</h2>'), 'base settings URL should not render the Health panel');
+    assert_true(!str_contains($dashboardHtml, '<h2>Settings</h2>'), 'base settings URL should not render the Settings panel');
     assert_contains('aria-current="page">Settings</a>', $settingsHtml, 'direct settings tab URL should render Settings as active');
     assert_contains('<h2>Settings</h2>', $settingsHtml, 'direct settings tab URL should render the Settings panel');
     assert_contains('aria-current="page">Sandbox</a>', $sandboxHtml, 'sandbox query tab should render Sandbox as active');
@@ -5270,12 +5281,16 @@ test_case('admin settings route defaults to Health and direct tab URLs render se
     assert_contains('<h2>Analyzer packs</h2>', $analyzerHtml, 'analyzer-packs query tab should render the analyzer-packs panel');
     assert_true(!str_contains($analyzerHtml, '<h2>Settings</h2>'), 'analyzer-packs query tab should not fall back to the settings panel');
 
-    assert_contains('aria-current="page">Health</a>', $fallbackHtml, 'invalid tab values should be sanitized back to Health');
-    assert_contains('<h2>Search health</h2>', $fallbackHtml, 'invalid tab values should render the Health panel');
+    assert_contains('aria-current="page">Health</a>', $healthHtml, 'health query tab should render Health as active');
+    assert_contains('<h2>Search health</h2>', $healthHtml, 'health query tab should render the Health panel');
+    assert_true(!str_contains($healthHtml, '<h2 id="wp-fts-dashboard-heading">Dashboard</h2>'), 'health query tab should not render the Dashboard panel');
+
+    assert_contains('aria-current="page">Dashboard</a>', $fallbackHtml, 'invalid tab values should be sanitized back to Dashboard');
+    assert_contains('<h2 id="wp-fts-dashboard-heading">Dashboard</h2>', $fallbackHtml, 'invalid tab values should render the Dashboard panel');
     assert_true(!str_contains($fallbackHtml, '<script>'), 'invalid tab values should not be reflected into the admin page');
 });
 
-test_case('activation sets redirect flag and safe admin init redirects to Health', function (): void {
+test_case('activation sets redirect flag and safe admin init redirects to Dashboard', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -5298,7 +5313,7 @@ test_case('activation sets redirect flag and safe admin init redirects to Health
             $redirect = $e;
         }
         assert_true($redirect instanceof WP_FTS_TestRedirect, 'safe admin_init should redirect after activation');
-        assert_same('/wp-admin/options-general.php?page=wp-fts-settings', $redirect->location, 'activation redirect should land on the Health/default tab');
+        assert_same('/wp-admin/options-general.php?page=wp-fts-settings', $redirect->location, 'activation redirect should land on the Dashboard/default tab');
         assert_true(!isset($GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::ACTIVATION_REDIRECT_OPTION]), 'successful redirect should consume the one-shot flag');
 
         wp_fts_test_reset_wordpress_fakes();
@@ -5326,7 +5341,71 @@ test_case('activation sets redirect flag and safe admin init redirects to Health
     }
 });
 
-test_case('health dashboard displays search state counts and last indexed content without demo controls', function (): void {
+test_case('default dashboard summarizes index progress search behavior and language packs', function (): void {
+    global $wpdb;
+
+    $oldWpdb = $wpdb ?? null;
+    $oldGet = $_GET;
+    $oldPost = $_POST;
+    $fake = new WP_FTS_Test_WPDB();
+    $wpdb = $fake;
+    wp_fts_test_reset_wordpress_fakes();
+    $GLOBALS['wp_fts_test_caps'][WP_FTS_Plugin::ADMIN_CAPABILITY][0] = true;
+    $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::SETTINGS_OPTION] = array_replace(
+        WP_FTS_Plugin::default_settings(),
+        [
+            'replace_frontend_search' => true,
+            'replace_admin_post_search' => false,
+            'index_post_types' => ['post', 'page'],
+        ]
+    );
+    $fake->postRows = [
+        wp_fts_test_backfill_post(681, 'post', 'publish', 'Dashboard First Indexed'),
+        wp_fts_test_backfill_post(682, 'post', 'publish', 'Dashboard Waiting Post'),
+        wp_fts_test_backfill_post(683, 'page', 'publish', 'Dashboard Remaining Page'),
+    ];
+
+    try {
+        WP_FTS_Plugin::process_manual_index_batch(['batch_size' => 1]);
+        $GLOBALS['wp_fts_test_options'][WP_FTS_Plugin::QUEUE_OPTION] = [682];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_POST = [];
+        $html = wp_fts_test_capture_admin_settings_tab(null);
+    } finally {
+        $_GET = $oldGet;
+        $_POST = $oldPost;
+        $wpdb = $oldWpdb;
+    }
+
+    assert_contains('<h2 id="wp-fts-dashboard-heading">Dashboard</h2>', $html, 'base settings URL should render the Dashboard first');
+    assert_contains('Open Health diagnostics', $html, 'dashboard should keep Health as a secondary diagnostics route');
+    assert_contains('<span class="wp-fts-dashboard-metric-label">Eligible content</span><span class="wp-fts-dashboard-metric-value">3</span>', $html, 'dashboard should summarize eligible content');
+    assert_contains('<span class="wp-fts-dashboard-metric-label">Indexed</span><span class="wp-fts-dashboard-metric-value">1</span>', $html, 'dashboard should summarize indexed content');
+    assert_contains('<span class="wp-fts-dashboard-metric-label">Left to index</span><span class="wp-fts-dashboard-metric-value">2</span>', $html, 'dashboard should summarize remaining content');
+    assert_contains('<span class="wp-fts-dashboard-metric-label">Queued updates</span><span class="wp-fts-dashboard-metric-value">1</span>', $html, 'dashboard should summarize pending queue work');
+    assert_contains('aria-label="Indexed content coverage"', $html, 'dashboard should expose index coverage as a progressbar');
+    assert_contains('33.3% indexed', $html, 'dashboard should show the indexed percentage');
+    assert_contains('Index the next batch now', $html, 'dashboard should expose the primary indexing action when work remains');
+    assert_contains('Test a search', $html, 'dashboard should link to the Sandbox search workflow');
+    assert_contains('Tune search settings', $html, 'dashboard should link to tuning controls');
+    assert_contains('<h3 id="wp-fts-dashboard-search-heading">Search behavior</h3>', $html, 'dashboard should show search behavior status');
+    assert_contains('<th scope="row">Public site search</th><td>Enabled</td>', $html, 'dashboard should show public search replacement state');
+    assert_contains('<th scope="row">wp-admin search</th><td>Disabled</td>', $html, 'dashboard should show wp-admin search replacement state');
+    assert_contains('<th scope="row">Provider mode</th><td>Prefer Language FTS</td>', $html, 'dashboard should show provider compatibility mode');
+    assert_contains('<th scope="row">Term matching</th><td>Match any word</td>', $html, 'dashboard should show matching behavior');
+    assert_contains('<h3 id="wp-fts-dashboard-packs-heading">Language packs</h3>', $html, 'dashboard should show language-pack status');
+    assert_contains('<th scope="row">Active packs</th><td>', $html, 'dashboard should show active language-pack count');
+    assert_contains('<th scope="row">Available bundled packs</th><td>', $html, 'dashboard should show available bundled language-pack count');
+    assert_contains('Review analyzer pack details', $html, 'dashboard should link to analyzer-pack details');
+    if (WP_FTS_AnalyzerPackValidator::gzip_available()) {
+        assert_contains('Enable bundled language packs', $html, 'dashboard should offer one-click bundled pack enablement when gzip support is available');
+    } else {
+        assert_contains('PHP gzip support is required before bundled language packs can be enabled.', $html, 'dashboard should explain missing gzip support instead of offering a broken action');
+    }
+    assert_true(!str_contains($html, '<h2>Search health</h2>'), 'default dashboard should not render the full Health diagnostics panel');
+});
+
+test_case('health tab displays search state counts and last indexed content without demo controls', function (): void {
     global $wpdb;
 
     $oldWpdb = $wpdb ?? null;
@@ -5362,7 +5441,7 @@ test_case('health dashboard displays search state counts and last indexed conten
             'started_at' => $lockStarted,
             'expires_at' => $lockExpires,
         ];
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'health'];
         $_POST = [];
         $html = wp_fts_test_capture_admin_settings_tab(null);
     } finally {
@@ -5371,7 +5450,7 @@ test_case('health dashboard displays search state counts and last indexed conten
         $wpdb = $oldWpdb;
     }
 
-    assert_contains('<h2>Search health</h2>', $html, 'default admin page should render the Health dashboard');
+    assert_contains('<h2>Search health</h2>', $html, 'Health tab should render detailed search health diagnostics');
     assert_contains('<th scope="row">Schema status</th><td>Stale</td>', $html, 'health dashboard should show stale schema status');
     assert_contains('<th scope="row">Stored schema version</th><td>0</td>', $html, 'health dashboard should show stored schema version');
     assert_contains('<th scope="row">Expected schema version</th><td>' . WP_FTS_Plugin::SCHEMA_VERSION . '</td>', $html, 'health dashboard should show expected schema version');
@@ -5441,7 +5520,7 @@ test_case('health dashboard renders expired lock diagnostics without exposing to
     ];
 
     try {
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'health'];
         $_POST = [];
         $html = wp_fts_test_capture_admin_settings_tab('health');
     } finally {
@@ -5536,7 +5615,7 @@ test_case('health schema repair POST requires capability and nonce before repair
     ];
 
     try {
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'health'];
         $_POST = $validPost;
         $unauthorizedHtml = wp_fts_test_capture_admin_settings_tab(null);
         assert_contains('You do not have permission to manage Full-Text Search settings.', $unauthorizedHtml, 'unauthorized repair should stop at the settings-page capability gate');
@@ -5577,7 +5656,7 @@ test_case('health schema repair POST repairs schema without indexing or creating
     ];
 
     try {
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'health'];
         $_POST = [
             'wp_fts_health_action' => 'repair_schema',
             'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
@@ -5754,7 +5833,7 @@ test_case('health manual batch records failures without exposing raw details', f
     $fake->failDocWriteErrors[731] = "simulated failure for INSERT INTO wp_fts_docs\n#0 stack SELECT * FROM wp_users";
 
     try {
-        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG];
+        $_GET = ['page' => WP_FTS_Plugin::ADMIN_PAGE_SLUG, 'tab' => 'health'];
         $_POST = [
             'wp_fts_health_action' => 'index_next_batch',
             'wp_fts_health_nonce' => wp_create_nonce('wp_fts_health_admin_action'),
@@ -6673,6 +6752,27 @@ test_case('admin analyzer pack save rejects unauthorized and invalid nonce POSTs
         $_GET = $oldGet;
         $_POST = $oldPost;
         $wpdb = $oldWpdb;
+    }
+});
+
+test_case('admin analyzer pack action parser accepts explicit GitHub fetch action', function (): void {
+    $oldPost = $_POST;
+
+    try {
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'fetch_extended_language_packs',
+        ];
+        $method = new ReflectionMethod(WP_FTS_Plugin::class, 'analyzer_post_action');
+        $method->setAccessible(true);
+
+        assert_same('fetch_extended_language_packs', $method->invoke(null), 'dashboard GitHub language-pack action should survive analyzer action sanitization');
+
+        $_POST = [
+            'wp_fts_analyzer_packs_action' => 'unsupported',
+        ];
+        assert_same('', $method->invoke(null), 'unknown analyzer actions should still fail closed');
+    } finally {
+        $_POST = $oldPost;
     }
 });
 
