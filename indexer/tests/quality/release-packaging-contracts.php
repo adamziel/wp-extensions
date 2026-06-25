@@ -146,7 +146,6 @@ function wp_fts_release_packaging_contract_run(): void
         'indexer/auth.json',
         'indexer/.composer/auth.json',
         'language-fts-core.zip',
-        'language-fts-wporg-compatible.zip',
         'language-fts-full.zip',
         'language-fts-extended-language-packs.zip',
         'language-fts-release-evidence.json',

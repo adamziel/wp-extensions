@@ -33,19 +33,18 @@ undiscovered.
 
 Release artifacts are split by license channel:
 
-- `language-fts-core.zip` or `language-fts-wporg-compatible.zip`: an
-  installable plugin ZIP that carries GPL-compatible code and analyzer-pack
-  data only. This profile excludes CC BY-SA UniMorph packs,
-  unknown-license packs, raw upstream source submodules, fixtures, local build
-  artifacts, and credentials. The BSD-2-Clause Polish PoliMorf runtime pack is
-  allowed in this channel.
+- `language-fts-core.zip`: an installable plugin ZIP that carries
+  GPL-compatible code and analyzer-pack data only. This profile excludes CC
+  BY-SA UniMorph packs, unknown-license packs, raw upstream source submodules,
+  fixtures, local build artifacts, and credentials. The BSD-2-Clause Polish
+  PoliMorf runtime pack is allowed in this channel.
 - `language-fts-full.zip`: an installable GitHub/full plugin ZIP. This profile
   may include CC BY-SA UniMorph packs with their notices, provenance, source
   locks, manifests, and runtime shards. Unknown-license packs still remain
   blocked.
 - `language-fts-extended-language-packs.zip`: a separate optional language-pack
   bundle for CC BY-SA UniMorph packs. It is not an installable plugin ZIP and
-  is not bundled with the core/WordPress.org-compatible package. It includes a
+  is not bundled with the core package. It includes a
   top-level `manifest.json`, `NOTICE.txt`, `LICENSES.md`, each pack manifest,
   each pack notice, `PROVENANCE.md`, `SOURCE.lock.json`, and runtime shards.
 - `language-fts-release-evidence.json`: machine-readable release evidence for
@@ -57,7 +56,7 @@ metadata, or source-only/raw-submodule status are excluded from every
 distributable artifact. The policy is checked by packaging tests and by the
 builders before ZIP creation.
 
-| Analyzer pack class | Core / WP.org-compatible ZIP | GitHub full ZIP | Extended pack bundle |
+| Analyzer pack class | Core ZIP | GitHub full ZIP | Extended pack bundle |
 | --- | --- | --- | --- |
 | Plugin PHP, docs, tools, production Composer dependencies | Included | Included | Not included |
 | BSD-2-Clause Polish PoliMorf runtime pack | Included | Included | Excluded |
@@ -66,10 +65,8 @@ builders before ZIP creation.
 | Fixture-only packs | Excluded | Excluded | Excluded |
 | Raw upstream sources under `resources/sources/` | Excluded | Excluded | Excluded |
 
-`wporg-compatible` describes a local packaging profile only, not a
-WordPress.org submission, approval, endorsement, hosted asset, SVN commit, tag,
-GitHub release, or upload.
-This profile is not a WordPress.org submission.
+The core package is a direct-install ZIP boundary only. It is not a WordPress.org submission,
+approval, endorsement, hosted asset, SVN commit, tag, GitHub release, or upload.
 
 ## GitHub Release Workflow
 
@@ -106,19 +103,17 @@ and does not maintain a moving `latest` tag.
 The workflow publishes these release assets:
 
 - `language-fts-core.zip`;
-- `language-fts-wporg-compatible.zip`;
 - `language-fts-full.zip`;
 - `language-fts-extended-language-packs.zip`;
 - `language-fts-release-evidence.json`;
 - `SHA256SUMS.txt`.
 
 Use `language-fts-core.zip` for the smallest GPL-compatible direct-install
-plugin package. Use `language-fts-wporg-compatible.zip` when reviewing the
-WordPress.org-compatible package boundary; it is not WordPress.org approval.
-Use `language-fts-full.zip` only when the separately licensed CC BY-SA UniMorph
-packs are acceptable. Use `language-fts-extended-language-packs.zip` only when
-you want optional extra packs outside the core plugin package, and review the
-bundle notices before use.
+plugin package. Use `language-fts-full.zip` only when the separately licensed
+CC BY-SA UniMorph packs are acceptable. Use
+`language-fts-extended-language-packs.zip` only when you want optional extra
+packs outside the core plugin package, and review the bundle notices before
+use.
 
 An empty manual draft named `language-fts-v0.1.9` may exist at
 `https://github.com/adamziel/wp-extensions/releases/tag/untagged-ddb06656129684895c65`.
@@ -128,7 +123,7 @@ real `language-fts-v*` tag, or run this workflow with the intended tag so it can
 create or update the release and upload the generated assets.
 
 This workflow does not submit to WordPress.org, does not commit to SVN, and
-does not make `wporg-compatible` approved by WordPress.org.
+does not make the core ZIP approved by WordPress.org.
 
 ## Files That Ship
 
@@ -426,11 +421,11 @@ The schema probe should succeed even before any content is indexed.
 5. Run `php indexer/tools/check-release-readiness.php --target=public-submission`
    and treat the current blockers as expected unless the release explicitly
    includes a completed public-submission authority pass.
-6. Build the core/WP.org-compatible ZIP, GitHub full ZIP, and extended language
-   pack bundle in temporary directories.
+6. Build the core ZIP, GitHub full ZIP, and extended language pack bundle in
+   temporary directories.
 7. Inspect the ZIPs for the release-channel license matrix: CC BY-SA UniMorph
-   packs absent from core/WP.org-compatible, present in full/extended, and
-   unknown-license packs absent everywhere.
+   packs absent from core, present in full/extended, and unknown-license packs
+   absent everywhere.
 8. Inspect the ZIPs for unexpected `.cao`, dotfiles, root `tests/`,
    dependency-internal vendor tests or coverage fixtures, or local cache files.
 9. Install the core or full plugin ZIP in a disposable WordPress site.

@@ -254,7 +254,7 @@ if ( ! class_exists( 'WP_FTS_ReleaseChannelPolicy' ) ) {
 			$notice_lines = array(
 				'Language FTS Extended Language Packs',
 				'',
-				'This bundle is an optional, separately licensed download. It is not bundled with the core or WordPress.org-compatible plugin package.',
+				'This bundle is an optional, separately licensed download. It is not bundled with the core plugin package.',
 				'Review each included pack NOTICE, PROVENANCE, SOURCE.lock, and manifest before use.',
 				'The plugin does not download, install, or activate these packs automatically.',
 				'This bundle is not a WordPress.org submission, approval, endorsement, or hosted asset.',
@@ -274,7 +274,7 @@ if ( ! class_exists( 'WP_FTS_ReleaseChannelPolicy' ) ) {
 			$license_lines = array(
 				'# Extended Language Pack License Summary',
 				'',
-				'This bundle contains only optional analyzer packs that are distributed separately from the core/WordPress.org-compatible plugin package.',
+				'This bundle contains only optional analyzer packs that are distributed separately from the core plugin package.',
 				'',
 				'| Pack | Language | License | Source |',
 				'| --- | --- | --- | --- |',
@@ -414,9 +414,9 @@ if ( ! class_exists( 'WP_FTS_ReleaseChannelPolicy' ) ) {
 				'',
 				'Profile: ' . $profile,
 				'',
-				'The core and WordPress.org-compatible package excludes optional CC BY-SA UniMorph analyzer packs and unknown-license packs.',
+				'The core package excludes optional CC BY-SA UniMorph analyzer packs and unknown-license packs.',
 				'The GitHub full package may include separately licensed CC BY-SA UniMorph analyzer packs with notices and provenance, but unknown-license packs remain excluded.',
-				'WordPress.org-compatible packaging is not a WordPress.org submission, approval, endorsement, or hosted asset.',
+				'This package is not a WordPress.org submission, approval, endorsement, or hosted asset.',
 				'',
 				'Included analyzer packs:',
 			);

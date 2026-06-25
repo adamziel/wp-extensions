@@ -99,11 +99,6 @@ jobs:
             --output="$DIST_DIR/language-fts-core.zip"
 
           php indexer/tools/build-release-zip.php \
-            --profile=wporg-compatible \
-            --build-dir="$BUILD_ROOT/wporg-compatible" \
-            --output="$DIST_DIR/language-fts-wporg-compatible.zip"
-
-          php indexer/tools/build-release-zip.php \
             --profile=github-full \
             --build-dir="$BUILD_ROOT/github-full" \
             --output="$DIST_DIR/language-fts-full.zip"
@@ -122,7 +117,6 @@ jobs:
             cd "$DIST_DIR"
             sha256sum \
               language-fts-core.zip \
-              language-fts-wporg-compatible.zip \
               language-fts-full.zip \
               language-fts-extended-language-packs.zip \
               language-fts-release-evidence.json \
@@ -138,7 +132,6 @@ jobs:
           $dist = getenv('DIST_DIR') ?: 'dist/language-fts';
           $assets = [
               'core' => $dist . '/language-fts-core.zip',
-              'wporg' => $dist . '/language-fts-wporg-compatible.zip',
               'full' => $dist . '/language-fts-full.zip',
               'extended' => $dist . '/language-fts-extended-language-packs.zip',
           ];
@@ -176,15 +169,12 @@ jobs:
           };
 
           $core = $zipNames($assets['core']);
-          $wporg = $zipNames($assets['wporg']);
           $full = $zipNames($assets['full']);
           $extended = $zipNames($assets['extended']);
 
-          foreach ([$core, $wporg] as $names) {
-              $assert($hasPrefix($names, 'indexer/resources/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Core/WP.org-compatible ZIP must include the BSD Polish pack.');
-              $assert(! $hasPrefix($names, 'indexer/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'Core/WP.org-compatible ZIP must exclude CC BY-SA UniMorph packs.');
-              $assert(! $hasPrefix($names, 'indexer/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'Core/WP.org-compatible ZIP must exclude unknown-license packs.');
-          }
+          $assert($hasPrefix($core, 'indexer/resources/analyzer-packs/pl-polimorf-20180722-full-playground/'), 'Core ZIP must include the BSD Polish pack.');
+          $assert(! $hasPrefix($core, 'indexer/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'Core ZIP must exclude CC BY-SA UniMorph packs.');
+          $assert(! $hasPrefix($core, 'indexer/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'Core ZIP must exclude unknown-license packs.');
 
           $assert($hasPrefix($full, 'indexer/resources/analyzer-packs/en-unimorph-eng-66e0e9e8e2dc/'), 'GitHub full ZIP must include CC BY-SA UniMorph packs.');
           $assert(! $hasPrefix($full, 'indexer/resources/analyzer-packs/te-unimorph-tel-551f60f5f434/'), 'GitHub full ZIP must exclude unknown-license packs.');
@@ -213,7 +203,6 @@ jobs:
           ## Assets
 
           - language-fts-core.zip: installable plugin ZIP with GPL-compatible package contents only.
-          - language-fts-wporg-compatible.zip: installable plugin ZIP using the same GPL-compatible package boundary. This is not a WordPress.org submission or approval.
           - language-fts-full.zip: installable GitHub/full plugin ZIP with separately licensed CC BY-SA UniMorph analyzer packs and notices.
           - language-fts-extended-language-packs.zip: optional separately licensed CC BY-SA UniMorph analyzer-pack bundle. Review notices and provenance before use.
           - language-fts-release-evidence.json: release evidence for the packaged checkout.
@@ -221,7 +210,7 @@ jobs:
 
           ## Download Guidance
 
-          Use language-fts-core.zip for the smallest GPL-compatible plugin package, or language-fts-wporg-compatible.zip when reviewing the WordPress.org-compatible package boundary. Use language-fts-full.zip only when the separately licensed CC BY-SA packs are acceptable for your distribution. Download language-fts-extended-language-packs.zip only if you want optional extra packs outside the core plugin package.
+          Use language-fts-core.zip for the smallest GPL-compatible plugin package. Use language-fts-full.zip only when the separately licensed CC BY-SA packs are acceptable for your distribution. Download language-fts-extended-language-packs.zip only if you want optional extra packs outside the core plugin package.
 
           No WordPress.org submission, SVN commit, or WordPress.org approval is performed by this workflow.
           NOTES
@@ -234,25 +223,33 @@ jobs:
 
           ASSETS=(
             "$DIST_DIR/language-fts-core.zip"
-            "$DIST_DIR/language-fts-wporg-compatible.zip"
             "$DIST_DIR/language-fts-full.zip"
             "$DIST_DIR/language-fts-extended-language-packs.zip"
             "$DIST_DIR/language-fts-release-evidence.json"
             "$DIST_DIR/SHA256SUMS.txt"
           )
+          DEPRECATED_ASSETS=(
+            "language-fts-wporg-compatible.zip"
+          )
 
-          upload_existing_release_asset() {
-            local asset_path="$1"
-            local asset_name
+          delete_existing_release_asset() {
+            local asset_name="$1"
             local asset_ids
 
-            asset_name="$(basename "$asset_path")"
             asset_ids="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
               --jq ".[] | select(.name == \"${asset_name}\") | .id")"
 
             for asset_id in $asset_ids; do
               gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}" >/dev/null
             done
+          }
+
+          upload_existing_release_asset() {
+            local asset_path="$1"
+            local asset_name
+
+            asset_name="$(basename "$asset_path")"
+            delete_existing_release_asset "$asset_name"
 
             gh api --method POST "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${asset_name}" \
               -H "Content-Type: application/octet-stream" \
@@ -270,6 +267,9 @@ jobs:
               -f name="Language FTS ${RELEASE_TAG}" \
               -f body="$(cat "$DIST_DIR/release-notes.md")" \
               >/dev/null
+            for asset_name in "${DEPRECATED_ASSETS[@]}"; do
+              delete_existing_release_asset "$asset_name"
+            done
             for asset in "${ASSETS[@]}"; do
               upload_existing_release_asset "$asset"
             done
